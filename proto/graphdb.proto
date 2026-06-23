@@ -74,6 +74,11 @@ service GraphDBService {
   rpc ListVectorIndexes(ListVectorIndexesRequest) returns (ListVectorIndexesResponse);
   rpc DropVectorIndex(DropVectorIndexRequest) returns (DropVectorIndexResponse);
   rpc SearchVector(SearchVectorRequest) returns (SearchVectorResponse);
+
+  // Schema Versioning
+  rpc GetVersionHistory(VersionHistoryRequest) returns (VersionHistoryResponse);
+  rpc GetSchemaChanges(SchemaChangesRequest) returns (SchemaChangesResponse);
+  rpc DetectBreakingChanges(BreakingChangesRequest) returns (BreakingChangesResponse);
 }
 
 // ============================================================
@@ -837,4 +842,58 @@ message VectorSearchResult {
   float score = 2;
   map<string, Value> properties = 3;
   repeated float vector = 4;  // If with_vector=true
+}
+
+// ============================================================
+// Schema Versioning
+// ============================================================
+
+message VersionHistoryRequest {
+  string space = 1;
+  string label = 2;
+  bool is_edge = 3;
+}
+
+message VersionHistoryResponse {
+  repeated SchemaVersion versions = 1;
+  string error = 2;
+}
+
+message SchemaVersion {
+  uint64 version = 1;
+  int64 timestamp_ms = 2;
+  repeated PropertyChangeEvent changes = 3;
+}
+
+message PropertyChangeEvent {
+  string change_type = 1;  // PropertyAdded, PropertyRemoved, PropertyRenamed, DataTypeChanged
+  map<string, string> details = 2;
+}
+
+message SchemaChangesRequest {
+  string space = 1;
+  string label = 2;
+  bool is_edge = 3;
+  uint64 from_version = 4;
+  uint64 to_version = 5;
+}
+
+message SchemaChangesResponse {
+  repeated PropertyChangeEvent changes = 1;
+  string error = 2;
+}
+
+message BreakingChangesRequest {
+  string space = 1;
+  string label = 2;
+  bool is_edge = 3;
+  uint64 from_version = 4;
+  uint64 to_version = 5;
+}
+
+message BreakingChangesResponse {
+  bool has_breaking_changes = 1;
+  repeated PropertyChangeEvent changes = 2;
+  string recommendation = 3;
+  string error = 4;
 }

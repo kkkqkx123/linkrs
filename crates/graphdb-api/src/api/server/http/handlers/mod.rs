@@ -30,7 +30,7 @@ pub use query_types::{
 };
 pub use schema::{
     create_edge_type, create_space, create_tag, drop_space, get_space, list_edge_types,
-    list_spaces, list_tags,
+    list_spaces, list_tags, get_version_history, get_schema_changes, detect_breaking_changes,
 };
 pub use session::{create as create_session, delete_session, get_session};
 pub use statistics::{database, queries, search as search_stats, session, system};

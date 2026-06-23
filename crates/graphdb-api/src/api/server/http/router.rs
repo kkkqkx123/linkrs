@@ -141,6 +141,19 @@ pub fn create_router<
             "/schema/spaces/{name}/edge-types",
             post(schema::create_edge_type).get(schema::list_edge_types),
         )
+        // Schema Versioning Routes
+        .route(
+            "/schema/versions/{space}/{label}",
+            get(schema::get_version_history),
+        )
+        .route(
+            "/schema/changes/{space}/{label}/{from_version}/{to_version}",
+            get(schema::get_schema_changes),
+        )
+        .route(
+            "/schema/breaking-changes/{space}/{label}/{from_version}/{to_version}",
+            get(schema::detect_breaking_changes),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,

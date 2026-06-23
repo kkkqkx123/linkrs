@@ -474,6 +474,184 @@ impl<
     ) -> Result<Response<SearchVectorResponse>, Status> {
         unimplemented!("SearchVector not yet implemented")
     }
+
+    async fn get_version_history(
+        &self,
+        request: Request<VersionHistoryRequest>,
+    ) -> Result<Response<VersionHistoryResponse>, Status> {
+        let req = request.into_inner();
+
+        let storage = self.app_state.server.get_storage();
+        let storage_read = storage.read();
+
+        let history = if req.is_edge {
+            storage_read
+                .get_edge_version_history(&req.space, &req.label)
+                .map_err(|e| Status::internal(format!("Failed to get edge version history: {}", e)))?
+        } else {
+            storage_read
+                .get_vertex_version_history(&req.space, &req.label)
+                .map_err(|e| Status::internal(format!("Failed to get vertex version history: {}", e)))?
+        };
+
+        let versions = history
+            .map(|h| {
+                h.change_log
+                    .get_versions()
+                    .iter()
+                    .map(|&version| {
+                        let changes = h.change_log
+                            .get_version_changes(version)
+                            .map(|v| v.iter().cloned().collect::<Vec<_>>())
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|change| PropertyChangeEvent {
+                                change_type: format!("{:?}", change.details),
+                                details: {
+                                    let mut details = std::collections::HashMap::new();
+                                    details.insert("description".to_string(), change.details.description());
+                                    details.insert("version".to_string(), change.version.to_string());
+                                    details
+                                },
+                            })
+                            .collect();
+
+                        SchemaVersion {
+                            version,
+                            timestamp_ms: 0, // TODO: extract from PropertyChange
+                            changes,
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(Response::new(VersionHistoryResponse {
+            versions,
+            error: String::new(),
+        }))
+    }
+
+    async fn get_schema_changes(
+        &self,
+        request: Request<SchemaChangesRequest>,
+    ) -> Result<Response<SchemaChangesResponse>, Status> {
+        let req = request.into_inner();
+
+        // Validate version range: from_version must be <= to_version
+        if req.from_version > req.to_version {
+            return Err(Status::invalid_argument(
+                format!(
+                    "Invalid version range: from_version ({}) must be <= to_version ({})",
+                    req.from_version, req.to_version
+                )
+            ));
+        }
+
+        let storage = self.app_state.server.get_storage();
+        let storage_read = storage.read();
+
+        let changes = if req.is_edge {
+            storage_read
+                .get_edge_schema_changes(&req.space, &req.label, req.from_version, req.to_version)
+                .map_err(|e| Status::internal(format!("Failed to get edge schema changes: {}", e)))?
+        } else {
+            storage_read
+                .get_vertex_schema_changes(&req.space, &req.label, req.from_version, req.to_version)
+                .map_err(|e| Status::internal(format!("Failed to get vertex schema changes: {}", e)))?
+        };
+
+        let proto_changes = changes
+            .iter()
+            .map(|change| PropertyChangeEvent {
+                change_type: format!("{:?}", change.details),
+                details: {
+                    let mut details = std::collections::HashMap::new();
+                    details.insert("description".to_string(), change.details.description());
+                    details.insert("version".to_string(), change.version.to_string());
+                    details
+                },
+            })
+            .collect();
+
+        Ok(Response::new(SchemaChangesResponse {
+            changes: proto_changes,
+            error: String::new(),
+        }))
+    }
+
+    async fn detect_breaking_changes(
+        &self,
+        request: Request<BreakingChangesRequest>,
+    ) -> Result<Response<BreakingChangesResponse>, Status> {
+        let req = request.into_inner();
+
+        // Validate version range: from_version must be <= to_version
+        if req.from_version > req.to_version {
+            return Err(Status::invalid_argument(
+                format!(
+                    "Invalid version range: from_version ({}) must be <= to_version ({})",
+                    req.from_version, req.to_version
+                )
+            ));
+        }
+
+        let storage = self.app_state.server.get_storage();
+        let storage_read = storage.read();
+
+        let changes = if req.is_edge {
+            storage_read
+                .detect_edge_breaking_changes(&req.space, &req.label, req.from_version, req.to_version)
+                .map_err(|e| Status::internal(format!("Failed to detect edge breaking changes: {}", e)))?
+        } else {
+            storage_read
+                .detect_vertex_breaking_changes(&req.space, &req.label, req.from_version, req.to_version)
+                .map_err(|e| Status::internal(format!("Failed to detect vertex breaking changes: {}", e)))?
+        };
+
+        let has_breaking = !changes.is_empty();
+        let proto_changes: Vec<PropertyChangeEvent> = changes
+            .iter()
+            .map(|change| PropertyChangeEvent {
+                change_type: format!("{:?}", change.details),
+                details: {
+                    let mut details = std::collections::HashMap::new();
+                    details.insert("description".to_string(), change.details.description());
+                    details.insert("version".to_string(), change.version.to_string());
+                    details
+                },
+            })
+            .collect();
+
+        let recommendation = if has_breaking {
+            format!(
+                "Found {} breaking changes. Data migration may be required.",
+                proto_changes.len()
+            )
+        } else {
+            "No breaking changes detected".to_string()
+        };
+
+        Ok(Response::new(BreakingChangesResponse {
+            has_breaking_changes: has_breaking,
+            changes: proto_changes,
+            recommendation,
+            error: String::new(),
+        }))
+    }
+}
+
+impl<
+        S: StorageClient
+            + StorageSchemaContextOps
+            + StorageSyncContextOps
+            + StorageTransactionContextOps
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+    > GraphDBService<S>
+{
 }
 
 /// Run the gRPC server

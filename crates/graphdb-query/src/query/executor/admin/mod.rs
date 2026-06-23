@@ -7,6 +7,7 @@ pub mod analyze;
 pub mod edge;
 pub mod index;
 pub mod query_management;
+pub mod schema_checker;
 pub mod space;
 pub mod tag;
 pub mod user;
@@ -49,5 +50,7 @@ pub use self::user::{
 pub use self::query_management::ShowStatsExecutor;
 
 pub use self::analyze::{AnalyzeExecutor, AnalyzeTarget};
+
+pub use self::schema_checker::{CompatibilityReport, SchemaCompatibilityChecker};
 
 pub use crate::core::types::PasswordInfo;
