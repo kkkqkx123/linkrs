@@ -1,0 +1,229 @@
+[workspace]
+resolver = "2"
+members = [
+    ".",
+    "crates/graphdb-core",
+    "crates/graphdb-config",
+    "crates/graphdb-search",
+    "crates/graphdb-sync",
+    "crates/graphdb-transaction",
+    "crates/graphdb-storage",
+    "crates/graphdb-query",
+    "crates/graphdb-api",
+    "crates/vector-client",
+    "graphdb-cli",
+]
+
+[patch.crates-io]
+tantivy = { path = "crates/tantivy" }
+tantivy-tokenizer-api = { path = "crates/tantivy/tokenizer-api" }
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["GraphDB Contributors"]
+license = "Apache-2.0"
+repository = "https://github.com/kkkqkx123/graphDB"
+homepage = "https://github.com/kkkqkx123/graphDB"
+
+[workspace.dependencies]
+# serialization
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+
+# error handling
+thiserror = "2.0.17"
+anyhow = "1.0"
+
+# logging / tracing
+log = "0.4.29"
+tracing = "0.1"
+flexi_logger = { version = "0.31", features = ["async"] }
+
+# concurrency
+parking_lot = "0.12"
+dashmap = "6.1"
+crossbeam-utils = "0.8"
+rayon = "1.10.0"
+
+# async runtime
+tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros", "net", "time", "signal", "sync"] }
+tokio-stream = "0.1"
+futures = "0.3"
+async-trait = "0.1"
+
+# data & time
+chrono = { version = "0.4.38", features = ["serde"] }
+uuid = { version = "1.19.0", features = ["v4"] }
+
+# text processing
+regex = "1.11.1"
+
+# random
+rand = "0.8.5"
+
+# compression & encoding
+crc32fast = "1.5"
+zstd = "0.13"
+postcard = { version = "1.1", features = ["use-std"] }
+bitvec = "1.0"
+
+# memory
+bumpalo = "3.16"
+memmap2 = "0.9"
+
+# numeric
+dec = "0.4.11"
+
+# caching
+moka = { version = "0.12", features = ["sync", "future"] }
+once_cell = "1.20"
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# configuration
+toml = "1.1"
+
+# system
+num_cpus = "1.17.0"
+sysinfo = "0.30"
+libc = "0.2"
+md-5 = "0.10"
+
+# security
+bcrypt = "0.18.0"
+
+# HTTP / networking
+reqwest = { version = "0.12", features = ["json"] }
+url = "2.5"
+
+# (optional) HTTP server stack
+axum = { version = "0.8", features = ["macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "timeout", "limit"] }
+http = "1.1"
+
+# (optional) gRPC stack
+tonic = "0.12"
+prost = "0.13"
+prost-types = "0.13"
+tonic-build = "0.12"
+prost-build = "0.13"
+
+# (optional) SQL database
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "migrate", "chrono"] }
+
+# CLI tools
+rustyline = { version = "14.0", features = ["derive"] }
+tabled = "0.17"
+colored = "2.1"
+dirs = "6.0"
+rpassword = "7.3"
+csv = "1.3"
+
+# build-time
+cbindgen = "0.29"
+
+# dev-deps shared across sub-crates
+tempfile = "3.23.0"
+serial_test = "3.0"
+
+[package]
+name = "graphdb"
+version.workspace = true
+edition.workspace = true
+description = "A lightweight single-node graph database implemented in Rust"
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+name = "graphdb"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "graphdb-server"
+path = "src/main.rs"
+required-features = ["server"]
+
+[dependencies]
+graphdb-core = { path = "crates/graphdb-core" }
+graphdb-config = { path = "crates/graphdb-config" }
+graphdb-search = { path = "crates/graphdb-search" }
+graphdb-sync = { path = "crates/graphdb-sync" }
+graphdb-transaction = { path = "crates/graphdb-transaction" }
+graphdb-storage = { path = "crates/graphdb-storage" }
+graphdb-query = { path = "crates/graphdb-query" }
+graphdb-api = { path = "crates/graphdb-api" }
+clap.workspace = true
+flexi_logger.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+
+cbindgen.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["processthreadsapi", "psapi", "sysinfoapi", "fileapi", "minwinbase"] }
+
+[features]
+default = ["server"]
+server = ["graphdb-api/server", "graphdb-config/server"]
+fulltext-search = ["graphdb-api/fulltext-search", "graphdb-search/fulltext-search", "graphdb-sync/fulltext-search"]
+jieba = ["graphdb-search/jieba"]
+qdrant = ["graphdb-api/qdrant", "graphdb-config/qdrant", "graphdb-sync/qdrant", "graphdb-query/qdrant"]
+embedded = ["graphdb-api/embedded", "graphdb-config/embedded"]
+grpc = ["graphdb-api/grpc"]
+c_api = ["graphdb-api/c_api"]
+
+[profile.dev]
+opt-level = 0
+debug = true
+codegen-units = 64
+
+[dev-dependencies]
+tokio-test = "0.4.4"
+tempfile = "3.23.0"
+criterion = { version = "0.5", features = ["async_tokio"] }
+serial_test = "3.0"
+parking_lot = "0.12"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+axum = { version = "0.8", features = ["macros"] }
+tower = "0.5"
+vector-client = { path = "crates/vector-client" }
+async-trait = "0.1"
+dashmap = "6.1"
+rand = "0.8"
+log = "0.4"
+regex = "1"
+toml = "1.1"
+reqwest = { version = "0.12", features = ["json"] }
+
+[[bench]]
+name = "storage_bench"
+harness = false
+
+[[bench]]
+name = "transaction_bench"
+harness = false
+
+[[bench]]
+name = "query_bench"
+harness = false
+
+[[bench]]
+name = "search_bench"
+harness = false
+
+[[bench]]
+name = "api_bench"
+harness = false
+
+[[bench]]
+name = "end_to_end_bench"
+harness = false

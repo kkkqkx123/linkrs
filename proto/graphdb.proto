@@ -1,0 +1,840 @@
+syntax = "proto3";
+
+package graphdb;
+
+// GraphDB Service Definition
+service GraphDBService {
+  // Health Check
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+  
+  // Authentication
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+  
+  // Session Management
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
+  rpc CloseSession(CloseSessionRequest) returns (CloseSessionResponse);
+  
+  // Query Execution
+  rpc ExecuteQuery(ExecuteQueryRequest) returns (ExecuteQueryResponse);
+  rpc ValidateQuery(ValidateQueryRequest) returns (ValidateQueryResponse);
+  rpc ExecuteQueryStream(ExecuteQueryRequest) returns (stream QueryResultChunk);
+  
+  // Transaction Management
+  rpc BeginTransaction(BeginTransactionRequest) returns (BeginTransactionResponse);
+  rpc CommitTransaction(CommitTransactionRequest) returns (CommitTransactionResponse);
+  rpc RollbackTransaction(RollbackTransactionRequest) returns (RollbackTransactionResponse);
+  
+  // Schema Management - Space
+  rpc CreateSpace(CreateSpaceRequest) returns (CreateSpaceResponse);
+  rpc GetSpace(GetSpaceRequest) returns (GetSpaceResponse);
+  rpc DropSpace(DropSpaceRequest) returns (DropSpaceResponse);
+  rpc ListSpaces(ListSpacesRequest) returns (ListSpacesResponse);
+  
+  // Schema Management - Tag
+  rpc CreateTag(CreateTagRequest) returns (CreateTagResponse);
+  rpc GetTag(GetTagRequest) returns (GetTagResponse);
+  rpc ListTags(ListTagsRequest) returns (ListTagsResponse);
+  rpc DropTag(DropTagRequest) returns (DropTagResponse);
+  
+  // Schema Management - Edge Type
+  rpc CreateEdgeType(CreateEdgeTypeRequest) returns (CreateEdgeTypeResponse);
+  rpc GetEdgeType(GetEdgeTypeRequest) returns (GetEdgeTypeResponse);
+  rpc ListEdgeTypes(ListEdgeTypesRequest) returns (ListEdgeTypesResponse);
+  rpc DropEdgeType(DropEdgeTypeRequest) returns (DropEdgeTypeResponse);
+  
+  // Batch Operations
+  rpc CreateBatch(CreateBatchRequest) returns (CreateBatchResponse);
+  rpc AddBatchItems(AddBatchItemsRequest) returns (AddBatchItemsResponse);
+  rpc ExecuteBatch(ExecuteBatchRequest) returns (ExecuteBatchResponse);
+  rpc GetBatchStatus(GetBatchStatusRequest) returns (GetBatchStatusResponse);
+  rpc CancelBatch(CancelBatchRequest) returns (CancelBatchResponse);
+  
+  // Statistics
+  rpc GetSessionStatistics(GetSessionStatisticsRequest) returns (GetSessionStatisticsResponse);
+  rpc GetQueryStatistics(GetQueryStatisticsRequest) returns (GetQueryStatisticsResponse);
+  rpc GetDatabaseStatistics(GetDatabaseStatisticsRequest) returns (GetDatabaseStatisticsResponse);
+  rpc GetSystemStatistics(GetSystemStatisticsRequest) returns (GetSystemStatisticsResponse);
+  
+  // Configuration
+  rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
+  rpc UpdateConfig(UpdateConfigRequest) returns (UpdateConfigResponse);
+  rpc ResetConfig(ResetConfigRequest) returns (ResetConfigResponse);
+  
+  // Custom Functions
+  rpc RegisterFunction(RegisterFunctionRequest) returns (RegisterFunctionResponse);
+  rpc UnregisterFunction(UnregisterFunctionRequest) returns (UnregisterFunctionResponse);
+  rpc ListFunctions(ListFunctionsRequest) returns (ListFunctionsResponse);
+  rpc GetFunctionInfo(GetFunctionInfoRequest) returns (GetFunctionInfoResponse);
+  
+  // Vector Index
+  rpc CreateVectorIndex(CreateVectorIndexRequest) returns (CreateVectorIndexResponse);
+  rpc GetVectorIndex(GetVectorIndexRequest) returns (GetVectorIndexResponse);
+  rpc ListVectorIndexes(ListVectorIndexesRequest) returns (ListVectorIndexesResponse);
+  rpc DropVectorIndex(DropVectorIndexRequest) returns (DropVectorIndexResponse);
+  rpc SearchVector(SearchVectorRequest) returns (SearchVectorResponse);
+}
+
+// ============================================================
+// Common Types
+// ============================================================
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  bool healthy = 1;
+  string version = 2;
+  int64 uptime_seconds = 3;
+}
+
+// ============================================================
+// Authentication
+// ============================================================
+
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+  optional string space = 3;
+}
+
+message LoginResponse {
+  bool success = 1;
+  string session_id = 2;
+  string error = 3;
+}
+
+message LogoutRequest {
+  string session_id = 1;
+}
+
+message LogoutResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// ============================================================
+// Session Management
+// ============================================================
+
+message CreateSessionRequest {
+  string username = 1;
+  string password = 2;
+  optional string space = 3;
+}
+
+message CreateSessionResponse {
+  bool success = 1;
+  string session_id = 2;
+  int32 space_id = 3;
+  string error = 4;
+}
+
+message GetSessionRequest {
+  string session_id = 1;
+}
+
+message GetSessionResponse {
+  bool exists = 1;
+  string session_id = 2;
+  string username = 3;
+  int32 space_id = 4;
+  int64 created_at = 5;
+  int64 last_accessed = 6;
+}
+
+message CloseSessionRequest {
+  string session_id = 1;
+}
+
+message CloseSessionResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// ============================================================
+// Query Execution
+// ============================================================
+
+message ExecuteQueryRequest {
+  string query = 1;
+  optional string session_id = 2;
+  optional string transaction_id = 3;
+  optional QueryParameters parameters = 4;
+}
+
+message QueryParameters {
+  map<string, Value> params = 1;
+}
+
+message ExecuteQueryResponse {
+  bool success = 1;
+  QueryResult result = 2;
+  string error = 3;
+  ExecutionMetadata metadata = 4;
+}
+
+message ValidateQueryRequest {
+  string query = 1;
+}
+
+message ValidateQueryResponse {
+  bool valid = 1;
+  string error = 2;
+  repeated string parameter_names = 3;
+}
+
+message QueryResult {
+  repeated string column_names = 1;
+  repeated Row rows = 2;
+  map<string, string> plan_descriptions = 3;
+}
+
+message Row {
+  repeated Value values = 1;
+}
+
+message Value {
+  oneof value {
+    string string_value = 1;
+    int64 int_value = 2;
+    double double_value = 3;
+    bool bool_value = 4;
+    bytes bytes_value = 5;
+    int64 timestamp_value = 6;
+    double float_value = 7;
+  }
+}
+
+message QueryResultChunk {
+  repeated Row rows = 1;
+  bool is_last = 2;
+}
+
+message ExecutionMetadata {
+  uint64 rows_returned = 1;
+  uint64 execution_time_ms = 2;
+  uint64 rows_scanned = 3;
+  map<string, uint64> custom_stats = 4;
+}
+
+// ============================================================
+// Transaction Management
+// ============================================================
+
+message BeginTransactionRequest {
+  optional string session_id = 1;
+  TransactionOptions options = 2;
+}
+
+message TransactionOptions {
+  bool read_only = 1;
+  bool autocommit = 2;
+  int32 isolation_level = 3;
+  int64 timeout_ms = 4;
+}
+
+message BeginTransactionResponse {
+  bool success = 1;
+  string transaction_id = 2;
+  string error = 3;
+}
+
+message CommitTransactionRequest {
+  string transaction_id = 1;
+}
+
+message CommitTransactionResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message RollbackTransactionRequest {
+  string transaction_id = 1;
+}
+
+message RollbackTransactionResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// ============================================================
+// Schema Management - Space
+// ============================================================
+
+message CreateSpaceRequest {
+  string name = 1;
+  SpaceOptions options = 2;
+}
+
+message SpaceOptions {
+  int32 partition_num = 1;
+  int32 replica_num = 2;
+  string charset = 3;
+  string collate = 4;
+  bool vid_fixed_length = 5;
+  int32 vid_length = 6;
+}
+
+message CreateSpaceResponse {
+  bool success = 1;
+  int32 space_id = 2;
+  string error = 3;
+}
+
+message GetSpaceRequest {
+  string name = 1;
+}
+
+message GetSpaceResponse {
+  bool exists = 1;
+  SpaceInfo space = 2;
+  string error = 3;
+}
+
+message SpaceInfo {
+  int32 id = 1;
+  string name = 2;
+  SpaceOptions options = 3;
+  int64 created_at = 4;
+}
+
+message DropSpaceRequest {
+  string name = 1;
+  bool if_exists = 2;
+}
+
+message DropSpaceResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message ListSpacesRequest {}
+
+message ListSpacesResponse {
+  repeated SpaceInfo spaces = 1;
+  string error = 2;
+}
+
+// ============================================================
+// Schema Management - Tag
+// ============================================================
+
+message CreateTagRequest {
+  string space_name = 1;
+  string tag_name = 2;
+  repeated PropertyDef properties = 3;
+  optional TagOptions options = 4;
+}
+
+message PropertyDef {
+  string name = 1;
+  PropertyType type = 2;
+  bool nullable = 3;
+  optional Value default_value = 4;
+  bool is_primary_key = 5;
+}
+
+enum PropertyType {
+  PROPERTY_TYPE_BOOL = 0;
+  PROPERTY_TYPE_INT = 1;
+  PROPERTY_TYPE_FLOAT = 2;
+  PROPERTY_TYPE_DOUBLE = 3;
+  PROPERTY_TYPE_STRING = 4;
+  PROPERTY_TYPE_TIMESTAMP = 5;
+  PROPERTY_TYPE_DATE = 6;
+  PROPERTY_TYPE_DATETIME = 7;
+  PROPERTY_TYPE_VID = 8;
+  PROPERTY_TYPE_EDGE = 9;
+  PROPERTY_TYPE_TAG = 10;
+  PROPERTY_TYPE_LIST = 11;
+  PROPERTY_TYPE_SET = 12;
+  PROPERTY_TYPE_MAP = 13;
+}
+
+message TagOptions {
+  int64 ttl_seconds = 1;
+  string ttl_column = 2;
+}
+
+message CreateTagResponse {
+  bool success = 1;
+  int32 tag_id = 2;
+  string error = 3;
+}
+
+message GetTagRequest {
+  string space_name = 1;
+  string tag_name = 2;
+}
+
+message GetTagResponse {
+  bool exists = 1;
+  TagInfo tag = 2;
+  string error = 3;
+}
+
+message TagInfo {
+  int32 id = 1;
+  string name = 2;
+  repeated PropertyDef properties = 3;
+  TagOptions options = 4;
+  int64 created_at = 5;
+}
+
+message ListTagsRequest {
+  string space_name = 1;
+}
+
+message ListTagsResponse {
+  repeated TagInfo tags = 1;
+  string error = 2;
+}
+
+message DropTagRequest {
+  string space_name = 1;
+  string tag_name = 2;
+  bool if_exists = 3;
+}
+
+message DropTagResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// ============================================================
+// Schema Management - Edge Type
+// ============================================================
+
+message CreateEdgeTypeRequest {
+  string space_name = 1;
+  string edge_type_name = 2;
+  repeated PropertyDef properties = 3;
+  optional EdgeTypeOptions options = 4;
+}
+
+message EdgeTypeOptions {
+  bool directed = 1;
+  int64 ttl_seconds = 2;
+  string ttl_column = 3;
+}
+
+message CreateEdgeTypeResponse {
+  bool success = 1;
+  int32 edge_type_id = 2;
+  string error = 3;
+}
+
+message GetEdgeTypeRequest {
+  string space_name = 1;
+  string edge_type_name = 2;
+}
+
+message GetEdgeTypeResponse {
+  bool exists = 1;
+  EdgeTypeInfo edge_type = 2;
+  string error = 3;
+}
+
+message EdgeTypeInfo {
+  int32 id = 1;
+  string name = 2;
+  repeated PropertyDef properties = 3;
+  EdgeTypeOptions options = 4;
+  int64 created_at = 5;
+}
+
+message ListEdgeTypesRequest {
+  string space_name = 1;
+}
+
+message ListEdgeTypesResponse {
+  repeated EdgeTypeInfo edge_types = 1;
+  string error = 2;
+}
+
+message DropEdgeTypeRequest {
+  string space_name = 1;
+  string edge_type_name = 2;
+  bool if_exists = 3;
+}
+
+message DropEdgeTypeResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// ============================================================
+// Batch Operations
+// ============================================================
+
+message CreateBatchRequest {
+  string space_name = 1;
+  optional BatchOptions options = 2;
+}
+
+message BatchOptions {
+  int64 timeout_ms = 1;
+  bool atomic = 2;
+}
+
+message CreateBatchResponse {
+  bool success = 1;
+  string batch_id = 2;
+  string error = 3;
+}
+
+message AddBatchItemsRequest {
+  string batch_id = 1;
+  repeated BatchItem items = 2;
+}
+
+message BatchItem {
+  oneof operation {
+    InsertVertex insert_vertex = 1;
+    InsertEdge insert_edge = 2;
+    UpdateVertex update_vertex = 3;
+    UpdateEdge update_edge = 4;
+    DeleteVertex delete_vertex = 5;
+    DeleteEdge delete_edge = 6;
+  }
+}
+
+message InsertVertex {
+  string tag_name = 1;
+  string vid = 2;
+  map<string, Value> properties = 3;
+}
+
+message InsertEdge {
+  string edge_type = 1;
+  string src = 2;
+  string dst = 3;
+  int64 ranking = 4;
+  map<string, Value> properties = 5;
+}
+
+message UpdateVertex {
+  string tag_name = 1;
+  string vid = 2;
+  map<string, Value> properties = 3;
+}
+
+message UpdateEdge {
+  string edge_type = 1;
+  string src = 2;
+  string dst = 3;
+  int64 ranking = 4;
+  map<string, Value> properties = 5;
+}
+
+message DeleteVertex {
+  string vid = 1;
+  repeated string tag_names = 2;
+}
+
+message DeleteEdge {
+  string edge_type = 1;
+  string src = 2;
+  string dst = 3;
+  int64 ranking = 4;
+}
+
+message AddBatchItemsResponse {
+  bool success = 1;
+  int32 items_added = 2;
+  string error = 3;
+}
+
+message ExecuteBatchRequest {
+  string batch_id = 1;
+}
+
+message ExecuteBatchResponse {
+  bool success = 1;
+  repeated BatchResult results = 2;
+  string error = 3;
+}
+
+message BatchResult {
+  bool success = 1;
+  string error = 2;
+}
+
+message GetBatchStatusRequest {
+  string batch_id = 1;
+}
+
+message GetBatchStatusResponse {
+  string status = 1;  // PENDING, RUNNING, COMPLETED, FAILED, CANCELLED
+  int32 total_items = 2;
+  int32 processed_items = 3;
+  int32 failed_items = 4;
+  string error = 5;
+}
+
+message CancelBatchRequest {
+  string batch_id = 1;
+}
+
+message CancelBatchResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// ============================================================
+// Statistics
+// ============================================================
+
+message GetSessionStatisticsRequest {
+  optional string session_id = 1;
+}
+
+message GetSessionStatisticsResponse {
+  int64 active_sessions = 1;
+  int64 total_sessions = 2;
+  int64 failed_sessions = 3;
+  map<string, int64> session_by_user = 4;
+}
+
+message GetQueryStatisticsRequest {
+  optional string session_id = 1;
+  optional int64 from_timestamp = 2;
+  optional int64 to_timestamp = 3;
+}
+
+message GetQueryStatisticsResponse {
+  int64 total_queries = 1;
+  int64 slow_queries = 2;
+  int64 failed_queries = 3;
+  int64 avg_execution_time_ms = 4;
+  int64 max_execution_time_ms = 5;
+  repeated SlowQuery slow_query_list = 6;
+}
+
+message SlowQuery {
+  string query = 1;
+  int64 execution_time_ms = 2;
+  int64 timestamp = 3;
+  optional string session_id = 4;
+}
+
+message GetDatabaseStatisticsRequest {}
+
+message GetDatabaseStatisticsResponse {
+  int32 total_spaces = 1;
+  int64 total_vertices = 2;
+  int64 total_edges = 3;
+  int64 storage_size_bytes = 4;
+}
+
+message GetSystemStatisticsRequest {}
+
+message GetSystemStatisticsResponse {
+  double cpu_usage_percent = 1;
+  int64 memory_used_bytes = 2;
+  int64 memory_total_bytes = 3;
+  double disk_usage_percent = 4;
+  int32 active_connections = 5;
+  int64 network_rx_bytes = 6;
+  int64 network_tx_bytes = 7;
+}
+
+// ============================================================
+// Configuration
+// ============================================================
+
+message GetConfigRequest {}
+
+message GetConfigResponse {
+  map<string, ConfigSection> config = 1;
+  string error = 2;
+}
+
+message ConfigSection {
+  map<string, ConfigValue> values = 1;
+}
+
+message ConfigValue {
+  oneof value {
+    string string_value = 1;
+    int64 int_value = 2;
+    double double_value = 3;
+    bool bool_value = 4;
+  }
+}
+
+message UpdateConfigRequest {
+  string section = 1;
+  string key = 2;
+  ConfigValue value = 3;
+}
+
+message UpdateConfigResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message ResetConfigRequest {
+  string section = 1;
+  string key = 2;
+}
+
+message ResetConfigResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// ============================================================
+// Custom Functions
+// ============================================================
+
+message RegisterFunctionRequest {
+  string name = 1;
+  string function_type = 2;  // SCALAR, AGGREGATE, TABLE
+  repeated string parameters = 3;
+  string return_type = 4;
+  string description = 5;
+  string implementation = 6;  // Function implementation (e.g., Lua code or WASM binary)
+}
+
+message RegisterFunctionResponse {
+  bool success = 1;
+  string function_id = 2;
+  string error = 3;
+}
+
+message UnregisterFunctionRequest {
+  string name = 1;
+}
+
+message UnregisterFunctionResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message ListFunctionsRequest {}
+
+message ListFunctionsResponse {
+  repeated FunctionInfo functions = 1;
+  string error = 2;
+}
+
+message FunctionInfo {
+  string name = 1;
+  string function_type = 2;
+  repeated string parameters = 3;
+  string return_type = 4;
+  string description = 5;
+}
+
+message GetFunctionInfoRequest {
+  string name = 1;
+}
+
+message GetFunctionInfoResponse {
+  bool exists = 1;
+  FunctionInfo function = 2;
+  string error = 3;
+}
+
+// ============================================================
+// Vector Index
+// ============================================================
+
+message CreateVectorIndexRequest {
+  string space_name = 1;
+  string tag_name = 2;
+  string field_name = 3;
+  VectorIndexOptions options = 4;
+}
+
+message VectorIndexOptions {
+  int32 dimension = 1;
+  DistanceMetric metric = 2;
+  string index_type = 3;  // HNSW, FLAT, IVF, etc.
+  map<string, string> parameters = 4;
+}
+
+enum DistanceMetric {
+  DISTANCE_METRIC_COSINE = 0;
+  DISTANCE_METRIC_L2 = 1;
+  DISTANCE_METRIC_DOT = 2;
+}
+
+message CreateVectorIndexResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message GetVectorIndexRequest {
+  string space_name = 1;
+  string tag_name = 2;
+  string field_name = 3;
+}
+
+message GetVectorIndexResponse {
+  bool exists = 1;
+  VectorIndexInfo index = 2;
+  string error = 3;
+}
+
+message VectorIndexInfo {
+  string space_name = 1;
+  string tag_name = 2;
+  string field_name = 3;
+  VectorIndexOptions options = 4;
+  int64 created_at = 5;
+  int64 indexed_vectors = 6;
+}
+
+message ListVectorIndexesRequest {
+  optional string space_name = 1;
+}
+
+message ListVectorIndexesResponse {
+  repeated VectorIndexInfo indexes = 1;
+  string error = 2;
+}
+
+message DropVectorIndexRequest {
+  string space_name = 1;
+  string tag_name = 2;
+  string field_name = 3;
+}
+
+message DropVectorIndexResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message SearchVectorRequest {
+  string space_name = 1;
+  string tag_name = 2;
+  string field_name = 3;
+  repeated float vector = 4;
+  int32 limit = 5;
+  SearchFilter filter = 6;
+  SearchOptions options = 7;
+}
+
+message SearchFilter {
+  string expression = 1;  // Filter expression
+}
+
+message SearchOptions {
+  int32 ef_search = 1;  // HNSW search parameter
+  bool with_vector = 2;  // Whether to return vector data
+}
+
+message SearchVectorResponse {
+  repeated VectorSearchResult results = 1;
+  string error = 2;
+}
+
+message VectorSearchResult {
+  string vid = 1;
+  float score = 2;
+  map<string, Value> properties = 3;
+  repeated float vector = 4;  // If with_vector=true
+}

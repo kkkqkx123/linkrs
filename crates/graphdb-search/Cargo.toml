@@ -1,0 +1,30 @@
+[package]
+name = "graphdb-search"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+graphdb-core = { path = "../graphdb-core" }
+graphdb-config = { path = "../graphdb-config" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+chrono.workspace = true
+tantivy = { version = "0.26.0", optional = true }
+jieba-rs = { version = "0.9", optional = true }
+tantivy-tokenizer-api = { version = "0.7", optional = true }
+dashmap.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["fs"] }
+
+[features]
+fulltext-search = ["dep:tantivy"]
+jieba = ["dep:jieba-rs", "dep:tantivy-tokenizer-api"]
+qdrant = ["graphdb-sync/qdrant"]
+
+[dev-dependencies]
+tempfile.workspace = true
+graphdb-sync = { path = "../graphdb-sync", features = ["fulltext-search", "qdrant"] }

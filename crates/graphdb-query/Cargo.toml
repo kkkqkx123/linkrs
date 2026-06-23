@@ -1,0 +1,33 @@
+[package]
+name = "graphdb-query"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+graphdb-core = { path = "../graphdb-core" }
+graphdb-storage = { path = "../graphdb-storage" }
+graphdb-search = { path = "../graphdb-search" }
+graphdb-sync = { path = "../graphdb-sync" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+regex.workspace = true
+rand.workspace = true
+rayon.workspace = true
+dashmap.workspace = true
+futures.workspace = true
+tokio.workspace = true
+moka.workspace = true
+vector-client = { path = "../vector-client", features = ["qdrant-grpc"], optional = true }
+
+[features]
+qdrant = ["dep:vector-client", "graphdb-sync/qdrant"]
+fulltext-search = ["graphdb-search/fulltext-search", "graphdb-sync/fulltext-search"]
+
+[dev-dependencies]
+graphdb-storage = { path = "../graphdb-storage", features = ["test-support"] }
+tempfile.workspace = true

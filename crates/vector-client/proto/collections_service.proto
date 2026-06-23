@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+import "collections.proto";
+
+package qdrant;
+option csharp_namespace = "Qdrant.Client.Grpc";
+
+service Collections {
+  rpc Get (GetCollectionInfoRequest) returns (GetCollectionInfoResponse) {}
+  rpc List (ListCollectionsRequest) returns (ListCollectionsResponse) {}
+  rpc Create (CreateCollection) returns (CollectionOperationResponse) {}
+  rpc Update (UpdateCollection) returns (CollectionOperationResponse) {}
+  rpc Delete (DeleteCollection) returns (CollectionOperationResponse) {}
+  rpc UpdateAliases (ChangeAliases) returns (CollectionOperationResponse) {}
+  rpc ListCollectionAliases (ListCollectionAliasesRequest) returns (ListAliasesResponse) {}
+  rpc ListAliases (ListAliasesRequest) returns (ListAliasesResponse) {}
+  rpc CollectionClusterInfo (CollectionClusterInfoRequest) returns (CollectionClusterInfoResponse) {}
+  rpc CollectionExists (CollectionExistsRequest) returns (CollectionExistsResponse) {}
+  rpc UpdateCollectionClusterSetup (UpdateCollectionClusterSetupRequest) returns (UpdateCollectionClusterSetupResponse) {}
+  rpc CreateShardKey (CreateShardKeyRequest) returns (CreateShardKeyResponse) {}
+  rpc DeleteShardKey (DeleteShardKeyRequest) returns (DeleteShardKeyResponse) {}
+}

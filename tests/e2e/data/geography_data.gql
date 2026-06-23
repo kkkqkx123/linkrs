@@ -1,0 +1,1458 @@
+-- Geography E2E Test Data
+-- Generated: 2026-04-28T12:18:48.939940
+
+-- Create test space
+CREATE SPACE IF NOT EXISTS e2e_geography (vid_type=STRING)
+USE e2e_geography
+
+-- Create tags
+CREATE TAG IF NOT EXISTS location(
+    name: STRING NOT NULL,
+    coord: GEOGRAPHY,
+    address: STRING,
+    category: STRING
+)
+
+CREATE TAG IF NOT EXISTS city(
+    name: STRING NOT NULL,
+    center: GEOGRAPHY,
+    population: INT,
+    area_km2: DOUBLE
+)
+
+-- Create edge types
+CREATE EDGE IF NOT EXISTS nearby(
+    distance_km: DOUBLE,
+    walking_time_min: INT
+)
+
+-- Generate cities
+INSERT VERTEX city(name, center, population, area_km2) VALUES "city1":
+    ("Beijing", st_geogfromtext("POINT(116.4074 39.9042)"), 21540000, 24182.8)
+INSERT VERTEX city(name, center, population, area_km2) VALUES "city2":
+    ("Shanghai", st_geogfromtext("POINT(121.4737 31.2304)"), 24280000, 5750.32)
+INSERT VERTEX city(name, center, population, area_km2) VALUES "city3":
+    ("Guangzhou", st_geogfromtext("POINT(113.2644 23.1291)"), 14043500, 13250.88)
+INSERT VERTEX city(name, center, population, area_km2) VALUES "city4":
+    ("Shenzhen", st_geogfromtext("POINT(114.0579 22.5431)"), 12528300, 11696.32)
+INSERT VERTEX city(name, center, population, area_km2) VALUES "city5":
+    ("Chengdu", st_geogfromtext("POINT(104.0668 30.5728)"), 16330000, 27094.14)
+INSERT VERTEX city(name, center, population, area_km2) VALUES "city6":
+    ("Hangzhou", st_geogfromtext("POINT(120.1551 30.2741)"), 10360000, 25300.98)
+INSERT VERTEX city(name, center, population, area_km2) VALUES "city7":
+    ("Wuhan", st_geogfromtext("POINT(114.3055 30.5928)"), 11212000, 31765.39)
+INSERT VERTEX city(name, center, population, area_km2) VALUES "city8":
+    ("Xi'an", st_geogfromtext("POINT(108.9398 34.3416)"), 12952900, 7608.16)
+INSERT VERTEX city(name, center, population, area_km2) VALUES "city9":
+    ("Nanjing", st_geogfromtext("POINT(118.7969 32.0603)"), 8500000, 17657.65)
+INSERT VERTEX city(name, center, population, area_km2) VALUES "city10":
+    ("Chongqing", st_geogfromtext("POINT(106.5516 29.563)"), 32054100, 5893.92)
+
+-- Generate 200 locations
+INSERT VERTEX location(name, coord, address, category) VALUES "loc001":
+    ("Location_001", st_geogfromtext("POINT(113.9510 22.5839)"), "204 Shenzhen Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc002":
+    ("Location_002", st_geogfromtext("POINT(118.7647 32.0400)"), "829 Nanjing Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc003":
+    ("Location_003", st_geogfromtext("POINT(116.5109 39.7681)"), "349 Beijing Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc004":
+    ("Location_004", st_geogfromtext("POINT(103.9290 30.7557)"), "105 Chengdu Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc005":
+    ("Location_005", st_geogfromtext("POINT(121.4257 31.1740)"), "619 Shanghai Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc006":
+    ("Location_006", st_geogfromtext("POINT(104.1897 30.6647)"), "128 Chengdu Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc007":
+    ("Location_007", st_geogfromtext("POINT(114.1370 30.5101)"), "907 Wuhan Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc008":
+    ("Location_008", st_geogfromtext("POINT(120.1860 30.3559)"), "678 Hangzhou Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc009":
+    ("Location_009", st_geogfromtext("POINT(114.1671 22.7372)"), "888 Shenzhen Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc010":
+    ("Location_010", st_geogfromtext("POINT(121.4258 31.2118)"), "167 Shanghai Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc011":
+    ("Location_011", st_geogfromtext("POINT(120.0972 30.3422)"), "624 Hangzhou Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc012":
+    ("Location_012", st_geogfromtext("POINT(113.2781 23.0270)"), "389 Guangzhou Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc013":
+    ("Location_013", st_geogfromtext("POINT(104.2626 30.6288)"), "225 Chengdu Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc014":
+    ("Location_014", st_geogfromtext("POINT(120.2922 30.3845)"), "842 Hangzhou Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc015":
+    ("Location_015", st_geogfromtext("POINT(116.5294 39.8647)"), "217 Beijing Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc016":
+    ("Location_016", st_geogfromtext("POINT(106.7021 29.4889)"), "406 Chongqing Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc017":
+    ("Location_017", st_geogfromtext("POINT(108.7969 34.1975)"), "552 Xi'an Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc018":
+    ("Location_018", st_geogfromtext("POINT(104.1656 30.5442)"), "409 Chengdu Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc019":
+    ("Location_019", st_geogfromtext("POINT(120.0428 30.4731)"), "506 Hangzhou Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc020":
+    ("Location_020", st_geogfromtext("POINT(121.5760 31.3748)"), "643 Shanghai Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc021":
+    ("Location_021", st_geogfromtext("POINT(113.3812 23.0980)"), "395 Guangzhou Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc022":
+    ("Location_022", st_geogfromtext("POINT(114.3439 30.5800)"), "995 Wuhan Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc023":
+    ("Location_023", st_geogfromtext("POINT(118.9412 31.8649)"), "699 Nanjing Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc024":
+    ("Location_024", st_geogfromtext("POINT(118.8973 32.1677)"), "115 Nanjing Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc025":
+    ("Location_025", st_geogfromtext("POINT(104.0407 30.5543)"), "996 Chengdu Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc026":
+    ("Location_026", st_geogfromtext("POINT(118.9017 32.0634)"), "892 Nanjing Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc027":
+    ("Location_027", st_geogfromtext("POINT(104.2035 30.5759)"), "157 Chengdu Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc028":
+    ("Location_028", st_geogfromtext("POINT(120.2601 30.2899)"), "941 Hangzhou Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc029":
+    ("Location_029", st_geogfromtext("POINT(116.4470 39.8996)"), "952 Beijing Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc030":
+    ("Location_030", st_geogfromtext("POINT(120.3066 30.4068)"), "246 Hangzhou Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc031":
+    ("Location_031", st_geogfromtext("POINT(116.3037 39.9311)"), "88 Beijing Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc032":
+    ("Location_032", st_geogfromtext("POINT(109.0662 34.5328)"), "785 Xi'an Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc033":
+    ("Location_033", st_geogfromtext("POINT(113.1158 23.1192)"), "170 Guangzhou Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc034":
+    ("Location_034", st_geogfromtext("POINT(104.0779 30.6154)"), "952 Chengdu Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc035":
+    ("Location_035", st_geogfromtext("POINT(118.8990 32.1362)"), "409 Nanjing Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc036":
+    ("Location_036", st_geogfromtext("POINT(120.1303 30.2811)"), "254 Hangzhou Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc037":
+    ("Location_037", st_geogfromtext("POINT(113.8835 22.3515)"), "236 Shenzhen Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc038":
+    ("Location_038", st_geogfromtext("POINT(106.4397 29.3914)"), "235 Chongqing Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc039":
+    ("Location_039", st_geogfromtext("POINT(121.6359 31.3743)"), "527 Shanghai Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc040":
+    ("Location_040", st_geogfromtext("POINT(113.9693 22.5373)"), "136 Shenzhen Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc041":
+    ("Location_041", st_geogfromtext("POINT(106.5821 29.4602)"), "827 Chongqing Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc042":
+    ("Location_042", st_geogfromtext("POINT(114.1817 30.4316)"), "363 Wuhan Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc043":
+    ("Location_043", st_geogfromtext("POINT(114.2699 30.7383)"), "690 Wuhan Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc044":
+    ("Location_044", st_geogfromtext("POINT(121.2979 31.3217)"), "255 Shanghai Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc045":
+    ("Location_045", st_geogfromtext("POINT(113.9340 22.5225)"), "188 Shenzhen Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc046":
+    ("Location_046", st_geogfromtext("POINT(104.0519 30.7226)"), "454 Chengdu Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc047":
+    ("Location_047", st_geogfromtext("POINT(118.6361 32.1212)"), "857 Nanjing Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc048":
+    ("Location_048", st_geogfromtext("POINT(116.5950 40.0747)"), "171 Beijing Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc049":
+    ("Location_049", st_geogfromtext("POINT(114.2998 30.4783)"), "925 Wuhan Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc050":
+    ("Location_050", st_geogfromtext("POINT(116.2733 39.7051)"), "272 Beijing Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc051":
+    ("Location_051", st_geogfromtext("POINT(108.8539 34.4202)"), "678 Xi'an Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc052":
+    ("Location_052", st_geogfromtext("POINT(108.8017 34.2603)"), "594 Xi'an Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc053":
+    ("Location_053", st_geogfromtext("POINT(118.6213 31.9857)"), "599 Nanjing Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc054":
+    ("Location_054", st_geogfromtext("POINT(108.9409 34.4827)"), "59 Xi'an Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc055":
+    ("Location_055", st_geogfromtext("POINT(118.6289 31.9346)"), "70 Nanjing Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc056":
+    ("Location_056", st_geogfromtext("POINT(114.0194 22.7197)"), "253 Shenzhen Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc057":
+    ("Location_057", st_geogfromtext("POINT(106.5894 29.6108)"), "674 Chongqing Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc058":
+    ("Location_058", st_geogfromtext("POINT(106.5777 29.4895)"), "210 Chongqing Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc059":
+    ("Location_059", st_geogfromtext("POINT(120.0506 30.2324)"), "469 Hangzhou Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc060":
+    ("Location_060", st_geogfromtext("POINT(120.3267 30.4484)"), "470 Hangzhou Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc061":
+    ("Location_061", st_geogfromtext("POINT(106.7510 29.7614)"), "551 Chongqing Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc062":
+    ("Location_062", st_geogfromtext("POINT(114.0603 22.3961)"), "903 Shenzhen Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc063":
+    ("Location_063", st_geogfromtext("POINT(121.6254 31.1782)"), "449 Shanghai Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc064":
+    ("Location_064", st_geogfromtext("POINT(118.8783 32.1050)"), "9 Nanjing Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc065":
+    ("Location_065", st_geogfromtext("POINT(118.7167 32.1257)"), "271 Nanjing Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc066":
+    ("Location_066", st_geogfromtext("POINT(121.6296 31.3274)"), "279 Shanghai Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc067":
+    ("Location_067", st_geogfromtext("POINT(104.1087 30.6598)"), "704 Chengdu Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc068":
+    ("Location_068", st_geogfromtext("POINT(104.0690 30.4732)"), "95 Chengdu Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc069":
+    ("Location_069", st_geogfromtext("POINT(114.4372 30.4104)"), "790 Wuhan Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc070":
+    ("Location_070", st_geogfromtext("POINT(113.3192 23.0339)"), "565 Guangzhou Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc071":
+    ("Location_071", st_geogfromtext("POINT(114.3299 30.4375)"), "559 Wuhan Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc072":
+    ("Location_072", st_geogfromtext("POINT(116.5412 39.9372)"), "441 Beijing Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc073":
+    ("Location_073", st_geogfromtext("POINT(113.0811 23.0750)"), "921 Guangzhou Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc074":
+    ("Location_074", st_geogfromtext("POINT(120.0391 30.1739)"), "363 Hangzhou Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc075":
+    ("Location_075", st_geogfromtext("POINT(118.9506 32.0229)"), "768 Nanjing Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc076":
+    ("Location_076", st_geogfromtext("POINT(113.4347 23.0238)"), "820 Guangzhou Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc077":
+    ("Location_077", st_geogfromtext("POINT(113.4170 22.9390)"), "802 Guangzhou Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc078":
+    ("Location_078", st_geogfromtext("POINT(114.4264 30.7384)"), "274 Wuhan Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc079":
+    ("Location_079", st_geogfromtext("POINT(113.3793 22.9723)"), "880 Guangzhou Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc080":
+    ("Location_080", st_geogfromtext("POINT(108.8288 34.4682)"), "359 Xi'an Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc081":
+    ("Location_081", st_geogfromtext("POINT(104.1950 30.7213)"), "25 Chengdu Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc082":
+    ("Location_082", st_geogfromtext("POINT(114.0173 22.4545)"), "991 Shenzhen Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc083":
+    ("Location_083", st_geogfromtext("POINT(104.0073 30.5766)"), "340 Chengdu Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc084":
+    ("Location_084", st_geogfromtext("POINT(116.2535 40.0924)"), "595 Beijing Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc085":
+    ("Location_085", st_geogfromtext("POINT(103.8821 30.6114)"), "747 Chengdu Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc086":
+    ("Location_086", st_geogfromtext("POINT(120.1297 30.4678)"), "395 Hangzhou Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc087":
+    ("Location_087", st_geogfromtext("POINT(106.4276 29.3808)"), "2 Chongqing Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc088":
+    ("Location_088", st_geogfromtext("POINT(118.9671 32.0757)"), "373 Nanjing Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc089":
+    ("Location_089", st_geogfromtext("POINT(114.1335 30.6585)"), "639 Wuhan Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc090":
+    ("Location_090", st_geogfromtext("POINT(120.2205 30.1240)"), "520 Hangzhou Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc091":
+    ("Location_091", st_geogfromtext("POINT(104.1336 30.5033)"), "568 Chengdu Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc092":
+    ("Location_092", st_geogfromtext("POINT(113.1411 23.1951)"), "694 Guangzhou Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc093":
+    ("Location_093", st_geogfromtext("POINT(113.3106 23.0495)"), "854 Guangzhou Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc094":
+    ("Location_094", st_geogfromtext("POINT(116.3289 39.7883)"), "622 Beijing Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc095":
+    ("Location_095", st_geogfromtext("POINT(120.1411 30.2510)"), "524 Hangzhou Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc096":
+    ("Location_096", st_geogfromtext("POINT(109.0573 34.5255)"), "675 Xi'an Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc097":
+    ("Location_097", st_geogfromtext("POINT(121.3872 31.2959)"), "344 Shanghai Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc098":
+    ("Location_098", st_geogfromtext("POINT(121.6011 31.3309)"), "231 Shanghai Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc099":
+    ("Location_099", st_geogfromtext("POINT(113.9168 22.3616)"), "626 Shenzhen Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc100":
+    ("Location_100", st_geogfromtext("POINT(121.4559 31.3849)"), "200 Shanghai Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc101":
+    ("Location_101", st_geogfromtext("POINT(114.3033 30.4904)"), "915 Wuhan Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc102":
+    ("Location_102", st_geogfromtext("POINT(121.5851 31.1179)"), "476 Shanghai Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc103":
+    ("Location_103", st_geogfromtext("POINT(116.4304 40.0712)"), "468 Beijing Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc104":
+    ("Location_104", st_geogfromtext("POINT(113.3850 23.1961)"), "610 Guangzhou Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc105":
+    ("Location_105", st_geogfromtext("POINT(120.3351 30.4307)"), "835 Hangzhou Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc106":
+    ("Location_106", st_geogfromtext("POINT(118.7676 32.2230)"), "919 Nanjing Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc107":
+    ("Location_107", st_geogfromtext("POINT(113.3619 23.1190)"), "770 Guangzhou Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc108":
+    ("Location_108", st_geogfromtext("POINT(114.1938 22.4540)"), "497 Shenzhen Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc109":
+    ("Location_109", st_geogfromtext("POINT(113.9677 22.3741)"), "241 Shenzhen Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc110":
+    ("Location_110", st_geogfromtext("POINT(104.0011 30.7300)"), "142 Chengdu Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc111":
+    ("Location_111", st_geogfromtext("POINT(113.1569 23.2067)"), "66 Guangzhou Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc112":
+    ("Location_112", st_geogfromtext("POINT(114.2685 30.6098)"), "64 Wuhan Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc113":
+    ("Location_113", st_geogfromtext("POINT(114.1911 22.4989)"), "969 Shenzhen Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc114":
+    ("Location_114", st_geogfromtext("POINT(116.5501 40.0104)"), "489 Beijing Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc115":
+    ("Location_115", st_geogfromtext("POINT(116.5845 39.8236)"), "874 Beijing Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc116":
+    ("Location_116", st_geogfromtext("POINT(114.3208 30.6867)"), "920 Wuhan Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc117":
+    ("Location_117", st_geogfromtext("POINT(114.0532 22.4523)"), "30 Shenzhen Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc118":
+    ("Location_118", st_geogfromtext("POINT(114.2400 30.6645)"), "742 Wuhan Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc119":
+    ("Location_119", st_geogfromtext("POINT(113.4006 23.2969)"), "547 Guangzhou Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc120":
+    ("Location_120", st_geogfromtext("POINT(116.5702 39.9410)"), "86 Beijing Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc121":
+    ("Location_121", st_geogfromtext("POINT(114.1598 30.5775)"), "267 Wuhan Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc122":
+    ("Location_122", st_geogfromtext("POINT(114.2364 30.5747)"), "780 Wuhan Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc123":
+    ("Location_123", st_geogfromtext("POINT(114.2168 30.7733)"), "259 Wuhan Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc124":
+    ("Location_124", st_geogfromtext("POINT(121.4618 31.3300)"), "975 Shanghai Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc125":
+    ("Location_125", st_geogfromtext("POINT(120.0448 30.1015)"), "773 Hangzhou Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc126":
+    ("Location_126", st_geogfromtext("POINT(116.5872 39.7839)"), "637 Beijing Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc127":
+    ("Location_127", st_geogfromtext("POINT(113.1598 23.1185)"), "578 Guangzhou Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc128":
+    ("Location_128", st_geogfromtext("POINT(114.0439 22.4456)"), "172 Shenzhen Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc129":
+    ("Location_129", st_geogfromtext("POINT(106.5945 29.6622)"), "797 Chongqing Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc130":
+    ("Location_130", st_geogfromtext("POINT(113.4503 22.9723)"), "952 Guangzhou Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc131":
+    ("Location_131", st_geogfromtext("POINT(104.0971 30.7360)"), "407 Chengdu Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc132":
+    ("Location_132", st_geogfromtext("POINT(113.8883 22.6193)"), "105 Shenzhen Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc133":
+    ("Location_133", st_geogfromtext("POINT(104.2069 30.6130)"), "816 Chengdu Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc134":
+    ("Location_134", st_geogfromtext("POINT(106.6647 29.5019)"), "678 Chongqing Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc135":
+    ("Location_135", st_geogfromtext("POINT(119.9827 30.3331)"), "870 Hangzhou Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc136":
+    ("Location_136", st_geogfromtext("POINT(114.4344 30.4350)"), "651 Wuhan Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc137":
+    ("Location_137", st_geogfromtext("POINT(109.0227 34.3158)"), "989 Xi'an Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc138":
+    ("Location_138", st_geogfromtext("POINT(104.1132 30.7406)"), "477 Chengdu Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc139":
+    ("Location_139", st_geogfromtext("POINT(114.4358 30.6298)"), "873 Wuhan Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc140":
+    ("Location_140", st_geogfromtext("POINT(114.1902 22.3778)"), "250 Shenzhen Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc141":
+    ("Location_141", st_geogfromtext("POINT(108.9677 34.4089)"), "30 Xi'an Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc142":
+    ("Location_142", st_geogfromtext("POINT(109.0802 34.2143)"), "364 Xi'an Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc143":
+    ("Location_143", st_geogfromtext("POINT(104.0029 30.7249)"), "570 Chengdu Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc144":
+    ("Location_144", st_geogfromtext("POINT(116.4141 39.7806)"), "738 Beijing Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc145":
+    ("Location_145", st_geogfromtext("POINT(114.3009 30.6961)"), "662 Wuhan Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc146":
+    ("Location_146", st_geogfromtext("POINT(108.9191 34.1485)"), "227 Xi'an Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc147":
+    ("Location_147", st_geogfromtext("POINT(114.3822 30.5153)"), "378 Wuhan Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc148":
+    ("Location_148", st_geogfromtext("POINT(108.9612 34.2791)"), "339 Xi'an Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc149":
+    ("Location_149", st_geogfromtext("POINT(120.2362 30.1825)"), "237 Hangzhou Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc150":
+    ("Location_150", st_geogfromtext("POINT(121.5622 31.1566)"), "974 Shanghai Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc151":
+    ("Location_151", st_geogfromtext("POINT(113.1410 23.2245)"), "742 Guangzhou Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc152":
+    ("Location_152", st_geogfromtext("POINT(106.7422 29.5729)"), "103 Chongqing Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc153":
+    ("Location_153", st_geogfromtext("POINT(113.9764 22.4875)"), "15 Shenzhen Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc154":
+    ("Location_154", st_geogfromtext("POINT(118.6475 31.8785)"), "567 Nanjing Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc155":
+    ("Location_155", st_geogfromtext("POINT(104.1458 30.4233)"), "106 Chengdu Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc156":
+    ("Location_156", st_geogfromtext("POINT(116.4370 39.8920)"), "349 Beijing Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc157":
+    ("Location_157", st_geogfromtext("POINT(113.4506 23.0301)"), "117 Guangzhou Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc158":
+    ("Location_158", st_geogfromtext("POINT(121.4340 31.0600)"), "156 Shanghai Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc159":
+    ("Location_159", st_geogfromtext("POINT(113.3889 23.3088)"), "255 Guangzhou Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc160":
+    ("Location_160", st_geogfromtext("POINT(121.4969 31.1969)"), "810 Shanghai Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc161":
+    ("Location_161", st_geogfromtext("POINT(106.4419 29.5720)"), "931 Chongqing Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc162":
+    ("Location_162", st_geogfromtext("POINT(108.8587 34.3770)"), "313 Xi'an Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc163":
+    ("Location_163", st_geogfromtext("POINT(106.6000 29.6069)"), "971 Chongqing Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc164":
+    ("Location_164", st_geogfromtext("POINT(114.1081 22.4490)"), "161 Shenzhen Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc165":
+    ("Location_165", st_geogfromtext("POINT(113.9274 22.3731)"), "419 Shenzhen Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc166":
+    ("Location_166", st_geogfromtext("POINT(109.0155 34.3296)"), "238 Xi'an Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc167":
+    ("Location_167", st_geogfromtext("POINT(104.1496 30.6540)"), "73 Chengdu Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc168":
+    ("Location_168", st_geogfromtext("POINT(114.2275 22.6582)"), "678 Shenzhen Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc169":
+    ("Location_169", st_geogfromtext("POINT(114.0280 22.5609)"), "931 Shenzhen Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc170":
+    ("Location_170", st_geogfromtext("POINT(104.1975 30.4014)"), "812 Chengdu Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc171":
+    ("Location_171", st_geogfromtext("POINT(104.1048 30.7025)"), "450 Chengdu Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc172":
+    ("Location_172", st_geogfromtext("POINT(121.4612 31.1520)"), "966 Shanghai Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc173":
+    ("Location_173", st_geogfromtext("POINT(104.0670 30.5703)"), "613 Chengdu Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc174":
+    ("Location_174", st_geogfromtext("POINT(116.5632 39.9980)"), "257 Beijing Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc175":
+    ("Location_175", st_geogfromtext("POINT(116.2439 40.0890)"), "602 Beijing Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc176":
+    ("Location_176", st_geogfromtext("POINT(116.6072 39.9731)"), "591 Beijing Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc177":
+    ("Location_177", st_geogfromtext("POINT(116.5126 39.7743)"), "668 Beijing Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc178":
+    ("Location_178", st_geogfromtext("POINT(109.1062 34.2142)"), "447 Xi'an Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc179":
+    ("Location_179", st_geogfromtext("POINT(109.1274 34.3296)"), "342 Xi'an Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc180":
+    ("Location_180", st_geogfromtext("POINT(120.2232 30.4172)"), "422 Hangzhou Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc181":
+    ("Location_181", st_geogfromtext("POINT(108.8551 34.5197)"), "38 Xi'an Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc182":
+    ("Location_182", st_geogfromtext("POINT(108.7750 34.2426)"), "994 Xi'an Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc183":
+    ("Location_183", st_geogfromtext("POINT(114.4515 30.7228)"), "674 Wuhan Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc184":
+    ("Location_184", st_geogfromtext("POINT(118.7817 31.8820)"), "371 Nanjing Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc185":
+    ("Location_185", st_geogfromtext("POINT(106.6542 29.6132)"), "209 Chongqing Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc186":
+    ("Location_186", st_geogfromtext("POINT(104.0865 30.7439)"), "902 Chengdu Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc187":
+    ("Location_187", st_geogfromtext("POINT(108.7884 34.5309)"), "819 Xi'an Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc188":
+    ("Location_188", st_geogfromtext("POINT(114.1418 22.4674)"), "566 Shenzhen Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc189":
+    ("Location_189", st_geogfromtext("POINT(114.1428 30.7897)"), "473 Wuhan Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc190":
+    ("Location_190", st_geogfromtext("POINT(121.5328 31.0920)"), "522 Shanghai Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc191":
+    ("Location_191", st_geogfromtext("POINT(104.0330 30.5658)"), "250 Chengdu Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc192":
+    ("Location_192", st_geogfromtext("POINT(108.9603 34.2950)"), "521 Xi'an Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc193":
+    ("Location_193", st_geogfromtext("POINT(113.4100 23.0396)"), "349 Guangzhou Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc194":
+    ("Location_194", st_geogfromtext("POINT(118.7038 31.8613)"), "858 Nanjing Road", "attraction")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc195":
+    ("Location_195", st_geogfromtext("POINT(106.5836 29.6270)"), "458 Chongqing Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc196":
+    ("Location_196", st_geogfromtext("POINT(118.7906 31.9933)"), "387 Nanjing Road", "park")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc197":
+    ("Location_197", st_geogfromtext("POINT(109.1129 34.4894)"), "586 Xi'an Road", "hotel")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc198":
+    ("Location_198", st_geogfromtext("POINT(114.1989 30.7030)"), "326 Wuhan Road", "restaurant")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc199":
+    ("Location_199", st_geogfromtext("POINT(109.0219 34.4662)"), "680 Xi'an Road", "shop")
+INSERT VERTEX location(name, coord, address, category) VALUES "loc200":
+    ("Location_200", st_geogfromtext("POINT(113.2625 22.9439)"), "989 Guangzhou Road", "park")
+
+-- Generate nearby relationships
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc001" -> "loc025" @0:
+    (3.89, 46)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc001" -> "loc037" @0:
+    (39.91, 478)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc001" -> "loc054" @0:
+    (40.33, 483)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc001" -> "loc079" @0:
+    (30.52, 366)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc001" -> "loc126" @0:
+    (27.06, 324)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc001" -> "loc135" @0:
+    (44.27, 531)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc001" -> "loc163" @0:
+    (18.84, 226)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc001" -> "loc180" @0:
+    (39.45, 473)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc001" -> "loc192" @0:
+    (42.99, 515)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc001" -> "loc198" @0:
+    (1.24, 14)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc002" -> "loc015" @0:
+    (39.27, 471)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc002" -> "loc090" @0:
+    (46.49, 557)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc002" -> "loc097" @0:
+    (43.56, 522)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc002" -> "loc102" @0:
+    (37.43, 449)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc002" -> "loc127" @0:
+    (20.07, 240)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc002" -> "loc129" @0:
+    (15.42, 185)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc002" -> "loc134" @0:
+    (37.48, 449)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc002" -> "loc143" @0:
+    (1.43, 17)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc002" -> "loc151" @0:
+    (16.58, 198)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc003" -> "loc082" @0:
+    (17.17, 206)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc003" -> "loc132" @0:
+    (3.14, 37)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc003" -> "loc137" @0:
+    (46.58, 558)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc003" -> "loc148" @0:
+    (4.42, 53)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc003" -> "loc157" @0:
+    (21.28, 255)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc003" -> "loc163" @0:
+    (26.01, 312)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc003" -> "loc183" @0:
+    (39.53, 474)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc003" -> "loc190" @0:
+    (27.53, 330)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc004" -> "loc006" @0:
+    (10.37, 124)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc004" -> "loc007" @0:
+    (46.7, 560)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc004" -> "loc043" @0:
+    (43.57, 522)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc004" -> "loc058" @0:
+    (3.83, 45)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc004" -> "loc108" @0:
+    (27.92, 335)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc004" -> "loc159" @0:
+    (2.75, 33)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc005" -> "loc012" @0:
+    (47.29, 567)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc005" -> "loc049" @0:
+    (7.28, 87)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc005" -> "loc074" @0:
+    (23.99, 287)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc005" -> "loc087" @0:
+    (47.44, 569)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc005" -> "loc089" @0:
+    (16.03, 192)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc005" -> "loc157" @0:
+    (27.74, 332)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc005" -> "loc185" @0:
+    (28.61, 343)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc006" -> "loc028" @0:
+    (32.86, 394)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc006" -> "loc085" @0:
+    (17.55, 210)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc006" -> "loc091" @0:
+    (20.74, 248)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc006" -> "loc112" @0:
+    (1.63, 19)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc006" -> "loc128" @0:
+    (10.7, 128)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc006" -> "loc130" @0:
+    (30.09, 361)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc006" -> "loc132" @0:
+    (37.16, 445)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc006" -> "loc197" @0:
+    (46.89, 562)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc007" -> "loc056" @0:
+    (42.41, 508)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc007" -> "loc064" @0:
+    (25.53, 306)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc007" -> "loc071" @0:
+    (27.81, 333)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc007" -> "loc072" @0:
+    (26.71, 320)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc007" -> "loc075" @0:
+    (40.75, 489)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc007" -> "loc101" @0:
+    (8.98, 107)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc007" -> "loc109" @0:
+    (10.97, 131)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc007" -> "loc113" @0:
+    (4.18, 50)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc007" -> "loc117" @0:
+    (46.47, 557)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc007" -> "loc145" @0:
+    (14.03, 168)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc007" -> "loc164" @0:
+    (15.76, 189)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc007" -> "loc172" @0:
+    (18.02, 216)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc008" -> "loc072" @0:
+    (49.19, 590)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc008" -> "loc078" @0:
+    (13.31, 159)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc008" -> "loc089" @0:
+    (5.68, 68)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc008" -> "loc121" @0:
+    (30.9, 370)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc008" -> "loc171" @0:
+    (7.26, 87)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc008" -> "loc181" @0:
+    (38.17, 458)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc008" -> "loc196" @0:
+    (36.09, 433)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc009" -> "loc067" @0:
+    (38.82, 465)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc009" -> "loc086" @0:
+    (5.43, 65)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc009" -> "loc092" @0:
+    (47.92, 575)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc009" -> "loc111" @0:
+    (24.1, 289)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc009" -> "loc115" @0:
+    (34.93, 419)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc009" -> "loc133" @0:
+    (32.68, 392)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc009" -> "loc182" @0:
+    (3.84, 46)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc009" -> "loc184" @0:
+    (3.49, 41)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc010" -> "loc040" @0:
+    (40.45, 485)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc010" -> "loc057" @0:
+    (43.21, 518)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc010" -> "loc086" @0:
+    (10.43, 125)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc010" -> "loc098" @0:
+    (20.8, 249)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc010" -> "loc104" @0:
+    (33.04, 396)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc010" -> "loc155" @0:
+    (41.88, 502)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc010" -> "loc164" @0:
+    (20.52, 246)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc010" -> "loc171" @0:
+    (41.6, 499)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc010" -> "loc181" @0:
+    (3.69, 44)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc010" -> "loc188" @0:
+    (23.32, 279)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc010" -> "loc193" @0:
+    (34.32, 411)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc010" -> "loc199" @0:
+    (31.15, 373)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc011" -> "loc061" @0:
+    (35.18, 422)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc011" -> "loc075" @0:
+    (45.94, 551)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc011" -> "loc082" @0:
+    (29.54, 354)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc011" -> "loc116" @0:
+    (30.32, 363)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc011" -> "loc138" @0:
+    (19.6, 235)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc011" -> "loc166" @0:
+    (47.15, 565)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc011" -> "loc179" @0:
+    (28.8, 345)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc011" -> "loc188" @0:
+    (8.96, 107)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc012" -> "loc085" @0:
+    (14.13, 169)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc012" -> "loc089" @0:
+    (44.53, 534)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc012" -> "loc095" @0:
+    (40.96, 491)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc012" -> "loc123" @0:
+    (10.04, 120)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc012" -> "loc135" @0:
+    (18.94, 227)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc012" -> "loc155" @0:
+    (39.13, 469)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc012" -> "loc157" @0:
+    (45.62, 547)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc012" -> "loc160" @0:
+    (12.99, 155)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc013" -> "loc017" @0:
+    (35.55, 426)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc013" -> "loc073" @0:
+    (14.04, 168)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc013" -> "loc085" @0:
+    (10.37, 124)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc013" -> "loc087" @0:
+    (16.45, 197)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc013" -> "loc122" @0:
+    (43.89, 526)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc013" -> "loc125" @0:
+    (49.74, 596)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc013" -> "loc128" @0:
+    (34.64, 415)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc013" -> "loc155" @0:
+    (25.07, 300)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc013" -> "loc159" @0:
+    (33.75, 405)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc013" -> "loc175" @0:
+    (14.88, 178)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc013" -> "loc181" @0:
+    (42.67, 512)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc014" -> "loc025" @0:
+    (34.38, 412)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc014" -> "loc032" @0:
+    (13.45, 161)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc014" -> "loc079" @0:
+    (5.0, 60)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc014" -> "loc105" @0:
+    (8.63, 103)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc014" -> "loc129" @0:
+    (46.8, 561)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc014" -> "loc183" @0:
+    (7.69, 92)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc014" -> "loc194" @0:
+    (40.79, 489)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc015" -> "loc027" @0:
+    (12.94, 155)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc015" -> "loc083" @0:
+    (33.61, 403)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc015" -> "loc101" @0:
+    (44.96, 539)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc015" -> "loc108" @0:
+    (3.74, 44)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc015" -> "loc134" @0:
+    (33.83, 405)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc015" -> "loc168" @0:
+    (30.03, 360)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc016" -> "loc026" @0:
+    (12.69, 152)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc016" -> "loc048" @0:
+    (25.61, 307)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc016" -> "loc049" @0:
+    (29.3, 351)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc016" -> "loc085" @0:
+    (10.74, 128)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc016" -> "loc090" @0:
+    (49.04, 588)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc016" -> "loc130" @0:
+    (2.64, 31)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc016" -> "loc134" @0:
+    (28.83, 345)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc016" -> "loc141" @0:
+    (36.12, 433)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc016" -> "loc171" @0:
+    (39.3, 471)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc016" -> "loc183" @0:
+    (26.73, 320)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc017" -> "loc022" @0:
+    (32.9, 394)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc017" -> "loc059" @0:
+    (5.01, 60)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc017" -> "loc066" @0:
+    (19.52, 234)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc017" -> "loc080" @0:
+    (30.18, 362)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc017" -> "loc084" @0:
+    (12.34, 148)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc017" -> "loc085" @0:
+    (8.29, 99)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc017" -> "loc125" @0:
+    (6.26, 75)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc017" -> "loc134" @0:
+    (41.69, 500)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc017" -> "loc164" @0:
+    (24.37, 292)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc017" -> "loc188" @0:
+    (10.93, 131)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc018" -> "loc057" @0:
+    (6.5, 78)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc018" -> "loc095" @0:
+    (36.52, 438)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc018" -> "loc105" @0:
+    (20.15, 241)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc018" -> "loc118" @0:
+    (33.35, 400)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc018" -> "loc143" @0:
+    (40.86, 490)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc018" -> "loc147" @0:
+    (46.14, 553)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc018" -> "loc150" @0:
+    (21.81, 261)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc018" -> "loc153" @0:
+    (19.0, 228)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc018" -> "loc180" @0:
+    (2.96, 35)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc019" -> "loc032" @0:
+    (23.31, 279)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc019" -> "loc041" @0:
+    (46.9, 562)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc019" -> "loc056" @0:
+    (2.58, 30)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc019" -> "loc101" @0:
+    (32.08, 384)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc019" -> "loc104" @0:
+    (42.91, 514)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc019" -> "loc149" @0:
+    (3.98, 47)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc020" -> "loc022" @0:
+    (41.19, 494)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc020" -> "loc029" @0:
+    (18.1, 217)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc020" -> "loc061" @0:
+    (38.98, 467)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc020" -> "loc064" @0:
+    (27.23, 326)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc020" -> "loc080" @0:
+    (20.26, 243)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc020" -> "loc103" @0:
+    (15.59, 187)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc020" -> "loc109" @0:
+    (41.0, 492)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc020" -> "loc120" @0:
+    (34.84, 418)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc020" -> "loc123" @0:
+    (10.85, 130)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc020" -> "loc132" @0:
+    (29.36, 352)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc020" -> "loc134" @0:
+    (8.93, 107)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc020" -> "loc140" @0:
+    (19.74, 236)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc020" -> "loc145" @0:
+    (43.44, 521)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc020" -> "loc158" @0:
+    (12.75, 153)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc020" -> "loc174" @0:
+    (27.97, 335)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc021" -> "loc063" @0:
+    (38.34, 460)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc021" -> "loc064" @0:
+    (13.86, 166)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc021" -> "loc078" @0:
+    (36.9, 442)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc021" -> "loc090" @0:
+    (49.79, 597)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc021" -> "loc097" @0:
+    (14.91, 178)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc021" -> "loc159" @0:
+    (44.19, 530)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc021" -> "loc171" @0:
+    (7.84, 94)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc021" -> "loc173" @0:
+    (42.76, 513)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc021" -> "loc178" @0:
+    (21.14, 253)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc022" -> "loc049" @0:
+    (1.69, 20)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc022" -> "loc059" @0:
+    (10.46, 125)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc022" -> "loc065" @0:
+    (34.45, 413)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc022" -> "loc069" @0:
+    (9.19, 110)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc022" -> "loc096" @0:
+    (49.19, 590)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc022" -> "loc106" @0:
+    (20.99, 251)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc022" -> "loc118" @0:
+    (24.39, 292)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc022" -> "loc135" @0:
+    (46.65, 559)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc022" -> "loc140" @0:
+    (26.27, 315)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc022" -> "loc154" @0:
+    (31.34, 376)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc023" -> "loc029" @0:
+    (24.03, 288)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc023" -> "loc080" @0:
+    (7.76, 93)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc023" -> "loc096" @0:
+    (49.33, 591)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc023" -> "loc126" @0:
+    (36.21, 434)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc023" -> "loc184" @0:
+    (46.18, 554)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc024" -> "loc027" @0:
+    (6.02, 72)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc024" -> "loc066" @0:
+    (46.4, 556)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc024" -> "loc071" @0:
+    (45.93, 551)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc024" -> "loc093" @0:
+    (5.34, 64)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc024" -> "loc099" @0:
+    (5.05, 60)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc024" -> "loc167" @0:
+    (47.73, 572)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc024" -> "loc185" @0:
+    (19.52, 234)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc025" -> "loc031" @0:
+    (3.27, 39)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc025" -> "loc033" @0:
+    (6.35, 76)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc025" -> "loc042" @0:
+    (7.51, 90)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc025" -> "loc046" @0:
+    (35.21, 422)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc025" -> "loc049" @0:
+    (15.71, 188)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc025" -> "loc080" @0:
+    (5.45, 65)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc025" -> "loc084" @0:
+    (24.6, 295)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc025" -> "loc085" @0:
+    (9.38, 112)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc025" -> "loc099" @0:
+    (9.41, 112)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc025" -> "loc105" @0:
+    (12.16, 145)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc025" -> "loc123" @0:
+    (32.42, 389)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc025" -> "loc129" @0:
+    (37.15, 445)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc025" -> "loc193" @0:
+    (49.02, 588)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc025" -> "loc194" @0:
+    (23.8, 285)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc025" -> "loc196" @0:
+    (26.79, 321)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc026" -> "loc029" @0:
+    (36.72, 440)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc026" -> "loc040" @0:
+    (23.01, 276)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc026" -> "loc052" @0:
+    (21.58, 258)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc026" -> "loc145" @0:
+    (17.98, 215)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc026" -> "loc157" @0:
+    (16.17, 194)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc026" -> "loc162" @0:
+    (16.19, 194)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc026" -> "loc174" @0:
+    (37.06, 444)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc027" -> "loc030" @0:
+    (27.15, 325)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc027" -> "loc080" @0:
+    (41.4, 496)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc027" -> "loc085" @0:
+    (0.62, 7)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc027" -> "loc139" @0:
+    (26.15, 313)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc027" -> "loc169" @0:
+    (40.82, 489)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc027" -> "loc182" @0:
+    (5.84, 70)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc028" -> "loc037" @0:
+    (11.24, 134)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc028" -> "loc064" @0:
+    (16.74, 200)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc028" -> "loc140" @0:
+    (21.81, 261)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc028" -> "loc146" @0:
+    (28.05, 336)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc028" -> "loc169" @0:
+    (2.73, 32)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc028" -> "loc173" @0:
+    (44.62, 535)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc028" -> "loc187" @0:
+    (16.64, 199)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc029" -> "loc044" @0:
+    (49.81, 597)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc029" -> "loc068" @0:
+    (35.31, 423)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc029" -> "loc107" @0:
+    (8.39, 100)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc029" -> "loc116" @0:
+    (43.05, 516)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc029" -> "loc164" @0:
+    (48.36, 580)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc029" -> "loc195" @0:
+    (43.39, 520)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc030" -> "loc042" @0:
+    (3.08, 36)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc030" -> "loc117" @0:
+    (7.09, 85)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc030" -> "loc135" @0:
+    (13.06, 156)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc030" -> "loc152" @0:
+    (6.83, 81)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc030" -> "loc174" @0:
+    (13.38, 160)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc030" -> "loc179" @0:
+    (18.15, 217)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc031" -> "loc034" @0:
+    (34.22, 410)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc031" -> "loc047" @0:
+    (48.5, 582)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc031" -> "loc056" @0:
+    (32.36, 388)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc031" -> "loc093" @0:
+    (17.42, 209)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc031" -> "loc111" @0:
+    (4.29, 51)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc031" -> "loc112" @0:
+    (5.83, 69)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc031" -> "loc143" @0:
+    (6.28, 75)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc031" -> "loc159" @0:
+    (6.04, 72)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc031" -> "loc160" @0:
+    (48.54, 582)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc031" -> "loc172" @0:
+    (8.72, 104)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc031" -> "loc183" @0:
+    (31.71, 380)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc032" -> "loc042" @0:
+    (14.76, 177)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc032" -> "loc074" @0:
+    (1.4, 16)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc032" -> "loc080" @0:
+    (3.65, 43)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc032" -> "loc088" @0:
+    (43.95, 527)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc032" -> "loc105" @0:
+    (5.72, 68)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc032" -> "loc142" @0:
+    (7.71, 92)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc032" -> "loc143" @0:
+    (40.41, 484)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc032" -> "loc166" @0:
+    (14.35, 172)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc032" -> "loc181" @0:
+    (17.06, 204)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc032" -> "loc192" @0:
+    (39.93, 479)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc033" -> "loc036" @0:
+    (32.72, 392)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc033" -> "loc099" @0:
+    (8.09, 97)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc033" -> "loc107" @0:
+    (44.77, 537)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc033" -> "loc159" @0:
+    (39.44, 473)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc033" -> "loc167" @0:
+    (43.17, 518)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc033" -> "loc168" @0:
+    (22.13, 265)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc033" -> "loc184" @0:
+    (3.4, 40)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc034" -> "loc059" @0:
+    (23.5, 282)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc034" -> "loc063" @0:
+    (46.71, 560)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc034" -> "loc072" @0:
+    (37.09, 445)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc034" -> "loc094" @0:
+    (34.75, 417)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc034" -> "loc096" @0:
+    (24.09, 289)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc034" -> "loc107" @0:
+    (41.69, 500)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc034" -> "loc117" @0:
+    (23.4, 280)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc034" -> "loc121" @0:
+    (14.42, 173)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc034" -> "loc179" @0:
+    (10.13, 121)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc034" -> "loc182" @0:
+    (37.0, 444)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc035" -> "loc046" @0:
+    (16.01, 192)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc035" -> "loc064" @0:
+    (19.5, 234)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc035" -> "loc099" @0:
+    (29.53, 354)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc035" -> "loc123" @0:
+    (11.36, 136)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc035" -> "loc124" @0:
+    (11.54, 138)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc035" -> "loc137" @0:
+    (6.2, 74)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc035" -> "loc142" @0:
+    (1.97, 23)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc035" -> "loc150" @0:
+    (42.22, 506)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc035" -> "loc152" @0:
+    (34.03, 408)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc035" -> "loc176" @0:
+    (30.99, 371)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc036" -> "loc043" @0:
+    (11.37, 136)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc036" -> "loc078" @0:
+    (10.42, 125)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc036" -> "loc091" @0:
+    (15.32, 183)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc036" -> "loc123" @0:
+    (40.61, 487)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc036" -> "loc132" @0:
+    (39.38, 472)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc036" -> "loc153" @0:
+    (34.61, 415)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc036" -> "loc185" @0:
+    (7.56, 90)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc037" -> "loc078" @0:
+    (6.18, 74)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc037" -> "loc091" @0:
+    (5.48, 65)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc037" -> "loc101" @0:
+    (33.91, 406)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc037" -> "loc112" @0:
+    (38.73, 464)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc037" -> "loc192" @0:
+    (46.21, 554)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc038" -> "loc042" @0:
+    (42.42, 509)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc038" -> "loc055" @0:
+    (43.56, 522)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc038" -> "loc088" @0:
+    (19.38, 232)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc038" -> "loc105" @0:
+    (25.28, 303)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc038" -> "loc116" @0:
+    (46.12, 553)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc038" -> "loc132" @0:
+    (40.75, 489)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc038" -> "loc144" @0:
+    (38.66, 463)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc038" -> "loc174" @0:
+    (3.96, 47)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc039" -> "loc047" @0:
+    (29.33, 351)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc039" -> "loc051" @0:
+    (30.35, 364)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc039" -> "loc088" @0:
+    (18.33, 219)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc039" -> "loc089" @0:
+    (40.47, 485)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc039" -> "loc166" @0:
+    (3.56, 42)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc040" -> "loc084" @0:
+    (36.43, 437)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc040" -> "loc103" @0:
+    (12.42, 149)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc040" -> "loc123" @0:
+    (28.86, 346)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc040" -> "loc139" @0:
+    (28.02, 336)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc040" -> "loc162" @0:
+    (49.01, 588)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc040" -> "loc168" @0:
+    (15.38, 184)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc041" -> "loc057" @0:
+    (30.38, 364)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc041" -> "loc069" @0:
+    (19.17, 230)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc041" -> "loc096" @0:
+    (25.92, 311)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc041" -> "loc184" @0:
+    (23.42, 281)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc041" -> "loc191" @0:
+    (44.56, 534)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc042" -> "loc061" @0:
+    (20.03, 240)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc042" -> "loc082" @0:
+    (8.2, 98)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc042" -> "loc114" @0:
+    (49.52, 594)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc042" -> "loc134" @0:
+    (2.52, 30)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc042" -> "loc146" @0:
+    (27.81, 333)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc042" -> "loc174" @0:
+    (9.99, 119)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc042" -> "loc189" @0:
+    (30.16, 361)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc042" -> "loc192" @0:
+    (28.53, 342)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc043" -> "loc063" @0:
+    (12.29, 147)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc043" -> "loc064" @0:
+    (7.83, 93)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc043" -> "loc073" @0:
+    (17.7, 212)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc043" -> "loc120" @0:
+    (8.56, 102)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc043" -> "loc135" @0:
+    (41.41, 496)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc043" -> "loc138" @0:
+    (12.79, 153)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc043" -> "loc142" @0:
+    (48.33, 579)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc043" -> "loc166" @0:
+    (21.64, 259)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc044" -> "loc046" @0:
+    (46.69, 560)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc044" -> "loc084" @0:
+    (49.7, 596)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc044" -> "loc085" @0:
+    (28.14, 337)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc044" -> "loc105" @0:
+    (48.26, 579)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc044" -> "loc112" @0:
+    (18.58, 222)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc044" -> "loc130" @0:
+    (37.68, 452)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc044" -> "loc132" @0:
+    (41.72, 500)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc044" -> "loc166" @0:
+    (14.47, 173)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc044" -> "loc174" @0:
+    (13.82, 165)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc044" -> "loc179" @0:
+    (16.07, 192)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc044" -> "loc181" @0:
+    (18.15, 217)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc045" -> "loc099" @0:
+    (43.02, 516)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc045" -> "loc118" @0:
+    (42.73, 512)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc045" -> "loc143" @0:
+    (8.21, 98)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc045" -> "loc147" @0:
+    (30.25, 363)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc045" -> "loc183" @0:
+    (39.26, 471)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc046" -> "loc048" @0:
+    (22.8, 273)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc046" -> "loc064" @0:
+    (40.78, 489)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc046" -> "loc065" @0:
+    (44.88, 538)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc046" -> "loc102" @0:
+    (14.85, 178)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc046" -> "loc116" @0:
+    (19.04, 228)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc046" -> "loc127" @0:
+    (8.09, 97)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc046" -> "loc164" @0:
+    (35.53, 426)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc046" -> "loc199" @0:
+    (4.14, 49)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc047" -> "loc055" @0:
+    (9.34, 112)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc047" -> "loc058" @0:
+    (48.81, 585)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc047" -> "loc067" @0:
+    (1.64, 19)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc047" -> "loc111" @0:
+    (25.81, 309)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc047" -> "loc118" @0:
+    (9.41, 112)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc047" -> "loc128" @0:
+    (16.78, 201)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc047" -> "loc167" @0:
+    (32.42, 389)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc047" -> "loc186" @0:
+    (2.87, 34)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc047" -> "loc187" @0:
+    (5.7, 68)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc048" -> "loc085" @0:
+    (11.2, 134)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc048" -> "loc117" @0:
+    (33.26, 399)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc048" -> "loc143" @0:
+    (13.68, 164)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc048" -> "loc172" @0:
+    (23.99, 287)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc049" -> "loc050" @0:
+    (17.96, 215)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc049" -> "loc060" @0:
+    (48.94, 587)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc049" -> "loc087" @0:
+    (26.24, 314)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc049" -> "loc106" @0:
+    (2.53, 30)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc049" -> "loc113" @0:
+    (12.95, 155)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc049" -> "loc162" @0:
+    (28.17, 338)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc049" -> "loc177" @0:
+    (40.47, 485)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc050" -> "loc054" @0:
+    (24.51, 294)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc050" -> "loc057" @0:
+    (30.39, 364)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc050" -> "loc094" @0:
+    (23.13, 277)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc050" -> "loc096" @0:
+    (15.49, 185)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc050" -> "loc100" @0:
+    (45.4, 544)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc050" -> "loc138" @0:
+    (42.68, 512)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc051" -> "loc081" @0:
+    (17.23, 206)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc051" -> "loc097" @0:
+    (49.06, 588)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc051" -> "loc105" @0:
+    (2.26, 27)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc051" -> "loc112" @0:
+    (3.24, 38)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc051" -> "loc141" @0:
+    (36.13, 433)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc051" -> "loc146" @0:
+    (17.81, 213)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc051" -> "loc190" @0:
+    (14.26, 171)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc051" -> "loc199" @0:
+    (10.68, 128)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc052" -> "loc058" @0:
+    (30.63, 367)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc052" -> "loc087" @0:
+    (40.08, 480)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc052" -> "loc126" @0:
+    (6.17, 74)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc052" -> "loc127" @0:
+    (34.38, 412)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc052" -> "loc130" @0:
+    (36.01, 432)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc052" -> "loc161" @0:
+    (46.55, 558)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc052" -> "loc163" @0:
+    (30.65, 367)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc052" -> "loc172" @0:
+    (36.45, 437)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc053" -> "loc083" @0:
+    (6.48, 77)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc053" -> "loc089" @0:
+    (21.86, 262)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc053" -> "loc106" @0:
+    (37.07, 444)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc053" -> "loc164" @0:
+    (45.18, 542)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc053" -> "loc168" @0:
+    (41.71, 500)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc053" -> "loc169" @0:
+    (10.56, 126)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc054" -> "loc060" @0:
+    (31.91, 382)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc054" -> "loc061" @0:
+    (7.28, 87)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc054" -> "loc075" @0:
+    (3.83, 45)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc054" -> "loc141" @0:
+    (36.25, 435)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc054" -> "loc162" @0:
+    (1.49, 17)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc054" -> "loc184" @0:
+    (41.6, 499)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc054" -> "loc194" @0:
+    (14.07, 168)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc055" -> "loc062" @0:
+    (25.1, 301)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc055" -> "loc096" @0:
+    (34.67, 416)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc055" -> "loc117" @0:
+    (21.5, 258)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc055" -> "loc148" @0:
+    (21.11, 253)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc056" -> "loc086" @0:
+    (18.6, 223)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc056" -> "loc097" @0:
+    (22.38, 268)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc056" -> "loc099" @0:
+    (15.86, 190)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc056" -> "loc105" @0:
+    (14.11, 169)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc056" -> "loc107" @0:
+    (34.93, 419)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc056" -> "loc121" @0:
+    (1.93, 23)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc056" -> "loc137" @0:
+    (41.95, 503)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc056" -> "loc161" @0:
+    (14.05, 168)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc057" -> "loc063" @0:
+    (41.82, 501)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc057" -> "loc080" @0:
+    (6.21, 74)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc057" -> "loc088" @0:
+    (35.21, 422)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc057" -> "loc091" @0:
+    (21.36, 256)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc057" -> "loc099" @0:
+    (40.56, 486)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc057" -> "loc119" @0:
+    (25.85, 310)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc057" -> "loc136" @0:
+    (7.8, 93)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc057" -> "loc191" @0:
+    (47.95, 575)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc058" -> "loc060" @0:
+    (16.29, 195)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc058" -> "loc092" @0:
+    (14.44, 173)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc058" -> "loc105" @0:
+    (16.57, 198)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc058" -> "loc109" @0:
+    (37.06, 444)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc058" -> "loc137" @0:
+    (47.54, 570)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc058" -> "loc164" @0:
+    (21.01, 252)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc058" -> "loc171" @0:
+    (16.57, 198)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc058" -> "loc181" @0:
+    (17.36, 208)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc058" -> "loc190" @0:
+    (42.69, 512)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc059" -> "loc060" @0:
+    (31.43, 377)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc059" -> "loc065" @0:
+    (48.68, 584)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc059" -> "loc156" @0:
+    (2.1, 25)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc059" -> "loc169" @0:
+    (24.3, 291)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc060" -> "loc084" @0:
+    (10.98, 131)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc060" -> "loc105" @0:
+    (47.37, 568)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc060" -> "loc143" @0:
+    (30.65, 367)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc060" -> "loc177" @0:
+    (37.85, 454)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc061" -> "loc109" @0:
+    (35.36, 424)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc061" -> "loc129" @0:
+    (33.14, 397)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc061" -> "loc158" @0:
+    (38.72, 464)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc061" -> "loc175" @0:
+    (6.4, 76)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc061" -> "loc179" @0:
+    (26.66, 319)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc061" -> "loc182" @0:
+    (22.14, 265)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc061" -> "loc183" @0:
+    (25.46, 305)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc062" -> "loc077" @0:
+    (28.95, 347)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc062" -> "loc078" @0:
+    (41.5, 498)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc062" -> "loc079" @0:
+    (11.65, 139)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc062" -> "loc096" @0:
+    (30.3, 363)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc062" -> "loc143" @0:
+    (40.27, 483)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc062" -> "loc193" @0:
+    (43.67, 524)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc062" -> "loc195" @0:
+    (19.16, 229)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc062" -> "loc199" @0:
+    (44.91, 538)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc063" -> "loc109" @0:
+    (45.35, 544)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc063" -> "loc111" @0:
+    (10.3, 123)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc063" -> "loc114" @0:
+    (39.84, 478)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc063" -> "loc164" @0:
+    (36.8, 441)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc063" -> "loc196" @0:
+    (12.94, 155)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc064" -> "loc090" @0:
+    (6.31, 75)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc064" -> "loc175" @0:
+    (28.56, 342)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc064" -> "loc176" @0:
+    (47.32, 567)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc064" -> "loc188" @0:
+    (23.18, 278)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc065" -> "loc115" @0:
+    (27.63, 331)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc065" -> "loc125" @0:
+    (12.56, 150)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc065" -> "loc126" @0:
+    (30.8, 369)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc066" -> "loc069" @0:
+    (30.67, 368)
+INSERT EDGE nearby(distance_km, walking_time_min) VALUES "loc066" -> "loc108" @0:
+    (30.5, 366)
+
+-- Verify data
+MATCH (c:city) RETURN count(c) AS city_count
+MATCH (l:location) RETURN count(l) AS location_count
+MATCH ()-[n:nearby]->() RETURN count(n) AS nearby_count

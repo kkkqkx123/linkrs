@@ -1,0 +1,25 @@
+[package]
+name = "graphdb-transaction"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+graphdb-core = { path = "../graphdb-core" }
+graphdb-sync = { path = "../graphdb-sync" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+dashmap.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+crossbeam-utils.workspace = true
+postcard.workspace = true
+crc32fast.workspace = true
+num_cpus.workspace = true
+zstd.workspace = true
+once_cell.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

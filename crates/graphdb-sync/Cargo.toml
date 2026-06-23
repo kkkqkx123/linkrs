@@ -1,0 +1,27 @@
+[package]
+name = "graphdb-sync"
+version.workspace = true
+edition.workspace = true
+
+[features]
+qdrant = ["dep:vector-client"]
+fulltext-search = ["graphdb-search/fulltext-search"]
+
+[dependencies]
+graphdb-core = { path = "../graphdb-core" }
+graphdb-search = { path = "../graphdb-search" }
+graphdb-config = { path = "../graphdb-config" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+dashmap.workspace = true
+parking_lot.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+rand.workspace = true
+vector-client = { path = "../vector-client", features = ["qdrant-grpc"], optional = true }
+tracing.workspace = true
+tokio.workspace = true
+futures.workspace = true
+async-trait.workspace = true

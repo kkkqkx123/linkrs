@@ -1,0 +1,84 @@
+// GraphCanvas styles
+.graphCanvas {
+  width: 100%;
+  height: 100%;
+  background: #fafafa;
+}
+
+// NodeDetailPanel styles
+.detailPanel {
+  margin-top: 16px;
+
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .section {
+    margin-top: 16px;
+
+    h4 {
+      margin-bottom: 8px;
+      color: #333;
+      font-weight: 500;
+    }
+  }
+
+  .comment {
+    color: #666;
+    font-style: italic;
+  }
+}
+
+// ZoomControls styles
+.zoomControls {
+  background: #fff;
+  padding: 8px 12px;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+
+  .zoomLevel {
+    min-width: 50px;
+    text-align: center;
+    display: inline-block;
+    font-weight: 500;
+  }
+}
+
+// Legend styles
+.legend {
+  .legendItem {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+
+  .legendIcon {
+    width: 16px;
+    height: 16px;
+    border-radius: 2px;
+    display: inline-block;
+  }
+
+  .tagIcon {
+    background-color: #52c41a;
+    border: 2px solid #52c41a;
+  }
+
+  .edgeIcon {
+    background-color: #faad14;
+    border: 2px solid #faad14;
+    transform: rotate(45deg);
+  }
+
+  .selectedIcon {
+    background-color: #fff;
+    border: 2px solid #f5222d;
+  }
+}

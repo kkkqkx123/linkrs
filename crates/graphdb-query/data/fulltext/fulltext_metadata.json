@@ -1,0 +1,16 @@
+[
+  {
+    "index_id": "space_ft_1_article_content",
+    "index_name": "idx_article_content",
+    "space_id": 1,
+    "tag_name": "article",
+    "field_name": "content",
+    "engine_type": "Bm25",
+    "storage_path": "data/fulltext/space_ft_1_article_content",
+    "created_at": "2026-06-13T07:11:37.348543471Z",
+    "last_updated": "2026-06-13T07:11:37.348550064Z",
+    "doc_count": 0,
+    "status": "Active",
+    "engine_config": null
+  }
+]

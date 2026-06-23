@@ -1,0 +1,29 @@
+# cbindgen 配置文件
+# 用于从 Rust 代码生成 C 头文件
+
+language = "C"
+
+[export]
+# 导出所有公开的项
+exclude = []
+
+[fn]
+# 函数命名风格
+rename_args = "None"
+
+[struct]
+# 结构体命名风格
+rename_fields = "None"
+derive_eq = true
+derive_neq = true
+
+[enum]
+# 枚举命名风格
+rename_variants = "None"
+add_sentinel = false
+
+[defines]
+# 预处理器定义
+"target_os = windows" = "WINDOWS"
+"target_os = linux" = "LINUX"
+"target_os = macos" = "MACOS"

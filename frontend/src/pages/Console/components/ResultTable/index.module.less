@@ -1,0 +1,39 @@
+.resultTable {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+}
+
+.table {
+  :global {
+    .ant-table-cell {
+      max-width: 300px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    
+    .ant-table-thead > tr > th {
+      background: #fafafa;
+      font-weight: 600;
+      cursor: pointer;
+      user-select: none;
+      
+      &:hover {
+        background: #f0f0f0;
+      }
+    }
+  }
+}
+
+.cell {
+  display: block;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.empty {
+  padding: 48px 0;
+}

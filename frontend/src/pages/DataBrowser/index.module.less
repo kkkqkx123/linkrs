@@ -1,0 +1,63 @@
+.container {
+  padding: 16px;
+}
+
+.headerCard {
+  margin-bottom: 16px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+
+  h2 {
+    margin: 0;
+  }
+}
+
+.content {
+  display: flex;
+  gap: 16px;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar {
+  width: 300px;
+  flex-shrink: 0;
+}
+
+.error {
+  margin-bottom: 16px;
+}
+
+.dataCard {
+  :global {
+    .ant-card-body {
+      padding: 0;
+    }
+
+    .ant-tabs-nav {
+      padding: 0 16px;
+      margin-bottom: 0;
+    }
+
+    .ant-tabs-content {
+      padding: 16px;
+    }
+  }
+}
+
+.filterRow {
+  margin-bottom: 16px;
+}
+
+.pagination {
+  margin-top: 16px;
+  display: flex;
+  justify-content: flex-end;
+}

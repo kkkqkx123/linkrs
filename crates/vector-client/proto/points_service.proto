@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+import "points.proto";
+
+package qdrant;
+option csharp_namespace = "Qdrant.Client.Grpc";
+
+service Points {
+  rpc Upsert (UpsertPoints) returns (PointsOperationResponse) {}
+  rpc Delete (DeletePoints) returns (PointsOperationResponse) {}
+  rpc Get (GetPoints) returns (GetResponse) {}
+  rpc UpdateVectors (UpdatePointVectors) returns (PointsOperationResponse) {}
+  rpc DeleteVectors (DeletePointVectors) returns (PointsOperationResponse) {}
+  rpc SetPayload (SetPayloadPoints) returns (PointsOperationResponse) {}
+  rpc OverwritePayload (SetPayloadPoints) returns (PointsOperationResponse) {}
+  rpc DeletePayload (DeletePayloadPoints) returns (PointsOperationResponse) {}
+  rpc ClearPayload (ClearPayloadPoints) returns (PointsOperationResponse) {}
+  rpc CreateFieldIndex (CreateFieldIndexCollection) returns (PointsOperationResponse) {}
+  rpc DeleteFieldIndex (DeleteFieldIndexCollection) returns (PointsOperationResponse) {}
+  rpc Search (SearchPoints) returns (SearchResponse) {}
+  rpc SearchBatch (SearchBatchPoints) returns (SearchBatchResponse) {}
+  rpc SearchGroups (SearchPointGroups) returns (SearchGroupsResponse) {}
+  rpc Scroll (ScrollPoints) returns (ScrollResponse) {}
+  rpc Recommend (RecommendPoints) returns (RecommendResponse) {}
+  rpc RecommendBatch (RecommendBatchPoints) returns (RecommendBatchResponse) {}
+  rpc RecommendGroups (RecommendPointGroups) returns (RecommendGroupsResponse) {}
+  rpc Discover (DiscoverPoints) returns (DiscoverResponse) {}
+  rpc DiscoverBatch (DiscoverBatchPoints) returns (DiscoverBatchResponse) {}
+  rpc Count (CountPoints) returns (CountResponse) {}
+  rpc UpdateBatch (UpdateBatchPoints) returns (UpdateBatchResponse) {}
+  rpc Query (QueryPoints) returns (QueryResponse) {}
+  rpc QueryBatch (QueryBatchPoints) returns (QueryBatchResponse) {}
+  rpc QueryGroups (QueryPointGroups) returns (QueryGroupsResponse) {}
+  rpc Facet (FacetCounts) returns (FacetResponse) {}
+  rpc SearchMatrixPairs (SearchMatrixPoints) returns (SearchMatrixPairsResponse) {}
+  rpc SearchMatrixOffsets (SearchMatrixPoints) returns (SearchMatrixOffsetsResponse) {}
+}

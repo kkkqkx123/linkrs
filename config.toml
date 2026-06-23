@@ -1,0 +1,158 @@
+[database]
+host = "127.0.0.1"
+port = 9758
+storage_path = "D:/项目/database/graphDB/data/graphdb"
+max_connections = 100
+
+[transaction]
+# 默认事务超时时间（秒）
+default_timeout = 30
+# 最大并发事务数
+max_concurrent_transactions = 1000
+# 是否启用两阶段提交（2PC）
+enable_2pc = false
+# 是否自动清理过期事务
+auto_cleanup = true
+# 清理任务执行间隔（秒）
+cleanup_interval = 10
+
+[log]
+level = "info"
+dir = "D:/项目/database/graphDB/logs"
+file = "graphdb"
+max_file_size = 104857600  # 100MB
+max_files = 5
+
+[auth]
+# 是否启用授权（false时跳过所有权限检查）
+enable_authorize = true
+# 登录失败次数限制（0表示不限制）
+failed_login_attempts = 5
+# 会话空闲超时时间（秒）
+session_idle_timeout_secs = 3600
+# 默认用户名
+default_username = "root"
+# 默认密码（生产环境请务必修改）
+default_password = "root"
+# 是否强制修改默认密码（首次登录时）
+force_change_default_password = true
+
+[bootstrap]
+# 是否自动创建默认Space
+auto_create_default_space = true
+# 默认Space名称
+default_space_name = "default"
+# 单用户模式（跳过认证，始终使用默认用户，适合个人使用）
+single_user_mode = false
+
+[optimizer]
+max_iteration_rounds = 5
+max_exploration_rounds = 128
+enable_cost_model = true
+enable_multi_plan = true
+enable_property_pruning = true
+enable_adaptive_iteration = true
+stable_threshold = 2
+min_iteration_rounds = 1
+
+[optimizer.rules]
+# 禁用的规则列表
+disabled_rules = []
+# 显式启用的规则列表（优先级高于默认）
+enabled_rules = []
+
+[monitoring]
+enabled = true
+memory_cache_size = 1000
+slow_query_threshold_ms = 1000
+
+[grpc]
+# 是否启用 gRPC 服务
+enabled = true
+# gRPC 服务端口
+port = 9669
+# 最大并发连接数
+max_connections = 100
+# 最大请求消息大小（字节）
+max_request_size = 10485760  # 10MB
+# 最大响应消息大小（字节）
+max_response_size = 10485760  # 10MB
+# Keepalive 间隔（秒，0 表示禁用）
+keepalive_interval_secs = 30
+# Keepalive 超时时间（秒，0 表示禁用）
+keepalive_timeout_secs = 10
+# 连接超时时间（秒）
+connection_timeout_secs = 10
+# 请求超时时间（秒，0 表示禁用）
+request_timeout_secs = 60
+
+[vector]
+# 是否启用向量搜索
+enabled = true
+# 向量搜索引擎类型
+engine = "Qdrant"
+
+[vector.connection]
+# Qdrant 服务器地址
+host = "localhost"
+# gRPC 端口
+port = 6334
+# HTTP 端口（用于健康检查）
+http_port = 6333
+# 是否使用 TLS
+use_tls = false
+# API 密钥（如果需要）
+# api_key = "your-api-key"
+# 连接超时时间（秒）
+connect_timeout_secs = 5
+
+[vector.timeout]
+# 请求超时时间（秒）
+request_timeout_secs = 30
+# 搜索超时时间（秒）
+search_timeout_secs = 10
+# 插入/更新超时时间（秒）
+upsert_timeout_secs = 30
+
+[vector.retry]
+# 最大重试次数
+max_retries = 3
+# 初始重试延迟（毫秒）
+initial_delay_ms = 100
+# 最大重试延迟（毫秒）
+max_delay_ms = 5000
+# 重试延迟倍数
+multiplier = 2.0
+
+# 嵌入服务配置（可选，不配置则使用原始向量）
+# [vector.embedding]
+# 嵌入 API 端点
+# base_url = "http://localhost:11434/api/embeddings"
+# API 密钥（如 OpenAI 需要填写）
+# api_key = "sk-xxx"
+# 模型名称
+# model = "all-minilm"
+# 请求超时（秒，默认 30）
+# timeout_secs = 30
+# 向量维度（可选，不填则自动检测）
+# dimension = 768
+
+# 文本预处理器配置（可选）
+# [vector.embedding.preprocessor]
+# type = "prefix"
+# prefix = "query: "
+
+
+# 调试用：在向量查询时自动将文本转为向量
+# 需配合 [vector.embedding] 一起使用
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.dev]
+opt-level = 0
+debug = true
+codegen-units = 64
