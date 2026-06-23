@@ -290,6 +290,120 @@ impl StorageReader for GraphStorage {
     fn list_tag_indexes(&self, space: &str) -> Result<Vec<Index>, StorageError> {
         index_manager::list_tag_indexes(&self.ctx, space)
     }
+
+    fn get_vertex_version_history(
+        &self,
+        space: &str,
+        tag: &str,
+    ) -> Result<Option<crate::storage::LabelVersionHistory>, StorageError> {
+        let tag_info = self.ctx.schema_manager().get_tag(space, tag)?;
+        let tag_info = tag_info.ok_or_else(|| StorageError::label_not_found(tag.to_string()))?;
+
+        let vertex_tables = self.ctx.data_store().vertex_tables().read();
+        let table = vertex_tables
+            .get(&tag_info.tag_id)
+            .ok_or_else(|| StorageError::label_not_found(tag.to_string()))?;
+
+        table.get_version_history().map(Some)
+    }
+
+    fn get_edge_version_history(
+        &self,
+        space: &str,
+        edge_type: &str,
+    ) -> Result<Option<crate::storage::LabelVersionHistory>, StorageError> {
+        let edge_info = self.ctx.schema_manager().get_edge_type(space, edge_type)?;
+        let edge_info =
+            edge_info.ok_or_else(|| StorageError::label_not_found(edge_type.to_string()))?;
+
+        let keys = {
+            let edge_label_index = self.ctx.data_store().edge_label_index().read();
+            edge_label_index
+                .get(&edge_info.edge_type_id)
+                .ok_or_else(|| StorageError::label_not_found(edge_type.to_string()))?
+                .clone()
+        };
+
+        if keys.is_empty() {
+            return Err(StorageError::label_not_found(edge_type.to_string()));
+        }
+
+        let key = &keys[0];
+
+        let edge_tables = self.ctx.data_store().edge_tables().read();
+        let table = edge_tables
+            .get(key)
+            .ok_or_else(|| StorageError::label_not_found(edge_type.to_string()))?;
+
+        table.get_version_history().map(Some)
+    }
+
+    fn get_vertex_schema_changes(
+        &self,
+        space: &str,
+        tag: &str,
+        from_version: u64,
+        to_version: u64,
+    ) -> Result<Vec<crate::storage::PropertyChange>, StorageError> {
+        let history = self.get_vertex_version_history(space, tag)?;
+        let history = history.ok_or_else(|| StorageError::label_not_found(tag.to_string()))?;
+
+        let mut changes = Vec::new();
+        for version in history.get_versions() {
+            if version > from_version && version <= to_version {
+                if let Some(version_changes) = history.change_log.get_version_changes(version) {
+                    changes.extend(version_changes.iter().cloned());
+                }
+            }
+        }
+
+        Ok(changes)
+    }
+
+    fn get_edge_schema_changes(
+        &self,
+        space: &str,
+        edge_type: &str,
+        from_version: u64,
+        to_version: u64,
+    ) -> Result<Vec<crate::storage::PropertyChange>, StorageError> {
+        let history = self.get_edge_version_history(space, edge_type)?;
+        let history =
+            history.ok_or_else(|| StorageError::label_not_found(edge_type.to_string()))?;
+
+        let mut changes = Vec::new();
+        for version in history.get_versions() {
+            if version > from_version && version <= to_version {
+                if let Some(version_changes) = history.change_log.get_version_changes(version) {
+                    changes.extend(version_changes.iter().cloned());
+                }
+            }
+        }
+
+        Ok(changes)
+    }
+
+    fn detect_vertex_breaking_changes(
+        &self,
+        space: &str,
+        tag: &str,
+        from_version: u64,
+        to_version: u64,
+    ) -> Result<Vec<crate::storage::PropertyChange>, StorageError> {
+        let changes = self.get_vertex_schema_changes(space, tag, from_version, to_version)?;
+        Ok(changes.into_iter().filter(|c| c.is_breaking()).collect())
+    }
+
+    fn detect_edge_breaking_changes(
+        &self,
+        space: &str,
+        edge_type: &str,
+        from_version: u64,
+        to_version: u64,
+    ) -> Result<Vec<crate::storage::PropertyChange>, StorageError> {
+        let changes = self.get_edge_schema_changes(space, edge_type, from_version, to_version)?;
+        Ok(changes.into_iter().filter(|c| c.is_breaking()).collect())
+    }
 }
 
 impl StorageWriter for GraphStorage {

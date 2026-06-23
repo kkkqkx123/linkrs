@@ -127,6 +127,12 @@ impl<S: StorageClient> StorageReader for MetricsStorage<S> {
     wrap_read!(list_edge_types(self, space: &str) -> Result<Vec<EdgeTypeInfo>, StorageError>);
     wrap_read!(get_tag_index(self, space: &str, index: &str) -> Result<Option<Index>, StorageError>);
     wrap_read!(list_tag_indexes(self, space: &str) -> Result<Vec<Index>, StorageError>);
+    wrap_read!(get_vertex_version_history(self, space: &str, tag: &str) -> Result<Option<crate::storage::LabelVersionHistory>, StorageError>);
+    wrap_read!(get_edge_version_history(self, space: &str, edge_type: &str) -> Result<Option<crate::storage::LabelVersionHistory>, StorageError>);
+    wrap_read!(get_vertex_schema_changes(self, space: &str, tag: &str, from_version: u64, to_version: u64) -> Result<Vec<crate::storage::PropertyChange>, StorageError>);
+    wrap_read!(get_edge_schema_changes(self, space: &str, edge_type: &str, from_version: u64, to_version: u64) -> Result<Vec<crate::storage::PropertyChange>, StorageError>);
+    wrap_read!(detect_vertex_breaking_changes(self, space: &str, tag: &str, from_version: u64, to_version: u64) -> Result<Vec<crate::storage::PropertyChange>, StorageError>);
+    wrap_read!(detect_edge_breaking_changes(self, space: &str, edge_type: &str, from_version: u64, to_version: u64) -> Result<Vec<crate::storage::PropertyChange>, StorageError>);
 }
 
 impl<S: StorageClient> StorageWriter for MetricsStorage<S> {

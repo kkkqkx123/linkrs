@@ -37,6 +37,7 @@ pub use engine::sync_wrapper::SyncWrapper;
 pub use engine::transaction::UndoTarget;
 pub use metrics::MetricsStorage;
 pub use mvcc::{MVCCTable, SnapshotHandle, TieredTombstoneManager, TombstoneEntry};
+pub use schema::{ChangeDetails, ChangeLog, LabelVersionHistory, PropertyChange, SchemaObjectType};
 pub use sync::{EdgeTableSync, PropertyTableSync, SnapshotGuard, VertexTableSync};
 pub use types::StoragePropertyDef;
 pub use vertex::{VertexSchema, VertexTable};

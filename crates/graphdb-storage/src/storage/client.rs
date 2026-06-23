@@ -7,6 +7,7 @@ use crate::core::types::{
 use crate::core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
 use crate::storage::engine::background_freeze::FreezeStats;
 use crate::storage::engine::graph_storage::context::ExportedEdgeSnapshotRecord;
+use crate::storage::schema::{LabelVersionHistory, PropertyChange};
 use crate::transaction::wal::recovery::{RecoveryConfig, RecoveryStats};
 use crate::transaction::UndoTarget;
 use std::sync::Arc;
@@ -89,6 +90,57 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
 
     fn get_tag_index(&self, space: &str, index: &str) -> Result<Option<Index>, StorageError>;
     fn list_tag_indexes(&self, space: &str) -> Result<Vec<Index>, StorageError>;
+
+    /// Schema version history queries
+    /// Query version history for a specific vertex tag
+    fn get_vertex_version_history(
+        &self,
+        space: &str,
+        tag: &str,
+    ) -> Result<Option<LabelVersionHistory>, StorageError>;
+
+    /// Query version history for a specific edge type
+    fn get_edge_version_history(
+        &self,
+        space: &str,
+        edge_type: &str,
+    ) -> Result<Option<LabelVersionHistory>, StorageError>;
+
+    /// Get schema changes between two versions for a vertex tag
+    fn get_vertex_schema_changes(
+        &self,
+        space: &str,
+        tag: &str,
+        from_version: u64,
+        to_version: u64,
+    ) -> Result<Vec<PropertyChange>, StorageError>;
+
+    /// Get schema changes between two versions for an edge type
+    fn get_edge_schema_changes(
+        &self,
+        space: &str,
+        edge_type: &str,
+        from_version: u64,
+        to_version: u64,
+    ) -> Result<Vec<PropertyChange>, StorageError>;
+
+    /// Detect breaking changes between versions for a vertex tag
+    fn detect_vertex_breaking_changes(
+        &self,
+        space: &str,
+        tag: &str,
+        from_version: u64,
+        to_version: u64,
+    ) -> Result<Vec<PropertyChange>, StorageError>;
+
+    /// Detect breaking changes between versions for an edge type
+    fn detect_edge_breaking_changes(
+        &self,
+        space: &str,
+        edge_type: &str,
+        from_version: u64,
+        to_version: u64,
+    ) -> Result<Vec<PropertyChange>, StorageError>;
 }
 
 /// Write operations for vertex and edge data.

@@ -7,9 +7,10 @@ use crate::core::types::{
 use crate::core::{Edge, EdgeDirection, RoleType, Value, Vertex};
 use crate::storage::engine::graph_storage::GraphStorageContext;
 use crate::storage::{
-    StorageAdmin, StorageAuthOps, StorageGcOps, StoragePersistenceOps, StorageReader,
-    StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps, StorageStats,
-    StorageSyncContextOps, StorageTransactionContextOps, StorageWriter,
+    LabelVersionHistory, PropertyChange, StorageAdmin, StorageAuthOps, StorageGcOps,
+    StoragePersistenceOps, StorageReader, StorageRecoveryOps, StorageSchemaContextOps,
+    StorageSchemaOps, StorageStats, StorageSyncContextOps, StorageTransactionContextOps,
+    StorageWriter,
 };
 use crate::transaction::UndoTarget;
 use parking_lot::RwLock;
@@ -94,6 +95,12 @@ impl StorageReader for MockStorage {
     mock_stub!(&self, list_edge_types(_space: &str) -> Result<Vec<EdgeTypeSchema>, StorageError>, Ok(Vec::new()));
     mock_stub!(&self, get_tag_index(_space: &str, _index: &str) -> Result<Option<Index>, StorageError>, Ok(None));
     mock_stub!(&self, list_tag_indexes(_space: &str) -> Result<Vec<Index>, StorageError>, Ok(Vec::new()));
+    mock_stub!(&self, get_vertex_version_history(_space: &str, _tag: &str) -> Result<Option<LabelVersionHistory>, StorageError>, Ok(None));
+    mock_stub!(&self, get_edge_version_history(_space: &str, _edge_type: &str) -> Result<Option<LabelVersionHistory>, StorageError>, Ok(None));
+    mock_stub!(&self, get_vertex_schema_changes(_space: &str, _tag: &str, _from_version: u64, _to_version: u64) -> Result<Vec<PropertyChange>, StorageError>, Ok(Vec::new()));
+    mock_stub!(&self, get_edge_schema_changes(_space: &str, _edge_type: &str, _from_version: u64, _to_version: u64) -> Result<Vec<PropertyChange>, StorageError>, Ok(Vec::new()));
+    mock_stub!(&self, detect_vertex_breaking_changes(_space: &str, _tag: &str, _from_version: u64, _to_version: u64) -> Result<Vec<PropertyChange>, StorageError>, Ok(Vec::new()));
+    mock_stub!(&self, detect_edge_breaking_changes(_space: &str, _edge_type: &str, _from_version: u64, _to_version: u64) -> Result<Vec<PropertyChange>, StorageError>, Ok(Vec::new()));
 }
 
 impl StorageWriter for MockStorage {

@@ -486,8 +486,33 @@ impl RecoveryApplier for GraphStorageContext {
             ));
         }
 
+        // First, try to add properties normally
+        let mut added_props = Vec::new();
         for prop in props {
-            self.add_vertex_property(redo.label, prop)?;
+            match self.add_vertex_property(redo.label, prop.clone()) {
+                Ok(()) => {
+                    added_props.push((prop.name, prop.data_type));
+                }
+                Err(e) => {
+                    // If column already exists, just record the schema change for version_history
+                    if e.to_string().contains("already exists") {
+                        // Column exists - need to record schema change for recovery
+                        let mut vertex_tables = self.data_store().vertex_tables().write();
+                        if let Some(table) = vertex_tables.get_mut(&redo.label) {
+                            let change_details = crate::storage::schema::ChangeDetails::PropertyAdded {
+                                name: prop.name.clone(),
+                                data_type: prop.data_type.clone(),
+                                nullable: prop.nullable,
+                                default_value: None,
+                            };
+                            table.rebuild_schema_change_from_redo(change_details)?;
+                            added_props.push((prop.name, prop.data_type));
+                        }
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
         }
 
         if let Some((space_name, mut tag)) = self.schema_manager().find_tag_by_id(redo.label) {
@@ -516,8 +541,43 @@ impl RecoveryApplier for GraphStorageContext {
             ));
         }
 
+        // First, try to add properties normally
         for prop in props {
-            self.add_edge_property(redo.edge_label, prop)?;
+            match self.add_edge_property(redo.edge_label, prop.clone()) {
+                Ok(()) => {}
+                Err(e) => {
+                    // If column already exists, just record the schema change for version_history
+                    if e.to_string().contains("already exists") {
+                        // Column exists - need to record schema change for recovery
+                        let edge_label_index = self.data_store().edge_label_index().read();
+                        if let Some(keys) = edge_label_index.get(&redo.edge_label) {
+                            if !keys.is_empty() {
+                                let key = keys[0];
+                                drop(edge_label_index);
+
+                                let mut edge_tables = self.data_store().edge_tables().write();
+                                if let Some(table) = edge_tables.get_mut(&key) {
+                                    let change_details = crate::storage::schema::ChangeDetails::PropertyAdded {
+                                        name: prop.name.clone(),
+                                        data_type: prop.data_type.clone(),
+                                        nullable: prop.nullable,
+                                        default_value: None,
+                                    };
+                                    table.rebuild_schema_change_from_redo(change_details)?;
+                                }
+                            } else {
+                                drop(edge_label_index);
+                                return Err(e);
+                            }
+                        } else {
+                            drop(edge_label_index);
+                            return Err(e);
+                        }
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
         }
 
         if let Some((space_name, mut edge_type)) =

@@ -339,6 +339,44 @@ impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
             &self,
             space: &str,
         ) -> Result<Vec<crate::core::types::Index>, StorageError>;
+        fn get_vertex_version_history(
+            &self,
+            space: &str,
+            tag: &str,
+        ) -> Result<Option<crate::storage::LabelVersionHistory>, StorageError>;
+        fn get_edge_version_history(
+            &self,
+            space: &str,
+            edge_type: &str,
+        ) -> Result<Option<crate::storage::LabelVersionHistory>, StorageError>;
+        fn get_vertex_schema_changes(
+            &self,
+            space: &str,
+            tag: &str,
+            from_version: u64,
+            to_version: u64,
+        ) -> Result<Vec<crate::storage::PropertyChange>, StorageError>;
+        fn get_edge_schema_changes(
+            &self,
+            space: &str,
+            edge_type: &str,
+            from_version: u64,
+            to_version: u64,
+        ) -> Result<Vec<crate::storage::PropertyChange>, StorageError>;
+        fn detect_vertex_breaking_changes(
+            &self,
+            space: &str,
+            tag: &str,
+            from_version: u64,
+            to_version: u64,
+        ) -> Result<Vec<crate::storage::PropertyChange>, StorageError>;
+        fn detect_edge_breaking_changes(
+            &self,
+            space: &str,
+            edge_type: &str,
+            from_version: u64,
+            to_version: u64,
+        ) -> Result<Vec<crate::storage::PropertyChange>, StorageError>;
     );
 }
 

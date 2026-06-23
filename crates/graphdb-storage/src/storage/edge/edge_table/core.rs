@@ -746,6 +746,15 @@ impl EdgeTableCore {
         Ok(())
     }
 
+    /// Rebuild schema change record during WAL recovery
+    ///
+    /// This is used during recovery when the column already exists (from SchemaManager),
+    /// but we need to update version_history to reflect the schema operation in the WAL.
+    /// Does NOT add the property (it already exists), but DOES record the change.
+    pub fn rebuild_schema_change_from_redo(&mut self, details: ChangeDetails) -> StorageResult<()> {
+        self.record_schema_change(details)
+    }
+
     pub fn remove_property(&mut self, name: &str) -> StorageResult<()> {
         if !self.is_open {
             return Err(StorageError::storage_not_open());
@@ -921,6 +930,19 @@ impl EdgeTableCore {
             self.property_index_cache.insert(prop.name.clone(), idx);
         }
         self.schema = schema;
+    }
+
+    /// Get cloned version history for schema change tracking
+    pub fn get_version_history(&self) -> StorageResult<LabelVersionHistory> {
+        Ok(self.version_history
+            .lock()
+            .map_err(|_| StorageError::db_error("Failed to lock version_history"))?
+            .clone())
+    }
+
+    /// Get reference to version history Arc for shared access
+    pub fn version_history_ref(&self) -> Arc<Mutex<LabelVersionHistory>> {
+        Arc::clone(&self.version_history)
     }
 
     pub fn iter(&self, ts: Timestamp) -> EdgeTableScanIterator<'_> {

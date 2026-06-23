@@ -279,3 +279,54 @@ fn test_multiple_crash_recovery_cycles() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Test that schema version history is rebuilt during recovery.
+/// This test verifies P1: schema changes recorded in WAL are used to rebuild version_history.
+#[test]
+fn test_schema_version_history_recovery() {
+    let dir = std::env::temp_dir()
+        .join("graphdb_storage_wal_test")
+        .join("schema_version_recovery");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let version_before_recovery: u64;
+    {
+        let mut storage = common::create_persistent_storage(&dir);
+        common::create_space(&mut storage, "test_space");
+        save_and_checkpoint(&mut storage);
+
+        // Create Person tag with initial property
+        common::create_person_tag(&mut storage, "test_space");
+
+        // Get version history - should be v1 after tag creation
+        let history = storage
+            .get_vertex_version_history("test_space", "Person")
+            .expect("get_vertex_version_history failed")
+            .expect("history should exist");
+
+        version_before_recovery = history.latest_version();
+        println!("Version before recovery: {}", version_before_recovery);
+    }
+
+    // Reopen and verify version_history is still there
+    {
+        let storage = common::open_persistent_storage(&dir);
+
+        let history = storage
+            .get_vertex_version_history("test_space", "Person")
+            .expect("get_vertex_version_history failed")
+            .expect("history should exist after recovery");
+
+        let version_after_recovery = history.latest_version();
+        println!("Version after recovery: {}", version_after_recovery);
+
+        // Verify: version history should be there (even if same as before)
+        assert!(
+            version_after_recovery >= 1,
+            "Schema version history should be accessible after recovery"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -6,6 +6,7 @@
 use crate::core::StorageResult;
 use crate::storage::types::StoragePropertyDef;
 use crate::storage::schema::{ChangeDetails, PropertyChange, SchemaObjectType};
+use crate::core::DataType;
 
 use super::core::VertexTable;
 
@@ -35,6 +36,15 @@ impl VertexTable {
         history_guard.add_change(change);
 
         Ok(())
+    }
+
+    /// Rebuild schema change record during WAL recovery
+    ///
+    /// This is used during recovery when the column already exists (from SchemaManager),
+    /// but we need to update version_history to reflect the schema operation in the WAL.
+    /// Does NOT add the column (it already exists), but DOES record the change.
+    pub fn rebuild_schema_change_from_redo(&mut self, details: ChangeDetails) -> StorageResult<()> {
+        self.record_schema_change(details)
     }
 
     pub fn add_property(&mut self, prop: StoragePropertyDef) -> StorageResult<()> {

@@ -515,6 +515,19 @@ impl VertexTable {
         }
     }
 
+    /// Get cloned version history for schema change tracking
+    pub fn get_version_history(&self) -> StorageResult<LabelVersionHistory> {
+        Ok(self.version_history
+            .lock()
+            .map_err(|_| StorageError::db_error("Failed to lock version_history"))?
+            .clone())
+    }
+
+    /// Get reference to version history Arc for shared access
+    pub fn version_history_ref(&self) -> Arc<Mutex<LabelVersionHistory>> {
+        Arc::clone(&self.version_history)
+    }
+
     pub fn memory_size(&self) -> usize {
         let mut total = 0;
 
