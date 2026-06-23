@@ -141,23 +141,20 @@ pub struct PropertyChange {
     pub version: u64,
     /// Timestamp in milliseconds when the change was made
     pub timestamp_ms: u64,
-    /// Type of object being modified
-    pub object_type: SchemaObjectType,
-    /// Label ID of the object
-    pub label_id: u32,
-    /// Label name of the object
-    pub label_name: String,
     /// Detailed information about the change
     pub details: ChangeDetails,
 }
 
 impl PropertyChange {
     /// Create a new property change event
+    ///
+    /// Note: object_type, label_id, and label_name are stored in ChangeLog container,
+    /// so we don't duplicate them here to avoid data inconsistency.
     pub fn new(
         version: u64,
-        object_type: SchemaObjectType,
-        label_id: u32,
-        label_name: String,
+        _object_type: SchemaObjectType,
+        _label_id: u32,
+        _label_name: String,
         details: ChangeDetails,
     ) -> Self {
         let timestamp_ms = std::time::SystemTime::now()
@@ -168,9 +165,6 @@ impl PropertyChange {
         Self {
             version,
             timestamp_ms,
-            object_type,
-            label_id,
-            label_name,
             details,
         }
     }
@@ -178,16 +172,6 @@ impl PropertyChange {
     /// Check if this change is breaking
     pub fn is_breaking(&self) -> bool {
         self.details.is_breaking()
-    }
-
-    /// Get change description
-    pub fn description(&self) -> String {
-        format!(
-            "[v{}] {}: {}",
-            self.version,
-            self.label_name,
-            self.details.description()
-        )
     }
 }
 
@@ -279,8 +263,6 @@ mod tests {
         );
 
         assert_eq!(change.version, 1);
-        assert_eq!(change.object_type, SchemaObjectType::Vertex);
-        assert_eq!(change.label_name, "User");
         assert!(!change.is_breaking());
     }
 

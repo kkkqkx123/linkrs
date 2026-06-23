@@ -685,6 +685,33 @@ impl EdgeTableCore {
         (edges, false)
     }
 
+    /// Record a schema change event
+    ///
+    /// Handles the common pattern of:
+    /// 1. Computing next version number from history
+    /// 2. Creating a PropertyChange event
+    /// 3. Recording it in the version history
+    fn record_schema_change(&mut self, details: ChangeDetails) -> StorageResult<()> {
+        // Get the next version number from history
+        let mut history_guard = self.version_history
+            .lock()
+            .map_err(|_| StorageError::db_error("Failed to lock version_history"))?;
+
+        let next_version = history_guard.latest_version() + 1;
+
+        let change = PropertyChange::new(
+            next_version,
+            SchemaObjectType::Edge,
+            self.label,
+            self.label_name.clone(),
+            details,
+        );
+
+        history_guard.add_change(change);
+
+        Ok(())
+    }
+
     pub fn add_property(
         &mut self,
         name: String,
@@ -708,23 +735,13 @@ impl EdgeTableCore {
             .properties
             .push(prop_def);
         self.property_index_cache.insert(name.clone(), new_idx);
-        // Increment schema version when property is added
-        self.schema.increment_version();
 
-        // Record schema change
-        let change = PropertyChange::new(
-            self.schema.schema_version,
-            SchemaObjectType::Edge,
-            self.label,
-            self.label_name.clone(),
-            ChangeDetails::PropertyAdded {
-                name,
-                data_type,
-                nullable,
-                default_value: None,
-            },
-        );
-        self.version_history.lock().unwrap().add_change(change);
+        self.record_schema_change(ChangeDetails::PropertyAdded {
+            name,
+            data_type,
+            nullable,
+            default_value: None,
+        })?;
 
         Ok(())
     }
@@ -755,21 +772,11 @@ impl EdgeTableCore {
                 *idx -= 1;
             }
         }
-        // Increment schema version when property is removed
-        self.schema.increment_version();
 
-        // Record schema change
-        let change = PropertyChange::new(
-            self.schema.schema_version,
-            SchemaObjectType::Edge,
-            self.label,
-            self.label_name.clone(),
-            ChangeDetails::PropertyRemoved {
-                name: removed_prop.name,
-                data_type: removed_prop.data_type,
-            },
-        );
-        self.version_history.lock().unwrap().add_change(change);
+        self.record_schema_change(ChangeDetails::PropertyRemoved {
+            name: removed_prop.name,
+            data_type: removed_prop.data_type,
+        })?;
 
         Ok(())
     }
@@ -803,21 +810,11 @@ impl EdgeTableCore {
         if let Some(idx) = self.property_index_cache.remove(old_name) {
             self.property_index_cache.insert(new_name.to_string(), idx);
         }
-        // Increment schema version when property is renamed
-        self.schema.increment_version();
 
-        // Record schema change
-        let change = PropertyChange::new(
-            self.schema.schema_version,
-            SchemaObjectType::Edge,
-            self.label,
-            self.label_name.clone(),
-            ChangeDetails::PropertyRenamed {
-                old_name: old_name.to_string(),
-                new_name: new_name.to_string(),
-            },
-        );
-        self.version_history.lock().unwrap().add_change(change);
+        self.record_schema_change(ChangeDetails::PropertyRenamed {
+            old_name: old_name.to_string(),
+            new_name: new_name.to_string(),
+        })?;
 
         Ok(())
     }
@@ -918,17 +915,6 @@ impl EdgeTableCore {
     }
 
     pub fn set_schema(&mut self, schema: EdgeSchema) {
-        // Rebuild property index cache
-        self.property_index_cache.clear();
-        for (idx, prop) in schema.properties.iter().enumerate() {
-            self.property_index_cache.insert(prop.name.clone(), idx);
-        }
-        self.schema = schema;
-    }
-
-    /// Set schema with explicit version number (used for undo operations)
-    pub fn set_schema_with_version(&mut self, mut schema: EdgeSchema, new_version: u64) {
-        schema.schema_version = new_version;
         // Rebuild property index cache
         self.property_index_cache.clear();
         for (idx, prop) in schema.properties.iter().enumerate() {

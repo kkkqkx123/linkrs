@@ -42,42 +42,9 @@ impl LabelVersionHistory {
         self.change_log.latest_version().unwrap_or(1)
     }
 
-    /// Check if a migration path exists (no breaking changes between versions)
-    pub fn can_migrate(&self, from_version: u64, to_version: u64) -> bool {
-        if from_version >= to_version {
-            return true; // No forward migration needed
-        }
-
-        // Check if there are breaking changes between versions
-        let breaking_between = self
-            .change_log
-            .changes
-            .iter()
-            .filter(|(v, _)| **v > from_version && **v <= to_version)
-            .any(|(_, changes)| changes.iter().any(|c| c.is_breaking()));
-
-        !breaking_between
-    }
-
     /// Get all versions in order
     pub fn get_versions(&self) -> Vec<u64> {
         self.change_log.get_versions()
-    }
-
-    /// Get breaking changes between two versions
-    pub fn get_breaking_changes(&self, from_version: u64, to_version: u64) -> Vec<PropertyChange> {
-        self.change_log
-            .changes
-            .iter()
-            .filter(|(v, _)| **v > from_version && **v <= to_version)
-            .flat_map(|(_, changes)| {
-                changes
-                    .iter()
-                    .filter(|c| c.is_breaking())
-                    .cloned()
-                    .collect::<Vec<_>>()
-            })
-            .collect()
     }
 }
 
@@ -196,14 +163,5 @@ mod tests {
 
         schema_history.add_vertex_history(vertex_history);
         assert!(schema_history.get_vertex_history(1).is_some());
-    }
-
-    #[test]
-    fn test_can_migrate() {
-        let mut history =
-            LabelVersionHistory::new(1, "User".to_string(), SchemaObjectType::Vertex);
-
-        // No breaking changes, migration should be allowed
-        assert!(history.can_migrate(1, 2));
     }
 }

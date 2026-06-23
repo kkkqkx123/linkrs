@@ -122,9 +122,6 @@ pub struct EdgeSchema {
     pub properties: Vec<StoragePropertyDef>,
     pub oe_strategy: EdgeStrategy,
     pub ie_strategy: EdgeStrategy,
-    /// Schema version for migration tracking
-    #[serde(default = "default_schema_version")]
-    pub schema_version: u64,
 }
 
 impl EdgeSchema {
@@ -233,25 +230,6 @@ impl EdgeSchema {
             }
             _ => Ok(()),
         }
-    }
-
-    /// Increment schema version when schema changes
-    pub fn increment_version(&mut self) {
-        self.schema_version += 1;
-    }
-
-    /// Validate that the loaded schema matches the expected version.
-    /// Returns Ok(()) if valid, Err with description if there are issues.
-    ///
-    /// Note: This method must be called explicitly by callers to enforce version checking.
-    pub fn validate_version(&self, expected_version: u64) -> Result<(), String> {
-        if self.schema_version != expected_version {
-            return Err(format!(
-                "Edge schema version mismatch: expected {}, got {}",
-                expected_version, self.schema_version
-            ));
-        }
-        Ok(())
     }
 }
 

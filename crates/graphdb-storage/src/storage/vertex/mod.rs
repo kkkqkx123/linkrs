@@ -78,28 +78,9 @@ pub struct VertexSchema {
     pub label_name: String,
     pub properties: Vec<StoragePropertyDef>,
     pub primary_key_index: usize,
-    /// Schema version for migration tracking
-    #[serde(default = "default_schema_version")]
-    pub schema_version: u64,
 }
 
 impl VertexSchema {
-    /// Validate that the loaded schema matches the expected version.
-    /// Returns Ok(()) if valid, Err with description if there are issues.
-    ///
-    /// Note: This method must be called explicitly by callers to enforce version checking.
-    pub fn validate(&self, expected_version: u64) -> Result<(), String> {
-        if self.schema_version != expected_version {
-            return Err(format!(
-                "Schema version mismatch: expected {}, got {}",
-                expected_version, self.schema_version
-            ));
-        }
-
-        // Digest validation reserved for future use
-        Ok(())
-    }
-
     /// Validate schema at creation time
     /// Ensures primary key exists and has a valid type for use as a key
     pub fn validate_on_creation(&self) -> Result<(), String> {
@@ -247,10 +228,5 @@ impl VertexSchema {
             }
             _ => Ok(()),
         }
-    }
-
-    /// Increment schema version when schema changes.
-    pub fn increment_version(&mut self) {
-        self.schema_version += 1;
     }
 }

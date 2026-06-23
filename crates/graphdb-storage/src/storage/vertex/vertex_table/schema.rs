@@ -10,6 +10,33 @@ use crate::storage::schema::{ChangeDetails, PropertyChange, SchemaObjectType};
 use super::core::VertexTable;
 
 impl VertexTable {
+    /// Record a schema change event
+    ///
+    /// Handles the common pattern of:
+    /// 1. Computing next version number from history
+    /// 2. Creating a PropertyChange event
+    /// 3. Recording it in the version history
+    fn record_schema_change(&mut self, details: ChangeDetails) -> StorageResult<()> {
+        // Get the next version number from history
+        let mut history_guard = self.version_history
+            .lock()
+            .map_err(|_| crate::core::StorageError::db_error("Failed to lock version_history"))?;
+
+        let next_version = history_guard.latest_version() + 1;
+
+        let change = PropertyChange::new(
+            next_version,
+            SchemaObjectType::Vertex,
+            self.label,
+            self.label_name.clone(),
+            details,
+        );
+
+        history_guard.add_change(change);
+
+        Ok(())
+    }
+
     pub fn add_property(&mut self, prop: StoragePropertyDef) -> StorageResult<()> {
         if !self.is_open {
             return Err(crate::core::StorageError::storage_not_open());
@@ -30,23 +57,12 @@ impl VertexTable {
         let idx = self.schema.properties.len() - 1;
         self.property_index_cache.insert(prop.name.clone(), idx);
 
-        // Increment schema version on modification
-        self.schema.increment_version();
-
-        // Record schema change
-        let change = PropertyChange::new(
-            self.schema.schema_version,
-            SchemaObjectType::Vertex,
-            self.label,
-            self.label_name.clone(),
-            ChangeDetails::PropertyAdded {
-                name: prop.name.clone(),
-                data_type: prop.data_type.clone(),
-                nullable: prop.nullable,
-                default_value: prop.default_value.clone(),
-            },
-        );
-        self.version_history.lock().unwrap().add_change(change);
+        self.record_schema_change(ChangeDetails::PropertyAdded {
+            name: prop.name.clone(),
+            data_type: prop.data_type.clone(),
+            nullable: prop.nullable,
+            default_value: prop.default_value.clone(),
+        })?;
 
         Ok(())
     }
@@ -90,21 +106,10 @@ impl VertexTable {
             }
         }
 
-        // Increment schema version on modification
-        self.schema.increment_version();
-
-        // Record schema change
-        let change = PropertyChange::new(
-            self.schema.schema_version,
-            SchemaObjectType::Vertex,
-            self.label,
-            self.label_name.clone(),
-            ChangeDetails::PropertyRemoved {
-                name: removed_prop.name,
-                data_type: removed_prop.data_type,
-            },
-        );
-        self.version_history.lock().unwrap().add_change(change);
+        self.record_schema_change(ChangeDetails::PropertyRemoved {
+            name: removed_prop.name,
+            data_type: removed_prop.data_type,
+        })?;
 
         Ok(())
     }
@@ -141,21 +146,10 @@ impl VertexTable {
             self.property_index_cache.insert(new_name.to_string(), idx);
         }
 
-        // Increment schema version on modification
-        self.schema.increment_version();
-
-        // Record schema change
-        let change = PropertyChange::new(
-            self.schema.schema_version,
-            SchemaObjectType::Vertex,
-            self.label,
-            self.label_name.clone(),
-            ChangeDetails::PropertyRenamed {
-                old_name: old_name.to_string(),
-                new_name: new_name.to_string(),
-            },
-        );
-        self.version_history.lock().unwrap().add_change(change);
+        self.record_schema_change(ChangeDetails::PropertyRenamed {
+            old_name: old_name.to_string(),
+            new_name: new_name.to_string(),
+        })?;
 
         Ok(())
     }
