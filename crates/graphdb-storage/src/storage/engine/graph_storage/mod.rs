@@ -194,6 +194,14 @@ impl StorageReader for GraphStorage {
         reader::scan_all_edges(&self.ctx, space)
     }
 
+    fn count_vertices_by_tag(&self, space: &str, tag: &str) -> Result<u64, StorageError> {
+        reader::count_vertices_by_tag(&self.ctx, space, tag)
+    }
+
+    fn count_edges_by_type(&self, space: &str, edge_type: &str) -> Result<u64, StorageError> {
+        reader::count_edges_by_type(&self.ctx, space, edge_type)
+    }
+
     fn lookup_index(
         &self,
         space: &str,
@@ -442,6 +450,10 @@ impl StorageWriter for GraphStorage {
 
     fn insert_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
         writer::insert_edge(&self.ctx, space, edge)
+    }
+
+    fn update_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
+        writer::update_edge(&self.ctx, space, edge)
     }
 
     fn delete_edge(

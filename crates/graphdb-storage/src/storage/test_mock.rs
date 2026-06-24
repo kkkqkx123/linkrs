@@ -79,6 +79,8 @@ impl StorageReader for MockStorage {
     mock_stub!(&self, get_node_edges(_space: &str, _node_id: &VertexId, _direction: EdgeDirection) -> Result<Vec<Edge>, StorageError>, Ok(Vec::new()));
     mock_stub!(&self, scan_edges_by_type(_space: &str, _edge_type: &str) -> Result<Vec<Edge>, StorageError>, Ok(Vec::new()));
     mock_stub!(&self, scan_all_edges(_space: &str) -> Result<Vec<Edge>, StorageError>, Ok(Vec::new()));
+    mock_stub!(&self, count_vertices_by_tag(_space: &str, _tag: &str) -> Result<u64, StorageError>, Ok(0));
+    mock_stub!(&self, count_edges_by_type(_space: &str, _edge_type: &str) -> Result<u64, StorageError>, Ok(0));
     mock_stub!(&self, lookup_index(_space: &str, _index: &str, _value: &Value) -> Result<Vec<Value>, StorageError>, Ok(Vec::new()));
     mock_stub!(&self, get_vertex_with_schema(_space: &str, _tag: &str, _id: &Value) -> Result<Option<(TagInfo, Vec<u8>)>, StorageError>, Ok(None));
     mock_stub!(&self, get_edge_with_schema(_space: &str, _edge_type: &str, _src: &Value, _dst: &Value) -> Result<Option<(EdgeTypeInfo, Vec<u8>)>, StorageError>, Ok(None));
@@ -116,6 +118,9 @@ impl StorageWriter for MockStorage {
         } else {
             Ok(())
         }
+    }
+    fn update_edge(&mut self, _space: &str, _edge: Edge) -> Result<(), StorageError> {
+        Ok(())
     }
     fn delete_edge(
         &mut self,

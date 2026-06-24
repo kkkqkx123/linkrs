@@ -458,6 +458,66 @@ pub(crate) fn scan_edges_by_type(
     Ok(edges)
 }
 
+pub(crate) fn count_vertices_by_tag(
+    ctx: &GraphStorageContext,
+    space: &str,
+    tag: &str,
+) -> StorageResult<u64> {
+    let tag_info = ctx.schema_manager().get_tag(space, tag)?.ok_or_else(|| {
+        StorageError::not_found(format!("Tag {} not found in space {}", tag, space))
+    })?;
+
+    let vertex_tables = ctx.data_store().vertex_tables().read();
+    let count = vertex_tables
+        .get(&tag_info.tag_id)
+        .map(|t| t.total_count() as u64)
+        .unwrap_or(0);
+    Ok(count)
+}
+
+pub(crate) fn count_edges_by_type(
+    ctx: &GraphStorageContext,
+    space: &str,
+    edge_type: &str,
+) -> StorageResult<u64> {
+    let edge_info = ctx.schema_manager().get_edge_type(space, edge_type)?.ok_or_else(|| {
+        StorageError::not_found(format!("Edge type {} not found in space {}", edge_type, space))
+    })?;
+
+    let edge_label_id = edge_info.edge_type_id;
+
+    let src_label_id: LabelId = match endpoint_label_id(ctx, space, &edge_info.src_tag_name)? {
+        Some(id) => id,
+        None => return Ok(0),
+    };
+    let dst_label_id: LabelId = match endpoint_label_id(ctx, space, &edge_info.dst_tag_name)? {
+        Some(id) => id,
+        None => return Ok(0),
+    };
+
+    if src_label_id == 0 && dst_label_id == 0 {
+        let edge_tables = ctx.data_store().edge_tables().read();
+        let count: u64 = edge_tables
+            .values()
+            .filter(|t| t.label() == edge_label_id)
+            .map(|t| t.edge_count())
+            .sum();
+        return Ok(count);
+    }
+
+    let key = crate::storage::engine::data_store::EdgeTableKey::new(
+        src_label_id,
+        dst_label_id,
+        edge_label_id,
+    );
+    let edge_tables = ctx.data_store().edge_tables().read();
+    let count = edge_tables
+        .get(&key)
+        .map(|t| t.edge_count())
+        .unwrap_or(0);
+    Ok(count)
+}
+
 pub(crate) fn scan_all_edges(ctx: &GraphStorageContext, space: &str) -> StorageResult<Vec<Edge>> {
     let _space_info = ctx
         .schema_manager()

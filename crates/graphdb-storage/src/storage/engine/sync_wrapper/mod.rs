@@ -275,6 +275,8 @@ impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
         ) -> Result<Vec<Edge>, StorageError>;
         fn scan_edges_by_type(&self, space: &str, edge_type: &str) -> Result<Vec<Edge>, StorageError>;
         fn scan_all_edges(&self, space: &str) -> Result<Vec<Edge>, StorageError>;
+        fn count_vertices_by_tag(&self, space: &str, tag: &str) -> Result<u64, StorageError>;
+        fn count_edges_by_type(&self, space: &str, edge_type: &str) -> Result<u64, StorageError>;
         fn lookup_index(
             &self,
             space: &str,

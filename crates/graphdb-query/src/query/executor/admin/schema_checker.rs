@@ -276,13 +276,9 @@ impl SchemaCompatibilityChecker {
     }
 
     /// Check if two data types are compatible
+    /// Uses the migration converter's supported conversion paths.
     fn are_types_compatible(from: &DataType, to: &DataType) -> bool {
-        match (from, to) {
-            // Same type is always compatible
-            (a, b) if std::mem::discriminant(a) == std::mem::discriminant(b) => true,
-            // Other conversions are not compatible
-            _ => false,
-        }
+        graphdb_migration::is_compatible_type(from, to)
     }
 
 }

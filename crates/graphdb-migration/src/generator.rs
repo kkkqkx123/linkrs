@@ -1,4 +1,4 @@
-use graphdb_core::core::StorageResult;
+use graphdb_core::core::{StorageError, StorageResult};
 use graphdb_storage::storage::{
     ChangeDetails, PropertyChange, StorageReader,
 };
@@ -6,34 +6,21 @@ use graphdb_storage::storage::{
 use crate::converter::ConversionError;
 use crate::plan::{MigrationPlan, MigrationStep, SafetyLevel};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, thiserror::Error)]
 pub enum MigrationError {
-    Storage(String),
+    #[error("Storage error: {0}")]
+    Storage(Box<StorageError>),
+
+    #[error("Plan error: {0}")]
     Plan(String),
-    Conversion(String),
+
+    #[error("Conversion error: {0}")]
+    Conversion(#[from] ConversionError),
 }
 
-impl std::fmt::Display for MigrationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            MigrationError::Storage(msg) => write!(f, "Storage error: {}", msg),
-            MigrationError::Plan(msg) => write!(f, "Plan error: {}", msg),
-            MigrationError::Conversion(msg) => write!(f, "Conversion error: {}", msg),
-        }
-    }
-}
-
-impl std::error::Error for MigrationError {}
-
-impl From<graphdb_core::core::StorageError> for MigrationError {
-    fn from(e: graphdb_core::core::StorageError) -> Self {
-        MigrationError::Storage(e.to_string())
-    }
-}
-
-impl From<ConversionError> for MigrationError {
-    fn from(e: ConversionError) -> Self {
-        MigrationError::Conversion(e.message)
+impl From<StorageError> for MigrationError {
+    fn from(e: StorageError) -> Self {
+        MigrationError::Storage(Box::new(e))
     }
 }
 
@@ -60,33 +47,33 @@ pub fn generate_vertex_plan(
             None
         } else {
             let safety = calculate_safety(&rollback_steps);
-            Some(Box::new(MigrationPlan {
-                space: space.to_string(),
-                label: tag.to_string(),
-                is_edge: false,
+            Some(Box::new(MigrationPlan::new(
+                space.to_string(),
+                tag.to_string(),
+                false,
                 from_version,
                 to_version,
-                steps: rollback_steps,
+                rollback_steps,
                 estimated_rows,
-                overall_safety: safety,
-                rollback_plan: None,
-            }))
+                safety,
+                None,
+            )))
         }
     } else {
         None
     };
 
-    Ok(MigrationPlan {
-        space: space.to_string(),
-        label: tag.to_string(),
-        is_edge: false,
+    Ok(MigrationPlan::new(
+        space.to_string(),
+        tag.to_string(),
+        false,
         from_version,
         to_version,
         steps,
         estimated_rows,
         overall_safety,
         rollback_plan,
-    })
+    ))
 }
 
 pub fn generate_edge_plan(
@@ -103,7 +90,7 @@ pub fn generate_edge_plan(
         changes.iter().flat_map(|c| step_from_change(c)).collect();
 
     let overall_safety = calculate_safety(&steps);
-    let estimated_rows = 0;
+    let estimated_rows = estimate_edge_rows(reader, space, edge_type).unwrap_or(0);
 
     let rollback_plan = if overall_safety != SafetyLevel::Dangerous {
         let rollback_steps: Vec<MigrationStep> =
@@ -112,38 +99,41 @@ pub fn generate_edge_plan(
             None
         } else {
             let safety = calculate_safety(&rollback_steps);
-            Some(Box::new(MigrationPlan {
-                space: space.to_string(),
-                label: edge_type.to_string(),
-                is_edge: true,
+            Some(Box::new(MigrationPlan::new(
+                space.to_string(),
+                edge_type.to_string(),
+                true,
                 from_version,
                 to_version,
-                steps: rollback_steps,
+                rollback_steps,
                 estimated_rows,
-                overall_safety: safety,
-                rollback_plan: None,
-            }))
+                safety,
+                None,
+            )))
         }
     } else {
         None
     };
 
-    Ok(MigrationPlan {
-        space: space.to_string(),
-        label: edge_type.to_string(),
-        is_edge: true,
+    Ok(MigrationPlan::new(
+        space.to_string(),
+        edge_type.to_string(),
+        true,
         from_version,
         to_version,
         steps,
         estimated_rows,
         overall_safety,
         rollback_plan,
-    })
+    ))
 }
 
 fn estimate_vertex_rows(reader: &dyn StorageReader, space: &str, tag: &str) -> StorageResult<u64> {
-    let vertices = reader.scan_vertices_by_tag(space, tag)?;
-    Ok(vertices.len() as u64)
+    reader.count_vertices_by_tag(space, tag)
+}
+
+fn estimate_edge_rows(reader: &dyn StorageReader, space: &str, edge_type: &str) -> StorageResult<u64> {
+    reader.count_edges_by_type(space, edge_type)
 }
 
 fn step_from_change(change: &PropertyChange) -> Vec<MigrationStep> {

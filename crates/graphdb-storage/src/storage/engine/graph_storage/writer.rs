@@ -506,16 +506,15 @@ fn rollback_edges(
     }
 }
 
-pub(crate) fn delete_edge(
+pub(crate) fn delete_edge_at_timestamp(
     ctx: &GraphStorageContext,
     space: &str,
     src: &VertexId,
     dst: &VertexId,
     edge_type: &str,
     rank: i64,
+    ts: Timestamp,
 ) -> StorageResult<()> {
-    let ts = ctx.get_write_timestamp();
-
     let edge_label_id = edge_label_id(ctx, space, edge_type)?
         .ok_or_else(|| StorageError::not_found(format!("Edge type {} not found", edge_type)))?;
 
@@ -565,9 +564,75 @@ pub(crate) fn delete_edge(
         )));
     }
 
-    ctx.version_manager().release_insert_timestamp(ts);
-
     Ok(())
+}
+
+pub(crate) fn delete_edge(
+    ctx: &GraphStorageContext,
+    space: &str,
+    src: &VertexId,
+    dst: &VertexId,
+    edge_type: &str,
+    rank: i64,
+) -> StorageResult<()> {
+    let ts = ctx.get_write_timestamp();
+    let result = delete_edge_at_timestamp(ctx, space, src, dst, edge_type, rank, ts);
+    ctx.version_manager().release_insert_timestamp(ts);
+    result
+}
+
+/// Atomically replace an edge's properties: delete the old edge and insert the
+/// new one under a single write timestamp. If the insert fails, the old edge is
+/// restored from a pre-delete read, ensuring no data loss.
+pub(crate) fn update_edge(
+    ctx: &GraphStorageContext,
+    space: &str,
+    edge: Edge,
+) -> StorageResult<()> {
+    let space_info = ctx.schema_manager().get_space(space)?
+        .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
+
+    // Save edge identity for rollback
+    let src = edge.src;
+    let dst = edge.dst;
+    let edge_type = edge.edge_type.clone();
+    let ranking = edge.ranking;
+
+    // Read current properties for rollback
+    let current_props = super::reader::get_edge(ctx, space, &src, &dst, &edge_type, ranking)?
+        .map(|e| e.props)
+        .unwrap_or_default();
+
+    let ts = ctx.get_write_timestamp();
+
+    // Delete the old edge
+    if let Err(e) = delete_edge_at_timestamp(ctx, space, &src, &dst, &edge_type, ranking, ts) {
+        ctx.version_manager().release_insert_timestamp(ts);
+        return Err(e);
+    }
+
+    // Insert the new edge
+    let mut rollback = Vec::new();
+    match insert_edge_at_timestamp(ctx, space, space_info.space_id, edge, ts, &mut rollback) {
+        Ok(()) => {
+            ctx.version_manager().release_insert_timestamp(ts);
+            Ok(())
+        }
+        Err(e) => {
+            // Rollback: undo the failed insert, then re-insert the old edge
+            rollback_edges(ctx, space_info.space_id, &rollback, ts);
+            let old_edge = Edge {
+                src,
+                dst,
+                edge_type,
+                ranking,
+                props: current_props,
+            };
+            let _ = insert_edge_at_timestamp(ctx, space, space_info.space_id, old_edge, ts, &mut Vec::new());
+            ctx.version_manager().release_insert_timestamp(ts);
+            Err(e)
+        }
+    }
 }
 
 pub(crate) fn batch_insert_edges(

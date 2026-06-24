@@ -251,3 +251,28 @@ pub fn convert_value(value: &Value, target_type: &DataType) -> Result<Value, Con
         )),
     }
 }
+
+/// Check if a type conversion is supported (without needing an actual value).
+/// Mirrors the conversion paths in [`convert_value`].
+pub fn is_compatible_type(from: &DataType, to: &DataType) -> bool {
+    if from == to {
+        return true;
+    }
+    match (from, to) {
+        // SmallInt widening
+        (DataType::SmallInt, DataType::Int | DataType::BigInt | DataType::Float | DataType::Double | DataType::String) => true,
+        // Int widening/narrowing
+        (DataType::Int, DataType::SmallInt | DataType::BigInt | DataType::Float | DataType::Double | DataType::String) => true,
+        // BigInt widening/narrowing
+        (DataType::BigInt, DataType::Int | DataType::SmallInt | DataType::Float | DataType::Double | DataType::String) => true,
+        // Float widening
+        (DataType::Float, DataType::Double | DataType::String) => true,
+        // Double narrowing
+        (DataType::Double, DataType::Float | DataType::String) => true,
+        // String parsing
+        (DataType::String, DataType::SmallInt | DataType::Int | DataType::BigInt | DataType::Float | DataType::Double | DataType::Bool) => true,
+        // Any type to String
+        (_, DataType::String) => true,
+        _ => false,
+    }
+}

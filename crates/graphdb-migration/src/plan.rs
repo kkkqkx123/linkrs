@@ -111,17 +111,17 @@ mod tests {
 
     #[test]
     fn test_empty_migration_plan() {
-        let plan = MigrationPlan {
-            space: "test".into(),
-            label: "User".into(),
-            is_edge: false,
-            from_version: 1,
-            to_version: 2,
-            steps: vec![],
-            estimated_rows: 0,
-            overall_safety: SafetyLevel::Safe,
-            rollback_plan: None,
-        };
+        let plan = MigrationPlan::new(
+            "test".into(),
+            "User".into(),
+            false,
+            1,
+            2,
+            vec![],
+            0,
+            SafetyLevel::Safe,
+            None,
+        );
         assert!(plan.is_empty());
         assert!(plan.print_summary().contains("SAFE"));
     }
@@ -133,6 +133,7 @@ mod tests {
             steps_completed: 3,
             rows_migrated: 100,
             errors: vec![],
+            completed_step_indices: vec![],
         };
         assert!(report.print_summary().contains("SUCCESS"));
         assert!(report.print_summary().contains("100"));
@@ -142,6 +143,7 @@ mod tests {
             steps_completed: 1,
             rows_migrated: 0,
             errors: vec!["Error converting value".into()],
+            completed_step_indices: vec![],
         };
         assert!(failed.print_summary().contains("FAILED"));
         assert!(failed.print_summary().contains("Error converting value"));
@@ -219,7 +221,6 @@ impl MigrationStep {
                 | MigrationStep::RenameColumn { .. }
                 | MigrationStep::ConvertType { .. }
                 | MigrationStep::SetDefault { .. }
-                | MigrationStep::ChangeNullability { .. }
         )
     }
 
@@ -285,6 +286,8 @@ impl MigrationStep {
     }
 }
 
+const DEFAULT_BATCH_SIZE: usize = 1000;
+
 #[derive(Debug, Clone)]
 pub struct MigrationPlan {
     pub space: String,
@@ -296,11 +299,45 @@ pub struct MigrationPlan {
     pub estimated_rows: u64,
     pub overall_safety: SafetyLevel,
     pub rollback_plan: Option<Box<MigrationPlan>>,
+    pub batch_size: usize,
+    pub completed_steps: Vec<usize>,
 }
 
 impl MigrationPlan {
+    pub fn new(
+        space: String,
+        label: String,
+        is_edge: bool,
+        from_version: u64,
+        to_version: u64,
+        steps: Vec<MigrationStep>,
+        estimated_rows: u64,
+        overall_safety: SafetyLevel,
+        rollback_plan: Option<Box<MigrationPlan>>,
+    ) -> Self {
+        Self {
+            space,
+            label,
+            is_edge,
+            from_version,
+            to_version,
+            steps,
+            estimated_rows,
+            overall_safety,
+            rollback_plan,
+            batch_size: DEFAULT_BATCH_SIZE,
+            completed_steps: Vec::new(),
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.steps.is_empty()
+    }
+
+    pub fn remaining_steps(&self) -> Vec<usize> {
+        (0..self.steps.len())
+            .filter(|i| !self.completed_steps.contains(i))
+            .collect()
     }
 
     pub fn print_summary(&self) -> String {
@@ -312,9 +349,11 @@ impl MigrationPlan {
         out.push_str(&format!("Safety: {} ({:?})\n", self.overall_safety.label(), self.overall_safety));
         out.push_str(&format!("Steps: {}\n", self.steps.len()));
         for (i, step) in self.steps.iter().enumerate() {
+            let prefix = if self.completed_steps.contains(&i) { "[DONE] " } else { "" };
             out.push_str(&format!(
-                "  {}. [{:?}] {}\n",
+                "  {}. {}[{:?}] {}\n",
                 i + 1,
+                prefix,
                 step.safety_level(),
                 step.description()
             ));
@@ -332,6 +371,7 @@ pub struct MigrationReport {
     pub steps_completed: usize,
     pub rows_migrated: u64,
     pub errors: Vec<String>,
+    pub completed_step_indices: Vec<usize>,
 }
 
 impl MigrationReport {

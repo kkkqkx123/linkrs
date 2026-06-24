@@ -107,6 +107,8 @@ impl<S: StorageClient> StorageReader for MetricsStorage<S> {
     wrap_read!(get_node_edges(self, space: &str, node_id: &VertexId, direction: EdgeDirection) -> Result<Vec<Edge>, StorageError>);
     wrap_read!(scan_edges_by_type(self, space: &str, edge_type: &str) -> Result<Vec<Edge>, StorageError>);
     wrap_read!(scan_all_edges(self, space: &str) -> Result<Vec<Edge>, StorageError>);
+    wrap_read!(count_vertices_by_tag(self, space: &str, tag: &str) -> Result<u64, StorageError>);
+    wrap_read!(count_edges_by_type(self, space: &str, edge_type: &str) -> Result<u64, StorageError>);
     wrap_read!(lookup_index(self, space: &str, index: &str, value: &Value) -> Result<Vec<Value>, StorageError>);
     wrap_read!(get_vertex_with_schema(self, space: &str, tag: &str, id: &Value) -> Result<Option<(TagInfo, Vec<u8>)>, StorageError>);
     wrap_read!(get_edge_with_schema(self, space: &str, edge_type: &str, src: &Value, dst: &Value) -> Result<Option<(EdgeTypeInfo, Vec<u8>)>, StorageError>);
@@ -148,6 +150,7 @@ impl<S: StorageClient> StorageWriter for MetricsStorage<S> {
     wrap_write!(batch_insert_vertices(self, space: &str, vertices: Vec<Vertex>) -> Result<Vec<VertexId>, StorageError>);
     wrap_write!(delete_tags(self, space: &str, vertex_id: &VertexId, tag_names: &[String]) -> Result<usize, StorageError>);
     wrap_write!(insert_edge(self, space: &str, edge: Edge) -> Result<(), StorageError>);
+    wrap_write!(update_edge(self, space: &str, edge: Edge) -> Result<(), StorageError>);
     fn delete_edge(
         &mut self,
         space: &str,

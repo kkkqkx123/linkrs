@@ -41,6 +41,8 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
     ) -> Result<Vec<Edge>, StorageError>;
     fn scan_edges_by_type(&self, space: &str, edge_type: &str) -> Result<Vec<Edge>, StorageError>;
     fn scan_all_edges(&self, space: &str) -> Result<Vec<Edge>, StorageError>;
+    fn count_vertices_by_tag(&self, space: &str, tag: &str) -> Result<u64, StorageError>;
+    fn count_edges_by_type(&self, space: &str, edge_type: &str) -> Result<u64, StorageError>;
 
     fn lookup_index(
         &self,
@@ -162,6 +164,7 @@ pub trait StorageWriter: Send + Sync + std::fmt::Debug {
     ) -> Result<usize, StorageError>;
 
     fn insert_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError>;
+    fn update_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError>;
     fn delete_edge(
         &mut self,
         space: &str,
