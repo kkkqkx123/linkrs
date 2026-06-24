@@ -311,7 +311,6 @@ impl Default for IdManager {
 #[derive(Debug, Clone)]
 pub struct IdIndexer {
     manager: Arc<Mutex<IdManager>>,
-    config: IdIndexerConfig,
 }
 
 impl IdIndexer {
@@ -326,7 +325,6 @@ impl IdIndexer {
     pub fn with_config(config: IdIndexerConfig) -> Self {
         Self {
             manager: Arc::new(Mutex::new(IdManager::with_config(config.clone()))),
-            config,
         }
     }
 

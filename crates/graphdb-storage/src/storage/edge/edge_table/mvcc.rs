@@ -198,7 +198,6 @@ impl MVCCManager {
                 (cold_count * std::mem::size_of::<(EdgeId, Timestamp)>()),
             oldest_delete_ts: oldest,
             newest_delete_ts: newest,
-            min_active_snapshot_ts: self.min_active_snapshot_ts,
         }
     }
 

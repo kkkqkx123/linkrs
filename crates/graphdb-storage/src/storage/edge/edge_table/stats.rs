@@ -16,8 +16,6 @@ pub struct TombstoneStats {
     pub oldest_delete_ts: Option<Timestamp>,
     /// Newest deletion timestamp in tombstones
     pub newest_delete_ts: Option<Timestamp>,
-    /// Current minimum active snapshot timestamp
-    pub min_active_snapshot_ts: Timestamp,
 }
 
 impl TombstoneStats {

@@ -87,8 +87,6 @@ pub struct FreezeConfig {
     pub max_segment_age: u32,
     /// Deletion ratio threshold for merge priority (0.0-1.0)
     pub deletion_threshold: f64,
-    /// Maximum size for a single segment before forcing merge (in bytes)
-    pub max_segment_size_bytes: usize,
 
     // ── Adaptive Strategy Parameters ──
     /// Minimum segment count to trigger adaptive merge (configurable threshold)
@@ -115,7 +113,6 @@ impl FreezeConfig {
             delta_memory_threshold_bytes: 128 * 1024 * 1024,  // 128MB
             max_segment_age: u32::MAX,  // Never merge
             deletion_threshold: 0.5,
-            max_segment_size_bytes: 4 * 1024 * 1024,  // 4MB
             adaptive_segment_threshold: 20,  // Low threshold for dev
             adaptive_maximum_segments: 50,   // Force freeze if >50 segments
             lsm_segment_pressure_threshold: 100,  // Low threshold for dev
@@ -135,7 +132,6 @@ impl FreezeConfig {
             delta_memory_threshold_bytes: 256 * 1024 * 1024,  // 256MB
             max_segment_age: 5000,
             deletion_threshold: 0.2,
-            max_segment_size_bytes: 8 * 1024 * 1024,  // 8MB
             adaptive_segment_threshold: 50,   // More reasonable for small systems
             adaptive_maximum_segments: 150,   // Force freeze if >150 segments
             lsm_segment_pressure_threshold: 150,
@@ -155,7 +151,6 @@ impl FreezeConfig {
             delta_memory_threshold_bytes: 1_000_000_000,  // 1GB
             max_segment_age: 1000,
             deletion_threshold: 0.3,
-            max_segment_size_bytes: 8 * 1024 * 1024,  // 8MB
             adaptive_segment_threshold: 100,  // Higher threshold for large systems
             adaptive_maximum_segments: 300,   // Force freeze if >300 segments
             lsm_segment_pressure_threshold: 200,  // LSM pressure at 200+ segments
@@ -188,13 +183,6 @@ impl FreezeConfig {
             return Err(StorageError::new(
                 StorageErrorKind::InvalidInput,
                 format!("deletion_threshold must be in [0.0, 1.0], got {}", self.deletion_threshold),
-            ));
-        }
-
-        if self.max_segment_size_bytes == 0 {
-            return Err(StorageError::new(
-                StorageErrorKind::InvalidInput,
-                "max_segment_size_bytes must be > 0",
             ));
         }
 
@@ -570,13 +558,6 @@ mod tests {
         assert!(config.validate().is_err());
 
         config.deletion_threshold = -0.1;
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_freeze_config_validate_zero_segment_size() {
-        let mut config = FreezeConfig::default();
-        config.max_segment_size_bytes = 0;
         assert!(config.validate().is_err());
     }
 

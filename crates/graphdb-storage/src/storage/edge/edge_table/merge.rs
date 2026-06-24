@@ -15,8 +15,6 @@ use crate::core::types::Timestamp;
 #[derive(Debug)]
 pub struct FreezeDeltaResult {
     pub frozen_count: usize,
-    pub edge_ids: Vec<u64>,
-    pub csr_position_to_edge_ids_index: Vec<usize>,
 }
 
 /// Merge selected segments with physical deletion of tombstoned edges

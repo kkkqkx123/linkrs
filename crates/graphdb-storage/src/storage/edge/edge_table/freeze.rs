@@ -85,8 +85,6 @@ impl EdgeTableCore {
             delta.clear();
             return merge::FreezeDeltaResult {
                 frozen_count: 0,
-                edge_ids: Vec::new(),
-                csr_position_to_edge_ids_index: Vec::new(),
             };
         }
 
@@ -155,8 +153,6 @@ impl EdgeTableCore {
 
         merge::FreezeDeltaResult {
             frozen_count: frozen,
-            edge_ids: Vec::new(),
-            csr_position_to_edge_ids_index: Vec::new(),
         }
     }
 
