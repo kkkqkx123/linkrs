@@ -334,15 +334,15 @@ impl EdgeTableCore {
         valid_count
     }
 
-    pub fn segment_versions(&self) -> Vec<(usize, u32, u32)> {
+    pub fn segment_versions(&self) -> Vec<(usize, u32)> {
         let mut versions = Vec::new();
 
         for (idx, seg) in self.out_segments.iter().enumerate() {
-            versions.push((idx, seg.version.version, seg.version.checksum));
+            versions.push((idx, seg.version.checksum));
         }
 
         for (idx, seg) in self.in_segments.iter().enumerate() {
-            versions.push((idx + 1000, seg.version.version, seg.version.checksum));
+            versions.push((idx + 1000, seg.version.checksum));
         }
 
         versions
@@ -351,12 +351,10 @@ impl EdgeTableCore {
     pub fn update_segment_checksums(&mut self) {
         for segment in &mut self.out_segments {
             segment.version.checksum = SegmentVersion::compute_checksum(segment);
-            segment.version.increment();
         }
 
         for segment in &mut self.in_segments {
             segment.version.checksum = SegmentVersion::compute_checksum(segment);
-            segment.version.increment();
         }
     }
 

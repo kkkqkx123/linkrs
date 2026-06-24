@@ -896,22 +896,6 @@ impl MutableCsr {
         self.fragmentation_ratio() >= threshold
     }
 
-    /// Compact and return detailed statistics about the operation
-    pub fn compact_with_stats(&mut self, ts: u32, reserve_ratio: f32) -> super::CompactionReport {
-        let stats_before = self.get_fragmentation_stats();
-        let removed = self.compact_with_ts(ts, reserve_ratio);
-        let stats_after = self.get_fragmentation_stats();
-
-        let reclaimed_bytes = (stats_before.total_capacity as i64 - stats_after.total_capacity as i64)
-            .max(0) as usize;
-
-        super::CompactionReport {
-            removed_edges: removed,
-            reclaimed_bytes,
-            old_fragmentation_ratio: stats_before.fragmentation_ratio(),
-            new_fragmentation_ratio: stats_after.fragmentation_ratio(),
-        }
-    }
 }
 
 impl Default for MutableCsr {
