@@ -859,7 +859,7 @@ impl MutableCsr {
         (self.nbr_list.len().saturating_sub(active_edges)) * std::mem::size_of::<Nbr>()
     }
 
-    /// Get detailed fragmentation statistics
+    /// Get detailed fragmentation statistics (legacy compat)
     pub fn get_fragmentation_stats(&self) -> super::FragmentationStats {
         let active_edges = self.edge_count.load(Ordering::Relaxed) as usize;
 

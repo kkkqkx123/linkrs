@@ -124,6 +124,35 @@ pub struct FreezeDecision {
     pub freeze_reason: FreezeReason,
 }
 
+impl FreezeDecision {
+    /// Get a human-readable summary of the decision, including threshold comparisons.
+    pub fn summary(&self) -> String {
+        let edge_pct = if self.edge_threshold > 0 {
+            (self.current_delta_edges as f64 / self.edge_threshold as f64 * 100.0) as u64
+        } else {
+            0
+        };
+        let mem_pct = if self.memory_threshold_bytes > 0 {
+            (self.current_delta_memory_bytes as f64 / self.memory_threshold_bytes as f64 * 100.0) as u64
+        } else {
+            0
+        };
+        format!(
+            "FreezeDecision {{ should_freeze: {}, edges: {} ({}/{} = {}%), memory: {}MB ({}/{}MB = {}%), reason: {:?} }}",
+            self.should_freeze,
+            self.current_delta_edges,
+            self.current_delta_edges,
+            self.edge_threshold,
+            edge_pct,
+            self.current_delta_memory_bytes / (1024 * 1024),
+            self.current_delta_memory_bytes / (1024 * 1024),
+            self.memory_threshold_bytes / (1024 * 1024),
+            mem_pct,
+            self.freeze_reason,
+        )
+    }
+}
+
 /// Reason why freeze was triggered
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FreezeReason {

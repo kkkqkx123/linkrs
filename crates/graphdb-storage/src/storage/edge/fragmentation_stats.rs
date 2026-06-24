@@ -32,12 +32,24 @@ pub struct FragmentationStats {
 }
 
 impl FragmentationStats {
+    /// Create basic stats without zombie block information.
+    /// Use `compute()` for full analysis including zombie blocks.
     pub fn new(total_capacity: usize, reachable_edges: usize) -> Self {
         Self {
             total_capacity,
             reachable_edges,
             zombie_blocks: 0,
             wasted_capacity: 0,
+        }
+    }
+
+    /// Compute detailed fragmentation stats from edge counts.
+    pub fn with_zombie_info(total_capacity: usize, reachable_edges: usize, zombie_blocks: usize, wasted_capacity: usize) -> Self {
+        Self {
+            total_capacity,
+            reachable_edges,
+            zombie_blocks,
+            wasted_capacity,
         }
     }
 

@@ -681,6 +681,16 @@ impl EdgeTableCore {
         (edges, false)
     }
 
+    /// Create a scan iterator with pagination support
+    pub fn scan_paginated_iter(&self, ts: Timestamp, offset: usize, page_size: usize) -> EdgeTableScanIterator<'_> {
+        let mut iter = EdgeTableScanIterator::with_limit(self, ts, Some(page_size));
+        // Skip offset records
+        for _ in 0..offset {
+            iter.next();
+        }
+        iter
+    }
+
     /// Record a schema change event
     ///
     /// Handles the common pattern of:
@@ -988,6 +998,16 @@ impl EdgeTableCore {
         self.out_csr.used_memory_size() + self.in_csr.used_memory_size()
     }
 
+    /// Estimate memory usage based on edge count and CSR strategy.
+    /// This provides a more accurate estimate than used_memory_size() for freeze decisions.
+    pub fn estimate_memory_usage(&self) -> usize {
+        let out_edges = self.out_csr.edge_count() as usize;
+        let in_edges = self.in_csr.edge_count() as usize;
+        let out_bytes_per_edge = self.out_csr.bytes_per_edge();
+        let in_bytes_per_edge = self.in_csr.bytes_per_edge();
+        out_edges * out_bytes_per_edge + in_edges * in_bytes_per_edge
+    }
+
     /// Check write backpressure and trigger freeze if necessary.
     /// Returns true if a freeze was triggered.
     pub fn check_and_apply_write_backpressure(&mut self, current_ts: Timestamp) -> bool {
@@ -995,7 +1015,7 @@ impl EdgeTableCore {
             return false; // Backpressure disabled
         }
 
-        let mutable_size = self.mutable_csr_memory_size();
+        let mutable_size = self.estimate_memory_usage();
 
         // Record current metrics
         if let Some(stats) = &self.stats_manager {
@@ -1098,9 +1118,9 @@ impl<'a> EdgeTableScanIterator<'a> {
     /// Check if iterator has more records to fetch
     pub fn has_more(&self) -> bool {
         if let Some(max) = self.max_records {
-            self.current_count < max
+            self.current_count < max && self.records.len() > self.current_count
         } else {
-            true
+            self.records.len() > self.current_count
         }
     }
 }

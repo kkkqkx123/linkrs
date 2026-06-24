@@ -21,7 +21,7 @@
 use crate::core::StorageResult;
 
 use super::{
-    CsrBase, EdgeId, EdgeStrategy, LabeledMutableCsr, LabeledMutableCsrIterator,
+    CsrBase, EdgeId, EdgeStrategy, FragmentationStats, LabeledMutableCsr, LabeledMutableCsrIterator,
     MutableCsr, MutableCsrIterator, MutableCsrTrait, MultiSingleMutableCsr,
     MultiSingleMutableCsrIterator, Nbr, SingleMutableCsr, SingleMutableCsrIterator, Timestamp,
     VertexId,
@@ -184,6 +184,24 @@ impl CsrVariant {
         match self {
             CsrVariant::Multiple(csr) => csr.fragmentation_ratio(),
             _ => 0.0,
+        }
+    }
+
+    /// Get fragmentation statistics for this CSR variant.
+    ///
+    /// Returns `Some(stats)` for MutableCsr variant, `None` for others.
+    pub fn fragmentation_stats(&self) -> Option<super::FragmentationStats> {
+        match self {
+            CsrVariant::Multiple(csr) => {
+                let stats = csr.get_fragmentation_stats();
+                Some(FragmentationStats::with_zombie_info(
+                    stats.total_capacity,
+                    stats.reachable_edges,
+                    stats.zombie_blocks,
+                    stats.wasted_capacity,
+                ))
+            },
+            _ => None,
         }
     }
 
@@ -362,6 +380,14 @@ impl CsrVariant {
         match self {
             CsrVariant::MultiSingle(csr) => csr.edges_per_vertex(),
             _ => 0,
+        }
+    }
+
+    /// Get edges of a vertex with a specific label (only for Labeled variant).
+    pub fn edges_of_label(&self, src_vid: u32, label: u32, ts: Timestamp) -> Vec<Nbr> {
+        match self {
+            CsrVariant::Labeled(csr) => csr.edges_of_label(src_vid, label, ts),
+            _ => Vec::new(),
         }
     }
 

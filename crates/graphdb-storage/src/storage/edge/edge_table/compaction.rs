@@ -56,14 +56,37 @@ impl EdgeTableCore {
 
     /// Compact mutable CSRs if fragmentation exceeds threshold.
     ///
+    /// Uses `FragmentationStats::should_compact` for adaptive threshold decision.
     /// Useful before flushing to disk to reduce memory usage.
     pub fn maybe_compact_for_flush(&mut self, ts: Timestamp, threshold: f32) {
         const RESERVE_RATIO: f32 = 0.25;
-        if self.out_csr.fragmentation_ratio() > threshold {
+        let out_stats = self.out_csr.fragmentation_stats();
+        let in_stats = self.in_csr.fragmentation_stats();
+        if out_stats.as_ref().map_or(false, |s| s.should_compact(threshold))
+            || self.out_csr.fragmentation_ratio() > threshold
+        {
             self.out_csr.compact_with_ts(ts, RESERVE_RATIO);
+            if let Some(ref stats) = out_stats {
+                log::debug!(
+                    "Compacted out_csr: fragmentation={:.2}, efficiency={:.2}, reclaimed={} bytes",
+                    stats.fragmentation_ratio(),
+                    stats.space_efficiency(),
+                    stats.reclamation_potential()
+                );
+            }
         }
-        if self.in_csr.fragmentation_ratio() > threshold {
+        if in_stats.as_ref().map_or(false, |s| s.should_compact(threshold))
+            || self.in_csr.fragmentation_ratio() > threshold
+        {
             self.in_csr.compact_with_ts(ts, RESERVE_RATIO);
+            if let Some(ref stats) = in_stats {
+                log::debug!(
+                    "Compacted in_csr: fragmentation={:.2}, efficiency={:.2}, reclaimed={} bytes",
+                    stats.fragmentation_ratio(),
+                    stats.space_efficiency(),
+                    stats.reclamation_potential()
+                );
+            }
         }
     }
 

@@ -145,10 +145,6 @@ impl GraphStorageContext {
         &self.persistent.data_store
     }
 
-    pub(crate) fn data_store_arc(&self) -> Arc<crate::storage::engine::data_store::GraphDataStore> {
-        Arc::clone(&self.persistent.data_store)
-    }
-
     pub(crate) fn get_freeze_config_full(&self) -> crate::storage::engine::config::FreezeConfig {
         self.persistent.config.freeze.clone()
     }

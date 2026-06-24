@@ -676,6 +676,11 @@ impl PropertyTable {
         self.name_indexer.contains(name)
     }
 
+    /// Get PropertyId by name
+    pub fn get_property_id(&self, name: &str) -> Option<crate::storage::types::PropertyId> {
+        self.name_indexer.get_id(name)
+    }
+
     pub fn dump(&self) -> Vec<u8> {
         let mut result = Vec::new();
 

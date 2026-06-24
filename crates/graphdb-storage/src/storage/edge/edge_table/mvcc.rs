@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 use super::stats::TombstoneStats;
+use super::super::bloom_filter::EdgeDeletionBloomFilter;
 use crate::core::types::{Timestamp, EdgeId};
 
 const HOT_TOMBSTONE_GC_THRESHOLD: usize = 150_000;
@@ -26,6 +27,10 @@ pub struct MVCCManager {
     /// Cold layer: older tombstones beyond hot threshold, kept for snapshot isolation
     /// Stored as Vec<(EdgeId, Timestamp)> to save memory and reduce lookup overhead
     pub cold_tombstones: Vec<(EdgeId, Timestamp)>,
+    /// Bloom filter for cold-layer pre-filtering.
+    /// Provides O(1) probabilistic membership testing to skip binary search
+    /// on edge IDs definitely not in the cold tombstone set.
+    pub cold_bloom_filter: EdgeDeletionBloomFilter,
     /// Minimum timestamp of all active snapshots
     pub min_active_snapshot_ts: Timestamp,
     /// Active snapshot timestamps and their reference count
@@ -38,6 +43,8 @@ impl Default for MVCCManager {
     }
 }
 
+const BLOOM_FILTER_CAPACITY: usize = 10_000;
+
 impl MVCCManager {
     /// Create a new MVCC manager
     pub fn new() -> Self {
@@ -46,6 +53,7 @@ impl MVCCManager {
             segment_tombstones: HashMap::new(),
             tombstones: HashMap::new(),
             cold_tombstones: Vec::new(),
+            cold_bloom_filter: EdgeDeletionBloomFilter::with_capacity(BLOOM_FILTER_CAPACITY),
             min_active_snapshot_ts: u32::MAX,
             active_snapshots: HashMap::new(),
         }
@@ -75,11 +83,19 @@ impl MVCCManager {
         self.is_tombstoned_cold(edge_id, ts)
     }
 
-    /// Check if an edge is tombstoned in cold layer using binary search.
+    /// Check if an edge is tombstoned in cold layer using bloom filter + binary search.
+    ///
+    /// The bloom filter provides O(1) probabilistic pre-filtering:
+    /// - If bloom filter says "definitely not in set", skip binary search (saves O(log n))
+    /// - If bloom filter says "might be in set", fall through to binary search
     ///
     /// The cold layer is kept sorted by EdgeId for efficient lookups.
     /// Returns true if the edge exists in cold layer with delete_ts <= ts.
     fn is_tombstoned_cold(&self, edge_id: EdgeId, ts: Timestamp) -> bool {
+        // Bloom filter pre-check: skip binary search if edge definitely not in cold set
+        if !self.cold_bloom_filter.might_contain(edge_id.0) {
+            return false;
+        }
         match self.cold_tombstones.binary_search_by_key(&edge_id, |&(id, _)| id) {
             Ok(idx) => self.cold_tombstones[idx].1 <= ts,
             Err(_) => false,
@@ -127,6 +143,14 @@ impl MVCCManager {
 
             // Ensure cold layer remains sorted for binary search
             self.cold_tombstones.sort_by_key(|k| k.0);
+        }
+
+        // Rebuild bloom filter from current cold layer state
+        self.cold_bloom_filter = EdgeDeletionBloomFilter::with_capacity(
+            (self.cold_tombstones.len() * 2).max(BLOOM_FILTER_CAPACITY)
+        );
+        for &(edge_id, _) in &self.cold_tombstones {
+            self.cold_bloom_filter.insert(edge_id.0);
         }
 
         let after = self.tombstones.len() + self.cold_tombstones.len();
@@ -195,7 +219,8 @@ impl MVCCManager {
         TombstoneStats {
             count: total_count,
             memory_bytes: TombstoneStats::estimate_memory(hot_count) +
-                (cold_count * std::mem::size_of::<(EdgeId, Timestamp)>()),
+                (cold_count * std::mem::size_of::<(EdgeId, Timestamp)>()) +
+                self.cold_bloom_filter.memory_bytes(),
             oldest_delete_ts: oldest,
             newest_delete_ts: newest,
         }

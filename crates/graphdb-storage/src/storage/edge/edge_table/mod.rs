@@ -26,6 +26,7 @@ pub use core::EdgeTableCore as EdgeTable;
 pub use core::UpdateEdgePropertyByOffsetParams;
 pub use segment::CsrSegment;
 pub use snapshot::ExportedEdgeSnapshot;
+pub use snapshot::SnapshotBuilder;
 pub use stats::{MergeStats, MergeMetrics, MergeMetricsResult};
 pub use compaction::CompactionMode;
 
@@ -38,7 +39,55 @@ use crate::core::types::{Timestamp, EdgeId};
 use crate::core::{StorageResult, StorageError};
 use std::time::Instant;
 use crate::storage::persistence::write_header_to;
+
+/// RAII handle for edge table snapshots.
+///
+/// Automatically unregisters the snapshot from MVCC tracking when dropped,
+/// enabling proper tombstone garbage collection.
+pub struct EdgeSnapshotHandle<'a> {
+    table: &'a mut EdgeTable,
+    ts: Timestamp,
+}
+
+impl<'a> EdgeSnapshotHandle<'a> {
+    /// Get the snapshot timestamp
+    pub fn timestamp(&self) -> Timestamp {
+        self.ts
+    }
+
+    /// Export the snapshot data
+    pub fn export(&self) -> StorageResult<ExportedEdgeSnapshot> {
+        self.table.export_snapshot(self.ts)
+    }
+
+    /// Manually release the snapshot (alternative to dropping)
+    pub fn release(mut self) {
+        // Prevent drop from being called
+        self.ts = u32::MAX;
+    }
+}
+
+impl<'a> Drop for EdgeSnapshotHandle<'a> {
+    fn drop(&mut self) {
+        if self.ts != u32::MAX {
+            self.table.unregister_snapshot(self.ts);
+        }
+    }
+}
 impl EdgeTable {
+    /// Register a snapshot for MVCC tracking (internal use).
+    ///
+    /// This is called automatically during export_snapshot to track active snapshots
+    /// and enable tombstone garbage collection.
+    pub fn register_snapshot(&mut self, ts: Timestamp) {
+        self.mvcc.register_active_snapshot(ts);
+    }
+
+    /// Unregister a snapshot, allowing GC of old tombstones.
+    pub fn unregister_snapshot(&mut self, ts: Timestamp) {
+        self.mvcc.unregister_active_snapshot(ts);
+    }
+
     /// Export a read-only snapshot of this edge table at the given timestamp.
     pub fn export_snapshot(&self, ts: Timestamp) -> StorageResult<ExportedEdgeSnapshot> {
         let out_edges = self.collect_edges_for_snapshot_mvcc(&self.out_csr, &self.out_segments, ts)?;
@@ -56,68 +105,45 @@ impl EdgeTable {
             schema: self.schema.clone(),
         })
     }
-
     /// Collect edges visible at timestamp from delta and segments with MVCC filtering.
+    ///
+    /// Uses `SnapshotBuilder` for efficient edge collection with deduplication.
     fn collect_edges_for_snapshot_mvcc(
         &self,
         delta: &CsrVariant,
         segments: &[CsrSegment],
         ts: Timestamp,
     ) -> StorageResult<Vec<(u32, Nbr)>> {
-        use std::collections::HashMap;
+        use snapshot::SnapshotBuilder;
 
-        let mut edge_map: HashMap<(u32, EdgeId), (u32, Nbr)> = HashMap::new();
+        let mut builder = SnapshotBuilder::new();
 
+        // Add edges from frozen segments
         for segment in segments.iter().rev() {
             if segment.create_ts_min > ts {
                 continue;
             }
 
             if segment.deletion_info.all_deleted_before(ts)
-                && segment.deletion_info.all_edges_deleted(segment.csr.edge_count()) {
+                && segment.deletion_info.all_edges_deleted(segment.csr.edge_count())
+            {
                 continue;
             }
 
-            for (edge_position, (src, immutable_nbr)) in segment.csr.iter().enumerate() {
-                let edge_id = segment.recover_edge_id(immutable_nbr, edge_position);
+            builder.add_segment_edges(segment, ts, &self.mvcc.tombstones);
+        }
 
-                if immutable_nbr.timestamp > ts {
-                    continue;
-                }
-
-                if let Some(&delete_ts) = self.mvcc.tombstones.get(&edge_id) {
-                    if delete_ts <= ts {
-                        continue;
-                    }
-                }
-
+        // Add edges from mutable delta
+        let delta_edges: Vec<(u32, Nbr)> = delta
+            .iter(ts)
+            .map(|(src, nbr)| {
                 let src_u32 = src.as_int64().unwrap_or(0) as u32;
-                let nbr = Nbr::new(
-                    immutable_nbr.neighbor,
-                    edge_id,
-                    immutable_nbr.prop_offset,
-                    immutable_nbr.timestamp,
-                );
-                edge_map.insert((src_u32, edge_id), (src_u32, nbr));
-            }
-        }
+                (src_u32, nbr)
+            })
+            .collect();
+        builder.add_delta_edges(delta_edges, ts, &self.mvcc.tombstones);
 
-        for (src, nbr) in delta.iter(ts) {
-            let src_u32 = src.as_int64().unwrap_or(0) as u32;
-
-            if let Some(&delete_ts) = self.mvcc.tombstones.get(&nbr.edge_id) {
-                if delete_ts <= ts {
-                    continue;
-                }
-            }
-
-            edge_map.insert((src_u32, nbr.edge_id), (src_u32, nbr));
-        }
-
-        let mut edges: Vec<_> = edge_map.into_values().collect();
-        edges.sort_by_key(|(src, _)| *src);
-
-        Ok(edges)
+        Ok(builder.edges())
     }
 
     /// Build a CSR from a list of edges.
@@ -126,6 +152,12 @@ impl EdgeTable {
         vertex_capacity: usize,
     ) -> StorageResult<Csr> {
         Ok(Csr::from_nbr_entries(&edges, vertex_capacity))
+    }
+
+    /// Get an RAII snapshot handle that automatically unregisters on drop.
+    pub fn snapshot_handle(&mut self, ts: Timestamp) -> EdgeSnapshotHandle<'_> {
+        self.register_snapshot(ts);
+        EdgeSnapshotHandle { table: self, ts }
     }
 
     /// Get current merge statistics

@@ -208,6 +208,17 @@ impl<T: Clone + Copy + Eq + std::hash::Hash + Ord> TieredTombstoneManager<T> {
     pub fn cold_len(&self) -> usize {
         self.cold_tombstones.len()
     }
+
+    /// Get the configured hot layer max size
+    pub fn hot_max_size(&self) -> usize {
+        self.hot_max_size
+    }
+
+    /// Check if hot layer is approaching capacity (above 80% of max)
+    pub fn is_hot_layer_near_capacity(&self) -> bool {
+        let threshold = self.hot_max_size.saturating_mul(8).saturating_div(10);
+        self.hot_tombstones.len() >= threshold
+    }
 }
 
 #[cfg(test)]

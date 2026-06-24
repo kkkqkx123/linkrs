@@ -59,8 +59,16 @@ impl EdgeTableCore {
 
         let total_frozen = out_result.frozen_count + in_result.frozen_count;
 
+        // Update checksums after freeze
+        self.update_segment_checksums();
+
         // Auto-trigger merge if segment count exceeds threshold (or emergency merge if max exceeded)
-        self.auto_merge_segments(ts);
+        let merged = self.auto_merge_segments(ts);
+
+        // Update checksums after merge as well
+        if merged > 0 {
+            self.update_segment_checksums();
+        }
 
         total_frozen
     }
