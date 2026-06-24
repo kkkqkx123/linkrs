@@ -6,6 +6,7 @@
 pub mod analyze;
 pub mod edge;
 pub mod index;
+pub mod migrate;
 pub mod query_management;
 pub mod schema_checker;
 pub mod space;
@@ -51,6 +52,7 @@ pub use self::query_management::ShowStatsExecutor;
 
 pub use self::analyze::{AnalyzeExecutor, AnalyzeTarget};
 
+pub use self::migrate::{MigrateExecutor, MigrationCmdInfo};
 pub use self::schema_checker::{CompatibilityReport, SchemaCompatibilityChecker};
 
 pub use crate::core::types::PasswordInfo;

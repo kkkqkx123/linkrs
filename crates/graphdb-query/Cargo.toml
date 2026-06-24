@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 graphdb-core = { path = "../graphdb-core" }
 graphdb-storage = { path = "../graphdb-storage" }
+graphdb-migration = { path = "../graphdb-migration" }
 graphdb-search = { path = "../graphdb-search" }
 graphdb-sync = { path = "../graphdb-sync" }
 serde.workspace = true
