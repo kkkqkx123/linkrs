@@ -73,6 +73,26 @@ impl SchemaCompatibilityChecker {
         tag: &str,
         changes: &[crate::storage::PropertyChange],
     ) -> StorageResult<CompatibilityReport> {
+        Self::vertex_compatibility(&*self.storage_reader, space, tag, changes)
+    }
+
+    /// Check compatibility before altering an edge type
+    pub fn check_alter_edge_compatibility(
+        &self,
+        space: &str,
+        edge_type: &str,
+        changes: &[crate::storage::PropertyChange],
+    ) -> StorageResult<CompatibilityReport> {
+        Self::edge_compatibility(&*self.storage_reader, space, edge_type, changes)
+    }
+
+    /// Check vertex tag changes using a provided reader (static entry point)
+    pub fn vertex_compatibility(
+        reader: &dyn StorageReader,
+        space: &str,
+        tag: &str,
+        changes: &[crate::storage::PropertyChange],
+    ) -> StorageResult<CompatibilityReport> {
         let mut report = CompatibilityReport {
             has_breaking_changes: false,
             breaking_changes: Vec::new(),
@@ -82,8 +102,7 @@ impl SchemaCompatibilityChecker {
         };
 
         // Get current version history
-        let current_history = self.storage_reader
-            .get_vertex_version_history(space, tag)?;
+        let current_history = reader.get_vertex_version_history(space, tag)?;
 
         let current_version = current_history
             .as_ref()
@@ -92,11 +111,11 @@ impl SchemaCompatibilityChecker {
 
         // Analyze each change
         for change in changes {
-            self.analyze_change(change, &mut report, current_version)?;
+            Self::analyze_single_change(change, &mut report, current_version);
         }
 
         // Estimate affected data
-        report.affected_data_count = self.estimate_vertex_count(space, tag)?;
+        report.affected_data_count = reader.scan_vertices_by_tag(space, tag).map(|v| v.len() as u64).unwrap_or(0);
 
         // Generate recommendation
         if report.has_breaking_changes {
@@ -113,9 +132,9 @@ impl SchemaCompatibilityChecker {
         Ok(report)
     }
 
-    /// Check compatibility before altering an edge type
-    pub fn check_alter_edge_compatibility(
-        &self,
+    /// Check edge type changes using a provided reader (static entry point)
+    pub fn edge_compatibility(
+        reader: &dyn StorageReader,
         space: &str,
         edge_type: &str,
         changes: &[crate::storage::PropertyChange],
@@ -129,8 +148,7 @@ impl SchemaCompatibilityChecker {
         };
 
         // Get current version history
-        let current_history = self.storage_reader
-            .get_edge_version_history(space, edge_type)?;
+        let current_history = reader.get_edge_version_history(space, edge_type)?;
 
         let current_version = current_history
             .as_ref()
@@ -139,11 +157,11 @@ impl SchemaCompatibilityChecker {
 
         // Analyze each change
         for change in changes {
-            self.analyze_change(change, &mut report, current_version)?;
+            Self::analyze_single_change(change, &mut report, current_version);
         }
 
         // Estimate affected data
-        report.affected_data_count = self.estimate_edge_count(space, edge_type)?;
+        report.affected_data_count = reader.scan_edges_by_type(space, edge_type).map(|e| e.len() as u64).unwrap_or(0);
 
         // Generate recommendation
         if report.has_breaking_changes {
@@ -161,12 +179,11 @@ impl SchemaCompatibilityChecker {
     }
 
     /// Analyze a single schema change
-    fn analyze_change(
-        &self,
+    fn analyze_single_change(
         change: &crate::storage::PropertyChange,
         report: &mut CompatibilityReport,
         _current_version: u64,
-    ) -> StorageResult<()> {
+    ) {
         match &change.details {
             ChangeDetails::PropertyRemoved { name, data_type: _ } => {
                 report.has_breaking_changes = true;
@@ -203,7 +220,7 @@ impl SchemaCompatibilityChecker {
                 new_type,
             } => {
                 // Check type compatibility
-                if !self.are_types_compatible(old_type, new_type) {
+                if !Self::are_types_compatible(old_type, new_type) {
                     report.has_breaking_changes = true;
                     report.breaking_changes.push(format!(
                         "Type change for '{}': {:?} → {:?} (incompatible)",
@@ -256,12 +273,10 @@ impl SchemaCompatibilityChecker {
                 ));
             }
         }
-
-        Ok(())
     }
 
     /// Check if two data types are compatible
-    fn are_types_compatible(&self, from: &DataType, to: &DataType) -> bool {
+    fn are_types_compatible(from: &DataType, to: &DataType) -> bool {
         match (from, to) {
             // Same type is always compatible
             (a, b) if std::mem::discriminant(a) == std::mem::discriminant(b) => true,
@@ -270,17 +285,6 @@ impl SchemaCompatibilityChecker {
         }
     }
 
-    /// Estimate the number of vertices for a tag
-    fn estimate_vertex_count(&self, space: &str, tag: &str) -> StorageResult<u64> {
-        let vertices = self.storage_reader.scan_vertices_by_tag(space, tag)?;
-        Ok(vertices.len() as u64)
-    }
-
-    /// Estimate the number of edges for an edge type
-    fn estimate_edge_count(&self, space: &str, edge_type: &str) -> StorageResult<u64> {
-        let edges = self.storage_reader.scan_edges_by_type(space, edge_type)?;
-        Ok(edges.len() as u64)
-    }
 }
 
 #[cfg(test)]
@@ -406,5 +410,75 @@ mod tests {
         ).unwrap();
 
         assert!(!report.has_breaking_changes);
+    }
+
+    #[test]
+    fn test_vertex_compatibility_static_method() {
+        let mock = MockStorage::new().expect("Failed to create MockStorage");
+        let change = crate::storage::PropertyChange {
+            version: 1,
+            timestamp_ms: 0,
+            details: ChangeDetails::PropertyRemoved {
+                name: "email".to_string(),
+                data_type: DataType::String,
+            },
+        };
+
+        let report = SchemaCompatibilityChecker::vertex_compatibility(
+            &mock,
+            "test_space",
+            "User",
+            &[change],
+        ).unwrap();
+
+        assert!(report.has_breaking_changes);
+        assert_eq!(report.breaking_changes.len(), 1);
+    }
+
+    #[test]
+    fn test_edge_compatibility_static_method() {
+        let mock = MockStorage::new().expect("Failed to create MockStorage");
+        let change = crate::storage::PropertyChange {
+            version: 1,
+            timestamp_ms: 0,
+            details: ChangeDetails::PropertyRemoved {
+                name: "weight".to_string(),
+                data_type: DataType::Double,
+            },
+        };
+
+        let report = SchemaCompatibilityChecker::edge_compatibility(
+            &mock,
+            "test_space",
+            "Knows",
+            &[change],
+        ).unwrap();
+
+        assert!(report.has_breaking_changes);
+        assert_eq!(report.breaking_changes.len(), 1);
+    }
+
+    #[test]
+    fn test_vertex_compatibility_property_rename() {
+        let mock = MockStorage::new().expect("Failed to create MockStorage");
+        let change = crate::storage::PropertyChange {
+            version: 1,
+            timestamp_ms: 0,
+            details: ChangeDetails::PropertyRenamed {
+                old_name: "old_field".to_string(),
+                new_name: "new_field".to_string(),
+            },
+        };
+
+        let report = SchemaCompatibilityChecker::vertex_compatibility(
+            &mock,
+            "test_space",
+            "User",
+            &[change],
+        ).unwrap();
+
+        assert!(!report.has_breaking_changes);
+        assert!(!report.warnings.is_empty());
+        assert!(report.warnings[0].contains("Renaming property"));
     }
 }
