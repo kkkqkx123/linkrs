@@ -44,6 +44,22 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
     fn count_vertices_by_tag(&self, space: &str, tag: &str) -> Result<u64, StorageError>;
     fn count_edges_by_type(&self, space: &str, edge_type: &str) -> Result<u64, StorageError>;
 
+    /// Scan edges of a specific type with pagination support.
+    /// Returns at most `limit` edges starting from `offset`.
+    /// The `offset` parameter is 0-based.
+    /// The `limit` parameter controls the page size.
+    fn scan_edges_by_type_paginated(
+        &self,
+        space: &str,
+        edge_type: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<Edge>, StorageError> {
+        // Default implementation: scan all and paginate in memory
+        let all = self.scan_edges_by_type(space, edge_type)?;
+        Ok(all.into_iter().skip(offset).take(limit).collect())
+    }
+
     fn lookup_index(
         &self,
         space: &str,

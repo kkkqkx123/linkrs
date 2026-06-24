@@ -48,7 +48,7 @@ impl GraphStorageContext {
                         log::debug!(
                             "Freeze triggered ({} strategy): {}",
                             manager.strategy_name(),
-                            manager.get_reason(&input)
+                            decision.summary()
                         );
 
                         let frozen = table.compact_and_freeze(ts, &config, crate::storage::edge::edge_table::CompactionMode::Standard);

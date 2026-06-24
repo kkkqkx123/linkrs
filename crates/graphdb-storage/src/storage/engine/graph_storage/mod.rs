@@ -194,6 +194,16 @@ impl StorageReader for GraphStorage {
         reader::scan_all_edges(&self.ctx, space)
     }
 
+    fn scan_edges_by_type_paginated(
+        &self,
+        space: &str,
+        edge_type: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<Edge>, StorageError> {
+        reader::scan_edges_by_type_paginated(&self.ctx, space, edge_type, offset, limit)
+    }
+
     fn count_vertices_by_tag(&self, space: &str, tag: &str) -> Result<u64, StorageError> {
         reader::count_vertices_by_tag(&self.ctx, space, tag)
     }

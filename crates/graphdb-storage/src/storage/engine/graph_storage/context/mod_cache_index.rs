@@ -48,8 +48,10 @@ impl GraphStorageContext {
     }
 
     pub fn export_snapshot(&self, ts: Timestamp) -> StorageResult<Vec<ExportedEdgeSnapshotRecord>> {
-        let edge_tables = self.persistent.data_store.edge_tables().read();
+        use crate::storage::edge::edge_table::EdgeSnapshotHandle;
+        let mut edge_tables = self.persistent.data_store.edge_tables().write();
         let mut results = Vec::with_capacity(edge_tables.len());
+        let mut handles: Vec<EdgeSnapshotHandle<'_>> = Vec::new();
         for (
             EdgeTableKey {
                 src_label,
@@ -57,16 +59,25 @@ impl GraphStorageContext {
                 edge_label,
             },
             table,
-        ) in edge_tables.iter()
+        ) in edge_tables.iter_mut()
         {
-            let snapshot = table.export_snapshot(ts)?;
+            let mut handle = table.snapshot_handle(ts);
+            let snapshot = handle.export()?;
             results.push(ExportedEdgeSnapshotRecord {
                 src_label: *src_label,
                 dst_label: *dst_label,
                 edge_label: *edge_label,
                 snapshot,
             });
+            handles.push(handle);
         }
         Ok(results)
+    }
+
+    pub fn release_snapshot(&self, ts: Timestamp) {
+        let mut edge_tables = self.persistent.data_store.edge_tables().write();
+        for (_, table) in edge_tables.iter_mut() {
+            table.unregister_snapshot(ts);
+        }
     }
 }
