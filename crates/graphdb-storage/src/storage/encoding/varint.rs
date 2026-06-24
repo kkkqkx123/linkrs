@@ -6,7 +6,7 @@
 //! Encoding format: Each byte uses bit 7 as a continuation flag (1 = more bytes follow),
 //! and bits 0-6 store 7 bits of the value.
 
-use std::io::{self, Read, Write};
+use std::io::Read;
 
 use crate::core::StorageResult;
 

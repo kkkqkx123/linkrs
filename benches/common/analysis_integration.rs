@@ -194,7 +194,7 @@ pub fn print_performance_grade(metrics: &AnalysisMetrics) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analyzer::{AnalysisMetrics, NodeMetrics};
+    use crate::analyzer::{AnalysisMetrics};
 
     #[test]
     fn test_score_to_grade() {

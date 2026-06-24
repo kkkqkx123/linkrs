@@ -3,7 +3,7 @@
 //! Enables consistent point-in-time snapshots of the edge table for
 //! backup, replication, and time-travel queries.
 
-use super::super::{Csr, Nbr, EdgeSchema, LabelId, VertexId, ImmutableNbr, CsrBase};
+use super::super::{Csr, Nbr, EdgeSchema, LabelId, VertexId, CsrBase};
 use super::segment::CsrSegment;
 use crate::core::types::{Timestamp, EdgeId};
 use crate::core::StorageResult;
@@ -102,10 +102,8 @@ impl SnapshotBuilder {
             return;
         }
 
-        let mut edge_position = 0usize;
-        for (src, immutable_nbr) in segment.csr.iter() {
+        for (edge_position, (src, immutable_nbr)) in segment.csr.iter().enumerate() {
             let edge_id = segment.recover_edge_id(immutable_nbr, edge_position);
-            edge_position += 1;
 
             if immutable_nbr.timestamp > ts {
                 continue;

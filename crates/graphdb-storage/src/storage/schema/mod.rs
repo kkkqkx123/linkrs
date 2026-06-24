@@ -29,6 +29,4 @@ pub mod change;
 pub mod version_history;
 
 pub use change::{ChangeDetails, ChangeLog, PropertyChange, SchemaObjectType};
-pub use version_history::{
-    LabelVersionHistory, SchemaVersionHistory,
-};
+pub use version_history::{LabelVersionHistory};

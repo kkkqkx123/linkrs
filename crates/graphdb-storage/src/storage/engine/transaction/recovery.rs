@@ -380,10 +380,10 @@ impl RecoveryApplier for GraphStorageContext {
             .get_space_id(&redo.space_name)
             .unwrap_or(0);
         let label_id = if let Some(label_id) = redo.label_id {
-            let space_id = self
-                .schema_manager()
-                .get_space_id(&redo.space_name)
-                .unwrap_or(0);
+        let _space_id = self
+            .schema_manager()
+            .get_space_id(&redo.space_name)
+            .unwrap_or(0);
             let storage_name = format!("space_{space_id}:edge:{}", redo.edge_label);
             match self.create_edge_type_with_id(
                 CreateEdgeTypeParams {
@@ -440,7 +440,7 @@ impl RecoveryApplier for GraphStorageContext {
         redo: &DeleteVertexTypeRedo,
         _ts: Timestamp,
     ) -> StorageResult<()> {
-        let space_name = redo.space_name.as_deref().unwrap_or("");
+        let _space_name = redo.space_name.as_deref().unwrap_or("");
         if let Some(space_name) = &redo.space_name {
             if let Ok(Some(space_info)) = self.schema_manager().get_space(space_name) {
                 let storage_name = format!("space_{}:tag:{}", space_info.space_id, redo.label_name);
@@ -458,7 +458,7 @@ impl RecoveryApplier for GraphStorageContext {
         redo: &DeleteEdgeTypeRedo,
         _ts: Timestamp,
     ) -> StorageResult<()> {
-        let space_name = redo.space_name.as_deref().unwrap_or("");
+        let _space_name = redo.space_name.as_deref().unwrap_or("");
         if let Some(space_name) = &redo.space_name {
             if let Ok(Some(space_info)) = self.schema_manager().get_space(space_name) {
                 let storage_name = format!("space_{}:edge:{}", space_info.space_id, redo.edge_label);

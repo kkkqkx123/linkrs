@@ -35,7 +35,7 @@ pub fn generate_vertex_plan(
         .get_vertex_schema_changes(space, tag, from_version, to_version)?;
 
     let steps: Vec<MigrationStep> =
-        changes.iter().flat_map(|c| step_from_change(c)).collect();
+        changes.iter().flat_map(step_from_change).collect();
 
     let overall_safety = calculate_safety(&steps);
     let estimated_rows = estimate_vertex_rows(reader, space, tag).unwrap_or(0);
@@ -87,7 +87,7 @@ pub fn generate_edge_plan(
         .get_edge_schema_changes(space, edge_type, from_version, to_version)?;
 
     let steps: Vec<MigrationStep> =
-        changes.iter().flat_map(|c| step_from_change(c)).collect();
+        changes.iter().flat_map(step_from_change).collect();
 
     let overall_safety = calculate_safety(&steps);
     let estimated_rows = estimate_edge_rows(reader, space, edge_type).unwrap_or(0);

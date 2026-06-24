@@ -114,7 +114,7 @@ impl AnalysisMetrics {
             score += 5.0;
         }
 
-        score.max(0.0).min(100.0)
+        score.clamp(0.0, 100.0)
     }
 
     /// Generate human-readable summary
@@ -171,7 +171,7 @@ impl AnalysisMetrics {
             ));
         }
 
-        report.push_str("\n");
+        report.push('\n');
         report.push_str(&format!("Overall Score: {:.1}/100\n", self.calculate_score()));
 
         report

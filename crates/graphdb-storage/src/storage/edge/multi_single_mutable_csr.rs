@@ -119,18 +119,17 @@ impl MultiSingleMutableCsr {
         }
 
         let additional = new_vertex_capacity - self.vertex_capacity;
-        for _ in 0..additional {
-            self.edges.extend(std::iter::repeat(
-                Nbr::with_delete_ts(
-                    VertexId::from_int64(0),
-                    INVALID_EDGE_ID,
-                    0,
-                    INVALID_TIMESTAMP,
-                    0,
-                ),
-            ).take(self.edges_per_vertex));
-            self.counts.push(0);
-        }
+        self.edges.extend(std::iter::repeat_n(
+            Nbr::with_delete_ts(
+                VertexId::from_int64(0),
+                INVALID_EDGE_ID,
+                0,
+                INVALID_TIMESTAMP,
+                0,
+            ),
+            additional * self.edges_per_vertex,
+        ));
+        self.counts.extend(std::iter::repeat_n(0, additional));
         self.vertex_capacity = new_vertex_capacity;
     }
 

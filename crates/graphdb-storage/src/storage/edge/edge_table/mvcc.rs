@@ -121,10 +121,9 @@ impl MVCCManager {
             to_move.sort_by_key(|k| k.0);
 
             let move_count = (to_move.len() as f64 * 0.3) as usize;
-            for i in 0..move_count {
-                let (edge_id, ts) = to_move[i];
-                self.tombstones.remove(&edge_id);
-                self.cold_tombstones.push((edge_id, ts));
+            for (edge_id, ts) in to_move.iter().take(move_count) {
+                self.tombstones.remove(edge_id);
+                self.cold_tombstones.push((*edge_id, *ts));
             }
 
             // Ensure cold layer remains sorted for binary search

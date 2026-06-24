@@ -518,7 +518,7 @@ impl TransactionOps {
             .ok_or(UndoLogError::LabelNotFound(0))?;
 
         if let Some(table) = vertex_tables.get_mut(&label_id) {
-            let new_schema = table.schema().clone();
+            let _new_schema = table.schema().clone();
             for (current, original) in current_names.iter().zip(original_names.iter()) {
                 if let Some(prop) = table.schema_mut()
                     .properties

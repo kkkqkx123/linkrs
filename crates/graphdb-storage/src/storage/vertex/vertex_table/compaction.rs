@@ -69,7 +69,15 @@ impl CompactionCoordinator {
             id_mapping: HashMap::new(),
         }
     }
+}
 
+impl Default for CompactionCoordinator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CompactionCoordinator {
     /// Execute the full compaction process on a VertexTable
     ///
     /// This is the public interface that orchestrates all steps in the correct order.

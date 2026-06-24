@@ -400,7 +400,7 @@ pub async fn get_version_history<
                     .map(|&version| {
                         let changes: Vec<_> = h.change_log
                             .get_version_changes(version)
-                            .map(|v| v.iter().cloned().collect::<Vec<_>>())
+                            .map(|v| v.clone())
                             .unwrap_or_default()
                             .into_iter()
                             .map(|change| {

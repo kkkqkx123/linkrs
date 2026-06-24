@@ -2,7 +2,6 @@
 //! Data generation utilities for benchmarks
 
 use std::fs;
-use std::path::Path;
 
 pub struct DataGenerator;
 

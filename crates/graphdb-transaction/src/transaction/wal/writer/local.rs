@@ -141,7 +141,7 @@ impl LocalWalWriter {
 
         let file = self.file.as_mut().ok_or(WalError::Closed)?;
         file.seek(SeekFrom::Start(0))?;
-        file.write_all(header_bytes)?;
+        file.write_all(&header_bytes)?;
         file.sync_all()?;
 
         self.file_header = Some(header);
@@ -655,7 +655,7 @@ impl LocalWalWriter {
         }
 
         file.seek(SeekFrom::Start(self.file_used as u64))?;
-        file.write_all(header_bytes)?;
+        file.write_all(&header_bytes)?;
         file.write_all(payload)?;
         self.file_used += total_len;
 
@@ -722,7 +722,7 @@ impl LocalWalWriter {
         file.seek(SeekFrom::Start(self.file_used as u64))?;
 
         for (header, payload) in compressed_entries {
-            file.write_all(header.as_bytes())?;
+            file.write_all(&header.as_bytes())?;
             file.write_all(&payload)?;
         }
 

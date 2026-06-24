@@ -52,8 +52,6 @@ pub mod writer;
 // Direct imports from core WAL layer
 pub use crate::core::wal::redo::*;
 pub use crate::core::wal::types::*;
-pub use crate::core::wal::traits::*;
-
 pub use crate::core::types::{TableId, TableTracker, TableTrackerConfig, TableType};
 pub use checkpoint::{Checkpoint, CheckpointManager, CheckpointMode, CheckpointResult};
 pub use parser::{

@@ -44,7 +44,7 @@ use crate::storage::mvcc::{MVCCTable, SnapshotHandle, TieredTombstoneManager};
 
 pub use super::property_schema::{
     PropertySchema, PropertyRecord, PropertyCompactionStats,
-    PROP_OFFSET_NONE, prop_offset_to_index, prop_index_to_offset,
+    prop_offset_to_index, prop_index_to_offset,
 };
 
 // Varint encoding for compact string lengths
@@ -188,7 +188,7 @@ impl PropertyTable {
                 .find(|(k, _)| k == &schema.name)
                 .map(|(_, v)| v.clone());
 
-            self.serialize_value(&mut buffer, value.as_ref(), &schema)?;
+            self.serialize_value(&mut buffer, value.as_ref(), schema)?;
         }
 
         Ok(buffer)
@@ -204,7 +204,7 @@ impl PropertyTable {
                 .map(|(_, v)| v.clone())
                 .flatten();
 
-            self.serialize_value(&mut buffer, value.as_ref(), &schema)?;
+            self.serialize_value(&mut buffer, value.as_ref(), schema)?;
         }
 
         Ok(buffer)
@@ -631,7 +631,7 @@ impl PropertyTable {
 
     /// Garbage collect tombstones older than min_active_snapshot_ts
     pub fn gc_tombstones(&mut self, min_active_snapshot_ts: Timestamp) -> u32 {
-        let removed_count = self.tombstones_manager.gc(min_active_snapshot_ts);
+        let _removed_count = self.tombstones_manager.gc(min_active_snapshot_ts);
 
         // Remove records that are fully tombstoned and older than min_active_snapshot_ts
         let mut reclaimed = 0u32;
@@ -724,7 +724,7 @@ impl PropertyTable {
         result.extend_from_slice(&(self.tombstones_manager.len() as u32).to_le_bytes());
 
         // Serialize hot layer
-        for idx in 0..self.tombstones_manager.hot_len() {
+        for _idx in 0..self.tombstones_manager.hot_len() {
             // Note: We serialize tombstones in order, hot then cold
             // This is for persistence; reconstruction happens during load
         }
@@ -932,10 +932,8 @@ impl PropertyTable {
 
     pub fn used_memory_size(&self) -> usize {
         let mut total = 0usize;
-        for record_opt in &self.records {
-            if let Some(record) = record_opt {
-                total += record.data.len();
-            }
+        for record in self.records.iter().flatten() {
+            total += record.data.len();
         }
         total += self.records.len() * std::mem::size_of::<Option<PropertyRecord>>();
         total += std::mem::size_of::<Self>();
@@ -1087,7 +1085,7 @@ impl PropertyTable {
                     // Prefetch the data location to L1/L2 cache
                     #[allow(unsafe_code)]
                     unsafe {
-                        let addr = record.data.as_ptr() as *const u8;
+                        let addr = record.data.as_ptr();
                         // Use a volatile read to ensure prefetch happens
                         std::ptr::read_volatile(addr);
                     }
@@ -1261,7 +1259,7 @@ impl MVCCTable for PropertyTable {
         self.min_active_snapshot_ts
     }
 
-    fn gc(&mut self, min_ts: Timestamp) -> StorageResult<usize> {
+    fn gc(&mut self, _min_ts: Timestamp) -> StorageResult<usize> {
         // Update min_active_snapshot_ts first
         self.min_active_snapshot_ts = self
             .active_snapshots

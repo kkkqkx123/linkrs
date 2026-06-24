@@ -3,11 +3,10 @@
 //! Provides fundamental edge table functionality including insertion, deletion,
 //! querying, property management, and basic maintenance operations.
 
-use super::segment::{CsrSegment, DeletionInfo, SegmentVersion};
+use super::segment::{CsrSegment, SegmentVersion};
 use super::mvcc::MVCCManager;
-use super::stats::DeletionStats;
-use super::super::{CsrVariant, EdgeSchema, EdgeStrategy, Nbr, EdgeRecord, CsrBase, MutableCsrTrait};
-use crate::core::types::{EdgeId, CompactConfig, LabelId, VertexId, Timestamp};
+use super::super::{CsrVariant, EdgeSchema, Nbr, EdgeRecord, CsrBase, MutableCsrTrait};
+use crate::core::types::{EdgeId, LabelId, VertexId, Timestamp};
 use crate::core::{DataType, StorageError, StorageResult, Value};
 use crate::storage::types::{PropertyId, StoragePropertyDef};
 use crate::storage::edge::PropertyTable;
@@ -668,10 +667,8 @@ impl EdgeTableCore {
 
         let mut edges = Vec::new();
         let mut skip_count = 0;
-        let mut total_count = 0;
 
         for edge in self.iter(ts) {
-            total_count += 1;
             if skip_count < offset {
                 skip_count += 1;
                 continue;
@@ -776,7 +773,7 @@ impl EdgeTableCore {
         self.schema.properties.remove(index);
         // Update cache: remove deleted property and adjust indices
         self.property_index_cache.remove(name);
-        for (prop_name, idx) in &mut self.property_index_cache {
+        for (_prop_name, idx) in &mut self.property_index_cache {
             if *idx > index {
                 *idx -= 1;
             }

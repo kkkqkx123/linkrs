@@ -6,7 +6,6 @@
 use crate::core::StorageResult;
 use crate::storage::types::StoragePropertyDef;
 use crate::storage::schema::{ChangeDetails, PropertyChange, SchemaObjectType};
-use crate::core::DataType;
 
 use super::core::VertexTable;
 
@@ -110,7 +109,7 @@ impl VertexTable {
 
         // Rebuild cache: remove deleted property and adjust indices
         self.property_index_cache.remove(prop_name);
-        for (name, idx) in &mut self.property_index_cache {
+        for idx in self.property_index_cache.values_mut() {
             if *idx > index {
                 *idx -= 1;
             }

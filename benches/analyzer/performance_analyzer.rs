@@ -267,7 +267,7 @@ impl PerformanceAnalyzer {
         report.push_str(&metrics.detailed_report());
 
         let bottlenecks = BottleneckDetector::detect_all(metrics);
-        report.push_str("\n");
+        report.push('\n');
         report.push_str(&BottleneckDetector::generate_report(&bottlenecks));
 
         report

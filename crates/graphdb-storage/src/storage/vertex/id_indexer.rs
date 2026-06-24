@@ -204,11 +204,10 @@ impl IdManager {
     }
 
     pub fn remove(&mut self, key: &IdKey) -> Option<u32> {
-        self.key_to_id.remove(key).map(|idx| {
+        self.key_to_id.remove(key).inspect(|&idx| {
             if (idx as usize) < self.keys.len() {
                 self.keys[idx as usize] = None;
             }
-            idx
         })
     }
 

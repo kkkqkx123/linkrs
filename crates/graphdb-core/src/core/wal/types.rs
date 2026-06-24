@@ -213,8 +213,8 @@ impl WalFileHeader {
         }
     }
 
-    /// Serialize header to fixed-size byte array (safe, stack-allocated)
-    pub fn as_bytes_array(&self) -> [u8; 64] {
+    /// Serialize header to byte vector
+    pub fn as_bytes(&self) -> Vec<u8> {
         let mut bytes = [0u8; 64];
         let mut offset = 0;
 
@@ -244,16 +244,11 @@ impl WalFileHeader {
 
         bytes[offset..offset+20].copy_from_slice(&self.reserved);
 
-        bytes
+        bytes.to_vec()
     }
 
-    /// Serialize header to byte vector (safe, heap-allocated when needed)
-    pub fn as_bytes_safe(&self) -> Vec<u8> {
-        self.as_bytes_array().to_vec()
-    }
-
-    /// Deserialize from byte slice (safe implementation)
-    pub fn from_bytes_safe(bytes: &[u8]) -> Option<Self> {
+    /// Deserialize from byte slice
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         if bytes.len() < Self::SIZE {
             return None;
         }
@@ -298,37 +293,6 @@ impl WalFileHeader {
             thread_id,
             reserved,
         })
-    }
-
-
-    /// Get bytes reference (unsafe but documented)
-    ///
-    /// # Safety
-    /// This is safe because WalFileHeader is repr(C) with fixed-size fields.
-    /// Use as_bytes_safe() for a guaranteed safe alternative.
-    #[deprecated(since = "0.2.0", note = "Use as_bytes_safe() instead")]
-    pub fn as_bytes(&self) -> &[u8] {
-        unsafe {
-            std::slice::from_raw_parts(
-                self as *const WalFileHeader as *const u8,
-                std::mem::size_of::<WalFileHeader>(),
-            )
-        }
-    }
-
-    /// Deserialize from bytes (unsafe but documented)
-    ///
-    /// # Safety
-    /// This is safe only if the input comes from a properly serialized WalFileHeader.
-    /// Use from_bytes_safe() for a guaranteed safe alternative.
-    #[deprecated(since = "0.2.0", note = "Use from_bytes_safe() instead")]
-    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() < Self::SIZE {
-            return None;
-        }
-        let header: WalFileHeader =
-            unsafe { std::ptr::read(bytes.as_ptr() as *const WalFileHeader) };
-        Some(header)
     }
 
     pub fn is_valid(&self) -> bool {
@@ -473,8 +437,8 @@ impl WalHeader {
         self.record_type != RecordType::Full
     }
 
-    /// Serialize header to fixed-size byte array (safe, stack-allocated)
-    pub fn as_bytes_array(&self) -> [u8; 40] {
+    /// Serialize header to byte vector
+    pub fn as_bytes(&self) -> Vec<u8> {
         let mut bytes = [0u8; 40];
         let mut offset = 0;
 
@@ -496,7 +460,6 @@ impl WalHeader {
         bytes[offset..offset+2].copy_from_slice(&self.flags.to_le_bytes());
         offset += 2;
 
-        // timestamp is u32, not u64
         bytes[offset..offset+4].copy_from_slice(&self.timestamp.to_le_bytes());
         offset += 4;
 
@@ -508,16 +471,11 @@ impl WalHeader {
 
         bytes[offset..offset+4].copy_from_slice(&self.checksum.to_le_bytes());
 
-        bytes
+        bytes.to_vec()
     }
 
-    /// Serialize header to byte vector (safe, heap-allocated when needed)
-    pub fn as_bytes_safe(&self) -> Vec<u8> {
-        self.as_bytes_array().to_vec()
-    }
-
-    /// Deserialize from byte slice (safe implementation)
-    pub fn from_bytes_safe(bytes: &[u8]) -> Option<Self> {
+    /// Deserialize from byte slice
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         if bytes.len() < Self::SIZE {
             return None;
         }
@@ -542,7 +500,6 @@ impl WalHeader {
         let flags = u16::from_le_bytes(bytes[offset..offset+2].try_into().ok()?);
         offset += 2;
 
-        // timestamp is u32, not u64
         let timestamp = u32::from_le_bytes(bytes[offset..offset+4].try_into().ok()?);
         offset += 4;
 
@@ -565,35 +522,6 @@ impl WalHeader {
             prev_lsn,
             checksum,
         })
-    }
-
-    /// Get bytes reference (unsafe but documented)
-    ///
-    /// # Safety
-    /// This is safe because WalHeader is repr(C) with fixed-size fields.
-    /// Use as_bytes_safe() for a guaranteed safe alternative.
-    #[deprecated(since = "0.2.0", note = "Use as_bytes_safe() instead")]
-    pub fn as_bytes(&self) -> &[u8] {
-        unsafe {
-            std::slice::from_raw_parts(
-                self as *const WalHeader as *const u8,
-                std::mem::size_of::<WalHeader>(),
-            )
-        }
-    }
-
-    /// Deserialize from bytes (unsafe but documented)
-    ///
-    /// # Safety
-    /// This is safe only if the input comes from a properly serialized WalHeader.
-    /// Use from_bytes_safe() for a guaranteed safe alternative.
-    #[deprecated(since = "0.2.0", note = "Use from_bytes_safe() instead")]
-    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() < Self::SIZE {
-            return None;
-        }
-        let header: WalHeader = unsafe { std::ptr::read(bytes.as_ptr() as *const WalHeader) };
-        Some(header)
     }
 }
 

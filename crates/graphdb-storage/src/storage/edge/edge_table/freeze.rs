@@ -8,8 +8,7 @@ use super::core::EdgeTableCore;
 use super::segment::{CsrSegment, DeletionInfo, SEPARATE_EDGE_ID_STORAGE_THRESHOLD};
 use super::merge;
 use crate::core::types::{EdgeId, Timestamp};
-use crate::core::StorageResult;
-use crate::storage::edge::{CsrVariant, Csr, Nbr, CsrBase};
+use crate::storage::edge::{CsrVariant, Csr, CsrBase};
 use std::collections::HashMap;
 
 impl EdgeTableCore {

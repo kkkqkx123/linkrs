@@ -324,7 +324,7 @@ impl<'a, T: InsertTarget + ?Sized> InsertTransaction<'a, T> {
     fn write_wal_header(&mut self) {
         let header = WalHeader::new(WalOpType::InsertVertex, self.timestamp, 0);
         let header_bytes = header.as_bytes();
-        self.wal_buffer[..WalHeader::SIZE].copy_from_slice(header_bytes);
+        self.wal_buffer[..WalHeader::SIZE].copy_from_slice(&header_bytes);
     }
 
     /// Ingest WAL entries into the graph

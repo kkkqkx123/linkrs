@@ -44,7 +44,7 @@ pub fn create_vertex_type(
     // Validate schema at creation time
     schema
         .validate_on_creation()
-        .map_err(|e| StorageError::invalid_operation(e))?;
+        .map_err(StorageError::invalid_operation)?;
 
     let table = VertexTable::new(label_id, name.to_string(), schema);
     ctx.data_store()
@@ -105,7 +105,7 @@ pub fn create_vertex_type_with_id(
     // Validate schema at creation time
     schema
         .validate_on_creation()
-        .map_err(|e| StorageError::invalid_operation(e))?;
+        .map_err(StorageError::invalid_operation)?;
 
     let table = VertexTable::new(label_id, user_name.to_string(), schema);
     ctx.data_store()
@@ -187,7 +187,7 @@ pub fn create_edge_type(
         .edge_label_index()
         .write()
         .entry(label_id)
-        .or_insert_with(Vec::new)
+        .or_default()
         .push(key);
 
     edge_label_names.insert(name.to_string(), label_id);
@@ -264,7 +264,7 @@ pub fn create_edge_type_with_id(
         .edge_label_index()
         .write()
         .entry(label_id)
-        .or_insert_with(Vec::new)
+        .or_default()
         .push(key);
 
     edge_label_names.insert(params.name.to_string(), label_id);

@@ -26,7 +26,7 @@ impl EdgeDeletionBloomFilter {
         // For 1% FP rate: bit_count = -1.44 * n * log2(p)
         // With p=0.01: bit_count ≈ 9.6 * n
         let bit_count = ((capacity as f64 * 9.6) as usize).max(8);
-        let word_count = (bit_count + 63) / 64;
+        let word_count = bit_count.div_ceil(64);
 
         // Number of hash functions: k = (bit_count / capacity) * ln(2)
         let hash_functions = (((bit_count as f64 / capacity.max(1) as f64) * 0.693) as usize).max(1);

@@ -3,8 +3,8 @@
 //! Handles flush (write) and load (read) operations with support for
 //! versioning, compression, and backward compatibility.
 
-use super::segment::{CsrSegment, DeletionInfo, SEPARATE_EDGE_ID_STORAGE_THRESHOLD};
-use super::super::{CsrVariant, CsrBase, MutableCsrTrait};
+use super::segment::{CsrSegment, DeletionInfo};
+use super::super::{CsrVariant, CsrBase};
 use crate::core::types::{Timestamp, EdgeId};
 use crate::core::{StorageError, StorageResult};
 use crate::storage::persistence::{read_header, section, write_header_to, HEADER_SIZE};
@@ -256,7 +256,7 @@ pub fn load_csr(
             deletion_info,
         );
 
-        if cursor.len() >= 1 {
+        if !cursor.is_empty() {
             let mut mode_byte = [0u8; 1];
             cursor.read_exact(&mut mode_byte)?;
             match mode_byte[0] {

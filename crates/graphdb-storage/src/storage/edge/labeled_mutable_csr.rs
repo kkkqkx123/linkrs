@@ -102,8 +102,8 @@ impl LabeledMutableCsr {
             return;
         }
         let additional = new_vertex_capacity - self.vertex_capacity;
-        self.label_ranges.extend(std::iter::repeat(Vec::new()).take(additional));
-        self.degrees.extend(std::iter::repeat(0).take(additional));
+        self.label_ranges.extend(std::iter::repeat_n(Vec::new(), additional));
+        self.degrees.extend(std::iter::repeat_n(0, additional));
         self.vertex_capacity = new_vertex_capacity;
     }
 

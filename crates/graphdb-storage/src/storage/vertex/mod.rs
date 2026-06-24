@@ -215,16 +215,16 @@ impl VertexSchema {
 
         match data_type {
             DataType::Empty => {
-                return Err(format!(
+                Err(format!(
                     "Property '{}' cannot have type Empty - properties must have valid types",
                     prop_name
-                ));
+                ))
             }
             DataType::Null => {
-                return Err(format!(
+                Err(format!(
                     "Property '{}' cannot have type Null - use nullable=true instead",
                     prop_name
-                ));
+                ))
             }
             _ => Ok(()),
         }

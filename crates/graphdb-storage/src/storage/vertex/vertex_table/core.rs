@@ -15,7 +15,6 @@
 //! // Use vertex_table.lock().unwrap().insert(...) for mutable operations
 //! ```
 
-use std::path::Path;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -349,8 +348,8 @@ impl VertexTable {
                 Err(e) => {
                     // Rollback: revert all previous inserts from both timestamps and id_indexer
                     for (prev_id, prev_external_id) in result_ids.iter().zip(inserted_external_ids.iter()) {
-                        let _ = self.timestamps.remove(*prev_id, ts);
-                        let _ = self.id_indexer.remove(&IdKey::Text(prev_external_id.clone()));
+                        self.timestamps.remove(*prev_id, ts);
+                        self.id_indexer.remove(&IdKey::Text(prev_external_id.clone()));
                     }
                     return Err(StorageError::invalid_operation(format!(
                         "Batch insert failed at index {}: {}",

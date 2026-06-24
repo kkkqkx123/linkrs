@@ -25,7 +25,6 @@ pub use dictionary::DictionaryColumn;
 pub use fsst::{FsstColumn, FsstEncoder};
 pub use rle::{RleBoolColumn, RleIntColumn};
 pub use selector::{ColumnStats, CompressionConfig, CompressionSelector};
-pub use varint::{decode_varint, decode_varint_reader, encode_varint, varint_len};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EncodingType {

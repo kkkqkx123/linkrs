@@ -207,7 +207,7 @@ impl ChangeLog {
     pub fn add_change(&mut self, change: PropertyChange) {
         self.changes
             .entry(change.version)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(change);
     }
 

@@ -8,9 +8,8 @@
 
 use super::segment::{CsrSegment, DeletionInfo};
 use super::stats::DirectionMergeMetrics;
-use super::super::{Csr, Nbr, CsrBase, MutableCsrTrait};
+use super::super::{Csr, Nbr, CsrBase};
 use crate::core::types::Timestamp;
-use std::time::Instant;
 
 /// Result of freezing delta CSR to segments
 #[derive(Debug)]
@@ -58,10 +57,8 @@ pub fn merge_selected_segments_with_deletion_filter(
         min_create_ts = min_create_ts.min(seg.create_ts_min);
         max_create_ts = max_create_ts.max(seg.create_ts_max);
 
-        let mut edge_position = 0usize;
-        for (src, immutable_nbr) in seg.csr.iter() {
-            let edge_id = seg.recover_edge_id(immutable_nbr, edge_position);
-            edge_position += 1;
+    for (edge_position, (src, immutable_nbr)) in seg.csr.iter().enumerate() {
+        let edge_id = seg.recover_edge_id(immutable_nbr, edge_position);
 
             // Skip physically deleted edges if minimum snapshot ts is provided
             if let Some(min_ts) = min_active_snapshot_ts {
@@ -156,7 +153,7 @@ pub fn merge_lsm_tiered(segments: &mut Vec<CsrSegment>, current_ts: Timestamp) -
     for (idx, segment) in segments.iter().enumerate() {
         let size = segment.estimated_bytes();
         let level = LSMSegmentLevel::for_size(size);
-        levels.entry(level).or_insert_with(Vec::new).push(idx);
+        levels.entry(level).or_default().push(idx);
     }
 
     for (level, indices) in &levels {
@@ -258,8 +255,7 @@ fn merge_adaptive_impl(
         max_create_ts = max_create_ts.max(seg.create_ts_max);
         merged_deletion_info = merged_deletion_info.merge(&seg.deletion_info);
 
-        let mut edge_position = 0usize;
-        for (src, immutable_nbr) in seg.csr.iter() {
+        for (edge_position, (src, immutable_nbr)) in seg.csr.iter().enumerate() {
             let src_u32 = src.as_int64().unwrap_or(0) as u32;
             let edge_id = seg.recover_edge_id(immutable_nbr, edge_position);
             let nbr = Nbr::new(
@@ -269,7 +265,6 @@ fn merge_adaptive_impl(
                 immutable_nbr.timestamp,
             );
             merged_entries.push((src_u32, nbr));
-            edge_position += 1;
         }
 
         to_remove.push(*idx);
@@ -324,10 +319,8 @@ pub fn merge_in_place(
     for segment in segments.drain(..) {
         let time_gap = if segment.create_ts_min > current_create_ts_max {
             segment.create_ts_min - current_create_ts_max
-        } else if current_create_ts_max > segment.create_ts_min {
-            0
         } else {
-            segment.create_ts_min - current_create_ts_max
+            segment.create_ts_min.saturating_sub(current_create_ts_max)
         };
 
         let total_edge_count = current_entries.len() + segment.csr.edge_count() as usize;
@@ -336,8 +329,7 @@ pub fn merge_in_place(
         let size_ok = estimated_size <= size_threshold;
 
         if time_gap <= time_threshold && size_ok && !current_entries.is_empty() {
-            let mut edge_position = 0usize;
-            for (src, immutable_nbr) in segment.csr.iter() {
+            for (edge_position, (src, immutable_nbr)) in segment.csr.iter().enumerate() {
                 let src_u32 = src.as_int64().unwrap_or(0) as u32;
                 let edge_id = segment.recover_edge_id(immutable_nbr, edge_position);
                 let nbr = Nbr::new(
@@ -347,7 +339,6 @@ pub fn merge_in_place(
                     immutable_nbr.timestamp,
                 );
                 current_entries.push((src_u32, nbr));
-                edge_position += 1;
             }
             current_create_ts_min = current_create_ts_min.min(segment.create_ts_min);
             current_create_ts_max = current_create_ts_max.max(segment.create_ts_max);
@@ -362,7 +353,7 @@ pub fn merge_in_place(
                     .max(1024);
 
                 let merged_csr = Csr::from_nbr_entries(&current_entries, vertex_capacity);
-                total_edges += merged_csr.edge_count() as u64;
+                total_edges += merged_csr.edge_count();
                 merged.push(CsrSegment::new(
                     merged_csr,
                     current_create_ts_min,
@@ -372,8 +363,7 @@ pub fn merge_in_place(
                 current_entries.clear();
             }
 
-            let mut edge_position = 0usize;
-            for (src, immutable_nbr) in segment.csr.iter() {
+            for (edge_position, (src, immutable_nbr)) in segment.csr.iter().enumerate() {
                 let src_u32 = src.as_int64().unwrap_or(0) as u32;
                 let edge_id = segment.recover_edge_id(immutable_nbr, edge_position);
                 let nbr = Nbr::new(
@@ -383,7 +373,6 @@ pub fn merge_in_place(
                     immutable_nbr.timestamp,
                 );
                 current_entries.push((src_u32, nbr));
-                edge_position += 1;
             }
             current_create_ts_min = segment.create_ts_min;
             current_create_ts_max = segment.create_ts_max;
@@ -400,7 +389,7 @@ pub fn merge_in_place(
             .max(1024);
 
         let merged_csr = Csr::from_nbr_entries(&current_entries, vertex_capacity);
-        total_edges += merged_csr.edge_count() as u64;
+        total_edges += merged_csr.edge_count();
         merged.push(CsrSegment::new(
             merged_csr,
             current_create_ts_min,
@@ -459,7 +448,7 @@ pub fn merge_aggressive(
                     .max(1024);
 
                 let merged_csr = Csr::from_nbr_entries(&current_entries, vertex_capacity);
-                total_edges += merged_csr.edge_count() as u64;
+                total_edges += merged_csr.edge_count();
                 merged.push(CsrSegment::new(
                     merged_csr,
                     current_create_ts_min,
@@ -469,8 +458,7 @@ pub fn merge_aggressive(
                 current_entries.clear();
             }
 
-            let mut edge_position = 0usize;
-            for (src, immutable_nbr) in segment.csr.iter() {
+            for (edge_position, (src, immutable_nbr)) in segment.csr.iter().enumerate() {
                 let src_u32 = src.as_int64().unwrap_or(0) as u32;
                 let edge_id = segment.recover_edge_id(immutable_nbr, edge_position);
                 let nbr = Nbr::new(
@@ -480,7 +468,6 @@ pub fn merge_aggressive(
                     immutable_nbr.timestamp,
                 );
                 current_entries.push((src_u32, nbr));
-                edge_position += 1;
             }
             current_create_ts_min = segment.create_ts_min;
             current_create_ts_max = segment.create_ts_max;
@@ -497,7 +484,7 @@ pub fn merge_aggressive(
             .max(1024);
 
         let merged_csr = Csr::from_nbr_entries(&current_entries, vertex_capacity);
-        total_edges += merged_csr.edge_count() as u64;
+        total_edges += merged_csr.edge_count();
         merged.push(CsrSegment::new(
             merged_csr,
             current_create_ts_min,

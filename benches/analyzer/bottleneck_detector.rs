@@ -349,7 +349,7 @@ impl BottleneckDetector {
                     report.push_str(&format!("    → {}\n", rec));
                 }
             }
-            report.push_str("\n");
+            report.push('\n');
         }
 
         if !high.is_empty() {
@@ -360,7 +360,7 @@ impl BottleneckDetector {
                     report.push_str(&format!("    → {}\n", rec));
                 }
             }
-            report.push_str("\n");
+            report.push('\n');
         }
 
         if !medium.is_empty() {
@@ -368,7 +368,7 @@ impl BottleneckDetector {
             for bottleneck in medium {
                 report.push_str(&format!("  - {}\n", bottleneck.description()));
             }
-            report.push_str("\n");
+            report.push('\n');
         }
 
         if !low.is_empty() {

@@ -25,20 +25,15 @@ impl Default for FlushConfig {
 }
 
 /// Freeze strategy type
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FreezeStrategyType {
     /// Conservative: freeze frequently but merge rarely
     Conservative,
     /// Adaptive: freeze with age-based merge
+    #[default]
     Adaptive,
     /// LSM tiered: freeze with LSM-style hierarchical merge
     LSMTiered,
-}
-
-impl Default for FreezeStrategyType {
-    fn default() -> Self {
-        FreezeStrategyType::Adaptive
-    }
 }
 
 /// Configuration for adaptive segment merging
@@ -279,8 +274,8 @@ impl LSMSegmentLevel {
     /// Get the size range for this level (min, max) in bytes
     pub fn size_range(&self) -> (usize, usize) {
         match self {
-            LSMSegmentLevel::L0 => (0, 1 * 1024 * 1024),           // 0-1MB
-            LSMSegmentLevel::L1 => (1 * 1024 * 1024, 8 * 1024 * 1024),  // 1-8MB
+            LSMSegmentLevel::L0 => (0, 1024 * 1024),           // 0-1MB
+            LSMSegmentLevel::L1 => (1024 * 1024, 8 * 1024 * 1024),  // 1-8MB
             LSMSegmentLevel::L2 => (8 * 1024 * 1024, 32 * 1024 * 1024), // 8-32MB
             LSMSegmentLevel::L3Plus => (32 * 1024 * 1024, usize::MAX),  // 32MB+
         }
@@ -299,7 +294,7 @@ impl LSMSegmentLevel {
     /// Get merge target size for this level (where it should aim to stay below)
     pub fn merge_target_size(&self) -> usize {
         match self {
-            LSMSegmentLevel::L0 => 1 * 1024 * 1024,           // Target < 1MB
+            LSMSegmentLevel::L0 => 1024 * 1024,           // Target < 1MB
             LSMSegmentLevel::L1 => 8 * 1024 * 1024,           // Target < 8MB
             LSMSegmentLevel::L2 => 32 * 1024 * 1024,          // Target < 32MB
             LSMSegmentLevel::L3Plus => 128 * 1024 * 1024,     // Target < 128MB

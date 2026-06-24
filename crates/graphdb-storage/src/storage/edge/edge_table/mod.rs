@@ -22,25 +22,21 @@ pub mod persistence;
 pub mod stats;
 
 // Re-export public types for backward compatibility
-pub use core::{
-    EdgeTableCore as EdgeTable, EdgeTableCore, EdgeTableConfig, EdgeTableScanIterator,
-    UpdateEdgePropertyByOffsetParams,
-};
-pub use segment::{CsrSegment, DeletionInfo, SegmentVersion, SEPARATE_EDGE_ID_STORAGE_THRESHOLD};
-pub use mvcc::MVCCManager;
-pub use snapshot::{ExportedEdgeSnapshot, SnapshotBuilder};
-pub use stats::{TombstoneStats, DeletionStats, MergeStats, MergeMetrics, MergeMetricsResult};
+pub use core::EdgeTableCore as EdgeTable;
+pub use core::UpdateEdgePropertyByOffsetParams;
+pub use segment::CsrSegment;
+pub use snapshot::ExportedEdgeSnapshot;
+pub use stats::{MergeStats, MergeMetrics, MergeMetricsResult};
 pub use compaction::CompactionMode;
 
 // Re-export from parent
 pub use super::{
-    Csr, CsrVariant, Nbr, ImmutableNbr, EdgeSchema, EdgeRecord, EdgeStrategy, CsrBase, MutableCsrTrait,
+    Csr, CsrVariant, Nbr, CsrBase,
 };
 
-use crate::core::types::{Timestamp, EdgeId, CompactConfig, LabelId, VertexId};
+use crate::core::types::{Timestamp, EdgeId};
 use crate::core::{StorageResult, StorageError};
 use std::time::Instant;
-use std::sync::Arc;
 use crate::storage::persistence::write_header_to;
 impl EdgeTable {
     /// Export a read-only snapshot of this edge table at the given timestamp.
@@ -82,10 +78,8 @@ impl EdgeTable {
                 continue;
             }
 
-            let mut edge_position = 0usize;
-            for (src, immutable_nbr) in segment.csr.iter() {
+            for (edge_position, (src, immutable_nbr)) in segment.csr.iter().enumerate() {
                 let edge_id = segment.recover_edge_id(immutable_nbr, edge_position);
-                edge_position += 1;
 
                 if immutable_nbr.timestamp > ts {
                     continue;
@@ -154,7 +148,7 @@ impl EdgeTable {
 
         let total_reduced = out_reduced + in_reduced;
         if total_reduced > 0 {
-            let duration_ms = start.elapsed().as_millis() as u64;
+            let _duration_ms = start.elapsed().as_millis() as u64;
             self.rebuild_segment_indices();
             // Record metrics if needed
         }
@@ -170,7 +164,7 @@ impl EdgeTable {
 
         let total_reduced = out_reduced + in_reduced;
         if total_reduced > 0 {
-            let duration_ms = start.elapsed().as_millis() as u64;
+            let _duration_ms = start.elapsed().as_millis() as u64;
             self.rebuild_segment_indices();
         }
 

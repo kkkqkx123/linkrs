@@ -8,7 +8,7 @@ use super::core::EdgeTableCore;
 use super::stats::DeletionStats;
 use super::segment::DeletionInfo;
 use crate::core::types::{Timestamp, CompactConfig};
-use crate::core::StorageResult;
+
 use crate::storage::edge::{MutableCsrTrait, CsrBase};
 
 /// Compaction mode for the unified compact_and_freeze pipeline.

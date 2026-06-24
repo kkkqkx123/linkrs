@@ -54,7 +54,6 @@ pub use labeled_mutable_csr::{LabeledMutableCsr, LabeledMutableCsrIterator};
 pub use mutable_csr::{MutableCsr, MutableCsrIterator};
 pub use multi_single_mutable_csr::{MultiSingleMutableCsr, MultiSingleMutableCsrIterator};
 pub use property_table::PropertyTable;
-pub use property_schema::{PropertySchema, PropertyRecord, PropertyCompactionStats};
 pub use single_mutable_csr::{SingleMutableCsr, SingleMutableCsrIterator};
 
 pub use crate::core::types::INVALID_EDGE_ID;
@@ -217,16 +216,16 @@ impl EdgeSchema {
 
         match data_type {
             DataType::Empty => {
-                return Err(crate::core::StorageError::invalid_operation(format!(
+                Err(crate::core::StorageError::invalid_operation(format!(
                     "Property '{}' cannot have type Empty - properties must have valid types",
                     prop_name
-                )));
+                )))
             }
             DataType::Null => {
-                return Err(crate::core::StorageError::invalid_operation(format!(
+                Err(crate::core::StorageError::invalid_operation(format!(
                     "Property '{}' cannot have type Null - use nullable=true instead",
                     prop_name
-                )));
+                )))
             }
             _ => Ok(()),
         }
@@ -334,7 +333,7 @@ impl NbrWithoutEdgeId {
     }
 
     /// Convert back to Nbr (requires recovered edge_id)
-    pub fn to_nbr(&self, edge_id: EdgeId) -> Nbr {
+    pub fn to_nbr(self, edge_id: EdgeId) -> Nbr {
         Nbr {
             neighbor: self.neighbor,
             edge_id,

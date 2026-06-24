@@ -3,7 +3,7 @@
 //! Contains schema definitions and compaction statistics for property storage.
 //! These types are separated from the table implementation for better modularity.
 
-use crate::core::{DataType, StorageError, StorageResult, Value};
+use crate::core::DataType;
 use crate::core::types::Timestamp;
 
 /// Sentinel value meaning "no properties"

@@ -817,7 +817,7 @@ impl<'a, T: UpdateTarget + ?Sized> UpdateTransaction<'a, T> {
     fn write_wal_header(&mut self, _is_update: bool) {
         let header = WalHeader::new(WalOpType::CreateVertexType, self.timestamp, 0);
         let header_bytes = header.as_bytes();
-        self.wal_buffer[..WalHeader::SIZE].copy_from_slice(header_bytes);
+        self.wal_buffer[..WalHeader::SIZE].copy_from_slice(&header_bytes);
     }
 }
 
