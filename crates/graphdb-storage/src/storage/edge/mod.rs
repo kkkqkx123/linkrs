@@ -58,11 +58,6 @@ pub use single_mutable_csr::{SingleMutableCsr, SingleMutableCsrIterator};
 
 pub use crate::core::types::INVALID_EDGE_ID;
 
-/// Default schema version (1) for new schemas and deserialization
-fn default_schema_version() -> u64 {
-    1
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct CompactionReport {
     /// Number of deleted edges that were removed
@@ -121,6 +116,7 @@ pub struct EdgeSchema {
     pub properties: Vec<StoragePropertyDef>,
     pub oe_strategy: EdgeStrategy,
     pub ie_strategy: EdgeStrategy,
+    pub schema_version: u64,
 }
 
 impl EdgeSchema {

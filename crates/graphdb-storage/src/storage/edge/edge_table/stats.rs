@@ -146,8 +146,8 @@ impl MergeMetrics {
         } else {
             0.0
         };
-        println!("[MergeMetrics] segments: {} → {} (-{:.1}%), edges: {}, duration: {}ms",
-                 self.segments_before, self.segments_after, reduction, self.edges_merged, self.duration_ms);
+        log::info!("[MergeMetrics] segments: {} → {} (-{:.1}%), edges: {}, duration: {}ms",
+                   self.segments_before, self.segments_after, reduction, self.edges_merged, self.duration_ms);
     }
 }
 

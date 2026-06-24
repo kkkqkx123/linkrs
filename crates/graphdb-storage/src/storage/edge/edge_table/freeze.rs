@@ -265,6 +265,53 @@ impl EdgeTableCore {
         let mut total_merged = 0;
         let min_snapshot_ts = self.mvcc.get_min_active_snapshot_ts();
 
+        // Emergency merge: if segment count exceeds hard limit, merge aggressively
+        if self.config.max_segments_per_direction > 0 {
+            if self.out_segments.len() > self.config.max_segments_per_direction {
+                let excess = self.out_segments.len().saturating_sub(self.config.merge_keep_newest);
+                if excess > 1 {
+                    let merge_indices: Vec<usize> = (0..excess).collect();
+                    let merged = merge::merge_selected_segments_with_deletion_filter(
+                        &mut self.out_segments,
+                        merge_indices,
+                        ts,
+                        Some(min_snapshot_ts),
+                    );
+                    total_merged += merged;
+                    self.rebuild_segment_indices();
+                }
+            }
+            if self.in_segments.len() > self.config.max_segments_per_direction {
+                let excess = self.in_segments.len().saturating_sub(self.config.merge_keep_newest);
+                if excess > 1 {
+                    let merge_indices: Vec<usize> = (0..excess).collect();
+                    let merged = merge::merge_selected_segments_with_deletion_filter(
+                        &mut self.in_segments,
+                        merge_indices,
+                        ts,
+                        Some(min_snapshot_ts),
+                    );
+                    total_merged += merged;
+                    self.rebuild_segment_indices();
+                }
+            }
+            if total_merged > 0 {
+                if cfg!(debug_assertions) {
+                    eprintln!(
+                        "[EdgeTable] Emergency merged {} segments (exceeded max {} per direction)",
+                        total_merged,
+                        self.config.max_segments_per_direction
+                    );
+                }
+                log::info!(
+                    "Emergency merge: {} segments (exceeded max {} per direction)",
+                    total_merged,
+                    self.config.max_segments_per_direction
+                );
+                return total_merged;
+            }
+        }
+
         // Check out-direction
         if self.out_segments.len() >= self.config.segment_merge_threshold {
             let to_merge_count = self.out_segments.len()

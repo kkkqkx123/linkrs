@@ -122,22 +122,46 @@ impl GraphStorageContext {
             }
         }
 
-        if self.persistent.config.merge_config.enable_adaptive_merge {
+        {
             let mut edge_tables = self.persistent.data_store.edge_tables().write();
-            let mut total_merged = 0usize;
+            let mut adaptive_merged = 0usize;
+            let mut lsm_merged = 0usize;
 
             for table in edge_tables.values_mut() {
-                let merged = table.merge_segments_adaptive(
-                    ts,
-                    self.persistent.config.merge_config.max_segment_age,
-                );
-                total_merged += merged;
+                if self.persistent.config.merge_config.enable_adaptive_merge {
+                    adaptive_merged += table.merge_segments_adaptive(
+                        ts,
+                        self.persistent.config.merge_config.max_segment_age,
+                        self.persistent.config.merge_config.deletion_threshold,
+                        self.persistent.config.merge_config.max_segment_size_bytes,
+                    );
+                }
+                if self.persistent.config.merge_config.enable_lsm_tiering {
+                    lsm_merged += table.merge_segments_lsm_tiered(ts);
+                }
+
+                let del_stats = table.deletion_stats();
+                if del_stats.is_significant() {
+                    log::debug!(
+                        "EdgeTable[{}] deletion stats: {:.1}% deleted ({} / {} frozen edges)",
+                        table.label,
+                        del_stats.deletion_percentage(),
+                        del_stats.total_deleted_edges,
+                        del_stats.total_frozen_edges,
+                    );
+                }
             }
 
-            if total_merged > 0 {
+            if adaptive_merged > 0 {
                 log::info!(
                     "Adaptive merge during compaction: {} segments merged",
-                    total_merged
+                    adaptive_merged
+                );
+            }
+            if lsm_merged > 0 {
+                log::info!(
+                    "LSM tiered merge during compaction: {} segments merged",
+                    lsm_merged
                 );
             }
         }

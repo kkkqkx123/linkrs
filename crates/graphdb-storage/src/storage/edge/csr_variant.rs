@@ -357,6 +357,14 @@ impl MutableCsrTrait for CsrVariant {
 }
 
 impl CsrVariant {
+    /// Get the configured max edges per vertex (only meaningful for MultiSingle).
+    pub fn edges_per_vertex(&self) -> usize {
+        match self {
+            CsrVariant::MultiSingle(csr) => csr.edges_per_vertex(),
+            _ => 0,
+        }
+    }
+
     /// Create an iterator over edges
     pub fn iter(&self, ts: Timestamp) -> CsrIterator<'_> {
         match self {

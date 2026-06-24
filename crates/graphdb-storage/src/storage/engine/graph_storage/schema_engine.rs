@@ -39,6 +39,7 @@ pub fn create_vertex_type(
         label_name: name.to_string(),
         properties,
         primary_key_index,
+        schema_version: 1,
     };
 
     // Validate schema at creation time
@@ -100,6 +101,7 @@ pub fn create_vertex_type_with_id(
         label_name: user_name.to_string(),
         properties,
         primary_key_index,
+        schema_version: 1,
     };
 
     // Validate schema at creation time
@@ -170,6 +172,7 @@ pub fn create_edge_type(
         properties,
         oe_strategy,
         ie_strategy,
+        schema_version: 1,
     };
 
     // Validate schema at creation time
@@ -247,6 +250,7 @@ pub fn create_edge_type_with_id(
         properties: params.properties,
         oe_strategy: params.oe_strategy,
         ie_strategy: params.ie_strategy,
+        schema_version: 1,
     };
 
     // Validate schema at creation time

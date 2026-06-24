@@ -67,8 +67,7 @@ impl VertexRecord {
     }
 }
 
-/// Default schema version (1) for new schemas and deserialization
-fn default_schema_version() -> u64 {
+pub(crate) fn default_schema_version() -> u64 {
     1
 }
 
@@ -78,6 +77,7 @@ pub struct VertexSchema {
     pub label_name: String,
     pub properties: Vec<StoragePropertyDef>,
     pub primary_key_index: usize,
+    pub schema_version: u64,
 }
 
 impl VertexSchema {

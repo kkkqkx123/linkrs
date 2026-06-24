@@ -28,6 +28,8 @@ impl GraphStorageContext {
                 let delta_memory = table.used_memory_size() as u64;
 
                 if let Some(ref manager) = self.runtime.background_freeze_manager {
+                    manager.record_delta_size(delta_edges);
+
                     let input = crate::storage::engine::config::FreezeDecisionInput {
                         delta_edge_count: delta_edges,
                         delta_memory_bytes: delta_memory,
@@ -39,10 +41,13 @@ impl GraphStorageContext {
                     if manager.should_freeze_with_stats(&input) {
                         let decision = manager.get_freeze_decision_with_stats(&input);
                         freeze_reasons.insert(decision.freeze_reason);
+                        log::debug!("Freeze triggered: {}", manager.get_reason(&input));
 
                         let frozen = table.compact_and_freeze(ts, &config, crate::storage::edge::edge_table::CompactionMode::Standard);
                         total_frozen += frozen as u64;
                         any_frozen = true;
+                    } else if log::log_enabled!(log::Level::Debug) {
+                        log::debug!("Skip freeze: {}", manager.get_reason(&input));
                     }
                 } else {
                     if delta_edges >= self.persistent.config.freeze.delta_edge_threshold {

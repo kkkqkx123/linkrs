@@ -13,7 +13,6 @@ use std::collections::HashMap;
 use super::stats::TombstoneStats;
 use crate::core::types::{Timestamp, EdgeId};
 
-const HOT_TOMBSTONE_MAX_SIZE: usize = 100_000;
 const HOT_TOMBSTONE_GC_THRESHOLD: usize = 150_000;
 
 /// MVCC and snapshot management for EdgeTable

@@ -925,14 +925,6 @@ impl GraphStorageContext {
 }
 
 
-fn vertex_type_storage_name(space_id: u64, tag_name: &str) -> String {
-    format!("space_{space_id}:tag:{tag_name}")
-}
-
-fn edge_type_storage_name(space_id: u64, edge_type_name: &str) -> String {
-    format!("space_{space_id}:edge:{edge_type_name}")
-}
-
 fn parse_data_type(raw: &str) -> StorageResult<DataType> {
     let upper = raw.trim().to_ascii_uppercase();
 

@@ -455,6 +455,7 @@ impl TransactionOps {
             label_name: name.to_string(),
             properties: Vec::new(),
             primary_key_index: 0,
+            schema_version: 1,
         };
 
         let table = VertexTable::new(label, name.to_string(), schema);
@@ -495,6 +496,7 @@ impl TransactionOps {
             properties: Vec::new(),
             oe_strategy: crate::storage::edge::EdgeStrategy::Multiple,
             ie_strategy: crate::storage::edge::EdgeStrategy::Multiple,
+            schema_version: 1,
         };
 
         let table = crate::storage::edge::EdgeTable::new(schema)

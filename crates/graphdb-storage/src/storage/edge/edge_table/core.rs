@@ -947,7 +947,16 @@ impl EdgeTableCore {
     }
 
     pub fn memory_size(&self) -> usize {
-        self.used_memory_size()
+        let total = self.used_memory_size();
+        let out_epv = self.out_csr.edges_per_vertex();
+        let in_epv = self.in_csr.edges_per_vertex();
+        if out_epv > 0 || in_epv > 0 {
+            log::trace!(
+                "EdgeTable[{}] memory: {} bytes, MultiSingle edges_per_vertex (out={}, in={})",
+                self.label, total, out_epv, in_epv
+            );
+        }
+        total
     }
 
     pub fn used_memory_size(&self) -> usize {

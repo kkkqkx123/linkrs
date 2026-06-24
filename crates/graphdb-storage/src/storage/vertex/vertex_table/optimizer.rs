@@ -75,10 +75,9 @@ impl VertexTable {
     /// 1. Get authoritative ID mapping from id_indexer.compact()
     /// 2. Propagate remapping to timestamps (if any IDs moved)
     /// 3. Propagate remapping to columns (if any IDs moved)
-    /// 4. Clean up orphaned timestamp entries
-    /// 5. Resize columns to match new id_indexer size
-    /// 6. Apply any deferred column encodings
-    /// 7. Verify all invariants (debug builds only)
+    /// 4. Resize columns to match new id_indexer size
+    /// 5. Apply any deferred column encodings
+    /// 6. Verify all invariants (debug builds only)
     ///
     /// # Atomicity Guarantee
     ///
@@ -115,39 +114,4 @@ impl VertexTable {
         let mut coordinator = super::compaction::CompactionCoordinator::new();
         coordinator.execute(self)
     }
-
-    /// Clean up orphaned timestamp entries (safety fallback).
-    ///
-    /// **Internal use only** - Called by CompactionCoordinator during coordination.
-    ///
-    /// **Why this method exists:**
-    /// When id_indexer removes entries (e.g., via compact_with_ts_collect), the corresponding
-    /// timestamp entries become orphaned. This method removes them to maintain consistency.
-    ///
-    /// **Orphan conditions:**
-    /// - Timestamp entry exists for ID N
-    /// - But id_indexer.get_key(N) returns None
-    /// - This violates the invariant: "every valid timestamp must have an id_indexer entry"
-    pub(super) fn cleanup_orphaned_timestamps(&mut self) {
-        let mut new_timestamps = crate::storage::vertex::VertexTimestamp::with_capacity(self.id_indexer.len());
-
-        // Copy only timestamps entries that have corresponding id_indexer entries
-        for idx in 0..self.timestamps.size() {
-            let idx_u32 = idx as u32;
-            if self.id_indexer.get_key(idx_u32).is_some() {
-                // This ID is still in id_indexer, keep its timestamp info
-                if let Some(start_ts) = self.timestamps.get_start_ts(idx_u32) {
-                    new_timestamps.insert(idx_u32, start_ts);
-                    if let Some(end_ts) = self.timestamps.get_end_ts(idx_u32) {
-                        if end_ts < crate::storage::vertex::MAX_TIMESTAMP {
-                            new_timestamps.remove(idx_u32, end_ts);
-                        }
-                    }
-                }
-            }
-        }
-
-        self.timestamps = new_timestamps;
-    }
 }
-

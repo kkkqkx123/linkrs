@@ -157,10 +157,10 @@ impl EdgeTable {
     }
 
     /// Merge CSR segments with adaptive strategy
-    pub fn merge_segments_adaptive(&mut self, current_ts: Timestamp, max_segment_age: Timestamp) -> usize {
+    pub fn merge_segments_adaptive(&mut self, current_ts: Timestamp, max_segment_age: Timestamp, deletion_threshold: f64, max_segment_size_bytes: usize) -> usize {
         let start = Instant::now();
-        let out_reduced = merge::merge_adaptive(&mut self.out_segments, current_ts, max_segment_age);
-        let in_reduced = merge::merge_adaptive(&mut self.in_segments, current_ts, max_segment_age);
+        let out_reduced = merge::merge_adaptive(&mut self.out_segments, current_ts, max_segment_age, deletion_threshold, max_segment_size_bytes);
+        let in_reduced = merge::merge_adaptive(&mut self.in_segments, current_ts, max_segment_age, deletion_threshold, max_segment_size_bytes);
 
         let total_reduced = out_reduced + in_reduced;
         if total_reduced > 0 {

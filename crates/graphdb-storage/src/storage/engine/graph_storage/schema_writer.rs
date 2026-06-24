@@ -32,25 +32,6 @@ fn append_schema_redo<T: serde::Serialize>(
     result
 }
 
-/// Helper to safely execute schema operations with WAL
-/// This pattern ensures: validate -> execute -> WAL record
-/// If execution fails, no WAL record is written
-fn execute_with_wal<F, T: serde::Serialize>(
-    ctx: &GraphStorageContext,
-    op_type: WalOpType,
-    redo_data: &T,
-    mut execute_fn: F,
-) -> StorageResult<()>
-where
-    F: FnMut() -> StorageResult<()>,
-{
-    // Execute the operation first
-    execute_fn()?;
-
-    // Only if successful, append WAL record
-    append_schema_redo(ctx, op_type, redo_data)
-}
-
 pub(crate) fn create_space(
     ctx: &GraphStorageContext,
     space: &mut SpaceInfo,

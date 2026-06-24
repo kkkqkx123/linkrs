@@ -203,14 +203,6 @@ impl EdgeTableCore {
             + self.in_segments.iter().map(|s| s.estimated_bytes()).sum::<usize>()
     }
 
-    /// Compact and freeze with physical deletion at specified timestamp.
-    ///
-    /// Convenience wrapper around [`compact_and_freeze`] with `CompactionMode::PhysicalDeletion`.
-    #[deprecated(since = "0.3.0", note = "use compact_and_freeze with CompactionMode::PhysicalDeletion instead")]
-    pub fn compact_and_freeze_with_physical_deletion(&mut self, ts: Timestamp, config: &CompactConfig) -> usize {
-        self.compact_and_freeze(ts, config, CompactionMode::PhysicalDeletion)
-    }
-
     /// Unified compaction pipeline with configurable mode.
     ///
     /// Provides a single entry point for all compaction variants:
@@ -246,7 +238,7 @@ impl EdgeTableCore {
             match mode {
                 CompactionMode::PhysicalDeletion => {
                     let min_active_snapshot_ts = self.mvcc.min_active_snapshot_ts;
-                    self.merge_segments_with_config_and_deletion_filter(
+                    let result = self.merge_segments_with_config_and_deletion_filter(
                         config.segment_merge_threshold,
                         merge_threshold,
                         if min_active_snapshot_ts < u32::MAX {
@@ -255,9 +247,15 @@ impl EdgeTableCore {
                             None
                         },
                     );
+                    if result.metrics.edges_merged > 0 {
+                        result.metrics.log();
+                    }
                 }
                 _ => {
-                    self.merge_segments_with_config(config.segment_merge_threshold, merge_threshold);
+                    let result = self.merge_segments_with_config(config.segment_merge_threshold, merge_threshold);
+                    if result.metrics.edges_merged > 0 {
+                        result.metrics.log();
+                    }
                 }
             }
         }
