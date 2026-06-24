@@ -325,6 +325,8 @@ impl PropertyGraphConfig {
     /// Create a development configuration
     pub fn development() -> Self {
         let freeze = FreezeConfig::development();
+        // Validate configuration on creation for early failure detection
+        let _ = freeze.validate();
         Self {
             enable_cache: true,
             cache_memory: 64 * 1024 * 1024,  // 64MB for dev
@@ -341,6 +343,8 @@ impl PropertyGraphConfig {
     /// Create a production configuration for small systems
     pub fn production_small() -> Self {
         let freeze = FreezeConfig::production_small();
+        // Validate configuration on creation for early failure detection
+        let _ = freeze.validate();
         Self {
             enable_cache: true,
             cache_memory: 128 * 1024 * 1024,
@@ -359,6 +363,8 @@ impl PropertyGraphConfig {
     /// Create a production configuration for large systems
     pub fn production_large() -> Self {
         let freeze = FreezeConfig::production_large();
+        // Validate configuration on creation for early failure detection
+        let _ = freeze.validate();
         Self {
             enable_cache: true,
             cache_memory: 256 * 1024 * 1024,

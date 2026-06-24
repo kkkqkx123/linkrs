@@ -1,6 +1,6 @@
 use crate::core::types::CompactConfig;
 use crate::core::StorageResult;
-use crate::storage::engine::background_freeze::FreezeStats;
+use crate::storage::engine::background_freeze::{FreezeStats, FreezeGuard};
 
 use super::GraphStorageContext;
 
@@ -19,7 +19,11 @@ impl GraphStorageContext {
         let mut total_frozen = 0u64;
         let mut any_frozen = false;
         let mut freeze_reasons = std::collections::HashSet::new();
-        let start = std::time::Instant::now();
+
+        // Use FreezeGuard to manage freeze statistics
+        let mut freeze_guard = self.runtime.background_freeze_manager
+            .as_ref()
+            .map(|m| FreezeGuard::new(m.clone()));
 
         {
             let mut edge_tables = self.persistent.data_store.edge_tables().write();
@@ -41,13 +45,21 @@ impl GraphStorageContext {
                     if manager.should_freeze_with_stats(&input) {
                         let decision = manager.get_freeze_decision_with_stats(&input);
                         freeze_reasons.insert(decision.freeze_reason);
-                        log::debug!("Freeze triggered: {}", manager.get_reason(&input));
+                        log::debug!(
+                            "Freeze triggered ({} strategy): {}",
+                            manager.strategy_name(),
+                            manager.get_reason(&input)
+                        );
 
                         let frozen = table.compact_and_freeze(ts, &config, crate::storage::edge::edge_table::CompactionMode::Standard);
                         total_frozen += frozen as u64;
                         any_frozen = true;
                     } else if log::log_enabled!(log::Level::Debug) {
-                        log::debug!("Skip freeze: {}", manager.get_reason(&input));
+                        log::debug!(
+                            "Skip freeze ({} strategy): {}",
+                            manager.strategy_name(),
+                            manager.get_reason(&input)
+                        );
                     }
                 } else {
                     if delta_edges >= self.persistent.config.freeze.delta_edge_threshold {
@@ -60,10 +72,18 @@ impl GraphStorageContext {
         }
 
         if any_frozen {
-            let duration_ms = start.elapsed().as_millis() as u64;
-            if let Some(ref manager) = self.runtime.background_freeze_manager {
-                manager.record_freeze(total_frozen, duration_ms);
+            // Record freeze via guard (automatically logged on drop)
+            if let Some(ref mut guard) = freeze_guard {
+                guard.record_edges(total_frozen);
+            } else {
+                // Fallback manual recording if no manager
+                if let Some(ref manager) = self.runtime.background_freeze_manager {
+                    let duration_ms = 0;
+                    manager.record_freeze(total_frozen, duration_ms);
+                }
+            }
 
+            if let Some(ref manager) = self.runtime.background_freeze_manager {
                 let reason_str = if freeze_reasons.is_empty() {
                     "none".to_string()
                 } else {
@@ -80,9 +100,9 @@ impl GraphStorageContext {
                 };
 
                 log::info!(
-                    "Background freeze: {} edges frozen in {}ms (reason: {})",
+                    "Background freeze ({} strategy): {} edges frozen (reason: {})",
+                    manager.strategy_name(),
                     total_frozen,
-                    duration_ms,
                     reason_str
                 );
             }

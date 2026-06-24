@@ -141,7 +141,16 @@ impl GraphStorageContext {
                 }
 
                 let stats = table.merge_stats();
-                log::debug!("Merge stats - segments: {}/{}", stats.current_segment_count, stats.max_segment_count);
+                log::debug!(
+                    "Merge stats - segments: {}/{}, total_ops: {}, avg_segs_per_op: {:.1}, avg_edges_per_op: {:.0}, avg_time_ms: {:.2}, pressure: {}",
+                    stats.current_segment_count,
+                    stats.max_segment_count,
+                    stats.total_merge_operations,
+                    stats.avg_segments_per_merge(),
+                    stats.avg_edges_per_merge(),
+                    stats.avg_merge_time_ms(),
+                    stats.segment_count_pressure()
+                );
 
                 let del_stats = table.deletion_stats();
                 if del_stats.is_significant() {
@@ -152,6 +161,19 @@ impl GraphStorageContext {
                         del_stats.total_deleted_edges,
                         del_stats.total_frozen_edges,
                     );
+                }
+
+                // Debug: Validate segment integrity
+                if log::log_enabled!(log::Level::Debug) {
+                    let valid_count = table.validate_segment_integrity();
+                    let total_segments = table.segment_versions().len();
+                    if valid_count != total_segments {
+                        log::warn!(
+                            "Segment integrity check: {}/{} segments valid",
+                            valid_count,
+                            total_segments
+                        );
+                    }
                 }
             }
 
@@ -167,6 +189,17 @@ impl GraphStorageContext {
                     lsm_merged
                 );
             }
+        }
+
+        // Log freeze configuration for monitoring
+        if let Some(ref manager) = self.runtime.background_freeze_manager {
+            let freeze_config = manager.get_config();
+            log::debug!(
+                "Freeze config - strategy: {:?}, edge_threshold: {}, memory_threshold: {}MB",
+                freeze_config.strategy,
+                freeze_config.delta_edge_threshold,
+                freeze_config.delta_memory_threshold_bytes / (1024 * 1024)
+            );
         }
 
         log::info!(

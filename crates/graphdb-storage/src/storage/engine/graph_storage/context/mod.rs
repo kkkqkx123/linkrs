@@ -111,6 +111,8 @@ impl GraphStoragePersistent {
     }
 
     fn new_with_config(config: PropertyGraphConfig) -> Self {
+        // Validate configuration for early failure detection
+        let _ = config.validate();
         let cache_manager = CacheManager::new(config.enable_cache, config.cache_memory);
         let table_tracker = Arc::new(TableTracker::with_config(TableTrackerConfig {
             flush_threshold: config.flush_config.flush_threshold,

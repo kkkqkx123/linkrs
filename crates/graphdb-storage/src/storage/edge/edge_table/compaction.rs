@@ -249,12 +249,18 @@ impl EdgeTableCore {
                     );
                     if result.metrics.edges_merged > 0 {
                         result.metrics.log();
+                        if result.segments_reduced > 0 {
+                            log::debug!("Segments reduced: {}", result.segments_reduced);
+                        }
                     }
                 }
                 _ => {
                     let result = self.merge_segments_with_config(config.segment_merge_threshold, merge_threshold);
                     if result.metrics.edges_merged > 0 {
                         result.metrics.log();
+                        if result.segments_reduced > 0 {
+                            log::debug!("Segments reduced: {}", result.segments_reduced);
+                        }
                     }
                 }
             }

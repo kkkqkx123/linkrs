@@ -147,6 +147,18 @@ pub fn merge_lsm_tiered(segments: &mut Vec<CsrSegment>, current_ts: Timestamp) -
 
     for (level, indices) in &levels {
         if indices.len() >= level.merge_trigger_count() {
+            // Debug logging with LSM level information
+            let (min_size, max_size) = level.size_range();
+            let target_size = level.merge_target_size();
+            log::debug!(
+                "LSM tier {:?}: size_range: {}-{}MB, merge_target: {}MB, segments: {}",
+                level,
+                min_size / (1024 * 1024),
+                max_size / (1024 * 1024),
+                target_size / (1024 * 1024),
+                indices.len()
+            );
+
             let merged = merge_selected_segments_with_deletion_filter(
                 segments,
                 indices.clone(),
@@ -394,6 +406,15 @@ pub fn merge_in_place(
     }
 
     *segments = merged;
+
+    // Log deletion percentages for observability
+    for (idx, segment) in segments.iter().enumerate() {
+        let del_pct = segment.deletion_info.deletion_percentage(segment.csr.edge_count());
+        if del_pct > 0 {
+            log::debug!("Merged segment[{}] deletion percentage: {}%", idx, del_pct);
+        }
+    }
+
     DirectionMergeMetrics {
         edges_processed: total_edges,
     }
