@@ -58,18 +58,6 @@ pub use single_mutable_csr::{SingleMutableCsr, SingleMutableCsrIterator};
 
 pub use crate::core::types::INVALID_EDGE_ID;
 
-#[derive(Debug, Clone, Copy)]
-pub struct CompactionReport {
-    /// Number of deleted edges that were removed
-    pub removed_edges: usize,
-    /// Number of bytes reclaimed
-    pub reclaimed_bytes: usize,
-    /// Fragmentation ratio before compaction
-    pub old_fragmentation_ratio: f32,
-    /// Fragmentation ratio after compaction
-    pub new_fragmentation_ratio: f32,
-}
-
 #[derive(Debug, Clone)]
 pub struct EdgeRecord {
     pub src_vid: VertexId,
@@ -266,76 +254,6 @@ impl Nbr {
             prop_offset,
             create_ts,
             delete_ts,
-        }
-    }
-
-    pub fn is_valid_at(&self, ts: Timestamp) -> bool {
-        self.create_ts <= ts && ts < self.delete_ts
-    }
-}
-
-/// Compact neighbor structure without edge_id field
-///
-/// Used in frozen segments to save memory when EdgeId is stored separately.
-/// Size: 44 bytes (32-bit neighbor + 32-bit prop_offset + 32-bit create_ts + 32-bit delete_ts)
-/// vs Nbr: 52 bytes (includes 64-bit edge_id)
-///
-/// EdgeId is stored separately in segment-level storage (segment_edge_ids) and
-/// recovered at query time using position-based mapping, allowing for 15% memory savings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NbrWithoutEdgeId {
-    pub neighbor: VertexId,      // 32 bits (variable length encoding)
-    pub prop_offset: u32,        // 4 bytes
-    pub create_ts: Timestamp,    // 4 bytes
-    pub delete_ts: Timestamp,    // 4 bytes
-}
-
-impl NbrWithoutEdgeId {
-    pub fn new(
-        neighbor: VertexId,
-        prop_offset: u32,
-        create_ts: Timestamp,
-    ) -> Self {
-        Self {
-            neighbor,
-            prop_offset,
-            create_ts,
-            delete_ts: u32::MAX,
-        }
-    }
-
-    pub fn with_delete_ts(
-        neighbor: VertexId,
-        prop_offset: u32,
-        create_ts: Timestamp,
-        delete_ts: Timestamp,
-    ) -> Self {
-        Self {
-            neighbor,
-            prop_offset,
-            create_ts,
-            delete_ts,
-        }
-    }
-
-    /// Convert from regular Nbr (discarding edge_id)
-    pub fn from_nbr(nbr: &Nbr) -> Self {
-        Self {
-            neighbor: nbr.neighbor,
-            prop_offset: nbr.prop_offset,
-            create_ts: nbr.create_ts,
-            delete_ts: nbr.delete_ts,
-        }
-    }
-
-    /// Convert back to Nbr (requires recovered edge_id)
-    pub fn to_nbr(self, edge_id: EdgeId) -> Nbr {
-        Nbr {
-            neighbor: self.neighbor,
-            edge_id,
-            prop_offset: self.prop_offset,
-            create_ts: self.create_ts,
-            delete_ts: self.delete_ts,
         }
     }
 

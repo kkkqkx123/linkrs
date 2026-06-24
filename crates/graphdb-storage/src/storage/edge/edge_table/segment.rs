@@ -99,8 +99,6 @@ impl DeletionInfo {
 /// Version tracking for CSR segment recovery
 #[derive(Debug, Clone, Copy)]
 pub struct SegmentVersion {
-    /// Version number: incremented on each update
-    pub version: u32,
     /// CRC32 checksum for integrity validation
     pub checksum: u32,
 }
@@ -109,14 +107,8 @@ impl SegmentVersion {
     /// Create a new segment version
     pub fn new() -> Self {
         Self {
-            version: 1,
             checksum: 0,
         }
-    }
-
-    /// Increment version on segment modification
-    pub fn increment(&mut self) {
-        self.version = self.version.saturating_add(1);
     }
 
     /// Compute CRC32 checksum for segment
