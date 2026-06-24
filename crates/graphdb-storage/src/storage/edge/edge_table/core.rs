@@ -673,7 +673,8 @@ impl EdgeTableCore {
                 skip_count += 1;
                 continue;
             }
-            if edges.len() >= page_size {
+            let has_more = edges.len() >= page_size;
+            if has_more {
                 return (edges, true);
             }
             edges.push(edge);

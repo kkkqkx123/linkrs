@@ -258,6 +258,8 @@ impl EdgeTableCore {
                     }
                 }
             }
+            let total_bytes = self.segments_total_bytes();
+            log::debug!("Segments total bytes after merge: {}", total_bytes);
         }
 
         // Layer 3: Compact property table to reclaim unused offsets

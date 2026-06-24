@@ -67,10 +67,6 @@ impl VertexRecord {
     }
 }
 
-pub(crate) fn default_schema_version() -> u64 {
-    1
-}
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VertexSchema {
     pub label_id: LabelId,

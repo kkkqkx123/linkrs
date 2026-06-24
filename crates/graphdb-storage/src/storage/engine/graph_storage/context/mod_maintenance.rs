@@ -140,6 +140,9 @@ impl GraphStorageContext {
                     lsm_merged += table.merge_segments_lsm_tiered(ts);
                 }
 
+                let stats = table.merge_stats();
+                log::debug!("Merge stats - segments: {}/{}", stats.current_segment_count, stats.max_segment_count);
+
                 let del_stats = table.deletion_stats();
                 if del_stats.is_significant() {
                     log::debug!(
