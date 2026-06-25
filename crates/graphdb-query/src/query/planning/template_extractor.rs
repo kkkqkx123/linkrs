@@ -124,12 +124,17 @@ impl ParameterizingTransformer {
                 func,
                 arg,
                 distinct,
+                filter,
             } => {
                 let new_arg = self.transform_with_params(arg, result);
+                let new_filter = filter
+                    .as_ref()
+                    .map(|f| self.transform_with_params(f, result));
                 Expression::Aggregate {
                     func: func.clone(),
                     arg: Box::new(new_arg),
                     distinct: *distinct,
+                    filter: new_filter.map(Box::new),
                 }
             }
             Expression::List(items) => {
@@ -933,13 +938,19 @@ impl TemplateExtractor {
                 func,
                 arg,
                 distinct,
+                filter,
             } => {
                 let distinct_str = if *distinct { "DISTINCT " } else { "" };
+                let filter_str = filter
+                    .as_ref()
+                    .map(|f| format!(" FILTER (WHERE {})", Self::expr_to_template_string(f)))
+                    .unwrap_or_default();
                 format!(
-                    "{}({}{})",
+                    "{}({}{}{})",
                     func,
                     distinct_str,
-                    Self::expr_to_template_string(arg)
+                    Self::expr_to_template_string(arg),
+                    filter_str
                 )
             }
             Expression::List(items) => {

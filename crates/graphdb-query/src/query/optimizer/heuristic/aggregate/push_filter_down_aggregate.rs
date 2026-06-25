@@ -306,6 +306,7 @@ mod tests {
             func: AggregateFunction::Count(None),
             arg: Box::new(Expression::Variable("amount".to_string())),
             distinct: false,
+            filter: None,
         };
 
         assert!(

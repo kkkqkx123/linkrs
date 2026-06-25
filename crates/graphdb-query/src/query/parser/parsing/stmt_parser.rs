@@ -245,29 +245,58 @@ impl StmtParser {
     /// Analysis of the GROUP BY statement
     fn parse_group_by_statement(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         use crate::core::types::expr::Expression;
-        use crate::query::parser::ast::stmt::{GroupByStmt, YieldItem};
+        use crate::query::parser::ast::stmt::{GroupByStmt, GroupingType, YieldItem};
         use crate::query::parser::parsing::clause_parser::ClauseParser;
 
         let start_span = ctx.current_span();
         ctx.expect_token(TokenKind::Group)?;
         ctx.expect_token(TokenKind::By)?;
 
-        // Parse the list of group items (only identifiers are to be parsed).
-        let mut group_items = Vec::new();
-        loop {
-            let ident = ctx.expect_identifier()?;
-            let expr = Expression::Variable(ident);
-            let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
-            let expr_id = ctx.expression_context().register_expression(expr_meta);
-            let contextual_expr = crate::core::types::expr::ContextualExpression::new(
-                expr_id,
-                ctx.expression_context_clone(),
-            );
-            group_items.push(contextual_expr);
-            if !ctx.match_token(TokenKind::Comma) {
-                break;
+        let (group_items, grouping_type) = if ctx.match_token(TokenKind::Rollup) {
+            ctx.expect_token(TokenKind::LParen)?;
+            let items = self.parse_grouping_set_items(ctx)?;
+            ctx.expect_token(TokenKind::RParen)?;
+            (items.clone(), GroupingType::Rollup(items))
+        } else if ctx.match_token(TokenKind::Cube) {
+            ctx.expect_token(TokenKind::LParen)?;
+            let items = self.parse_grouping_set_items(ctx)?;
+            ctx.expect_token(TokenKind::RParen)?;
+            (items.clone(), GroupingType::Cube(items))
+        } else if ctx.match_token(TokenKind::Grouping) {
+            ctx.expect_token(TokenKind::Sets)?;
+            ctx.expect_token(TokenKind::LParen)?;
+            let mut sets = Vec::new();
+            loop {
+                ctx.expect_token(TokenKind::LParen)?;
+                let items = self.parse_grouping_set_items(ctx)?;
+                ctx.expect_token(TokenKind::RParen)?;
+                sets.push(items);
+                if !ctx.match_token(TokenKind::Comma) {
+                    break;
+                }
             }
-        }
+            ctx.expect_token(TokenKind::RParen)?;
+            let all_items: Vec<_> = sets.iter().flatten().cloned().collect();
+            (all_items, GroupingType::GroupingSets(sets))
+        } else {
+            // Parse the list of group items (only identifiers are to be parsed).
+            let mut group_items = Vec::new();
+            loop {
+                let ident = ctx.expect_identifier()?;
+                let expr = Expression::Variable(ident);
+                let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+                let expr_id = ctx.expression_context().register_expression(expr_meta);
+                let contextual_expr = crate::core::types::expr::ContextualExpression::new(
+                    expr_id,
+                    ctx.expression_context_clone(),
+                );
+                group_items.push(contextual_expr);
+                if !ctx.match_token(TokenKind::Comma) {
+                    break;
+                }
+            }
+            (group_items, GroupingType::Standard)
+        };
 
         // Analyzing the YIELD clause
         let yield_clause = if ctx.match_token(TokenKind::Yield) {
@@ -306,9 +335,34 @@ impl StmtParser {
         Ok(Stmt::GroupBy(GroupByStmt {
             span,
             group_items,
+            grouping_type,
             yield_clause,
             having_clause,
         }))
+    }
+
+    /// Parse grouping set items for ROLLUP, CUBE, GROUPING SETS
+    fn parse_grouping_set_items(
+        &mut self,
+        ctx: &mut ParseContext,
+    ) -> Result<Vec<crate::core::types::expr::ContextualExpression>, ParseError> {
+        use crate::core::types::expr::Expression;
+        let mut items = Vec::new();
+        loop {
+            let ident = ctx.expect_identifier()?;
+            let expr = Expression::Variable(ident);
+            let expr_meta = crate::core::types::expr::ExpressionMeta::new(expr);
+            let expr_id = ctx.expression_context().register_expression(expr_meta);
+            let contextual_expr = crate::core::types::expr::ContextualExpression::new(
+                expr_id,
+                ctx.expression_context_clone(),
+            );
+            items.push(contextual_expr);
+            if !ctx.match_token(TokenKind::Comma) {
+                break;
+            }
+        }
+        Ok(items)
     }
 
     /// Analyzing expressions (auxiliary method)

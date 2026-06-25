@@ -133,11 +133,13 @@ fn extract_group_suite_recursive(expression: &Expression, group_suite: &mut Grou
             func,
             arg,
             distinct,
+            filter,
         } => {
             let agg_expression = Expression::Aggregate {
                 func: func.clone(),
                 arg: Box::new(arg.as_ref().clone()),
                 distinct: *distinct,
+                filter: filter.clone(),
             };
             group_suite.add_aggregate(agg_expression);
             extract_group_suite_recursive(arg, group_suite);

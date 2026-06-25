@@ -1013,11 +1013,25 @@ impl PartialEq for ProfileStmt {
     }
 }
 
+/// Grouping set type for GROUP BY clause
+#[derive(Debug, Clone, PartialEq)]
+pub enum GroupingType {
+    /// Standard GROUP BY with a single set of group keys
+    Standard,
+    /// GROUP BY ROLLUP(...) - hierarchical subtotals
+    Rollup(Vec<ContextualExpression>),
+    /// GROUP BY CUBE(...) - all possible subtotals
+    Cube(Vec<ContextualExpression>),
+    /// GROUP BY GROUPING SETS(...) - explicit grouping sets
+    GroupingSets(Vec<Vec<ContextualExpression>>),
+}
+
 /// The GROUP BY statement
 #[derive(Debug, Clone, PartialEq)]
 pub struct GroupByStmt {
     pub span: Span,
     pub group_items: Vec<ContextualExpression>,
+    pub grouping_type: GroupingType,
     pub yield_clause: YieldClause,
     pub having_clause: Option<ContextualExpression>,
 }
@@ -1228,6 +1242,8 @@ pub struct WithStmt {
     pub order_by: Option<OrderByClause>,
     pub skip: Option<usize>,
     pub limit: Option<usize>,
+    /// Recursive CTE flag - when true, the WITH clause defines a recursive CTE
+    pub recursive: bool,
 }
 
 /// The YIELD statement

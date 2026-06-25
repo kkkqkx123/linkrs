@@ -57,6 +57,7 @@ impl Expression {
             func,
             arg: Box::new(arg),
             distinct,
+            filter: None,
         }
     }
 

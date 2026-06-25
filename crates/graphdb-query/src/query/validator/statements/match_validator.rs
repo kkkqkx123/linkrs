@@ -1049,6 +1049,7 @@ mod tests {
             func: crate::core::types::operators::AggregateFunction::Count(None),
             arg: Box::new(Expression::Variable("n".to_string())),
             distinct: false,
+            filter: None,
         });
         assert!(validator.has_aggregate_expression(&agg_expression));
     }

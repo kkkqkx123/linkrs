@@ -61,6 +61,7 @@ impl ExpressionChecker {
                 func,
                 arg,
                 distinct,
+                ..
             } => {
                 self.validate_aggregate_operation(func, arg, *distinct, depth)?;
             }

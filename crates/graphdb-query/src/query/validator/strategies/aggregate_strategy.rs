@@ -112,6 +112,7 @@ impl AggregateValidationStrategy {
                 func,
                 arg,
                 distinct: _,
+                ..
             } => {
                 // 1. Verify the validity of the aggregate function names.
                 // Since enumerations are now being used, this check may need to be adjusted.
@@ -350,6 +351,7 @@ mod tests {
             func: AggregateFunction::Count(None),
             arg: Box::new(Expression::Literal(crate::core::Value::Int(1))),
             distinct: false,
+            filter: None,
         };
         let meta = ExpressionMeta::new(expression);
         let id = expr_ctx.register_expression(meta);
@@ -368,11 +370,13 @@ mod tests {
             func: AggregateFunction::Count(None),
             arg: Box::new(Expression::Literal(crate::core::Value::Int(1))),
             distinct: false,
+            filter: None,
         };
         let outer_agg = Expression::Aggregate {
             func: AggregateFunction::Sum("".to_string()),
             arg: Box::new(inner_agg),
             distinct: false,
+            filter: None,
         };
         let meta = ExpressionMeta::new(outer_agg);
         let id = expr_ctx.register_expression(meta);
@@ -396,6 +400,7 @@ mod tests {
                 property: "*".to_string(),
             }),
             distinct: false,
+            filter: None,
         };
 
         let meta = ExpressionMeta::new(expression);
@@ -417,6 +422,7 @@ mod tests {
                 property: "*".to_string(),
             }),
             distinct: false,
+            filter: None,
         };
 
         let meta = ExpressionMeta::new(expression);
@@ -465,6 +471,7 @@ mod tests {
                 func,
                 arg: Box::new(Expression::Literal(crate::core::Value::Int(1))),
                 distinct: false,
+            filter: None,
             };
 
             let meta = ExpressionMeta::new(expression);
@@ -486,6 +493,7 @@ mod tests {
             func: AggregateFunction::Count(None),
             arg: Box::new(Expression::Literal(crate::core::Value::Int(1))),
             distinct: true,
+            filter: None,
         };
 
         let meta = ExpressionMeta::new(expression);
@@ -509,6 +517,7 @@ mod tests {
                 property: "*".to_string(),
             }),
             distinct: false,
+            filter: None,
         };
         let meta = ExpressionMeta::new(count_input_wildcard);
         let expr_ctx = ExpressionAnalysisContext::new();
@@ -524,6 +533,7 @@ mod tests {
                 property: "*".to_string(),
             }),
             distinct: false,
+            filter: None,
         };
         let meta = ExpressionMeta::new(sum_input_wildcard);
         let expr_ctx = ExpressionAnalysisContext::new();
@@ -548,6 +558,7 @@ mod tests {
                 property: "*".to_string(),
             }),
             distinct: false,
+            filter: None,
         };
         let meta = ExpressionMeta::new(count_var_wildcard);
         let expr_ctx = ExpressionAnalysisContext::new();
@@ -563,6 +574,7 @@ mod tests {
                 property: "*".to_string(),
             }),
             distinct: false,
+            filter: None,
         };
         let meta = ExpressionMeta::new(avg_var_wildcard);
         let expr_ctx = ExpressionAnalysisContext::new();
@@ -592,6 +604,7 @@ mod tests {
                 right: Box::new(Expression::Literal(crate::core::Value::Int(1))),
             }),
             distinct: false,
+            filter: None,
         };
         let meta = ExpressionMeta::new(nested_wildcard);
         let expr_ctx = ExpressionAnalysisContext::new();
@@ -716,6 +729,7 @@ mod tests {
                 property: "amount".to_string(),
             }),
             distinct: false,
+            filter: None,
         };
 
         let meta = ExpressionMeta::new(expression);
@@ -734,6 +748,7 @@ mod tests {
             func: AggregateFunction::Count(None),
             arg: Box::new(Expression::Literal(crate::core::Value::Int(1))),
             distinct: false,
+            filter: None,
         };
 
         let meta = ExpressionMeta::new(expression);
@@ -754,6 +769,7 @@ mod tests {
                 property: "value".to_string(),
             }),
             distinct: false,
+            filter: None,
         };
         let meta = ExpressionMeta::new(min_expression);
         let expr_ctx = ExpressionAnalysisContext::new();
@@ -767,6 +783,7 @@ mod tests {
                 property: "value".to_string(),
             }),
             distinct: false,
+            filter: None,
         };
         let meta = ExpressionMeta::new(max_expression);
         let expr_ctx = ExpressionAnalysisContext::new();

@@ -39,13 +39,19 @@ impl Expression {
                 func,
                 arg,
                 distinct,
+                filter,
             } => {
                 let distinct_str = if *distinct { "DISTINCT " } else { "" };
+                let filter_str = filter
+                    .as_ref()
+                    .map(|f| format!(" FILTER (WHERE {})", f.to_expression_string()))
+                    .unwrap_or_default();
                 format!(
-                    "{}({}{})",
+                    "{}({}{}{})",
                     func.name(),
                     distinct_str,
-                    arg.to_expression_string()
+                    arg.to_expression_string(),
+                    filter_str
                 )
             }
             Expression::List(items) => {

@@ -48,6 +48,7 @@ pub enum Expression {
         func: AggregateFunction,
         arg: Box<Expression>,
         distinct: bool,
+        filter: Option<Box<Expression>>,
     },
 
     /// list literal

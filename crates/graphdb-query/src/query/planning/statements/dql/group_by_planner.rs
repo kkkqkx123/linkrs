@@ -200,6 +200,8 @@ impl Planner for GroupByPlanner {
         }
 
         // Create an aggregate node.
+        // For ROLLUP/CUBE/GROUPING SETS, we use the first group set as the primary keys
+        // and the executor will handle the multiple grouping sets.
         let aggregate_node = AggregateNode::new(
             arg_node_enum.clone(),
             group_keys,

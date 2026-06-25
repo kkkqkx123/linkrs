@@ -267,10 +267,14 @@ impl Expression {
                 func,
                 arg,
                 distinct,
+                filter,
             } => Expression::Aggregate {
                 func: func.clone(),
                 arg: Box::new(arg.transform(transformer)),
                 distinct: *distinct,
+                filter: filter
+                    .as_ref()
+                    .map(|f| Box::new(f.transform(transformer))),
             },
             Expression::List(items) => Expression::List(
                 items

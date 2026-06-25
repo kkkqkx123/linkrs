@@ -163,6 +163,7 @@ impl ExpressionAnalyzer {
                 func,
                 arg,
                 distinct: _,
+                ..
             } => self.analyze_aggregate_expression(func, arg, variable_types),
 
             Expression::Property {

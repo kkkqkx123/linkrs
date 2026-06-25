@@ -331,6 +331,8 @@ impl UtilStmtParser {
         let start_span = ctx.current_span();
         ctx.expect_token(TokenKind::With)?;
 
+        let recursive = ctx.match_token(TokenKind::Recursive);
+
         let mut items = Vec::new();
         let distinct = ctx.match_token(TokenKind::Distinct);
 
@@ -388,6 +390,7 @@ impl UtilStmtParser {
             order_by,
             skip,
             limit,
+            recursive,
         }))
     }
 

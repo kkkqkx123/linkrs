@@ -71,8 +71,12 @@ pub trait ExpressionVisitor {
                 func,
                 arg,
                 distinct,
+                filter,
             } => {
                 self.visit_aggregate(func, arg, *distinct);
+                if let Some(filter) = filter {
+                    self.visit(filter);
+                }
             }
             Expression::Case {
                 test_expr,

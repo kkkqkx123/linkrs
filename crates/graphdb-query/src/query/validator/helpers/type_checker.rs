@@ -115,6 +115,7 @@ impl TypeValidator {
                 func,
                 arg,
                 distinct: _,
+                ..
             } => self.validate_aggregate_return_type(func, arg, context, expected_type),
             Expression::Variable(name) => self.validate_variable_type(name, context, expected_type),
             _ => {
@@ -336,6 +337,7 @@ impl TypeValidator {
                 func,
                 arg,
                 distinct: _,
+                ..
             } => {
                 let arg_type = self.deduce_expression_type_full(arg, context);
                 self.deduce_aggregate_return_type_with_arg(func, &arg_type)

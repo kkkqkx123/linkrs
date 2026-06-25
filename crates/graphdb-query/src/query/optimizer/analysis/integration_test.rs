@@ -186,6 +186,7 @@ fn test_expression_aggregate_detection() {
         func: crate::core::types::operators::AggregateFunction::Count(None),
         arg: Box::new(Expression::Variable("n".to_string())),
         distinct: false,
+        filter: None,
     };
 
     let ctx_expr = create_test_context(aggregate_expr);

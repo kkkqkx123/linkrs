@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
 use crate::core::types::operators::{BinaryOperator, UnaryOperator};
-use crate::core::types::{Position, Span};
+use crate::core::types::{DataType, Position, Span};
 use crate::core::Value;
 use crate::query::parser::core::error::{ParseError, ParseErrorKind};
 use crate::query::parser::parsing::parse_context::ParseContext;
@@ -364,12 +364,42 @@ impl<'a> ExprParser<'a> {
                         ));
                     }
                 } else {
-                    // Other type casts can be added here
-                    return Err(ParseError::new(
-                        ParseErrorKind::SyntaxError,
-                        format!("Unknown type cast target: {}", type_name),
-                        span.start,
-                    ));
+                    let target_type = match type_name.to_uppercase().as_str() {
+                        "BOOL" | "BOOLEAN" => DataType::Bool,
+                        "INT" | "INTEGER" | "INT4" => DataType::Int,
+                        "BIGINT" | "INT8" => DataType::BigInt,
+                        "SMALLINT" | "INT2" => DataType::SmallInt,
+                        "FLOAT" | "FLOAT4" => DataType::Float,
+                        "DOUBLE" | "FLOAT8" | "DOUBLE PRECISION" => DataType::Double,
+                        "STRING" | "TEXT" | "VARCHAR" => DataType::String,
+                        "DATE" => DataType::Date,
+                        "TIME" => DataType::Time,
+                        "DATETIME" => DataType::DateTime,
+                        "TIMESTAMP" => DataType::Timestamp,
+                        "LIST" => DataType::List,
+                        "MAP" => DataType::Map,
+                        "SET" => DataType::Set,
+                        "JSON" => DataType::Json,
+                        "JSONB" => DataType::JsonB,
+                        "UUID" => DataType::Uuid,
+                        "INTERVAL" => DataType::Interval,
+                        "BLOB" => DataType::Blob,
+                        "GEOGRAPHY" => DataType::Geography,
+                        _ => {
+                            return Err(ParseError::new(
+                                ParseErrorKind::SyntaxError,
+                                format!("Unknown type cast target: {}", type_name),
+                                span.start,
+                            ));
+                        }
+                    };
+                    expression = ParseResult {
+                        expr: Expression::TypeCast {
+                            expression: Box::new(expression.expr),
+                            target_type,
+                        },
+                        span,
+                    };
                 }
             } else {
                 break;
@@ -643,6 +673,7 @@ impl<'a> ExprParser<'a> {
                             "*".to_string(),
                         ))),
                         distinct: false,
+                        filter: None,
                     },
                     span,
                 });
@@ -720,17 +751,32 @@ impl<'a> ExprParser<'a> {
                 _ => crate::core::types::operators::AggregateFunction::Count(None),
             };
 
+            let filter = if ctx.match_token(TokenKind::Filter) {
+                ctx.expect_token(TokenKind::LParen)?;
+                ctx.expect_token(TokenKind::Where)?;
+                let filter_expr = self.parse_expression(ctx)?;
+                ctx.expect_token(TokenKind::RParen)?;
+                Some(Box::new(filter_expr.expr))
+            } else {
+                None
+            };
+
+            let span = ctx.merge_span(span.start, ctx.current_position());
             Ok(ParseResult {
                 expr: Expression::Aggregate {
                     func,
                     arg: Box::new(arg),
                     distinct,
+                    filter,
                 },
                 span,
             })
         } else {
             Ok(ParseResult {
-                expr: Expression::function(name, args.into_iter().map(|e| e.expr).collect()),
+                expr: Expression::Function {
+                    name,
+                    args: args.into_iter().map(|e| e.expr).collect(),
+                },
                 span,
             })
         }

@@ -644,10 +644,14 @@ impl WildcardReplacer {
                 func,
                 arg,
                 distinct,
+                filter,
             } => Expression::Aggregate {
                 func: func.clone(),
                 arg: Box::new(self.replace_internal(arg)),
                 distinct: *distinct,
+                filter: filter
+                    .as_ref()
+                    .map(|f| Box::new(self.replace_internal(f))),
             },
             Expression::Case {
                 test_expr,

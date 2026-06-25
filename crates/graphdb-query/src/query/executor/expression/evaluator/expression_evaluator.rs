@@ -114,8 +114,16 @@ impl ExpressionEvaluator {
                 func,
                 arg,
                 distinct,
+                filter,
             } => {
                 let arg_value = Self::evaluate_recursive(arg, context)?;
+                if let Some(filter_expr) = &filter {
+                    let filter_result = Self::evaluate_recursive(filter_expr, context)?;
+                    let is_true = matches!(filter_result, Value::Bool(true));
+                    if !is_true {
+                        return Ok(Value::Null(crate::core::NullType::Null));
+                    }
+                }
                 FunctionEvaluator::eval_aggregate_function(func, &[arg_value], *distinct)
             }
 
