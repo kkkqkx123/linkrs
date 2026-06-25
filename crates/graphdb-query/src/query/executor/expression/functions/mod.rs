@@ -152,6 +152,8 @@ pub enum BuiltinFunction {
     Fulltext(FulltextFunction),
     /// Vector functions
     Vector(VectorFunction),
+    /// Window functions
+    Window(crate::query::executor::expression::functions::builtin::window::WindowFunction),
 }
 
 impl BuiltinFunction {
@@ -171,6 +173,7 @@ impl BuiltinFunction {
             BuiltinFunction::Path(f) => f.name(),
             BuiltinFunction::Fulltext(f) => f.name(),
             BuiltinFunction::Vector(f) => f.name(),
+            BuiltinFunction::Window(f) => f.name(),
         }
     }
 
@@ -190,6 +193,7 @@ impl BuiltinFunction {
             BuiltinFunction::Path(f) => f.arity(),
             BuiltinFunction::Fulltext(_) => 0,
             BuiltinFunction::Vector(f) => f.arity(),
+            BuiltinFunction::Window(f) => f.arity(),
         }
     }
 
@@ -209,6 +213,7 @@ impl BuiltinFunction {
             BuiltinFunction::Path(f) => f.is_variadic(),
             BuiltinFunction::Fulltext(f) => f.is_variadic(),
             BuiltinFunction::Vector(f) => f.is_variadic(),
+            BuiltinFunction::Window(f) => f.is_variadic(),
         }
     }
 
@@ -228,6 +233,7 @@ impl BuiltinFunction {
             BuiltinFunction::Path(f) => f.description(),
             BuiltinFunction::Fulltext(f) => f.description(),
             BuiltinFunction::Vector(f) => f.description(),
+            BuiltinFunction::Window(f) => f.description(),
         }
     }
 
@@ -258,6 +264,7 @@ impl BuiltinFunction {
                 ))
             }
             BuiltinFunction::Vector(f) => f.execute(args),
+            BuiltinFunction::Window(f) => f.execute(args),
         }
     }
 

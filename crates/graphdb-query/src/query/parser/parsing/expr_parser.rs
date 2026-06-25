@@ -669,7 +669,7 @@ impl<'a> ExprParser<'a> {
         );
 
         if is_aggregate {
-            let distinct = false;
+            let distinct = ctx.match_token(TokenKind::Distinct);
             let arg = args.first().map(|a| a.expr.clone()).unwrap_or_else(|| {
                 Expression::Literal(crate::core::Value::Null(crate::core::NullType::Null))
             });

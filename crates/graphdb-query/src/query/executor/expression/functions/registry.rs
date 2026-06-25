@@ -232,6 +232,11 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::Graph(GraphFunction::Rank));
         self.register_builtin(BuiltinFunction::Graph(GraphFunction::StartNode));
         self.register_builtin(BuiltinFunction::Graph(GraphFunction::EndNode));
+        self.register_builtin(BuiltinFunction::Graph(GraphFunction::Neighbors));
+        self.register_builtin(BuiltinFunction::Graph(GraphFunction::Degree));
+        self.register_builtin(BuiltinFunction::Graph(GraphFunction::OutEdges));
+        self.register_builtin(BuiltinFunction::Graph(GraphFunction::InEdges));
+        self.register_builtin(BuiltinFunction::Graph(GraphFunction::ShortestPath));
 
         // Register container operation functions
         use super::ContainerFunction;
@@ -254,6 +259,17 @@ impl FunctionRegistry {
 
         // Register vector functions
         super::builtin::vector::register_vector_functions(self);
+
+        // Register window functions
+        self.register_builtin(BuiltinFunction::Window(super::builtin::window::WindowFunction::RowNumber));
+        self.register_builtin(BuiltinFunction::Window(super::builtin::window::WindowFunction::Rank));
+        self.register_builtin(BuiltinFunction::Window(super::builtin::window::WindowFunction::DenseRank));
+        self.register_builtin(BuiltinFunction::Window(super::builtin::window::WindowFunction::Lead));
+        self.register_builtin(BuiltinFunction::Window(super::builtin::window::WindowFunction::Lag));
+        self.register_builtin(BuiltinFunction::Window(super::builtin::window::WindowFunction::FirstValue));
+        self.register_builtin(BuiltinFunction::Window(super::builtin::window::WindowFunction::LastValue));
+        self.register_builtin(BuiltinFunction::Window(super::builtin::window::WindowFunction::NthValue));
+        self.register_builtin(BuiltinFunction::Window(super::builtin::window::WindowFunction::Ntile));
     }
 }
 

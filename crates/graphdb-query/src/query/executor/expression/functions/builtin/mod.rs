@@ -21,3 +21,4 @@ pub mod regex;
 pub mod string;
 pub mod utility;
 pub mod vector;
+pub mod window;

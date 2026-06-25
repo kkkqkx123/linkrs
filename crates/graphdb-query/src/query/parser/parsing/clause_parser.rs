@@ -109,6 +109,18 @@ impl ClauseParser {
             }
         }
 
+        // Parse optional SAMPLE clause
+        let sample = if ctx.match_token(TokenKind::Sample) {
+            let count = ctx.expect_integer_literal()? as usize;
+            Some(super::super::ast::types::SampleClause {
+                span: ctx.current_span(),
+                count,
+                percentage: None,
+            })
+        } else {
+            None
+        };
+
         // Parse optional HAVING clause
         let having_clause = if ctx.match_token(TokenKind::Having) {
             Some(self.parse_expression(ctx)?)
@@ -123,7 +135,7 @@ impl ClauseParser {
             order_by,
             limit,
             skip,
-            sample: None,
+            sample,
             having_clause,
         })
     }
@@ -197,6 +209,18 @@ impl ClauseParser {
             None
         };
 
+        // Parse optional SAMPLE clause
+        let sample = if ctx.match_token(TokenKind::Sample) {
+            let count = ctx.expect_integer_literal()? as usize;
+            Some(super::super::ast::types::SampleClause {
+                span: ctx.current_span(),
+                count,
+                percentage: None,
+            })
+        } else {
+            None
+        };
+
         let end_span = ctx.current_span();
 
         Ok(YieldClause {
@@ -206,7 +230,7 @@ impl ClauseParser {
             order_by,
             limit,
             skip,
-            sample: None,
+            sample,
         })
     }
 
