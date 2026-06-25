@@ -187,6 +187,14 @@ impl CsrVariant {
         }
     }
 
+    /// Estimate wasted bytes due to fragmentation (only for Multiple strategy).
+    pub fn wasted_bytes_estimate(&self) -> usize {
+        match self {
+            CsrVariant::Multiple(csr) => csr.wasted_bytes_estimate(),
+            _ => 0,
+        }
+    }
+
     /// Get fragmentation statistics for this CSR variant.
     ///
     /// Returns `Some(stats)` for MutableCsr variant, `None` for others.
@@ -380,14 +388,6 @@ impl CsrVariant {
         match self {
             CsrVariant::MultiSingle(csr) => csr.edges_per_vertex(),
             _ => 0,
-        }
-    }
-
-    /// Get edges of a vertex with a specific label (only for Labeled variant).
-    pub fn edges_of_label(&self, src_vid: u32, label: u32, ts: Timestamp) -> Vec<Nbr> {
-        match self {
-            CsrVariant::Labeled(csr) => csr.edges_of_label(src_vid, label, ts),
-            _ => Vec::new(),
         }
     }
 

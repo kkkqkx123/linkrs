@@ -107,27 +107,6 @@ impl LabeledMutableCsr {
         self.vertex_capacity = new_vertex_capacity;
     }
 
-    /// Get all edges of a vertex with a specific label
-    pub fn edges_of_label(&self, src_vid: u32, label: LabelId, ts: Timestamp) -> Vec<Nbr> {
-        if src_vid as usize >= self.vertex_capacity {
-            return Vec::new();
-        }
-
-        let ranges = &self.label_ranges[src_vid as usize];
-        for lr in ranges {
-            if lr.label == label {
-                let end = (lr.offset + lr.count) as usize;
-                let start = lr.offset as usize;
-                return self.nbr_list[start..end]
-                    .iter()
-                    .filter(|nbr| nbr.is_valid_at(ts))
-                    .copied()
-                    .collect();
-            }
-        }
-        Vec::new()
-    }
-
     /// Insert edge with label information
     fn insert_edge_with_label(
         &mut self,
@@ -180,18 +159,6 @@ impl LabeledMutableCsr {
         true
     }
 
-    /// Get edge by source, destination, and label
-    pub fn get_edge_by_label(
-        &self,
-        src_vid: u32,
-        dst: VertexId,
-        label: LabelId,
-        ts: Timestamp,
-    ) -> Option<Nbr> {
-        self.edges_of_label(src_vid, label, ts)
-            .into_iter()
-            .find(|nbr| nbr.neighbor == dst)
-    }
 }
 
 impl CsrBase for LabeledMutableCsr {

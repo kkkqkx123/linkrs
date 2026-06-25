@@ -881,13 +881,6 @@ impl MutableCsr {
         )
     }
 
-    /// Check if compaction should be triggered based on fragmentation ratio
-    ///
-    /// Returns true if fragmentation_ratio() >= threshold
-    pub fn should_compact_with_threshold(&self, threshold: f32) -> bool {
-        self.fragmentation_ratio() >= threshold
-    }
-
 }
 
 impl Default for MutableCsr {
@@ -1269,21 +1262,6 @@ mod tests {
         // After overflow, ratio should be > 1.0
         let ratio = csr.fragmentation_ratio();
         assert!(ratio > 1.0, "Expected ratio > 1.0, got {}", ratio);
-    }
-
-    #[test]
-    fn test_should_compact() {
-        let mut csr = MutableCsr::with_capacity(10, 100);
-
-        // Insert edges to trigger overflow
-        for i in 1..=6 {
-            let dst = VertexId::from_int64(i as i64);
-            csr.insert_edge(0u32, dst, EdgeId(i as u64), 0, 1);
-        }
-
-        let ratio = csr.fragmentation_ratio();
-        assert!(csr.should_compact_with_threshold(ratio - 0.1), "should_compact_with_threshold failed for ratio {}", ratio);
-        assert!(!csr.should_compact_with_threshold(ratio + 0.1), "should_compact_with_threshold incorrectly returned true");
     }
 
     #[test]

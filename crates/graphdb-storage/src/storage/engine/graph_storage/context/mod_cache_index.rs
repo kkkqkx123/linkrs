@@ -61,7 +61,7 @@ impl GraphStorageContext {
             table,
         ) in edge_tables.iter_mut()
         {
-            let mut handle = table.snapshot_handle(ts);
+            let handle = table.snapshot_handle(ts);
             log::debug!(
                 "Exporting snapshot at ts={} for edge table {}/{}/{}",
                 handle.timestamp(),
@@ -84,10 +84,4 @@ impl GraphStorageContext {
         Ok(results)
     }
 
-    pub fn release_snapshot(&self, ts: Timestamp) {
-        let mut edge_tables = self.persistent.data_store.edge_tables().write();
-        for (_, table) in edge_tables.iter_mut() {
-            table.unregister_snapshot(ts);
-        }
-    }
 }
