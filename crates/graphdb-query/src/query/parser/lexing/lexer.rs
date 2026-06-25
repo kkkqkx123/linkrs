@@ -52,12 +52,14 @@ impl<'a> Lexer<'a> {
 
     fn read_char(&mut self) -> Option<char> {
         let ch = self.chars.next();
-        self.position += 1;
-        if ch == Some('\n') {
-            self.line += 1;
-            self.column = 0;
-        } else {
-            self.column += 1;
+        if let Some(c) = ch {
+            self.position += c.len_utf8();
+            if c == '\n' {
+                self.line += 1;
+                self.column = 0;
+            } else {
+                self.column += 1;
+            }
         }
         ch
     }

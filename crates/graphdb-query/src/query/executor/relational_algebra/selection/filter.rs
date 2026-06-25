@@ -20,7 +20,7 @@ use crate::query::executor::expression::evaluator::expression_evaluator::Express
 use crate::query::executor::expression::{DefaultExpressionContext, ExpressionContext};
 use crate::query::executor::utils::recursion_detector::ParallelConfig;
 use crate::query::DataSet;
-use crate::storage::StorageClient;
+use crate::storage::{StorageClient, StorageReader};
 
 fn _extract_variable_names(expr: &Expression) -> Vec<String> {
     let mut names = Vec::new();
@@ -245,9 +245,11 @@ impl<S: StorageClient + Send + 'static> FilterExecutor<S> {
     /// Single-threaded filtering
     fn apply_filter_single(&self, dataset: &mut DataSet) -> DBResult<()> {
         let mut filtered_rows = Vec::new();
+        let storage: Arc<RwLock<dyn StorageReader>> = self.base.storage.clone();
 
         for row in &dataset.rows {
-            let mut context = DefaultExpressionContext::new();
+            let mut context =
+                DefaultExpressionContext::with_storage(storage.clone(), "default".to_string());
 
             // Set the column names as variables.
             for (i, col_name) in dataset.col_names.iter().enumerate() {
@@ -333,6 +335,7 @@ impl<S: StorageClient + Send + 'static> FilterExecutor<S> {
     fn apply_filter_parallel(&self, dataset: &mut DataSet, batch_size: usize) -> DBResult<()> {
         let col_names = dataset.col_names.clone();
         let condition = self.condition.clone();
+        let storage: Arc<RwLock<dyn StorageReader>> = self.base.storage.clone();
 
         let filtered_rows: Vec<Vec<Value>> = dataset
             .rows
@@ -341,7 +344,10 @@ impl<S: StorageClient + Send + 'static> FilterExecutor<S> {
                 chunk
                     .iter()
                     .filter_map(|row| {
-                        let mut context = DefaultExpressionContext::new();
+                        let mut context = DefaultExpressionContext::with_storage(
+                            storage.clone(),
+                            "default".to_string(),
+                        );
                         for (i, col_name) in col_names.iter().enumerate() {
                             if i < row.len() {
                                 context.set_variable(col_name.clone(), row[i].clone());

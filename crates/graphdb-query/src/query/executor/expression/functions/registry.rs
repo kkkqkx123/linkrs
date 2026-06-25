@@ -6,6 +6,7 @@
 use super::BuiltinFunction;
 use super::CustomFunction;
 use crate::core::Value;
+use crate::query::executor::expression::evaluation_context::graph_storage::GraphStorageRef;
 use crate::query::executor::expression::{ExpressionError, ExpressionErrorType};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -92,6 +93,26 @@ impl FunctionRegistry {
             return func.execute(args);
         }
 
+        Err(ExpressionError::new(
+            ExpressionErrorType::UndefinedFunction,
+            format!("Undefined function: {}", name),
+        ))
+    }
+
+    /// Execute a function with graph storage access
+    pub fn execute_with_storage(
+        &self,
+        name: &str,
+        args: &[Value],
+        storage: &GraphStorageRef,
+    ) -> Result<Value, ExpressionError> {
+        let upper_name = name.to_uppercase();
+        if let Some(func) = self.builtin_functions.get(&upper_name) {
+            return func.execute_with_storage(args, storage);
+        }
+        if let Some(func) = self.custom_functions.get(&upper_name) {
+            return func.execute(args);
+        }
         Err(ExpressionError::new(
             ExpressionErrorType::UndefinedFunction,
             format!("Undefined function: {}", name),
@@ -283,6 +304,8 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::Graph(GraphFunction::OutEdges));
         self.register_builtin(BuiltinFunction::Graph(GraphFunction::InEdges));
         self.register_builtin(BuiltinFunction::Graph(GraphFunction::ShortestPath));
+        self.register_builtin(BuiltinFunction::Graph(GraphFunction::Bfs));
+        self.register_builtin(BuiltinFunction::Graph(GraphFunction::ConnectedComponents));
 
         // Register container operation functions
         use super::ContainerFunction;

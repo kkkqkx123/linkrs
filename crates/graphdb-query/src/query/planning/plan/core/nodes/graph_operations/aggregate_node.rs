@@ -9,6 +9,7 @@ define_plan_node_with_deps! {
     pub struct AggregateNode {
         group_keys: Vec<String>,
         aggregation_functions: Vec<AggregateFunction>,
+        aggregation_distinct: Vec<bool>,
     }
     enum: Aggregate
     input: SingleInputNode
@@ -21,6 +22,7 @@ impl AggregateNode {
         group_keys: Vec<String>,
         aggregation_functions: Vec<AggregateFunction>,
     ) -> Result<Self, crate::query::planning::planner::PlannerError> {
+        let num_agg = aggregation_functions.len();
         let mut col_names: Vec<String> = group_keys.clone();
         for agg_func in &aggregation_functions {
             col_names.push(agg_func.name().to_string());
@@ -32,6 +34,7 @@ impl AggregateNode {
             deps: vec![input],
             group_keys,
             aggregation_functions,
+            aggregation_distinct: vec![false; num_agg],
             output_var: None,
             col_names,
         })
@@ -44,6 +47,7 @@ impl AggregateNode {
         aggregation_functions: Vec<AggregateFunction>,
         agg_aliases: Vec<String>,
     ) -> Result<Self, crate::query::planning::planner::PlannerError> {
+        let num_agg = aggregation_functions.len();
         let mut col_names: Vec<String> = group_keys.clone();
         for alias in &agg_aliases {
             col_names.push(alias.clone());
@@ -55,6 +59,7 @@ impl AggregateNode {
             deps: vec![input],
             group_keys,
             aggregation_functions,
+            aggregation_distinct: vec![false; num_agg],
             output_var: None,
             col_names,
         })
@@ -68,6 +73,16 @@ impl AggregateNode {
     /// Obtain a list of aggregate functions
     pub fn aggregation_functions(&self) -> &[AggregateFunction] {
         &self.aggregation_functions
+    }
+
+    /// Obtain distinct flags for aggregate functions
+    pub fn aggregation_distinct(&self) -> &[bool] {
+        &self.aggregation_distinct
+    }
+
+    /// Set distinct flags for aggregate functions
+    pub fn set_aggregation_distinct(&mut self, distinct: Vec<bool>) {
+        self.aggregation_distinct = distinct;
     }
 
     /// Obtaining aggregate expressions (also known as alias methods, which are the same as aggregation_functions)

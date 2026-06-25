@@ -102,10 +102,20 @@ impl ExpressionEvaluator {
                         }
                     }
                     // Otherwise, use the normal execution mode.
-                    owned_func.execute(&arg_values)
+                    // If graph storage is available, use storage-backed execution
+                    if let Some(storage) = context.get_graph_storage() {
+                        owned_func.execute_with_storage(&arg_values, &storage)
+                    } else {
+                        owned_func.execute(&arg_values)
+                    }
                 } else {
                     // If it is not available in the context, use the global registry.
-                    global_registry().execute(name, &arg_values)
+                    // Check if graph storage is available
+                    if let Some(storage) = context.get_graph_storage() {
+                        global_registry().execute_with_storage(name, &arg_values, &storage)
+                    } else {
+                        global_registry().execute(name, &arg_values)
+                    }
                 }
             }
 

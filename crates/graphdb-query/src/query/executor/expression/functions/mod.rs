@@ -45,6 +45,7 @@ pub use builtin::utility::UtilityFunction;
 
 use crate::core::types::operators::AggregateFunction;
 use crate::core::Value;
+use crate::query::executor::expression::evaluation_context::graph_storage::GraphStorageRef;
 use crate::query::executor::expression::{ExpressionError, ExpressionErrorType};
 
 use std::ffi::c_void;
@@ -89,6 +90,17 @@ impl OwnedFunctionRef {
     pub fn execute(&self, args: &[Value]) -> Result<Value, ExpressionError> {
         match self {
             OwnedFunctionRef::Builtin(f) => f.execute(args),
+            OwnedFunctionRef::Custom(f) => f.execute(args),
+        }
+    }
+
+    pub fn execute_with_storage(
+        &self,
+        args: &[Value],
+        storage: &GraphStorageRef,
+    ) -> Result<Value, ExpressionError> {
+        match self {
+            OwnedFunctionRef::Builtin(f) => f.execute_with_storage(args, storage),
             OwnedFunctionRef::Custom(f) => f.execute(args),
         }
     }
@@ -265,6 +277,19 @@ impl BuiltinFunction {
             }
             BuiltinFunction::Vector(f) => f.execute(args),
             BuiltinFunction::Window(f) => f.execute(args),
+        }
+    }
+
+    /// Execute function with graph storage access.
+    /// Graph functions use this to perform storage-backed operations.
+    pub fn execute_with_storage(
+        &self,
+        args: &[Value],
+        storage: &GraphStorageRef,
+    ) -> Result<Value, ExpressionError> {
+        match self {
+            BuiltinFunction::Graph(f) => f.execute_with_storage(args, storage),
+            _ => self.execute(args),
         }
     }
 

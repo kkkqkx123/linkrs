@@ -265,7 +265,8 @@ impl<'a> ParseContext<'a> {
             | TokenKind::AdminRole
             | TokenKind::God
             | TokenKind::Dba
-            | TokenKind::Guest => {
+            | TokenKind::Guest
+            | TokenKind::Space => {
                 let s = self.current_token.lexeme.clone();
                 self.next_token();
                 Ok(s)

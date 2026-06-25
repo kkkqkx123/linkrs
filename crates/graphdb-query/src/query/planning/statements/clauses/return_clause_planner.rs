@@ -12,6 +12,7 @@ use crate::query::parser::ast::Stmt;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::DedupNode;
 use crate::query::planning::plan::core::nodes::operation::project_node::ProjectNode;
+use crate::query::planning::plan::core::nodes::operation::sample_node::SampleNode;
 use crate::query::planning::plan::core::nodes::AggregateNode;
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::PlannerError;
@@ -70,6 +71,15 @@ fn extract_having_clause(stmt: &Stmt) -> Option<crate::core::types::ContextualEx
     if let Stmt::Match(match_stmt) = stmt {
         if let Some(return_clause) = &match_stmt.return_clause {
             return return_clause.having_clause.clone();
+        }
+    }
+    None
+}
+
+fn extract_sample_clause(stmt: &Stmt) -> Option<usize> {
+    if let Stmt::Match(match_stmt) = stmt {
+        if let Some(return_clause) = &match_stmt.return_clause {
+            return return_clause.sample.as_ref().map(|s| s.count);
         }
     }
     None
@@ -137,7 +147,8 @@ impl ClausePlanner for ReturnClausePlanner {
         });
 
         if has_aggregate {
-            let (group_keys, agg_functions, agg_aliases) = extract_aggregate_info(&yield_columns)?;
+            let (group_keys, agg_functions, agg_aliases, agg_distinct) =
+                extract_aggregate_info(&yield_columns)?;
 
             let mut project_columns: Vec<YieldColumn> = yield_columns
                 .iter()
@@ -179,12 +190,13 @@ impl ClausePlanner for ReturnClausePlanner {
             let project_node = ProjectNode::new(input_node.clone(), project_columns)?;
             let project_plan = SubPlan::new(Some(project_node.into_enum()), input_plan.tail);
 
-            let aggregate_node = AggregateNode::with_agg_aliases(
+            let mut aggregate_node = AggregateNode::with_agg_aliases(
                 project_plan.root.clone().unwrap(),
                 group_keys,
                 agg_functions,
                 agg_aliases,
             )?;
+            aggregate_node.set_aggregation_distinct(agg_distinct);
 
             let mut final_node: PlanNodeEnum = aggregate_node.into_enum();
 
@@ -206,11 +218,18 @@ impl ClausePlanner for ReturnClausePlanner {
                 }
             }
 
+            // Apply SAMPLE clause if present
+            if let Some(sample_count) = extract_sample_clause(stmt) {
+                if let Ok(sample_node) = SampleNode::new(final_node.clone(), sample_count as i64) {
+                    final_node = PlanNodeEnum::Sample(sample_node);
+                }
+            }
+
             Ok(SubPlan::new(Some(final_node), project_plan.tail))
         } else {
             let project_node = ProjectNode::new(input_node.clone(), yield_columns)?;
 
-            let final_node = if self.distinct {
+            let mut final_node = if self.distinct {
                 match DedupNode::new(project_node.clone().into_enum()) {
                     Ok(dedup) => dedup.into_enum(),
                     Err(_) => project_node.into_enum(),
@@ -218,6 +237,13 @@ impl ClausePlanner for ReturnClausePlanner {
             } else {
                 project_node.into_enum()
             };
+
+            // Apply SAMPLE clause if present
+            if let Some(sample_count) = extract_sample_clause(stmt) {
+                if let Ok(sample_node) = SampleNode::new(final_node.clone(), sample_count as i64) {
+                    final_node = PlanNodeEnum::Sample(sample_node);
+                }
+            }
 
             Ok(SubPlan::new(Some(final_node), input_plan.tail))
         }
@@ -237,8 +263,8 @@ fn expression_contains_aggregate(expr: &crate::core::Expression) -> bool {
     }
 }
 
-/// Aggregate extraction result containing group keys, aggregate functions, and their aliases
-type AggregateExtractionResult = (Vec<String>, Vec<AggregateFunction>, Vec<String>);
+/// Aggregate extraction result containing group keys, aggregate functions, their aliases, and distinct flags
+type AggregateExtractionResult = (Vec<String>, Vec<AggregateFunction>, Vec<String>, Vec<bool>);
 
 fn extract_aggregate_info(
     columns: &[YieldColumn],
@@ -246,14 +272,16 @@ fn extract_aggregate_info(
     let mut group_keys = Vec::new();
     let mut agg_functions = Vec::new();
     let mut agg_aliases = Vec::new();
+    let mut agg_distinct = Vec::new();
 
     for col in columns {
         if let Some(expr_meta) = col.expression.expression() {
             let expr = expr_meta.inner();
             if expression_contains_aggregate(expr) {
-                if let Some(agg_func) = extract_aggregate_function(expr) {
+                if let Some((agg_func, distinct)) = extract_aggregate_function(expr) {
                     agg_functions.push(agg_func);
                     agg_aliases.push(col.alias.clone());
+                    agg_distinct.push(distinct);
                 }
             } else {
                 let key = col.alias.clone();
@@ -264,16 +292,21 @@ fn extract_aggregate_info(
         }
     }
 
-    Ok((group_keys, agg_functions, agg_aliases))
+    Ok((group_keys, agg_functions, agg_aliases, agg_distinct))
 }
 
-fn extract_aggregate_function(expr: &crate::core::Expression) -> Option<AggregateFunction> {
+fn extract_aggregate_function(
+    expr: &crate::core::Expression,
+) -> Option<(AggregateFunction, bool)> {
     use crate::core::Expression;
     match expr {
-        Expression::Aggregate { func, .. } => Some(func.clone()),
-        Expression::Binary { left, right, .. } => {
-            extract_aggregate_function(left).or_else(|| extract_aggregate_function(right))
-        }
+        Expression::Aggregate {
+            func,
+            distinct,
+            ..
+        } => Some((func.clone(), *distinct)),
+        Expression::Binary { left, right, .. } => extract_aggregate_function(left)
+            .or_else(|| extract_aggregate_function(right)),
         Expression::Unary { operand, .. } => extract_aggregate_function(operand),
         Expression::Function { args, .. } => args.iter().find_map(extract_aggregate_function),
         _ => None,

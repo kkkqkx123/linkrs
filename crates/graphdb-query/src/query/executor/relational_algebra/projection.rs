@@ -22,7 +22,7 @@ use crate::query::executor::expression::DefaultExpressionContext;
 use crate::query::executor::utils::recursion_detector::ParallelConfig;
 use crate::query::validator::context::ExpressionAnalysisContext;
 use crate::query::ExecutionResult;
-use crate::storage::StorageClient;
+use crate::storage::{StorageClient, StorageReader};
 
 fn _extract_variable_names(expr: &Expression) -> Vec<String> {
     let mut names = Vec::new();
@@ -203,8 +203,17 @@ impl<S: StorageClient> ProjectExecutor<S> {
     /// Projection of single-row data
     fn project_row(&self, row: &[Value], col_names: &[String]) -> DBResult<Vec<Value>> {
         let mut projected_row = Vec::new();
+        let storage: Option<Arc<RwLock<dyn StorageReader>>> = self
+            .base
+            .storage
+            .as_ref()
+            .map(|s| s.clone() as Arc<RwLock<dyn StorageReader>>);
 
-        let mut context = DefaultExpressionContext::new();
+        let mut context = if let Some(storage) = storage {
+            DefaultExpressionContext::with_storage(storage, "default".to_string())
+        } else {
+            DefaultExpressionContext::new()
+        };
 
         // Set the value of the current row to the context variable.
         for (i, col_name) in col_names.iter().enumerate() {
@@ -303,6 +312,11 @@ impl<S: StorageClient> ProjectExecutor<S> {
             let batch_size = self.parallel_config.calculate_batch_size(total_size);
             let columns = self.columns.clone();
             let col_names = dataset.col_names.clone();
+            let storage: Option<Arc<RwLock<dyn StorageReader>>> = self
+                .base
+                .storage
+                .as_ref()
+                .map(|s| s.clone() as Arc<RwLock<dyn StorageReader>>);
 
             // Use `par_chunks` from `rayon` for parallel processing.
             let projected_rows: Vec<Vec<Value>> = dataset
@@ -312,7 +326,14 @@ impl<S: StorageClient> ProjectExecutor<S> {
                     chunk
                         .iter()
                         .filter_map(|row| {
-                            let mut context = DefaultExpressionContext::new();
+                            let mut context = if let Some(ref storage) = storage {
+                                DefaultExpressionContext::with_storage(
+                                    storage.clone(),
+                                    "default".to_string(),
+                                )
+                            } else {
+                                DefaultExpressionContext::new()
+                            };
 
                             // Set the value of the current row to the context variable.
                             for (i, col_name) in col_names.iter().enumerate() {

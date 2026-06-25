@@ -31,7 +31,7 @@ use crate::query::executor::expression::DefaultExpressionContext;
 use crate::query::executor::result_processing::agg_data::AggData;
 use crate::query::executor::result_processing::agg_function_manager::AggFunctionManager;
 use crate::query::executor::utils::recursion_detector::ParallelConfig;
-use crate::storage::StorageClient;
+use crate::storage::{StorageClient, StorageReader};
 
 /// Aggregation function specifications
 /// Includes the type of aggregate function and optional field name parameters.
@@ -369,10 +369,13 @@ impl<S: StorageClient> AggregateExecutor<S> {
         let agg_func_count = self.aggregate_functions.len();
         let mut group_state = GroupAggregateState::new(agg_func_count);
 
+        let storage: Arc<RwLock<dyn StorageReader>> = self.base.storage.clone();
+
         // Process each row of data.
         for row in &dataset.rows {
             // Constructing the context for the expression
-            let mut context = DefaultExpressionContext::new();
+            let mut context =
+                DefaultExpressionContext::with_storage(storage.clone(), "default".to_string());
             for (i, col_name) in dataset.col_names.iter().enumerate() {
                 if i < row.len() {
                     context.set_variable(col_name.clone(), row[i].clone());
@@ -530,6 +533,8 @@ impl<S: StorageClient> AggregateExecutor<S> {
         let col_names = dataset.col_names.clone();
         let agg_function_manager = self.agg_function_manager.clone();
 
+        let storage: Arc<RwLock<dyn StorageReader>> = self.base.storage.clone();
+
         // Use rayon to process data batches in parallel.
         let partial_results: Vec<GroupAggregateState> = dataset
             .rows
@@ -540,7 +545,10 @@ impl<S: StorageClient> AggregateExecutor<S> {
 
                 for row in chunk {
                     // Building the context for the expression
-                    let mut context = DefaultExpressionContext::new();
+                    let mut context = DefaultExpressionContext::with_storage(
+                        storage.clone(),
+                        "default".to_string(),
+                    );
                     for (i, col_name) in col_names.iter().enumerate() {
                         if i < row.len() {
                             context.set_variable(col_name.clone(), row[i].clone());
@@ -1077,10 +1085,12 @@ impl<S: StorageClient> HavingExecutor<S> {
 
     fn apply_having_condition(&self, dataset: &mut crate::query::DataSet) -> DBResult<()> {
         let mut filtered_rows = Vec::new();
+        let storage: Arc<RwLock<dyn StorageReader>> = self.base.storage.clone();
 
         for row in &dataset.rows {
             // Constructing the context for the expression
-            let mut context = DefaultExpressionContext::new();
+            let mut context =
+                DefaultExpressionContext::with_storage(storage.clone(), "default".to_string());
             for (i, col_name) in dataset.col_names.iter().enumerate() {
                 if i < row.len() {
                     context.set_variable(col_name.clone(), row[i].clone());

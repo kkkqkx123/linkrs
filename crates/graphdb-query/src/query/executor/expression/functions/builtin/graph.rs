@@ -3,10 +3,12 @@
 //! Provide functions for manipulating vertices and edges, including id, tags, labels, properties, type, src, dst, and rank.
 //! Also includes graph traversal functions: neighbors, degree, shortest_path.
 
+use crate::core::types::VertexId;
 use crate::core::value::list::List;
 use crate::core::value::NullType;
 use crate::core::vertex_edge_path::Vertex;
 use crate::core::Value;
+use crate::query::executor::expression::evaluation_context::graph_storage::GraphStorageRef;
 use crate::query::executor::expression::ExpressionError;
 
 /// Graph function enumeration
@@ -27,6 +29,8 @@ pub enum GraphFunction {
     OutEdges,
     InEdges,
     ShortestPath,
+    Bfs,
+    ConnectedComponents,
 }
 
 impl GraphFunction {
@@ -48,6 +52,8 @@ impl GraphFunction {
             Self::OutEdges => "out_edges",
             Self::InEdges => "in_edges",
             Self::ShortestPath => "shortest_path",
+            Self::Bfs => "bfs",
+            Self::ConnectedComponents => "connected_components",
         }
     }
 
@@ -69,6 +75,8 @@ impl GraphFunction {
             Self::OutEdges => 1,
             Self::InEdges => 1,
             Self::ShortestPath => 2,
+            Self::Bfs => 2,
+            Self::ConnectedComponents => 0,
         }
     }
 
@@ -92,9 +100,11 @@ impl GraphFunction {
             Self::EndNode => "Get the target vertex of the edge",
             Self::Neighbors => "Get all neighbor vertex IDs of a vertex",
             Self::Degree => "Get the degree (number of edges) of a vertex",
-            Self::OutEdges => "Get all outgoing edge types of a vertex",
-            Self::InEdges => "Get all incoming edge types of a vertex",
+            Self::OutEdges => "Get all outgoing edges of a vertex",
+            Self::InEdges => "Get all incoming edges of a vertex",
             Self::ShortestPath => "Find the shortest path between two vertices (returns path length)",
+            Self::Bfs => "Breadth-first search traversal (start_vid, max_depth)",
+            Self::ConnectedComponents => "Find all connected components in the graph",
         }
     }
 
@@ -115,6 +125,27 @@ impl GraphFunction {
             Self::OutEdges => execute_out_edges(args),
             Self::InEdges => execute_in_edges(args),
             Self::ShortestPath => execute_shortest_path(args),
+            Self::Bfs => execute_bfs(args),
+            Self::ConnectedComponents => execute_connected_components(args),
+        }
+    }
+
+    /// Execute with graph storage access.
+    /// Falls back to execute() if no results can be obtained from storage.
+    pub fn execute_with_storage(
+        &self,
+        args: &[Value],
+        storage: &GraphStorageRef,
+    ) -> Result<Value, ExpressionError> {
+        match self {
+            Self::Neighbors => execute_neighbors_with_storage(args, storage),
+            Self::Degree => execute_degree_with_storage(args, storage),
+            Self::OutEdges => execute_out_edges_with_storage(args, storage),
+            Self::InEdges => execute_in_edges_with_storage(args, storage),
+            Self::ShortestPath => execute_shortest_path_with_storage(args, storage),
+            Self::Bfs => execute_bfs_with_storage(args, storage),
+            Self::ConnectedComponents => execute_connected_components_with_storage(args, storage),
+            _ => self.execute(args),
         }
     }
 }
@@ -278,6 +309,20 @@ fn execute_endnode(args: &[Value]) -> Result<Value, ExpressionError> {
     }
 }
 
+fn extract_vertex_id(value: &Value) -> Result<VertexId, ExpressionError> {
+    match value {
+        Value::Vertex(v) => Ok(v.vid),
+        Value::BigInt(id) => Ok(VertexId::from_int64(*id)),
+        Value::Int(id) => Ok(VertexId::from_int64(*id as i64)),
+        Value::Null(_) => Err(ExpressionError::type_error(
+            "Expected a vertex or vertex ID, got null",
+        )),
+        _ => Err(ExpressionError::type_error(
+            "Expected a vertex or vertex ID",
+        )),
+    }
+}
+
 fn execute_neighbors(args: &[Value]) -> Result<Value, ExpressionError> {
     if args.len() != 1 {
         return Err(ExpressionError::type_error(
@@ -286,18 +331,8 @@ fn execute_neighbors(args: &[Value]) -> Result<Value, ExpressionError> {
     }
     match &args[0] {
         Value::Vertex(v) => {
-            let neighbor_ids: Vec<Value> = v
-                .properties
-                .iter()
-                .filter(|(k, _)| k.starts_with("neighbor_"))
-                .map(|(_, v)| v.clone())
-                .collect();
-            if neighbor_ids.is_empty() {
-                let vid = v.vid.as_int64().unwrap_or(0);
-                Ok(Value::BigInt(vid))
-            } else {
-                Ok(Value::list(List { values: neighbor_ids }))
-            }
+            let vid = v.vid.as_int64().unwrap_or(0);
+            Ok(Value::BigInt(vid))
         }
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
@@ -402,6 +437,255 @@ fn execute_shortest_path(args: &[Value]) -> Result<Value, ExpressionError> {
         return Ok(Value::BigInt(0));
     }
     Ok(Value::BigInt(-1))
+}
+
+fn execute_bfs(_args: &[Value]) -> Result<Value, ExpressionError> {
+    Err(ExpressionError::function_error(
+        "bfs() requires graph storage access; use within a query context".to_string(),
+    ))
+}
+
+fn execute_connected_components(_args: &[Value]) -> Result<Value, ExpressionError> {
+    Err(ExpressionError::function_error(
+        "connected_components() requires graph storage access; use within a query context"
+            .to_string(),
+    ))
+}
+
+// --- Storage-backed implementations ---
+
+fn execute_neighbors_with_storage(
+    args: &[Value],
+    storage: &GraphStorageRef,
+) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error(
+            "The neighbors function takes 1 argument",
+        ));
+    }
+    let vid = extract_vertex_id(&args[0])?;
+    let neighbors = storage
+        .get_neighbors(&vid)
+        .map_err(|e| ExpressionError::function_error(e))?;
+    let neighbor_ids: Vec<Value> = neighbors
+        .into_iter()
+        .map(|(nid, _)| Value::BigInt(nid.as_int64().unwrap_or(0)))
+        .collect();
+    Ok(Value::list(List { values: neighbor_ids }))
+}
+
+fn execute_degree_with_storage(
+    args: &[Value],
+    storage: &GraphStorageRef,
+) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error(
+            "The degree function takes 1 argument",
+        ));
+    }
+    let vid = extract_vertex_id(&args[0])?;
+    let neighbors = storage
+        .get_neighbors(&vid)
+        .map_err(|e| ExpressionError::function_error(e))?;
+    Ok(Value::BigInt(neighbors.len() as i64))
+}
+
+fn execute_out_edges_with_storage(
+    args: &[Value],
+    storage: &GraphStorageRef,
+) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error(
+            "The out_edges function takes 1 argument",
+        ));
+    }
+    use crate::core::types::EdgeDirection;
+    let vid = extract_vertex_id(&args[0])?;
+    let reader = storage.storage.read();
+    let edges = reader
+        .get_node_edges(&storage.space, &vid, EdgeDirection::Out)
+        .map_err(|e| ExpressionError::function_error(format!("Storage error: {}", e)))?;
+    drop(reader);
+    let edge_values: Vec<Value> = edges.into_iter().map(|e| Value::Edge(Box::new(e))).collect();
+    Ok(Value::list(List {
+        values: edge_values,
+    }))
+}
+
+fn execute_in_edges_with_storage(
+    args: &[Value],
+    storage: &GraphStorageRef,
+) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error(
+            "The in_edges function takes 1 argument",
+        ));
+    }
+    use crate::core::types::EdgeDirection;
+    let vid = extract_vertex_id(&args[0])?;
+    let reader = storage.storage.read();
+    let edges = reader
+        .get_node_edges(&storage.space, &vid, EdgeDirection::In)
+        .map_err(|e| ExpressionError::function_error(format!("Storage error: {}", e)))?;
+    drop(reader);
+    let edge_values: Vec<Value> = edges.into_iter().map(|e| Value::Edge(Box::new(e))).collect();
+    Ok(Value::list(List {
+        values: edge_values,
+    }))
+}
+
+fn execute_shortest_path_with_storage(
+    args: &[Value],
+    storage: &GraphStorageRef,
+) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "The shortest_path function takes 2 arguments (start_vid, end_vid)",
+        ));
+    }
+    let start_vid = extract_vertex_id(&args[0])?;
+    let end_vid = extract_vertex_id(&args[1])?;
+
+    if start_vid == end_vid {
+        return Ok(Value::BigInt(0));
+    }
+
+    // Simple BFS to find shortest path length
+    use std::collections::{HashMap, VecDeque};
+    let mut visited: HashMap<VertexId, i64> = HashMap::new();
+    let mut queue: VecDeque<VertexId> = VecDeque::new();
+
+    visited.insert(start_vid, 0);
+    queue.push_back(start_vid);
+
+    while let Some(current) = queue.pop_front() {
+        let distance = visited[&current];
+
+        let neighbors = storage
+            .get_neighbors(&current)
+            .map_err(|e| ExpressionError::function_error(e))?;
+
+        for (neighbor_id, _) in neighbors {
+            if neighbor_id == end_vid {
+                return Ok(Value::BigInt(distance + 1));
+            }
+            if !visited.contains_key(&neighbor_id) {
+                visited.insert(neighbor_id, distance + 1);
+                queue.push_back(neighbor_id);
+            }
+        }
+    }
+
+    Ok(Value::BigInt(-1))
+}
+
+fn execute_bfs_with_storage(
+    args: &[Value],
+    storage: &GraphStorageRef,
+) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "The bfs function takes 2 arguments (start_vid, max_depth)",
+        ));
+    }
+    let start_vid = extract_vertex_id(&args[0])?;
+    let max_depth = match &args[1] {
+        Value::BigInt(d) => *d,
+        Value::Int(d) => *d as i64,
+        _ => {
+            return Err(ExpressionError::type_error(
+                "bfs max_depth must be an integer",
+            ))
+        }
+    };
+
+    use std::collections::{HashSet, VecDeque};
+    let mut visited: HashSet<VertexId> = HashSet::new();
+    let mut queue: VecDeque<(VertexId, i64)> = VecDeque::new();
+    let mut result: Vec<Value> = Vec::new();
+
+    visited.insert(start_vid);
+    queue.push_back((start_vid, 0));
+    result.push(Value::BigInt(start_vid.as_int64().unwrap_or(0)));
+
+    while let Some((current, depth)) = queue.pop_front() {
+        if depth >= max_depth {
+            continue;
+        }
+
+        let neighbors = storage
+            .get_neighbors(&current)
+            .map_err(|e| ExpressionError::function_error(e))?;
+
+        for (neighbor_id, _) in neighbors {
+            if visited.insert(neighbor_id) {
+                queue.push_back((neighbor_id, depth + 1));
+                result.push(Value::BigInt(neighbor_id.as_int64().unwrap_or(0)));
+            }
+        }
+    }
+
+    Ok(Value::list(List { values: result }))
+}
+
+fn execute_connected_components_with_storage(
+    _args: &[Value],
+    storage: &GraphStorageRef,
+) -> Result<Value, ExpressionError> {
+    if !_args.is_empty() {
+        return Err(ExpressionError::type_error(
+            "The connected_components function takes no arguments",
+        ));
+    }
+
+    // Get all vertices from storage
+    let reader = storage.storage.read();
+    let all_vertices = reader
+        .scan_vertices(&storage.space)
+        .map_err(|e| ExpressionError::function_error(format!("Storage error: {}", e)))?;
+    drop(reader);
+
+    use std::collections::{HashSet, VecDeque};
+
+    let all_vids: HashSet<VertexId> = all_vertices.iter().map(|v| v.vid).collect();
+    let mut visited: HashSet<VertexId> = HashSet::new();
+    let mut components: Vec<Vec<Value>> = Vec::new();
+
+    for start_vid in &all_vids {
+        if visited.contains(start_vid) {
+            continue;
+        }
+
+        let mut component: Vec<Value> = Vec::new();
+        let mut queue: VecDeque<VertexId> = VecDeque::new();
+        visited.insert(*start_vid);
+        queue.push_back(*start_vid);
+        component.push(Value::BigInt(start_vid.as_int64().unwrap_or(0)));
+
+        while let Some(current) = queue.pop_front() {
+            let neighbors = match storage.get_neighbors(&current) {
+                Ok(n) => n,
+                Err(_) => continue,
+            };
+            for (neighbor_id, _) in neighbors {
+                if visited.insert(neighbor_id) {
+                    queue.push_back(neighbor_id);
+                    component.push(Value::BigInt(neighbor_id.as_int64().unwrap_or(0)));
+                }
+            }
+        }
+
+        components.push(component);
+    }
+
+    let component_lists: Vec<Value> = components
+        .into_iter()
+        .map(|comp| Value::list(List { values: comp }))
+        .collect();
+
+    Ok(Value::list(List {
+        values: component_lists,
+    }))
 }
 
 #[cfg(test)]

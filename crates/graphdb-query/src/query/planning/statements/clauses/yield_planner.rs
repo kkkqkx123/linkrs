@@ -5,6 +5,7 @@
 
 use crate::core::YieldColumn;
 use crate::query::parser::ast::Stmt;
+use crate::query::planning::plan::core::nodes::operation::sample_node::SampleNode;
 use crate::query::planning::plan::core::nodes::{FilterNode, LimitNode, PlanNodeEnum, ProjectNode};
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::PlannerError;
@@ -18,6 +19,7 @@ type YieldInfoResult = Result<
     (
         Vec<YieldColumn>,
         Option<crate::core::types::ContextualExpression>,
+        Option<usize>,
         Option<usize>,
         Option<usize>,
     ),
@@ -45,6 +47,7 @@ impl YieldClausePlanner {
         filter_condition: Option<crate::core::types::ContextualExpression>,
         skip: Option<usize>,
         limit: Option<usize>,
+        sample: Option<usize>,
         input_plan: &SubPlan,
     ) -> Result<SubPlan, PlannerError> {
         let mut current_plan = input_plan.clone();
@@ -61,7 +64,25 @@ impl YieldClausePlanner {
             current_plan = SubPlan::new(Some(filter_node), current_plan.tail.clone());
         }
 
-        // 3. Handling pagination (LIMIT/SKIP)
+        // 3. Apply SAMPLE clause if present (before pagination)
+        if let Some(sample_count) = sample {
+            let input_node = current_plan.root().as_ref().ok_or_else(|| {
+                PlannerError::PlanGenerationFailed("The input plan has no root node".to_string())
+            })?;
+            let sample_node = SampleNode::new(input_node.clone(), sample_count as i64)
+                .map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!(
+                        "Failed to create SampleNode: {}",
+                        e
+                    ))
+                })?;
+            current_plan = SubPlan::new(
+                Some(PlanNodeEnum::Sample(sample_node)),
+                current_plan.tail.clone(),
+            );
+        }
+
+        // 4. Handling pagination (LIMIT/SKIP)
         if limit.is_some() || skip.is_some() {
             current_plan = self.apply_pagination(current_plan, skip, limit)?;
         }
@@ -143,9 +164,17 @@ impl ClausePlanner for YieldClausePlanner {
         input_plan: SubPlan,
     ) -> Result<SubPlan, PlannerError> {
         // Extract the information from the YIELD clause in the sentence.
-        let (yield_columns, filter_condition, skip, limit) = Self::extract_yield_info(stmt)?;
+        let (yield_columns, filter_condition, skip, limit, sample) =
+            Self::extract_yield_info(stmt)?;
 
-        self.plan_yield_clause(&yield_columns, filter_condition, skip, limit, &input_plan)
+        self.plan_yield_clause(
+            &yield_columns,
+            filter_condition,
+            skip,
+            limit,
+            sample,
+            &input_plan,
+        )
     }
 }
 
@@ -164,7 +193,7 @@ impl YieldClausePlanner {
         match stmt {
             Stmt::Yield(yield_stmt) => {
                 let yield_columns = Self::convert_yield_items(&yield_stmt.items)?;
-                Ok((yield_columns, yield_stmt.where_clause.clone(), None, None))
+                Ok((yield_columns, yield_stmt.where_clause.clone(), None, None, None))
             }
             Stmt::Go(go_stmt) => {
                 // Extract the YIELD clause from the GO statement.
@@ -172,23 +201,25 @@ impl YieldClausePlanner {
                     let yield_columns = Self::convert_yield_items(&yield_clause.items)?;
                     let skip = yield_clause.skip.as_ref().map(|s| s.count);
                     let limit = yield_clause.limit.as_ref().map(|l| l.count);
+                    let sample = yield_clause.sample.as_ref().map(|s| s.count);
                     Ok((
                         yield_columns,
                         yield_clause.where_clause.clone(),
                         skip,
                         limit,
+                        sample,
                     ))
                 } else {
-                    Ok((vec![], None, None, None))
+                    Ok((vec![], None, None, None, None))
                 }
             }
             Stmt::Fetch(_fetch_stmt) => {
                 // The FETCH statement may have an implicit YIELD.
-                Ok((vec![], None, None, None))
+                Ok((vec![], None, None, None, None))
             }
             _ => {
                 // Other statement types are not currently supported for extracting the YIELD value.
-                Ok((vec![], None, None, None))
+                Ok((vec![], None, None, None, None))
             }
         }
     }
@@ -284,7 +315,7 @@ mod tests {
             limit: None,
         });
 
-        let (columns, filter, skip, limit) =
+        let (columns, filter, skip, limit, _sample) =
             YieldClausePlanner::extract_yield_info(&yield_stmt).expect("extract failed");
         assert_eq!(columns.len(), 1);
         assert_eq!(columns[0].alias, "n");
@@ -330,7 +361,7 @@ mod tests {
             }),
         });
 
-        let (columns, filter, skip, limit) =
+        let (columns, filter, skip, limit, _sample) =
             YieldClausePlanner::extract_yield_info(&go_stmt).expect("extract failed");
         assert_eq!(columns.len(), 1);
         assert!(filter.is_none());

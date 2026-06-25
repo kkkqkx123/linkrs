@@ -175,10 +175,18 @@ impl<S: StorageClient + Send + 'static> DataProcessingBuilder<S> {
             .collect();
 
         // The `AggregateFunction` needs to be converted to `Vec<AggregateFunctionSpec>`.
-        let aggregate_functions: Vec<AggregateFunctionSpec> = node
-            .aggregation_functions()
+        let agg_funcs = node.aggregation_functions();
+        let agg_distinct = node.aggregation_distinct();
+        let aggregate_functions: Vec<AggregateFunctionSpec> = agg_funcs
             .iter()
-            .map(|agg_func| AggregateFunctionSpec::from_agg_function(agg_func.clone()))
+            .enumerate()
+            .map(|(i, agg_func)| {
+                let mut spec = AggregateFunctionSpec::from_agg_function(agg_func.clone());
+                if i < agg_distinct.len() && agg_distinct[i] {
+                    spec = spec.with_distinct();
+                }
+                spec
+            })
             .collect();
 
         // Get column names from the node

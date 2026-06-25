@@ -30,7 +30,10 @@ impl GroupByPlanner {
     ///
     /// Recursively traverse the expression tree and collect all aggregate functions.
     /// Refer to the implementation of ExpressionUtils::collectAll in nebula-graph.
-    fn extract_aggregate_functions(&self, expr: &ContextualExpression) -> Vec<AggregateFunction> {
+    fn extract_aggregate_functions(
+        &self,
+        expr: &ContextualExpression,
+    ) -> Vec<(AggregateFunction, bool)> {
         let expr_meta = match expr.expression() {
             Some(e) => e,
             None => return Vec::new(),
@@ -45,11 +48,15 @@ impl GroupByPlanner {
     fn collect_aggregate_functions_recursive(
         &self,
         expr: &Expression,
-        functions: &mut Vec<AggregateFunction>,
+        functions: &mut Vec<(AggregateFunction, bool)>,
     ) {
         match expr {
-            Expression::Aggregate { func, .. } => {
-                functions.push(func.clone());
+            Expression::Aggregate {
+                func,
+                distinct,
+                ..
+            } => {
+                functions.push((func.clone(), *distinct));
             }
             Expression::Binary { left, right, .. } => {
                 self.collect_aggregate_functions_recursive(left, functions);
@@ -192,17 +199,21 @@ impl Planner for GroupByPlanner {
             .map(|(i, _)| format!("group_key_{}", i))
             .collect();
 
-        // Extract the aggregate functions
+        // Extract the aggregate functions with distinct flags
         let mut aggregation_functions = Vec::new();
+        let mut aggregation_distinct = Vec::new();
         for item in &group_by_stmt.yield_clause.items {
             let funcs = self.extract_aggregate_functions(&item.expression);
-            aggregation_functions.extend(funcs);
+            for (func, distinct) in funcs {
+                aggregation_functions.push(func);
+                aggregation_distinct.push(distinct);
+            }
         }
 
         // Create an aggregate node.
         // For ROLLUP/CUBE/GROUPING SETS, we use the first group set as the primary keys
         // and the executor will handle the multiple grouping sets.
-        let aggregate_node = AggregateNode::new(
+        let mut aggregate_node = AggregateNode::new(
             arg_node_enum.clone(),
             group_keys,
             aggregation_functions,
@@ -210,6 +221,7 @@ impl Planner for GroupByPlanner {
         .map_err(|e| {
             PlannerError::PlanGenerationFailed(format!("Failed to create AggregateNode: {}", e))
         })?;
+        aggregate_node.set_aggregation_distinct(aggregation_distinct);
 
         let mut final_node = PlanNodeEnum::Aggregate(aggregate_node);
 

@@ -6,9 +6,10 @@
 //! For compilation-time analysis, please use `ExpressionAnalysisContext`.
 
 use crate::core::Value;
+use crate::query::executor::expression::evaluation_context::graph_storage::GraphStorageRef;
 use crate::query::executor::expression::functions::OwnedFunctionRef;
 
-/// The “expression evaluation context trait”
+/// The "expression evaluation context trait"
 ///
 /// Provide a unified context interface for evaluating graph database expressions.
 ///
@@ -27,6 +28,11 @@ pub trait ExpressionContext {
         None
     }
 
+    /// Obtain the graph storage accessor for graph algorithm functions
+    fn get_graph_storage(&self) -> Option<GraphStorageRef> {
+        None
+    }
+
     /// Check whether the context supports caching.
     fn supports_cache(&self) -> bool {
         false
@@ -34,7 +40,7 @@ pub trait ExpressionContext {
 
     /// Obtain the cache manager (if available).
     ///
-    /// The caching function has been removed; the result is “None”.
+    /// The caching function has been removed; the result is "None".
     fn get_cache(&mut self) -> Option<&mut ()> {
         None
     }

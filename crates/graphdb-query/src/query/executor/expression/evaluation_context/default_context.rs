@@ -6,14 +6,19 @@
 //! For compilation-time analysis, please use `ExpressionAnalysisContext`.
 
 use crate::core::Value;
+use crate::query::executor::expression::evaluation_context::graph_storage::GraphStorageRef;
 use crate::query::executor::expression::functions::global_registry_ref;
+use crate::storage::StorageReader;
 use std::collections::HashMap;
+use std::sync::Arc;
+use parking_lot::RwLock;
 
 /// The evaluation context of the default expression
 ///
 /// Provide the contextual environment required for evaluating the expression, including:
 /// Variable storage
 /// Function registration (using a global function registry)
+/// Optional graph storage accessor for graph algorithm functions
 ///
 /// Note: This context is used for the evaluation of runtime expressions.
 /// For compilation-time analysis, please use `ExpressionAnalysisContext`.
@@ -21,13 +26,28 @@ use std::collections::HashMap;
 pub struct DefaultExpressionContext {
     /// Variable storage
     variables: HashMap<String, Value>,
+    /// Optional graph storage for graph algorithm functions
+    storage: Option<Arc<RwLock<dyn StorageReader>>>,
+    /// Space name for graph storage access
+    space: String,
 }
 
 impl DefaultExpressionContext {
-    /// Create a new context.
+    /// Create a new context without graph storage access.
     pub fn new() -> Self {
         Self {
             variables: HashMap::new(),
+            storage: None,
+            space: String::new(),
+        }
+    }
+
+    /// Create a new context with graph storage access.
+    pub fn with_storage(storage: Arc<RwLock<dyn StorageReader>>, space: String) -> Self {
+        Self {
+            variables: HashMap::new(),
+            storage: Some(storage),
+            space,
         }
     }
 
@@ -54,6 +74,8 @@ impl DefaultExpressionContext {
     pub fn from_execution_context(ctx: &crate::query::executor::base::ExecutionContext) -> Self {
         Self {
             variables: ctx.variables.read().clone(),
+            storage: None,
+            space: String::new(),
         }
     }
 
@@ -106,5 +128,11 @@ impl crate::query::executor::expression::evaluator::traits::ExpressionContext
                     )
                 })
             })
+    }
+
+    fn get_graph_storage(&self) -> Option<GraphStorageRef> {
+        self.storage
+            .as_ref()
+            .map(|s| GraphStorageRef::new(s.clone(), self.space.clone()))
     }
 }

@@ -6,6 +6,7 @@
 //! For context analysis during compilation, please refer to `ExpressionAnalysisContext`.
 
 pub mod default_context;
+pub mod graph_storage;
 pub mod row_context;
 
 // Re-export the default context type.
