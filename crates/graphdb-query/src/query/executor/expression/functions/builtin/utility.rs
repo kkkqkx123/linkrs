@@ -12,6 +12,9 @@ pub enum UtilityFunction {
     Coalesce,
     Hash,
     JsonExtract,
+    JsonBuildObject,
+    JsonBuildArray,
+    JsonObjectKeys,
     NullIf,
     Greatest,
     Least,
@@ -24,6 +27,9 @@ impl UtilityFunction {
             UtilityFunction::Coalesce => "coalesce",
             UtilityFunction::Hash => "hash",
             UtilityFunction::JsonExtract => "json_extract",
+            UtilityFunction::JsonBuildObject => "json_build_object",
+            UtilityFunction::JsonBuildArray => "json_build_array",
+            UtilityFunction::JsonObjectKeys => "json_object_keys",
             UtilityFunction::NullIf => "nullif",
             UtilityFunction::Greatest => "greatest",
             UtilityFunction::Least => "least",
@@ -36,6 +42,9 @@ impl UtilityFunction {
             UtilityFunction::Coalesce => 1,
             UtilityFunction::Hash => 1,
             UtilityFunction::JsonExtract => 2,
+            UtilityFunction::JsonBuildObject => 0,
+            UtilityFunction::JsonBuildArray => 0,
+            UtilityFunction::JsonObjectKeys => 1,
             UtilityFunction::NullIf => 2,
             UtilityFunction::Greatest => 2,
             UtilityFunction::Least => 2,
@@ -46,7 +55,11 @@ impl UtilityFunction {
     pub fn is_variadic(&self) -> bool {
         matches!(
             self,
-            UtilityFunction::Coalesce | UtilityFunction::Greatest | UtilityFunction::Least
+            UtilityFunction::Coalesce
+                | UtilityFunction::Greatest
+                | UtilityFunction::Least
+                | UtilityFunction::JsonBuildObject
+                | UtilityFunction::JsonBuildArray
         )
     }
 
@@ -57,6 +70,9 @@ impl UtilityFunction {
             UtilityFunction::JsonExtract => {
                 "Extract the value of a specified path from a JSON string"
             }
+            UtilityFunction::JsonBuildObject => "Build a JSON object from key-value pairs",
+            UtilityFunction::JsonBuildArray => "Build a JSON array from a list of values",
+            UtilityFunction::JsonObjectKeys => "Get keys from a JSON object",
             UtilityFunction::NullIf => "Return NULL if two values are equal",
             UtilityFunction::Greatest => "Return the largest of the arguments",
             UtilityFunction::Least => "Return the smallest of the arguments",
@@ -69,6 +85,9 @@ impl UtilityFunction {
             UtilityFunction::Coalesce => execute_coalesce(args),
             UtilityFunction::Hash => execute_hash(args),
             UtilityFunction::JsonExtract => execute_json_extract(args),
+            UtilityFunction::JsonBuildObject => execute_json_build_object(args),
+            UtilityFunction::JsonBuildArray => execute_json_build_array(args),
+            UtilityFunction::JsonObjectKeys => execute_json_object_keys(args),
             UtilityFunction::NullIf => execute_nullif(args),
             UtilityFunction::Greatest => execute_greatest(args),
             UtilityFunction::Least => execute_least(args),
@@ -124,6 +143,100 @@ fn execute_json_extract(args: &[Value]) -> Result<Value, ExpressionError> {
         _ => Err(ExpressionError::type_error(
             "The json_extract function takes string arguments",
         )),
+    }
+}
+
+fn execute_json_build_object(args: &[Value]) -> Result<Value, ExpressionError> {
+    use serde_json::Map;
+
+    if args.len() % 2 != 0 {
+        return Err(ExpressionError::type_error(
+            "json_build_object requires an even number of arguments (key-value pairs)",
+        ));
+    }
+
+    let mut map = Map::new();
+    for chunk in args.chunks(2) {
+        let key = match &chunk[0] {
+            Value::String(s) => s.clone(),
+            Value::Null(_) => continue,
+            _ => {
+                return Err(ExpressionError::type_error(
+                    "json_build_object keys must be strings",
+                ))
+            }
+        };
+        let value = value_to_json_value(&chunk[1]);
+        map.insert(key, value);
+    }
+
+    Ok(Value::String(
+        serde_json::to_string(&JsonValue::Object(map))
+            .map_err(|e| ExpressionError::type_error(format!("JSON serialization error: {}", e)))?,
+    ))
+}
+
+fn execute_json_build_array(args: &[Value]) -> Result<Value, ExpressionError> {
+    let arr: Vec<JsonValue> = args.iter().map(value_to_json_value).collect();
+    Ok(Value::String(
+        serde_json::to_string(&JsonValue::Array(arr))
+            .map_err(|e| ExpressionError::type_error(format!("JSON serialization error: {}", e)))?,
+    ))
+}
+
+fn execute_json_object_keys(args: &[Value]) -> Result<Value, ExpressionError> {
+    use crate::core::value::list::List;
+
+    match &args[0] {
+        Value::String(json_str) => {
+            let json_value: JsonValue = serde_json::from_str(json_str)
+                .map_err(|_| ExpressionError::type_error("Invalid JSON string"))?;
+
+            match &json_value {
+                JsonValue::Object(map) => {
+                    let keys: Vec<Value> = map
+                        .keys()
+                        .map(|k| Value::String(k.clone()))
+                        .collect();
+                    Ok(Value::list(List { values: keys }))
+                }
+                _ => Err(ExpressionError::type_error(
+                    "json_object_keys requires a JSON object",
+                )),
+            }
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "json_object_keys requires a string argument",
+        )),
+    }
+}
+
+fn value_to_json_value(value: &Value) -> JsonValue {
+    match value {
+        Value::Null(_) => JsonValue::Null,
+        Value::Bool(b) => JsonValue::Bool(*b),
+        Value::SmallInt(i) => JsonValue::Number((*i).into()),
+        Value::Int(i) => JsonValue::Number((*i).into()),
+        Value::BigInt(i) => JsonValue::Number((*i).into()),
+        Value::Float(f) => JsonValue::Number(
+            serde_json::Number::from_f64(*f as f64).unwrap_or(serde_json::Number::from(0)),
+        ),
+        Value::Double(f) => JsonValue::Number(
+            serde_json::Number::from_f64(*f).unwrap_or(serde_json::Number::from(0)),
+        ),
+        Value::String(s) => JsonValue::String(s.clone()),
+        Value::List(list) => {
+            JsonValue::Array(list.values.iter().map(value_to_json_value).collect())
+        }
+        Value::Map(map) => {
+            let obj: serde_json::Map<String, JsonValue> = map
+                .iter()
+                .map(|(k, v)| (k.clone(), value_to_json_value(v)))
+                .collect();
+            JsonValue::Object(obj)
+        }
+        _ => JsonValue::Null,
     }
 }
 

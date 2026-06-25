@@ -119,6 +119,34 @@ define_function_enum! {
             description: "Calculate Levenshtein edit distance between two strings",
             handler: execute_levenshtein
         },
+        SplitPart => {
+            name: "split_part",
+            arity: 3,
+            variadic: false,
+            description: "Split string by delimiter and return Nth part",
+            handler: execute_split_part
+        },
+        Initcap => {
+            name: "initcap",
+            arity: 1,
+            variadic: false,
+            description: "Capitalize first letter of each word",
+            handler: execute_initcap
+        },
+        Repeat => {
+            name: "repeat",
+            arity: 2,
+            variadic: false,
+            description: "Repeat string N times",
+            handler: execute_repeat
+        },
+        Position => {
+            name: "position",
+            arity: 2,
+            variadic: false,
+            description: "Find position of substring",
+            handler: execute_position
+        },
     }
 }
 
@@ -374,6 +402,104 @@ fn execute_levenshtein(args: &[Value]) -> Result<Value, ExpressionError> {
         (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
             "levenshtein requires string arguments",
+        )),
+    }
+}
+
+fn execute_split_part(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 3 {
+        return Err(ExpressionError::type_error(
+            "split_part requires 3 arguments",
+        ));
+    }
+    match (&args[0], &args[1], &args[2]) {
+        (Value::String(s), Value::String(delimiter), Value::Int(n)) => {
+            if *n <= 0 {
+                return Err(ExpressionError::type_error(
+                    "split_part index must be positive",
+                ));
+            }
+            let parts: Vec<&str> = s.split(delimiter).collect();
+            let idx = (*n - 1) as usize;
+            if idx < parts.len() {
+                Ok(Value::String(parts[idx].to_string()))
+            } else {
+                Ok(Value::String(String::new()))
+            }
+        }
+        (Value::Null(_), _, _) | (_, Value::Null(_), _) | (_, _, Value::Null(_)) => {
+            Ok(Value::Null(NullType::Null))
+        }
+        _ => Err(ExpressionError::type_error(
+            "split_part requires string, string, and integer arguments",
+        )),
+    }
+}
+
+fn execute_initcap(args: &[Value]) -> Result<Value, ExpressionError> {
+    match &args[0] {
+        Value::String(s) => {
+            let result: String = s
+                .split_whitespace()
+                .map(|word| {
+                    let mut chars = word.chars();
+                    match chars.next() {
+                        None => String::new(),
+                        Some(c) => {
+                            c.to_uppercase().to_string() + &chars.as_str().to_lowercase()
+                        }
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            Ok(Value::String(result))
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "initcap requires a string type",
+        )),
+    }
+}
+
+fn execute_repeat(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "repeat requires 2 arguments",
+        ));
+    }
+    match (&args[0], &args[1]) {
+        (Value::String(s), Value::Int(n)) => {
+            if *n < 0 {
+                return Err(ExpressionError::type_error(
+                    "repeat count must be non-negative",
+                ));
+            }
+            Ok(Value::String(s.repeat(*n as usize)))
+        }
+        (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "repeat requires string and integer arguments",
+        )),
+    }
+}
+
+fn execute_position(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "position requires 2 arguments",
+        ));
+    }
+    match (&args[0], &args[1]) {
+        (Value::String(s), Value::String(sub)) => {
+            if let Some(idx) = s.find(sub) {
+                Ok(Value::Int((idx + 1) as i32))
+            } else {
+                Ok(Value::Int(0))
+            }
+        }
+        (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "position requires string arguments",
         )),
     }
 }

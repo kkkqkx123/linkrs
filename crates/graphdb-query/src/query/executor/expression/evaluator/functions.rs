@@ -248,6 +248,187 @@ impl FunctionEvaluator {
 
                 Ok(Value::BigInt(result))
             }
+            AggregateFunction::Variance(_) => {
+                if args.is_empty() {
+                    return Err(ExpressionError::argument_count_error(1, args.len()));
+                }
+
+                let values = match &args[0] {
+                    Value::List(list) => list,
+                    _ => return Err(ExpressionError::type_error("First argument must be a list")),
+                };
+
+                if values.is_empty() {
+                    return Ok(Value::Null(crate::core::NullType::NaN));
+                }
+
+                let mut numeric_values = Vec::new();
+                for value in values.iter() {
+                    match value {
+                        Value::SmallInt(v) => numeric_values.push(*v as f64),
+                        Value::Int(v) => numeric_values.push(*v as f64),
+                        Value::BigInt(v) => numeric_values.push(*v as f64),
+                        Value::Float(v) => numeric_values.push(*v as f64),
+                        Value::Double(v) => numeric_values.push(*v),
+                        _ => continue,
+                    }
+                }
+
+                if numeric_values.is_empty() {
+                    return Ok(Value::Null(crate::core::NullType::NaN));
+                }
+
+                let n = numeric_values.len() as f64;
+                let mean: f64 = numeric_values.iter().sum::<f64>() / n;
+                let variance: f64 = numeric_values
+                    .iter()
+                    .map(|value| (value - mean).powi(2))
+                    .sum::<f64>()
+                    / n;
+
+                Ok(Value::Double(variance))
+            }
+            AggregateFunction::Median(_) => {
+                if args.is_empty() {
+                    return Err(ExpressionError::argument_count_error(1, args.len()));
+                }
+
+                let values = match &args[0] {
+                    Value::List(list) => list,
+                    _ => return Err(ExpressionError::type_error("First argument must be a list")),
+                };
+
+                if values.is_empty() {
+                    return Ok(Value::Null(crate::core::NullType::NaN));
+                }
+
+                let mut numeric_values = Vec::new();
+                for value in values.iter() {
+                    match value {
+                        Value::SmallInt(v) => numeric_values.push(*v as f64),
+                        Value::Int(v) => numeric_values.push(*v as f64),
+                        Value::BigInt(v) => numeric_values.push(*v as f64),
+                        Value::Float(v) => numeric_values.push(*v as f64),
+                        Value::Double(v) => numeric_values.push(*v),
+                        _ => continue,
+                    }
+                }
+
+                if numeric_values.is_empty() {
+                    return Ok(Value::Null(crate::core::NullType::NaN));
+                }
+
+                numeric_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+                let len = numeric_values.len();
+                let median = if len % 2 == 0 {
+                    (numeric_values[len / 2 - 1] + numeric_values[len / 2]) / 2.0
+                } else {
+                    numeric_values[len / 2]
+                };
+
+                Ok(Value::Double(median))
+            }
+            AggregateFunction::Mode(_) => {
+                if args.is_empty() {
+                    return Err(ExpressionError::argument_count_error(1, args.len()));
+                }
+
+                let values = match &args[0] {
+                    Value::List(list) => list,
+                    _ => return Err(ExpressionError::type_error("First argument must be a list")),
+                };
+
+                if values.is_empty() {
+                    return Ok(Value::Null(crate::core::NullType::NaN));
+                }
+
+                let mut frequency_map = std::collections::HashMap::new();
+                for value in values.iter() {
+                    let key = format!("{}", value);
+                    *frequency_map.entry(key).or_insert(0usize) += 1;
+                }
+
+                let mode = frequency_map
+                    .into_iter()
+                    .max_by_key(|(_, count)| *count)
+                    .map(|(key, _)| key);
+
+                match mode {
+                    Some(mode_str) => {
+                        if let Ok(int_val) = mode_str.parse::<i32>() {
+                            Ok(Value::Int(int_val))
+                        } else if let Ok(float_val) = mode_str.parse::<f64>() {
+                            Ok(Value::Double(float_val))
+                        } else if mode_str == "true" {
+                            Ok(Value::Bool(true))
+                        } else if mode_str == "false" {
+                            Ok(Value::Bool(false))
+                        } else {
+                            Ok(Value::String(mode_str))
+                        }
+                    }
+                    None => Ok(Value::Null(crate::core::NullType::NaN)),
+                }
+            }
+            AggregateFunction::BoolAnd(_) => {
+                if args.is_empty() {
+                    return Err(ExpressionError::argument_count_error(1, args.len()));
+                }
+
+                let values = match &args[0] {
+                    Value::List(list) => list,
+                    _ => return Err(ExpressionError::type_error("First argument must be a list")),
+                };
+
+                if values.is_empty() {
+                    return Ok(Value::Bool(true));
+                }
+
+                let mut result = true;
+                for value in values.iter() {
+                    match value {
+                        Value::Bool(b) => result &= *b,
+                        Value::Null(_) => {}
+                        _ => {
+                            return Err(ExpressionError::type_error(
+                                "All values must be boolean for BOOL_AND",
+                            ))
+                        }
+                    }
+                }
+
+                Ok(Value::Bool(result))
+            }
+            AggregateFunction::BoolOr(_) => {
+                if args.is_empty() {
+                    return Err(ExpressionError::argument_count_error(1, args.len()));
+                }
+
+                let values = match &args[0] {
+                    Value::List(list) => list,
+                    _ => return Err(ExpressionError::type_error("First argument must be a list")),
+                };
+
+                if values.is_empty() {
+                    return Ok(Value::Bool(false));
+                }
+
+                let mut result = false;
+                for value in values.iter() {
+                    match value {
+                        Value::Bool(b) => result |= *b,
+                        Value::Null(_) => {}
+                        _ => {
+                            return Err(ExpressionError::type_error(
+                                "All values must be boolean for BOOL_OR",
+                            ))
+                        }
+                    }
+                }
+
+                Ok(Value::Bool(result))
+            }
             AggregateFunction::GroupConcat(_, separator) => {
                 if args.is_empty() {
                     return Err(ExpressionError::argument_count_error(1, args.len()));

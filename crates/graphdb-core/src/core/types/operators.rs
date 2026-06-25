@@ -204,8 +204,13 @@ pub enum AggregateFunction {
     Distinct(String),
     Percentile(String, f64),
     Std(String),
+    Variance(String),
+    Median(String),
+    Mode(String),
     BitAnd(String),
     BitOr(String),
+    BoolAnd(String),
+    BoolOr(String),
     GroupConcat(String, String),
     /// Vector sum - element-wise sum of vectors
     VecSum(String),
@@ -232,8 +237,13 @@ impl AggregateFunction {
             AggregateFunction::Distinct(_) => "DISTINCT",
             AggregateFunction::Percentile(_, _) => "PERCENTILE",
             AggregateFunction::Std(_) => "STD",
+            AggregateFunction::Variance(_) => "VARIANCE",
+            AggregateFunction::Median(_) => "MEDIAN",
+            AggregateFunction::Mode(_) => "MODE",
             AggregateFunction::BitAnd(_) => "BIT_AND",
             AggregateFunction::BitOr(_) => "BIT_OR",
+            AggregateFunction::BoolAnd(_) => "BOOL_AND",
+            AggregateFunction::BoolOr(_) => "BOOL_OR",
             AggregateFunction::GroupConcat(_, _) => "GROUP_CONCAT",
             AggregateFunction::VecSum(_) => "VEC_SUM",
             AggregateFunction::VecAvg(_) => "VEC_AVG",
@@ -260,8 +270,13 @@ impl AggregateFunction {
             | AggregateFunction::CollectSet(_)
             | AggregateFunction::Distinct(_)
             | AggregateFunction::Std(_)
+            | AggregateFunction::Variance(_)
+            | AggregateFunction::Median(_)
+            | AggregateFunction::Mode(_)
             | AggregateFunction::BitAnd(_)
             | AggregateFunction::BitOr(_)
+            | AggregateFunction::BoolAnd(_)
+            | AggregateFunction::BoolOr(_)
             | AggregateFunction::VecSum(_)
             | AggregateFunction::VecAvg(_) => 1,
             AggregateFunction::Percentile(_, _) => 2,
@@ -284,6 +299,8 @@ impl AggregateFunction {
                 | AggregateFunction::Max(_)
                 | AggregateFunction::Percentile(_, _)
                 | AggregateFunction::Std(_)
+                | AggregateFunction::Variance(_)
+                | AggregateFunction::Median(_)
                 | AggregateFunction::VecSum(_)
                 | AggregateFunction::VecAvg(_)
         )
@@ -319,8 +336,13 @@ impl AggregateFunction {
             AggregateFunction::Distinct(field) => Some(field),
             AggregateFunction::Percentile(field, _) => Some(field),
             AggregateFunction::Std(field) => Some(field),
+            AggregateFunction::Variance(field) => Some(field),
+            AggregateFunction::Median(field) => Some(field),
+            AggregateFunction::Mode(field) => Some(field),
             AggregateFunction::BitAnd(field) => Some(field),
             AggregateFunction::BitOr(field) => Some(field),
+            AggregateFunction::BoolAnd(field) => Some(field),
+            AggregateFunction::BoolOr(field) => Some(field),
             AggregateFunction::GroupConcat(field, _) => Some(field),
             AggregateFunction::VecSum(field) => Some(field),
             AggregateFunction::VecAvg(field) => Some(field),
@@ -343,8 +365,13 @@ impl AggregateFunction {
             AggregateFunction::Distinct(_) => "deduplication",
             AggregateFunction::Percentile(_, _) => "Calculation of percentile",
             AggregateFunction::Std(_) => "calculate the standard deviation",
+            AggregateFunction::Variance(_) => "Calculate the variance",
+            AggregateFunction::Median(_) => "Calculate the median",
+            AggregateFunction::Mode(_) => "Calculate the mode",
             AggregateFunction::BitAnd(_) => "compatibility with",
             AggregateFunction::BitOr(_) => "bitwise OR",
+            AggregateFunction::BoolAnd(_) => "logical AND",
+            AggregateFunction::BoolOr(_) => "logical OR",
             AggregateFunction::GroupConcat(_, _) => "packet connection",
             AggregateFunction::VecSum(_) => "Calculate the element-by-element sum of vector",
             AggregateFunction::VecAvg(_) => {

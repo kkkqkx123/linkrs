@@ -708,6 +708,15 @@ impl<'a> ExprParser<'a> {
                     crate::core::types::operators::AggregateFunction::CollectSet(field_name)
                 }
                 "STD" => crate::core::types::operators::AggregateFunction::Std(field_name),
+                "VARIANCE" => {
+                    crate::core::types::operators::AggregateFunction::Variance(field_name)
+                }
+                "MEDIAN" => crate::core::types::operators::AggregateFunction::Median(field_name),
+                "MODE" => crate::core::types::operators::AggregateFunction::Mode(field_name),
+                "BOOL_AND" => {
+                    crate::core::types::operators::AggregateFunction::BoolAnd(field_name)
+                }
+                "BOOL_OR" => crate::core::types::operators::AggregateFunction::BoolOr(field_name),
                 _ => crate::core::types::operators::AggregateFunction::Count(None),
             };
 

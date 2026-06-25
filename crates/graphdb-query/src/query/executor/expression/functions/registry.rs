@@ -135,6 +135,13 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::Math(MathFunction::BitAnd));
         self.register_builtin(BuiltinFunction::Math(MathFunction::BitOr));
         self.register_builtin(BuiltinFunction::Math(MathFunction::BitXor));
+        self.register_builtin(BuiltinFunction::Math(MathFunction::Atan2));
+        self.register_builtin(BuiltinFunction::Math(MathFunction::Sinh));
+        self.register_builtin(BuiltinFunction::Math(MathFunction::Cosh));
+        self.register_builtin(BuiltinFunction::Math(MathFunction::Tanh));
+        self.register_builtin(BuiltinFunction::Math(MathFunction::Degrees));
+        self.register_builtin(BuiltinFunction::Math(MathFunction::Gcd));
+        self.register_builtin(BuiltinFunction::Math(MathFunction::Lcm));
 
         // Register string function
         self.register_builtin(BuiltinFunction::String(StringFunction::Length));
@@ -153,6 +160,10 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::String(StringFunction::ConcatWs));
         self.register_builtin(BuiltinFunction::String(StringFunction::Strcasecmp));
         self.register_builtin(BuiltinFunction::String(StringFunction::Levenshtein));
+        self.register_builtin(BuiltinFunction::String(StringFunction::SplitPart));
+        self.register_builtin(BuiltinFunction::String(StringFunction::Initcap));
+        self.register_builtin(BuiltinFunction::String(StringFunction::Repeat));
+        self.register_builtin(BuiltinFunction::String(StringFunction::Position));
 
         // Registering regular expression functions
         self.register_builtin(BuiltinFunction::Regex(RegexFunction::RegexMatch));
@@ -205,6 +216,15 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::Utility(UtilityFunction::Hash));
         self.register_builtin(BuiltinFunction::Utility(UtilityFunction::JsonExtract));
         self.register_builtin(BuiltinFunction::Utility(UtilityFunction::NullIf));
+        self.register_builtin(BuiltinFunction::Utility(
+            UtilityFunction::JsonBuildObject,
+        ));
+        self.register_builtin(BuiltinFunction::Utility(
+            UtilityFunction::JsonBuildArray,
+        ));
+        self.register_builtin(BuiltinFunction::Utility(
+            UtilityFunction::JsonObjectKeys,
+        ));
         self.register_builtin(BuiltinFunction::Utility(UtilityFunction::Greatest));
         self.register_builtin(BuiltinFunction::Utility(UtilityFunction::Least));
         self.register_builtin(BuiltinFunction::Utility(UtilityFunction::GenRandomUuid));
@@ -228,6 +248,21 @@ impl FunctionRegistry {
             String::new(),
         )));
         self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Distinct(
+            String::new(),
+        )));
+        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Variance(
+            String::new(),
+        )));
+        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Median(
+            String::new(),
+        )));
+        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::Mode(
+            String::new(),
+        )));
+        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::BoolAnd(
+            String::new(),
+        )));
+        self.register_builtin(BuiltinFunction::Aggregate(AggregateFunction::BoolOr(
             String::new(),
         )));
 

@@ -19,6 +19,11 @@ pub fn aggregate_from_str(func_name: &str) -> Result<AggregateFunction, Expressi
         "COLLECT" => Ok(AggregateFunction::Collect("".to_string())),
         "DISTINCT" => Ok(AggregateFunction::Distinct("".to_string())),
         "PERCENTILE" => Ok(AggregateFunction::Percentile("".to_string(), 50.0)),
+        "VARIANCE" => Ok(AggregateFunction::Variance("".to_string())),
+        "MEDIAN" => Ok(AggregateFunction::Median("".to_string())),
+        "MODE" => Ok(AggregateFunction::Mode("".to_string())),
+        "BOOL_AND" => Ok(AggregateFunction::BoolAnd("".to_string())),
+        "BOOL_OR" => Ok(AggregateFunction::BoolOr("".to_string())),
         _ => Err(ExpressionError::function_error(format!(
             "Unknown aggregate function: {}",
             func_name
@@ -114,6 +119,46 @@ pub fn aggregate_from_str_with_args(
             }
             Ok(AggregateFunction::VecAvg(args[0].clone()))
         }
+        "VARIANCE" => {
+            if args.is_empty() {
+                return Err(ExpressionError::function_error(
+                    "VARIANCE function requires a field name".to_string(),
+                ));
+            }
+            Ok(AggregateFunction::Variance(args[0].clone()))
+        }
+        "MEDIAN" => {
+            if args.is_empty() {
+                return Err(ExpressionError::function_error(
+                    "MEDIAN function requires a field name".to_string(),
+                ));
+            }
+            Ok(AggregateFunction::Median(args[0].clone()))
+        }
+        "MODE" => {
+            if args.is_empty() {
+                return Err(ExpressionError::function_error(
+                    "MODE function requires a field name".to_string(),
+                ));
+            }
+            Ok(AggregateFunction::Mode(args[0].clone()))
+        }
+        "BOOL_AND" => {
+            if args.is_empty() {
+                return Err(ExpressionError::function_error(
+                    "BOOL_AND function requires a field name".to_string(),
+                ));
+            }
+            Ok(AggregateFunction::BoolAnd(args[0].clone()))
+        }
+        "BOOL_OR" => {
+            if args.is_empty() {
+                return Err(ExpressionError::function_error(
+                    "BOOL_OR function requires a field name".to_string(),
+                ));
+            }
+            Ok(AggregateFunction::BoolOr(args[0].clone()))
+        }
         _ => Err(ExpressionError::function_error(format!(
             "Unknown aggregate function: {}",
             func_name
@@ -197,8 +242,13 @@ impl AggregateExpression {
             )),
             AggregateFunction::Percentile(_, _) => state.calculate_percentile(50.0),
             AggregateFunction::Std(_) => state.calculate_std(),
+            AggregateFunction::Variance(_) => state.calculate_variance(),
+            AggregateFunction::Median(_) => state.calculate_median(),
+            AggregateFunction::Mode(_) => state.calculate_mode(),
             AggregateFunction::BitAnd(_) => state.calculate_bit_and(),
             AggregateFunction::BitOr(_) => state.calculate_bit_or(),
+            AggregateFunction::BoolAnd(_) => state.calculate_bool_and(),
+            AggregateFunction::BoolOr(_) => state.calculate_bool_or(),
             AggregateFunction::GroupConcat(_, _) => state.calculate_group_concat(),
             AggregateFunction::VecSum(_) => Ok(state.vec_sum.clone()),
             AggregateFunction::VecAvg(_) => {
@@ -223,8 +273,13 @@ pub struct AggregateState {
     pub distinct_values: std::collections::HashSet<String>,
     pub percentile_values: Vec<f64>,
     pub std_values: Vec<f64>,
+    pub variance_values: Vec<f64>,
+    pub median_values: Vec<f64>,
+    pub mode_values: Vec<Value>,
     pub bit_and_value: Option<i64>,
     pub bit_or_value: Option<i64>,
+    pub bool_and_value: Option<bool>,
+    pub bool_or_value: Option<bool>,
     pub group_concat_values: Vec<Value>,
     /// Vector sum for VEC_SUM
     pub vec_sum: Value,
@@ -249,8 +304,13 @@ impl AggregateState {
             distinct_values: std::collections::HashSet::new(),
             percentile_values: Vec::new(),
             std_values: Vec::new(),
+            variance_values: Vec::new(),
+            median_values: Vec::new(),
+            mode_values: Vec::new(),
             bit_and_value: None,
             bit_or_value: None,
+            bool_and_value: None,
+            bool_or_value: None,
             group_concat_values: Vec::new(),
             vec_sum: Value::Null(crate::core::value::NullType::NaN),
             vec_avg: Value::Null(crate::core::value::NullType::NaN),
@@ -266,8 +326,13 @@ impl AggregateState {
         self.distinct_values.clear();
         self.percentile_values.clear();
         self.std_values.clear();
+        self.variance_values.clear();
+        self.median_values.clear();
+        self.mode_values.clear();
         self.bit_and_value = None;
         self.bit_or_value = None;
+        self.bool_and_value = None;
+        self.bool_or_value = None;
         self.group_concat_values.clear();
         self.vec_sum = Value::Null(crate::core::value::NullType::NaN);
         self.vec_avg = Value::Null(crate::core::value::NullType::NaN);
@@ -303,8 +368,8 @@ impl AggregateState {
                     _ => {}
                 }
             }
-            AggregateFunction::Std(_) => {
-                // Special handling of the STD function: Collecting numerical values
+            AggregateFunction::Std(_) | AggregateFunction::Variance(_) => {
+                // Special handling of the STD and VARIANCE functions: Collecting numerical values
                 match value {
                     Value::SmallInt(v) => self.std_values.push(*v as f64),
                     Value::Int(v) => self.std_values.push(*v as f64),
@@ -313,6 +378,20 @@ impl AggregateState {
                     Value::Double(v) => self.std_values.push(*v),
                     _ => {}
                 }
+            }
+            AggregateFunction::Median(_) => {
+                // Special handling of the MEDIAN function: Collecting numerical values
+                match value {
+                    Value::SmallInt(v) => self.median_values.push(*v as f64),
+                    Value::Int(v) => self.median_values.push(*v as f64),
+                    Value::BigInt(v) => self.median_values.push(*v as f64),
+                    Value::Float(v) => self.median_values.push(*v as f64),
+                    Value::Double(v) => self.median_values.push(*v),
+                    _ => {}
+                }
+            }
+            AggregateFunction::Mode(_) => {
+                self.mode_values.push(value.clone());
             }
             AggregateFunction::BitAnd(_) => {
                 // Special handling of the BIT_AND function
@@ -331,6 +410,24 @@ impl AggregateState {
                         self.bit_or_value = Some(current | v);
                     } else {
                         self.bit_or_value = Some(*v);
+                    }
+                }
+            }
+            AggregateFunction::BoolAnd(_) => {
+                if let Value::Bool(b) = value {
+                    if let Some(current) = self.bool_and_value {
+                        self.bool_and_value = Some(current && *b);
+                    } else {
+                        self.bool_and_value = Some(*b);
+                    }
+                }
+            }
+            AggregateFunction::BoolOr(_) => {
+                if let Value::Bool(b) = value {
+                    if let Some(current) = self.bool_or_value {
+                        self.bool_or_value = Some(current || *b);
+                    } else {
+                        self.bool_or_value = Some(*b);
                     }
                 }
             }
@@ -515,6 +612,95 @@ impl AggregateState {
             .map(|v| format!("{}", v))
             .collect();
         Ok(Value::String(result.join(",")))
+    }
+
+    /// Calculate the variance
+    pub fn calculate_variance(&self) -> Result<Value, ExpressionError> {
+        if self.std_values.is_empty() {
+            return Ok(Value::Null(crate::core::value::NullType::Null));
+        }
+
+        let n = self.std_values.len() as f64;
+        let mean: f64 = self.std_values.iter().sum::<f64>() / n;
+        let variance: f64 = self
+            .std_values
+            .iter()
+            .map(|value| (value - mean).powi(2))
+            .sum::<f64>()
+            / n;
+
+        Ok(Value::Double(variance))
+    }
+
+    /// Calculate the median
+    pub fn calculate_median(&self) -> Result<Value, ExpressionError> {
+        if self.median_values.is_empty() {
+            return Ok(Value::Null(crate::core::value::NullType::Null));
+        }
+
+        let mut sorted_values = self.median_values.clone();
+        sorted_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        let len = sorted_values.len();
+        if len % 2 == 0 {
+            let mid = len / 2;
+            Ok(Value::Double((sorted_values[mid - 1] + sorted_values[mid]) / 2.0))
+        } else {
+            Ok(Value::Double(sorted_values[len / 2]))
+        }
+    }
+
+    /// Calculate the mode
+    pub fn calculate_mode(&self) -> Result<Value, ExpressionError> {
+        if self.mode_values.is_empty() {
+            return Ok(Value::Null(crate::core::value::NullType::Null));
+        }
+
+        let mut frequency_map = std::collections::HashMap::new();
+        for value in &self.mode_values {
+            let key = format!("{}", value);
+            *frequency_map.entry(key).or_insert(0usize) += 1;
+        }
+
+        let mode = frequency_map
+            .into_iter()
+            .max_by_key(|(_, count)| *count)
+            .map(|(key, _)| key);
+
+        match mode {
+            Some(mode_str) => {
+                if let Ok(int_val) = mode_str.parse::<i32>() {
+                    Ok(Value::Int(int_val))
+                } else if let Ok(float_val) = mode_str.parse::<f64>() {
+                    Ok(Value::Double(float_val))
+                } else if mode_str == "true" {
+                    Ok(Value::Bool(true))
+                } else if mode_str == "false" {
+                    Ok(Value::Bool(false))
+                } else {
+                    Ok(Value::String(mode_str))
+                }
+            }
+            None => Ok(Value::Null(crate::core::value::NullType::Null)),
+        }
+    }
+
+    /// Performing a logical AND operation
+    pub fn calculate_bool_and(&self) -> Result<Value, ExpressionError> {
+        if let Some(value) = self.bool_and_value {
+            Ok(Value::Bool(value))
+        } else {
+            Ok(Value::Null(crate::core::value::NullType::Null))
+        }
+    }
+
+    /// Performing a logical OR operation
+    pub fn calculate_bool_or(&self) -> Result<Value, ExpressionError> {
+        if let Some(value) = self.bool_or_value {
+            Ok(Value::Bool(value))
+        } else {
+            Ok(Value::Null(crate::core::value::NullType::Null))
+        }
     }
 }
 

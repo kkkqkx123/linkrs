@@ -203,6 +203,55 @@ define_function_enum! {
             description: "palindromic or binomial (math.)",
             handler: execute_bit_xor
         },
+        Atan2 => {
+            name: "atan2",
+            arity: 2,
+            variadic: false,
+            description: "Compute the arctangent of y/x",
+            handler: execute_atan2
+        },
+        Sinh => {
+            name: "sinh",
+            arity: 1,
+            variadic: false,
+            description: "Calculate the hyperbolic sine",
+            handler: execute_sinh
+        },
+        Cosh => {
+            name: "cosh",
+            arity: 1,
+            variadic: false,
+            description: "Calculate the hyperbolic cosine",
+            handler: execute_cosh
+        },
+        Tanh => {
+            name: "tanh",
+            arity: 1,
+            variadic: false,
+            description: "Calculate the hyperbolic tangent",
+            handler: execute_tanh
+        },
+        Degrees => {
+            name: "degrees",
+            arity: 1,
+            variadic: false,
+            description: "Convert radians to degrees",
+            handler: execute_degrees
+        },
+        Gcd => {
+            name: "gcd",
+            arity: 2,
+            variadic: false,
+            description: "Greatest common divisor",
+            handler: execute_gcd
+        },
+        Lcm => {
+            name: "lcm",
+            arity: 2,
+            variadic: false,
+            description: "Least common multiple",
+            handler: execute_lcm
+        },
     }
 }
 
@@ -372,6 +421,17 @@ fn execute_bit_or(args: &[Value]) -> Result<Value, ExpressionError> {
     }
 }
 
+define_binary_numeric_fn!(
+    execute_atan2,
+    |y: f32, x: f32| Ok(Value::Float(y.atan2(x))),
+    "atan2"
+);
+
+define_unary_float_fn!(execute_sinh, |v: f32| v.sinh(), "sinh");
+define_unary_float_fn!(execute_cosh, |v: f32| v.cosh(), "cosh");
+define_unary_float_fn!(execute_tanh, |v: f32| v.tanh(), "tanh");
+define_unary_float_fn!(execute_degrees, |v: f32| v.to_degrees(), "degrees");
+
 fn execute_bit_xor(args: &[Value]) -> Result<Value, ExpressionError> {
     if args.len() != 2 {
         return Err(ExpressionError::type_error(
@@ -387,6 +447,79 @@ fn execute_bit_xor(args: &[Value]) -> Result<Value, ExpressionError> {
             "The bit_xor function takes integer arguments",
         )),
     }
+}
+
+fn execute_gcd(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "The gcd function takes 2 arguments",
+        ));
+    }
+    match (&args[0], &args[1]) {
+        (Value::Int(a), Value::Int(b)) => Ok(Value::Int(gcd(*a, *b))),
+        (Value::BigInt(a), Value::BigInt(b)) => Ok(Value::BigInt(gcd(*a, *b))),
+        (Value::Int(a), Value::BigInt(b)) => Ok(Value::BigInt(gcd(*a as i64, *b))),
+        (Value::BigInt(a), Value::Int(b)) => Ok(Value::BigInt(gcd(*a, *b as i64))),
+        (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "The gcd function requires integer arguments",
+        )),
+    }
+}
+
+fn execute_lcm(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "The lcm function takes 2 arguments",
+        ));
+    }
+    match (&args[0], &args[1]) {
+        (Value::Int(a), Value::Int(b)) => Ok(Value::Int(lcm(*a, *b))),
+        (Value::BigInt(a), Value::BigInt(b)) => Ok(Value::BigInt(lcm(*a, *b))),
+        (Value::Int(a), Value::BigInt(b)) => Ok(Value::BigInt(lcm(*a as i64, *b))),
+        (Value::BigInt(a), Value::Int(b)) => Ok(Value::BigInt(lcm(*a, *b as i64))),
+        (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "The lcm function requires integer arguments",
+        )),
+    }
+}
+
+fn gcd<T: Copy + std::ops::Rem<Output = T> + PartialEq + From<i8> + std::ops::Neg<Output = T> + PartialOrd>(
+    mut a: T,
+    mut b: T,
+) -> T {
+    let zero: T = T::from(0);
+    if a == zero {
+        return b;
+    }
+    if b == zero {
+        return a;
+    }
+    while b != zero {
+        let temp = b;
+        b = a % b;
+        a = temp;
+    }
+    if a < zero {
+        -a
+    } else {
+        a
+    }
+}
+
+fn lcm<T: Copy + std::ops::Rem<Output = T> + PartialEq + From<i8> + std::ops::Neg<Output = T> + PartialOrd + std::ops::Div<Output = T> + std::ops::Mul<Output = T>>(
+    a: T,
+    b: T,
+) -> T {
+    let zero: T = T::from(0);
+    if a == zero || b == zero {
+        return zero;
+    }
+    let g = gcd(a, b);
+    let abs_a = if a < zero { -a } else { a };
+    let abs_b = if b < zero { -b } else { b };
+    (abs_a / g) * abs_b
 }
 
 #[cfg(test)]

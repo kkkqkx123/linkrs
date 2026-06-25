@@ -493,8 +493,13 @@ impl<S: StorageClient> AggregateExecutor<S> {
             | AggregateFunction::CollectSet(field)
             | AggregateFunction::Distinct(field)
             | AggregateFunction::Std(field)
+            | AggregateFunction::Variance(field)
+            | AggregateFunction::Median(field)
+            | AggregateFunction::Mode(field)
             | AggregateFunction::BitAnd(field)
-            | AggregateFunction::BitOr(field) => {
+            | AggregateFunction::BitOr(field)
+            | AggregateFunction::BoolAnd(field)
+            | AggregateFunction::BoolOr(field) => {
                 Self::resolve_field_value(context, field, row, col_names)
             }
             AggregateFunction::Percentile(field, _) => {
@@ -574,8 +579,13 @@ impl<S: StorageClient> AggregateExecutor<S> {
                             | AggregateFunction::CollectSet(field)
                             | AggregateFunction::Distinct(field)
                             | AggregateFunction::Std(field)
+                            | AggregateFunction::Variance(field)
+                            | AggregateFunction::Median(field)
+                            | AggregateFunction::Mode(field)
                             | AggregateFunction::BitAnd(field)
-                            | AggregateFunction::BitOr(field) => {
+                            | AggregateFunction::BitOr(field)
+                            | AggregateFunction::BoolAnd(field)
+                            | AggregateFunction::BoolOr(field) => {
                                 // Try direct lookup first
                                 if let Some(col_index) =
                                     col_names.iter().position(|name| name == field)
@@ -737,6 +747,41 @@ impl<S: StorageClient> AggregateExecutor<S> {
                             format!("bitor_{}", field)
                         } else {
                             "bitor".to_string()
+                        }
+                    }
+                    AggregateFunction::Variance(_) => {
+                        if let Some(ref field) = agg_func.field {
+                            format!("variance_{}", field)
+                        } else {
+                            "variance".to_string()
+                        }
+                    }
+                    AggregateFunction::Median(_) => {
+                        if let Some(ref field) = agg_func.field {
+                            format!("median_{}", field)
+                        } else {
+                            "median".to_string()
+                        }
+                    }
+                    AggregateFunction::Mode(_) => {
+                        if let Some(ref field) = agg_func.field {
+                            format!("mode_{}", field)
+                        } else {
+                            "mode".to_string()
+                        }
+                    }
+                    AggregateFunction::BoolAnd(_) => {
+                        if let Some(ref field) = agg_func.field {
+                            format!("booland_{}", field)
+                        } else {
+                            "booland".to_string()
+                        }
+                    }
+                    AggregateFunction::BoolOr(_) => {
+                        if let Some(ref field) = agg_func.field {
+                            format!("boolor_{}", field)
+                        } else {
+                            "boolor".to_string()
                         }
                     }
                     AggregateFunction::GroupConcat(_, _) => {

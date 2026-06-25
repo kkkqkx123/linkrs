@@ -490,8 +490,13 @@ impl TypeValidator {
             crate::core::AggregateFunction::Distinct(_) => DataType::Set,
             crate::core::AggregateFunction::Percentile(_, _) => DataType::Float,
             crate::core::AggregateFunction::Std(_) => DataType::Float,
+            crate::core::AggregateFunction::Variance(_) => DataType::Float,
+            crate::core::AggregateFunction::Median(_) => DataType::Float,
+            crate::core::AggregateFunction::Mode(_) => DataType::Empty,
             crate::core::AggregateFunction::BitAnd(_)
             | crate::core::AggregateFunction::BitOr(_) => DataType::Int,
+            crate::core::AggregateFunction::BoolAnd(_)
+            | crate::core::AggregateFunction::BoolOr(_) => DataType::Bool,
             crate::core::AggregateFunction::GroupConcat(_, _) => DataType::String,
             crate::core::AggregateFunction::VecSum(_) => DataType::Vector,
             crate::core::AggregateFunction::VecAvg(_) => DataType::Vector,
@@ -515,8 +520,13 @@ impl TypeValidator {
             crate::core::AggregateFunction::Distinct(_) => DataType::Set,
             crate::core::AggregateFunction::Percentile(_, _) => DataType::Float,
             crate::core::AggregateFunction::Std(_) => DataType::Float,
+            crate::core::AggregateFunction::Variance(_) => DataType::Float,
+            crate::core::AggregateFunction::Median(_) => DataType::Float,
+            crate::core::AggregateFunction::Mode(_) => arg_type.clone(),
             crate::core::AggregateFunction::BitAnd(_)
             | crate::core::AggregateFunction::BitOr(_) => DataType::Int,
+            crate::core::AggregateFunction::BoolAnd(_)
+            | crate::core::AggregateFunction::BoolOr(_) => DataType::Bool,
             crate::core::AggregateFunction::GroupConcat(_, _) => DataType::String,
             crate::core::AggregateFunction::VecSum(_) => DataType::Vector,
             crate::core::AggregateFunction::VecAvg(_) => DataType::Vector,
