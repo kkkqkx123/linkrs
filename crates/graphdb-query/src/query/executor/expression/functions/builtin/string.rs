@@ -147,6 +147,20 @@ define_function_enum! {
             description: "Find position of substring",
             handler: execute_position
         },
+        Left => {
+            name: "left",
+            arity: 2,
+            variadic: false,
+            description: "Get first N characters of string",
+            handler: execute_left
+        },
+        Right => {
+            name: "right",
+            arity: 2,
+            variadic: false,
+            description: "Get last N characters of string",
+            handler: execute_right
+        },
     }
 }
 
@@ -500,6 +514,57 @@ fn execute_position(args: &[Value]) -> Result<Value, ExpressionError> {
         (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
             "position requires string arguments",
+        )),
+    }
+}
+
+fn execute_left(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "left requires 2 arguments",
+        ));
+    }
+    match (&args[0], &args[1]) {
+        (Value::String(s), Value::Int(n)) => {
+            let n = *n;
+            if n >= s.chars().count() as i32 {
+                Ok(Value::String(s.clone()))
+            } else if n <= 0 {
+                Ok(Value::String(String::new()))
+            } else {
+                let result: String = s.chars().take(n as usize).collect();
+                Ok(Value::String(result))
+            }
+        }
+        (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "left requires string and integer arguments",
+        )),
+    }
+}
+
+fn execute_right(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "right requires 2 arguments",
+        ));
+    }
+    match (&args[0], &args[1]) {
+        (Value::String(s), Value::Int(n)) => {
+            let n = *n;
+            let char_count = s.chars().count();
+            if n >= char_count as i32 {
+                Ok(Value::String(s.clone()))
+            } else if n <= 0 {
+                Ok(Value::String(String::new()))
+            } else {
+                let result: String = s.chars().skip(char_count - n as usize).collect();
+                Ok(Value::String(result))
+            }
+        }
+        (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "right requires string and integer arguments",
         )),
     }
 }

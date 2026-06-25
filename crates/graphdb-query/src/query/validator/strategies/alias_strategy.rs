@@ -119,8 +119,8 @@ impl AliasValidationStrategy {
             crate::core::types::expr::Expression::TypeCast { expression, .. } => {
                 self.extract_alias_name_internal(expression)
             }
-            crate::core::types::expr::Expression::Aggregate { arg, .. } => {
-                self.extract_alias_name_internal(arg)
+            crate::core::types::expr::Expression::Aggregate { args, .. } => {
+                args.first().and_then(|arg| self.extract_alias_name_internal(arg))
             }
             crate::core::types::expr::Expression::Function { name, args } => {
                 match name.to_lowercase().as_str() {
@@ -221,9 +221,11 @@ impl AliasValidationStrategy {
                 // Type conversion expressions require that their subexpressions be validated.
                 self.validate_expression_aliases_internal(expression, aliases)
             }
-            crate::core::types::expr::Expression::Aggregate { arg, .. } => {
-                // Aggregate function expressions need to have their parameter expressions verified.
-                self.validate_expression_aliases_internal(arg, aliases)
+            crate::core::types::expr::Expression::Aggregate { args, .. } => {
+                for arg in args {
+                    self.validate_expression_aliases_internal(arg, aliases)?;
+                }
+                Ok(())
             }
             crate::core::types::expr::Expression::Range {
                 collection,

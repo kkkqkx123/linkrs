@@ -66,6 +66,61 @@ impl AggFunctionMeta {
                 require_numeric: false,
                 allow_wildcard: false,
             }),
+            "STDDEV_POP" => Some(AggFunctionMeta {
+                name: "STDDEV_POP",
+                require_numeric: true,
+                allow_wildcard: false,
+            }),
+            "STDDEV_SAMP" => Some(AggFunctionMeta {
+                name: "STDDEV_SAMP",
+                require_numeric: true,
+                allow_wildcard: false,
+            }),
+            "PRODUCT" => Some(AggFunctionMeta {
+                name: "PRODUCT",
+                require_numeric: true,
+                allow_wildcard: false,
+            }),
+            "PERCENTILE_CONT" => Some(AggFunctionMeta {
+                name: "PERCENTILE_CONT",
+                require_numeric: true,
+                allow_wildcard: false,
+            }),
+            "VARIANCE" => Some(AggFunctionMeta {
+                name: "VARIANCE",
+                require_numeric: true,
+                allow_wildcard: false,
+            }),
+            "MEDIAN" => Some(AggFunctionMeta {
+                name: "MEDIAN",
+                require_numeric: true,
+                allow_wildcard: false,
+            }),
+            "MODE" => Some(AggFunctionMeta {
+                name: "MODE",
+                require_numeric: false,
+                allow_wildcard: false,
+            }),
+            "PERCENTILE" => Some(AggFunctionMeta {
+                name: "PERCENTILE",
+                require_numeric: true,
+                allow_wildcard: false,
+            }),
+            "BOOL_AND" => Some(AggFunctionMeta {
+                name: "BOOL_AND",
+                require_numeric: false,
+                allow_wildcard: false,
+            }),
+            "BOOL_OR" => Some(AggFunctionMeta {
+                name: "BOOL_OR",
+                require_numeric: false,
+                allow_wildcard: false,
+            }),
+            "DISTINCT" => Some(AggFunctionMeta {
+                name: "DISTINCT",
+                require_numeric: false,
+                allow_wildcard: false,
+            }),
             _ => None,
         }
     }
@@ -78,6 +133,17 @@ impl AggFunctionMeta {
             "MAX",
             "MIN",
             "STD",
+            "STDDEV_POP",
+            "STDDEV_SAMP",
+            "PRODUCT",
+            "PERCENTILE_CONT",
+            "VARIANCE",
+            "MEDIAN",
+            "MODE",
+            "PERCENTILE",
+            "BOOL_AND",
+            "BOOL_OR",
+            "DISTINCT",
             "BIT_AND",
             "BIT_OR",
             "BIT_XOR",
@@ -127,7 +193,7 @@ mod tests {
     #[test]
     fn test_all_functions_count() {
         let funcs = AggFunctionMeta::all_functions();
-        assert_eq!(funcs.len(), 11);
+        assert_eq!(funcs.len(), 22);
     }
 
     #[test]

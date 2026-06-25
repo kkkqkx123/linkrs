@@ -800,8 +800,10 @@ impl SchemaValidator {
                 }
                 Ok(())
             }
-            Expression::Aggregate { arg, .. } => {
-                self.validate_expression_properties(arg, space_name, available_vars)?;
+            Expression::Aggregate { args, .. } => {
+                for arg in args {
+                    self.validate_expression_properties(arg, space_name, available_vars)?;
+                }
                 Ok(())
             }
             Expression::Predicate { args, .. } => {

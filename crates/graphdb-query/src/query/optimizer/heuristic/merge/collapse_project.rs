@@ -107,12 +107,14 @@ impl CollapseProjectRule {
                     Self::collect_property_refs(&arg_expr, refs);
                 }
             }
-            Expression::Aggregate { arg, .. } => {
-                let arg_meta = ExpressionMeta::new((**arg).clone());
+            Expression::Aggregate { args, .. } => {
                 let ctx = Arc::new(ExpressionAnalysisContext::new());
-                let id = ctx.register_expression(arg_meta);
-                let arg_expr = ContextualExpression::new(id, ctx);
-                Self::collect_property_refs(&arg_expr, refs);
+                for arg in args {
+                    let arg_meta = ExpressionMeta::new(arg.clone());
+                    let id = ctx.register_expression(arg_meta);
+                    let arg_expr = ContextualExpression::new(id, ctx.clone());
+                    Self::collect_property_refs(&arg_expr, refs);
+                }
             }
             Expression::List(list) => {
                 let ctx = Arc::new(ExpressionAnalysisContext::new());

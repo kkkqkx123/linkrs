@@ -333,7 +333,7 @@ impl ExpressionVisitor for AnalysisVisitor<'_> {
     fn visit_aggregate(
         &mut self,
         _func: &crate::core::types::operators::AggregateFunction,
-        arg: &Expression,
+        args: &[Expression],
         _distinct: bool,
     ) {
         self.analysis.contains_aggregate = true;
@@ -341,7 +341,9 @@ impl ExpressionVisitor for AnalysisVisitor<'_> {
             self.analysis.complexity_score += 20;
         }
         self.analysis.node_count += 1;
-        self.visit(arg);
+        for arg in args {
+            self.visit(arg);
+        }
     }
 
     fn visit_case(

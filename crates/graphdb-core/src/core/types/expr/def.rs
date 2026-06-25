@@ -46,7 +46,7 @@ pub enum Expression {
     /// aggregate function (math.)
     Aggregate {
         func: AggregateFunction,
-        arg: Box<Expression>,
+        args: Vec<Expression>,
         distinct: bool,
         filter: Option<Box<Expression>>,
     },

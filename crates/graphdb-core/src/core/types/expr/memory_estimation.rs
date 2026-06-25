@@ -20,7 +20,9 @@ impl MemoryEstimatable for Expression {
             // Unary operations: base size + operand
             Expression::Unary { operand, .. } => base_size + operand.estimate_memory(),
             Expression::TypeCast { expression, .. } => base_size + expression.estimate_memory(),
-            Expression::Aggregate { arg, .. } => base_size + arg.estimate_memory(),
+            Expression::Aggregate { args, .. } => {
+                base_size + args.iter().map(|arg| arg.estimate_memory()).sum::<usize>()
+            }
 
             // Binary operations: base size + two operands
             Expression::Binary { left, right, .. } => {
@@ -188,9 +190,11 @@ impl Expression {
                     total += std::mem::size_of::<Expression>();
                     stack.push(expression);
                 }
-                Expression::Aggregate { arg, .. } => {
-                    total += std::mem::size_of::<Expression>();
-                    stack.push(arg);
+                Expression::Aggregate { args, .. } => {
+                    total += std::mem::size_of::<Expression>() * args.len();
+                    for arg in args {
+                        stack.push(arg);
+                    }
                 }
 
                 // Binary operations: add two operands
@@ -364,10 +368,15 @@ impl Expression {
                 | Expression::TypeCast {
                     expression: operand,
                     ..
-                }
-                | Expression::Aggregate { arg: operand, .. } => {
+                } => {
                     count += 1;
                     stack.push(operand);
+                }
+                Expression::Aggregate { args, .. } => {
+                    count += args.len();
+                    for arg in args {
+                        stack.push(arg);
+                    }
                 }
                 Expression::Binary { left, right, .. }
                 | Expression::Subscript {

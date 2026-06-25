@@ -70,7 +70,7 @@ fn requires_runtime_context(expression: &Expression) -> bool {
         }
         Expression::Unary { operand, .. } => requires_runtime_context(operand),
         Expression::Function { args, .. } => args.iter().any(requires_runtime_context),
-        Expression::Aggregate { arg, .. } => requires_runtime_context(arg),
+        Expression::Aggregate { args, .. } => args.iter().any(requires_runtime_context),
         Expression::List(items) => items.iter().any(requires_runtime_context),
         Expression::Map(pairs) => pairs.iter().any(|(_, val)| requires_runtime_context(val)),
         Expression::Case {
@@ -183,8 +183,10 @@ fn collect_variables_recursive(expression: &Expression, variables: &mut Vec<Stri
                 collect_variables_recursive(arg, variables);
             }
         }
-        Expression::Aggregate { arg, .. } => {
-            collect_variables_recursive(arg, variables);
+        Expression::Aggregate { args, .. } => {
+            for arg in args {
+                collect_variables_recursive(arg, variables);
+            }
         }
         Expression::List(items) => {
             for item in items {
@@ -500,7 +502,7 @@ mod tests {
     fn test_has_aggregate_function() {
         let expr = Expression::Aggregate {
             func: AggregateFunction::Count(None),
-            arg: Box::new(Expression::Variable("x".to_string())),
+            args: vec![Expression::Variable("x".to_string())],
             distinct: false,
         };
         assert!(has_aggregate_function(&expr));
@@ -515,12 +517,12 @@ mod tests {
             op: BinaryOperator::Add,
             left: Box::new(Expression::Aggregate {
                 func: AggregateFunction::Count(None),
-                arg: Box::new(Expression::Variable("a".to_string())),
+                args: vec![Expression::Variable("a".to_string())],
                 distinct: false,
             }),
             right: Box::new(Expression::Aggregate {
                 func: AggregateFunction::Sum("b".to_string()),
-                arg: Box::new(Expression::Variable("b".to_string())),
+                args: vec![Expression::Variable("b".to_string())],
                 distinct: false,
             }),
         };

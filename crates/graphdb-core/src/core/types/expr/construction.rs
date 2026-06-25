@@ -55,7 +55,36 @@ impl Expression {
     pub fn aggregate(func: AggregateFunction, arg: Expression, distinct: bool) -> Self {
         Expression::Aggregate {
             func,
-            arg: Box::new(arg),
+            args: vec![arg],
+            distinct,
+            filter: None,
+        }
+    }
+
+    /// Create an aggregate function expression with a FILTER clause.
+    pub fn aggregate_with_filter(
+        func: AggregateFunction,
+        arg: Expression,
+        distinct: bool,
+        filter: Expression,
+    ) -> Self {
+        Expression::Aggregate {
+            func,
+            args: vec![arg],
+            distinct,
+            filter: Some(Box::new(filter)),
+        }
+    }
+
+    /// Create a multi-argument aggregate function expression (e.g. CORR, COVAR).
+    pub fn aggregate_multi(
+        func: AggregateFunction,
+        args: Vec<Expression>,
+        distinct: bool,
+    ) -> Self {
+        Expression::Aggregate {
+            func,
+            args,
             distinct,
             filter: None,
         }

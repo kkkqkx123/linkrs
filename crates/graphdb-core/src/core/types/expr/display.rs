@@ -37,11 +37,16 @@ impl Expression {
             }
             Expression::Aggregate {
                 func,
-                arg,
+                args,
                 distinct,
                 filter,
             } => {
                 let distinct_str = if *distinct { "DISTINCT " } else { "" };
+                let args_str = args
+                    .iter()
+                    .map(|e| e.to_expression_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 let filter_str = filter
                     .as_ref()
                     .map(|f| format!(" FILTER (WHERE {})", f.to_expression_string()))
@@ -50,7 +55,7 @@ impl Expression {
                     "{}({}{}{})",
                     func.name(),
                     distinct_str,
-                    arg.to_expression_string(),
+                    args_str,
                     filter_str
                 )
             }

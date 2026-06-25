@@ -161,10 +161,10 @@ impl ExpressionAnalyzer {
 
             Expression::Aggregate {
                 func,
-                arg,
+                args,
                 distinct: _,
                 ..
-            } => self.analyze_aggregate_expression(func, arg, variable_types),
+            } => self.analyze_aggregate_expression(func, args, variable_types),
 
             Expression::Property {
                 object,
@@ -335,15 +335,21 @@ impl ExpressionAnalyzer {
     fn analyze_aggregate_expression(
         &self,
         func: &crate::core::AggregateFunction,
-        arg: &Expression,
+        args: &[Expression],
         variable_types: Option<&std::collections::HashMap<String, DataType>>,
     ) -> Result<ExpressionAnalysisResult, ValidationError> {
-        let arg_result = self.analyze_expression(arg, variable_types)?;
-
-        let data_type = self.deduce_aggregate_return_type(func, &arg_result.data_type);
+        let mut all_variables = Vec::new();
+        let mut data_type = DataType::Empty;
+        for arg in args {
+            let arg_result = self.analyze_expression(arg, variable_types)?;
+            if data_type == DataType::Empty {
+                data_type = self.deduce_aggregate_return_type(func, &arg_result.data_type);
+            }
+            all_variables.extend(arg_result.variables);
+        }
 
         let mut result = ExpressionAnalysisResult::new(data_type);
-        result.variables = arg_result.variables;
+        result.variables = all_variables;
         result.has_aggregate = true;
 
         Ok(result)
@@ -570,7 +576,11 @@ impl ExpressionAnalyzer {
             AggregateFunction::CollectSet(_) => DataType::Set,
             AggregateFunction::Distinct(_) => DataType::Set,
             AggregateFunction::Percentile(_, _) => DataType::Float,
+            AggregateFunction::PercentileCont(_, _) => DataType::Float,
             AggregateFunction::Std(_) => DataType::Float,
+            AggregateFunction::StddevPop(_) => DataType::Float,
+            AggregateFunction::StddevSamp(_) => DataType::Float,
+            AggregateFunction::Product(_) => DataType::Float,
             AggregateFunction::Variance(_) => DataType::Float,
             AggregateFunction::Median(_) => DataType::Float,
             AggregateFunction::Mode(_) => arg_type.clone(),

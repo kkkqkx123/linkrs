@@ -427,7 +427,20 @@ impl OrderByValidator {
                 crate::core::AggregateFunction::Count(_) => Ok(ValueType::Int),
                 crate::core::AggregateFunction::Sum(_) => Ok(ValueType::Float),
                 crate::core::AggregateFunction::Avg(_) => Ok(ValueType::Float),
+                crate::core::AggregateFunction::Min(_) => Ok(ValueType::Float),
+                crate::core::AggregateFunction::Max(_) => Ok(ValueType::Float),
                 crate::core::AggregateFunction::Collect(_) => Ok(ValueType::List),
+                crate::core::AggregateFunction::Std(_) => Ok(ValueType::Float),
+                crate::core::AggregateFunction::StddevPop(_) => Ok(ValueType::Float),
+                crate::core::AggregateFunction::StddevSamp(_) => Ok(ValueType::Float),
+                crate::core::AggregateFunction::Variance(_) => Ok(ValueType::Float),
+                crate::core::AggregateFunction::Product(_) => Ok(ValueType::Float),
+                crate::core::AggregateFunction::Percentile(_, _) => Ok(ValueType::Float),
+                crate::core::AggregateFunction::PercentileCont(_, _) => Ok(ValueType::Float),
+                crate::core::AggregateFunction::Median(_) => Ok(ValueType::Float),
+                crate::core::AggregateFunction::Mode(_) => Ok(ValueType::Unknown),
+                crate::core::AggregateFunction::BoolAnd(_) => Ok(ValueType::Bool),
+                crate::core::AggregateFunction::BoolOr(_) => Ok(ValueType::Bool),
                 _ => Ok(ValueType::Unknown),
             },
             Expression::List(_) => Ok(ValueType::List),
@@ -529,8 +542,10 @@ impl OrderByValidator {
             Expression::Unary { operand, .. } => {
                 self.collect_refs_internal(operand, refs);
             }
-            Expression::Aggregate { arg, .. } => {
-                self.collect_refs_internal(arg, refs);
+            Expression::Aggregate { args, .. } => {
+                for arg in args {
+                    self.collect_refs_internal(arg, refs);
+                }
             }
             Expression::List(items) => {
                 for item in items {

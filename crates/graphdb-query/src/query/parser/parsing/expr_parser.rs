@@ -669,9 +669,9 @@ impl<'a> ExprParser<'a> {
                 return Ok(ParseResult {
                     expr: Expression::Aggregate {
                         func: crate::core::types::operators::AggregateFunction::Count(None),
-                        arg: Box::new(Expression::Literal(crate::core::Value::String(
+                        args: vec![Expression::Literal(crate::core::Value::String(
                             "*".to_string(),
-                        ))),
+                        ))],
                         distinct: false,
                         filter: None,
                     },
@@ -696,7 +696,13 @@ impl<'a> ExprParser<'a> {
 
         let is_aggregate = matches!(
             name_upper.as_str(),
-            "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "COLLECT" | "COLLECT_SET" | "STD"
+            "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "COLLECT" | "COLLECT_SET"
+                | "STD" | "STDDEV_POP" | "STDDEV_SAMP"
+                | "PRODUCT" | "PERCENTILE_CONT"
+                | "VARIANCE" | "MEDIAN" | "MODE"
+                | "BOOL_AND" | "BOOL_OR" | "PERCENTILE"
+                | "DISTINCT" | "BIT_AND" | "BIT_OR"
+                | "GROUP_CONCAT" | "VEC_SUM" | "VEC_AVG"
         );
 
         if is_aggregate {
@@ -739,6 +745,23 @@ impl<'a> ExprParser<'a> {
                     crate::core::types::operators::AggregateFunction::CollectSet(field_name)
                 }
                 "STD" => crate::core::types::operators::AggregateFunction::Std(field_name),
+                "STDDEV_POP" => crate::core::types::operators::AggregateFunction::StddevPop(field_name),
+                "STDDEV_SAMP" => crate::core::types::operators::AggregateFunction::StddevSamp(field_name),
+                "PRODUCT" => crate::core::types::operators::AggregateFunction::Product(field_name),
+                "PERCENTILE_CONT" => {
+                    let percentile = if args.len() > 1 {
+                        match &args[1].expr {
+                            Expression::Literal(crate::core::Value::Int(v)) => *v as f64,
+                            Expression::Literal(crate::core::Value::BigInt(v)) => *v as f64,
+                            Expression::Literal(crate::core::Value::Float(v)) => *v as f64,
+                            Expression::Literal(crate::core::Value::Double(v)) => *v,
+                            _ => 50.0,
+                        }
+                    } else {
+                        50.0
+                    };
+                    crate::core::types::operators::AggregateFunction::PercentileCont(field_name, percentile)
+                }
                 "VARIANCE" => {
                     crate::core::types::operators::AggregateFunction::Variance(field_name)
                 }
@@ -765,7 +788,7 @@ impl<'a> ExprParser<'a> {
             Ok(ParseResult {
                 expr: Expression::Aggregate {
                     func,
-                    arg: Box::new(arg),
+                    args: vec![arg],
                     distinct,
                     filter,
                 },

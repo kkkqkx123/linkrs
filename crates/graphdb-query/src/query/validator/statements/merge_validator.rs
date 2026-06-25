@@ -327,8 +327,10 @@ impl MergeValidator {
                 self.validate_expression_recursive(object)?;
                 Ok(())
             }
-            Expression::Aggregate { arg, .. } => {
-                self.validate_expression_recursive(arg)?;
+            Expression::Aggregate { args, .. } => {
+                for arg in args {
+                    self.validate_expression_recursive(arg)?;
+                }
                 Ok(())
             }
             Expression::TypeCast { expression, .. } => {

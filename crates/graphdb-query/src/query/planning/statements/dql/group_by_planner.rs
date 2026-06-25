@@ -5,7 +5,7 @@
 use crate::core::types::expr::contextual::ContextualExpression;
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::AggregateFunction;
-use crate::query::parser::ast::Stmt;
+use crate::query::parser::ast::{GroupingType, Stmt};
 use crate::query::planning::plan::core::{
     node_id_generator::next_node_id,
     nodes::{AggregateNode, ArgumentNode, FilterNode},
@@ -33,7 +33,7 @@ impl GroupByPlanner {
     fn extract_aggregate_functions(
         &self,
         expr: &ContextualExpression,
-    ) -> Vec<(AggregateFunction, bool)> {
+    ) -> Vec<(AggregateFunction, bool, Option<Expression>)> {
         let expr_meta = match expr.expression() {
             Some(e) => e,
             None => return Vec::new(),
@@ -48,15 +48,16 @@ impl GroupByPlanner {
     fn collect_aggregate_functions_recursive(
         &self,
         expr: &Expression,
-        functions: &mut Vec<(AggregateFunction, bool)>,
+        functions: &mut Vec<(AggregateFunction, bool, Option<Expression>)>,
     ) {
         match expr {
             Expression::Aggregate {
                 func,
                 distinct,
+                filter,
                 ..
             } => {
-                functions.push((func.clone(), *distinct));
+                functions.push((func.clone(), *distinct, filter.as_ref().map(|f| f.as_ref().clone())));
             }
             Expression::Binary { left, right, .. } => {
                 self.collect_aggregate_functions_recursive(left, functions);
@@ -192,6 +193,7 @@ impl Planner for GroupByPlanner {
         let arg_node_enum = PlanNodeEnum::Argument(arg_node.clone());
 
         // Extract the group key – Use an expression to describe the key.
+        let num_group_items = group_by_stmt.group_items.len();
         let group_keys: Vec<String> = group_by_stmt
             .group_items
             .iter()
@@ -199,20 +201,79 @@ impl Planner for GroupByPlanner {
             .map(|(i, _)| format!("group_key_{}", i))
             .collect();
 
-        // Extract the aggregate functions with distinct flags
+        // Extract the aggregate functions with distinct flags and filters
         let mut aggregation_functions = Vec::new();
         let mut aggregation_distinct = Vec::new();
+        let mut aggregation_filters = Vec::new();
         for item in &group_by_stmt.yield_clause.items {
             let funcs = self.extract_aggregate_functions(&item.expression);
-            for (func, distinct) in funcs {
+            for (func, distinct, filter) in funcs {
                 aggregation_functions.push(func);
                 aggregation_distinct.push(distinct);
+                aggregation_filters.push(filter);
             }
         }
 
+        // Generate grouping sets from GroupingType
+        let grouping_sets = match &group_by_stmt.grouping_type {
+            GroupingType::Standard => Vec::new(),
+            GroupingType::Rollup(_) => {
+                // ROLLUP(a, b, c) -> (a,b,c), (a,b), (a), ()
+                let mut sets: Vec<Vec<String>> = Vec::new();
+                for i in (0..=num_group_items).rev() {
+                    sets.push(group_keys[0..i].to_vec());
+                }
+                sets
+            }
+            GroupingType::Cube(_) => {
+                // CUBE(a, b) -> (a,b), (a), (b), ()
+                let mut sets: Vec<Vec<String>> = Vec::new();
+                for mask in 0..(1u32 << num_group_items) {
+                    let mut set = Vec::new();
+                    for i in 0..num_group_items {
+                        if mask & (1 << i) != 0 {
+                            set.push(group_keys[i].clone());
+                        }
+                    }
+                    // Sort by original position for deterministic order: larger sets first
+                    if !set.is_empty() {
+                        sets.push(set);
+                    }
+                }
+                sets.push(Vec::new());
+                // Sort descending by number of keys
+                sets.sort_by(|a, b| b.len().cmp(&a.len()));
+                sets.dedup();
+                sets
+            }
+            GroupingType::GroupingSets(sets) => {
+                // GROUPING SETS preserves the user's explicit sets
+                // Convert the expressions to string keys using their indices in group_items
+                sets.iter()
+                    .map(|exprs| {
+                        exprs
+                            .iter()
+                            .filter_map(|e| {
+                                // Find the expression's index in the original group_items and use the corresponding key name
+                                let expr_str = e.expression().map(|m| m.inner().to_string());
+                                group_by_stmt
+                                    .group_items
+                                    .iter()
+                                    .position(|gi| {
+                                        gi.expression()
+                                            .map(|m| m.inner().to_string())
+                                            == expr_str
+                                    })
+                                    .map(|idx| format!("group_key_{}", idx))
+                            })
+                            .collect()
+                    })
+                    .filter(|set: &Vec<String>| !set.is_empty() || sets.is_empty())
+                    .collect()
+            }
+        };
+
         // Create an aggregate node.
-        // For ROLLUP/CUBE/GROUPING SETS, we use the first group set as the primary keys
-        // and the executor will handle the multiple grouping sets.
         let mut aggregate_node = AggregateNode::new(
             arg_node_enum.clone(),
             group_keys,
@@ -222,6 +283,8 @@ impl Planner for GroupByPlanner {
             PlannerError::PlanGenerationFailed(format!("Failed to create AggregateNode: {}", e))
         })?;
         aggregate_node.set_aggregation_distinct(aggregation_distinct);
+        aggregate_node.set_aggregation_filters(aggregation_filters);
+        aggregate_node.set_grouping_sets(grouping_sets);
 
         let mut final_node = PlanNodeEnum::Aggregate(aggregate_node);
 

@@ -122,11 +122,14 @@ impl ExpressionEvaluator {
             // Aggregate functions – Direct evaluation
             Expression::Aggregate {
                 func,
-                arg,
+                args,
                 distinct,
                 filter,
             } => {
-                let arg_value = Self::evaluate_recursive(arg, context)?;
+                let arg_values: Vec<Value> = args
+                    .iter()
+                    .map(|a| Self::evaluate_recursive(a, context))
+                    .collect::<Result<Vec<_>, _>>()?;
                 if let Some(filter_expr) = &filter {
                     let filter_result = Self::evaluate_recursive(filter_expr, context)?;
                     let is_true = matches!(filter_result, Value::Bool(true));
@@ -134,7 +137,7 @@ impl ExpressionEvaluator {
                         return Ok(Value::Null(crate::core::NullType::Null));
                     }
                 }
-                FunctionEvaluator::eval_aggregate_function(func, &[arg_value], *distinct)
+                FunctionEvaluator::eval_aggregate_function(func, &arg_values, *distinct)
             }
 
             // CASE expressions – Short-circuit evaluation
@@ -304,8 +307,28 @@ impl ExpressionEvaluator {
 
         let result = match target_type {
             DataType::Bool => value.to_bool(),
+            DataType::SmallInt => match value.to_int32() {
+                Value::Int(i) => Value::SmallInt(i as i16),
+                v => v,
+            },
             DataType::Int => value.to_int(),
+            DataType::BigInt => {
+                let int_val = value.to_int();
+                match int_val {
+                    Value::Int(i) => Value::BigInt(i as i64),
+                    Value::Null(_) => Value::Null(NullType::Null),
+                    _ => Value::Null(NullType::BadData),
+                }
+            }
             DataType::Float => value.to_float(),
+            DataType::Double => {
+                let float_val = value.to_float();
+                match float_val {
+                    Value::Float(f) => Value::Double(f as f64),
+                    Value::Null(_) => Value::Null(NullType::Null),
+                    _ => Value::Null(NullType::BadData),
+                }
+            }
             DataType::String => {
                 return value
                     .to_string()

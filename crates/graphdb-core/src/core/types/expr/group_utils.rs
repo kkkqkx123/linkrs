@@ -131,18 +131,20 @@ fn extract_group_suite_recursive(expression: &Expression, group_suite: &mut Grou
         }
         Expression::Aggregate {
             func,
-            arg,
+            args,
             distinct,
             filter,
         } => {
             let agg_expression = Expression::Aggregate {
                 func: func.clone(),
-                arg: Box::new(arg.as_ref().clone()),
+                args: args.iter().map(|arg| arg.clone()).collect(),
                 distinct: *distinct,
                 filter: filter.clone(),
             };
             group_suite.add_aggregate(agg_expression);
-            extract_group_suite_recursive(arg, group_suite);
+            for arg in args {
+                extract_group_suite_recursive(arg, group_suite);
+            }
         }
         Expression::List(items) => {
             for item in items {
@@ -277,7 +279,7 @@ mod tests {
         let mut suite = GroupSuite::new();
         let expr = Expression::Aggregate {
             func: AggregateFunction::Count(None),
-            arg: Box::new(Expression::Variable("x".to_string())),
+            args: vec![Expression::Variable("x".to_string())],
             distinct: false,
         };
 
@@ -321,7 +323,7 @@ mod tests {
             op: BinaryOperator::Add,
             left: Box::new(Expression::Aggregate {
                 func: AggregateFunction::Count(None),
-                arg: Box::new(Expression::Variable("x".to_string())),
+                args: vec![Expression::Variable("x".to_string())],
                 distinct: false,
             }),
             right: Box::new(Expression::Variable("y".to_string())),

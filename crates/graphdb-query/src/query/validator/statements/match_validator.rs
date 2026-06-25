@@ -1047,7 +1047,7 @@ mod tests {
         // Testing Expressions with Aggregate Functions
         let agg_expression = create_contextual_expr(Expression::Aggregate {
             func: crate::core::types::operators::AggregateFunction::Count(None),
-            arg: Box::new(Expression::Variable("n".to_string())),
+            args: vec![Expression::Variable("n".to_string())],
             distinct: false,
             filter: None,
         });

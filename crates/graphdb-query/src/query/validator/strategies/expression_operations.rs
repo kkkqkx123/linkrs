@@ -73,12 +73,12 @@ impl ExpressionOperationsValidator {
             }
             crate::core::types::expr::Expression::Aggregate {
                 func,
-                arg,
+                args,
                 distinct,
                 ..
             } => {
                 // Verify the aggregate functions
-                self.validate_aggregate_operation(func, arg, *distinct, depth)?;
+                self.validate_aggregate_operation(func, args, *distinct, depth)?;
             }
             crate::core::types::expr::Expression::Property {
                 object: prop_expression,
@@ -225,22 +225,24 @@ impl ExpressionOperationsValidator {
     fn validate_aggregate_operation(
         &self,
         func: &crate::core::AggregateFunction,
-        arg: &crate::core::types::expr::Expression,
+        args: &[crate::core::types::expr::Expression],
         distinct: bool,
         depth: usize,
     ) -> Result<(), ValidationError> {
         // Recursive verification of aggregation parameters
-        self.validate_expression_operations_recursive(arg, depth + 1)?;
+        for arg in args {
+            self.validate_expression_operations_recursive(arg, depth + 1)?;
 
-        // Create a temporary ContextualExpression for type inference.
-        let ctx = std::sync::Arc::new(ExpressionAnalysisContext::new());
-        let meta = crate::core::types::expr::ExpressionMeta::new(arg.clone());
-        let id = ctx.register_expression(meta);
-        let contextual_arg = ContextualExpression::new(id, ctx);
+            // Create a temporary ContextualExpression for type inference.
+            let ctx = std::sync::Arc::new(ExpressionAnalysisContext::new());
+            let meta = crate::core::types::expr::ExpressionMeta::new(arg.clone());
+            let id = ctx.register_expression(meta);
+            let contextual_arg = ContextualExpression::new(id, ctx);
 
-        // Use type inference validators to verify the parameter types of aggregate functions.
-        let type_validator = TypeDeduceValidator::new();
-        let _ = type_validator.deduce_type(&contextual_arg);
+            // Use type inference validators to verify the parameter types of aggregate functions.
+            let type_validator = TypeDeduceValidator::new();
+            let _ = type_validator.deduce_type(&contextual_arg);
+        }
 
         // Verify the DISTINCT flag
         if distinct {
@@ -544,8 +546,10 @@ impl ExpressionOperationsValidator {
                     self.check_expression_cycles(arg, visited, depth + 1)?;
                 }
             }
-            Expression::Aggregate { arg, .. } => {
-                self.check_expression_cycles(arg, visited, depth + 1)?;
+            Expression::Aggregate { args, .. } => {
+                for arg in args {
+                    self.check_expression_cycles(arg, visited, depth + 1)?;
+                }
             }
             _ => {}
         }
@@ -585,8 +589,8 @@ impl ExpressionOperationsValidator {
                     .unwrap_or(0);
                 1 + max_arg_depth
             }
-            crate::core::types::expr::Expression::Aggregate { arg, .. } => {
-                1 + self.calculate_expression_depth_internal(arg)
+            crate::core::types::expr::Expression::Aggregate { args, .. } => {
+                1 + args.iter().map(|a| self.calculate_expression_depth_internal(a)).max().unwrap_or(0)
             }
             crate::core::types::expr::Expression::Property {
                 object: prop_expression,

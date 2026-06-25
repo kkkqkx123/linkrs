@@ -69,11 +69,11 @@ pub trait ExpressionVisitor {
             }
             Expression::Aggregate {
                 func,
-                arg,
+                args,
                 distinct,
                 filter,
             } => {
-                self.visit_aggregate(func, arg, *distinct);
+                self.visit_aggregate(func, args, *distinct);
                 if let Some(filter) = filter {
                     self.visit(filter);
                 }
@@ -187,8 +187,10 @@ pub trait ExpressionVisitor {
     }
 
     /// Accessing Aggregate Function Expressions
-    fn visit_aggregate(&mut self, _func: &AggregateFunction, arg: &Expression, _distinct: bool) {
-        self.visit(arg);
+    fn visit_aggregate(&mut self, _func: &AggregateFunction, args: &[Expression], _distinct: bool) {
+        for arg in args {
+            self.visit(arg);
+        }
     }
 
     /// Accessing Conditional Expressions

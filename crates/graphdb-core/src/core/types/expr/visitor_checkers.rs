@@ -95,9 +95,11 @@ impl ExpressionVisitor for ConstantChecker {
         }
     }
 
-    fn visit_aggregate(&mut self, _func: &AggregateFunction, arg: &Expression, _distinct: bool) {
+    fn visit_aggregate(&mut self, _func: &AggregateFunction, args: &[Expression], _distinct: bool) {
         if self.is_constant {
-            self.visit(arg);
+            for arg in args {
+                self.visit(arg);
+            }
         }
     }
 
@@ -375,9 +377,14 @@ impl ExpressionVisitor for PropertyContainsChecker {
         }
     }
 
-    fn visit_aggregate(&mut self, _func: &AggregateFunction, arg: &Expression, _distinct: bool) {
+    fn visit_aggregate(&mut self, _func: &AggregateFunction, args: &[Expression], _distinct: bool) {
         if !self.contains {
-            self.visit(arg);
+            for arg in args {
+                self.visit(arg);
+                if self.contains {
+                    break;
+                }
+            }
         }
     }
 
@@ -642,12 +649,12 @@ impl WildcardReplacer {
             },
             Expression::Aggregate {
                 func,
-                arg,
+                args,
                 distinct,
                 filter,
             } => Expression::Aggregate {
                 func: func.clone(),
-                arg: Box::new(self.replace_internal(arg)),
+                args: args.iter().map(|arg| self.replace_internal(arg)).collect(),
                 distinct: *distinct,
                 filter: filter
                     .as_ref()
@@ -843,7 +850,7 @@ impl ExpressionVisitor for AggregateFunctionChecker {
         }
     }
 
-    fn visit_aggregate(&mut self, _func: &AggregateFunction, _arg: &Expression, _distinct: bool) {
+    fn visit_aggregate(&mut self, _func: &AggregateFunction, _args: &[Expression], _distinct: bool) {
         self.contains_aggregate = true;
     }
 
@@ -1121,9 +1128,14 @@ impl ExpressionVisitor for VariableContainsChecker {
         }
     }
 
-    fn visit_aggregate(&mut self, _func: &AggregateFunction, arg: &Expression, _distinct: bool) {
+    fn visit_aggregate(&mut self, _func: &AggregateFunction, args: &[Expression], _distinct: bool) {
         if !self.contains {
-            self.visit(arg);
+            for arg in args {
+                self.visit(arg);
+                if self.contains {
+                    break;
+                }
+            }
         }
     }
 
@@ -1387,13 +1399,18 @@ impl ExpressionVisitor for PathBuildContainsChecker {
                 if self.contains_path_build {
                     break;
                 }
-            }
+}
         }
     }
 
-    fn visit_aggregate(&mut self, _func: &AggregateFunction, arg: &Expression, _distinct: bool) {
+    fn visit_aggregate(&mut self, _func: &AggregateFunction, args: &[Expression], _distinct: bool) {
         if !self.contains_path_build {
-            self.visit(arg);
+            for arg in args {
+                self.visit(arg);
+                if self.contains_path_build {
+                    break;
+                }
+            }
         }
     }
 

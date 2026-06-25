@@ -147,7 +147,7 @@ impl ClausePlanner for ReturnClausePlanner {
         });
 
         if has_aggregate {
-            let (group_keys, agg_functions, agg_aliases, agg_distinct) =
+            let (group_keys, agg_functions, agg_aliases, agg_distinct, agg_filters) =
                 extract_aggregate_info(&yield_columns)?;
 
             let mut project_columns: Vec<YieldColumn> = yield_columns
@@ -169,19 +169,21 @@ impl ClausePlanner for ReturnClausePlanner {
             for col in &yield_columns {
                 if let Some(expr_meta) = col.expression.expression() {
                     let inner = expr_meta.inner();
-                    if let Expression::Aggregate { arg, .. } = inner {
-                        let arg_expr_str = arg.to_expression_string();
-                        // Only add if not already projected (avoid duplicates)
-                        if !existing_aliases.contains(&arg_expr_str) {
-                            let ctx = col.expression.context();
-                            let meta = ExpressionMeta::new(arg.as_ref().clone());
-                            let id = ctx.register_expression(meta);
-                            let ctx_expr = ContextualExpression::new(id, ctx.clone());
-                            project_columns.push(YieldColumn {
-                                expression: ctx_expr,
-                                alias: arg_expr_str,
-                                is_matched: false,
-                            });
+                    if let Expression::Aggregate { args, .. } = inner {
+                        for arg in args {
+                            let arg_expr_str = arg.to_expression_string();
+                            // Only add if not already projected (avoid duplicates)
+                            if !existing_aliases.contains(&arg_expr_str) {
+                                let ctx = col.expression.context();
+                                let meta = ExpressionMeta::new(arg.clone());
+                                let id = ctx.register_expression(meta);
+                                let ctx_expr = ContextualExpression::new(id, ctx.clone());
+                                project_columns.push(YieldColumn {
+                                    expression: ctx_expr,
+                                    alias: arg_expr_str,
+                                    is_matched: false,
+                                });
+                            }
                         }
                     }
                 }
@@ -197,6 +199,7 @@ impl ClausePlanner for ReturnClausePlanner {
                 agg_aliases,
             )?;
             aggregate_node.set_aggregation_distinct(agg_distinct);
+            aggregate_node.set_aggregation_filters(agg_filters);
 
             let mut final_node: PlanNodeEnum = aggregate_node.into_enum();
 
@@ -263,8 +266,14 @@ fn expression_contains_aggregate(expr: &crate::core::Expression) -> bool {
     }
 }
 
-/// Aggregate extraction result containing group keys, aggregate functions, their aliases, and distinct flags
-type AggregateExtractionResult = (Vec<String>, Vec<AggregateFunction>, Vec<String>, Vec<bool>);
+/// Aggregate extraction result containing group keys, aggregate functions, their aliases, distinct flags, and filters
+type AggregateExtractionResult = (
+    Vec<String>,
+    Vec<AggregateFunction>,
+    Vec<String>,
+    Vec<bool>,
+    Vec<Option<Expression>>,
+);
 
 fn extract_aggregate_info(
     columns: &[YieldColumn],
@@ -273,15 +282,17 @@ fn extract_aggregate_info(
     let mut agg_functions = Vec::new();
     let mut agg_aliases = Vec::new();
     let mut agg_distinct = Vec::new();
+    let mut agg_filters = Vec::new();
 
     for col in columns {
         if let Some(expr_meta) = col.expression.expression() {
             let expr = expr_meta.inner();
             if expression_contains_aggregate(expr) {
-                if let Some((agg_func, distinct)) = extract_aggregate_function(expr) {
+                if let Some((agg_func, distinct, filter)) = extract_aggregate_function(expr) {
                     agg_functions.push(agg_func);
                     agg_aliases.push(col.alias.clone());
                     agg_distinct.push(distinct);
+                    agg_filters.push(filter);
                 }
             } else {
                 let key = col.alias.clone();
@@ -292,19 +303,20 @@ fn extract_aggregate_info(
         }
     }
 
-    Ok((group_keys, agg_functions, agg_aliases, agg_distinct))
+    Ok((group_keys, agg_functions, agg_aliases, agg_distinct, agg_filters))
 }
 
 fn extract_aggregate_function(
     expr: &crate::core::Expression,
-) -> Option<(AggregateFunction, bool)> {
+) -> Option<(AggregateFunction, bool, Option<Expression>)> {
     use crate::core::Expression;
     match expr {
         Expression::Aggregate {
             func,
             distinct,
+            filter,
             ..
-        } => Some((func.clone(), *distinct)),
+        } => Some((func.clone(), *distinct, filter.as_ref().map(|f| f.as_ref().clone()))),
         Expression::Binary { left, right, .. } => extract_aggregate_function(left)
             .or_else(|| extract_aggregate_function(right)),
         Expression::Unary { operand, .. } => extract_aggregate_function(operand),

@@ -113,10 +113,14 @@ impl TypeValidator {
             }
             Expression::Aggregate {
                 func,
-                arg,
-                distinct: _,
+                args,
                 ..
-            } => self.validate_aggregate_return_type(func, arg, context, expected_type),
+            } => {
+                for arg in args {
+                    self.validate_aggregate_return_type(func, arg, context, expected_type.clone())?;
+                }
+                Ok(())
+            }
             Expression::Variable(name) => self.validate_variable_type(name, context, expected_type),
             _ => {
                 let actual_type = self.deduce_expr_type(expression);
@@ -335,12 +339,16 @@ impl TypeValidator {
             }
             Expression::Aggregate {
                 func,
-                arg,
+                args,
                 distinct: _,
                 ..
             } => {
-                let arg_type = self.deduce_expression_type_full(arg, context);
-                self.deduce_aggregate_return_type_with_arg(func, &arg_type)
+                if let Some(arg) = args.first() {
+                    let arg_type = self.deduce_expression_type_full(arg, context);
+                    self.deduce_aggregate_return_type_with_arg(func, &arg_type)
+                } else {
+                    DataType::Empty
+                }
             }
             _ => DataType::Empty,
         }
@@ -491,7 +499,11 @@ impl TypeValidator {
             crate::core::AggregateFunction::CollectSet(_) => DataType::Set,
             crate::core::AggregateFunction::Distinct(_) => DataType::Set,
             crate::core::AggregateFunction::Percentile(_, _) => DataType::Float,
+            crate::core::AggregateFunction::PercentileCont(_, _) => DataType::Float,
             crate::core::AggregateFunction::Std(_) => DataType::Float,
+            crate::core::AggregateFunction::StddevPop(_) => DataType::Float,
+            crate::core::AggregateFunction::StddevSamp(_) => DataType::Float,
+            crate::core::AggregateFunction::Product(_) => DataType::Float,
             crate::core::AggregateFunction::Variance(_) => DataType::Float,
             crate::core::AggregateFunction::Median(_) => DataType::Float,
             crate::core::AggregateFunction::Mode(_) => DataType::Empty,
@@ -521,7 +533,11 @@ impl TypeValidator {
             crate::core::AggregateFunction::CollectSet(_) => DataType::Set,
             crate::core::AggregateFunction::Distinct(_) => DataType::Set,
             crate::core::AggregateFunction::Percentile(_, _) => DataType::Float,
+            crate::core::AggregateFunction::PercentileCont(_, _) => DataType::Float,
             crate::core::AggregateFunction::Std(_) => DataType::Float,
+            crate::core::AggregateFunction::StddevPop(_) => DataType::Float,
+            crate::core::AggregateFunction::StddevSamp(_) => DataType::Float,
+            crate::core::AggregateFunction::Product(_) => DataType::Float,
             crate::core::AggregateFunction::Variance(_) => DataType::Float,
             crate::core::AggregateFunction::Median(_) => DataType::Float,
             crate::core::AggregateFunction::Mode(_) => arg_type.clone(),

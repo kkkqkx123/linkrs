@@ -343,7 +343,7 @@ impl ExpressionPrecomputationOptimizer {
                     && self.check_expression_deterministic(mapping)
             }
             // Aggregate expressions are deterministic if the argument is deterministic
-            Expression::Aggregate { arg, .. } => self.check_expression_deterministic(arg),
+            Expression::Aggregate { args, .. } => args.iter().all(|arg| self.check_expression_deterministic(arg)),
             // Predicate expressions are deterministic if all arguments are deterministic
             Expression::Predicate { args, .. } => args
                 .iter()

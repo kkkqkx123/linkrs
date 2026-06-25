@@ -19,6 +19,9 @@ pub enum UtilityFunction {
     Greatest,
     Least,
     GenRandomUuid,
+    JsonEach,
+    JsonTypeOf,
+    JsonStripNulls,
 }
 
 impl UtilityFunction {
@@ -34,6 +37,9 @@ impl UtilityFunction {
             UtilityFunction::Greatest => "greatest",
             UtilityFunction::Least => "least",
             UtilityFunction::GenRandomUuid => "gen_random_uuid",
+            UtilityFunction::JsonEach => "json_each",
+            UtilityFunction::JsonTypeOf => "json_typeof",
+            UtilityFunction::JsonStripNulls => "json_strip_nulls",
         }
     }
 
@@ -49,6 +55,9 @@ impl UtilityFunction {
             UtilityFunction::Greatest => 2,
             UtilityFunction::Least => 2,
             UtilityFunction::GenRandomUuid => 0,
+            UtilityFunction::JsonEach => 1,
+            UtilityFunction::JsonTypeOf => 1,
+            UtilityFunction::JsonStripNulls => 1,
         }
     }
 
@@ -77,6 +86,9 @@ impl UtilityFunction {
             UtilityFunction::Greatest => "Return the largest of the arguments",
             UtilityFunction::Least => "Return the smallest of the arguments",
             UtilityFunction::GenRandomUuid => "Generate a random UUID v4",
+            UtilityFunction::JsonEach => "Expand a JSON object into key-value pairs",
+            UtilityFunction::JsonTypeOf => "Return the type of a JSON value",
+            UtilityFunction::JsonStripNulls => "Strip null values from a JSON object or array",
         }
     }
 
@@ -92,6 +104,9 @@ impl UtilityFunction {
             UtilityFunction::Greatest => execute_greatest(args),
             UtilityFunction::Least => execute_least(args),
             UtilityFunction::GenRandomUuid => execute_gen_random_uuid(args),
+            UtilityFunction::JsonEach => execute_json_each(args),
+            UtilityFunction::JsonTypeOf => execute_json_typeof(args),
+            UtilityFunction::JsonStripNulls => execute_json_strip_nulls(args),
         }
     }
 }
@@ -369,6 +384,109 @@ fn execute_least(args: &[Value]) -> Result<Value, ExpressionError> {
 fn execute_gen_random_uuid(_args: &[Value]) -> Result<Value, ExpressionError> {
     use crate::core::value::uuid::UuidValue;
     Ok(Value::Uuid(UuidValue::new_v4()))
+}
+
+fn execute_json_each(args: &[Value]) -> Result<Value, ExpressionError> {
+    match &args[0] {
+        Value::String(json_str) => {
+            let json_value: JsonValue = serde_json::from_str(json_str)
+                .map_err(|_| ExpressionError::type_error("Invalid JSON string"))?;
+            match json_value {
+                JsonValue::Object(map) => {
+                    let entries: Vec<Value> = map
+                        .into_iter()
+                        .map(|(k, v)| {
+                            Value::list(List {
+                                values: vec![Value::String(k), json_to_value(&v)],
+                            })
+                        })
+                        .collect();
+                    Ok(Value::list(List { values: entries }))
+                }
+                JsonValue::Array(arr) => {
+                    let entries: Vec<Value> = arr
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, v)| {
+                            Value::list(List {
+                                values: vec![Value::BigInt(i as i64), json_to_value(&v)],
+                            })
+                        })
+                        .collect();
+                    Ok(Value::list(List { values: entries }))
+                }
+                _ => Err(ExpressionError::type_error(
+                    "json_each requires a JSON object or array",
+                )),
+            }
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "json_each requires a string argument",
+        )),
+    }
+}
+
+fn execute_json_typeof(args: &[Value]) -> Result<Value, ExpressionError> {
+    match &args[0] {
+        Value::String(json_str) => {
+            let json_value: JsonValue = serde_json::from_str(json_str)
+                .map_err(|_| ExpressionError::type_error("Invalid JSON string"))?;
+            let type_str = match &json_value {
+                JsonValue::Null => "null",
+                JsonValue::Bool(_) => "boolean",
+                JsonValue::Number(_) => "number",
+                JsonValue::String(_) => "string",
+                JsonValue::Array(_) => "array",
+                JsonValue::Object(_) => "object",
+            };
+            Ok(Value::String(type_str.to_string()))
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "json_typeof requires a string argument",
+        )),
+    }
+}
+
+fn execute_json_strip_nulls(args: &[Value]) -> Result<Value, ExpressionError> {
+    match &args[0] {
+        Value::String(json_str) => {
+            let json_value: JsonValue = serde_json::from_str(json_str)
+                .map_err(|_| ExpressionError::type_error("Invalid JSON string"))?;
+            let stripped = strip_nulls_from_json(json_value);
+            Ok(Value::String(
+                serde_json::to_string(&stripped)
+                    .map_err(|e| ExpressionError::type_error(format!("JSON serialization error: {}", e)))?,
+            ))
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "json_strip_nulls requires a string argument",
+        )),
+    }
+}
+
+fn strip_nulls_from_json(value: JsonValue) -> JsonValue {
+    match value {
+        JsonValue::Object(map) => {
+            let cleaned: serde_json::Map<String, JsonValue> = map
+                .into_iter()
+                .filter(|(_, v)| !v.is_null())
+                .map(|(k, v)| (k, strip_nulls_from_json(v)))
+                .collect();
+            JsonValue::Object(cleaned)
+        }
+        JsonValue::Array(arr) => {
+            let cleaned: Vec<JsonValue> = arr
+                .into_iter()
+                .filter(|v| !v.is_null())
+                .map(strip_nulls_from_json)
+                .collect();
+            JsonValue::Array(cleaned)
+        }
+        other => other,
+    }
 }
 
 #[cfg(test)]

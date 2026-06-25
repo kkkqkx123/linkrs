@@ -369,12 +369,12 @@ impl SubqueryUnnestingOptimizer {
             },
             Expression::Aggregate {
                 func,
-                arg,
+                args,
                 distinct,
                 filter,
             } => Expression::Aggregate {
                 func: func.clone(),
-                arg: Box::new(self.replace_all_variables(arg, new_var)),
+                args: args.iter().map(|a| self.replace_all_variables(a, new_var)).collect(),
                 distinct: *distinct,
                 filter: filter
                     .as_ref()

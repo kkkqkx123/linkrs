@@ -204,7 +204,11 @@ pub enum AggregateFunction {
     Distinct(String),
     Percentile(String, f64),
     Std(String),
+    StddevPop(String),
+    StddevSamp(String),
     Variance(String),
+    Product(String),
+    PercentileCont(String, f64),
     Median(String),
     Mode(String),
     BitAnd(String),
@@ -237,7 +241,11 @@ impl AggregateFunction {
             AggregateFunction::Distinct(_) => "DISTINCT",
             AggregateFunction::Percentile(_, _) => "PERCENTILE",
             AggregateFunction::Std(_) => "STD",
+            AggregateFunction::StddevPop(_) => "STDDEV_POP",
+            AggregateFunction::StddevSamp(_) => "STDDEV_SAMP",
             AggregateFunction::Variance(_) => "VARIANCE",
+            AggregateFunction::Product(_) => "PRODUCT",
+            AggregateFunction::PercentileCont(_, _) => "PERCENTILE_CONT",
             AggregateFunction::Median(_) => "MEDIAN",
             AggregateFunction::Mode(_) => "MODE",
             AggregateFunction::BitAnd(_) => "BIT_AND",
@@ -269,7 +277,10 @@ impl AggregateFunction {
             | AggregateFunction::Collect(_)
             | AggregateFunction::CollectSet(_)
             | AggregateFunction::Distinct(_)
-            | AggregateFunction::Std(_)
+            |             AggregateFunction::Std(_)
+            | AggregateFunction::StddevPop(_)
+            | AggregateFunction::StddevSamp(_)
+            | AggregateFunction::Product(_)
             | AggregateFunction::Variance(_)
             | AggregateFunction::Median(_)
             | AggregateFunction::Mode(_)
@@ -280,6 +291,7 @@ impl AggregateFunction {
             | AggregateFunction::VecSum(_)
             | AggregateFunction::VecAvg(_) => 1,
             AggregateFunction::Percentile(_, _) => 2,
+            AggregateFunction::PercentileCont(_, _) => 2,
             AggregateFunction::GroupConcat(_, _) => {
                 if self.separator().is_empty() {
                     1
@@ -298,7 +310,11 @@ impl AggregateFunction {
                 | AggregateFunction::Min(_)
                 | AggregateFunction::Max(_)
                 | AggregateFunction::Percentile(_, _)
+                | AggregateFunction::PercentileCont(_, _)
                 | AggregateFunction::Std(_)
+                | AggregateFunction::StddevPop(_)
+                | AggregateFunction::StddevSamp(_)
+                | AggregateFunction::Product(_)
                 | AggregateFunction::Variance(_)
                 | AggregateFunction::Median(_)
                 | AggregateFunction::VecSum(_)
@@ -335,7 +351,11 @@ impl AggregateFunction {
             AggregateFunction::CollectSet(field) => Some(field),
             AggregateFunction::Distinct(field) => Some(field),
             AggregateFunction::Percentile(field, _) => Some(field),
+            AggregateFunction::PercentileCont(field, _) => Some(field),
             AggregateFunction::Std(field) => Some(field),
+            AggregateFunction::StddevPop(field) => Some(field),
+            AggregateFunction::StddevSamp(field) => Some(field),
+            AggregateFunction::Product(field) => Some(field),
             AggregateFunction::Variance(field) => Some(field),
             AggregateFunction::Median(field) => Some(field),
             AggregateFunction::Mode(field) => Some(field),
@@ -364,7 +384,11 @@ impl AggregateFunction {
             AggregateFunction::CollectSet(_) => "Collection of unique values",
             AggregateFunction::Distinct(_) => "deduplication",
             AggregateFunction::Percentile(_, _) => "Calculation of percentile",
+            AggregateFunction::PercentileCont(_, _) => "Continuous percentile (with interpolation)",
             AggregateFunction::Std(_) => "calculate the standard deviation",
+            AggregateFunction::StddevPop(_) => "Population standard deviation",
+            AggregateFunction::StddevSamp(_) => "Sample standard deviation",
+            AggregateFunction::Product(_) => "Compute the product of values",
             AggregateFunction::Variance(_) => "Calculate the variance",
             AggregateFunction::Median(_) => "Calculate the median",
             AggregateFunction::Mode(_) => "Calculate the mode",

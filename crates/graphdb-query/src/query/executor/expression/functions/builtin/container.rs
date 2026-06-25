@@ -24,6 +24,10 @@ pub enum ContainerFunction {
     ListPrepend,
     ListFilter,
     ListTransform,
+    ListConcat,
+    ListSort,
+    ListSlice,
+    ListToString,
 }
 
 impl ContainerFunction {
@@ -43,6 +47,10 @@ impl ContainerFunction {
             Self::ListPrepend => "list_prepend",
             Self::ListFilter => "list_filter",
             Self::ListTransform => "list_transform",
+            Self::ListConcat => "list_concat",
+            Self::ListSort => "list_sort",
+            Self::ListSlice => "list_slice",
+            Self::ListToString => "list_to_string",
         }
     }
 
@@ -62,12 +70,16 @@ impl ContainerFunction {
             Self::ListPrepend => 2,
             Self::ListFilter => 2,
             Self::ListTransform => 2,
+            Self::ListConcat => 2,
+            Self::ListSort => 1,
+            Self::ListSlice => 3,
+            Self::ListToString => 2,
         }
     }
 
     /// Is it a function with variable parameters?
     pub fn is_variadic(&self) -> bool {
-        matches!(self, Self::Range)
+        matches!(self, Self::Range | Self::ListConcat)
     }
 
     /// Obtain the function description
@@ -86,6 +98,10 @@ impl ContainerFunction {
             Self::ListPrepend => "Prepend element to list",
             Self::ListFilter => "Filter list elements by predicate",
             Self::ListTransform => "Transform list elements by function",
+            Self::ListConcat => "Concatenate multiple lists into one",
+            Self::ListSort => "Sort list elements",
+            Self::ListSlice => "Extract a slice from a list",
+            Self::ListToString => "Convert a list to a string with delimiter",
         }
     }
 
@@ -104,6 +120,10 @@ impl ContainerFunction {
             Self::ListPrepend => execute_list_prepend(args),
             Self::ListFilter => execute_list_filter(args),
             Self::ListTransform => execute_list_transform(args),
+            Self::ListConcat => execute_list_concat(args),
+            Self::ListSort => execute_list_sort(args),
+            Self::ListSlice => execute_list_slice(args),
+            Self::ListToString => execute_list_to_string(args),
         }
     }
 }
@@ -416,6 +436,110 @@ fn execute_list_transform(args: &[Value]) -> Result<Value, ExpressionError> {
         _ => Err(ExpressionError::type_error(
             "list_transform requires lists as arguments",
         )),
+    }
+}
+
+fn execute_list_concat(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() < 2 {
+        return Err(ExpressionError::type_error(
+            "list_concat requires at least 2 arguments",
+        ));
+    }
+    let mut result = Vec::new();
+    for arg in args {
+        match arg {
+            Value::List(list) => result.extend(list.values.clone()),
+            Value::Null(_) => return Ok(Value::Null(NullType::Null)),
+            _ => {
+                return Err(ExpressionError::type_error(
+                    "list_concat requires list arguments",
+                ))
+            }
+        }
+    }
+    Ok(Value::list(List { values: result }))
+}
+
+fn execute_list_sort(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error(
+            "list_sort requires 1 argument",
+        ));
+    }
+    match &args[0] {
+        Value::List(list) => {
+            let mut sorted = list.values.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            Ok(Value::list(List { values: sorted }))
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "list_sort requires a list type",
+        )),
+    }
+}
+
+fn execute_list_slice(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 3 {
+        return Err(ExpressionError::type_error(
+            "list_slice requires 3 arguments",
+        ));
+    }
+    match (&args[0], &args[1], &args[2]) {
+        (Value::List(list), Value::Int(start), Value::Int(end)) => {
+            let len = list.values.len() as i32;
+            let start = if *start < 0 { (len + *start).max(0) } else { (*start).min(len) } as usize;
+            let end = if *end < 0 { (len + *end).max(0) } else { (*end).min(len) } as usize;
+            if start >= end {
+                Ok(Value::list(List { values: vec![] }))
+            } else {
+                Ok(Value::list(List {
+                    values: list.values[start..end].to_vec(),
+                }))
+            }
+        }
+        (Value::Null(_), _, _) | (_, Value::Null(_), _) | (_, _, Value::Null(_)) => {
+            Ok(Value::Null(NullType::Null))
+        }
+        _ => Err(ExpressionError::type_error(
+            "list_slice requires list, integer, and integer arguments",
+        )),
+    }
+}
+
+fn execute_list_to_string(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "list_to_string requires 2 arguments",
+        ));
+    }
+    match (&args[0], &args[1]) {
+        (Value::List(list), Value::String(delimiter)) => {
+            let strings: Vec<String> = list
+                .values
+                .iter()
+                .map(|v| value_to_string(v))
+                .collect();
+            Ok(Value::String(strings.join(delimiter)))
+        }
+        (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "list_to_string requires list and string arguments",
+        )),
+    }
+}
+
+fn value_to_string(v: &Value) -> String {
+    match v {
+        Value::Null(_) => String::new(),
+        Value::Bool(b) => b.to_string(),
+        Value::SmallInt(i) => i.to_string(),
+        Value::Int(i) => i.to_string(),
+        Value::BigInt(i) => i.to_string(),
+        Value::Float(f) => f.to_string(),
+        Value::Double(f) => f.to_string(),
+        Value::String(s) => s.clone(),
+        _ => format!("{:?}", v),
     }
 }
 

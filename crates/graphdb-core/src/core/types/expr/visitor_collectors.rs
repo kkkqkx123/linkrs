@@ -73,8 +73,10 @@ impl ExpressionVisitor for PropertyCollector {
         }
     }
 
-    fn visit_aggregate(&mut self, _func: &AggregateFunction, arg: &Expression, _distinct: bool) {
-        self.visit(arg);
+    fn visit_aggregate(&mut self, _func: &AggregateFunction, args: &[Expression], _distinct: bool) {
+        for arg in args {
+            self.visit(arg);
+        }
     }
 
     fn visit_case(
@@ -307,17 +309,11 @@ impl ExpressionVisitor for OrConditionCollector {
                     }
                 }
             }
-            _ => {
-                self.can_convert = false;
-                self.visit(left);
-                self.visit(right);
-            }
+            _ => {}
         }
     }
 
-    fn visit_unary(&mut self, _op: UnaryOperator, operand: &Expression) {
-        self.visit(operand);
-    }
+    fn visit_unary(&mut self, _op: UnaryOperator, _operand: &Expression) {}
 
     fn visit_function(&mut self, _name: &str, args: &[Expression]) {
         for arg in args {
@@ -325,8 +321,10 @@ impl ExpressionVisitor for OrConditionCollector {
         }
     }
 
-    fn visit_aggregate(&mut self, _func: &AggregateFunction, arg: &Expression, _distinct: bool) {
-        self.visit(arg);
+    fn visit_aggregate(&mut self, _func: &AggregateFunction, args: &[Expression], _distinct: bool) {
+        for arg in args {
+            self.visit(arg);
+        }
     }
 
     fn visit_case(
@@ -524,7 +522,12 @@ impl ExpressionVisitor for PropertyPredicateCollector {
                 | BinaryOperator::GreaterThanOrEqual
         ) {
             if let Some(property) = &self.current_property {
-                if let Expression::Literal(value) = right {
+                let literal = match (left, right) {
+                    (Expression::Literal(v), _) => Some(v),
+                    (_, Expression::Literal(v)) => Some(v),
+                    _ => None,
+                };
+                if let Some(value) = literal {
                     self.predicates.push(PropertyPredicate {
                         property: property.clone(),
                         operator: op,
@@ -533,14 +536,9 @@ impl ExpressionVisitor for PropertyPredicateCollector {
                 }
             }
         }
-        self.current_property = None;
-        self.visit(left);
-        self.visit(right);
     }
 
-    fn visit_unary(&mut self, _op: UnaryOperator, operand: &Expression) {
-        self.visit(operand);
-    }
+    fn visit_unary(&mut self, _op: UnaryOperator, _operand: &Expression) {}
 
     fn visit_function(&mut self, _name: &str, args: &[Expression]) {
         for arg in args {
@@ -548,8 +546,10 @@ impl ExpressionVisitor for PropertyPredicateCollector {
         }
     }
 
-    fn visit_aggregate(&mut self, _func: &AggregateFunction, arg: &Expression, _distinct: bool) {
-        self.visit(arg);
+    fn visit_aggregate(&mut self, _func: &AggregateFunction, args: &[Expression], _distinct: bool) {
+        for arg in args {
+            self.visit(arg);
+        }
     }
 
     fn visit_case(
@@ -725,8 +725,10 @@ impl ExpressionVisitor for VariableCollector {
         }
     }
 
-    fn visit_aggregate(&mut self, _func: &AggregateFunction, arg: &Expression, _distinct: bool) {
-        self.visit(arg);
+    fn visit_aggregate(&mut self, _func: &AggregateFunction, args: &[Expression], _distinct: bool) {
+        for arg in args {
+            self.visit(arg);
+        }
     }
 
     fn visit_case(
@@ -914,12 +916,14 @@ impl ExpressionVisitor for FunctionCollector {
         }
     }
 
-    fn visit_aggregate(&mut self, func: &AggregateFunction, arg: &Expression, _distinct: bool) {
+    fn visit_aggregate(&mut self, func: &AggregateFunction, args: &[Expression], _distinct: bool) {
         let func_name = format!("{:?}", func);
         if !self.functions.contains(&func_name) {
             self.functions.push(func_name);
         }
-        self.visit(arg);
+        for arg in args {
+            self.visit(arg);
+        }
     }
 
     fn visit_case(

@@ -122,17 +122,20 @@ impl ParameterizingTransformer {
             }
             Expression::Aggregate {
                 func,
-                arg,
+                args,
                 distinct,
                 filter,
             } => {
-                let new_arg = self.transform_with_params(arg, result);
+                let new_args: Vec<Expression> = args
+                    .iter()
+                    .map(|a| self.transform_with_params(a, result))
+                    .collect();
                 let new_filter = filter
                     .as_ref()
                     .map(|f| self.transform_with_params(f, result));
                 Expression::Aggregate {
                     func: func.clone(),
-                    arg: Box::new(new_arg),
+                    args: new_args,
                     distinct: *distinct,
                     filter: new_filter.map(Box::new),
                 }
@@ -936,7 +939,7 @@ impl TemplateExtractor {
             }
             Expression::Aggregate {
                 func,
-                arg,
+                args,
                 distinct,
                 filter,
             } => {
@@ -945,11 +948,15 @@ impl TemplateExtractor {
                     .as_ref()
                     .map(|f| format!(" FILTER (WHERE {})", Self::expr_to_template_string(f)))
                     .unwrap_or_default();
+                let arg_strs: Vec<String> = args
+                    .iter()
+                    .map(Self::expr_to_template_string)
+                    .collect();
                 format!(
                     "{}({}{}{})",
                     func,
                     distinct_str,
-                    Self::expr_to_template_string(arg),
+                    arg_strs.join(", "),
                     filter_str
                 )
             }

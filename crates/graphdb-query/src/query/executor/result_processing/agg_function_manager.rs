@@ -417,6 +417,135 @@ impl AggFunctionManager {
             }),
         );
 
+        // PRODUCT function
+        self.functions.insert(
+            "PRODUCT".to_string(),
+            Arc::new(|agg_data: &mut AggData, val: &Value| {
+                let res = agg_data.result_mut();
+                if res.is_bad_null() {
+                    return Ok(());
+                }
+                if !val.is_null() && !val.is_empty() && !val.is_numeric() {
+                    *res = Value::Null(NullType::BadType);
+                    return Ok(());
+                }
+                if val.is_null() || val.is_empty() {
+                    return Ok(());
+                }
+                if res.is_null() {
+                    *res = val.clone();
+                } else {
+                    match res.mul(val) {
+                        Ok(new_val) => *res = new_val,
+                        Err(_) => *res = Value::Null(NullType::BadType),
+                    }
+                }
+                Ok(())
+            }),
+        );
+
+        // STDDEV_POP function - population standard deviation (divide by n)
+        self.functions.insert(
+            "STDDEV_POP".to_string(),
+            Arc::new(|agg_data: &mut AggData, val: &Value| {
+                if agg_data.result().is_bad_null() {
+                    return Ok(());
+                }
+                if !val.is_null() && !val.is_empty() && !val.is_numeric() {
+                    *agg_data.result_mut() = Value::Null(NullType::BadType);
+                    return Ok(());
+                }
+                if val.is_null() || val.is_empty() {
+                    return Ok(());
+                }
+                let val_f64 = match val {
+                    Value::SmallInt(v) => *v as f64,
+                    Value::Int(v) => *v as f64,
+                    Value::BigInt(v) => *v as f64,
+                    Value::Float(v) => (*v).into(),
+                    Value::Double(v) => *v,
+                    _ => return Ok(()),
+                };
+                if agg_data.result().is_null() {
+                    *agg_data.result_mut() = Value::Double(0.0);
+                    *agg_data.cnt_mut() = Value::Double(0.0);
+                    *agg_data.avg_mut() = Value::Double(0.0);
+                    *agg_data.deviation_mut() = Value::Double(0.0);
+                }
+                let cnt = agg_data.cnt().clone();
+                let avg = agg_data.avg().clone();
+                let deviation = agg_data.deviation().clone();
+                if let (Value::Double(c), Value::Double(a), Value::Double(d)) =
+                    (cnt, avg, deviation)
+                {
+                    let new_cnt = c + 1.0;
+                    let delta = val_f64 - a;
+                    let new_avg = a + delta / new_cnt;
+                    let delta2 = val_f64 - new_avg;
+                    let new_deviation = d + delta * delta2;
+                    *agg_data.cnt_mut() = Value::Double(new_cnt);
+                    *agg_data.avg_mut() = Value::Double(new_avg);
+                    *agg_data.deviation_mut() = Value::Double(new_deviation);
+                    if new_cnt >= 1.0 {
+                        let variance = new_deviation / new_cnt;
+                        *agg_data.result_mut() = Value::Double(variance.sqrt());
+                    }
+                }
+                Ok(())
+            }),
+        );
+
+        // STDDEV_SAMP function - sample standard deviation (divide by n-1)
+        self.functions.insert(
+            "STDDEV_SAMP".to_string(),
+            Arc::new(|agg_data: &mut AggData, val: &Value| {
+                if agg_data.result().is_bad_null() {
+                    return Ok(());
+                }
+                if !val.is_null() && !val.is_empty() && !val.is_numeric() {
+                    *agg_data.result_mut() = Value::Null(NullType::BadType);
+                    return Ok(());
+                }
+                if val.is_null() || val.is_empty() {
+                    return Ok(());
+                }
+                let val_f64 = match val {
+                    Value::SmallInt(v) => *v as f64,
+                    Value::Int(v) => *v as f64,
+                    Value::BigInt(v) => *v as f64,
+                    Value::Float(v) => (*v).into(),
+                    Value::Double(v) => *v,
+                    _ => return Ok(()),
+                };
+                if agg_data.result().is_null() {
+                    *agg_data.result_mut() = Value::Double(0.0);
+                    *agg_data.cnt_mut() = Value::Double(0.0);
+                    *agg_data.avg_mut() = Value::Double(0.0);
+                    *agg_data.deviation_mut() = Value::Double(0.0);
+                }
+                let cnt = agg_data.cnt().clone();
+                let avg = agg_data.avg().clone();
+                let deviation = agg_data.deviation().clone();
+                if let (Value::Double(c), Value::Double(a), Value::Double(d)) =
+                    (cnt, avg, deviation)
+                {
+                    let new_cnt = c + 1.0;
+                    let delta = val_f64 - a;
+                    let new_avg = a + delta / new_cnt;
+                    let delta2 = val_f64 - new_avg;
+                    let new_deviation = d + delta * delta2;
+                    *agg_data.cnt_mut() = Value::Double(new_cnt);
+                    *agg_data.avg_mut() = Value::Double(new_avg);
+                    *agg_data.deviation_mut() = Value::Double(new_deviation);
+                    if new_cnt >= 2.0 {
+                        let variance = new_deviation / (new_cnt - 1.0);
+                        *agg_data.result_mut() = Value::Double(variance.sqrt());
+                    }
+                }
+                Ok(())
+            }),
+        );
+
         // VEC_AVG function - element-wise average of vectors
         self.functions.insert(
             "VEC_AVG".to_string(),

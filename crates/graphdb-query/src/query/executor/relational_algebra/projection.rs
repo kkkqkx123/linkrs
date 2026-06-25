@@ -44,7 +44,11 @@ fn _extract_variable_names(expr: &Expression) -> Vec<String> {
                     collect(arg, names);
                 }
             }
-            Expression::Aggregate { arg, .. } => collect(arg, names),
+            Expression::Aggregate { args, .. } => {
+                for arg in args {
+                    collect(arg, names);
+                }
+            }
             Expression::List(elements) => {
                 for elem in elements {
                     collect(elem, names);

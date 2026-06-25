@@ -304,7 +304,7 @@ mod tests {
     fn test_has_aggregate_function_reference_with_aggregate() {
         let condition = Expression::Aggregate {
             func: AggregateFunction::Count(None),
-            arg: Box::new(Expression::Variable("amount".to_string())),
+            args: vec![Expression::Variable("amount".to_string())],
             distinct: false,
             filter: None,
         };

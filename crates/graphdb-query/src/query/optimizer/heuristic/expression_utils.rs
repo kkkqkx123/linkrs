@@ -154,12 +154,12 @@ fn rewrite_expression_with_map(
         },
         Expression::Aggregate {
             func,
-            arg,
+            args,
             distinct,
             filter,
         } => Expression::Aggregate {
             func: func.clone(),
-            arg: Box::new(rewrite_expression_with_map(arg, rewrite_map, expr_context.clone())),
+            args: args.iter().map(|a| rewrite_expression_with_map(a, rewrite_map, expr_context.clone())).collect(),
             distinct: *distinct,
             filter: filter
                 .as_ref()

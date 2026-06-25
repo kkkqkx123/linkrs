@@ -2,6 +2,7 @@
 
 use crate::core::types::operators::AggregateFunction;
 use crate::core::value::list::List;
+use crate::core::value::NullType;
 use crate::core::Expression;
 use crate::core::Value;
 use crate::query::executor::expression::ExpressionError;
@@ -19,6 +20,10 @@ pub fn aggregate_from_str(func_name: &str) -> Result<AggregateFunction, Expressi
         "COLLECT" => Ok(AggregateFunction::Collect("".to_string())),
         "DISTINCT" => Ok(AggregateFunction::Distinct("".to_string())),
         "PERCENTILE" => Ok(AggregateFunction::Percentile("".to_string(), 50.0)),
+        "STDDEV_POP" => Ok(AggregateFunction::StddevPop("".to_string())),
+        "STDDEV_SAMP" => Ok(AggregateFunction::StddevSamp("".to_string())),
+        "PRODUCT" => Ok(AggregateFunction::Product("".to_string())),
+        "PERCENTILE_CONT" => Ok(AggregateFunction::PercentileCont("".to_string(), 50.0)),
         "VARIANCE" => Ok(AggregateFunction::Variance("".to_string())),
         "MEDIAN" => Ok(AggregateFunction::Median("".to_string())),
         "MODE" => Ok(AggregateFunction::Mode("".to_string())),
@@ -103,6 +108,17 @@ pub fn aggregate_from_str_with_args(
             })?;
             Ok(AggregateFunction::Percentile(args[0].clone(), percentile))
         }
+        "PERCENTILE_CONT" => {
+            if args.len() < 2 {
+                return Err(ExpressionError::function_error(
+                    "PERCENTILE_CONT function requires a field name and percentile value".to_string(),
+                ));
+            }
+            let percentile = args[1].parse::<f64>().map_err(|_| {
+                ExpressionError::function_error("Invalid percentile value".to_string())
+            })?;
+            Ok(AggregateFunction::PercentileCont(args[0].clone(), percentile))
+        }
         "VEC_SUM" => {
             if args.is_empty() {
                 return Err(ExpressionError::function_error(
@@ -118,6 +134,30 @@ pub fn aggregate_from_str_with_args(
                 ));
             }
             Ok(AggregateFunction::VecAvg(args[0].clone()))
+        }
+        "STDDEV_POP" => {
+            if args.is_empty() {
+                return Err(ExpressionError::function_error(
+                    "STDDEV_POP function requires a field name".to_string(),
+                ));
+            }
+            Ok(AggregateFunction::StddevPop(args[0].clone()))
+        }
+        "STDDEV_SAMP" => {
+            if args.is_empty() {
+                return Err(ExpressionError::function_error(
+                    "STDDEV_SAMP function requires a field name".to_string(),
+                ));
+            }
+            Ok(AggregateFunction::StddevSamp(args[0].clone()))
+        }
+        "PRODUCT" => {
+            if args.is_empty() {
+                return Err(ExpressionError::function_error(
+                    "PRODUCT function requires a field name".to_string(),
+                ));
+            }
+            Ok(AggregateFunction::Product(args[0].clone()))
         }
         "VARIANCE" => {
             if args.is_empty() {
@@ -241,7 +281,11 @@ impl AggregateExpression {
                     .collect::<std::collections::HashSet<_>>(),
             )),
             AggregateFunction::Percentile(_, _) => state.calculate_percentile(50.0),
+            AggregateFunction::PercentileCont(_, _) => state.calculate_percentile(50.0),
             AggregateFunction::Std(_) => state.calculate_std(),
+            AggregateFunction::StddevPop(_) => state.calculate_stddev_pop(),
+            AggregateFunction::StddevSamp(_) => state.calculate_stddev_samp(),
+            AggregateFunction::Product(_) => state.calculate_product(),
             AggregateFunction::Variance(_) => state.calculate_variance(),
             AggregateFunction::Median(_) => state.calculate_median(),
             AggregateFunction::Mode(_) => state.calculate_mode(),
@@ -357,7 +401,7 @@ impl AggregateState {
 
         // Special processing is performed depending on the type of aggregate function.
         match function {
-            AggregateFunction::Percentile(_, _) => {
+            AggregateFunction::Percentile(_, _) | AggregateFunction::PercentileCont(_, _) => {
                 // Special handling of the PERCENTILE function: Collecting numerical values
                 match value {
                     Value::SmallInt(v) => self.percentile_values.push(*v as f64),
@@ -368,7 +412,7 @@ impl AggregateState {
                     _ => {}
                 }
             }
-            AggregateFunction::Std(_) | AggregateFunction::Variance(_) => {
+            AggregateFunction::Std(_) | AggregateFunction::StddevPop(_) | AggregateFunction::StddevSamp(_) | AggregateFunction::Variance(_) => {
                 // Special handling of the STD and VARIANCE functions: Collecting numerical values
                 match value {
                     Value::SmallInt(v) => self.std_values.push(*v as f64),
@@ -477,6 +521,25 @@ impl AggregateState {
                                 .collect();
                             self.vec_avg = Value::vector(new_avg);
                         }
+                    }
+                }
+            }
+            AggregateFunction::Product(_) => {
+                // Product accumulation - multiply values
+                if !value.is_null() && !value.is_empty() {
+                    if self.sum == Value::Int(0) {
+                        self.sum = value.clone();
+                    } else {
+                        self.sum = match (&self.sum, value) {
+                            (Value::SmallInt(a), Value::SmallInt(b)) => Value::SmallInt(a * b),
+                            (Value::SmallInt(a), Value::Int(b)) => Value::Int(*a as i32 * b),
+                            (Value::Int(a), Value::Int(b)) => Value::Int(a * b),
+                            (Value::Int(a), Value::SmallInt(b)) => Value::Int(a * *b as i32),
+                            (Value::BigInt(a), Value::BigInt(b)) => Value::BigInt(a * b),
+                            (Value::Float(a), Value::Float(b)) => Value::Float(a * b),
+                            (Value::Double(a), Value::Double(b)) => Value::Double(a * b),
+                            _ => Value::Null(NullType::BadData),
+                        };
                     }
                 }
             }
@@ -701,6 +764,43 @@ impl AggregateState {
         } else {
             Ok(Value::Null(crate::core::value::NullType::Null))
         }
+    }
+
+    /// Calculate population standard deviation (divide by n)
+    pub fn calculate_stddev_pop(&self) -> Result<Value, ExpressionError> {
+        if self.std_values.is_empty() {
+            return Ok(Value::Null(crate::core::value::NullType::Null));
+        }
+        let n = self.std_values.len() as f64;
+        let mean: f64 = self.std_values.iter().sum::<f64>() / n;
+        let variance: f64 = self
+            .std_values
+            .iter()
+            .map(|value| (value - mean).powi(2))
+            .sum::<f64>()
+            / n;
+        Ok(Value::Double(variance.sqrt()))
+    }
+
+    /// Calculate sample standard deviation (divide by n-1)
+    pub fn calculate_stddev_samp(&self) -> Result<Value, ExpressionError> {
+        let n = self.std_values.len() as f64;
+        if n < 2.0 {
+            return Ok(Value::Null(crate::core::value::NullType::Null));
+        }
+        let mean: f64 = self.std_values.iter().sum::<f64>() / n;
+        let variance: f64 = self
+            .std_values
+            .iter()
+            .map(|value| (value - mean).powi(2))
+            .sum::<f64>()
+            / (n - 1.0);
+        Ok(Value::Double(variance.sqrt()))
+    }
+
+    /// Calculate product of values
+    pub fn calculate_product(&self) -> Result<Value, ExpressionError> {
+        Ok(self.sum.clone())
     }
 }
 

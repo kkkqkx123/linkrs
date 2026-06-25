@@ -16,7 +16,7 @@ impl Expression {
             Expression::Binary { left, right, .. } => vec![left.as_ref(), right.as_ref()],
             Expression::Unary { operand, .. } => vec![operand.as_ref()],
             Expression::Function { args, .. } => args.iter().collect(),
-            Expression::Aggregate { arg, .. } => vec![arg.as_ref()],
+            Expression::Aggregate { args, .. } => args.iter().collect(),
             Expression::List(items) => items.iter().collect(),
             Expression::Map(pairs) => pairs.iter().map(|(_, expression)| expression).collect(),
             Expression::Case {
@@ -99,7 +99,7 @@ impl Expression {
             Expression::Binary { left, right, .. } => vec![left.as_mut(), right.as_mut()],
             Expression::Unary { operand, .. } => vec![operand.as_mut()],
             Expression::Function { args, .. } => args.iter_mut().collect(),
-            Expression::Aggregate { arg, .. } => vec![arg.as_mut()],
+            Expression::Aggregate { args, .. } => args.iter_mut().collect(),
             Expression::List(items) => items.iter_mut().collect(),
             Expression::Map(pairs) => pairs.iter_mut().map(|(_, expression)| expression).collect(),
             Expression::Case {
@@ -265,12 +265,12 @@ impl Expression {
             },
             Expression::Aggregate {
                 func,
-                arg,
+                args,
                 distinct,
                 filter,
             } => Expression::Aggregate {
                 func: func.clone(),
-                arg: Box::new(arg.transform(transformer)),
+                args: args.iter().map(|arg| arg.transform(transformer)).collect(),
                 distinct: *distinct,
                 filter: filter
                     .as_ref()

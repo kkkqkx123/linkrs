@@ -492,6 +492,142 @@ impl FunctionEvaluator {
                     None => Ok(Value::Null(NullType::NaN)),
                 }
             }
+            AggregateFunction::PercentileCont(_, _) => {
+                // Same logic as PERCENTILE
+                if args.len() < 2 {
+                    return Err(ExpressionError::argument_count_error(2, args.len()));
+                }
+                let percentile = match &args[1] {
+                    Value::Int(v) => *v as f64,
+                    Value::BigInt(v) => *v as f64,
+                    Value::Float(v) => *v as f64,
+                    Value::Double(v) => *v,
+                    _ => return Err(ExpressionError::type_error("Percentile must be a number")),
+                };
+                if !(0.0..=100.0).contains(&percentile) {
+                    return Err(ExpressionError::new(
+                        ExpressionErrorType::InvalidOperation,
+                        "Percentile must be between 0 and 100",
+                    ));
+                }
+                let values = match &args[0] {
+                    Value::List(list) => list,
+                    _ => return Err(ExpressionError::type_error("First argument must be a list")),
+                };
+                if values.is_empty() {
+                    return Ok(Value::Null(crate::core::NullType::NaN));
+                }
+                let mut numeric_values = Vec::new();
+                for value in values.iter() {
+                    match value {
+                        Value::SmallInt(v) => numeric_values.push(*v as f64),
+                        Value::Int(v) => numeric_values.push(*v as f64),
+                        Value::BigInt(v) => numeric_values.push(*v as f64),
+                        Value::Float(v) => numeric_values.push(*v as f64),
+                        Value::Double(v) => numeric_values.push(*v),
+                        _ => continue,
+                    }
+                }
+                if numeric_values.is_empty() {
+                    return Ok(Value::Null(crate::core::NullType::NaN));
+                }
+                numeric_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                let index = (percentile / 100.0) * (numeric_values.len() - 1) as f64;
+                let lower_index = index.floor() as usize;
+                let upper_index = index.ceil() as usize;
+                if lower_index == upper_index {
+                    Ok(Value::Double(numeric_values[lower_index]))
+                } else {
+                    let lower_value = numeric_values[lower_index];
+                    let upper_value = numeric_values[upper_index];
+                    let weight = index - lower_index as f64;
+                    let interpolated = lower_value + weight * (upper_value - lower_value);
+                    Ok(Value::Double(interpolated))
+                }
+            }
+            AggregateFunction::StddevPop(_) => {
+                if args.is_empty() {
+                    return Err(ExpressionError::argument_count_error(1, args.len()));
+                }
+                let values = match &args[0] {
+                    Value::List(list) => list,
+                    _ => return Err(ExpressionError::type_error("First argument must be a list")),
+                };
+                if values.is_empty() {
+                    return Ok(Value::Null(crate::core::NullType::NaN));
+                }
+                let mut numeric_values = Vec::new();
+                for value in values.iter() {
+                    match value {
+                        Value::SmallInt(v) => numeric_values.push(*v as f64),
+                        Value::Int(v) => numeric_values.push(*v as f64),
+                        Value::BigInt(v) => numeric_values.push(*v as f64),
+                        Value::Float(v) => numeric_values.push(*v as f64),
+                        Value::Double(v) => numeric_values.push(*v),
+                        _ => continue,
+                    }
+                }
+                if numeric_values.is_empty() {
+                    return Ok(Value::Null(crate::core::NullType::NaN));
+                }
+                let n = numeric_values.len() as f64;
+                let mean: f64 = numeric_values.iter().sum::<f64>() / n;
+                let variance: f64 = numeric_values.iter().map(|value| (value - mean).powi(2)).sum::<f64>() / n;
+                Ok(Value::Double(variance.sqrt()))
+            }
+            AggregateFunction::StddevSamp(_) => {
+                if args.is_empty() {
+                    return Err(ExpressionError::argument_count_error(1, args.len()));
+                }
+                let values = match &args[0] {
+                    Value::List(list) => list,
+                    _ => return Err(ExpressionError::type_error("First argument must be a list")),
+                };
+                if values.is_empty() {
+                    return Ok(Value::Null(crate::core::NullType::NaN));
+                }
+                let mut numeric_values = Vec::new();
+                for value in values.iter() {
+                    match value {
+                        Value::SmallInt(v) => numeric_values.push(*v as f64),
+                        Value::Int(v) => numeric_values.push(*v as f64),
+                        Value::BigInt(v) => numeric_values.push(*v as f64),
+                        Value::Float(v) => numeric_values.push(*v as f64),
+                        Value::Double(v) => numeric_values.push(*v),
+                        _ => continue,
+                    }
+                }
+                if numeric_values.is_empty() {
+                    return Ok(Value::Null(crate::core::NullType::NaN));
+                }
+                let n = numeric_values.len() as f64;
+                if n < 2.0 {
+                    return Ok(Value::Null(crate::core::NullType::NaN));
+                }
+                let mean: f64 = numeric_values.iter().sum::<f64>() / n;
+                let variance: f64 = numeric_values.iter().map(|value| (value - mean).powi(2)).sum::<f64>() / (n - 1.0);
+                Ok(Value::Double(variance.sqrt()))
+            }
+            AggregateFunction::Product(_) => {
+                if args.is_empty() {
+                    return Err(ExpressionError::argument_count_error(1, args.len()));
+                }
+                let values = match &args[0] {
+                    Value::List(list) => list,
+                    _ => return Err(ExpressionError::type_error("First argument must be a list")),
+                };
+                if values.is_empty() {
+                    return Ok(Value::Null(crate::core::NullType::NaN));
+                }
+                let mut product = Value::Int(1);
+                for value in values.iter() {
+                    if value.is_null() || value.is_empty() {
+                        continue;
+                    }
+                    product = product.mul(value).map_err(ExpressionError::runtime_error)?;
+                }
+                Ok(product)
+            }
             AggregateFunction::VecAvg(_) => {
                 if args.is_empty() {
                     return Err(ExpressionError::argument_count_error(1, args.len()));

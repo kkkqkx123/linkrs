@@ -147,8 +147,10 @@ impl VariableChecker {
                     self.collect_variables_internal(arg, variables);
                 }
             }
-            crate::core::types::expr::Expression::Aggregate { arg, .. } => {
-                self.collect_variables_internal(arg, variables);
+            crate::core::types::expr::Expression::Aggregate { args, .. } => {
+                for arg in args {
+                    self.collect_variables_internal(arg, variables);
+                }
             }
             crate::core::types::expr::Expression::Property {
                 object: inner_expression,
@@ -217,8 +219,8 @@ impl VariableChecker {
             crate::core::types::expr::Expression::Function { args, .. } => args
                 .iter()
                 .any(|arg| self.contains_variable_internal(arg, var)),
-            crate::core::types::expr::Expression::Aggregate { arg, .. } => {
-                self.contains_variable_internal(arg, var)
+            crate::core::types::expr::Expression::Aggregate { args, .. } => {
+                args.iter().any(|arg| self.contains_variable_internal(arg, var))
             }
             crate::core::types::expr::Expression::Property {
                 object: inner_expression,

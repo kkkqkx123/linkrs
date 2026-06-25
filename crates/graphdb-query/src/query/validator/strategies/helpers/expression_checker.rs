@@ -59,11 +59,11 @@ impl ExpressionChecker {
             }
             crate::core::types::expr::Expression::Aggregate {
                 func,
-                arg,
+                args,
                 distinct,
                 ..
             } => {
-                self.validate_aggregate_operation(func, arg, *distinct, depth)?;
+                self.validate_aggregate_operation(func, args, *distinct, depth)?;
             }
             crate::core::types::expr::Expression::Property {
                 object: prop_expression,
@@ -196,13 +196,14 @@ impl ExpressionChecker {
     fn validate_aggregate_operation(
         &self,
         func: &crate::core::AggregateFunction,
-        arg: &crate::core::types::expr::Expression,
+        args: &[crate::core::types::expr::Expression],
         distinct: bool,
         depth: usize,
     ) -> Result<(), ValidationError> {
-        self.validate_expression_operations_recursive(arg, depth + 1)?;
-
-        let _ = arg.deduce_type();
+        for arg in args {
+            self.validate_expression_operations_recursive(arg, depth + 1)?;
+            let _ = arg.deduce_type();
+        }
 
         if distinct {
             match func {
@@ -463,8 +464,10 @@ impl ExpressionChecker {
                     self.check_expression_cycles(arg, visited, depth + 1)?;
                 }
             }
-            crate::core::types::expr::Expression::Aggregate { arg, .. } => {
-                self.check_expression_cycles(arg, visited, depth + 1)?;
+            crate::core::types::expr::Expression::Aggregate { args, .. } => {
+                for arg in args {
+                    self.check_expression_cycles(arg, visited, depth + 1)?;
+                }
             }
             _ => {}
         }
@@ -503,8 +506,8 @@ impl ExpressionChecker {
                     .unwrap_or(0);
                 1 + max_arg_depth
             }
-            crate::core::types::expr::Expression::Aggregate { arg, .. } => {
-                1 + self.calculate_expression_depth_internal(arg)
+            crate::core::types::expr::Expression::Aggregate { args, .. } => {
+                1 + args.iter().map(|a| self.calculate_expression_depth_internal(a)).max().unwrap_or(0)
             }
             crate::core::types::expr::Expression::Property {
                 object: prop_expression,

@@ -40,6 +40,8 @@ pub struct AggregateFunctionSpec {
     pub function: AggregateFunction,
     pub field: Option<String>,
     pub distinct: bool,
+    pub filter: Option<Expression>,
+    pub grouping_sets: Option<Vec<Vec<Expression>>>,
 }
 
 impl AggregateFunctionSpec {
@@ -48,6 +50,8 @@ impl AggregateFunctionSpec {
             function,
             field: None,
             distinct: false,
+            filter: None,
+            grouping_sets: None,
         }
     }
 
@@ -58,6 +62,16 @@ impl AggregateFunctionSpec {
 
     pub fn with_distinct(mut self) -> Self {
         self.distinct = true;
+        self
+    }
+
+    pub fn with_filter(mut self, filter: Expression) -> Self {
+        self.filter = Some(filter);
+        self
+    }
+
+    pub fn with_grouping_sets(mut self, sets: Vec<Vec<Expression>>) -> Self {
+        self.grouping_sets = Some(sets);
         self
     }
 
@@ -83,6 +97,8 @@ impl AggregateFunctionSpec {
             function: AggregateFunction::Avg(field.clone()),
             field: Some(field),
             distinct: false,
+            filter: None,
+            grouping_sets: None,
         }
     }
 
@@ -109,6 +125,8 @@ impl AggregateFunctionSpec {
             function,
             field,
             distinct: false,
+            filter: None,
+            grouping_sets: None,
         }
     }
 
@@ -218,6 +236,8 @@ pub struct AggregateExecutor<S: StorageClient + Send + 'static> {
     parallel_config: ParallelConfig,
     /// Aggregate Function Manager
     agg_function_manager: AggFunctionManager,
+    /// Optional grouping sets for ROLLUP/CUBE/GROUPING SETS support
+    grouping_sets: Vec<Vec<Expression>>,
 }
 
 impl<S: StorageClient> AggregateExecutor<S> {
@@ -252,12 +272,19 @@ impl<S: StorageClient> AggregateExecutor<S> {
             input_executor: None,
             parallel_config: ParallelConfig::default(),
             agg_function_manager: AggFunctionManager::new(),
+            grouping_sets: Vec::new(),
         }
     }
 
     /// Setting up parallel computing configuration
     pub fn with_parallel_config(mut self, config: ParallelConfig) -> Self {
         self.parallel_config = config;
+        self
+    }
+
+    /// Set grouping sets for ROLLUP/CUBE/GROUPING SETS support
+    pub fn with_grouping_sets(mut self, sets: Vec<Vec<Expression>>) -> Self {
+        self.grouping_sets = sets;
         self
     }
 
@@ -272,16 +299,20 @@ impl<S: StorageClient> AggregateExecutor<S> {
             ));
         };
 
-        match input_result {
-            ExecutionResult::DataSet(dataset) => self.aggregate_dataset(dataset),
+        let dataset = match input_result {
+            ExecutionResult::DataSet(dataset) => dataset,
             ExecutionResult::Empty
             | ExecutionResult::Success
-            | ExecutionResult::SpaceSwitched(_) => {
-                let dataset = crate::query::DataSet::new();
-                self.aggregate_dataset(dataset)
-            }
-            ExecutionResult::Error(msg) => Err(DBError::query(msg)),
+            | ExecutionResult::SpaceSwitched(_) => crate::query::DataSet::new(),
+            ExecutionResult::Error(msg) => return Err(DBError::query(msg)),
+        };
+
+        // When grouping_sets is non-empty, iterate over each set and union the results.
+        if !self.grouping_sets.is_empty() {
+            return self.aggregate_grouping_sets(dataset);
         }
+
+        self.aggregate_dataset(dataset)
     }
 
     /// Convert Vertices to a DataSet for aggregation
@@ -326,6 +357,122 @@ impl<S: StorageClient> AggregateExecutor<S> {
         }
 
         dataset
+    }
+
+    /// Handle ROLLUP/CUBE/GROUPING SETS by iterating over each grouping set
+    /// and unioning the results with NULL padding for inactive group keys.
+    fn aggregate_grouping_sets(
+        &mut self,
+        dataset: crate::query::DataSet,
+    ) -> DBResult<crate::query::DataSet> {
+        // Build the full list of group key column names from the primary group_keys.
+        let all_key_names: Vec<String> = self.group_keys.iter().filter_map(|expr| {
+            if let Expression::Variable(name) = expr {
+                Some(name.clone())
+            } else {
+                None
+            }
+        }).collect();
+
+        let mut combined: Option<crate::query::DataSet> = None;
+
+        let grouping_sets = self.grouping_sets.clone();
+        for gs in &grouping_sets {
+            // Run aggregation with only this subset of keys
+            let result = self.aggregate_with_group_keys(gs.clone(), &dataset)?;
+
+            // Pad result with NULLs for group key columns not in this grouping set
+            let padded = self.pad_grouping_set_result(&result, gs, &all_key_names);
+
+            match combined {
+                None => combined = Some(padded),
+                Some(ref mut c) => {
+                    for row in padded.rows {
+                        c.rows.push(row);
+                    }
+                }
+            }
+        }
+
+        combined.ok_or_else(|| DBError::query("No grouping sets produced results".to_string()))
+    }
+
+    /// Run aggregation with a custom set of group keys (for grouping sets).
+    fn aggregate_with_group_keys(
+        &mut self,
+        group_keys: Vec<Expression>,
+        dataset: &crate::query::DataSet,
+    ) -> DBResult<crate::query::DataSet> {
+        let saved_keys = std::mem::replace(&mut self.group_keys, group_keys);
+        let result = self.aggregate_dataset(dataset.clone());
+        self.group_keys = saved_keys;
+        result
+    }
+
+    /// Create NULL-padded column values for group keys not in the current grouping set.
+    fn pad_grouping_set_result(
+        &self,
+        result: &crate::query::DataSet,
+        active_keys: &[Expression],
+        all_key_names: &[String],
+    ) -> crate::query::DataSet {
+        // Build a list of (key_name, position in active_keys) for this grouping set
+        let active_key_positions: Vec<(String, usize)> = active_keys
+            .iter()
+            .enumerate()
+            .filter_map(|(pos, e)| {
+                if let Expression::Variable(name) = e {
+                    Some((name.clone(), pos))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let num_agg = self.aggregate_functions.len();
+
+        // Build the full col_names: all key columns + aggregate function columns
+        let mut full_col_names = all_key_names.to_vec();
+        for af in &self.aggregate_functions {
+            full_col_names.push(af.agg_function_name());
+        }
+
+        let mut padded = crate::query::DataSet::with_columns(full_col_names);
+
+        // Pre-index active_keys for O(1) position lookup
+        let active_key_map: std::collections::HashMap<&str, usize> = active_key_positions
+            .iter()
+            .map(|(name, pos)| (name.as_str(), *pos))
+            .collect();
+
+        for row in &result.rows {
+            let num_active_keys = active_keys.len();
+
+            // Build the full row with NULLs for inactive keys
+            let mut full_row: Vec<Value> = all_key_names
+                .iter()
+                .map(|key_name| {
+                    active_key_map
+                        .get(key_name.as_str())
+                        .map(|&pos| row[pos].clone())
+                        .unwrap_or(Value::Null(NullType::Null))
+                })
+                .collect();
+
+            // Copy aggregate function results (they start after the active key values in the row)
+            let agg_start = num_active_keys;
+            for j in 0..num_agg {
+                if agg_start + j < row.len() {
+                    full_row.push(row[agg_start + j].clone());
+                } else {
+                    full_row.push(Value::Null(NullType::Null));
+                }
+            }
+
+            padded.add_row(full_row);
+        }
+
+        padded
     }
 
     fn aggregate_dataset(
@@ -402,6 +549,17 @@ impl<S: StorageClient> AggregateExecutor<S> {
                 }
 
                 let agg_data = &mut agg_data_list[i];
+
+                // Evaluate FILTER clause if present
+                if let Some(filter_expr) = &agg_func.filter {
+                    let filter_result =
+                        ExpressionEvaluator::evaluate(filter_expr, &mut context)
+                            .unwrap_or(Value::Null(NullType::Null));
+                    if !matches!(filter_result, Value::Bool(true)) {
+                        continue;
+                    }
+                }
+
                 let value = self.get_value_for_agg(&mut context, agg_func, row, &dataset.col_names);
 
                 // Obtain the aggregate functions and execute them.
@@ -496,6 +654,9 @@ impl<S: StorageClient> AggregateExecutor<S> {
             | AggregateFunction::CollectSet(field)
             | AggregateFunction::Distinct(field)
             | AggregateFunction::Std(field)
+            | AggregateFunction::StddevPop(field)
+            | AggregateFunction::StddevSamp(field)
+            | AggregateFunction::Product(field)
             | AggregateFunction::Variance(field)
             | AggregateFunction::Median(field)
             | AggregateFunction::Mode(field)
@@ -506,6 +667,9 @@ impl<S: StorageClient> AggregateExecutor<S> {
                 Self::resolve_field_value(context, field, row, col_names)
             }
             AggregateFunction::Percentile(field, _) => {
+                Self::resolve_field_value(context, field, row, col_names)
+            }
+            AggregateFunction::PercentileCont(field, _) => {
                 Self::resolve_field_value(context, field, row, col_names)
             }
             AggregateFunction::GroupConcat(field, _) => {
@@ -575,6 +739,16 @@ impl<S: StorageClient> AggregateExecutor<S> {
 
                         let agg_data = &mut agg_data_list[i];
 
+                        // Evaluate FILTER clause if present
+                        if let Some(filter_expr) = &agg_func.filter {
+                            let filter_result =
+                                ExpressionEvaluator::evaluate(filter_expr, &mut context)
+                                    .unwrap_or(Value::Null(NullType::Null));
+                            if !matches!(filter_result, Value::Bool(true)) {
+                                continue;
+                            }
+                        }
+
                         // Obtain the value
                         let value = match &agg_func.function {
                             AggregateFunction::Count(None) => Value::Int(1),
@@ -587,6 +761,9 @@ impl<S: StorageClient> AggregateExecutor<S> {
                             | AggregateFunction::CollectSet(field)
                             | AggregateFunction::Distinct(field)
                             | AggregateFunction::Std(field)
+                            | AggregateFunction::StddevPop(field)
+                            | AggregateFunction::StddevSamp(field)
+                            | AggregateFunction::Product(field)
                             | AggregateFunction::Variance(field)
                             | AggregateFunction::Median(field)
                             | AggregateFunction::Mode(field)
@@ -736,11 +913,39 @@ impl<S: StorageClient> AggregateExecutor<S> {
                             "percentile".to_string()
                         }
                     }
+                    AggregateFunction::PercentileCont(_, _) => {
+                        if let Some(ref field) = agg_func.field {
+                            format!("percentile_cont_{}", field)
+                        } else {
+                            "percentile_cont".to_string()
+                        }
+                    }
                     AggregateFunction::Std(_) => {
                         if let Some(ref field) = agg_func.field {
                             format!("std_{}", field)
                         } else {
                             "std".to_string()
+                        }
+                    }
+                    AggregateFunction::StddevPop(_) => {
+                        if let Some(ref field) = agg_func.field {
+                            format!("stddev_pop_{}", field)
+                        } else {
+                            "stddev_pop".to_string()
+                        }
+                    }
+                    AggregateFunction::StddevSamp(_) => {
+                        if let Some(ref field) = agg_func.field {
+                            format!("stddev_samp_{}", field)
+                        } else {
+                            "stddev_samp".to_string()
+                        }
+                    }
+                    AggregateFunction::Product(_) => {
+                        if let Some(ref field) = agg_func.field {
+                            format!("product_{}", field)
+                        } else {
+                            "product".to_string()
                         }
                     }
                     AggregateFunction::BitAnd(_) => {

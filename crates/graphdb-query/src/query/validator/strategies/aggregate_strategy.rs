@@ -110,27 +110,42 @@ impl AggregateValidationStrategy {
         match expression {
             crate::core::types::expr::Expression::Aggregate {
                 func,
-                arg,
+                args,
                 distinct: _,
+                filter,
                 ..
             } => {
                 // 1. Verify the validity of the aggregate function names.
                 // Since enumerations are now being used, this check may need to be adjusted.
                 // Skip this check for now, since the enumeration values are always valid.
 
-                // 2. Check for nested aggregate functions: It is not allowed for aggregate functions to contain other aggregate functions.
-                if self.has_aggregate_expression_internal(arg) {
-                    return Err(ValidationError::new(
-                        "Aggregate function nesting is not allowed".to_string(),
-                        ValidationErrorType::AggregateError,
-                    ));
+                // 2-4. Check each argument for nested aggregates, wildcard, and validity
+                for arg in args {
+                    // 2. Check for nested aggregate functions: It is not allowed for aggregate functions to contain other aggregate functions.
+                    if self.has_aggregate_expression_internal(arg) {
+                        return Err(ValidationError::new(
+                            "Aggregate function nesting is not allowed".to_string(),
+                            ValidationErrorType::AggregateError,
+                        ));
+                    }
+
+                    // 3. Check special attributes (*. * can only be used for COUNT).
+                    self.validate_wildcard_property(func, arg)?;
+
+                    // 4. Recursive verification of the validity of parameter expressions
+                    self.validate_expression_in_aggregate(arg)?;
                 }
 
-                // 3. Check special attributes (*. * can only be used for COUNT).
-                self.validate_wildcard_property(func, arg)?;
-
-                // 4. Recursive verification of the validity of parameter expressions
-                self.validate_expression_in_aggregate(arg)?;
+                // 5. Validate FILTER clause expression if present
+                if let Some(filter_expr) = filter {
+                    if self.has_aggregate_expression_internal(filter_expr) {
+                        return Err(ValidationError::new(
+                            "FILTER clause must not contain aggregate functions".to_string(),
+                            ValidationErrorType::AggregateError,
+                        ));
+                    }
+                    self.validate_expression_in_aggregate(filter_expr)?;
+                }
 
                 Ok(())
             }
@@ -349,7 +364,7 @@ mod tests {
         // Count(None) 是有效的，表示 COUNT(*)
         let expression = Expression::Aggregate {
             func: AggregateFunction::Count(None),
-            arg: Box::new(Expression::Literal(crate::core::Value::Int(1))),
+            args: vec![Expression::Literal(crate::core::Value::Int(1))],
             distinct: false,
             filter: None,
         };
@@ -368,13 +383,13 @@ mod tests {
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
         let inner_agg = Expression::Aggregate {
             func: AggregateFunction::Count(None),
-            arg: Box::new(Expression::Literal(crate::core::Value::Int(1))),
+            args: vec![Expression::Literal(crate::core::Value::Int(1))],
             distinct: false,
             filter: None,
         };
         let outer_agg = Expression::Aggregate {
             func: AggregateFunction::Sum("".to_string()),
-            arg: Box::new(inner_agg),
+            args: vec![inner_agg],
             distinct: false,
             filter: None,
         };
@@ -395,10 +410,10 @@ mod tests {
         let strategy = AggregateValidationStrategy::new();
         let expression = Expression::Aggregate {
             func: AggregateFunction::Count(None),
-            arg: Box::new(Expression::Property {
+            args: vec![Expression::Property {
                 object: Box::new(Expression::Variable("n".to_string())),
                 property: "*".to_string(),
-            }),
+            }],
             distinct: false,
             filter: None,
         };
@@ -417,10 +432,10 @@ mod tests {
         let strategy = AggregateValidationStrategy::new();
         let expression = Expression::Aggregate {
             func: AggregateFunction::Sum("".to_string()),
-            arg: Box::new(Expression::Property {
+            args: vec![Expression::Property {
                 object: Box::new(Expression::Variable("n".to_string())),
                 property: "*".to_string(),
-            }),
+            }],
             distinct: false,
             filter: None,
         };
@@ -469,7 +484,7 @@ mod tests {
         for func in valid_functions {
             let expression = Expression::Aggregate {
                 func,
-                arg: Box::new(Expression::Literal(crate::core::Value::Int(1))),
+                args: vec![Expression::Literal(crate::core::Value::Int(1))],
                 distinct: false,
             filter: None,
             };
@@ -491,7 +506,7 @@ mod tests {
         let strategy = AggregateValidationStrategy::new();
         let expression = Expression::Aggregate {
             func: AggregateFunction::Count(None),
-            arg: Box::new(Expression::Literal(crate::core::Value::Int(1))),
+            args: vec![Expression::Literal(crate::core::Value::Int(1))],
             distinct: true,
             filter: None,
         };
@@ -512,10 +527,10 @@ mod tests {
         // COUNT($-.*) 应该被允许
         let count_input_wildcard = Expression::Aggregate {
             func: AggregateFunction::Count(None),
-            arg: Box::new(Expression::Property {
+            args: vec![Expression::Property {
                 object: Box::new(Expression::Variable("-".to_string())),
                 property: "*".to_string(),
-            }),
+            }],
             distinct: false,
             filter: None,
         };
@@ -528,10 +543,10 @@ mod tests {
         // SUM($-.*) 不应该被允许
         let sum_input_wildcard = Expression::Aggregate {
             func: AggregateFunction::Sum("".to_string()),
-            arg: Box::new(Expression::Property {
+            args: vec![Expression::Property {
                 object: Box::new(Expression::Variable("-".to_string())),
                 property: "*".to_string(),
-            }),
+            }],
             distinct: false,
             filter: None,
         };
@@ -553,10 +568,10 @@ mod tests {
         // COUNT($var.*) 应该被允许
         let count_var_wildcard = Expression::Aggregate {
             func: AggregateFunction::Count(None),
-            arg: Box::new(Expression::Property {
+            args: vec![Expression::Property {
                 object: Box::new(Expression::Variable("myVar".to_string())),
                 property: "*".to_string(),
-            }),
+            }],
             distinct: false,
             filter: None,
         };
@@ -569,10 +584,10 @@ mod tests {
         // AVG($var.*) 不应该被允许
         let avg_var_wildcard = Expression::Aggregate {
             func: AggregateFunction::Avg("".to_string()),
-            arg: Box::new(Expression::Property {
+            args: vec![Expression::Property {
                 object: Box::new(Expression::Variable("myVar".to_string())),
                 property: "*".to_string(),
-            }),
+            }],
             distinct: false,
             filter: None,
         };
@@ -595,14 +610,14 @@ mod tests {
         // SUM(n.* + 1) - 这里的 n.* 不是聚合函数的直接参数
         let nested_wildcard = Expression::Aggregate {
             func: AggregateFunction::Sum("".to_string()),
-            arg: Box::new(Expression::Binary {
+            args: vec![Expression::Binary {
                 left: Box::new(Expression::Property {
                     object: Box::new(Expression::Variable("n".to_string())),
                     property: "*".to_string(),
                 }),
                 op: BinaryOperator::Add,
                 right: Box::new(Expression::Literal(crate::core::Value::Int(1))),
-            }),
+            }],
             distinct: false,
             filter: None,
         };
@@ -724,10 +739,10 @@ mod tests {
         // Testing the effectiveness of the SUM aggregation function
         let expression = Expression::Aggregate {
             func: AggregateFunction::Sum("".to_string()),
-            arg: Box::new(Expression::Property {
+            args: vec![Expression::Property {
                 object: Box::new(Expression::Variable("n".to_string())),
                 property: "amount".to_string(),
-            }),
+            }],
             distinct: false,
             filter: None,
         };
@@ -746,7 +761,7 @@ mod tests {
         // Testing the effectiveness of the COUNT aggregate function
         let expression = Expression::Aggregate {
             func: AggregateFunction::Count(None),
-            arg: Box::new(Expression::Literal(crate::core::Value::Int(1))),
+            args: vec![Expression::Literal(crate::core::Value::Int(1))],
             distinct: false,
             filter: None,
         };
@@ -764,10 +779,10 @@ mod tests {
 
         let min_expression = Expression::Aggregate {
             func: AggregateFunction::Min("".to_string()),
-            arg: Box::new(Expression::Property {
+            args: vec![Expression::Property {
                 object: Box::new(Expression::Variable("n".to_string())),
                 property: "value".to_string(),
-            }),
+            }],
             distinct: false,
             filter: None,
         };
@@ -778,10 +793,10 @@ mod tests {
 
         let max_expression = Expression::Aggregate {
             func: AggregateFunction::Max("".to_string()),
-            arg: Box::new(Expression::Property {
+            args: vec![Expression::Property {
                 object: Box::new(Expression::Variable("n".to_string())),
                 property: "value".to_string(),
-            }),
+            }],
             distinct: false,
             filter: None,
         };

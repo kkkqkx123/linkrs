@@ -177,6 +177,7 @@ impl<S: StorageClient + Send + 'static> DataProcessingBuilder<S> {
         // The `AggregateFunction` needs to be converted to `Vec<AggregateFunctionSpec>`.
         let agg_funcs = node.aggregation_functions();
         let agg_distinct = node.aggregation_distinct();
+        let agg_filters = node.aggregation_filters();
         let aggregate_functions: Vec<AggregateFunctionSpec> = agg_funcs
             .iter()
             .enumerate()
@@ -184,6 +185,11 @@ impl<S: StorageClient + Send + 'static> DataProcessingBuilder<S> {
                 let mut spec = AggregateFunctionSpec::from_agg_function(agg_func.clone());
                 if i < agg_distinct.len() && agg_distinct[i] {
                     spec = spec.with_distinct();
+                }
+                if i < agg_filters.len() {
+                    if let Some(ref filter_expr) = agg_filters[i] {
+                        spec = spec.with_filter(filter_expr.clone());
+                    }
                 }
                 spec
             })
@@ -193,13 +199,29 @@ impl<S: StorageClient + Send + 'static> DataProcessingBuilder<S> {
         let col_names = node.col_names().to_vec();
 
         // Use with_col_names to pass column names
-        let executor = AggregateExecutor::with_col_names(
+        let mut executor = AggregateExecutor::with_col_names(
             node.id(),
             storage,
             aggregate_functions,
             group_keys,
             col_names,
         );
+
+        // Pass grouping sets for ROLLUP/CUBE/GROUPING SETS support
+        use crate::core::Expression;
+        let grouping_sets: Vec<Vec<Expression>> = node
+            .grouping_sets()
+            .iter()
+            .map(|set| {
+                set.iter()
+                    .map(|name| Expression::Variable(name.clone()))
+                    .collect()
+            })
+            .collect();
+        if !grouping_sets.is_empty() {
+            executor = executor.with_grouping_sets(grouping_sets);
+        }
+
         Ok(ExecutorEnum::Aggregate(executor))
     }
 

@@ -127,6 +127,41 @@ define_function_enum! {
             description: "Get current timestamp",
             handler: execute_current_timestamp
         },
+        ToChar => {
+            name: "to_char",
+            arity: 2,
+            variadic: false,
+            description: "Format datetime as string",
+            handler: execute_to_char
+        },
+        ToDate => {
+            name: "to_date",
+            arity: 1,
+            variadic: false,
+            description: "Convert string to date",
+            handler: execute_to_date
+        },
+        Age => {
+            name: "age",
+            arity: 1,
+            variadic: false,
+            description: "Calculate age/interval from date/datetime to now",
+            handler: execute_age
+        },
+        LastDay => {
+            name: "last_day",
+            arity: 1,
+            variadic: false,
+            description: "Get last day of the month",
+            handler: execute_last_day
+        },
+        GenerateSeries => {
+            name: "generate_series",
+            arity: 2,
+            variadic: true,
+            description: "Generate a series of timestamps",
+            handler: execute_generate_series
+        },
     }
 }
 
@@ -547,6 +582,191 @@ fn execute_current_timestamp(_args: &[Value]) -> Result<Value, ExpressionError> 
         .expect("system time error")
         .as_millis();
     Ok(Value::BigInt(now as i64))
+}
+
+fn execute_to_char(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "to_char requires 2 arguments",
+        ));
+    }
+    let format_str = match &args[1] {
+        Value::String(s) => s.clone(),
+        Value::Null(_) => return Ok(Value::Null(NullType::Null)),
+        _ => return Err(ExpressionError::type_error("to_char format must be a string")),
+    };
+    match &args[0] {
+        Value::Date(d) => {
+            let naive = chrono::NaiveDate::from_ymd_opt(d.year, d.month, d.day)
+                .ok_or_else(|| ExpressionError::type_error("Invalid date"))?;
+            let formatted = naive.format(&format_str).to_string();
+            Ok(Value::String(formatted))
+        }
+        Value::DateTime(dt) => {
+            let naive = chrono::NaiveDateTime::new(
+                chrono::NaiveDate::from_ymd_opt(dt.year, dt.month, dt.day)
+                    .ok_or_else(|| ExpressionError::type_error("Invalid date"))?,
+                chrono::NaiveTime::from_hms_micro_opt(dt.hour, dt.minute, dt.sec, dt.microsec)
+                    .ok_or_else(|| ExpressionError::type_error("Invalid time"))?,
+            );
+            let formatted = naive.format(&format_str).to_string();
+            Ok(Value::String(formatted))
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "to_char requires a date or datetime as first argument",
+        )),
+    }
+}
+
+fn execute_to_date(args: &[Value]) -> Result<Value, ExpressionError> {
+    match &args[0] {
+        Value::String(s) => {
+            let formats = ["%Y-%m-%d", "%Y/%m/%d", "%d-%m-%Y", "%m-%d-%Y", "%Y%m%d"];
+            for fmt in &formats {
+                if let Ok(naivedate) = chrono::NaiveDate::parse_from_str(s, fmt) {
+                    return Ok(Value::Date(DateValue {
+                        year: naivedate.year(),
+                        month: naivedate.month(),
+                        day: naivedate.day(),
+                    }));
+                }
+            }
+            Err(ExpressionError::type_error(
+                "Unable to parse date string, supported formats: YYYY-MM-DD, YYYY/MM/DD, DD-MM-YYYY, MM-DD-YYYY, YYYYMMDD",
+            ))
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "to_date requires a string argument",
+        )),
+    }
+}
+
+fn execute_age(args: &[Value]) -> Result<Value, ExpressionError> {
+    let now = chrono::Utc::now();
+    match &args[0] {
+        Value::Date(d) => {
+            let naive = chrono::NaiveDate::from_ymd_opt(d.year, d.month, d.day)
+                .ok_or_else(|| ExpressionError::type_error("Invalid date"))?;
+            let target = naive.and_hms_opt(0, 0, 0)
+                .ok_or_else(|| ExpressionError::type_error("Invalid time"))?;
+            let target_dt = target.and_utc();
+            let duration = now.signed_duration_since(target_dt);
+            Ok(Value::BigInt(duration.num_days()))
+        }
+        Value::DateTime(dt) => {
+            let naive = chrono::NaiveDateTime::new(
+                chrono::NaiveDate::from_ymd_opt(dt.year, dt.month, dt.day)
+                    .ok_or_else(|| ExpressionError::type_error("Invalid date"))?,
+                chrono::NaiveTime::from_hms_micro_opt(dt.hour, dt.minute, dt.sec, dt.microsec)
+                    .ok_or_else(|| ExpressionError::type_error("Invalid time"))?,
+            );
+            let target_dt = naive.and_utc();
+            let duration = now.signed_duration_since(target_dt);
+            Ok(Value::BigInt(duration.num_days()))
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "age requires a date or datetime argument",
+        )),
+    }
+}
+
+fn execute_last_day(args: &[Value]) -> Result<Value, ExpressionError> {
+    match &args[0] {
+        Value::Date(d) => {
+            let last_day = get_last_day(d.year, d.month);
+            Ok(Value::Date(DateValue {
+                year: d.year,
+                month: d.month,
+                day: last_day,
+            }))
+        }
+        Value::DateTime(dt) => {
+            let last_day = get_last_day(dt.year, dt.month);
+            Ok(Value::DateTime(DateTimeValue {
+                year: dt.year,
+                month: dt.month,
+                day: last_day,
+                hour: dt.hour,
+                minute: dt.minute,
+                sec: dt.sec,
+                microsec: dt.microsec,
+            }))
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "last_day requires a date or datetime argument",
+        )),
+    }
+}
+
+fn get_last_day(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0) {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 30,
+    }
+}
+
+fn execute_generate_series(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() < 2 || args.len() > 3 {
+        return Err(ExpressionError::type_error(
+            "generate_series requires 2 or 3 arguments",
+        ));
+    }
+    let start = match &args[0] {
+        Value::BigInt(v) => *v,
+        Value::Int(v) => *v as i64,
+        Value::Null(_) => return Ok(Value::Null(NullType::Null)),
+        _ => return Err(ExpressionError::type_error("generate_series start must be an integer")),
+    };
+    let end = match &args[1] {
+        Value::BigInt(v) => *v,
+        Value::Int(v) => *v as i64,
+        Value::Null(_) => return Ok(Value::Null(NullType::Null)),
+        _ => return Err(ExpressionError::type_error("generate_series end must be an integer")),
+    };
+    let step = if args.len() > 2 {
+        match &args[2] {
+            Value::BigInt(v) => *v,
+            Value::Int(v) => *v as i64,
+            Value::Null(_) => return Ok(Value::Null(NullType::Null)),
+            _ => return Err(ExpressionError::type_error("generate_series step must be an integer")),
+        }
+    } else {
+        1
+    };
+
+    if step == 0 {
+        return Err(ExpressionError::type_error("generate_series step cannot be 0"));
+    }
+
+    let mut result = Vec::new();
+    if step > 0 {
+        let mut i = start;
+        while i <= end {
+            result.push(Value::BigInt(i));
+            i += step;
+        }
+    } else {
+        let mut i = start;
+        while i >= end {
+            result.push(Value::BigInt(i));
+            i += step;
+        }
+    }
+
+    use crate::core::value::list::List;
+    Ok(Value::list(List { values: result }))
 }
 
 #[cfg(test)]
