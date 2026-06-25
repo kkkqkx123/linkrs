@@ -91,7 +91,7 @@ impl PerformanceAnalyzer {
         let mut nodes = vec![];
         let lines: Vec<&str> = output.lines().collect();
 
-        for (idx, line) in lines.iter().enumerate() {
+        for line in lines.iter() {
             // Look for lines that contain node statistics (contain |)
             if !line.contains('|') {
                 continue;

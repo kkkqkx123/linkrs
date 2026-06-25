@@ -4,7 +4,7 @@ use graphdb_storage::storage::{
 };
 
 use crate::converter::ConversionError;
-use crate::plan::{MigrationPlan, MigrationStep, SafetyLevel};
+use crate::plan::{MigrationPlan, MigrationStep, MigrationTarget, SafetyLevel, VersionRange};
 
 #[derive(Debug, thiserror::Error)]
 pub enum MigrationError {
@@ -40,6 +40,16 @@ pub fn generate_vertex_plan(
     let overall_safety = calculate_safety(&steps);
     let estimated_rows = estimate_vertex_rows(reader, space, tag).unwrap_or(0);
 
+     let target = MigrationTarget {
+        space: space.to_string(),
+        label: tag.to_string(),
+        is_edge: false,
+    };
+    let version_range = VersionRange {
+        from: from_version,
+        to: to_version,
+    };
+
     let rollback_plan = if overall_safety != SafetyLevel::Dangerous {
         let rollback_steps: Vec<MigrationStep> =
             steps.iter().filter_map(|s| s.reverse()).collect();
@@ -48,11 +58,8 @@ pub fn generate_vertex_plan(
         } else {
             let safety = calculate_safety(&rollback_steps);
             Some(Box::new(MigrationPlan::new(
-                space.to_string(),
-                tag.to_string(),
-                false,
-                from_version,
-                to_version,
+                target.clone(),
+                version_range.clone(),
                 rollback_steps,
                 estimated_rows,
                 safety,
@@ -64,11 +71,8 @@ pub fn generate_vertex_plan(
     };
 
     Ok(MigrationPlan::new(
-        space.to_string(),
-        tag.to_string(),
-        false,
-        from_version,
-        to_version,
+        target,
+        version_range,
         steps,
         estimated_rows,
         overall_safety,
@@ -92,6 +96,16 @@ pub fn generate_edge_plan(
     let overall_safety = calculate_safety(&steps);
     let estimated_rows = estimate_edge_rows(reader, space, edge_type).unwrap_or(0);
 
+    let target = MigrationTarget {
+        space: space.to_string(),
+        label: edge_type.to_string(),
+        is_edge: true,
+    };
+    let version_range = VersionRange {
+        from: from_version,
+        to: to_version,
+    };
+
     let rollback_plan = if overall_safety != SafetyLevel::Dangerous {
         let rollback_steps: Vec<MigrationStep> =
             steps.iter().filter_map(|s| s.reverse()).collect();
@@ -100,11 +114,8 @@ pub fn generate_edge_plan(
         } else {
             let safety = calculate_safety(&rollback_steps);
             Some(Box::new(MigrationPlan::new(
-                space.to_string(),
-                edge_type.to_string(),
-                true,
-                from_version,
-                to_version,
+                target.clone(),
+                version_range.clone(),
                 rollback_steps,
                 estimated_rows,
                 safety,
@@ -116,11 +127,8 @@ pub fn generate_edge_plan(
     };
 
     Ok(MigrationPlan::new(
-        space.to_string(),
-        edge_type.to_string(),
-        true,
-        from_version,
-        to_version,
+        target,
+        version_range,
         steps,
         estimated_rows,
         overall_safety,

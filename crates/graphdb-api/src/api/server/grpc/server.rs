@@ -502,7 +502,7 @@ impl<
                     .map(|&version| {
                         let changes = h.change_log
                             .get_version_changes(version)
-                            .map(|v| v.clone())
+                            .cloned()
                             .unwrap_or_default()
                             .into_iter()
                             .map(|change| PropertyChangeEvent {

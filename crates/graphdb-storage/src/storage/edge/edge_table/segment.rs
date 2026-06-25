@@ -67,11 +67,7 @@ impl DeletionInfo {
         match self {
             DeletionInfo::NoDeletes => 0,
             DeletionInfo::HasDeletes { deleted_count, .. } => {
-                if total_edge_count == 0 {
-                    0
-                } else {
-                    (((*deleted_count as u64) * 100) / total_edge_count) as u32
-                }
+                total_edge_count.checked_div(*deleted_count as u64).map_or(0, |v| v as u32)
             }
         }
     }

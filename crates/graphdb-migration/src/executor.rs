@@ -22,7 +22,7 @@ pub fn execute_migration_plan(
         });
     }
 
-    if plan.is_edge {
+    if plan.target.is_edge {
         execute_edge_plan(storage, plan, &remaining)
     } else {
         execute_vertex_plan(storage, plan, &remaining)
@@ -39,7 +39,7 @@ fn execute_vertex_plan(
     let mut completed_step_indices = plan.completed_steps.clone();
 
     let vertices = storage
-        .scan_vertices_by_tag(&plan.space, &plan.label)
+        .scan_vertices_by_tag(&plan.target.space, &plan.target.label)
         ?;
 
     for &step_idx in remaining {
@@ -51,10 +51,10 @@ fn execute_vertex_plan(
 
         let mut migrated = 0u64;
         for vertex in &vertices {
-            match apply_step_to_vertex(vertex, &plan.label, step) {
+            match apply_step_to_vertex(vertex, &plan.target.label, step) {
                 Ok(Some(transformed)) => {
                     storage
-                        .update_vertex(&plan.space, transformed)
+                        .update_vertex(&plan.target.space, transformed)
                         ?;
                     migrated += 1;
                 }
@@ -91,7 +91,7 @@ fn execute_edge_plan(
     remaining: &[usize],
 ) -> Result<MigrationReport, MigrationError> {
     let edges = storage
-        .scan_edges_by_type(&plan.space, &plan.label)
+        .scan_edges_by_type(&plan.target.space, &plan.target.label)
         ?;
 
     let mut rows_migrated = 0u64;
@@ -112,7 +112,7 @@ fn execute_edge_plan(
                     transformed.props = new_props;
 
                     storage
-                        .update_edge(&plan.space, transformed)
+                        .update_edge(&plan.target.space, transformed)
                         ?;
 
                     rows_migrated += 1;

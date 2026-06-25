@@ -64,7 +64,7 @@ impl EdgeTableCore {
         let in_stats = self.in_csr.fragmentation_stats();
         let out_wasted = self.out_csr.wasted_bytes_estimate();
         let in_wasted = self.in_csr.wasted_bytes_estimate();
-        if out_stats.as_ref().map_or(false, |s| s.should_compact(threshold))
+        if out_stats.as_ref().is_some_and(|s| s.should_compact(threshold))
             || self.out_csr.fragmentation_ratio() >= threshold
         {
             self.out_csr.compact_with_ts(ts, RESERVE_RATIO);
@@ -78,7 +78,7 @@ impl EdgeTableCore {
                 );
             }
         }
-        if in_stats.as_ref().map_or(false, |s| s.should_compact(threshold))
+        if in_stats.as_ref().is_some_and(|s| s.should_compact(threshold))
             || self.in_csr.fragmentation_ratio() >= threshold
         {
             self.in_csr.compact_with_ts(ts, RESERVE_RATIO);

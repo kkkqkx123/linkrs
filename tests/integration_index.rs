@@ -11,11 +11,15 @@ mod common;
 
 use common::{
     assertions::{assert_count, assert_none, assert_ok, assert_some},
-    storage_helpers::{create_test_space, knows_edge_type_info, person_tag_info},
+    storage_helpers::{create_test_space, person_tag_info},
     TestStorage,
 };
 use graphdb::core::types::{Index, IndexField, IndexStatus, IndexType, VertexId};
-use graphdb::core::{Edge, Value, Vertex};
+use graphdb::core::{Value, Vertex};
+#[cfg(feature = "qdrant")]
+use common::storage_helpers::knows_edge_type_info;
+#[cfg(feature = "qdrant")]
+use graphdb::core::Edge;
 use graphdb::query::planning::plan::{IndexLimit, ScanType};
 use graphdb::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
 use parking_lot::RwLock;

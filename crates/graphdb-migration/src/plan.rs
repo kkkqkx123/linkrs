@@ -112,11 +112,12 @@ mod tests {
     #[test]
     fn test_empty_migration_plan() {
         let plan = MigrationPlan::new(
-            "test".into(),
-            "User".into(),
-            false,
-            1,
-            2,
+            MigrationTarget {
+                space: "test".into(),
+                label: "User".into(),
+                is_edge: false,
+            },
+            VersionRange { from: 1, to: 2 },
             vec![],
             0,
             SafetyLevel::Safe,
@@ -289,12 +290,22 @@ impl MigrationStep {
 const DEFAULT_BATCH_SIZE: usize = 1000;
 
 #[derive(Debug, Clone)]
-pub struct MigrationPlan {
+pub struct MigrationTarget {
     pub space: String,
     pub label: String,
     pub is_edge: bool,
-    pub from_version: u64,
-    pub to_version: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct VersionRange {
+    pub from: u64,
+    pub to: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct MigrationPlan {
+    pub target: MigrationTarget,
+    pub version_range: VersionRange,
     pub steps: Vec<MigrationStep>,
     pub estimated_rows: u64,
     pub overall_safety: SafetyLevel,
@@ -305,22 +316,16 @@ pub struct MigrationPlan {
 
 impl MigrationPlan {
     pub fn new(
-        space: String,
-        label: String,
-        is_edge: bool,
-        from_version: u64,
-        to_version: u64,
+        target: MigrationTarget,
+        version_range: VersionRange,
         steps: Vec<MigrationStep>,
         estimated_rows: u64,
         overall_safety: SafetyLevel,
         rollback_plan: Option<Box<MigrationPlan>>,
     ) -> Self {
         Self {
-            space,
-            label,
-            is_edge,
-            from_version,
-            to_version,
+            target,
+            version_range,
             steps,
             estimated_rows,
             overall_safety,
@@ -344,7 +349,7 @@ impl MigrationPlan {
         let mut out = String::new();
         out.push_str(&format!(
             "Migration Plan: {} v{} → v{} ({} row(s))\n",
-            self.label, self.from_version, self.to_version, self.estimated_rows
+            self.target.label, self.version_range.from, self.version_range.to, self.estimated_rows
         ));
         out.push_str(&format!("Safety: {} ({:?})\n", self.overall_safety.label(), self.overall_safety));
         out.push_str(&format!("Steps: {}\n", self.steps.len()));

@@ -1,3 +1,5 @@
+#![cfg(feature = "embedded")]
+
 use graphdb::api::embedded::{GraphDatabase, TransactionConfig};
 use std::time::Duration;
 

@@ -20,6 +20,7 @@ const EDGE_ID_STORAGE_MODE_DIRECT: u8 = 0;
 const EDGE_ID_STORAGE_MODE_SEPARATE: u8 = 1;
 
 /// Write edge table metadata to file
+#[allow(clippy::too_many_arguments)]
 pub fn flush_metadata(
     file: &mut File,
     label: u32,
@@ -121,6 +122,7 @@ pub fn flush_properties(
 }
 
 /// Load metadata from file cursor
+#[allow(clippy::type_complexity)]
 pub fn load_metadata(
     cursor: &mut &[u8],
 ) -> StorageResult<(u32, u32, u32, String, bool, EdgeSchema, EdgeId, HashMap<EdgeId, Timestamp>, Timestamp)> {

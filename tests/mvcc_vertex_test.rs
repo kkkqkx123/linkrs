@@ -20,6 +20,7 @@ mod tests {
                 },
             ],
             primary_key_index: 0,
+            schema_version: 0,
         }
     }
 

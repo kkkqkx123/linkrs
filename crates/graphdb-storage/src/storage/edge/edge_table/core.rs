@@ -790,7 +790,7 @@ impl EdgeTableCore {
         self.schema.properties.remove(index);
         // Update cache: remove deleted property and adjust indices
         self.property_index_cache.remove(name);
-        for (_prop_name, idx) in &mut self.property_index_cache {
+        for idx in self.property_index_cache.values_mut() {
             if *idx > index {
                 *idx -= 1;
             }
