@@ -26,13 +26,12 @@ pub use core::EdgeTableCore as EdgeTable;
 pub use core::UpdateEdgePropertyByOffsetParams;
 pub use segment::CsrSegment;
 pub use snapshot::ExportedEdgeSnapshot;
-pub use snapshot::SnapshotBuilder;
 pub use stats::{MergeStats, MergeMetrics, MergeMetricsResult};
 pub use compaction::CompactionMode;
 
 // Re-export from parent
 pub use super::{
-    Csr, CsrVariant, Nbr, CsrBase,
+    CsrVariant, Nbr, CsrBase,
 };
 
 use crate::core::types::{Timestamp, EdgeId};
@@ -90,11 +89,12 @@ impl EdgeTable {
 
     /// Export a read-only snapshot of this edge table at the given timestamp.
     pub fn export_snapshot(&self, ts: Timestamp) -> StorageResult<ExportedEdgeSnapshot> {
+        use snapshot::SnapshotBuilder;
         let out_edges = self.collect_edges_for_snapshot_mvcc(&self.out_csr, &self.out_segments, ts)?;
         let in_edges = self.collect_edges_for_snapshot_mvcc(&self.in_csr, &self.in_segments, ts)?;
 
-        let out_csr = Self::build_csr_from_edges(out_edges, self.out_csr.vertex_capacity())?;
-        let in_csr = Self::build_csr_from_edges(in_edges, self.in_csr.vertex_capacity())?;
+        let out_csr = SnapshotBuilder::build_csr(out_edges, self.out_csr.vertex_capacity())?;
+        let in_csr = SnapshotBuilder::build_csr(in_edges, self.in_csr.vertex_capacity())?;
 
         Ok(ExportedEdgeSnapshot {
             snapshot_ts: ts,
@@ -144,14 +144,6 @@ impl EdgeTable {
         builder.add_delta_edges(delta_edges, ts, &self.mvcc.tombstones);
 
         Ok(builder.edges())
-    }
-
-    /// Build a CSR from a list of edges.
-    fn build_csr_from_edges(
-        edges: Vec<(u32, Nbr)>,
-        vertex_capacity: usize,
-    ) -> StorageResult<Csr> {
-        Ok(Csr::from_nbr_entries(&edges, vertex_capacity))
     }
 
     /// Get an RAII snapshot handle that automatically unregisters on drop.
@@ -400,12 +392,7 @@ impl EdgeTable {
         self.dst_label = dst_label;
         self.label_name = label_name;
         self.is_open = is_open;
-        // Rebuild property index cache from loaded schema
-        self.property_index_cache.clear();
-        for (idx, prop) in schema.properties.iter().enumerate() {
-            self.property_index_cache.insert(prop.name.clone(), idx);
-        }
-        self.schema = schema;
+        self.set_schema(schema);
         self.next_edge_id = next_edge_id;
         self.mvcc.tombstones = tombstones;
         self.mvcc.min_active_snapshot_ts = min_snapshot_ts;

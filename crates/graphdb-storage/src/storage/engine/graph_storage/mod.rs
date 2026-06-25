@@ -61,6 +61,28 @@ impl GraphStorage {
         })
     }
 
+    /// Create with a custom property graph configuration.
+    pub fn new_with_config(config: crate::storage::engine::config::PropertyGraphConfig) -> StorageResult<Self> {
+        Ok(Self {
+            ctx: Arc::new(GraphStorageContext::new_with_config(config)),
+        })
+    }
+
+    /// Create with development configuration (small thresholds, conservative freeze).
+    pub fn new_development() -> StorageResult<Self> {
+        Self::new_with_config(crate::storage::engine::config::PropertyGraphConfig::development())
+    }
+
+    /// Create with production configuration for small systems.
+    pub fn new_production_small() -> StorageResult<Self> {
+        Self::new_with_config(crate::storage::engine::config::PropertyGraphConfig::production_small())
+    }
+
+    /// Create with production configuration for large systems (LSM tiered freeze).
+    pub fn new_production_large() -> StorageResult<Self> {
+        Self::new_with_config(crate::storage::engine::config::PropertyGraphConfig::production_large())
+    }
+
     pub fn new_with_path(path: PathBuf) -> StorageResult<Self> {
         GraphStorageContext::new_with_path(path).map(|ctx| Self { ctx: Arc::new(ctx) })
     }
@@ -322,7 +344,11 @@ impl StorageReader for GraphStorage {
             .get(&tag_info.tag_id)
             .ok_or_else(|| StorageError::label_not_found(tag.to_string()))?;
 
-        table.get_version_history().map(Some)
+        let version_history = table.version_history_ref();
+        let guard = version_history
+            .lock()
+            .map_err(|_| StorageError::db_error("Failed to lock version_history"))?;
+        Ok(Some(guard.clone()))
     }
 
     fn get_edge_version_history(
@@ -353,7 +379,11 @@ impl StorageReader for GraphStorage {
             .get(key)
             .ok_or_else(|| StorageError::label_not_found(edge_type.to_string()))?;
 
-        table.get_version_history().map(Some)
+        let version_history = table.version_history_ref();
+        let guard = version_history
+            .lock()
+            .map_err(|_| StorageError::db_error("Failed to lock version_history"))?;
+        Ok(Some(guard.clone()))
     }
 
     fn get_vertex_schema_changes(
@@ -421,6 +451,33 @@ impl StorageReader for GraphStorage {
     ) -> Result<Vec<crate::storage::PropertyChange>, StorageError> {
         let changes = self.get_edge_schema_changes(space, edge_type, from_version, to_version)?;
         Ok(changes.into_iter().filter(|c| c.is_breaking()).collect())
+    }
+}
+
+impl GraphStorage {
+    /// Aggregate all label version histories into a single `SchemaVersionHistory`.
+    pub fn aggregate_schema_version_history(
+        &self,
+        space: &str,
+    ) -> Result<crate::storage::schema::version_history::SchemaVersionHistory, StorageError> {
+        use crate::storage::schema::version_history::SchemaVersionHistory;
+        let mut schema_history = SchemaVersionHistory::new();
+
+        let tag_infos = self.ctx.schema_manager().list_tags(space)?;
+        for tag_info in tag_infos {
+            if let Some(history) = self.get_vertex_version_history(space, &tag_info.tag_name)? {
+                schema_history.add_vertex_history(history);
+            }
+        }
+
+        let edge_infos = self.ctx.schema_manager().list_edge_types(space)?;
+        for edge_info in edge_infos {
+            if let Some(history) = self.get_edge_version_history(space, &edge_info.edge_type_name)? {
+                schema_history.add_edge_history(history);
+            }
+        }
+
+        Ok(schema_history)
     }
 }
 

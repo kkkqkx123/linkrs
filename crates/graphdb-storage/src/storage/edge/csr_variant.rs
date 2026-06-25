@@ -391,6 +391,14 @@ impl CsrVariant {
         }
     }
 
+    /// Iterate edges of a vertex without allocating (only for Multiple strategy).
+    pub fn iter_edges_of(&self, src_vid: u32, ts: Timestamp) -> Option<super::mutable_csr::VertexEdgesIter<'_>> {
+        match self {
+            CsrVariant::Multiple(csr) => Some(csr.iter_edges_of(src_vid, ts)),
+            _ => None,
+        }
+    }
+
     /// Create an iterator over edges
     pub fn iter(&self, ts: Timestamp) -> CsrIterator<'_> {
         match self {

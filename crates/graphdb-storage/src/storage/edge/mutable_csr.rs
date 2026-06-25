@@ -514,6 +514,11 @@ impl MutableCsr {
         result
     }
 
+    /// Iterate edges of a vertex without collecting into a Vec.
+    pub fn iter_edges_of(&self, src_vid: u32, ts: Timestamp) -> VertexEdgesIter<'_> {
+        VertexEdgesIter::new(self, src_vid, ts)
+    }
+
     fn count_valid_primary(&self, src_idx: usize, ts: Timestamp) -> usize {
         let degree = self.degrees[src_idx] as usize;
         let offset = self.adj_offsets[src_idx] as usize;
@@ -592,14 +597,6 @@ impl MutableCsr {
     /// Create iterator over all edges
     pub fn iter(&self, ts: Timestamp) -> MutableCsrIterator<'_> {
         MutableCsrIterator::new(self, ts)
-    }
-
-    /// Create iterator over edges of a specific vertex at the given timestamp
-    ///
-    /// This returns an iterator of references to neighbors without allocating a Vec.
-    /// Use this for efficient vertex neighbor traversal in hot paths.
-    pub fn edges_iter(&self, src_vid: u32, ts: Timestamp) -> VertexEdgesIter<'_> {
-        VertexEdgesIter::new(self, src_vid, ts)
     }
 
     /// Dump to bytes
@@ -848,13 +845,8 @@ impl MutableCsr {
         self.nbr_list.len() as f32 / active_edges as f32
     }
 
-    /// Check if fragmentation exceeds a threshold
-    pub fn should_compact(&self, threshold: f32) -> bool {
-        self.fragmentation_ratio() > threshold
-    }
-
     /// Estimate wasted memory due to fragmentation (in bytes)
-    pub fn wasted_bytes_estimate(&self) -> usize {
+    pub(crate) fn wasted_bytes_estimate(&self) -> usize {
         let active_edges = self.edge_count.load(Ordering::Relaxed) as usize;
         (self.nbr_list.len().saturating_sub(active_edges)) * std::mem::size_of::<Nbr>()
     }
@@ -881,12 +873,12 @@ impl MutableCsr {
             }
         }
 
-        super::FragmentationStats {
-            total_capacity: self.nbr_list.len(),
-            reachable_edges: active_edges,
+        super::FragmentationStats::with_zombie_info(
+            self.nbr_list.len(),
+            active_edges,
             zombie_blocks,
-            wasted_capacity: total_wasted,
-        }
+            total_wasted,
+        )
     }
 
     /// Check if compaction should be triggered based on fragmentation ratio
@@ -1290,8 +1282,8 @@ mod tests {
         }
 
         let ratio = csr.fragmentation_ratio();
-        assert!(csr.should_compact(ratio - 0.1), "should_compact failed for ratio {}", ratio);
-        assert!(!csr.should_compact(ratio + 0.1), "should_compact incorrectly returned true");
+        assert!(csr.should_compact_with_threshold(ratio - 0.1), "should_compact_with_threshold failed for ratio {}", ratio);
+        assert!(!csr.should_compact_with_threshold(ratio + 0.1), "should_compact_with_threshold incorrectly returned true");
     }
 
     #[test]
@@ -1346,8 +1338,8 @@ mod tests {
         csr.insert_edge(0u32, VertexId::from_int64(4), EdgeId(103), 0, 1);
         csr.insert_edge(0u32, VertexId::from_int64(5), EdgeId(104), 0, 1);
 
-        // Test edges_iter yields same neighbors as edges_of without allocation
-        let iter_neighbors: Vec<_> = csr.edges_iter(0u32, 1).map(|nbr| nbr.neighbor).collect();
+        // Test iter_edges_of yields same neighbors as edges_of without allocation
+        let iter_neighbors: Vec<_> = csr.iter_edges_of(0u32, 1).map(|nbr| nbr.neighbor).collect();
         let vec_neighbors: Vec<_> = csr.edges_of(0u32, 1).iter().map(|nbr| nbr.neighbor).collect();
 
         assert_eq!(iter_neighbors.len(), vec_neighbors.len());
@@ -1366,16 +1358,16 @@ mod tests {
         csr.delete_edge(0u32, EdgeId(101), 2);
 
         // At ts=1, only first edge should be visible
-        let edges_ts1: Vec<_> = csr.edges_iter(0u32, 1).collect();
+        let edges_ts1: Vec<_> = csr.iter_edges_of(0u32, 1).collect();
         assert_eq!(edges_ts1.len(), 1);
         assert_eq!(edges_ts1[0].edge_id, EdgeId(100));
 
         // At ts=2, first two edges are visible (but second is deleted)
-        let edges_ts2: Vec<_> = csr.edges_iter(0u32, 2).collect();
+        let edges_ts2: Vec<_> = csr.iter_edges_of(0u32, 2).collect();
         assert_eq!(edges_ts2.len(), 1);
 
         // At ts=3, all three are visible (but second is deleted)
-        let edges_ts3: Vec<_> = csr.edges_iter(0u32, 3).collect();
+        let edges_ts3: Vec<_> = csr.iter_edges_of(0u32, 3).collect();
         assert_eq!(edges_ts3.len(), 2);
     }
 }

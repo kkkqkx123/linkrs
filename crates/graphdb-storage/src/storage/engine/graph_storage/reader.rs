@@ -531,35 +531,31 @@ pub(crate) fn scan_edges_by_type_paginated(
         for table in edge_tables.values().filter(|t| t.label() == edge_label_id) {
             let tbl_src = table.src_label();
             let tbl_dst = table.dst_label();
-            let (page, _has_more) = table.scan_paginated(ts, offset, limit);
+            let (page, has_more) = table.scan_paginated(ts, offset, limit);
             for record in page {
                 endpoint_to_edge(ctx, record, tbl_src, tbl_dst, edge_type, &mut edges);
             }
-            if edges.len() >= offset + limit {
+            if !has_more || edges.len() >= offset + limit {
                 break;
             }
         }
         return Ok(truncate_to_page(edges, offset, limit));
     }
 
-    let records = ctx.scan_edges(src_label_id, dst_label_id, edge_label_id, ts);
-    apply_pagination(records, offset, limit, &mut |record| {
-        endpoint_to_edge(ctx, record, src_label_id, dst_label_id, edge_type, &mut edges);
-    });
+    let edge_tables = ctx.data_store().edge_tables().read();
+    for table in edge_tables.values().filter(|t| {
+        t.src_label() == src_label_id && t.dst_label() == dst_label_id && t.label() == edge_label_id
+    }) {
+        let mut iter = table.scan_paginated_iter(ts, offset, limit);
+        for record in iter.by_ref() {
+            endpoint_to_edge(ctx, record, src_label_id, dst_label_id, edge_type, &mut edges);
+        }
+        if iter.has_more() && edges.len() < offset + limit {
+            log::debug!("scan_edges_by_type_paginated: more records available beyond page");
+        }
+    }
 
     Ok(truncate_to_page(edges, offset, limit))
-}
-
-/// Apply pagination to an iterator, calling `f` for each item within the page range.
-fn apply_pagination<T, F: FnMut(T)>(
-    items: Vec<T>,
-    offset: usize,
-    limit: usize,
-    mut f: F,
-) {
-    for item in items.into_iter().skip(offset).take(limit) {
-        f(item);
-    }
 }
 
 /// Truncate a collection to return only the requested page.

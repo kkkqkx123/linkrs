@@ -146,9 +146,9 @@ impl MVCCManager {
         }
 
         // Rebuild bloom filter from current cold layer state
-        self.cold_bloom_filter = EdgeDeletionBloomFilter::with_capacity(
-            (self.cold_tombstones.len() * 2).max(BLOOM_FILTER_CAPACITY)
-        );
+        self.cold_bloom_filter.clear();
+        let new_capacity = (self.cold_tombstones.len() * 2).max(BLOOM_FILTER_CAPACITY);
+        self.cold_bloom_filter = EdgeDeletionBloomFilter::with_capacity(new_capacity);
         for &(edge_id, _) in &self.cold_tombstones {
             self.cold_bloom_filter.insert(edge_id.0);
         }

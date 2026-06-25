@@ -62,6 +62,13 @@ impl GraphStorageContext {
         ) in edge_tables.iter_mut()
         {
             let mut handle = table.snapshot_handle(ts);
+            log::debug!(
+                "Exporting snapshot at ts={} for edge table {}/{}/{}",
+                handle.timestamp(),
+                src_label,
+                dst_label,
+                edge_label
+            );
             let snapshot = handle.export()?;
             results.push(ExportedEdgeSnapshotRecord {
                 src_label: *src_label,
@@ -70,6 +77,9 @@ impl GraphStorageContext {
                 snapshot,
             });
             handles.push(handle);
+        }
+        for handle in handles {
+            handle.release();
         }
         Ok(results)
     }

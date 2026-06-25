@@ -258,9 +258,17 @@ impl EdgeTableCore {
         let mut seen = HashSet::new();
         let mut result = Vec::new();
 
-        for nbr in delta.edges_of(src, ts) {
-            if !self.mvcc.is_tombstoned(nbr.edge_id, ts) && seen.insert(nbr.edge_id) {
-                result.push(nbr);
+        if let Some(iter) = delta.iter_edges_of(src, ts) {
+            for nbr in iter {
+                if !self.mvcc.is_tombstoned(nbr.edge_id, ts) && seen.insert(nbr.edge_id) {
+                    result.push(*nbr);
+                }
+            }
+        } else {
+            for nbr in delta.edges_of(src, ts) {
+                if !self.mvcc.is_tombstoned(nbr.edge_id, ts) && seen.insert(nbr.edge_id) {
+                    result.push(nbr);
+                }
             }
         }
 
@@ -957,12 +965,13 @@ impl EdgeTableCore {
 
     pub fn memory_size(&self) -> usize {
         let total = self.used_memory_size();
+        let mutable = self.mutable_csr_memory_size();
         let out_epv = self.out_csr.edges_per_vertex();
         let in_epv = self.in_csr.edges_per_vertex();
         if out_epv > 0 || in_epv > 0 {
             log::trace!(
-                "EdgeTable[{}] memory: {} bytes, MultiSingle edges_per_vertex (out={}, in={})",
-                self.label, total, out_epv, in_epv
+                "EdgeTable[{}] memory: {} bytes (mutable={}), MultiSingle edges_per_vertex (out={}, in={})",
+                self.label, total, mutable, out_epv, in_epv
             );
         }
         total
@@ -1005,7 +1014,15 @@ impl EdgeTableCore {
         let in_edges = self.in_csr.edge_count() as usize;
         let out_bytes_per_edge = self.out_csr.bytes_per_edge();
         let in_bytes_per_edge = self.in_csr.bytes_per_edge();
-        out_edges * out_bytes_per_edge + in_edges * in_bytes_per_edge
+        let estimated = out_edges * out_bytes_per_edge + in_edges * in_bytes_per_edge;
+
+        let total_capacity = out_edges + in_edges;
+        let frag_stats = crate::storage::edge::FragmentationStats::new(total_capacity, out_edges.min(in_edges));
+        if frag_stats.fragmentation_ratio() > 2.0 {
+            log::debug!("EdgeTable[{}] high fragmentation: {:.2}", self.label, frag_stats.fragmentation_ratio());
+        }
+
+        estimated
     }
 
     /// Check write backpressure and trigger freeze if necessary.

@@ -110,7 +110,7 @@ impl GraphStoragePersistent {
         )
     }
 
-    fn new_with_config(config: PropertyGraphConfig) -> Self {
+    pub fn new_with_config(config: PropertyGraphConfig) -> Self {
         // Validate configuration for early failure detection
         let _ = config.validate();
         let cache_manager = CacheManager::new(config.enable_cache, config.cache_memory);
@@ -212,7 +212,6 @@ impl DeferredWalOps {
     fn drain_deletes(&self) -> Vec<(crate::core::wal::redo::DeleteEdgeRedo, Timestamp)> {
         self.deletes.lock().drain(..).collect()
     }
-
 }
 
 #[derive(Clone)]
@@ -318,6 +317,15 @@ pub use mod_cache_index::ExportedEdgeSnapshotRecord;
 impl std::fmt::Debug for GraphStorageContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GraphStorageContext").finish()
+    }
+}
+
+impl GraphStorageContext {
+    pub fn new_with_config(config: PropertyGraphConfig) -> Self {
+        Self {
+            persistent: GraphStoragePersistent::new_with_config(config),
+            runtime: GraphStorageRuntime::new(),
+        }
     }
 }
 

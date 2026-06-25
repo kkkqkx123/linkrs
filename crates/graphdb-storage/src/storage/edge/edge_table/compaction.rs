@@ -62,29 +62,33 @@ impl EdgeTableCore {
         const RESERVE_RATIO: f32 = 0.25;
         let out_stats = self.out_csr.fragmentation_stats();
         let in_stats = self.in_csr.fragmentation_stats();
+        let out_wasted = self.out_csr.wasted_bytes_estimate();
+        let in_wasted = self.in_csr.wasted_bytes_estimate();
         if out_stats.as_ref().map_or(false, |s| s.should_compact(threshold))
-            || self.out_csr.fragmentation_ratio() > threshold
+            || self.out_csr.fragmentation_ratio() >= threshold
         {
             self.out_csr.compact_with_ts(ts, RESERVE_RATIO);
             if let Some(ref stats) = out_stats {
                 log::debug!(
-                    "Compacted out_csr: fragmentation={:.2}, efficiency={:.2}, reclaimed={} bytes",
+                    "Compacted out_csr: fragmentation={:.2}, efficiency={:.2}, reclaimed={} bytes, wasted={}",
                     stats.fragmentation_ratio(),
                     stats.space_efficiency(),
-                    stats.reclamation_potential()
+                    stats.reclamation_potential(),
+                    out_wasted
                 );
             }
         }
         if in_stats.as_ref().map_or(false, |s| s.should_compact(threshold))
-            || self.in_csr.fragmentation_ratio() > threshold
+            || self.in_csr.fragmentation_ratio() >= threshold
         {
             self.in_csr.compact_with_ts(ts, RESERVE_RATIO);
             if let Some(ref stats) = in_stats {
                 log::debug!(
-                    "Compacted in_csr: fragmentation={:.2}, efficiency={:.2}, reclaimed={} bytes",
+                    "Compacted in_csr: fragmentation={:.2}, efficiency={:.2}, reclaimed={} bytes, wasted={}",
                     stats.fragmentation_ratio(),
                     stats.space_efficiency(),
-                    stats.reclamation_potential()
+                    stats.reclamation_potential(),
+                    in_wasted
                 );
             }
         }
