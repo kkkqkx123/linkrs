@@ -19,6 +19,11 @@ pub enum ContainerFunction {
     Keys,
     ReverseList,
     ToSet,
+    ListContains,
+    ListAppend,
+    ListPrepend,
+    ListFilter,
+    ListTransform,
 }
 
 impl ContainerFunction {
@@ -33,6 +38,11 @@ impl ContainerFunction {
             Self::Keys => "keys",
             Self::ReverseList => "reverse",
             Self::ToSet => "toset",
+            Self::ListContains => "list_contains",
+            Self::ListAppend => "list_append",
+            Self::ListPrepend => "list_prepend",
+            Self::ListFilter => "list_filter",
+            Self::ListTransform => "list_transform",
         }
     }
 
@@ -47,6 +57,11 @@ impl ContainerFunction {
             Self::Keys => 1,
             Self::ReverseList => 1,
             Self::ToSet => 1,
+            Self::ListContains => 2,
+            Self::ListAppend => 2,
+            Self::ListPrepend => 2,
+            Self::ListFilter => 2,
+            Self::ListTransform => 2,
         }
     }
 
@@ -66,6 +81,11 @@ impl ContainerFunction {
             Self::Keys => "Get all the keys for vertices, edges, or mappings.",
             Self::ReverseList => "inversion list",
             Self::ToSet => "Convert the list to a set.",
+            Self::ListContains => "Check if list contains a value",
+            Self::ListAppend => "Append element to list",
+            Self::ListPrepend => "Prepend element to list",
+            Self::ListFilter => "Filter list elements by predicate",
+            Self::ListTransform => "Transform list elements by function",
         }
     }
 
@@ -79,6 +99,11 @@ impl ContainerFunction {
             Self::Keys => execute_keys(args),
             Self::ReverseList => execute_reverse_list(args),
             Self::ToSet => execute_toset(args),
+            Self::ListContains => execute_list_contains(args),
+            Self::ListAppend => execute_list_append(args),
+            Self::ListPrepend => execute_list_prepend(args),
+            Self::ListFilter => execute_list_filter(args),
+            Self::ListTransform => execute_list_transform(args),
         }
     }
 }
@@ -272,6 +297,125 @@ fn execute_toset(args: &[Value]) -> Result<Value, ExpressionError> {
         }
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error("toset requires a list type")),
+    }
+}
+
+fn execute_list_contains(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "list_contains requires 2 arguments",
+        ));
+    }
+    match (&args[0], &args[1]) {
+        (Value::List(list), value) => {
+            let contains = list.values.iter().any(|v| v == value);
+            Ok(Value::Bool(contains))
+        }
+        (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "list_contains requires a list as first argument",
+        )),
+    }
+}
+
+fn execute_list_append(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "list_append requires 2 arguments",
+        ));
+    }
+    match &args[0] {
+        Value::List(list) => {
+            let mut new_values = list.values.clone();
+            new_values.push(args[1].clone());
+            Ok(Value::list(List {
+                values: new_values,
+            }))
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "list_append requires a list as first argument",
+        )),
+    }
+}
+
+fn execute_list_prepend(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "list_prepend requires 2 arguments",
+        ));
+    }
+    match &args[0] {
+        Value::List(list) => {
+            let mut new_values = vec![args[1].clone()];
+            new_values.extend(list.values.clone());
+            Ok(Value::list(List {
+                values: new_values,
+            }))
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "list_prepend requires a list as first argument",
+        )),
+    }
+}
+
+fn execute_list_filter(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "list_filter requires 2 arguments",
+        ));
+    }
+    match (&args[0], &args[1]) {
+        (Value::List(list), Value::List(mask)) => {
+            let min_len = list.values.len().min(mask.values.len());
+            let filtered: Vec<Value> = list.values[..min_len]
+                .iter()
+                .zip(&mask.values[..min_len])
+                .filter(|(_, m)| match m {
+                    Value::Bool(b) => *b,
+                    Value::Null(_) => false,
+                    _ => true,
+                })
+                .map(|(v, _)| v.clone())
+                .collect();
+            Ok(Value::list(List {
+                values: filtered,
+            }))
+        }
+        (Value::List(_), _) => Err(ExpressionError::type_error(
+            "list_filter second argument must be a boolean list",
+        )),
+        (Value::Null(_), _) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "list_filter requires a list as first argument",
+        )),
+    }
+}
+
+fn execute_list_transform(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "list_transform requires 2 arguments",
+        ));
+    }
+    match (&args[0], &args[1]) {
+        (Value::List(list), Value::List(replacements)) => {
+            let mut result = list.values.clone();
+            for (item, replacement) in result.iter_mut().zip(replacements.values.iter()) {
+                if !replacement.is_null() {
+                    *item = replacement.clone();
+                }
+            }
+            Ok(Value::list(List { values: result }))
+        }
+        (Value::List(_), _) => Err(ExpressionError::type_error(
+            "list_transform second argument must be a list",
+        )),
+        (Value::Null(_), _) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "list_transform requires lists as arguments",
+        )),
     }
 }
 

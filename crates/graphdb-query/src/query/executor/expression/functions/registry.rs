@@ -152,6 +152,7 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::String(StringFunction::Rpad));
         self.register_builtin(BuiltinFunction::String(StringFunction::ConcatWs));
         self.register_builtin(BuiltinFunction::String(StringFunction::Strcasecmp));
+        self.register_builtin(BuiltinFunction::String(StringFunction::Levenshtein));
 
         // Registering regular expression functions
         self.register_builtin(BuiltinFunction::Regex(RegexFunction::RegexMatch));
@@ -176,6 +177,12 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::Minute));
         self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::Second));
         self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::TimeStamp));
+        self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::DateAdd));
+        self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::DateSub));
+        self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::DateDiff));
+        self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::DateTrunc));
+        self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::CurrentDate));
+        self.register_builtin(BuiltinFunction::DateTime(DateTimeFunction::CurrentTimestamp));
 
         // Registering geospatial functions
         use super::GeographyFunction;
@@ -197,6 +204,10 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::Utility(UtilityFunction::Coalesce));
         self.register_builtin(BuiltinFunction::Utility(UtilityFunction::Hash));
         self.register_builtin(BuiltinFunction::Utility(UtilityFunction::JsonExtract));
+        self.register_builtin(BuiltinFunction::Utility(UtilityFunction::NullIf));
+        self.register_builtin(BuiltinFunction::Utility(UtilityFunction::Greatest));
+        self.register_builtin(BuiltinFunction::Utility(UtilityFunction::Least));
+        self.register_builtin(BuiltinFunction::Utility(UtilityFunction::GenRandomUuid));
 
         // Register aggregate functions
         use crate::core::types::operators::AggregateFunction;
@@ -248,6 +259,11 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::Container(ContainerFunction::Keys));
         self.register_builtin(BuiltinFunction::Container(ContainerFunction::ReverseList));
         self.register_builtin(BuiltinFunction::Container(ContainerFunction::ToSet));
+        self.register_builtin(BuiltinFunction::Container(ContainerFunction::ListContains));
+        self.register_builtin(BuiltinFunction::Container(ContainerFunction::ListAppend));
+        self.register_builtin(BuiltinFunction::Container(ContainerFunction::ListPrepend));
+        self.register_builtin(BuiltinFunction::Container(ContainerFunction::ListFilter));
+        self.register_builtin(BuiltinFunction::Container(ContainerFunction::ListTransform));
 
         // Registration path function
         use super::PathFunction;

@@ -85,6 +85,48 @@ define_function_enum! {
             description: "Get current timestamp or convert datetime to timestamp",
             handler: execute_timestamp
         },
+        DateAdd => {
+            name: "date_add",
+            arity: 2,
+            variadic: false,
+            description: "Add interval to date/datetime",
+            handler: execute_date_add
+        },
+        DateSub => {
+            name: "date_sub",
+            arity: 2,
+            variadic: false,
+            description: "Subtract interval from date/datetime",
+            handler: execute_date_sub
+        },
+        DateDiff => {
+            name: "date_diff",
+            arity: 2,
+            variadic: false,
+            description: "Calculate difference between two dates/datetimes",
+            handler: execute_date_diff
+        },
+        DateTrunc => {
+            name: "date_trunc",
+            arity: 2,
+            variadic: false,
+            description: "Truncate date/datetime to specified precision",
+            handler: execute_date_trunc
+        },
+        CurrentDate => {
+            name: "current_date",
+            arity: 0,
+            variadic: false,
+            description: "Get current date",
+            handler: execute_current_date
+        },
+        CurrentTimestamp => {
+            name: "current_timestamp",
+            arity: 0,
+            variadic: false,
+            description: "Get current timestamp",
+            handler: execute_current_timestamp
+        },
     }
 }
 
@@ -253,6 +295,258 @@ fn execute_timestamp(args: &[Value]) -> Result<Value, ExpressionError> {
             )),
         }
     }
+}
+
+fn execute_date_add(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "date_add requires 2 arguments",
+        ));
+    }
+    let amount = match &args[1] {
+        Value::Int(i) => *i as i64,
+        Value::BigInt(i) => *i,
+        Value::Null(_) => return Ok(Value::Null(NullType::Null)),
+        _ => return Err(ExpressionError::type_error("date_add amount must be an integer")),
+    };
+    match &args[0] {
+        Value::Date(d) => {
+            let naive = chrono::NaiveDate::from_ymd_opt(d.year, d.month, d.day)
+                .ok_or_else(|| ExpressionError::type_error("Invalid date"))?;
+            let result = naive + chrono::TimeDelta::days(amount);
+            Ok(Value::Date(DateValue {
+                year: result.year(),
+                month: result.month(),
+                day: result.day(),
+            }))
+        }
+        Value::DateTime(dt) => {
+            let naive = chrono::NaiveDateTime::new(
+                chrono::NaiveDate::from_ymd_opt(dt.year, dt.month, dt.day)
+                    .ok_or_else(|| ExpressionError::type_error("Invalid date"))?,
+                chrono::NaiveTime::from_hms_micro_opt(dt.hour, dt.minute, dt.sec, dt.microsec)
+                    .ok_or_else(|| ExpressionError::type_error("Invalid time"))?,
+            );
+            let result = naive + chrono::TimeDelta::days(amount);
+            Ok(Value::DateTime(DateTimeValue {
+                year: result.year(),
+                month: result.month(),
+                day: result.day(),
+                hour: result.hour(),
+                minute: result.minute(),
+                sec: result.second(),
+                microsec: result.nanosecond() / 1000,
+            }))
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "date_add requires a date or datetime as first argument",
+        )),
+    }
+}
+
+fn execute_date_sub(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "date_sub requires 2 arguments",
+        ));
+    }
+    let amount = match &args[1] {
+        Value::Int(i) => *i as i64,
+        Value::BigInt(i) => *i,
+        Value::Null(_) => return Ok(Value::Null(NullType::Null)),
+        _ => return Err(ExpressionError::type_error("date_sub amount must be an integer")),
+    };
+    match &args[0] {
+        Value::Date(d) => {
+            let naive = chrono::NaiveDate::from_ymd_opt(d.year, d.month, d.day)
+                .ok_or_else(|| ExpressionError::type_error("Invalid date"))?;
+            let result = naive - chrono::TimeDelta::days(amount);
+            Ok(Value::Date(DateValue {
+                year: result.year(),
+                month: result.month(),
+                day: result.day(),
+            }))
+        }
+        Value::DateTime(dt) => {
+            let naive = chrono::NaiveDateTime::new(
+                chrono::NaiveDate::from_ymd_opt(dt.year, dt.month, dt.day)
+                    .ok_or_else(|| ExpressionError::type_error("Invalid date"))?,
+                chrono::NaiveTime::from_hms_micro_opt(dt.hour, dt.minute, dt.sec, dt.microsec)
+                    .ok_or_else(|| ExpressionError::type_error("Invalid time"))?,
+            );
+            let result = naive - chrono::TimeDelta::days(amount);
+            Ok(Value::DateTime(DateTimeValue {
+                year: result.year(),
+                month: result.month(),
+                day: result.day(),
+                hour: result.hour(),
+                minute: result.minute(),
+                sec: result.second(),
+                microsec: result.nanosecond() / 1000,
+            }))
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "date_sub requires a date or datetime as first argument",
+        )),
+    }
+}
+
+fn execute_date_diff(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "date_diff requires 2 arguments",
+        ));
+    }
+    match (&args[0], &args[1]) {
+        (Value::Date(d1), Value::Date(d2)) => {
+            let n1 = chrono::NaiveDate::from_ymd_opt(d1.year, d1.month, d1.day)
+                .ok_or_else(|| ExpressionError::type_error("Invalid date"))?;
+            let n2 = chrono::NaiveDate::from_ymd_opt(d2.year, d2.month, d2.day)
+                .ok_or_else(|| ExpressionError::type_error("Invalid date"))?;
+            let diff = (n2 - n1).num_days();
+            Ok(Value::BigInt(diff))
+        }
+        (Value::DateTime(dt1), Value::DateTime(dt2)) => {
+            let n1 = chrono::NaiveDateTime::new(
+                chrono::NaiveDate::from_ymd_opt(dt1.year, dt1.month, dt1.day)
+                    .ok_or_else(|| ExpressionError::type_error("Invalid date"))?,
+                chrono::NaiveTime::from_hms_micro_opt(dt1.hour, dt1.minute, dt1.sec, dt1.microsec)
+                    .ok_or_else(|| ExpressionError::type_error("Invalid time"))?,
+            );
+            let n2 = chrono::NaiveDateTime::new(
+                chrono::NaiveDate::from_ymd_opt(dt2.year, dt2.month, dt2.day)
+                    .ok_or_else(|| ExpressionError::type_error("Invalid date"))?,
+                chrono::NaiveTime::from_hms_micro_opt(dt2.hour, dt2.minute, dt2.sec, dt2.microsec)
+                    .ok_or_else(|| ExpressionError::type_error("Invalid time"))?,
+            );
+            let diff = (n2 - n1).num_milliseconds();
+            Ok(Value::BigInt(diff))
+        }
+        (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "date_diff requires two dates or two datetimes",
+        )),
+    }
+}
+
+fn execute_date_trunc(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "date_trunc requires 2 arguments",
+        ));
+    }
+    let precision = match &args[1] {
+        Value::String(s) => s.as_str(),
+        Value::Null(_) => return Ok(Value::Null(NullType::Null)),
+        _ => return Err(ExpressionError::type_error("date_trunc precision must be a string")),
+    };
+    match &args[0] {
+        Value::Date(d) => match precision {
+            "year" => Ok(Value::Date(DateValue {
+                year: d.year,
+                month: 1,
+                day: 1,
+            })),
+            "month" => Ok(Value::Date(DateValue {
+                year: d.year,
+                month: d.month,
+                day: 1,
+            })),
+            "day" => Ok(Value::Date(DateValue {
+                year: d.year,
+                month: d.month,
+                day: d.day,
+            })),
+            _ => Err(ExpressionError::type_error(format!(
+                "Invalid date_trunc precision: {}",
+                precision
+            ))),
+        },
+        Value::DateTime(dt) => match precision {
+            "year" => Ok(Value::DateTime(DateTimeValue {
+                year: dt.year,
+                month: 1,
+                day: 1,
+                hour: 0,
+                minute: 0,
+                sec: 0,
+                microsec: 0,
+            })),
+            "month" => Ok(Value::DateTime(DateTimeValue {
+                year: dt.year,
+                month: dt.month,
+                day: 1,
+                hour: 0,
+                minute: 0,
+                sec: 0,
+                microsec: 0,
+            })),
+            "day" => Ok(Value::DateTime(DateTimeValue {
+                year: dt.year,
+                month: dt.month,
+                day: dt.day,
+                hour: 0,
+                minute: 0,
+                sec: 0,
+                microsec: 0,
+            })),
+            "hour" => Ok(Value::DateTime(DateTimeValue {
+                year: dt.year,
+                month: dt.month,
+                day: dt.day,
+                hour: dt.hour,
+                minute: 0,
+                sec: 0,
+                microsec: 0,
+            })),
+            "minute" => Ok(Value::DateTime(DateTimeValue {
+                year: dt.year,
+                month: dt.month,
+                day: dt.day,
+                hour: dt.hour,
+                minute: dt.minute,
+                sec: 0,
+                microsec: 0,
+            })),
+            "second" => Ok(Value::DateTime(DateTimeValue {
+                year: dt.year,
+                month: dt.month,
+                day: dt.day,
+                hour: dt.hour,
+                minute: dt.minute,
+                sec: dt.sec,
+                microsec: 0,
+            })),
+            _ => Err(ExpressionError::type_error(format!(
+                "Invalid date_trunc precision: {}",
+                precision
+            ))),
+        },
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "date_trunc requires a date or datetime as first argument",
+        )),
+    }
+}
+
+fn execute_current_date(_args: &[Value]) -> Result<Value, ExpressionError> {
+    let now = chrono::Utc::now();
+    Ok(Value::Date(DateValue {
+        year: now.year(),
+        month: now.month(),
+        day: now.day(),
+    }))
+}
+
+fn execute_current_timestamp(_args: &[Value]) -> Result<Value, ExpressionError> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time error")
+        .as_millis();
+    Ok(Value::BigInt(now as i64))
 }
 
 #[cfg(test)]

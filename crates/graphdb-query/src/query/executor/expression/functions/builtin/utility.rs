@@ -12,6 +12,10 @@ pub enum UtilityFunction {
     Coalesce,
     Hash,
     JsonExtract,
+    NullIf,
+    Greatest,
+    Least,
+    GenRandomUuid,
 }
 
 impl UtilityFunction {
@@ -20,6 +24,10 @@ impl UtilityFunction {
             UtilityFunction::Coalesce => "coalesce",
             UtilityFunction::Hash => "hash",
             UtilityFunction::JsonExtract => "json_extract",
+            UtilityFunction::NullIf => "nullif",
+            UtilityFunction::Greatest => "greatest",
+            UtilityFunction::Least => "least",
+            UtilityFunction::GenRandomUuid => "gen_random_uuid",
         }
     }
 
@@ -28,11 +36,18 @@ impl UtilityFunction {
             UtilityFunction::Coalesce => 1,
             UtilityFunction::Hash => 1,
             UtilityFunction::JsonExtract => 2,
+            UtilityFunction::NullIf => 2,
+            UtilityFunction::Greatest => 2,
+            UtilityFunction::Least => 2,
+            UtilityFunction::GenRandomUuid => 0,
         }
     }
 
     pub fn is_variadic(&self) -> bool {
-        matches!(self, UtilityFunction::Coalesce)
+        matches!(
+            self,
+            UtilityFunction::Coalesce | UtilityFunction::Greatest | UtilityFunction::Least
+        )
     }
 
     pub fn description(&self) -> &str {
@@ -42,6 +57,10 @@ impl UtilityFunction {
             UtilityFunction::JsonExtract => {
                 "Extract the value of a specified path from a JSON string"
             }
+            UtilityFunction::NullIf => "Return NULL if two values are equal",
+            UtilityFunction::Greatest => "Return the largest of the arguments",
+            UtilityFunction::Least => "Return the smallest of the arguments",
+            UtilityFunction::GenRandomUuid => "Generate a random UUID v4",
         }
     }
 
@@ -50,6 +69,10 @@ impl UtilityFunction {
             UtilityFunction::Coalesce => execute_coalesce(args),
             UtilityFunction::Hash => execute_hash(args),
             UtilityFunction::JsonExtract => execute_json_extract(args),
+            UtilityFunction::NullIf => execute_nullif(args),
+            UtilityFunction::Greatest => execute_greatest(args),
+            UtilityFunction::Least => execute_least(args),
+            UtilityFunction::GenRandomUuid => execute_gen_random_uuid(args),
         }
     }
 }
@@ -155,6 +178,84 @@ fn json_to_value(json: &JsonValue) -> Value {
             Value::map(map)
         }
     }
+}
+
+fn execute_nullif(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "nullif requires 2 arguments",
+        ));
+    }
+    match (&args[0], &args[1]) {
+        (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
+        (a, b) => {
+            if values_equal(a, b) {
+                Ok(Value::Null(NullType::Null))
+            } else {
+                Ok(a.clone())
+            }
+        }
+    }
+}
+
+fn values_equal(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Int(a), Value::BigInt(b)) => *a as i64 == *b,
+        (Value::BigInt(a), Value::Int(b)) => *a == *b as i64,
+        (Value::Float(a), Value::Double(b)) => *a as f64 == *b,
+        (Value::Double(a), Value::Float(b)) => *a == *b as f64,
+        _ => a == b,
+    }
+}
+
+fn values_less_than(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Int(a), Value::Int(b)) => a < b,
+        (Value::BigInt(a), Value::BigInt(b)) => a < b,
+        (Value::Float(a), Value::Float(b)) => a < b,
+        (Value::Double(a), Value::Double(b)) => a < b,
+        (Value::String(a), Value::String(b)) => a < b,
+        (Value::Int(a), Value::BigInt(b)) => (*a as i64) < *b,
+        (Value::BigInt(a), Value::Int(b)) => *a < (*b as i64),
+        (Value::Float(a), Value::Double(b)) => (*a as f64) < *b,
+        (Value::Double(a), Value::Float(b)) => *a < (*b as f64),
+        _ => false,
+    }
+}
+
+fn execute_greatest(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.is_empty() {
+        return Err(ExpressionError::type_error(
+            "greatest requires at least 1 argument",
+        ));
+    }
+    let mut result = &args[0];
+    for arg in &args[1..] {
+        if values_less_than(result, arg) {
+            result = arg;
+        }
+    }
+    Ok(result.clone())
+}
+
+fn execute_least(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.is_empty() {
+        return Err(ExpressionError::type_error(
+            "least requires at least 1 argument",
+        ));
+    }
+    let mut result = &args[0];
+    for arg in &args[1..] {
+        if values_less_than(arg, result) {
+            result = arg;
+        }
+    }
+    Ok(result.clone())
+}
+
+fn execute_gen_random_uuid(_args: &[Value]) -> Result<Value, ExpressionError> {
+    use crate::core::value::uuid::UuidValue;
+    Ok(Value::Uuid(UuidValue::new_v4()))
 }
 
 #[cfg(test)]
