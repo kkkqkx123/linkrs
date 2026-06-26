@@ -20,7 +20,7 @@ mod index {
         setup_test_space(
             &mut db,
             "e2e_optimizer",
-            &["CREATE TAG person(name: STRING, age: INT, city: STRING, salary: INT)"],
+            &["CREATE TAG person(name: STRING NOT NULL, age: INT, city: STRING, salary: INT)"],
             &[],
         )
         .expect("Failed to setup test space");
@@ -60,7 +60,7 @@ mod index {
         setup_test_space(
             &mut db,
             "e2e_optimizer_range",
-            &["CREATE TAG person(name: STRING, age: INT)"],
+            &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
             &[],
         )
         .expect("Failed to setup test space");
@@ -94,7 +94,7 @@ mod index {
         setup_test_space(
             &mut db,
             "e2e_optimizer_scan",
-            &["CREATE TAG person(name: STRING, salary: INT)"],
+            &["CREATE TAG person(name: STRING NOT NULL, salary: INT)"],
             &[],
         )
         .expect("Failed to setup test space");
@@ -129,8 +129,8 @@ mod join {
             &mut db,
             "e2e_optimizer_join",
             &[
-                "CREATE TAG company(name: STRING, industry: STRING)",
-                "CREATE TAG employee(name: STRING, salary: INT)",
+                "CREATE TAG company(name: STRING NOT NULL, industry: STRING)",
+                "CREATE TAG employee(name: STRING NOT NULL, salary: INT)",
             ],
             &["CREATE EDGE works_at(position: STRING)"],
         )
@@ -185,7 +185,7 @@ mod aggregate {
         setup_test_space(
             &mut db,
             "e2e_optimizer_agg",
-            &["CREATE TAG sales(product: STRING, amount: INT, category: STRING)"],
+            &["CREATE TAG sales(product: STRING NOT NULL, amount: INT, category: STRING)"],
             &[],
         )
         .expect("Failed to setup test space");
@@ -226,7 +226,7 @@ mod topn {
         setup_test_space(
             &mut db,
             "e2e_optimizer_topn",
-            &["CREATE TAG product(name: STRING, price: INT, sales: INT)"],
+            &["CREATE TAG product(name: STRING NOT NULL, price: INT, sales: INT)"],
             &[],
         )
         .expect("Failed to setup test space");
@@ -257,7 +257,7 @@ mod explain_format {
         setup_test_space(
             &mut db,
             "e2e_optimizer_explain",
-            &["CREATE TAG person(name: STRING, age: INT)"],
+            &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
             &[],
         )
         .expect("Failed to setup test space");
@@ -274,7 +274,7 @@ mod explain_format {
         setup_test_space(
             &mut db,
             "e2e_optimizer_dot",
-            &["CREATE TAG person(name: STRING, age: INT)"],
+            &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
             &[],
         )
         .expect("Failed to setup test space");
@@ -296,7 +296,7 @@ mod profile {
         setup_test_space(
             &mut db,
             "e2e_optimizer_profile",
-            &["CREATE TAG person(name: STRING, age: INT)"],
+            &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
             &[],
         )
         .expect("Failed to setup test space");

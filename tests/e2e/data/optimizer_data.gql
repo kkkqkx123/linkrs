@@ -7,7 +7,7 @@ USE e2e_optimizer
 
 -- Create tags
 CREATE TAG IF NOT EXISTS person(
-    name: STRING,
+    name: STRING NOT NULL,
     age: INT,
     city: STRING,
     salary: INT,
@@ -15,7 +15,7 @@ CREATE TAG IF NOT EXISTS person(
 )
 
 CREATE TAG IF NOT EXISTS company(
-    name: STRING,
+    name: STRING NOT NULL,
     industry: STRING,
     size: INT
 )

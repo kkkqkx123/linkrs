@@ -63,7 +63,7 @@ fn test_show_tags() {
     setup_test_space(
         &mut db,
         "e2e_show_tags",
-        &["CREATE TAG person(name: STRING, age: INT)"],
+        &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
         &[],
     )
     .expect("Failed to setup test space");
@@ -79,7 +79,7 @@ fn test_show_edges() {
     setup_test_space(
         &mut db,
         "e2e_show_edges",
-        &["CREATE TAG person(name: STRING)"],
+        &["CREATE TAG person(name: STRING NOT NULL)"],
         &["CREATE EDGE friend(degree: FLOAT)"],
     )
     .expect("Failed to setup test space");
@@ -352,7 +352,7 @@ fn test_explain_basic() {
     setup_test_space(
         &mut db,
         "e2e_explain",
-        &["CREATE TAG person(name: STRING, age: INT)"],
+        &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
         &[],
     )
     .expect("Failed to setup test space");
@@ -369,7 +369,7 @@ fn test_profile_query() {
     setup_test_space(
         &mut db,
         "e2e_profile",
-        &["CREATE TAG person(name: STRING, age: INT)"],
+        &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
         &[],
     )
     .expect("Failed to setup test space");
@@ -390,7 +390,7 @@ fn test_transaction_commit() {
     setup_test_space(
         &mut db,
         "e2e_tx_commit",
-        &["CREATE TAG person(name: STRING, age: INT)"],
+        &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
         &[],
     )
     .expect("Failed to setup test space");
@@ -415,7 +415,7 @@ fn test_transaction_rollback() {
     setup_test_space(
         &mut db,
         "e2e_tx_rollback",
-        &["CREATE TAG person(name: STRING, age: INT)"],
+        &["CREATE TAG person(name: STRING NOT NULL, age: INT)"],
         &[],
     )
     .expect("Failed to setup test space");

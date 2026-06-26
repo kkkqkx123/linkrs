@@ -79,7 +79,7 @@ mod initialization {
         setup_test_space(
             &mut db,
             "schema_manager_test_space",
-            &["CREATE TAG IF NOT EXISTS test_person(name STRING, age INT)"],
+            &["CREATE TAG IF NOT EXISTS test_person(name STRING NOT NULL, age INT)"],
             &[],
         )
         .expect("Failed to setup test space");
@@ -98,7 +98,7 @@ mod initialization {
         setup_test_space(
             &mut db,
             "schema_manager_test_space",
-            &["CREATE TAG IF NOT EXISTS test_person(name STRING, age INT)"],
+            &["CREATE TAG IF NOT EXISTS test_person(name STRING NOT NULL, age INT)"],
             &[],
         )
         .expect("Failed to setup test space");
@@ -118,7 +118,7 @@ mod initialization {
         setup_test_space(
             &mut db,
             "schema_manager_test_space",
-            &["CREATE TAG IF NOT EXISTS test_person(name STRING, age INT)"],
+            &["CREATE TAG IF NOT EXISTS test_person(name STRING NOT NULL, age INT)"],
             &[],
         )
         .expect("Failed to setup test space");
@@ -141,7 +141,7 @@ mod initialization {
         setup_test_space(
             &mut db,
             "schema_manager_test_space",
-            &["CREATE TAG IF NOT EXISTS test_person(name STRING, age INT)"],
+            &["CREATE TAG IF NOT EXISTS test_person(name STRING NOT NULL, age INT)"],
             &[],
         )
         .expect("Failed to setup test space");
