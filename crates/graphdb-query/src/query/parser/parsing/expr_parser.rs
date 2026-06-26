@@ -1015,7 +1015,6 @@ impl<'a> ExprParser<'a> {
     }
 
     fn parse_subquery_body(&mut self, ctx: &mut ParseContext<'a>) -> Result<SubqueryBody, ParseError> {
-        let _start_pos = ctx.current_position();
         let mut patterns = Vec::new();
         let mut where_clause = None;
         let mut return_expr = None;

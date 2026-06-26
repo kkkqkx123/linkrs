@@ -233,7 +233,7 @@ impl Planner for GroupByPlanner {
                 let mut sets: Vec<Vec<String>> = Vec::new();
                 for mask in 0..(1u32 << num_group_items) {
                     let mut set = Vec::new();
-                    for (i, _key) in group_keys.iter().enumerate().take(num_group_items) {
+                    for (i, _) in group_keys.iter().enumerate().take(num_group_items) {
                         if mask & (1 << i) != 0 {
                             set.push(group_keys[i].clone());
                         }
