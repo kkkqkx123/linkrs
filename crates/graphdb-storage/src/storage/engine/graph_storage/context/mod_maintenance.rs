@@ -156,7 +156,7 @@ impl GraphStorageContext {
                 if del_stats.is_significant() {
                     log::debug!(
                         "EdgeTable[{}] deletion stats: {:.1}% deleted ({} / {} frozen edges)",
-                        table.label,
+                        table.label(),
                         del_stats.deletion_percentage(),
                         del_stats.total_deleted_edges,
                         del_stats.total_frozen_edges,

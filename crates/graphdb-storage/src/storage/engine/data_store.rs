@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use parking_lot::RwLock;
 
 use crate::core::types::LabelId;
-use crate::storage::edge::EdgeTable;
+use crate::storage::edge::EdgeStore;
 use crate::storage::vertex::VertexTable;
 
 #[derive(Hash, Eq, PartialEq, Clone, Copy, Debug)]
@@ -35,7 +35,7 @@ impl From<(LabelId, LabelId, LabelId)> for EdgeTableKey {
 
 pub struct GraphDataStore {
     vertex_tables: RwLock<HashMap<LabelId, VertexTable>>,
-    edge_tables: RwLock<HashMap<EdgeTableKey, EdgeTable>>,
+    edge_tables: RwLock<HashMap<EdgeTableKey, EdgeStore>>,
     vertex_label_names: RwLock<HashMap<String, LabelId>>,
     edge_label_names: RwLock<HashMap<String, LabelId>>,
     vertex_label_counter: RwLock<LabelId>,
@@ -63,7 +63,7 @@ impl GraphDataStore {
         &self.vertex_tables
     }
 
-    pub(crate) fn edge_tables(&self) -> &RwLock<HashMap<EdgeTableKey, EdgeTable>> {
+    pub(crate) fn edge_tables(&self) -> &RwLock<HashMap<EdgeTableKey, EdgeStore>> {
         &self.edge_tables
     }
 

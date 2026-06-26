@@ -4,7 +4,7 @@ mod tests {
 
     use crate::core::types::{LabelId, VertexId};
     use crate::core::Value;
-    use crate::storage::edge::{EdgeSchema, EdgeStrategy, EdgeTable};
+    use crate::storage::edge::{EdgeSchema, EdgeStrategy, EdgeStore};
     use crate::storage::engine::data_store::EdgeTableKey;
     use crate::storage::types::StoragePropertyDef;
     use crate::storage::vertex::{VertexSchema, VertexTable};
@@ -33,7 +33,7 @@ mod tests {
         src_label: LabelId,
         dst_label: LabelId,
         name: &str,
-    ) -> EdgeTable {
+    ) -> EdgeStore {
         let schema = EdgeSchema {
             label_id: edge_label,
             label_name: name.to_string(),
@@ -47,7 +47,7 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        EdgeTable::new(schema).expect("Failed to create EdgeTable")
+        EdgeStore::new(schema).expect("Failed to create EdgeStore")
     }
 
     #[test]
@@ -115,7 +115,7 @@ mod tests {
         vertex_tables.insert(0, create_vertex_table(0, "Person"));
         vertex_tables.insert(1, create_vertex_table(1, "Person"));
 
-        let mut edge_tables: HashMap<EdgeTableKey, EdgeTable> = HashMap::new();
+        let mut edge_tables: HashMap<EdgeTableKey, EdgeStore> = HashMap::new();
         edge_tables.insert(
             EdgeTableKey::new(0, 1, 0),
             create_edge_table(0, 0, 1, "KNOWS"),
@@ -156,7 +156,7 @@ mod tests {
         let mut vertex_tables: HashMap<LabelId, VertexTable> = HashMap::new();
         vertex_tables.insert(0, create_vertex_table(0, "Person"));
 
-        let mut edge_tables: HashMap<EdgeTableKey, EdgeTable> = HashMap::new();
+        let mut edge_tables: HashMap<EdgeTableKey, EdgeStore> = HashMap::new();
         edge_tables.insert(
             EdgeTableKey::new(0, 1, 0),
             create_edge_table(0, 0, 1, "KNOWS"),
@@ -267,7 +267,7 @@ mod tests {
         vertex_tables.insert(0, create_vertex_table(0, "Person"));
         vertex_tables.insert(1, create_vertex_table(1, "Employee"));
 
-        let mut edge_tables: HashMap<EdgeTableKey, EdgeTable> = HashMap::new();
+        let mut edge_tables: HashMap<EdgeTableKey, EdgeStore> = HashMap::new();
         edge_tables.insert(
             EdgeTableKey::new(0, 0, 0),
             create_edge_table(0, 0, 0, "KNOWS"),
@@ -308,7 +308,7 @@ mod tests {
         vertex_tables.insert(0, create_vertex_table(0, "Person"));
         vertex_tables.insert(1, create_vertex_table(1, "Person"));
 
-        let mut edge_tables: HashMap<EdgeTableKey, EdgeTable> = HashMap::new();
+        let mut edge_tables: HashMap<EdgeTableKey, EdgeStore> = HashMap::new();
         edge_tables.insert(
             EdgeTableKey::new(0, 1, 0),
             create_edge_table(0, 0, 1, "KNOWS"),
@@ -363,7 +363,7 @@ mod tests {
         let mut vertex_tables: HashMap<LabelId, VertexTable> = HashMap::new();
         vertex_tables.insert(0, create_vertex_table(0, "Person"));
 
-        let mut edge_tables: HashMap<EdgeTableKey, EdgeTable> = HashMap::new();
+        let mut edge_tables: HashMap<EdgeTableKey, EdgeStore> = HashMap::new();
         edge_tables.insert(
             EdgeTableKey::new(0, 0, 0),
             create_edge_table(0, 0, 0, "KNOWS"),
@@ -455,7 +455,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut edge_tables: HashMap<EdgeTableKey, EdgeTable> = HashMap::new();
+        let mut edge_tables: HashMap<EdgeTableKey, EdgeStore> = HashMap::new();
         let mut edge_label_names: HashMap<String, LabelId> = HashMap::new();
         let mut edge_label_counter: LabelId = 0;
 
@@ -478,7 +478,7 @@ mod tests {
     #[test]
     fn test_create_edge_type_undo_missing_vertex_label() {
         let vertex_tables: HashMap<LabelId, VertexTable> = HashMap::new();
-        let mut edge_tables: HashMap<EdgeTableKey, EdgeTable> = HashMap::new();
+        let mut edge_tables: HashMap<EdgeTableKey, EdgeStore> = HashMap::new();
         let mut edge_label_names: HashMap<String, LabelId> = HashMap::new();
         let mut edge_label_counter: LabelId = 0;
 

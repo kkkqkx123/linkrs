@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 
 use crate::core::types::LabelId;
 use crate::core::{StorageError, StorageResult};
-use crate::storage::edge::{EdgeSchema, EdgeStrategy, EdgeTable};
+use crate::storage::edge::{EdgeSchema, EdgeStrategy, EdgeStore};
 use crate::storage::engine::data_store::EdgeTableKey;
 use crate::storage::engine::params::CreateEdgeTypeParams;
 use crate::storage::types::StoragePropertyDef;
@@ -178,7 +178,7 @@ pub fn create_edge_type(
     // Validate schema at creation time
     schema.validate_on_creation()?;
 
-    let mut table = EdgeTable::new(schema)?;
+    let mut table = EdgeStore::new(schema)?;
     if let Some(stats) = ctx.stats_manager() {
         table.set_stats_manager(stats.clone());
     }
@@ -256,7 +256,7 @@ pub fn create_edge_type_with_id(
     // Validate schema at creation time
     schema.validate_on_creation()?;
 
-    let mut table = EdgeTable::new(schema)?;
+    let mut table = EdgeStore::new(schema)?;
     if let Some(stats) = ctx.stats_manager() {
         table.set_stats_manager(stats.clone());
     }

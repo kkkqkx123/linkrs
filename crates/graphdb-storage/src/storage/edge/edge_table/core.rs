@@ -5,7 +5,7 @@
 
 use super::segment::{CsrSegment, SegmentVersion};
 use super::mvcc::MVCCManager;
-use super::super::{CsrVariant, EdgeSchema, Nbr, EdgeRecord, CsrBase, MutableCsrTrait};
+use super::super::{Csr, CsrVariant, EdgeSchema, Nbr, EdgeRecord, CsrBase, MutableCsrTrait};
 use crate::core::types::{EdgeId, LabelId, VertexId, Timestamp};
 use crate::core::{DataType, StorageError, StorageResult, Value};
 use crate::storage::types::{PropertyId, StoragePropertyDef};
@@ -61,7 +61,11 @@ pub struct UpdateEdgePropertyByOffsetParams {
     pub ts: Timestamp,
 }
 
-pub struct EdgeTableCore {
+/// TimeTravel edge store: multi-segment CSR with freeze/merge/MVCC (full history).
+///
+/// This is the original EdgeTableCore, renamed to distinguish it from the upcoming
+/// SimpleEdgeStore (no history). The `EdgeTable` type alias preserves backward compat.
+pub struct TimeTravelEdgeStore {
     pub label: LabelId,
     pub label_name: String,
     pub src_label: LabelId,
@@ -87,9 +91,24 @@ pub struct EdgeTableCore {
     /// Cache for property name → schema index mapping to avoid O(n) linear lookups.
     /// Invalidated whenever schema changes.
     pub property_index_cache: HashMap<String, usize>,
+
+    /// Sparse vertex index for out-direction segments.
+    /// Maps source vertex ID → list of segment indices that contain edges for that vertex.
+    /// Enables skipping segments that don't contain the queried vertex during traversal.
+    pub sparse_vertex_index_out: HashMap<u32, Vec<usize>>,
+    /// Sparse vertex index for in-direction segments.
+    pub sparse_vertex_index_in: HashMap<u32, Vec<usize>>,
+
+    /// Pre-merged CSR of all out-direction segments for ts=MAX queries.
+    /// Built lazily when a current-time query arrives and invalidated on freeze/merge.
+    pub current_snapshot_out: Option<Csr>,
+    /// Pre-merged CSR of all in-direction segments for ts=MAX queries.
+    pub current_snapshot_in: Option<Csr>,
+    /// Whether the current snapshots need to be rebuilt.
+    pub snapshot_dirty: bool,
 }
 
-impl EdgeTableCore {
+impl TimeTravelEdgeStore {
     pub fn new(schema: EdgeSchema) -> StorageResult<Self> {
         Self::with_config(schema, EdgeTableConfig::default())
     }
@@ -145,6 +164,11 @@ impl EdgeTableCore {
             stats_manager: None,
             version_history,
             property_index_cache,
+            sparse_vertex_index_out: HashMap::new(),
+            sparse_vertex_index_in: HashMap::new(),
+            current_snapshot_out: None,
+            current_snapshot_in: None,
+            snapshot_dirty: true,
         })
     }
 
@@ -180,12 +204,24 @@ impl EdgeTableCore {
     fn base_get_edge(
         &self,
         segments: &[CsrSegment],
+        sparse_index: Option<&HashMap<u32, Vec<usize>>>,
         src: u32,
         dst: VertexId,
         ts: Timestamp,
     ) -> Option<Nbr> {
+        // Build relevant segment set for sparse index filtering
+        let relevant_set: Option<std::collections::HashSet<usize>> = sparse_index
+            .and_then(|idx| idx.get(&src))
+            .map(|indices| indices.iter().copied().collect());
+
         // Scan segments in reverse (newest first), with early termination optimizations
-        for segment in segments.iter().rev() {
+        for (forward_idx, segment) in segments.iter().enumerate().rev() {
+            // Sparse vertex index skip
+            if let Some(ref set) = relevant_set {
+                if !set.contains(&forward_idx) {
+                    continue;
+                }
+            }
             // Skip segments that were created after the query timestamp
             if segment.create_ts_min > ts {
                 continue;
@@ -217,10 +253,28 @@ impl EdgeTableCore {
         None
     }
 
-    fn base_edges_of(&self, segments: &[CsrSegment], src: u32, ts: Timestamp) -> Vec<Nbr> {
+    fn base_edges_of(
+        &self,
+        segments: &[CsrSegment],
+        sparse_index: Option<&HashMap<u32, Vec<usize>>>,
+        src: u32,
+        ts: Timestamp,
+    ) -> Vec<Nbr> {
         let mut edges = Vec::new();
 
-        for segment in segments.iter().rev() {
+        // Build a set of segment indices that contain this vertex (for O(1) lookup)
+        let relevant_set: Option<std::collections::HashSet<usize>> = sparse_index
+            .and_then(|idx| idx.get(&src))
+            .map(|indices| indices.iter().copied().collect());
+
+        for (forward_idx, segment) in segments.iter().enumerate().rev() {
+            // Sparse vertex index skip: if this segment does NOT contain the vertex, skip
+            if let Some(ref set) = relevant_set {
+                if !set.contains(&forward_idx) {
+                    continue;
+                }
+            }
+
             if segment.create_ts_min > ts {
                 continue;
             }
@@ -252,6 +306,7 @@ impl EdgeTableCore {
         &self,
         delta: &CsrVariant,
         segments: &[CsrSegment],
+        sparse_index: Option<&HashMap<u32, Vec<usize>>>,
         src: u32,
         ts: Timestamp,
     ) -> Vec<Nbr> {
@@ -272,7 +327,7 @@ impl EdgeTableCore {
             }
         }
 
-        for nbr in self.base_edges_of(segments, src, ts) {
+        for nbr in self.base_edges_of(segments, sparse_index, src, ts) {
             if seen.insert(nbr.edge_id) {
                 result.push(nbr);
             }
@@ -285,6 +340,7 @@ impl EdgeTableCore {
         &self,
         delta: &CsrVariant,
         segments: &[CsrSegment],
+        sparse_index: Option<&HashMap<u32, Vec<usize>>>,
         src: u32,
         dst: VertexId,
         ts: Timestamp,
@@ -295,7 +351,7 @@ impl EdgeTableCore {
             }
         }
 
-        self.base_get_edge(segments, src, dst, ts)
+        self.base_get_edge(segments, sparse_index, src, dst, ts)
     }
 
     fn edge_record_from_nbr(&self, src: u32, nbr: Nbr) -> EdgeRecord {
@@ -476,7 +532,7 @@ impl EdgeTableCore {
             return Ok(true);
         }
 
-        if let Some(nbr) = self.base_get_edge(&self.out_segments, src, dst_key, ts) {
+        if let Some(nbr) = self.base_get_edge(&self.out_segments, Some(&self.sparse_vertex_index_out), src, dst_key, ts) {
             let edge_id = nbr.edge_id;
             self.mvcc.pending_segment_deletions.insert(edge_id, ts);
             self.mvcc.tombstones.insert(edge_id, ts);
@@ -538,7 +594,7 @@ impl EdgeTableCore {
         }
 
         let dst_key = Self::edge_endpoint_key(dst, rank);
-        let nbr = self.merged_get_edge(&self.out_csr, &self.out_segments, src, dst_key, ts)?;
+        let nbr = self.merged_get_edge(&self.out_csr, &self.out_segments, Some(&self.sparse_vertex_index_out), src, dst_key, ts)?;
         let properties = self.properties_for_offset(nbr.prop_offset);
 
         Some(EdgeRecord {
@@ -554,7 +610,12 @@ impl EdgeTableCore {
             return Vec::new();
         }
 
-        let nbrs = self.merged_edges_of(&self.out_csr, &self.out_segments, src, ts);
+        let nbrs = if ts == u32::MAX && !self.snapshot_dirty && self.current_snapshot_out.is_some() {
+            // Fast path: use current snapshot (single CSR lookup instead of per-segment iteration)
+            self.merged_edges_of_current(&self.out_csr, src)
+        } else {
+            self.merged_edges_of(&self.out_csr, &self.out_segments, Some(&self.sparse_vertex_index_out), src, ts)
+        };
 
         // Optimization: prefetch all properties first to improve cache locality
         let prop_offsets: Vec<_> = nbrs.iter().map(|nbr| nbr.prop_offset).collect();
@@ -593,7 +654,11 @@ impl EdgeTableCore {
             return Vec::new();
         }
 
-        let nbrs = self.merged_edges_of(&self.in_csr, &self.in_segments, dst, ts);
+        let nbrs = if ts == u32::MAX && !self.snapshot_dirty && self.current_snapshot_in.is_some() {
+            self.merged_edges_of_current_in(&self.in_csr, dst)
+        } else {
+            self.merged_edges_of(&self.in_csr, &self.in_segments, Some(&self.sparse_vertex_index_in), dst, ts)
+        };
 
         // Optimization: prefetch all properties first to improve cache locality
         let prop_offsets: Vec<_> = nbrs.iter().map(|nbr| nbr.prop_offset).collect();
@@ -632,7 +697,7 @@ impl EdgeTableCore {
             return false;
         }
         let dst_key = Self::edge_endpoint_key(dst, rank);
-        self.merged_get_edge(&self.out_csr, &self.out_segments, src, dst_key, ts)
+        self.merged_get_edge(&self.out_csr, &self.out_segments, Some(&self.sparse_vertex_index_out), src, dst_key, ts)
             .is_some()
     }
 
@@ -862,7 +927,7 @@ impl EdgeTableCore {
             .ok_or_else(|| StorageError::column_not_found(prop_name.to_string()))?;
 
         let dst_key = Self::edge_endpoint_key(dst, rank);
-        if let Some(nbr) = self.merged_get_edge(&self.out_csr, &self.out_segments, src, dst_key, ts)
+        if let Some(nbr) = self.merged_get_edge(&self.out_csr, &self.out_segments, Some(&self.sparse_vertex_index_out), src, dst_key, ts)
         {
             self.properties
                 .set_property(nbr.prop_offset, prop_name, Some(value.clone()), ts)?;
@@ -884,6 +949,7 @@ impl EdgeTableCore {
         if let Some(nbr) = self.merged_get_edge(
             &self.out_csr,
             &self.out_segments,
+            Some(&self.sparse_vertex_index_out),
             params.src,
             dst_key,
             params.ts,
@@ -894,6 +960,7 @@ impl EdgeTableCore {
             if let Some(ie_nbr) = self.merged_get_edge(
                 &self.in_csr,
                 &self.in_segments,
+                Some(&self.sparse_vertex_index_in),
                 params.dst,
                 src_key,
                 params.ts,
@@ -1017,6 +1084,206 @@ impl EdgeTableCore {
         estimated
     }
 
+    // ── P0: Sparse vertex index methods ──
+
+    /// Rebuild sparse vertex indices from scratch for both directions.
+    /// Scans all segments to identify which vertices have edges in each segment.
+    pub fn rebuild_sparse_vertex_indices(&mut self) {
+        self.sparse_vertex_index_out.clear();
+        for (seg_idx, seg) in self.out_segments.iter().enumerate() {
+            for (src_vid, _) in seg.csr.iter() {
+                if let Some(vid) = src_vid.as_int64() {
+                    self.sparse_vertex_index_out
+                        .entry(vid as u32)
+                        .or_default()
+                        .push(seg_idx);
+                }
+            }
+        }
+        // Deduplicate segment indices per vertex
+        for indices in self.sparse_vertex_index_out.values_mut() {
+            indices.sort_unstable();
+            indices.dedup();
+        }
+
+        self.sparse_vertex_index_in.clear();
+        for (seg_idx, seg) in self.in_segments.iter().enumerate() {
+            for (src_vid, _) in seg.csr.iter() {
+                if let Some(vid) = src_vid.as_int64() {
+                    self.sparse_vertex_index_in
+                        .entry(vid as u32)
+                        .or_default()
+                        .push(seg_idx);
+                }
+            }
+        }
+        for indices in self.sparse_vertex_index_in.values_mut() {
+            indices.sort_unstable();
+            indices.dedup();
+        }
+    }
+
+    /// Update sparse vertex index incrementally after adding a new out-direction segment.
+    fn append_sparse_index_out(&mut self, new_seg_idx: usize) {
+        if new_seg_idx >= self.out_segments.len() {
+            return;
+        }
+        let seg = &self.out_segments[new_seg_idx];
+        for (src_vid, _) in seg.csr.iter() {
+            if let Some(vid) = src_vid.as_int64() {
+                self.sparse_vertex_index_out
+                    .entry(vid as u32)
+                    .or_default()
+                    .push(new_seg_idx);
+            }
+        }
+    }
+
+    /// Update sparse vertex index incrementally after adding a new in-direction segment.
+    fn append_sparse_index_in(&mut self, new_seg_idx: usize) {
+        if new_seg_idx >= self.in_segments.len() {
+            return;
+        }
+        let seg = &self.in_segments[new_seg_idx];
+        for (src_vid, _) in seg.csr.iter() {
+            if let Some(vid) = src_vid.as_int64() {
+                self.sparse_vertex_index_in
+                    .entry(vid as u32)
+                    .or_default()
+                    .push(new_seg_idx);
+            }
+        }
+    }
+
+    // ── P0: Current snapshot methods ──
+
+    /// Invalidate current snapshots, forcing them to be rebuilt on next ts=MAX query.
+    pub fn invalidate_snapshot(&mut self) {
+        self.snapshot_dirty = true;
+    }
+
+    /// Rebuild current snapshots from segments (eager rebuild).
+    /// Called after freeze or merge operations when segments have changed.
+    /// Rebuilds both out and in direction snapshots.
+    pub fn rebuild_current_snapshot(&mut self) {
+        // Build snapshot for out direction
+        if !self.out_segments.is_empty() {
+            use super::snapshot::SnapshotBuilder;
+            let ts = u32::MAX;
+            let mut builder = SnapshotBuilder::new();
+            for segment in self.out_segments.iter().rev() {
+                builder.add_segment_edges(segment, ts, &self.mvcc.tombstones);
+            }
+            let edges = builder.edges();
+            let vertex_capacity = self.out_csr.vertex_capacity();
+            if let Ok(csr) = SnapshotBuilder::build_csr(edges, vertex_capacity) {
+                self.current_snapshot_out = Some(csr);
+            }
+        } else {
+            self.current_snapshot_out = None;
+        }
+
+        // Build snapshot for in direction
+        if !self.in_segments.is_empty() {
+            use super::snapshot::SnapshotBuilder;
+            let ts = u32::MAX;
+            let mut builder = SnapshotBuilder::new();
+            for segment in self.in_segments.iter().rev() {
+                builder.add_segment_edges(segment, ts, &self.mvcc.tombstones);
+            }
+            let edges = builder.edges();
+            let vertex_capacity = self.in_csr.vertex_capacity();
+            if let Ok(csr) = SnapshotBuilder::build_csr(edges, vertex_capacity) {
+                self.current_snapshot_in = Some(csr);
+            }
+        } else {
+            self.current_snapshot_in = None;
+        }
+
+        self.snapshot_dirty = false;
+    }
+
+    /// Fast path for out_edges at ts=MAX: use current snapshot + mutable CSR,
+    /// avoiding per-segment iteration.
+    fn merged_edges_of_current(
+        &self,
+        delta: &CsrVariant,
+        src: u32,
+    ) -> Vec<Nbr> {
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+
+        // 1. From mutable CSR
+        if let Some(iter) = delta.iter_edges_of(src, u32::MAX) {
+            for nbr in iter {
+                if !self.mvcc.is_tombstoned(nbr.edge_id, u32::MAX) && seen.insert(nbr.edge_id) {
+                    result.push(*nbr);
+                }
+            }
+        } else {
+            for nbr in delta.edges_of(src, u32::MAX) {
+                if !self.mvcc.is_tombstoned(nbr.edge_id, u32::MAX) && seen.insert(nbr.edge_id) {
+                    result.push(nbr);
+                }
+            }
+        }
+
+        // 2. From current snapshot (pre-merged segments, single CSR lookup)
+        if let Some(ref snapshot) = self.current_snapshot_out {
+            for edge in snapshot.edges_of(src).iter() {
+                if !self.mvcc.is_tombstoned(edge.edge_id, u32::MAX) && seen.insert(edge.edge_id) {
+                    result.push(Nbr::new(
+                        edge.neighbor,
+                        edge.edge_id,
+                        edge.prop_offset,
+                        edge.timestamp,
+                    ));
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Fast path for in_edges at ts=MAX.
+    fn merged_edges_of_current_in(
+        &self,
+        delta: &CsrVariant,
+        dst: u32,
+    ) -> Vec<Nbr> {
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+
+        if let Some(iter) = delta.iter_edges_of(dst, u32::MAX) {
+            for nbr in iter {
+                if !self.mvcc.is_tombstoned(nbr.edge_id, u32::MAX) && seen.insert(nbr.edge_id) {
+                    result.push(*nbr);
+                }
+            }
+        } else {
+            for nbr in delta.edges_of(dst, u32::MAX) {
+                if !self.mvcc.is_tombstoned(nbr.edge_id, u32::MAX) && seen.insert(nbr.edge_id) {
+                    result.push(nbr);
+                }
+            }
+        }
+
+        if let Some(ref snapshot) = self.current_snapshot_in {
+            for edge in snapshot.edges_of(dst).iter() {
+                if !self.mvcc.is_tombstoned(edge.edge_id, u32::MAX) && seen.insert(edge.edge_id) {
+                    result.push(Nbr::new(
+                        edge.neighbor,
+                        edge.edge_id,
+                        edge.prop_offset,
+                        edge.timestamp,
+                    ));
+                }
+            }
+        }
+
+        result
+    }
+
     /// Check write backpressure and trigger freeze if necessary.
     /// Returns true if a freeze was triggered.
     pub fn check_and_apply_write_backpressure(&mut self, current_ts: Timestamp) -> bool {
@@ -1048,7 +1315,7 @@ impl EdgeTableCore {
 }
 
 pub struct EdgeTableScanIterator<'a> {
-    _table: &'a EdgeTableCore,
+    _table: &'a TimeTravelEdgeStore,
     records: std::vec::IntoIter<EdgeRecord>,
     /// Maximum number of records to return (None = unlimited)
     max_records: Option<usize>,
@@ -1057,12 +1324,12 @@ pub struct EdgeTableScanIterator<'a> {
 }
 
 impl<'a> EdgeTableScanIterator<'a> {
-    pub fn new(table: &'a EdgeTableCore, ts: Timestamp) -> Self {
+    pub fn new(table: &'a TimeTravelEdgeStore, ts: Timestamp) -> Self {
         Self::with_limit(table, ts, None)
     }
 
     /// Create a scan iterator with a maximum record limit
-    pub fn with_limit(table: &'a EdgeTableCore, ts: Timestamp, max_records: Option<usize>) -> Self {
+    pub fn with_limit(table: &'a TimeTravelEdgeStore, ts: Timestamp, max_records: Option<usize>) -> Self {
         let mut seen = HashSet::new();
         let mut records = Vec::new();
 

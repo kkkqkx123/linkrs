@@ -1,5 +1,5 @@
 use super::*;
-use super::EdgeTableCore;
+use super::core::TimeTravelEdgeStore;
 use crate::core::types::{VertexId, DataType};
 use crate::core::Value;
 use crate::storage::types::StoragePropertyDef;
@@ -7,7 +7,7 @@ use crate::storage::schema::ChangeDetails;
 
 // Type alias for backward compatibility with existing tests
 #[allow(dead_code)]
-type EdgeTable = EdgeTableCore;
+type EdgeTable = TimeTravelEdgeStore;
 
 fn create_test_schema() -> EdgeSchema {
     EdgeSchema {
@@ -573,7 +573,7 @@ fn test_version_history_add_property() -> StorageResult<()> {
         ie_strategy: EdgeStrategy::Multiple,
         schema_version: 1,
     };
-    let mut table = EdgeTableCore::with_config(schema, Default::default())?;
+    let mut table = TimeTravelEdgeStore::with_config(schema, Default::default())?;
 
     let initial_version = table.schema.schema_version;
     assert_eq!(initial_version, 1);
@@ -621,7 +621,7 @@ fn test_version_history_remove_property() -> StorageResult<()> {
         ie_strategy: EdgeStrategy::Multiple,
         schema_version: 1,
     };
-    let mut table = EdgeTableCore::with_config(schema, Default::default())?;
+    let mut table = TimeTravelEdgeStore::with_config(schema, Default::default())?;
 
     // Remove the property
     table.remove_property("weight")?;
@@ -660,7 +660,7 @@ fn test_version_history_rename_property() -> StorageResult<()> {
         ie_strategy: EdgeStrategy::Multiple,
         schema_version: 1,
     };
-    let mut table = EdgeTableCore::with_config(schema, Default::default())?;
+    let mut table = TimeTravelEdgeStore::with_config(schema, Default::default())?;
 
     // Rename the property
     table.rename_property("weight", "strength")?;
@@ -700,7 +700,7 @@ fn test_version_history_multiple_changes() -> StorageResult<()> {
         ie_strategy: EdgeStrategy::Multiple,
         schema_version: 1,
     };
-    let mut table = EdgeTableCore::with_config(schema, Default::default())?;
+    let mut table = TimeTravelEdgeStore::with_config(schema, Default::default())?;
 
     // Make several changes
     table.add_property(

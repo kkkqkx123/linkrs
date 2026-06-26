@@ -48,7 +48,7 @@ pub use crate::core::types::EdgeStrategy;
 pub use csr::Csr;
 pub use csr_trait::{CsrBase, MutableCsrTrait};
 pub use csr_variant::CsrVariant;
-pub use edge_table::{EdgeTable, ExportedEdgeSnapshot, UpdateEdgePropertyByOffsetParams, CompactionMode};
+pub use edge_table::{EdgeStore, EdgeTable, ExportedEdgeSnapshot, UpdateEdgePropertyByOffsetParams, CompactionMode};
 pub use fragmentation_stats::FragmentationStats;
 pub use labeled_mutable_csr::{LabeledMutableCsr, LabeledMutableCsrIterator};
 pub use mutable_csr::{MutableCsr, MutableCsrIterator};

@@ -75,7 +75,7 @@ impl GraphStorageContext {
                 s.dst_label = actual_dst_label;
                 s
             };
-            let mut new_table = crate::storage::edge::EdgeTable::new(edge_schema)?;
+            let mut new_table = crate::storage::edge::EdgeStore::new(edge_schema)?;
             if let Some(stats) = &self.persistent.stats_manager {
                 new_table.set_stats_manager(stats.clone());
             }

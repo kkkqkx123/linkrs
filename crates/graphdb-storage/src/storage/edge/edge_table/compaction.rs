@@ -4,7 +4,7 @@
 //! Compaction removes deleted edges and reclaims memory, while maintaining
 //! MVCC visibility guarantees through proper timestamp tracking.
 
-use super::core::EdgeTableCore;
+use super::core::TimeTravelEdgeStore;
 use super::stats::DeletionStats;
 use super::segment::DeletionInfo;
 use crate::core::types::{Timestamp, CompactConfig};
@@ -28,7 +28,7 @@ pub enum CompactionMode {
     PhysicalDeletion,
 }
 
-impl EdgeTableCore {
+impl TimeTravelEdgeStore {
     /// Compact mutable CSR only - physical removal of deleted edges from delta.
     ///
     /// Removes edges marked as deleted from both out and in mutable CSRs.

@@ -12,7 +12,7 @@ use crate::transaction::codec::{bytes_to_value, property_value_to_value};
 use crate::transaction::insert_transaction::{InsertTransactionError, InsertTransactionResult};
 use crate::transaction::undo_log::{PropertyValue, UndoLogError, UndoLogResult};
 
-use crate::storage::edge::EdgeTable;
+use crate::storage::edge::EdgeStore;
 use crate::storage::engine::data_store::EdgeTableKey;
 use crate::storage::vertex::VertexTable;
 
@@ -117,7 +117,7 @@ impl TransactionOps {
     }
 
     pub fn add_edge(
-        edge_tables: &mut HashMap<EdgeTableKey, EdgeTable>,
+        edge_tables: &mut HashMap<EdgeTableKey, EdgeStore>,
         vertex_tables: &HashMap<LabelId, VertexTable>,
         params: AddEdgeParams,
         properties: &[(String, Vec<u8>)],
@@ -165,7 +165,7 @@ impl TransactionOps {
 
     pub fn delete_vertex_type(
         vertex_tables: &mut HashMap<LabelId, VertexTable>,
-        edge_tables: &mut HashMap<EdgeTableKey, EdgeTable>,
+        edge_tables: &mut HashMap<EdgeTableKey, EdgeStore>,
         vertex_label_names: &mut HashMap<String, LabelId>,
         edge_label_names: &mut HashMap<String, LabelId>,
         label: LabelId,
@@ -196,7 +196,7 @@ impl TransactionOps {
     }
 
     pub fn delete_edge_type(
-        edge_tables: &mut HashMap<EdgeTableKey, EdgeTable>,
+        edge_tables: &mut HashMap<EdgeTableKey, EdgeStore>,
         edge_label_names: &mut HashMap<String, LabelId>,
         params: DeleteEdgeTypeParams,
     ) -> UndoLogResult<()> {
@@ -275,7 +275,7 @@ impl TransactionOps {
     }
 
     pub fn delete_edge(
-        edge_tables: &mut HashMap<EdgeTableKey, EdgeTable>,
+        edge_tables: &mut HashMap<EdgeTableKey, EdgeStore>,
         params: DeleteEdgeParams,
         oe_offset: i32,
         ie_offset: i32,
@@ -298,7 +298,7 @@ impl TransactionOps {
     }
 
     pub fn revert_delete_edge(
-        edge_tables: &mut HashMap<EdgeTableKey, EdgeTable>,
+        edge_tables: &mut HashMap<EdgeTableKey, EdgeStore>,
         params: RevertDeleteEdgeParams,
         oe_offset: i32,
         ie_offset: i32,
@@ -375,7 +375,7 @@ impl TransactionOps {
     }
 
     pub fn update_edge_property(
-        edge_tables: &mut HashMap<EdgeTableKey, EdgeTable>,
+        edge_tables: &mut HashMap<EdgeTableKey, EdgeStore>,
         vertex_tables: &HashMap<LabelId, VertexTable>,
         params: crate::storage::engine::params::EdgeOperationParams,
         prop_name: &str,
@@ -413,7 +413,7 @@ impl TransactionOps {
     }
 
     pub fn update_edge_property_undo(
-        edge_tables: &mut HashMap<EdgeTableKey, EdgeTable>,
+        edge_tables: &mut HashMap<EdgeTableKey, EdgeStore>,
         params: UpdateEdgePropertyUndoParams,
         _oe_offset: i32,
         _ie_offset: i32,
@@ -465,7 +465,7 @@ impl TransactionOps {
     }
 
     pub fn create_edge_type_undo(
-        edge_tables: &mut HashMap<EdgeTableKey, EdgeTable>,
+        edge_tables: &mut HashMap<EdgeTableKey, EdgeStore>,
         edge_label_names: &mut HashMap<String, LabelId>,
         edge_label_counter: &mut LabelId,
         vertex_tables: &HashMap<LabelId, VertexTable>,
@@ -499,7 +499,7 @@ impl TransactionOps {
             schema_version: 1,
         };
 
-        let table = crate::storage::edge::EdgeTable::new(schema)
+        let table = crate::storage::edge::EdgeStore::new(schema)
             .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
         let key = EdgeTableKey::new(src_label_id, dst_label_id, label);
         edge_tables.insert(key, table);
@@ -536,7 +536,7 @@ impl TransactionOps {
     }
 
     pub fn revert_rename_edge_properties(
-        edge_tables: &mut HashMap<EdgeTableKey, EdgeTable>,
+        edge_tables: &mut HashMap<EdgeTableKey, EdgeStore>,
         edge_label_names: &mut HashMap<String, LabelId>,
         vertex_tables: &HashMap<LabelId, VertexTable>,
         edge_labels: &EdgeTypeLabelParams,
@@ -597,7 +597,7 @@ impl TransactionOps {
     }
 
     pub fn revert_delete_edge_properties(
-        edge_tables: &mut HashMap<EdgeTableKey, EdgeTable>,
+        edge_tables: &mut HashMap<EdgeTableKey, EdgeStore>,
         edge_label_names: &mut HashMap<String, LabelId>,
         vertex_tables: &HashMap<LabelId, VertexTable>,
         prop_names: &[String],

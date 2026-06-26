@@ -4,14 +4,14 @@
 //! Freezing is the process of taking visible edges from the mutable CSR and converting
 //! them to immutable segments for better cache locality and query performance.
 
-use super::core::EdgeTableCore;
+use super::core::TimeTravelEdgeStore;
 use super::segment::{CsrSegment, DeletionInfo, SEPARATE_EDGE_ID_STORAGE_THRESHOLD};
 use super::merge;
 use crate::core::types::{EdgeId, Timestamp};
 use crate::storage::edge::{CsrVariant, Csr, CsrBase};
 use std::collections::HashMap;
 
-impl EdgeTableCore {
+impl TimeTravelEdgeStore {
     /// Freeze CSR only (convert mutable delta to immutable segment).
     ///
     /// Converts visible edges (ts <= query_ts) to immutable CSR and records
@@ -68,6 +68,12 @@ impl EdgeTableCore {
         // Update checksums after merge as well
         if merged > 0 {
             self.update_segment_checksums();
+        }
+
+        // Rebuild sparse vertex indices and current snapshot after any segment mutation
+        if out_segments_after > out_segments_before || in_segments_after > in_segments_before || merged > 0 {
+            self.rebuild_sparse_vertex_indices();
+            self.rebuild_current_snapshot();
         }
 
         total_frozen
