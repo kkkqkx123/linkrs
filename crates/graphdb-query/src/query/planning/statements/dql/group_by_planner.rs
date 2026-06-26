@@ -233,7 +233,7 @@ impl Planner for GroupByPlanner {
                 let mut sets: Vec<Vec<String>> = Vec::new();
                 for mask in 0..(1u32 << num_group_items) {
                     let mut set = Vec::new();
-                    for i in 0..num_group_items {
+                    for (i, _key) in group_keys.iter().enumerate().take(num_group_items) {
                         if mask & (1 << i) != 0 {
                             set.push(group_keys[i].clone());
                         }
@@ -245,7 +245,7 @@ impl Planner for GroupByPlanner {
                 }
                 sets.push(Vec::new());
                 // Sort descending by number of keys
-                sets.sort_by(|a, b| b.len().cmp(&a.len()));
+                sets.sort_by_key(|b| std::cmp::Reverse(b.len()));
                 sets.dedup();
                 sets
             }

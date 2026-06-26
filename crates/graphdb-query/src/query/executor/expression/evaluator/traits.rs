@@ -5,9 +5,11 @@
 //! Note: This trait is used for the evaluation of runtime expressions.
 //! For compilation-time analysis, please use `ExpressionAnalysisContext`.
 
+use crate::core::types::expr::SubqueryBody;
 use crate::core::Value;
 use crate::query::executor::expression::evaluation_context::graph_storage::GraphStorageRef;
 use crate::query::executor::expression::functions::OwnedFunctionRef;
+use crate::query::executor::expression::ExpressionError;
 
 /// The "expression evaluation context trait"
 ///
@@ -43,5 +45,16 @@ pub trait ExpressionContext {
     /// The caching function has been removed; the result is "None".
     fn get_cache(&mut self) -> Option<&mut ()> {
         None
+    }
+
+    /// Execute a subquery body and return the result values.
+    ///
+    /// Used for EXISTS and IN subquery expressions.
+    /// Returns the list of values from the subquery's RETURN clause.
+    fn execute_subquery(&mut self, body: &SubqueryBody) -> Result<Vec<Value>, ExpressionError> {
+        let _ = body;
+        Err(ExpressionError::type_error(
+            "Subquery execution not supported in this context",
+        ))
     }
 }

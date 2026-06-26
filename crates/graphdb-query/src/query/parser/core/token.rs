@@ -402,6 +402,10 @@ impl TokenKindExt for TokenKind {
                 | TokenKind::Ge
                 | TokenKind::Regex
                 | TokenKind::NotOp
+                | TokenKind::Arrow
+                | TokenKind::ArrowRight
+                | TokenKind::HashArrow
+                | TokenKind::HashArrowRight
         )
     }
 

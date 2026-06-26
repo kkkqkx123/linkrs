@@ -204,7 +204,7 @@ fn execute_json_extract(args: &[Value]) -> Result<Value, ExpressionError> {
 fn execute_json_build_object(args: &[Value]) -> Result<Value, ExpressionError> {
     use serde_json::Map;
 
-    if args.len() % 2 != 0 {
+    if !args.len().is_multiple_of(2) {
         return Err(ExpressionError::type_error(
             "json_build_object requires an even number of arguments (key-value pairs)",
         ));

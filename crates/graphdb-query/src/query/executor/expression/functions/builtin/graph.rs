@@ -478,7 +478,7 @@ fn execute_neighbors_with_storage(
     let vid = extract_vertex_id(&args[0])?;
     let neighbors = storage
         .get_neighbors(&vid)
-        .map_err(|e| ExpressionError::function_error(e))?;
+        .map_err(ExpressionError::function_error)?;
     let neighbor_ids: Vec<Value> = neighbors
         .into_iter()
         .map(|(nid, _)| Value::BigInt(nid.as_int64().unwrap_or(0)))
@@ -498,7 +498,7 @@ fn execute_degree_with_storage(
     let vid = extract_vertex_id(&args[0])?;
     let neighbors = storage
         .get_neighbors(&vid)
-        .map_err(|e| ExpressionError::function_error(e))?;
+        .map_err(ExpressionError::function_error)?;
     Ok(Value::BigInt(neighbors.len() as i64))
 }
 
@@ -575,14 +575,14 @@ fn execute_shortest_path_with_storage(
 
         let neighbors = storage
             .get_neighbors(&current)
-            .map_err(|e| ExpressionError::function_error(e))?;
+            .map_err(ExpressionError::function_error)?;
 
         for (neighbor_id, _) in neighbors {
             if neighbor_id == end_vid {
                 return Ok(Value::BigInt(distance + 1));
             }
-            if !visited.contains_key(&neighbor_id) {
-                visited.insert(neighbor_id, distance + 1);
+            if let std::collections::hash_map::Entry::Vacant(e) = visited.entry(neighbor_id) {
+                e.insert(distance + 1);
                 queue.push_back(neighbor_id);
             }
         }
@@ -627,7 +627,7 @@ fn execute_bfs_with_storage(
 
         let neighbors = storage
             .get_neighbors(&current)
-            .map_err(|e| ExpressionError::function_error(e))?;
+            .map_err(ExpressionError::function_error)?;
 
         for (neighbor_id, _) in neighbors {
             if visited.insert(neighbor_id) {
@@ -767,15 +767,14 @@ fn execute_variable_length_path_with_storage(
         ));
     }
 
-    if start_vid == end_vid {
-        if min_depth <= 0 {
+    if start_vid == end_vid
+        && min_depth <= 0 {
             return Ok(Value::list(List {
                 values: vec![Value::list(List { values: vec![
                     Value::BigInt(start_vid.as_int64().unwrap_or(0)),
                 ] })],
             }));
         }
-    }
 
     // DFS with depth limit to find all paths from start_vid to end_vid
     // within the depth range [min_depth, max_depth]
@@ -904,9 +903,10 @@ fn execute_pagerank_with_storage(
             }
         }
 
-        for i in 0..vertex_count {
-            new_scores[i] = (1.0 - damping_factor) / vertex_count as f64
-                + damping_factor * dangling_sum / vertex_count as f64;
+        let base = (1.0 - damping_factor) / vertex_count as f64
+            + damping_factor * dangling_sum / vertex_count as f64;
+        for score in new_scores.iter_mut() {
+            *score = base;
         }
 
         for i in 0..vertex_count {

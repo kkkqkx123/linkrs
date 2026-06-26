@@ -412,6 +412,38 @@ impl<'a> ExprParser<'a> {
                     expr: Expression::in_subquery(expression.expr, subquery, false),
                     span,
                 };
+            } else if ctx.check_token(TokenKind::Arrow) && matches!(ctx.peek_token().kind, TokenKind::StringLiteral(_)) {
+                ctx.match_token(TokenKind::Arrow);
+                let key = ctx.expect_string_literal()?;
+                let span = ctx.merge_span(expression.span.start, ctx.current_position());
+                expression = ParseResult {
+                    expr: Expression::binary(expression.expr, BinaryOperator::JsonGet, Expression::literal(key)),
+                    span,
+                };
+            } else if ctx.check_token(TokenKind::ArrowRight) && matches!(ctx.peek_token().kind, TokenKind::StringLiteral(_)) {
+                ctx.match_token(TokenKind::ArrowRight);
+                let key = ctx.expect_string_literal()?;
+                let span = ctx.merge_span(expression.span.start, ctx.current_position());
+                expression = ParseResult {
+                    expr: Expression::binary(expression.expr, BinaryOperator::JsonGetText, Expression::literal(key)),
+                    span,
+                };
+            } else if ctx.check_token(TokenKind::HashArrow) && matches!(ctx.peek_token().kind, TokenKind::StringLiteral(_)) {
+                ctx.match_token(TokenKind::HashArrow);
+                let path = ctx.expect_string_literal()?;
+                let span = ctx.merge_span(expression.span.start, ctx.current_position());
+                expression = ParseResult {
+                    expr: Expression::binary(expression.expr, BinaryOperator::JsonPathGet, Expression::literal(path)),
+                    span,
+                };
+            } else if ctx.check_token(TokenKind::HashArrowRight) && matches!(ctx.peek_token().kind, TokenKind::StringLiteral(_)) {
+                ctx.match_token(TokenKind::HashArrowRight);
+                let path = ctx.expect_string_literal()?;
+                let span = ctx.merge_span(expression.span.start, ctx.current_position());
+                expression = ParseResult {
+                    expr: Expression::binary(expression.expr, BinaryOperator::JsonPathGetText, Expression::literal(path)),
+                    span,
+                };
             } else {
                 break;
             }
@@ -983,7 +1015,7 @@ impl<'a> ExprParser<'a> {
     }
 
     fn parse_subquery_body(&mut self, ctx: &mut ParseContext<'a>) -> Result<SubqueryBody, ParseError> {
-        let start_pos = ctx.current_position();
+        let _start_pos = ctx.current_position();
         let mut patterns = Vec::new();
         let mut where_clause = None;
         let mut return_expr = None;

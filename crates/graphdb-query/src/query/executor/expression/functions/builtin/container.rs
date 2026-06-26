@@ -313,11 +313,9 @@ fn execute_keys(args: &[Value]) -> Result<Value, ExpressionError> {
             }
         }
         Value::Json(j) => {
-            if let Ok(v) = j.to_value() {
-                if let serde_json::Value::Object(m) = v {
-                    for key in m.keys() {
-                        keys.insert(key.clone());
-                    }
+            if let Ok(serde_json::Value::Object(m)) = j.to_value() {
+                for key in m.keys() {
+                    keys.insert(key.clone());
                 }
             }
         }
@@ -567,7 +565,7 @@ fn execute_list_to_string(args: &[Value]) -> Result<Value, ExpressionError> {
             let strings: Vec<String> = list
                 .values
                 .iter()
-                .map(|v| value_to_string(v))
+                .map(value_to_string)
                 .collect();
             Ok(Value::String(strings.join(delimiter)))
         }

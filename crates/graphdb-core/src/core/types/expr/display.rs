@@ -239,7 +239,7 @@ impl Expression {
                     }).collect();
                     result.push_str(&format!("ORDER BY {}", parts.join(", ")));
                 }
-                result.push_str(")");
+                result.push(')');
                 result
             }
         }

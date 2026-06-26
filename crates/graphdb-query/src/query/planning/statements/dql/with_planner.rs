@@ -6,7 +6,7 @@ use crate::core::YieldColumn;
 use crate::query::parser::ast::stmt::{OrderDirection, ReturnItem, Stmt, WithStmt};
 use crate::query::planning::plan::core::{
     node_id_generator::next_node_id,
-    nodes::{ArgumentNode, DedupNode, FilterNode, LimitNode, ProjectNode, SortNode},
+    nodes::{ArgumentNode, DedupNode, FilterNode, LimitNode, LoopNode, ProjectNode, SortNode},
 };
 use crate::query::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
@@ -107,6 +107,24 @@ impl Planner for WithPlanner {
                     ))
                 })?;
             current_node = PlanNodeEnum::Filter(filter_node);
+        }
+
+        // Handle recursive CTE
+        if with_stmt.recursive {
+            // For recursive CTE, create a loop node for iterative expansion
+            let expr_ctx = crate::query::validator::context::ExpressionAnalysisContext::new();
+            let expr_id = expr_ctx.register_expression(
+                crate::core::types::ExpressionMeta::with_span(
+                    crate::core::Expression::literal(true),
+                    crate::core::types::Span::default(),
+                ),
+            );
+            let condition_expr = crate::core::types::ContextualExpression::new(
+                expr_id,
+                std::sync::Arc::new(expr_ctx),
+            );
+            let loop_node = LoopNode::new(next_node_id(), condition_expr);
+            current_node = PlanNodeEnum::Loop(loop_node);
         }
 
         // If deduplication is required, create a deduplication node.

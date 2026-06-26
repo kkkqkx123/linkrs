@@ -298,12 +298,20 @@ impl ExpressionEvaluator {
                 "The query parameter '{}' requires values provided by the runtime context.",
                 name
             ))),
-            Expression::Exists { .. } => Err(ExpressionError::type_error(
-                "EXISTS subquery requires a runtime context",
-            )),
-            Expression::In { .. } => Err(ExpressionError::type_error(
-                "IN subquery requires a runtime context",
-            )),
+            Expression::Exists { body } => {
+                let results = context.execute_subquery(body)?;
+                Ok(Value::Bool(!results.is_empty()))
+            }
+            Expression::In {
+                expr,
+                subquery,
+                negated,
+            } => {
+                let value = Self::evaluate_recursive(expr, context)?;
+                let results = context.execute_subquery(subquery)?;
+                let found = results.contains(&value);
+                Ok(Value::Bool(if *negated { !found } else { found }))
+            }
         }
     }
 

@@ -409,7 +409,7 @@ impl FulltextFunction {
         };
 
         if context.matched_fields.contains(&field_name) {
-            let field_bonus = if context.highlights.as_ref().map_or(false, |h| h.contains_key(&field_name)) {
+            let field_bonus = if context.highlights.as_ref().is_some_and(|h| h.contains_key(&field_name)) {
                 1.5
             } else {
                 1.0

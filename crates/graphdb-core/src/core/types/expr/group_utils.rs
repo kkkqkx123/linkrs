@@ -137,7 +137,7 @@ fn extract_group_suite_recursive(expression: &Expression, group_suite: &mut Grou
         } => {
             let agg_expression = Expression::Aggregate {
                 func: func.clone(),
-                args: args.iter().map(|arg| arg.clone()).collect(),
+                args: args.to_vec(),
                 distinct: *distinct,
                 filter: filter.clone(),
             };

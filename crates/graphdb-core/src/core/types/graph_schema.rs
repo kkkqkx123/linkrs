@@ -20,6 +20,8 @@ pub enum JoinType {
     Full,
     /// Cartesian product (cross linking)
     Cross,
+    /// lateral join (correlated subquery)
+    Lateral,
 }
 
 impl JoinType {
@@ -31,6 +33,7 @@ impl JoinType {
             JoinType::Right => "RIGHT",
             JoinType::Full => "FULL",
             JoinType::Cross => "CROSS",
+            JoinType::Lateral => "LATERAL",
         }
     }
 
@@ -43,6 +46,11 @@ impl JoinType {
     pub fn is_inner(&self) -> bool {
         matches!(self, JoinType::Inner)
     }
+
+    /// Determine if it is a lateral join
+    pub fn is_lateral(&self) -> bool {
+        matches!(self, JoinType::Lateral)
+    }
 }
 
 impl From<&str> for JoinType {
@@ -53,6 +61,7 @@ impl From<&str> for JoinType {
             "RIGHT" => JoinType::Right,
             "FULL" => JoinType::Full,
             "CROSS" => JoinType::Cross,
+            "LATERAL" => JoinType::Lateral,
             _ => JoinType::Inner,
         }
     }

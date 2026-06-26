@@ -706,7 +706,7 @@ impl AggregateState {
         sorted_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
         let len = sorted_values.len();
-        if len % 2 == 0 {
+        if len.is_multiple_of(2) {
             let mid = len / 2;
             Ok(Value::Double((sorted_values[mid - 1] + sorted_values[mid]) / 2.0))
         } else {

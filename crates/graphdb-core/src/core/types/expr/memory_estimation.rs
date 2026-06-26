@@ -140,10 +140,10 @@ impl MemoryEstimatable for Expression {
                     + over_partition_by.iter().map(|e| e.estimate_memory()).sum::<usize>()
                     + over_order_by.iter().map(|e| e.estimate_memory()).sum::<usize>()
             }
-            Expression::Exists { body } => base_size + body.patterns.iter().map(|p| estimate_string_memory(p)).sum::<usize>(),
+            Expression::Exists { body } => base_size + body.patterns.iter().map(estimate_string_memory).sum::<usize>(),
             Expression::In { expr, subquery, .. } => {
                 base_size + expr.estimate_memory()
-                    + subquery.patterns.iter().map(|p| estimate_string_memory(p)).sum::<usize>()
+                    + subquery.patterns.iter().map(estimate_string_memory).sum::<usize>()
             }
         }
     }
