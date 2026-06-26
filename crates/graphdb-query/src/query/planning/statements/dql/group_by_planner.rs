@@ -168,7 +168,8 @@ impl GroupByPlanner {
             | Expression::TagProperty { .. }
             | Expression::EdgeProperty { .. }
             | Expression::Parameter(_)
-            | Expression::Vector(_) => {}
+            | Expression::Vector(_)
+            | Expression::WindowFunction { .. } => {}
         }
     }
 }

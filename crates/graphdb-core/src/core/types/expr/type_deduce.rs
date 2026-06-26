@@ -42,6 +42,7 @@ impl Expression {
             Expression::PathBuild(_) => DataType::Path,
             Expression::Parameter(_) => DataType::Empty,
             Expression::Vector(_) => DataType::Vector,
+            Expression::WindowFunction { .. } => DataType::Empty,
         }
     }
 

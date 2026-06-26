@@ -30,6 +30,7 @@ pub use crate::query::planning::plan::core::nodes::control_flow::control_flow_no
 };
 pub use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
 pub use crate::query::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+pub use crate::query::planning::plan::core::nodes::graph_operations::window_node::WindowNode;
 pub use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::{
     ApplyNode, AssignNode, DataCollectNode, DedupNode, MaterializeNode, PatternApplyNode,
     RemoveNode, RollUpApplyNode, UnionNode, UnwindNode,
@@ -111,6 +112,7 @@ pub trait PlanNodeVisitor {
     impl_visitor_methods!(
         Filter, FilterNode, visit_filter;
         Aggregate, AggregateNode, visit_aggregate;
+        Window, WindowNode, visit_window;
         Dedup, DedupNode, visit_dedup;
     );
 
@@ -234,6 +236,7 @@ impl PlanNodeEnum {
             PlanNodeEnum::BiTraverse(node) => visitor.visit_bi_traverse(node),
             PlanNodeEnum::Filter(node) => visitor.visit_filter(node),
             PlanNodeEnum::Aggregate(node) => visitor.visit_aggregate(node),
+            PlanNodeEnum::Window(node) => visitor.visit_window(node),
             PlanNodeEnum::Argument(node) => visitor.visit_argument(node),
             PlanNodeEnum::Loop(node) => visitor.visit_loop(node),
             PlanNodeEnum::PassThrough(node) => visitor.visit_pass_through(node),

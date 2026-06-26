@@ -347,9 +347,14 @@ impl ExpressionPrecomputationOptimizer {
             // Predicate expressions are deterministic if all arguments are deterministic
             Expression::Predicate { args, .. } => args
                 .iter()
-                .all(|arg| self.check_expression_deterministic(arg)), // Pattern is now exhaustive - all Expression variants are handled above
+                .all(|arg| self.check_expression_deterministic(arg)),             // Pattern is now exhaustive - all Expression variants are handled above
                                                                       // If new variants are added in the future, they should be handled here
                                                                       // For now, this branch is unreachable but kept for future-proofing
+            Expression::WindowFunction { args, over_partition_by, over_order_by, .. } => {
+                args.iter().all(|arg| self.check_expression_deterministic(arg))
+                    && over_partition_by.iter().all(|e| self.check_expression_deterministic(e))
+                    && over_order_by.iter().all(|e| self.check_expression_deterministic(e))
+            }
         }
     }
 

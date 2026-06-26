@@ -67,6 +67,9 @@ impl PlanNodeEnum {
             PlanNodeEnum::Aggregate(node) => {
                 vec![super::plan_node_traits::SingleInputNode::input(node)]
             }
+            PlanNodeEnum::Window(node) => {
+                vec![super::plan_node_traits::SingleInputNode::input(node)]
+            }
             PlanNodeEnum::Unwind(node) => {
                 vec![super::plan_node_traits::SingleInputNode::input(node)]
             }

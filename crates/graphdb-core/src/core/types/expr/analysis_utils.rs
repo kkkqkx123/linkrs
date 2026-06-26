@@ -130,6 +130,7 @@ fn requires_runtime_context(expression: &Expression) -> bool {
         Expression::PathBuild(exprs) => exprs.iter().any(requires_runtime_context),
         Expression::Parameter(_) => true,
         Expression::Vector(_) => false,
+        Expression::WindowFunction { args, .. } => args.iter().any(requires_runtime_context),
     }
 }
 
@@ -315,6 +316,7 @@ pub fn has_aggregate_function(expression: &Expression) -> bool {
                 || map.as_ref().is_some_and(|e| has_aggregate_function(e))
         }
         Expression::Property { object, .. } => has_aggregate_function(object),
+        Expression::WindowFunction { args, .. } => args.iter().any(has_aggregate_function),
         _ => false,
     }
 }
@@ -420,6 +422,17 @@ fn extract_aggregate_functions_recursive(
         }
         Expression::Property { object, .. } => {
             extract_aggregate_functions_recursive(object, functions);
+        }
+        Expression::WindowFunction { args, over_partition_by, over_order_by, .. } => {
+            for arg in args {
+                extract_aggregate_functions_recursive(arg, functions);
+            }
+            for e in over_partition_by {
+                extract_aggregate_functions_recursive(e, functions);
+            }
+            for e in over_order_by {
+                extract_aggregate_functions_recursive(e, functions);
+            }
         }
         _ => {}
     }

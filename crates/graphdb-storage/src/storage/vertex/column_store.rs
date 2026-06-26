@@ -342,6 +342,12 @@ impl ColumnStorage for VariableWidthColumn {
             } else {
                 None
             }
+        } else if matches!(self.data_type, DataType::Json) {
+            let s = String::from_utf8(bytes.to_vec()).ok()?;
+            crate::core::value::Json::parse(&s).ok().map(|j| Value::Json(Box::new(j)))
+        } else if matches!(self.data_type, DataType::JsonB) {
+            let s = String::from_utf8(bytes.to_vec()).ok()?;
+            crate::core::value::JsonB::parse(&s).ok().map(|jb| Value::JsonB(Box::new(jb)))
         } else {
             String::from_utf8(bytes.to_vec()).ok().map(Value::String)
         }
@@ -618,6 +624,19 @@ fn write_variable_value(data: &mut Vec<u8>, value: &Value) -> StorageResult<()> 
             let len = bytes.len() as u64;
             data.extend_from_slice(&len.to_le_bytes());
             data.extend_from_slice(&bytes);
+        }
+        Value::Json(j) => {
+            let bytes = j.as_str().as_bytes();
+            let len = bytes.len() as u64;
+            data.extend_from_slice(&len.to_le_bytes());
+            data.extend_from_slice(bytes);
+        }
+        Value::JsonB(j) => {
+            let text = j.to_json_string();
+            let bytes = text.as_bytes();
+            let len = bytes.len() as u64;
+            data.extend_from_slice(&len.to_le_bytes());
+            data.extend_from_slice(bytes);
         }
         _ => {
             return Err(StorageError::type_mismatch(

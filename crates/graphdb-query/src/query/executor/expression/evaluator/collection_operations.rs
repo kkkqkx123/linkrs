@@ -5,6 +5,87 @@
 use crate::core::value::list::List;
 use crate::core::Value;
 use crate::query::executor::expression::ExpressionError;
+use serde_json::Value as JsonValue;
+
+/// Convert a serde_json::Value to a native Value
+fn json_to_value_inline(json: &JsonValue) -> Value {
+    match json {
+        JsonValue::Null => Value::Null(crate::core::value::NullType::Null),
+        JsonValue::Bool(b) => Value::Bool(*b),
+        JsonValue::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Value::BigInt(i)
+            } else if let Some(f) = n.as_f64() {
+                Value::Double(f)
+            } else {
+                Value::Null(crate::core::value::NullType::Null)
+            }
+        }
+        JsonValue::String(s) => Value::String(s.clone()),
+        JsonValue::Array(arr) => {
+            let values: Vec<Value> = arr.iter().map(json_to_value_inline).collect();
+            Value::list(List::from(values))
+        }
+        JsonValue::Object(obj) => {
+            let map: std::collections::HashMap<String, Value> = obj
+                .iter()
+                .map(|(k, v)| (k.clone(), json_to_value_inline(v)))
+                .collect();
+            Value::map(map)
+        }
+    }
+}
+
+/// Access a JSON value by subscript (string key for objects, integer index for arrays)
+fn json_subscript_access(json: &JsonValue, index: &Value) -> Result<Value, ExpressionError> {
+    match (json, index) {
+        (JsonValue::Object(map), Value::String(key)) => {
+            map.get(key)
+                .map(json_to_value_inline)
+                .ok_or_else(|| ExpressionError::runtime_error(
+                    format!("JSON key not found: {}", key)
+                ))
+        }
+        (JsonValue::Array(arr), Value::Int(i)) => {
+            let idx = if *i < 0 { arr.len() as i32 + i } else { *i } as usize;
+            arr.get(idx)
+                .map(json_to_value_inline)
+                .ok_or_else(|| ExpressionError::index_out_of_bounds(idx as isize, arr.len()))
+        }
+        (JsonValue::Array(arr), Value::BigInt(i)) => {
+            let idx = if *i < 0 { arr.len() as i64 + i } else { *i } as usize;
+            arr.get(idx)
+                .map(json_to_value_inline)
+                .ok_or_else(|| ExpressionError::index_out_of_bounds(idx as isize, arr.len()))
+        }
+        (JsonValue::Object(_), _) => Err(ExpressionError::type_error("JSON object key must be a string")),
+        (JsonValue::Array(_), _) => Err(ExpressionError::type_error("JSON array index must be an integer")),
+        _ => Err(ExpressionError::type_error("Subscript not supported on this JSON type")),
+    }
+}
+
+/// Access a JSON value by property name (for property access syntax `obj.key`)
+fn json_property_access(json: &JsonValue, property: &str) -> Result<Value, ExpressionError> {
+    match json {
+        JsonValue::Object(map) => {
+            Ok(map
+                .get(property)
+                .map(json_to_value_inline)
+                .unwrap_or(Value::Null(crate::core::value::NullType::Null)))
+        }
+        JsonValue::Array(arr) => {
+            if let Ok(index) = property.parse::<isize>() {
+                let idx = if index < 0 { arr.len() as isize + index } else { index } as usize;
+                arr.get(idx)
+                    .map(json_to_value_inline)
+                    .ok_or_else(|| ExpressionError::index_out_of_bounds(idx as isize, arr.len()))
+            } else {
+                Err(ExpressionError::type_error("JSON array property must be an integer index"))
+            }
+        }
+        _ => Ok(Value::Null(crate::core::value::NullType::Null)),
+    }
+}
 
 /// Set operation evaluator
 pub struct CollectionOperationEvaluator;
@@ -78,6 +159,15 @@ impl CollectionOperationEvaluator {
                 } else {
                     Err(ExpressionError::type_error("Mapping key must be a string"))
                 }
+            }
+            Value::Json(j) => {
+                let json_value = j.to_value().map_err(|e| ExpressionError::type_error(
+                    format!("Invalid JSON: {}", e)
+                ))?;
+                json_subscript_access(&json_value, index)
+            }
+            Value::JsonB(j) => {
+                json_subscript_access(j.as_value(), index)
             }
             _ => Err(ExpressionError::type_error(
                 "Types for which subscript access are not supported",
@@ -233,6 +323,15 @@ impl CollectionOperationEvaluator {
                 } else {
                     Err(ExpressionError::type_error("List index must be an integer"))
                 }
+            }
+            Value::Json(j) => {
+                let json_value = j.to_value().map_err(|e| ExpressionError::type_error(
+                    format!("Invalid JSON: {}", e)
+                ))?;
+                json_property_access(&json_value, property)
+            }
+            Value::JsonB(j) => {
+                json_property_access(j.as_value(), property)
             }
             _ => Err(ExpressionError::type_error(
                 "Types of property access are not supported",

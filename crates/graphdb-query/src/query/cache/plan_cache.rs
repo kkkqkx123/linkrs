@@ -397,6 +397,7 @@ impl QueryPlanCache {
             PlanNodeEnum::Sample(_) => 15,
             PlanNodeEnum::Dedup(_) => 20,
             PlanNodeEnum::Aggregate(_) => 40,
+            PlanNodeEnum::Window(_) => 35,
 
             // Join nodes
             PlanNodeEnum::InnerJoin(_) => 50,

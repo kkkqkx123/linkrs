@@ -230,6 +230,9 @@ impl<S: StorageClient + Send + 'static> ExecutorFactory<S> {
             PlanNodeEnum::Aggregate(node) => {
                 DataProcessingBuilder::build_aggregate(node, storage, context)
             }
+            PlanNodeEnum::Window(node) => {
+                DataProcessingBuilder::build_window(node, storage, context)
+            }
             PlanNodeEnum::Dedup(node) => DataProcessingBuilder::build_dedup(node, storage, context),
 
             // Connect the actuator.

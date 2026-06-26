@@ -795,13 +795,69 @@ impl<'a> ExprParser<'a> {
                 span,
             })
         } else {
-            Ok(ParseResult {
-                expr: Expression::Function {
-                    name,
-                    args: args.into_iter().map(|e| e.expr).collect(),
-                },
-                span,
-            })
+            let func_args: Vec<Expression> = args.into_iter().map(|e| e.expr).collect();
+            // Check for OVER clause (window function)
+            if ctx.match_token(TokenKind::Over) {
+                ctx.expect_token(TokenKind::LParen)?;
+                let mut partition_by = Vec::new();
+                let mut order_by = Vec::new();
+                let mut order_desc = Vec::new();
+
+                // Parse optional PARTITION BY clause
+                if self.match_identifier_token(ctx, "PARTITION") {
+                    ctx.expect_token(TokenKind::By)?;
+                    partition_by.push(self.parse_expression(ctx)?.expr);
+                    while ctx.match_token(TokenKind::Comma) {
+                        partition_by.push(self.parse_expression(ctx)?.expr);
+                    }
+                }
+
+                // Parse optional ORDER BY clause
+                if ctx.match_token(TokenKind::Order) {
+                    ctx.expect_token(TokenKind::By)?;
+                    let first_expr = self.parse_expression(ctx)?;
+                    let desc = if ctx.match_token(TokenKind::Desc) {
+                        true
+                    } else {
+                        ctx.match_token(TokenKind::Asc);
+                        false
+                    };
+                    order_by.push(first_expr.expr);
+                    order_desc.push(desc);
+                    while ctx.match_token(TokenKind::Comma) {
+                        let expr = self.parse_expression(ctx)?.expr;
+                        let d = if ctx.match_token(TokenKind::Desc) {
+                            true
+                        } else {
+                            ctx.match_token(TokenKind::Asc);
+                            false
+                        };
+                        order_by.push(expr);
+                        order_desc.push(d);
+                    }
+                }
+
+                ctx.expect_token(TokenKind::RParen)?;
+                let span = ctx.merge_span(span.start, ctx.current_position());
+                Ok(ParseResult {
+                    expr: Expression::WindowFunction {
+                        name,
+                        args: func_args,
+                        over_partition_by: partition_by,
+                        over_order_by: order_by,
+                        over_order_desc: order_desc,
+                    },
+                    span,
+                })
+            } else {
+                Ok(ParseResult {
+                    expr: Expression::Function {
+                        name,
+                        args: func_args,
+                    },
+                    span,
+                })
+            }
         }
     }
 
@@ -901,6 +957,16 @@ impl<'a> ExprParser<'a> {
             expr: Expression::list_comprehension(variable, source, filter, map),
             span,
         })
+    }
+
+    fn match_identifier_token(&mut self, ctx: &mut ParseContext<'a>, expected: &str) -> bool {
+        if let TokenKind::Identifier(s) = &ctx.current_token().kind {
+            if s.eq_ignore_ascii_case(expected) {
+                ctx.next_token();
+                return true;
+            }
+        }
+        false
     }
 
     pub fn set_compat_mode(&mut self, _enabled: bool) {}

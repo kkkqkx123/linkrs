@@ -1,5 +1,6 @@
 //! Implementation of string functions
 
+use crate::core::value::list::List;
 use crate::core::value::NullType;
 use crate::core::Value;
 use crate::query::executor::expression::{ExpressionError, ExpressionErrorType};
@@ -160,6 +161,34 @@ define_function_enum! {
             variadic: false,
             description: "Get last N characters of string",
             handler: execute_right
+        },
+        StringInsert => {
+            name: "insert",
+            arity: 4,
+            variadic: false,
+            description: "Insert substring at specified position",
+            handler: execute_string_insert
+        },
+        Translate => {
+            name: "translate",
+            arity: 3,
+            variadic: false,
+            description: "Replace characters in string using mapping",
+            handler: execute_translate
+        },
+        Format => {
+            name: "format",
+            arity: 2,
+            variadic: true,
+            description: "Format string with placeholders",
+            handler: execute_format
+        },
+        StringSplit => {
+            name: "string_split",
+            arity: 2,
+            variadic: false,
+            description: "Split string into substrings by delimiter",
+            handler: execute_string_split
         },
     }
 }
@@ -569,6 +598,111 @@ fn execute_right(args: &[Value]) -> Result<Value, ExpressionError> {
     }
 }
 
+fn execute_string_insert(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 4 {
+        return Err(ExpressionError::type_error("insert requires 4 arguments"));
+    }
+    match (&args[0], &args[1], &args[2], &args[3]) {
+        (Value::String(s), Value::Int(pos), Value::Int(len), Value::String(newsub)) => {
+            let pos = *pos as usize;
+            let len = *len as usize;
+            if pos > s.len() {
+                return Ok(Value::String(s.clone()));
+            }
+            let result = format!(
+                "{}{}{}",
+                &s[..pos],
+                newsub,
+                &s[(pos + len).min(s.len())..]
+            );
+            Ok(Value::String(result))
+        }
+        (Value::Null(_), _, _, _)
+        | (_, Value::Null(_), _, _)
+        | (_, _, Value::Null(_), _)
+        | (_, _, _, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "insert requires string, int, int, string arguments",
+        )),
+    }
+}
+
+fn execute_translate(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 3 {
+        return Err(ExpressionError::type_error("translate requires 3 arguments"));
+    }
+    match (&args[0], &args[1], &args[2]) {
+        (Value::String(s), Value::String(from), Value::String(to)) => {
+            let result: String = s
+                .chars()
+                .map(|c| {
+                    if let Some(pos) = from.chars().position(|fc| fc == c) {
+                        to.chars().nth(pos).unwrap_or(c)
+                    } else {
+                        c
+                    }
+                })
+                .collect();
+            Ok(Value::String(result))
+        }
+        (Value::Null(_), _, _) | (_, Value::Null(_), _) | (_, _, Value::Null(_)) => {
+            Ok(Value::Null(NullType::Null))
+        }
+        _ => Err(ExpressionError::type_error(
+            "translate requires string, string, string arguments",
+        )),
+    }
+}
+
+fn execute_format(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() < 2 {
+        return Err(ExpressionError::type_error(
+            "format requires at least 2 arguments (format string + values)",
+        ));
+    }
+    let format_str = match &args[0] {
+        Value::String(s) => s.clone(),
+        Value::Null(_) => return Ok(Value::Null(NullType::Null)),
+        _ => {
+            return Err(ExpressionError::type_error(
+                "format first argument must be a string",
+            ))
+        }
+    };
+    let mut result = format_str;
+    for (i, arg) in args[1..].iter().enumerate() {
+        let placeholder = format!("{{{}}}", i);
+        let replacement = match arg {
+            Value::Null(_) => "NULL".to_string(),
+            Value::String(s) => s.clone(),
+            other => format!("{}", other),
+        };
+        result = result.replace(&placeholder, &replacement);
+    }
+    Ok(Value::String(result))
+}
+
+fn execute_string_split(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "string_split requires 2 arguments",
+        ));
+    }
+    match (&args[0], &args[1]) {
+        (Value::String(s), Value::String(delimiter)) => {
+            let parts: Vec<Value> = s
+                .split(delimiter)
+                .map(|p| Value::String(p.to_string()))
+                .collect();
+            Ok(Value::list(List { values: parts }))
+        }
+        (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "string_split requires string and string arguments",
+        )),
+    }
+}
+
 fn levenshtein_distance(s1: &str, s2: &str) -> usize {
     let len1 = s1.chars().count();
     let len2 = s2.chars().count();
@@ -705,5 +839,69 @@ mod tests {
             .execute(&[Value::Null(NullType::Null)])
             .expect("Execution should succeed");
         assert_eq!(result, Value::Null(NullType::Null));
+    }
+
+    #[test]
+    fn test_string_insert() {
+        let func = StringFunction::StringInsert;
+        let result = func
+            .execute(&[
+                Value::String("Hello World".to_string()),
+                Value::Int(5),
+                Value::Int(0),
+                Value::String(",".to_string()),
+            ])
+            .expect("Execution should succeed");
+        assert_eq!(result, Value::String("Hello, World".to_string()));
+    }
+
+    #[test]
+    fn test_translate() {
+        let func = StringFunction::Translate;
+        let result = func
+            .execute(&[
+                Value::String("hello".to_string()),
+                Value::String("ae".to_string()),
+                Value::String("xy".to_string()),
+            ])
+            .expect("Execution should succeed");
+        assert_eq!(result, Value::String("hyllo".to_string()));
+    }
+
+    #[test]
+    fn test_format() {
+        let func = StringFunction::Format;
+        let result = func
+            .execute(&[
+                Value::String("Hello {0}, your score is {1}".to_string()),
+                Value::String("Alice".to_string()),
+                Value::Int(95),
+            ])
+            .expect("Execution should succeed");
+        assert_eq!(
+            result,
+            Value::String("Hello Alice, your score is 95".to_string())
+        );
+    }
+
+    #[test]
+    fn test_string_split() {
+        let func = StringFunction::StringSplit;
+        let result = func
+            .execute(&[
+                Value::String("a,b,c".to_string()),
+                Value::String(",".to_string()),
+            ])
+            .expect("Execution should succeed");
+        assert_eq!(
+            result,
+            Value::list(List {
+                values: vec![
+                    Value::String("a".to_string()),
+                    Value::String("b".to_string()),
+                    Value::String("c".to_string()),
+                ]
+            })
+        );
     }
 }

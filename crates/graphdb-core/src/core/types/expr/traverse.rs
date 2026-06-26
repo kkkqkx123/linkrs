@@ -85,6 +85,13 @@ impl Expression {
             Expression::PathBuild(items) => items.iter().collect(),
             Expression::Parameter(_) => vec![],
             Expression::Vector(_) => vec![],
+            Expression::WindowFunction { args, over_partition_by, over_order_by, .. } => {
+                let mut c: Vec<&Expression> = vec![];
+                c.extend(args);
+                c.extend(over_partition_by);
+                c.extend(over_order_by);
+                c
+            }
         }
     }
 
@@ -168,6 +175,13 @@ impl Expression {
             Expression::PathBuild(items) => items.iter_mut().collect(),
             Expression::Parameter(_) => vec![],
             Expression::Vector(_) => vec![],
+            Expression::WindowFunction { args, over_partition_by, over_order_by, .. } => {
+                let mut c: Vec<&mut Expression> = vec![];
+                c.extend(args);
+                c.extend(over_partition_by);
+                c.extend(over_order_by);
+                c
+            }
         }
     }
 
@@ -371,6 +385,13 @@ impl Expression {
             ),
             Expression::Parameter(_) => self.clone(),
             Expression::Vector(_) => self.clone(),
+            Expression::WindowFunction { name, args, over_partition_by, over_order_by, over_order_desc } => Expression::WindowFunction {
+                name: name.clone(),
+                args: args.iter().map(|e| e.transform(transformer)).collect(),
+                over_partition_by: over_partition_by.iter().map(|e| e.transform(transformer)).collect(),
+                over_order_by: over_order_by.iter().map(|e| e.transform(transformer)).collect(),
+                over_order_desc: over_order_desc.clone(),
+            },
         }
     }
 }

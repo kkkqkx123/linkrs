@@ -135,6 +135,11 @@ impl MemoryEstimatable for Expression {
                     + mapping.estimate_memory()
             }
             Expression::Vector(data) => base_size + data.len() * std::mem::size_of::<f32>(),
+            Expression::WindowFunction { args, over_partition_by, over_order_by, .. } => {
+                base_size + args.iter().map(|e| e.estimate_memory()).sum::<usize>()
+                    + over_partition_by.iter().map(|e| e.estimate_memory()).sum::<usize>()
+                    + over_order_by.iter().map(|e| e.estimate_memory()).sum::<usize>()
+            }
         }
     }
 }
@@ -339,6 +344,18 @@ impl Expression {
                 }
                 Expression::Vector(_) => {
                     // Vector leaf node, base already counted
+                }
+                Expression::WindowFunction { args, over_partition_by, over_order_by, .. } => {
+                    total += std::mem::size_of::<Expression>() * (args.len() + over_partition_by.len() + over_order_by.len());
+                    for arg in args {
+                        stack.push(arg);
+                    }
+                    for e in over_partition_by {
+                        stack.push(e);
+                    }
+                    for e in over_order_by {
+                        stack.push(e);
+                    }
                 }
             }
         }

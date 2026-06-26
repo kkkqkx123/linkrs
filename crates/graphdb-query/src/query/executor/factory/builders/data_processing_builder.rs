@@ -7,12 +7,14 @@ use crate::query::executor::base::ExecutionContext;
 use crate::query::executor::base::ExecutorEnum;
 use crate::query::executor::relational_algebra::{
     AggregateExecutor, AggregateFunctionSpec, FilterExecutor, ProjectExecutor, ProjectionColumn,
+    WindowExecutor,
 };
 use crate::query::executor::result_processing::{
     DedupExecutor, LimitExecutor, SampleExecutor, SampleMethod, SortExecutor, SortKey, TopNExecutor,
 };
 use crate::query::planning::plan::core::nodes::{
     AggregateNode, DedupNode, FilterNode, LimitNode, ProjectNode, SampleNode, SortNode, TopNNode,
+    WindowNode,
 };
 use crate::storage::StorageClient;
 use parking_lot::RwLock;
@@ -223,6 +225,17 @@ impl<S: StorageClient + Send + 'static> DataProcessingBuilder<S> {
         }
 
         Ok(ExecutorEnum::Aggregate(executor))
+    }
+
+    /// Building the Window Executor
+    pub fn build_window(
+        node: &WindowNode,
+        storage: Arc<RwLock<S>>,
+        _context: &ExecutionContext,
+    ) -> Result<ExecutorEnum<S>, QueryError> {
+        let window_functions = node.window_functions().to_vec();
+        let executor = WindowExecutor::new(node.id(), storage, window_functions);
+        Ok(ExecutorEnum::Window(executor))
     }
 
     /// Building a Dedup Executor

@@ -12,6 +12,7 @@ pub mod join;
 pub mod projection;
 pub mod selection;
 pub mod set_operations;
+pub mod window;
 
 // Re-export selection executors
 pub use selection::FilterExecutor;
@@ -34,3 +35,6 @@ pub use join::{
 pub use set_operations::{
     IntersectExecutor, MinusExecutor, SetExecutor, UnionAllExecutor, UnionExecutor,
 };
+
+// Re-export window executor
+pub use window::WindowExecutor;

@@ -13,6 +13,9 @@ use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::DedupNode;
 use crate::query::planning::plan::core::nodes::operation::project_node::ProjectNode;
 use crate::query::planning::plan::core::nodes::operation::sample_node::SampleNode;
+use crate::query::planning::plan::core::nodes::graph_operations::window_node::{
+    WindowFunctionSpec, WindowNode,
+};
 use crate::query::planning::plan::core::nodes::AggregateNode;
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::PlannerError;
@@ -146,6 +149,14 @@ impl ClausePlanner for ReturnClausePlanner {
             }
         });
 
+        let has_window = yield_columns.iter().any(|col| {
+            if let Some(expr_meta) = col.expression.expression() {
+                expression_contains_window_function(expr_meta.inner())
+            } else {
+                false
+            }
+        });
+
         if has_aggregate {
             let (group_keys, agg_functions, agg_aliases, agg_distinct, agg_filters) =
                 extract_aggregate_info(&yield_columns)?;
@@ -229,6 +240,69 @@ impl ClausePlanner for ReturnClausePlanner {
             }
 
             Ok(SubPlan::new(Some(final_node), project_plan.tail))
+        } else if has_window {
+            let window_specs = extract_window_function_info(&yield_columns)?;
+
+            let mut project_columns: Vec<YieldColumn> = yield_columns
+                .iter()
+                .filter(|col| {
+                    if let Some(expr_meta) = col.expression.expression() {
+                        !expression_contains_window_function(expr_meta.inner())
+                    } else {
+                        false
+                    }
+                })
+                .cloned()
+                .collect();
+
+            let existing_aliases: Vec<String> =
+                project_columns.iter().map(|pc| pc.alias.clone()).collect();
+            for col in &yield_columns {
+                if let Some(expr_meta) = col.expression.expression() {
+                    let inner = expr_meta.inner();
+                    if let Expression::WindowFunction { args, .. } = inner {
+                        for arg in args {
+                            let arg_expr_str = arg.to_expression_string();
+                            if !existing_aliases.contains(&arg_expr_str) {
+                                let ctx = col.expression.context();
+                                let meta = ExpressionMeta::new(arg.clone());
+                                let id = ctx.register_expression(meta);
+                                let ctx_expr = ContextualExpression::new(id, ctx.clone());
+                                project_columns.push(YieldColumn {
+                                    expression: ctx_expr,
+                                    alias: arg_expr_str,
+                                    is_matched: false,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+
+            let project_node = ProjectNode::new(input_node.clone(), project_columns)?;
+            let window_node = WindowNode::new(project_node.clone().into_enum(), window_specs)
+                .map_err(|e| {
+                    PlannerError::PlanGenerationFailed(format!(
+                        "Failed to create WindowNode: {}",
+                        e
+                    ))
+                })?;
+
+            let mut final_node = window_node.into_enum();
+
+            if self.distinct {
+                if let Ok(dedup) = DedupNode::new(final_node.clone()) {
+                    final_node = dedup.into_enum();
+                }
+            }
+
+            if let Some(sample_count) = extract_sample_clause(stmt) {
+                if let Ok(sample_node) = SampleNode::new(final_node.clone(), sample_count as i64) {
+                    final_node = PlanNodeEnum::Sample(sample_node);
+                }
+            }
+
+            Ok(SubPlan::new(Some(final_node), None))
         } else {
             let project_node = ProjectNode::new(input_node.clone(), yield_columns)?;
 
@@ -264,6 +338,48 @@ fn expression_contains_aggregate(expr: &crate::core::Expression) -> bool {
         Expression::Function { args, .. } => args.iter().any(expression_contains_aggregate),
         _ => false,
     }
+}
+
+fn expression_contains_window_function(expr: &crate::core::Expression) -> bool {
+    use crate::core::Expression;
+    match expr {
+        Expression::WindowFunction { .. } => true,
+        Expression::Binary { left, right, .. } => {
+            expression_contains_window_function(left)
+                || expression_contains_window_function(right)
+        }
+        Expression::Unary { operand, .. } => expression_contains_window_function(operand),
+        Expression::Function { args, .. } => args.iter().any(expression_contains_window_function),
+        _ => false,
+    }
+}
+
+fn extract_window_function_info(
+    columns: &[YieldColumn],
+) -> Result<Vec<WindowFunctionSpec>, PlannerError> {
+    let mut window_specs = Vec::new();
+    for col in columns {
+        if let Some(expr_meta) = col.expression.expression() {
+            let expr = expr_meta.inner();
+            if let Expression::WindowFunction {
+                name,
+                args,
+                over_partition_by,
+                over_order_by,
+                over_order_desc,
+            } = expr
+            {
+                window_specs.push(WindowFunctionSpec {
+                    name: name.clone(),
+                    args: args.clone(),
+                    partition_by: over_partition_by.clone(),
+                    order_by: over_order_by.clone(),
+                    order_desc: over_order_desc.clone(),
+                });
+            }
+        }
+    }
+    Ok(window_specs)
 }
 
 /// Aggregate extraction result containing group keys, aggregate functions, their aliases, distinct flags, and filters

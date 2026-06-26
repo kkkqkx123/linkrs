@@ -214,6 +214,23 @@ impl Expression {
                         .join(", ")
                 )
             }
+            Expression::WindowFunction { name, args, over_partition_by, over_order_by, over_order_desc } => {
+                let args_str: Vec<String> = args.iter().map(|a| a.to_expression_string()).collect();
+                let mut result = format!("{}({}) OVER (", name, args_str.join(", "));
+                if !over_partition_by.is_empty() {
+                    let parts: Vec<String> = over_partition_by.iter().map(|e| e.to_expression_string()).collect();
+                    result.push_str(&format!("PARTITION BY {} ", parts.join(", ")));
+                }
+                if !over_order_by.is_empty() {
+                    let parts: Vec<String> = over_order_by.iter().enumerate().map(|(i, e)| {
+                        let dir = if over_order_desc[i] { " DESC" } else { "" };
+                        format!("{}{}", e.to_expression_string(), dir)
+                    }).collect();
+                    result.push_str(&format!("ORDER BY {}", parts.join(", ")));
+                }
+                result.push_str(")");
+                result
+            }
         }
     }
 }

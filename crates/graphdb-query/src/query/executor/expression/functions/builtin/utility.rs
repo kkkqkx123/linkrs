@@ -22,6 +22,14 @@ pub enum UtilityFunction {
     JsonEach,
     JsonTypeOf,
     JsonStripNulls,
+    IfNull,
+    TypeOf,
+    Version,
+    CurrentUser,
+    CurrentDatabase,
+    Corr,
+    CovarPop,
+    CovarSamp,
 }
 
 impl UtilityFunction {
@@ -40,6 +48,14 @@ impl UtilityFunction {
             UtilityFunction::JsonEach => "json_each",
             UtilityFunction::JsonTypeOf => "json_typeof",
             UtilityFunction::JsonStripNulls => "json_strip_nulls",
+            UtilityFunction::IfNull => "ifnull",
+            UtilityFunction::TypeOf => "typeof",
+            UtilityFunction::Version => "version",
+            UtilityFunction::CurrentUser => "current_user",
+            UtilityFunction::CurrentDatabase => "current_database",
+            UtilityFunction::Corr => "corr",
+            UtilityFunction::CovarPop => "covar_pop",
+            UtilityFunction::CovarSamp => "covar_samp",
         }
     }
 
@@ -58,6 +74,14 @@ impl UtilityFunction {
             UtilityFunction::JsonEach => 1,
             UtilityFunction::JsonTypeOf => 1,
             UtilityFunction::JsonStripNulls => 1,
+            UtilityFunction::IfNull => 2,
+            UtilityFunction::TypeOf => 1,
+            UtilityFunction::Version => 0,
+            UtilityFunction::CurrentUser => 0,
+            UtilityFunction::CurrentDatabase => 0,
+            UtilityFunction::Corr => 2,
+            UtilityFunction::CovarPop => 2,
+            UtilityFunction::CovarSamp => 2,
         }
     }
 
@@ -89,6 +113,14 @@ impl UtilityFunction {
             UtilityFunction::JsonEach => "Expand a JSON object into key-value pairs",
             UtilityFunction::JsonTypeOf => "Return the type of a JSON value",
             UtilityFunction::JsonStripNulls => "Strip null values from a JSON object or array",
+            UtilityFunction::IfNull => "Return first argument if not NULL, otherwise second argument",
+            UtilityFunction::TypeOf => "Return the type name of a value",
+            UtilityFunction::Version => "Return the GraphDB version string",
+            UtilityFunction::CurrentUser => "Return the current user name",
+            UtilityFunction::CurrentDatabase => "Return the current database name",
+            UtilityFunction::Corr => "Return the correlation coefficient of two lists",
+            UtilityFunction::CovarPop => "Return the population covariance of two lists",
+            UtilityFunction::CovarSamp => "Return the sample covariance of two lists",
         }
     }
 
@@ -107,6 +139,14 @@ impl UtilityFunction {
             UtilityFunction::JsonEach => execute_json_each(args),
             UtilityFunction::JsonTypeOf => execute_json_typeof(args),
             UtilityFunction::JsonStripNulls => execute_json_strip_nulls(args),
+            UtilityFunction::IfNull => execute_ifnull(args),
+            UtilityFunction::TypeOf => execute_typeof(args),
+            UtilityFunction::Version => execute_version(args),
+            UtilityFunction::CurrentUser => execute_current_user(args),
+            UtilityFunction::CurrentDatabase => execute_current_database(args),
+            UtilityFunction::Corr => execute_corr(args),
+            UtilityFunction::CovarPop => execute_covar_pop(args),
+            UtilityFunction::CovarSamp => execute_covar_samp(args),
         }
     }
 }
@@ -146,19 +186,19 @@ fn execute_hash(args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_json_extract(args: &[Value]) -> Result<Value, ExpressionError> {
-    match (&args[0], &args[1]) {
-        (Value::String(json_str), Value::String(path)) => {
-            let json_value: JsonValue = serde_json::from_str(json_str)
-                .map_err(|_| ExpressionError::type_error("Invalid JSON string"))?;
-
-            let result = extract_json_value(&json_value, path);
-            Ok(json_to_value(result))
-        }
-        (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
-        _ => Err(ExpressionError::type_error(
-            "The json_extract function takes string arguments",
-        )),
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error("json_extract requires 2 arguments"));
     }
+    if args[0].is_null() || args[1].is_null() {
+        return Ok(Value::Null(NullType::Null));
+    }
+    let json_value = arg_to_json_value(&args[0])?;
+    let path = match &args[1] {
+        Value::String(s) => s.as_str(),
+        _ => return Err(ExpressionError::type_error("json_extract path must be a string")),
+    };
+    let result = extract_json_value(&json_value, path);
+    Ok(json_to_value(result))
 }
 
 fn execute_json_build_object(args: &[Value]) -> Result<Value, ExpressionError> {
@@ -202,27 +242,21 @@ fn execute_json_build_array(args: &[Value]) -> Result<Value, ExpressionError> {
 fn execute_json_object_keys(args: &[Value]) -> Result<Value, ExpressionError> {
     use crate::core::value::list::List;
 
-    match &args[0] {
-        Value::String(json_str) => {
-            let json_value: JsonValue = serde_json::from_str(json_str)
-                .map_err(|_| ExpressionError::type_error("Invalid JSON string"))?;
+    if args.is_empty() || args[0].is_null() {
+        return Ok(Value::Null(NullType::Null));
+    }
+    let json_value = arg_to_json_value(&args[0])?;
 
-            match &json_value {
-                JsonValue::Object(map) => {
-                    let keys: Vec<Value> = map
-                        .keys()
-                        .map(|k| Value::String(k.clone()))
-                        .collect();
-                    Ok(Value::list(List { values: keys }))
-                }
-                _ => Err(ExpressionError::type_error(
-                    "json_object_keys requires a JSON object",
-                )),
-            }
+    match &json_value {
+        JsonValue::Object(map) => {
+            let keys: Vec<Value> = map
+                .keys()
+                .map(|k| Value::String(k.clone()))
+                .collect();
+            Ok(Value::list(List { values: keys }))
         }
-        Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
-            "json_object_keys requires a string argument",
+            "json_object_keys requires a JSON object",
         )),
     }
 }
@@ -251,7 +285,20 @@ fn value_to_json_value(value: &Value) -> JsonValue {
                 .collect();
             JsonValue::Object(obj)
         }
+        Value::Json(j) => j.to_value().unwrap_or(JsonValue::Null),
+        Value::JsonB(j) => j.as_value().clone(),
         _ => JsonValue::Null,
+    }
+}
+
+/// Extract a serde_json::Value from any JSON-compatible value type.
+fn arg_to_json_value(arg: &Value) -> Result<JsonValue, ExpressionError> {
+    match arg {
+        Value::Null(_) => Err(ExpressionError::type_error("Null JSON value")),
+        Value::String(s) => serde_json::from_str(s).map_err(|_| ExpressionError::type_error("Invalid JSON string")),
+        Value::Json(j) => j.to_value().map_err(|e| ExpressionError::type_error(format!("Invalid JSON: {}", e))),
+        Value::JsonB(j) => Ok(j.as_value().clone()),
+        _ => Err(ExpressionError::type_error("Expected a JSON-compatible value (string, json, or jsonb)")),
     }
 }
 
@@ -387,84 +434,67 @@ fn execute_gen_random_uuid(_args: &[Value]) -> Result<Value, ExpressionError> {
 }
 
 fn execute_json_each(args: &[Value]) -> Result<Value, ExpressionError> {
-    match &args[0] {
-        Value::String(json_str) => {
-            let json_value: JsonValue = serde_json::from_str(json_str)
-                .map_err(|_| ExpressionError::type_error("Invalid JSON string"))?;
-            match json_value {
-                JsonValue::Object(map) => {
-                    let entries: Vec<Value> = map
-                        .into_iter()
-                        .map(|(k, v)| {
-                            Value::list(List {
-                                values: vec![Value::String(k), json_to_value(&v)],
-                            })
-                        })
-                        .collect();
-                    Ok(Value::list(List { values: entries }))
-                }
-                JsonValue::Array(arr) => {
-                    let entries: Vec<Value> = arr
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, v)| {
-                            Value::list(List {
-                                values: vec![Value::BigInt(i as i64), json_to_value(&v)],
-                            })
-                        })
-                        .collect();
-                    Ok(Value::list(List { values: entries }))
-                }
-                _ => Err(ExpressionError::type_error(
-                    "json_each requires a JSON object or array",
-                )),
-            }
+    if args.is_empty() || args[0].is_null() {
+        return Ok(Value::Null(NullType::Null));
+    }
+    let json_value = arg_to_json_value(&args[0])?;
+
+    match json_value {
+        JsonValue::Object(map) => {
+            let entries: Vec<Value> = map
+                .into_iter()
+                .map(|(k, v)| {
+                    Value::list(List {
+                        values: vec![Value::String(k), json_to_value(&v)],
+                    })
+                })
+                .collect();
+            Ok(Value::list(List { values: entries }))
         }
-        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        JsonValue::Array(arr) => {
+            let entries: Vec<Value> = arr
+                .into_iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    Value::list(List {
+                        values: vec![Value::BigInt(i as i64), json_to_value(&v)],
+                    })
+                })
+                .collect();
+            Ok(Value::list(List { values: entries }))
+        }
         _ => Err(ExpressionError::type_error(
-            "json_each requires a string argument",
+            "json_each requires a JSON object or array",
         )),
     }
 }
 
 fn execute_json_typeof(args: &[Value]) -> Result<Value, ExpressionError> {
-    match &args[0] {
-        Value::String(json_str) => {
-            let json_value: JsonValue = serde_json::from_str(json_str)
-                .map_err(|_| ExpressionError::type_error("Invalid JSON string"))?;
-            let type_str = match &json_value {
-                JsonValue::Null => "null",
-                JsonValue::Bool(_) => "boolean",
-                JsonValue::Number(_) => "number",
-                JsonValue::String(_) => "string",
-                JsonValue::Array(_) => "array",
-                JsonValue::Object(_) => "object",
-            };
-            Ok(Value::String(type_str.to_string()))
-        }
-        Value::Null(_) => Ok(Value::Null(NullType::Null)),
-        _ => Err(ExpressionError::type_error(
-            "json_typeof requires a string argument",
-        )),
+    if args.is_empty() || args[0].is_null() {
+        return Ok(Value::Null(NullType::Null));
     }
+    let json_value = arg_to_json_value(&args[0])?;
+
+    let type_str = match &json_value {
+        JsonValue::Null => "null",
+        JsonValue::Bool(_) => "boolean",
+        JsonValue::Number(_) => "number",
+        JsonValue::String(_) => "string",
+        JsonValue::Array(_) => "array",
+        JsonValue::Object(_) => "object",
+    };
+    Ok(Value::String(type_str.to_string()))
 }
 
 fn execute_json_strip_nulls(args: &[Value]) -> Result<Value, ExpressionError> {
-    match &args[0] {
-        Value::String(json_str) => {
-            let json_value: JsonValue = serde_json::from_str(json_str)
-                .map_err(|_| ExpressionError::type_error("Invalid JSON string"))?;
-            let stripped = strip_nulls_from_json(json_value);
-            Ok(Value::String(
-                serde_json::to_string(&stripped)
-                    .map_err(|e| ExpressionError::type_error(format!("JSON serialization error: {}", e)))?,
-            ))
-        }
-        Value::Null(_) => Ok(Value::Null(NullType::Null)),
-        _ => Err(ExpressionError::type_error(
-            "json_strip_nulls requires a string argument",
-        )),
+    if args.is_empty() || args[0].is_null() {
+        return Ok(Value::Null(NullType::Null));
     }
+    let json_value = arg_to_json_value(&args[0])?;
+    let stripped = strip_nulls_from_json(json_value);
+    let output = serde_json::to_string(&stripped)
+        .map_err(|e| ExpressionError::type_error(format!("JSON serialization error: {}", e)))?;
+    Ok(Value::String(output))
 }
 
 fn strip_nulls_from_json(value: JsonValue) -> JsonValue {
@@ -489,6 +519,161 @@ fn strip_nulls_from_json(value: JsonValue) -> JsonValue {
     }
 }
 
+fn execute_ifnull(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error("ifnull requires 2 arguments"));
+    }
+    match &args[0] {
+        Value::Null(_) => Ok(args[1].clone()),
+        other => Ok(other.clone()),
+    }
+}
+
+fn execute_typeof(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error("typeof requires 1 argument"));
+    }
+    let type_name = match &args[0] {
+        Value::Null(_) => "null",
+        Value::Bool(_) => "bool",
+        Value::SmallInt(_) => "smallint",
+        Value::Int(_) => "int",
+        Value::BigInt(_) => "bigint",
+        Value::Float(_) => "float",
+        Value::Double(_) => "double",
+        Value::String(_) => "string",
+        Value::Date(_) => "date",
+        Value::Time(_) => "time",
+        Value::DateTime(_) => "datetime",
+        Value::List(_) => "list",
+        Value::Map(_) => "map",
+        Value::Set(_) => "set",
+        Value::Vertex(_) => "vertex",
+        Value::Edge(_) => "edge",
+        Value::Path(_) => "path",
+        Value::Uuid(_) => "uuid",
+        Value::Vector(_) => "vector",
+        Value::Geography(_) => "geography",
+        _ => "unknown",
+    };
+    Ok(Value::String(type_name.to_string()))
+}
+
+fn execute_version(_args: &[Value]) -> Result<Value, ExpressionError> {
+    Ok(Value::String("GraphDB 0.1.0".to_string()))
+}
+
+fn execute_current_user(_args: &[Value]) -> Result<Value, ExpressionError> {
+    Ok(Value::String("root".to_string()))
+}
+
+fn execute_current_database(_args: &[Value]) -> Result<Value, ExpressionError> {
+    Ok(Value::String("default".to_string()))
+}
+
+fn extract_numeric_pairs(args: &[Value]) -> Result<(Vec<f64>, Vec<f64>), ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error("Function requires 2 arguments"));
+    }
+    let xs = match &args[0] {
+        Value::List(list) => list
+            .values
+            .iter()
+            .map(|v| match v {
+                Value::SmallInt(i) => Ok(*i as f64),
+                Value::Int(i) => Ok(*i as f64),
+                Value::BigInt(i) => Ok(*i as f64),
+                Value::Float(f) => Ok(*f as f64),
+                Value::Double(f) => Ok(*f),
+                Value::Null(_) => Ok(f64::NAN),
+                _ => Err(ExpressionError::type_error("Non-numeric value in list")),
+            })
+            .collect::<Result<Vec<f64>, _>>(),
+        Value::Null(_) => return Ok((vec![], vec![])),
+        _ => return Err(ExpressionError::type_error("First argument must be a list")),
+    }?;
+    let ys = match &args[1] {
+        Value::List(list) => list
+            .values
+            .iter()
+            .map(|v| match v {
+                Value::SmallInt(i) => Ok(*i as f64),
+                Value::Int(i) => Ok(*i as f64),
+                Value::BigInt(i) => Ok(*i as f64),
+                Value::Float(f) => Ok(*f as f64),
+                Value::Double(f) => Ok(*f),
+                Value::Null(_) => Ok(f64::NAN),
+                _ => Err(ExpressionError::type_error("Non-numeric value in list")),
+            })
+            .collect::<Result<Vec<f64>, _>>(),
+        Value::Null(_) => return Ok((vec![], vec![])),
+        _ => return Err(ExpressionError::type_error("Second argument must be a list")),
+    }?;
+    if xs.len() != ys.len() {
+        return Err(ExpressionError::type_error("Lists must have the same length"));
+    }
+    Ok((xs, ys))
+}
+
+fn execute_corr(args: &[Value]) -> Result<Value, ExpressionError> {
+    let (xs, ys) = extract_numeric_pairs(args)?;
+    if xs.is_empty() {
+        return Ok(Value::Null(NullType::Null));
+    }
+    let n = xs.len() as f64;
+    let sum_x: f64 = xs.iter().filter(|v| !v.is_nan()).sum();
+    let sum_y: f64 = ys.iter().filter(|v| !v.is_nan()).sum();
+    let sum_xy: f64 = xs
+        .iter()
+        .zip(ys.iter())
+        .filter(|(x, y)| !x.is_nan() && !y.is_nan())
+        .map(|(x, y)| x * y)
+        .sum();
+    let sum_x2: f64 = xs.iter().filter(|v| !v.is_nan()).map(|x| x * x).sum();
+    let sum_y2: f64 = ys.iter().filter(|v| !v.is_nan()).map(|y| y * y).sum();
+    let numerator = n * sum_xy - sum_x * sum_y;
+    let denom = (n * sum_x2 - sum_x * sum_x).sqrt() * (n * sum_y2 - sum_y * sum_y).sqrt();
+    if denom == 0.0 {
+        Ok(Value::Null(NullType::Null))
+    } else {
+        Ok(Value::Double(numerator / denom))
+    }
+}
+
+fn execute_covar_pop(args: &[Value]) -> Result<Value, ExpressionError> {
+    let (xs, ys) = extract_numeric_pairs(args)?;
+    if xs.is_empty() {
+        return Ok(Value::Null(NullType::Null));
+    }
+    let n = xs.len() as f64;
+    let mean_x: f64 = xs.iter().sum::<f64>() / n;
+    let mean_y: f64 = ys.iter().sum::<f64>() / n;
+    let covar: f64 = xs
+        .iter()
+        .zip(ys.iter())
+        .map(|(x, y)| (x - mean_x) * (y - mean_y))
+        .sum::<f64>()
+        / n;
+    Ok(Value::Double(covar))
+}
+
+fn execute_covar_samp(args: &[Value]) -> Result<Value, ExpressionError> {
+    let (xs, ys) = extract_numeric_pairs(args)?;
+    if xs.len() < 2 {
+        return Ok(Value::Null(NullType::Null));
+    }
+    let n = xs.len() as f64;
+    let mean_x: f64 = xs.iter().sum::<f64>() / n;
+    let mean_y: f64 = ys.iter().sum::<f64>() / n;
+    let covar: f64 = xs
+        .iter()
+        .zip(ys.iter())
+        .map(|(x, y)| (x - mean_x) * (y - mean_y))
+        .sum::<f64>()
+        / (n - 1.0);
+    Ok(Value::Double(covar))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -509,5 +694,105 @@ mod tests {
             .execute(&[Value::String("test".to_string())])
             .expect("Execution should succeed");
         assert!(matches!(result, Value::BigInt(_)));
+    }
+
+    #[test]
+    fn test_ifnull() {
+        assert_eq!(
+            UtilityFunction::IfNull
+                .execute(&[Value::Null(NullType::Null), Value::Int(42)])
+                .unwrap(),
+            Value::Int(42)
+        );
+        assert_eq!(
+            UtilityFunction::IfNull
+                .execute(&[Value::Int(10), Value::Int(42)])
+                .unwrap(),
+            Value::Int(10)
+        );
+    }
+
+    #[test]
+    fn test_typeof() {
+        assert_eq!(
+            UtilityFunction::TypeOf.execute(&[Value::Int(1)]).unwrap(),
+            Value::String("int".to_string())
+        );
+        assert_eq!(
+            UtilityFunction::TypeOf
+                .execute(&[Value::String("hello".to_string())])
+                .unwrap(),
+            Value::String("string".to_string())
+        );
+        assert_eq!(
+            UtilityFunction::TypeOf
+                .execute(&[Value::Bool(true)])
+                .unwrap(),
+            Value::String("bool".to_string())
+        );
+        assert_eq!(
+            UtilityFunction::TypeOf
+                .execute(&[Value::Null(NullType::Null)])
+                .unwrap(),
+            Value::String("null".to_string())
+        );
+    }
+
+    #[test]
+    fn test_version() {
+        let result = UtilityFunction::Version.execute(&[]).unwrap();
+        assert!(matches!(result, Value::String(_)));
+    }
+
+    #[test]
+    fn test_current_user() {
+        let result = UtilityFunction::CurrentUser.execute(&[]).unwrap();
+        assert!(matches!(result, Value::String(_)));
+    }
+
+    #[test]
+    fn test_current_database() {
+        let result = UtilityFunction::CurrentDatabase.execute(&[]).unwrap();
+        assert!(matches!(result, Value::String(_)));
+    }
+
+    #[test]
+    fn test_corr() {
+        let xs = Value::list(List {
+            values: vec![
+                Value::Double(1.0),
+                Value::Double(2.0),
+                Value::Double(3.0),
+                Value::Double(4.0),
+                Value::Double(5.0),
+            ],
+        });
+        let ys = Value::list(List {
+            values: vec![
+                Value::Double(2.0),
+                Value::Double(4.0),
+                Value::Double(6.0),
+                Value::Double(8.0),
+                Value::Double(10.0),
+            ],
+        });
+        let result = UtilityFunction::Corr
+            .execute(&[xs, ys])
+            .expect("corr should succeed");
+        assert!(matches!(result, Value::Double(v) if (v - 1.0).abs() < 1e-10));
+    }
+
+    #[test]
+    fn test_covar_pop() {
+        let xs = Value::list(List {
+            values: vec![Value::Double(1.0), Value::Double(2.0)],
+        });
+        let ys = Value::list(List {
+            values: vec![Value::Double(3.0), Value::Double(4.0)],
+        });
+        let result = UtilityFunction::CovarPop
+            .execute(&[xs, ys])
+            .expect("covar_pop should succeed");
+        assert!(matches!(result, Value::Double(_)));
     }
 }

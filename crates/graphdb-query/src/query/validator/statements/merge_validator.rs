@@ -412,6 +412,7 @@ impl MergeValidator {
             }
             Expression::Parameter(_) => Ok(()),
             Expression::Vector(_) => Ok(()),
+            Expression::WindowFunction { .. } => Ok(()),
         }
     }
 

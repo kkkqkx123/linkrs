@@ -138,7 +138,8 @@ fn _extract_variable_names(expr: &Expression) -> Vec<String> {
             | Expression::TagProperty { .. }
             | Expression::EdgeProperty { .. }
             | Expression::Parameter(_)
-            | Expression::Vector(_) => {}
+            | Expression::Vector(_)
+            | Expression::WindowFunction { .. } => {}
         }
     }
     collect(expr, &mut names);

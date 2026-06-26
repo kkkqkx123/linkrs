@@ -154,6 +154,9 @@ pub trait ExpressionVisitor {
             Expression::Vector(data) => {
                 self.visit_vector(data);
             }
+            Expression::WindowFunction { name, args, .. } => {
+                self.visit_function(name, args);
+            }
         }
     }
 

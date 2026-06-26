@@ -269,7 +269,12 @@ fn json_to_value(json: serde_json::Value) -> Option<Value> {
             let values: Vec<Value> = arr.into_iter().filter_map(json_to_value).collect();
             Some(Value::list(crate::core::value::List::from(values)))
         }
-        serde_json::Value::Object(_) => None, // Object types are not supported
+        serde_json::Value::Object(data) => {
+            let obj = serde_json::Value::Object(data);
+            crate::core::value::Json::parse(&obj.to_string())
+                .ok()
+                .map(|j| Value::Json(Box::new(j)))
+        }
     }
 }
 

@@ -298,7 +298,8 @@ impl ParameterizingTransformer {
             | Expression::TagProperty { .. }
             | Expression::EdgeProperty { .. }
             | Expression::Parameter(_)
-            | Expression::Vector(_) => expr.clone(),
+            | Expression::Vector(_)
+            | Expression::WindowFunction { .. } => expr.clone(),
         }
     }
 }

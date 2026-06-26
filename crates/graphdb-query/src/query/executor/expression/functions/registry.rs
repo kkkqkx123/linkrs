@@ -187,6 +187,10 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::String(StringFunction::Position));
         self.register_builtin(BuiltinFunction::String(StringFunction::Left));
         self.register_builtin(BuiltinFunction::String(StringFunction::Right));
+        self.register_builtin(BuiltinFunction::String(StringFunction::StringInsert));
+        self.register_builtin(BuiltinFunction::String(StringFunction::Translate));
+        self.register_builtin(BuiltinFunction::String(StringFunction::Format));
+        self.register_builtin(BuiltinFunction::String(StringFunction::StringSplit));
 
         // Registering regular expression functions
         self.register_builtin(BuiltinFunction::Regex(RegexFunction::RegexMatch));
@@ -259,6 +263,14 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::Utility(UtilityFunction::JsonEach));
         self.register_builtin(BuiltinFunction::Utility(UtilityFunction::JsonTypeOf));
         self.register_builtin(BuiltinFunction::Utility(UtilityFunction::JsonStripNulls));
+        self.register_builtin(BuiltinFunction::Utility(UtilityFunction::IfNull));
+        self.register_builtin(BuiltinFunction::Utility(UtilityFunction::TypeOf));
+        self.register_builtin(BuiltinFunction::Utility(UtilityFunction::Version));
+        self.register_builtin(BuiltinFunction::Utility(UtilityFunction::CurrentUser));
+        self.register_builtin(BuiltinFunction::Utility(UtilityFunction::CurrentDatabase));
+        self.register_builtin(BuiltinFunction::Utility(UtilityFunction::Corr));
+        self.register_builtin(BuiltinFunction::Utility(UtilityFunction::CovarPop));
+        self.register_builtin(BuiltinFunction::Utility(UtilityFunction::CovarSamp));
 
         // Register aggregate functions
         use crate::core::types::operators::AggregateFunction;
@@ -349,6 +361,9 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::Container(ContainerFunction::ListSort));
         self.register_builtin(BuiltinFunction::Container(ContainerFunction::ListSlice));
         self.register_builtin(BuiltinFunction::Container(ContainerFunction::ListToString));
+        self.register_builtin(BuiltinFunction::Container(ContainerFunction::ListDistinct));
+        self.register_builtin(BuiltinFunction::Container(ContainerFunction::ListUnique));
+        self.register_builtin(BuiltinFunction::Container(ContainerFunction::ListExtract));
 
         // Registration path function
         use super::PathFunction;

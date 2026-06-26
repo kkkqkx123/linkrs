@@ -28,6 +28,9 @@ pub enum ContainerFunction {
     ListSort,
     ListSlice,
     ListToString,
+    ListDistinct,
+    ListUnique,
+    ListExtract,
 }
 
 impl ContainerFunction {
@@ -51,6 +54,9 @@ impl ContainerFunction {
             Self::ListSort => "list_sort",
             Self::ListSlice => "list_slice",
             Self::ListToString => "list_to_string",
+            Self::ListDistinct => "list_distinct",
+            Self::ListUnique => "list_unique",
+            Self::ListExtract => "list_extract",
         }
     }
 
@@ -74,6 +80,9 @@ impl ContainerFunction {
             Self::ListSort => 1,
             Self::ListSlice => 3,
             Self::ListToString => 2,
+            Self::ListDistinct => 1,
+            Self::ListUnique => 1,
+            Self::ListExtract => 2,
         }
     }
 
@@ -102,6 +111,9 @@ impl ContainerFunction {
             Self::ListSort => "Sort list elements",
             Self::ListSlice => "Extract a slice from a list",
             Self::ListToString => "Convert a list to a string with delimiter",
+            Self::ListDistinct => "Remove duplicate elements from list",
+            Self::ListUnique => "Remove duplicate elements from list",
+            Self::ListExtract => "Extract element from list at specified index",
         }
     }
 
@@ -124,6 +136,9 @@ impl ContainerFunction {
             Self::ListSort => execute_list_sort(args),
             Self::ListSlice => execute_list_slice(args),
             Self::ListToString => execute_list_to_string(args),
+            Self::ListDistinct => execute_list_distinct(args),
+            Self::ListUnique => execute_list_distinct(args),
+            Self::ListExtract => execute_list_extract(args),
         }
     }
 }
@@ -186,9 +201,27 @@ fn execute_size(args: &[Value]) -> Result<Value, ExpressionError> {
         Value::List(list) => Ok(Value::BigInt(list.values.len() as i64)),
         Value::Map(map) => Ok(Value::BigInt(map.len() as i64)),
         Value::Set(set) => Ok(Value::BigInt(set.len() as i64)),
+        Value::Json(j) => {
+            if let Ok(v) = j.to_value() {
+                match v {
+                    serde_json::Value::Object(m) => Ok(Value::BigInt(m.len() as i64)),
+                    serde_json::Value::Array(a) => Ok(Value::BigInt(a.len() as i64)),
+                    _ => Ok(Value::BigInt(1)),
+                }
+            } else {
+                Ok(Value::Null(NullType::Null))
+            }
+        }
+        Value::JsonB(j) => {
+            match j.as_value() {
+                serde_json::Value::Object(m) => Ok(Value::BigInt(m.len() as i64)),
+                serde_json::Value::Array(a) => Ok(Value::BigInt(a.len() as i64)),
+                _ => Ok(Value::BigInt(1)),
+            }
+        }
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
-            "size requires string, list, map or set type",
+            "size requires string, list, map, set, or json type",
         )),
     }
 }
@@ -279,10 +312,26 @@ fn execute_keys(args: &[Value]) -> Result<Value, ExpressionError> {
                 keys.insert(key.clone());
             }
         }
+        Value::Json(j) => {
+            if let Ok(v) = j.to_value() {
+                if let serde_json::Value::Object(m) = v {
+                    for key in m.keys() {
+                        keys.insert(key.clone());
+                    }
+                }
+            }
+        }
+        Value::JsonB(j) => {
+            if let serde_json::Value::Object(m) = j.as_value() {
+                for key in m.keys() {
+                    keys.insert(key.clone());
+                }
+            }
+        }
         Value::Null(_) => return Ok(Value::Null(NullType::Null)),
         _ => {
             return Err(ExpressionError::type_error(
-                "keys requires vertex, edge or map type",
+                "keys requires vertex, edge, map or json type",
             ))
         }
     }
@@ -529,6 +578,72 @@ fn execute_list_to_string(args: &[Value]) -> Result<Value, ExpressionError> {
     }
 }
 
+fn execute_list_distinct(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 1 {
+        return Err(ExpressionError::type_error(
+            "list_distinct requires 1 argument",
+        ));
+    }
+    match &args[0] {
+        Value::List(list) => {
+            let mut seen = std::collections::HashSet::new();
+            let mut result = Vec::new();
+            for item in &list.values {
+                if seen.insert(item.clone()) {
+                    result.push(item.clone());
+                }
+            }
+            Ok(Value::list(List { values: result }))
+        }
+        Value::Null(_) => Ok(Value::Null(NullType::Null)),
+        _ => Err(ExpressionError::type_error(
+            "list_distinct requires a list type",
+        )),
+    }
+}
+
+fn execute_list_extract(args: &[Value]) -> Result<Value, ExpressionError> {
+    if args.len() != 2 {
+        return Err(ExpressionError::type_error(
+            "list_extract requires 2 arguments",
+        ));
+    }
+    let len = match &args[0] {
+        Value::List(list) => list.values.len() as i64,
+        Value::Null(_) => return Ok(Value::Null(NullType::Null)),
+        _ => {
+            return Err(ExpressionError::type_error(
+                "list_extract requires a list as first argument",
+            ))
+        }
+    };
+    let idx = match &args[1] {
+        Value::Int(i) => {
+            let i = *i as i64;
+            if i < 0 { len + i } else { i }
+        }
+        Value::BigInt(i) => {
+            let i = *i;
+            if i < 0 { len + i } else { i }
+        }
+        Value::Null(_) => return Ok(Value::Null(NullType::Null)),
+        _ => {
+            return Err(ExpressionError::type_error(
+                "list_extract requires an integer as second argument",
+            ))
+        }
+    };
+    let list = match &args[0] {
+        Value::List(list) => list,
+        _ => unreachable!(),
+    };
+    if idx < 0 || idx >= len {
+        Ok(Value::Null(NullType::Null))
+    } else {
+        Ok(list.values[idx as usize].clone())
+    }
+}
+
 fn value_to_string(v: &Value) -> String {
     match v {
         Value::Null(_) => String::new(),
@@ -680,5 +795,63 @@ mod tests {
                 .expect("size should handle NULL"),
             Value::Null(NullType::Null)
         );
+    }
+
+    #[test]
+    fn test_list_distinct() {
+        let list = Value::list(List {
+            values: vec![
+                Value::Int(1),
+                Value::Int(2),
+                Value::Int(1),
+                Value::Int(3),
+                Value::Int(2),
+            ],
+        });
+        let result = ContainerFunction::ListDistinct
+            .execute(&[list])
+            .expect("list_distinct should succeed");
+        assert_eq!(
+            result,
+            Value::list(List {
+                values: vec![Value::Int(1), Value::Int(2), Value::Int(3)]
+            })
+        );
+    }
+
+    #[test]
+    fn test_list_extract() {
+        let list = Value::list(List {
+            values: vec![Value::Int(10), Value::Int(20), Value::Int(30)],
+        });
+        assert_eq!(
+            ContainerFunction::ListExtract
+                .execute(&[list.clone(), Value::Int(0)])
+                .unwrap(),
+            Value::Int(10)
+        );
+        assert_eq!(
+            ContainerFunction::ListExtract
+                .execute(&[list.clone(), Value::Int(1)])
+                .unwrap(),
+            Value::Int(20)
+        );
+        assert_eq!(
+            ContainerFunction::ListExtract
+                .execute(&[list.clone(), Value::Int(-1)])
+                .unwrap(),
+            Value::Int(30)
+        );
+    }
+
+    #[test]
+    fn test_list_extract_out_of_bounds() {
+        let list = Value::list(List {
+            values: vec![Value::Int(1)],
+        });
+        let result = ContainerFunction::ListExtract
+            .execute(&[list, Value::Int(5)])
+            .expect("list_extract should handle out of bounds");
+        assert_eq!(result, Value::Null(NullType::Null));
     }
 }

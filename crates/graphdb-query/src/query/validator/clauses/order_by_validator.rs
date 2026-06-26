@@ -489,6 +489,7 @@ impl OrderByValidator {
             Expression::Reduce { .. } => Ok(ValueType::Unknown),
             Expression::PathBuild(_) => Ok(ValueType::Path),
             Expression::Parameter(_) => Ok(ValueType::Unknown),
+            Expression::WindowFunction { .. } => Ok(ValueType::Unknown),
         }
     }
 
@@ -631,6 +632,7 @@ impl OrderByValidator {
             }
             Expression::Parameter(_) => {}
             Expression::Vector(_) => {}
+            Expression::WindowFunction { .. } => {}
         }
     }
 }

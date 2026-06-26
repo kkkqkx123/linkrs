@@ -42,6 +42,7 @@ pub use crate::query::planning::plan::core::nodes::control_flow::control_flow_no
 };
 pub use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
 pub use crate::query::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+pub use crate::query::planning::plan::core::nodes::graph_operations::window_node::{WindowFunctionSpec, WindowNode};
 pub use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::{
     ApplyNode, AssignNode, DataCollectNode, DedupNode, MaterializeNode, PatternApplyNode,
     RemoveNode, RollUpApplyNode, UnionNode, UnwindNode,
@@ -140,6 +141,7 @@ pub enum PlanNodeEnum {
     Sample(SampleNode),
     Dedup(DedupNode),
     Aggregate(AggregateNode),
+    Window(WindowNode),
 
     // ========== Connecting Nodes ==========
     InnerJoin(InnerJoinNode),
@@ -255,6 +257,7 @@ crate::define_enum_is_methods! {
     (Sample, is_sample),
     (Dedup, is_dedup),
     (Aggregate, is_aggregate),
+    (Window, is_window),
     // Connecting nodes
     (InnerJoin, is_inner_join),
     (LeftJoin, is_left_join),
@@ -351,6 +354,7 @@ crate::define_enum_as_methods! {
     (Sample, as_sample, SampleNode),
     (Dedup, as_dedup, DedupNode),
     (Aggregate, as_aggregate, AggregateNode),
+    (Window, as_window, WindowNode),
     // Connecting nodes
     (InnerJoin, as_inner_join, InnerJoinNode),
     (LeftJoin, as_left_join, LeftJoinNode),
@@ -446,6 +450,7 @@ crate::define_enum_as_mut_methods! {
     (Sample, as_sample_mut, SampleNode),
     (Dedup, as_dedup_mut, DedupNode),
     (Aggregate, as_aggregate_mut, AggregateNode),
+    (Window, as_window_mut, WindowNode),
     // Connecting nodes
     (InnerJoin, as_inner_join_mut, InnerJoinNode),
     (LeftJoin, as_left_join_mut, LeftJoinNode),
@@ -541,6 +546,7 @@ crate::define_enum_type_name! {
     (Sample, "Sample"),
     (Dedup, "Dedup"),
     (Aggregate, "Aggregate"),
+    (Window, "Window"),
     // Connecting nodes
     (InnerJoin, "InnerJoin"),
     (LeftJoin, "LeftJoin"),
@@ -639,6 +645,7 @@ crate::define_enum_category! {
     (Sample, PlanNodeCategory::Operation),
     (Dedup, PlanNodeCategory::Operation),
     (Aggregate, PlanNodeCategory::Operation),
+    (Window, PlanNodeCategory::Operation),
     // Connecting nodes
     (InnerJoin, PlanNodeCategory::Join),
     (LeftJoin, PlanNodeCategory::Join),
@@ -737,6 +744,7 @@ crate::define_enum_describe! {
     (Sample, "Sample"),
     (Dedup, "Dedup"),
     (Aggregate, "Aggregate"),
+    (Window, "Window function"),
     // Connecting nodes
     (InnerJoin, "InnerJoin"),
     (LeftJoin, "LeftJoin"),

@@ -31,7 +31,7 @@ pub use data_modification::{
 pub use graph_operations::{
     AggregateNode, ApplyKind, ApplyNode, AssignNode, DataCollectNode, DedupNode, IntersectNode,
     MaterializeNode, MinusNode, PatternApplyNode, RemoveNode, RollUpApplyNode, UnionNode,
-    UnwindNode,
+    UnwindNode, WindowFunctionSpec, WindowNode,
 };
 pub use join::{
     AntiJoinNode, CrossJoinNode, FullOuterJoinNode, HashInnerJoinNode, HashLeftJoinNode,

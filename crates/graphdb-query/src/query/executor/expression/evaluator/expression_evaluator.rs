@@ -187,6 +187,9 @@ impl ExpressionEvaluator {
 
             // Vector literal – Direct evaluation
             Expression::Vector(data) => Ok(Value::vector(data.clone())),
+            Expression::WindowFunction { .. } => Err(ExpressionError::type_error(
+                "Window functions require a runtime window context",
+            )),
 
             // Mapping – Batch evaluation
             Expression::Map(entries) => {
@@ -337,6 +340,43 @@ impl ExpressionEvaluator {
             }
             DataType::List => value.to_list(),
             DataType::Map => value.to_map(),
+            DataType::Json => {
+                match value {
+                    Value::String(s) => {
+                        let j = crate::core::value::json::Json::parse(s)
+                            .map_err(|e| ExpressionError::type_error(format!("Invalid JSON: {}", e)))?;
+                        Value::Json(Box::new(j))
+                    }
+                    Value::Json(_) => value.clone(),
+                    Value::JsonB(jb) => {
+                        let j = jb.to_json();
+                        Value::Json(Box::new(j))
+                    }
+                    Value::Null(_) => Value::Null(NullType::Null),
+                    _ => return Err(ExpressionError::type_error(
+                        format!("Cannot convert {:?} to JSON", value.get_type())
+                    )),
+                }
+            }
+            DataType::JsonB => {
+                match value {
+                    Value::String(s) => {
+                        let jb = crate::core::value::json::JsonB::parse(s)
+                            .map_err(|e| ExpressionError::type_error(format!("Invalid JSON: {}", e)))?;
+                        Value::JsonB(Box::new(jb))
+                    }
+                    Value::JsonB(_) => value.clone(),
+                    Value::Json(j) => {
+                        let jb = j.to_jsonb()
+                            .map_err(|e| ExpressionError::type_error(format!("Invalid JSON: {}", e)))?;
+                        Value::JsonB(Box::new(jb))
+                    }
+                    Value::Null(_) => Value::Null(NullType::Null),
+                    _ => return Err(ExpressionError::type_error(
+                        format!("Cannot convert {:?} to JSONB", value.get_type())
+                    )),
+                }
+            }
             _ => {
                 return Err(ExpressionError::type_error(format!(
                     "Unsupported type conversion: {:?}",
