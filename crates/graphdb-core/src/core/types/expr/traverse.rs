@@ -85,6 +85,26 @@ impl Expression {
             Expression::PathBuild(items) => items.iter().collect(),
             Expression::Parameter(_) => vec![],
             Expression::Vector(_) => vec![],
+            Expression::Exists { body } => {
+                let mut c: Vec<&Expression> = vec![];
+                if let Some(where_clause) = &body.where_clause {
+                    c.push(where_clause);
+                }
+                if let Some(return_expr) = &body.return_expr {
+                    c.push(return_expr);
+                }
+                c
+            }
+            Expression::In { expr, subquery, .. } => {
+                let mut c: Vec<&Expression> = vec![expr.as_ref()];
+                if let Some(where_clause) = &subquery.where_clause {
+                    c.push(where_clause);
+                }
+                if let Some(return_expr) = &subquery.return_expr {
+                    c.push(return_expr);
+                }
+                c
+            }
             Expression::WindowFunction { args, over_partition_by, over_order_by, .. } => {
                 let mut c: Vec<&Expression> = vec![];
                 c.extend(args);
@@ -175,6 +195,26 @@ impl Expression {
             Expression::PathBuild(items) => items.iter_mut().collect(),
             Expression::Parameter(_) => vec![],
             Expression::Vector(_) => vec![],
+            Expression::Exists { body } => {
+                let mut c: Vec<&mut Expression> = vec![];
+                if let Some(where_clause) = &mut body.where_clause {
+                    c.push(where_clause);
+                }
+                if let Some(return_expr) = &mut body.return_expr {
+                    c.push(return_expr);
+                }
+                c
+            }
+            Expression::In { expr, subquery, .. } => {
+                let mut c: Vec<&mut Expression> = vec![expr.as_mut()];
+                if let Some(where_clause) = &mut subquery.where_clause {
+                    c.push(where_clause);
+                }
+                if let Some(return_expr) = &mut subquery.return_expr {
+                    c.push(return_expr);
+                }
+                c
+            }
             Expression::WindowFunction { args, over_partition_by, over_order_by, .. } => {
                 let mut c: Vec<&mut Expression> = vec![];
                 c.extend(args);
@@ -385,6 +425,12 @@ impl Expression {
             ),
             Expression::Parameter(_) => self.clone(),
             Expression::Vector(_) => self.clone(),
+            Expression::Exists { body: _ } => self.clone(),
+            Expression::In { expr, subquery, negated } => Expression::In {
+                expr: Box::new(expr.transform(transformer)),
+                subquery: subquery.clone(),
+                negated: *negated,
+            },
             Expression::WindowFunction { name, args, over_partition_by, over_order_by, over_order_desc } => Expression::WindowFunction {
                 name: name.clone(),
                 args: args.iter().map(|e| e.transform(transformer)).collect(),

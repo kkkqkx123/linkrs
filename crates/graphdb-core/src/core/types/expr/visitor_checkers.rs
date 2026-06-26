@@ -764,6 +764,12 @@ impl WildcardReplacer {
             ),
             Expression::Parameter(name) => Expression::Parameter(name.clone()),
             Expression::Vector(data) => Expression::Vector(data.clone()),
+            Expression::Exists { body } => Expression::Exists { body: body.clone() },
+            Expression::In { expr, subquery, negated } => Expression::In {
+                expr: Box::new(self.replace_internal(expr)),
+                subquery: subquery.clone(),
+                negated: *negated,
+            },
             Expression::WindowFunction { name, args, over_partition_by, over_order_by, over_order_desc } => {
                 Expression::WindowFunction {
                     name: name.clone(),

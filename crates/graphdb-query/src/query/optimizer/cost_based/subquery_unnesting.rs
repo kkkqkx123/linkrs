@@ -505,6 +505,8 @@ impl SubqueryUnnestingOptimizer {
             Expression::Parameter(_) => expr.clone(),
             Expression::Literal(_) => expr.clone(),
             Expression::Vector(_) => expr.clone(),
+            Expression::Exists { .. } => expr.clone(),
+            Expression::In { .. } => expr.clone(),
             Expression::WindowFunction { .. } => expr.clone(),
         }
     }

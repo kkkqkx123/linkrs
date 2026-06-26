@@ -147,17 +147,54 @@ pub enum Expression {
 /// Represents vector literals like VECTOR[0.1, 0.2, 0.3] or [0.1, 0.2]::VECTOR
 Vector(Vec<f32>),
 
-/// Window function expression with OVER clause
-WindowFunction {
-    /// Window function name (e.g. "row_number", "rank", "lead")
-    name: String,
-    /// Arguments to the window function
-    args: Vec<Expression>,
-    /// PARTITION BY expressions
-    over_partition_by: Vec<Expression>,
-    /// ORDER BY expressions
-    over_order_by: Vec<Expression>,
-    /// Whether each ORDER BY expression is descending
-    over_order_desc: Vec<bool>,
-},
+    /// Window function expression with OVER clause
+    WindowFunction {
+        /// Window function name (e.g. "row_number", "rank", "lead")
+        name: String,
+        /// Arguments to the window function
+        args: Vec<Expression>,
+        /// PARTITION BY expressions
+        over_partition_by: Vec<Expression>,
+        /// ORDER BY expressions
+        over_order_by: Vec<Expression>,
+        /// Whether each ORDER BY expression is descending
+        over_order_desc: Vec<bool>,
+    },
+
+    /// EXISTS subquery expression
+    ///
+    /// Evaluates to true if the subquery pattern has at least one match.
+    /// Syntax: `EXISTS { pattern }` or `EXISTS(pattern)`
+    Exists {
+        /// The subquery body (WHERE clause condition or pattern reference)
+        body: Box<SubqueryBody>,
+    },
+
+    /// IN subquery expression
+    ///
+    /// Evaluates to true if `expr` is in the result set of the subquery.
+    /// Syntax: `expr IN { MATCH ... RETURN ... }`
+    In {
+        /// The expression to test
+        expr: Box<Expression>,
+        /// The subquery body
+        subquery: Box<SubqueryBody>,
+        /// Whether this is NOT IN
+        negated: bool,
+    },
+}
+
+/// A subquery body used in EXISTS and IN expressions.
+///
+/// Represents a mini-query: MATCH pattern [WHERE condition] RETURN expression
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SubqueryBody {
+    /// Pattern elements (triples like `a:Person-[:KNOWS]->b:Person`)
+    pub patterns: Vec<String>,
+    /// WHERE clause expression
+    pub where_clause: Option<Box<Expression>>,
+    /// RETURN expression (single expression for scalar subquery)
+    pub return_expr: Option<Box<Expression>>,
+    /// Whether this is a correlated subquery (references outer variables)
+    pub is_correlated: bool,
 }

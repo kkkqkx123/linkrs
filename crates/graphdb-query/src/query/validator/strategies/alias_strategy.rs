@@ -147,6 +147,8 @@ impl AliasValidationStrategy {
             | crate::core::types::expr::Expression::List(_)
             | crate::core::types::expr::Expression::Map(_)
             | crate::core::types::expr::Expression::Vector(_)
+            | crate::core::types::expr::Expression::Exists { .. }
+            | crate::core::types::expr::Expression::In { .. }
             | crate::core::types::expr::Expression::WindowFunction { .. }
             | crate::core::types::expr::Expression::Predicate { .. } => None,
         }
@@ -218,6 +220,8 @@ impl AliasValidationStrategy {
             | crate::core::types::expr::Expression::PathBuild(_)
             | crate::core::types::expr::Expression::Parameter(_)
             | crate::core::types::expr::Expression::Vector(_)
+            | crate::core::types::expr::Expression::Exists { .. }
+            | crate::core::types::expr::Expression::In { .. }
             | crate::core::types::expr::Expression::WindowFunction { .. } => Ok(()),
             crate::core::types::expr::Expression::TypeCast { expression, .. } => {
                 // Type conversion expressions require that their subexpressions be validated.

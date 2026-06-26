@@ -294,6 +294,10 @@ pub enum TokenKind {
     DstRef,
     SrcRef,
     InputRef,
+    // JSONB operators
+    ArrowRight,     // ->>
+    HashArrow,      // #>
+    HashArrowRight, // #>>
     Eof,
 }
 

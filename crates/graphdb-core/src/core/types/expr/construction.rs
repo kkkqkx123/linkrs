@@ -2,7 +2,7 @@
 //!
 //! Provide methods for creating various types of expressions.
 
-use crate::core::types::expr::Expression;
+use crate::core::types::expr::{Expression, SubqueryBody};
 use crate::core::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
 use crate::core::types::DataType;
 use crate::core::{NullType, Value};
@@ -229,6 +229,22 @@ impl Expression {
     /// Create a vector literal expression
     pub fn vector(data: Vec<f32>) -> Self {
         Expression::Vector(data)
+    }
+
+    /// Create an EXISTS subquery expression
+    pub fn exists(body: SubqueryBody) -> Self {
+        Expression::Exists {
+            body: Box::new(body),
+        }
+    }
+
+    /// Create an IN subquery expression
+    pub fn in_subquery(expr: Expression, subquery: SubqueryBody, negated: bool) -> Self {
+        Expression::In {
+            expr: Box::new(expr),
+            subquery: Box::new(subquery),
+            negated,
+        }
     }
 
     /// Creating a boolean literal

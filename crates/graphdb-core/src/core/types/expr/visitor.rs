@@ -14,6 +14,7 @@
 //! assert_eq!(collector.properties, vec!["name".to_string()]);
 //! ```
 
+use crate::core::types::expr::SubqueryBody;
 use crate::core::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
 use crate::core::types::DataType;
 use crate::core::Expression;
@@ -156,6 +157,16 @@ pub trait ExpressionVisitor {
             }
             Expression::WindowFunction { name, args, .. } => {
                 self.visit_function(name, args);
+            }
+            Expression::Exists { body } => {
+                self.visit_exists(body);
+            }
+            Expression::In {
+                expr,
+                subquery,
+                negated,
+            } => {
+                self.visit_in(expr, subquery, *negated);
             }
         }
     }
@@ -327,4 +338,12 @@ pub trait ExpressionVisitor {
 
     /// Accessing query parameter expressions
     fn visit_parameter(&mut self, _name: &str) {}
+
+    /// Accessing EXISTS subquery expressions
+    fn visit_exists(&mut self, _body: &SubqueryBody) {}
+
+    /// Accessing IN subquery expressions
+    fn visit_in(&mut self, expr: &Expression, _subquery: &SubqueryBody, _negated: bool) {
+        self.visit(expr);
+    }
 }

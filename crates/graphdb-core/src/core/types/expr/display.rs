@@ -214,6 +214,17 @@ impl Expression {
                         .join(", ")
                 )
             }
+            Expression::Exists { body } => {
+                format!("EXISTS {{ {} }}", body.patterns.join(", "))
+            }
+            Expression::In {
+                expr,
+                subquery,
+                negated,
+            } => {
+                let op = if *negated { "NOT IN" } else { "IN" };
+                format!("{} {} {{ {} }}", expr.to_expression_string(), op, subquery.patterns.join(", "))
+            }
             Expression::WindowFunction { name, args, over_partition_by, over_order_by, over_order_desc } => {
                 let args_str: Vec<String> = args.iter().map(|a| a.to_expression_string()).collect();
                 let mut result = format!("{}({}) OVER (", name, args_str.join(", "));

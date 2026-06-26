@@ -137,6 +137,8 @@ fn _extract_variable_names(expr: &Expression) -> Vec<String> {
             | Expression::EdgeProperty { .. }
             | Expression::Parameter(_)
             | Expression::Vector(_)
+            | Expression::Exists { .. }
+            | Expression::In { .. }
             | Expression::WindowFunction { .. } => {}
         }
     }

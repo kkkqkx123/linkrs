@@ -298,6 +298,12 @@ impl ExpressionEvaluator {
                 "The query parameter '{}' requires values provided by the runtime context.",
                 name
             ))),
+            Expression::Exists { .. } => Err(ExpressionError::type_error(
+                "EXISTS subquery requires a runtime context",
+            )),
+            Expression::In { .. } => Err(ExpressionError::type_error(
+                "IN subquery requires a runtime context",
+            )),
         }
     }
 

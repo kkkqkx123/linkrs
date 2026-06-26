@@ -32,6 +32,11 @@ pub enum BinaryOperator {
     EndsWith,
     Subscript,
     Attribute,
+    // JSONB operators
+    JsonGet,        // -> 
+    JsonGetText,    // ->>
+    JsonPathGet,    // #>
+    JsonPathGetText,// #>>
     Union,
     Intersect,
     Except,
@@ -64,6 +69,10 @@ impl BinaryOperator {
             BinaryOperator::EndsWith => "ENDS WITH",
             BinaryOperator::Subscript => "[]",
             BinaryOperator::Attribute => ".",
+            BinaryOperator::JsonGet => "->",
+            BinaryOperator::JsonGetText => "->>",
+            BinaryOperator::JsonPathGet => "#>",
+            BinaryOperator::JsonPathGetText => "#>>",
             BinaryOperator::Union => "UNION",
             BinaryOperator::Intersect => "INTERSECT",
             BinaryOperator::Except => "EXCEPT",
@@ -91,7 +100,12 @@ impl BinaryOperator {
             BinaryOperator::Multiply | BinaryOperator::Divide | BinaryOperator::Modulo => 7,
             BinaryOperator::Exponent => 8,
             BinaryOperator::StringConcat => 9,
-            BinaryOperator::Subscript | BinaryOperator::Attribute => 10,
+            BinaryOperator::Subscript
+            | BinaryOperator::Attribute
+            | BinaryOperator::JsonGet
+            | BinaryOperator::JsonGetText
+            | BinaryOperator::JsonPathGet
+            | BinaryOperator::JsonPathGetText => 10,
         }
     }
 

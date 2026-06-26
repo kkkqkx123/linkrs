@@ -248,6 +248,8 @@ impl ExpressionPrecomputationOptimizer {
             Expression::Parameter(_) => true, // Parameters are deterministic within a query
             Expression::Label(_) => true,
             Expression::Vector(_) => true, // Vector literals are deterministic
+            Expression::Exists { .. } => false, // Subqueries are not deterministic
+            Expression::In { .. } => false, // Subqueries are not deterministic
             Expression::Unary { operand, .. } => self.check_expression_deterministic(operand),
             Expression::Binary { left, right, .. } => {
                 self.check_expression_deterministic(left)

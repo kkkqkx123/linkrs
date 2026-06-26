@@ -630,7 +630,12 @@ impl<'a> Lexer<'a> {
                 self.read_char();
                 if let Some(&'>') = self.peek_char() {
                     self.read_char();
-                    Token::new(Tk::Arrow, "->".to_string(), self.line, self.column)
+                    if let Some(&'>') = self.peek_char() {
+                        self.read_char();
+                        Token::new(Tk::ArrowRight, "->>".to_string(), self.line, self.column)
+                    } else {
+                        Token::new(Tk::Arrow, "->".to_string(), self.line, self.column)
+                    }
                 } else {
                     Token::new(Tk::Minus, "-".to_string(), self.line, self.column)
                 }
@@ -935,6 +940,23 @@ impl<'a> Lexer<'a> {
                     start_line,
                     start_col,
                 )
+            }
+            Some(&'#') => {
+                self.read_char();
+                if let Some(&'>') = self.peek_char() {
+                    self.read_char();
+                    if let Some(&'>') = self.peek_char() {
+                        self.read_char();
+                        Token::new(Tk::HashArrowRight, "#>>".to_string(), self.line, self.column)
+                    } else {
+                        Token::new(Tk::HashArrow, "#>".to_string(), self.line, self.column)
+                    }
+                } else {
+                    let start_col = self.column;
+                    let start_line = self.line;
+                    self.add_error(LexError::unexpected_character('#', self.current_position()));
+                    Token::new(Tk::Identifier("#".to_string()), "#".to_string(), start_line, start_col)
+                }
             }
             Some(&ch) => {
                 let start_col = self.column;

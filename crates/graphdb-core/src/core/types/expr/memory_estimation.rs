@@ -2,7 +2,7 @@
 //!
 //! This module provides memory estimation for the Expression enum and related types.
 
-use crate::core::types::expr::Expression;
+use crate::core::types::expr::{Expression, SubqueryBody};
 use crate::core::types::memory_estimation::MemoryEstimatable;
 use crate::core::value::Value;
 
@@ -139,6 +139,11 @@ impl MemoryEstimatable for Expression {
                 base_size + args.iter().map(|e| e.estimate_memory()).sum::<usize>()
                     + over_partition_by.iter().map(|e| e.estimate_memory()).sum::<usize>()
                     + over_order_by.iter().map(|e| e.estimate_memory()).sum::<usize>()
+            }
+            Expression::Exists { body } => base_size + body.patterns.iter().map(|p| estimate_string_memory(p)).sum::<usize>(),
+            Expression::In { expr, subquery, .. } => {
+                base_size + expr.estimate_memory()
+                    + subquery.patterns.iter().map(|p| estimate_string_memory(p)).sum::<usize>()
             }
         }
     }
@@ -344,6 +349,31 @@ impl Expression {
                 }
                 Expression::Vector(_) => {
                     // Vector leaf node, base already counted
+                }
+                Expression::Exists { body } => {
+                    total += std::mem::size_of::<SubqueryBody>();
+                    for p in &body.patterns {
+                        total += p.capacity();
+                    }
+                    if let Some(where_clause) = &body.where_clause {
+                        stack.push(where_clause);
+                    }
+                    if let Some(return_expr) = &body.return_expr {
+                        stack.push(return_expr);
+                    }
+                }
+                Expression::In { expr, subquery, .. } => {
+                    total += std::mem::size_of::<SubqueryBody>();
+                    for p in &subquery.patterns {
+                        total += p.capacity();
+                    }
+                    stack.push(expr);
+                    if let Some(where_clause) = &subquery.where_clause {
+                        stack.push(where_clause);
+                    }
+                    if let Some(return_expr) = &subquery.return_expr {
+                        stack.push(return_expr);
+                    }
                 }
                 Expression::WindowFunction { args, over_partition_by, over_order_by, .. } => {
                     total += std::mem::size_of::<Expression>() * (args.len() + over_partition_by.len() + over_order_by.len());

@@ -44,6 +44,12 @@ impl BinaryOperationEvaluator {
             BinaryOperator::Like => Self::eval_like(left, right),
             BinaryOperator::In => Self::eval_in(left, right),
             BinaryOperator::NotIn => Self::eval_not_in(left, right),
+
+            // JSONB operators
+            BinaryOperator::JsonGet => Self::eval_json_get(left, right),
+            BinaryOperator::JsonGetText => Self::eval_json_get_text(left, right),
+            BinaryOperator::JsonPathGet => Self::eval_json_path_get(left, right),
+            BinaryOperator::JsonPathGetText => Self::eval_json_path_get_text(left, right),
             BinaryOperator::Contains => Self::eval_contains(left, right),
             BinaryOperator::StartsWith => Self::eval_starts_with(left, right),
             BinaryOperator::EndsWith => Self::eval_ends_with(left, right),
@@ -337,6 +343,176 @@ impl BinaryOperationEvaluator {
             }
             _ => Err(ExpressionError::type_error("EXCEPT requires list values")),
         }
+    }
+
+    // JSONB operator implementations
+    fn eval_json_get(left: &Value, right: &Value) -> Result<Value, ExpressionError> {
+        Self::eval_json_operator(left, right, false, false)
+    }
+
+    fn eval_json_get_text(left: &Value, right: &Value) -> Result<Value, ExpressionError> {
+        Self::eval_json_operator(left, right, true, false)
+    }
+
+    fn eval_json_path_get(left: &Value, right: &Value) -> Result<Value, ExpressionError> {
+        Self::eval_json_operator(left, right, false, true)
+    }
+
+    fn eval_json_path_get_text(left: &Value, right: &Value) -> Result<Value, ExpressionError> {
+        Self::eval_json_operator(left, right, true, true)
+    }
+
+    fn eval_json_operator(
+        json: &Value,
+        key_or_path: &Value,
+        as_text: bool,
+        is_path: bool,
+    ) -> Result<Value, ExpressionError> {
+        use crate::core::value::NullType;
+        use serde_json::Value as JsonValue;
+
+        if json.is_null() || key_or_path.is_null() {
+            return Ok(Value::Null(NullType::Null));
+        }
+
+        let json_value = match json {
+            Value::String(s) => serde_json::from_str(s).map_err(|e| {
+                ExpressionError::type_error(format!("Invalid JSON string: {}", e))
+            }),
+            Value::Json(j) => j.to_value().map_err(|e| {
+                ExpressionError::type_error(format!("Invalid JSON: {}", e))
+            }),
+            Value::JsonB(j) => Ok(j.as_value().clone()),
+            _ => Err(ExpressionError::type_error(
+                "JSON operator requires JSON/JSONB or JSON string",
+            )),
+        }?;
+
+        let key_str = match key_or_path {
+            Value::String(s) => s.clone(),
+            _ => return Err(ExpressionError::type_error(
+                "JSON operator key/path must be a string",
+            )),
+        };
+
+        let result = if is_path {
+            // Handle JSON path (e.g., #>, #>>)
+            let path_segments: Vec<&str> = if key_str.starts_with('$') {
+                key_str.split('.').collect()
+            } else {
+                return Err(ExpressionError::type_error("JSON path must start with '$'"));
+            };
+
+            let mut current = &json_value;
+            for segment in path_segments.iter().skip(1) {
+                match current {
+                    JsonValue::Object(map) => {
+                        if let Some(v) = map.get(*segment) {
+                            current = v;
+                        } else {
+                            return Ok(Value::Null(NullType::Null));
+                        }
+                    }
+                    JsonValue::Array(arr) => {
+                        if let Ok(index) = segment.parse::<usize>() {
+                            if index < arr.len() {
+                                current = &arr[index];
+                            } else {
+                                return Ok(Value::Null(NullType::Null));
+                            }
+                        } else {
+                            return Ok(Value::Null(NullType::Null));
+                        }
+                    }
+                    _ => return Ok(Value::Null(NullType::Null)),
+                }
+            }
+            current.clone()
+        } else {
+            // Handle simple key access (e.g., ->, ->>)
+            match &json_value {
+                JsonValue::Object(map) => {
+                    map.get(&key_str).cloned().unwrap_or(JsonValue::Null)
+                }
+                JsonValue::Array(arr) => {
+                    if let Ok(index) = key_str.parse::<usize>() {
+                        if index < arr.len() {
+                            arr[index].clone()
+                        } else {
+                            JsonValue::Null
+                        }
+                    } else {
+                        JsonValue::Null
+                    }
+                }
+                _ => JsonValue::Null,
+            }
+        };
+
+        // Convert result to appropriate GraphDB Value
+        let value_result = if as_text {
+            // Return as string
+            match result {
+                JsonValue::Null => Value::Null(NullType::Null),
+                JsonValue::String(s) => Value::String(s),
+                JsonValue::Number(n) => {
+                    if let Some(i) = n.as_i64() {
+                        Value::BigInt(i)
+                    } else if let Some(f) = n.as_f64() {
+                        Value::Double(f)
+                    } else {
+                        Value::String(n.to_string())
+                    }
+                }
+                JsonValue::Bool(b) => Value::Bool(b),
+                JsonValue::Array(_) | JsonValue::Object(_) => {
+                    Value::String(serde_json::to_string(&result).unwrap_or_default())
+                }
+            }
+        } else {
+            // Return as JSON value
+            match result {
+                JsonValue::Null => Value::Null(NullType::Null),
+                JsonValue::String(s) => Value::String(s),
+                JsonValue::Number(n) => {
+                    if let Some(i) = n.as_i64() {
+                        Value::BigInt(i)
+                    } else if let Some(f) = n.as_f64() {
+                        Value::Double(f)
+                    } else {
+                        Value::String(n.to_string())
+                    }
+                }
+                JsonValue::Bool(b) => Value::Bool(b),
+                JsonValue::Array(arr) => {
+                    let items: Vec<Value> = arr.into_iter().map(|v| {
+                        match v {
+                            JsonValue::Null => Value::Null(NullType::Null),
+                            JsonValue::String(s) => Value::String(s),
+                            JsonValue::Number(n) => {
+                                if let Some(i) = n.as_i64() {
+                                    Value::BigInt(i)
+                                } else if let Some(f) = n.as_f64() {
+                                    Value::Double(f)
+                                } else {
+                                    Value::String(n.to_string())
+                                }
+                            }
+                            JsonValue::Bool(b) => Value::Bool(b),
+                            JsonValue::Array(_) | JsonValue::Object(_) => {
+                                Value::String(serde_json::to_string(&v).unwrap_or_default())
+                            }
+                        }
+                    }).collect();
+                    Value::List(Box::new(crate::core::value::list::List::from(items)))
+                }
+                JsonValue::Object(_) => {
+                    Value::String(serde_json::to_string(&result).unwrap_or_default())
+                }
+            }
+        };
+
+        Ok(value_result)
     }
 }
 

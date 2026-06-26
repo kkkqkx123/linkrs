@@ -489,6 +489,8 @@ impl OrderByValidator {
             Expression::Reduce { .. } => Ok(ValueType::Unknown),
             Expression::PathBuild(_) => Ok(ValueType::Path),
             Expression::Parameter(_) => Ok(ValueType::Unknown),
+            Expression::Exists { .. } => Ok(ValueType::Bool),
+            Expression::In { .. } => Ok(ValueType::Bool),
             Expression::WindowFunction { .. } => Ok(ValueType::Unknown),
         }
     }
@@ -632,6 +634,10 @@ impl OrderByValidator {
             }
             Expression::Parameter(_) => {}
             Expression::Vector(_) => {}
+            Expression::Exists { .. } => {}
+            Expression::In { expr, .. } => {
+                self.collect_refs_internal(expr, refs);
+            }
             Expression::WindowFunction { .. } => {}
         }
     }

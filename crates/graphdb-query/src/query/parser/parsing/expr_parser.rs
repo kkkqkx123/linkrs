@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::core::types::expr::{ContextualExpression, Expression, ExpressionMeta};
+use crate::core::types::expr::{ContextualExpression, Expression, ExpressionMeta, SubqueryBody};
 use crate::core::types::operators::{BinaryOperator, UnaryOperator};
 use crate::core::types::{DataType, Position, Span};
 use crate::core::Value;
@@ -401,6 +401,17 @@ impl<'a> ExprParser<'a> {
                         span,
                     };
                 }
+            } else if ctx.check_token(TokenKind::In) && ctx.peek_token().kind == TokenKind::LBrace {
+                // IN subquery: expr IN { MATCH ... }
+                ctx.match_token(TokenKind::In);
+                ctx.expect_token(TokenKind::LBrace)?;
+                let subquery = self.parse_subquery_body(ctx)?;
+                ctx.expect_token(TokenKind::RBrace)?;
+                let span = ctx.merge_span(expression.span.start, ctx.current_position());
+                expression = ParseResult {
+                    expr: Expression::in_subquery(expression.expr, subquery, false),
+                    span,
+                };
             } else {
                 break;
             }
@@ -643,6 +654,18 @@ impl<'a> ExprParser<'a> {
                 let span = ctx.merge_span(start_pos, ctx.current_position());
                 Ok(ParseResult {
                     expr: Expression::vector(data),
+                    span,
+                })
+            }
+            TokenKind::Exists => {
+                // EXISTS { pattern } or EXISTS(pattern)
+                ctx.next_token();
+                ctx.expect_token(TokenKind::LBrace)?;
+                let body = self.parse_subquery_body(ctx)?;
+                ctx.expect_token(TokenKind::RBrace)?;
+                let span = ctx.merge_span(start_pos, ctx.current_position());
+                Ok(ParseResult {
+                    expr: Expression::exists(body),
                     span,
                 })
             }
@@ -957,6 +980,62 @@ impl<'a> ExprParser<'a> {
             expr: Expression::list_comprehension(variable, source, filter, map),
             span,
         })
+    }
+
+    fn parse_subquery_body(&mut self, ctx: &mut ParseContext<'a>) -> Result<SubqueryBody, ParseError> {
+        let start_pos = ctx.current_position();
+        let mut patterns = Vec::new();
+        let mut where_clause = None;
+        let mut return_expr = None;
+
+        if ctx.match_token(TokenKind::Match) {
+            let pattern_str = self.parse_pattern_string(ctx)?;
+            patterns.push(pattern_str);
+        }
+
+        if ctx.match_token(TokenKind::Where) {
+            let expr = self.parse_expression(ctx)?;
+            where_clause = Some(Box::new(expr.expr));
+        }
+
+        if ctx.match_token(TokenKind::Return) {
+            let expr = self.parse_expression(ctx)?;
+            return_expr = Some(Box::new(expr.expr));
+        }
+
+        let is_correlated = false;
+
+        Ok(SubqueryBody {
+            patterns,
+            where_clause,
+            return_expr,
+            is_correlated,
+        })
+    }
+
+    fn parse_pattern_string(&mut self, ctx: &mut ParseContext<'a>) -> Result<String, ParseError> {
+        let start_pos = ctx.current_position();
+        let mut pattern = String::new();
+
+        while !ctx.match_token(TokenKind::RBrace)
+            && !ctx.match_token(TokenKind::Where)
+            && !ctx.match_token(TokenKind::Return)
+            && !ctx.match_token(TokenKind::Match)
+        {
+            pattern.push_str(&ctx.current_token().lexeme);
+            pattern.push(' ');
+            ctx.next_token();
+        }
+
+        if pattern.is_empty() {
+            return Err(ParseError::new(
+                ParseErrorKind::SyntaxError,
+                "Empty pattern in subquery".to_string(),
+                start_pos,
+            ));
+        }
+
+        Ok(pattern.trim().to_string())
     }
 
     fn match_identifier_token(&mut self, ctx: &mut ParseContext<'a>, expected: &str) -> bool {
