@@ -512,6 +512,7 @@ impl TypeValidator {
             crate::core::AggregateFunction::BoolAnd(_)
             | crate::core::AggregateFunction::BoolOr(_) => DataType::Bool,
             crate::core::AggregateFunction::GroupConcat(_, _) => DataType::String,
+            crate::core::AggregateFunction::GroupConcatWithOrder(_, _, _) => DataType::String,
             crate::core::AggregateFunction::VecSum(_) => DataType::Vector,
             crate::core::AggregateFunction::VecAvg(_) => DataType::Vector,
         }
@@ -546,6 +547,7 @@ impl TypeValidator {
             crate::core::AggregateFunction::BoolAnd(_)
             | crate::core::AggregateFunction::BoolOr(_) => DataType::Bool,
             crate::core::AggregateFunction::GroupConcat(_, _) => DataType::String,
+            crate::core::AggregateFunction::GroupConcatWithOrder(_, _, _) => DataType::String,
             crate::core::AggregateFunction::VecSum(_) => DataType::Vector,
             crate::core::AggregateFunction::VecAvg(_) => DataType::Vector,
         }

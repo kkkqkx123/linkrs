@@ -675,6 +675,9 @@ impl<S: StorageClient> AggregateExecutor<S> {
             AggregateFunction::GroupConcat(field, _) => {
                 Self::resolve_field_value(context, field, row, col_names)
             }
+            AggregateFunction::GroupConcatWithOrder(field, _, _) => {
+                Self::resolve_field_value(context, field, row, col_names)
+            }
             AggregateFunction::VecSum(field) => {
                 Self::resolve_field_value(context, field, row, col_names)
             }
@@ -998,6 +1001,13 @@ impl<S: StorageClient> AggregateExecutor<S> {
                         }
                     }
                     AggregateFunction::GroupConcat(_, _) => {
+                        if let Some(ref field) = agg_func.field {
+                            format!("group_concat_{}", field)
+                        } else {
+                            "group_concat".to_string()
+                        }
+                    }
+                    AggregateFunction::GroupConcatWithOrder(_, _, _) => {
                         if let Some(ref field) = agg_func.field {
                             format!("group_concat_{}", field)
                         } else {

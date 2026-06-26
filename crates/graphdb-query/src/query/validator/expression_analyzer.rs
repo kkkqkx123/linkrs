@@ -587,6 +587,7 @@ impl ExpressionAnalyzer {
             AggregateFunction::BitAnd(_) | AggregateFunction::BitOr(_) => DataType::Int,
             AggregateFunction::BoolAnd(_) | AggregateFunction::BoolOr(_) => DataType::Bool,
             AggregateFunction::GroupConcat(_, _) => DataType::String,
+            AggregateFunction::GroupConcatWithOrder(_, _, _) => DataType::String,
             AggregateFunction::VecSum(_) => DataType::Vector,
             AggregateFunction::VecAvg(_) => DataType::Vector,
         }

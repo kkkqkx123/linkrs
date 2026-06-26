@@ -321,6 +321,9 @@ impl FunctionRegistry {
             String::new(),
             50.0,
         )));
+        self.register_builtin(BuiltinFunction::Aggregate(
+            AggregateFunction::GroupConcatWithOrder(String::new(), String::new(), Vec::new()),
+        ));
 
         // Registering functions related to graphics
         use super::GraphFunction;
@@ -342,6 +345,7 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::Graph(GraphFunction::Bfs));
         self.register_builtin(BuiltinFunction::Graph(GraphFunction::ConnectedComponents));
         self.register_builtin(BuiltinFunction::Graph(GraphFunction::VariableLengthPath));
+        self.register_builtin(BuiltinFunction::Graph(GraphFunction::PageRank));
 
         // Register container operation functions
         use super::ContainerFunction;

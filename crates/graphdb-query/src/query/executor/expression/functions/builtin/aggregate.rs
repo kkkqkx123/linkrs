@@ -294,6 +294,7 @@ impl AggregateExpression {
             AggregateFunction::BoolAnd(_) => state.calculate_bool_and(),
             AggregateFunction::BoolOr(_) => state.calculate_bool_or(),
             AggregateFunction::GroupConcat(_, _) => state.calculate_group_concat(),
+            AggregateFunction::GroupConcatWithOrder(_, _, _) => state.calculate_group_concat(),
             AggregateFunction::VecSum(_) => Ok(state.vec_sum.clone()),
             AggregateFunction::VecAvg(_) => {
                 if state.count > 0 {

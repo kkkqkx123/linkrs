@@ -230,6 +230,8 @@ pub enum AggregateFunction {
     BoolAnd(String),
     BoolOr(String),
     GroupConcat(String, String),
+    /// GROUP_CONCAT with ORDER BY support for WITHIN GROUP clause
+    GroupConcatWithOrder(String, String, Vec<String>),
     /// Vector sum - element-wise sum of vectors
     VecSum(String),
     /// Vector average - element-wise average of vectors
@@ -267,6 +269,7 @@ impl AggregateFunction {
             AggregateFunction::BoolAnd(_) => "BOOL_AND",
             AggregateFunction::BoolOr(_) => "BOOL_OR",
             AggregateFunction::GroupConcat(_, _) => "GROUP_CONCAT",
+            AggregateFunction::GroupConcatWithOrder(_, _, _) => "GROUP_CONCAT",
             AggregateFunction::VecSum(_) => "VEC_SUM",
             AggregateFunction::VecAvg(_) => "VEC_AVG",
         }
@@ -291,7 +294,7 @@ impl AggregateFunction {
             | AggregateFunction::Collect(_)
             | AggregateFunction::CollectSet(_)
             | AggregateFunction::Distinct(_)
-            |             AggregateFunction::Std(_)
+            | AggregateFunction::Std(_)
             | AggregateFunction::StddevPop(_)
             | AggregateFunction::StddevSamp(_)
             | AggregateFunction::Product(_)
@@ -307,6 +310,13 @@ impl AggregateFunction {
             AggregateFunction::Percentile(_, _) => 2,
             AggregateFunction::PercentileCont(_, _) => 2,
             AggregateFunction::GroupConcat(_, _) => {
+                if self.separator().is_empty() {
+                    1
+                } else {
+                    2
+                }
+            }
+            AggregateFunction::GroupConcatWithOrder(_, _, _) => {
                 if self.separator().is_empty() {
                     1
                 } else {
@@ -349,6 +359,7 @@ impl AggregateFunction {
     pub fn separator(&self) -> String {
         match self {
             AggregateFunction::GroupConcat(_, sep) => sep.clone(),
+            AggregateFunction::GroupConcatWithOrder(_, sep, _) => sep.clone(),
             _ => String::new(),
         }
     }
@@ -378,6 +389,7 @@ impl AggregateFunction {
             AggregateFunction::BoolAnd(field) => Some(field),
             AggregateFunction::BoolOr(field) => Some(field),
             AggregateFunction::GroupConcat(field, _) => Some(field),
+            AggregateFunction::GroupConcatWithOrder(field, _, _) => Some(field),
             AggregateFunction::VecSum(field) => Some(field),
             AggregateFunction::VecAvg(field) => Some(field),
         }
@@ -411,10 +423,21 @@ impl AggregateFunction {
             AggregateFunction::BoolAnd(_) => "logical AND",
             AggregateFunction::BoolOr(_) => "logical OR",
             AggregateFunction::GroupConcat(_, _) => "packet connection",
+            AggregateFunction::GroupConcatWithOrder(_, _, _) => {
+                "Group concatenation with ORDER BY (WITHIN GROUP)"
+            }
             AggregateFunction::VecSum(_) => "Calculate the element-by-element sum of vector",
             AggregateFunction::VecAvg(_) => {
                 "Calculate the element-by-element average of the vector"
             }
+        }
+    }
+
+    /// Get the order by field names for WITHIN GROUP clause
+    pub fn order_by_fields(&self) -> Option<&[String]> {
+        match self {
+            AggregateFunction::GroupConcatWithOrder(_, _, order_by) => Some(order_by),
+            _ => None,
         }
     }
 }

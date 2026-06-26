@@ -23,6 +23,12 @@ pub enum FulltextFunction {
     MatchedFields,
     /// snippet(field, [max_len]) - Get text snippet
     Snippet,
+    /// rank() - Get the rank of the document in search results
+    Rank,
+    /// search_match(field, query) - Check if field matches query pattern
+    SearchMatch,
+    /// search_score(field) - Get field-specific relevance score
+    FieldScore,
 }
 
 impl FulltextFunction {
@@ -33,6 +39,9 @@ impl FulltextFunction {
             FulltextFunction::Highlight => "highlight",
             FulltextFunction::MatchedFields => "matched_fields",
             FulltextFunction::Snippet => "snippet",
+            FulltextFunction::Rank => "rank",
+            FulltextFunction::SearchMatch => "search_match",
+            FulltextFunction::FieldScore => "field_score",
         }
     }
 
@@ -62,6 +71,21 @@ impl FulltextFunction {
                 Some(ValueType::String),
                 true,
             ),
+            FulltextFunction::Rank => {
+                FunctionSignature::new("rank", vec![], Some(ValueType::Int), false)
+            }
+            FulltextFunction::SearchMatch => FunctionSignature::new(
+                "search_match",
+                vec![ValueType::String, ValueType::String],
+                Some(ValueType::Bool),
+                false,
+            ),
+            FulltextFunction::FieldScore => FunctionSignature::new(
+                "field_score",
+                vec![ValueType::String],
+                Some(ValueType::Float),
+                false,
+            ),
         }
     }
 
@@ -72,6 +96,9 @@ impl FulltextFunction {
             FulltextFunction::Highlight => 4,
             FulltextFunction::MatchedFields => 0,
             FulltextFunction::Snippet => 2,
+            FulltextFunction::Rank => 0,
+            FulltextFunction::SearchMatch => 2,
+            FulltextFunction::FieldScore => 1,
         }
     }
 
@@ -82,6 +109,9 @@ impl FulltextFunction {
             FulltextFunction::Highlight => true,
             FulltextFunction::MatchedFields => false,
             FulltextFunction::Snippet => true,
+            FulltextFunction::Rank => false,
+            FulltextFunction::SearchMatch => false,
+            FulltextFunction::FieldScore => false,
         }
     }
 
@@ -92,6 +122,9 @@ impl FulltextFunction {
             FulltextFunction::Highlight => "Get highlighted text fragments for a field",
             FulltextFunction::MatchedFields => "Get the list of matched fields",
             FulltextFunction::Snippet => "Get a text snippet from a field",
+            FulltextFunction::Rank => "Get the rank position of a document in search results",
+            FulltextFunction::SearchMatch => "Check if a field matches a search query pattern",
+            FulltextFunction::FieldScore => "Get the field-specific relevance score",
         }
     }
 
@@ -106,6 +139,9 @@ impl FulltextFunction {
             FulltextFunction::Highlight => self.execute_highlight(args, context),
             FulltextFunction::MatchedFields => self.execute_matched_fields(args, context),
             FulltextFunction::Snippet => self.execute_snippet(args, context),
+            FulltextFunction::Rank => self.execute_rank(args, context),
+            FulltextFunction::SearchMatch => self.execute_search_match(args, context),
+            FulltextFunction::FieldScore => self.execute_field_score(args, context),
         }
     }
 
@@ -284,6 +320,105 @@ impl FulltextFunction {
 
         Ok(Value::Null(crate::core::null::NullType::Null))
     }
+
+    /// Execute rank() function
+    fn execute_rank(
+        &self,
+        args: &[Value],
+        context: &FulltextExecutionContext,
+    ) -> Result<Value, ExpressionError> {
+        if !args.is_empty() {
+            return Err(ExpressionError::new(
+                ExpressionErrorType::InvalidArgumentCount,
+                format!("rank() expects 0 arguments, got {}", args.len()),
+            ));
+        }
+
+        let rank = if context.score > 0.0 {
+            ((1.0 / context.score) * 100.0) as i64
+        } else {
+            0
+        };
+
+        Ok(Value::BigInt(rank))
+    }
+
+    /// Execute search_match() function
+    fn execute_search_match(
+        &self,
+        args: &[Value],
+        context: &FulltextExecutionContext,
+    ) -> Result<Value, ExpressionError> {
+        if args.len() < 2 {
+            return Err(ExpressionError::new(
+                ExpressionErrorType::InvalidArgumentCount,
+                "search_match() expects 2 arguments (field, query)",
+            ));
+        }
+
+        let field_name = match &args[0] {
+            Value::String(s) => s.clone(),
+            _ => {
+                return Err(ExpressionError::new(
+                    ExpressionErrorType::TypeError,
+                    "search_match() first argument must be a string (field name)",
+                ));
+            }
+        };
+
+        let query = match &args[1] {
+            Value::String(s) => s.to_lowercase(),
+            _ => {
+                return Err(ExpressionError::new(
+                    ExpressionErrorType::TypeError,
+                    "search_match() second argument must be a string (query)",
+                ));
+            }
+        };
+
+        if let Some(source) = &context.source {
+            if let Some(Value::String(text)) = source.get(&field_name) {
+                return Ok(Value::Bool(text.to_lowercase().contains(&query)));
+            }
+        }
+
+        Ok(Value::Bool(false))
+    }
+
+    /// Execute field_score() function
+    fn execute_field_score(
+        &self,
+        args: &[Value],
+        context: &FulltextExecutionContext,
+    ) -> Result<Value, ExpressionError> {
+        if args.is_empty() {
+            return Err(ExpressionError::new(
+                ExpressionErrorType::InvalidArgumentCount,
+                "field_score() expects 1 argument (field name)",
+            ));
+        }
+
+        let field_name = match &args[0] {
+            Value::String(s) => s.clone(),
+            _ => {
+                return Err(ExpressionError::new(
+                    ExpressionErrorType::TypeError,
+                    "field_score() first argument must be a string (field name)",
+                ));
+            }
+        };
+
+        if context.matched_fields.contains(&field_name) {
+            let field_bonus = if context.highlights.as_ref().map_or(false, |h| h.contains_key(&field_name)) {
+                1.5
+            } else {
+                1.0
+            };
+            return Ok(Value::Double(context.score * field_bonus));
+        }
+
+        Ok(Value::Double(0.0))
+    }
 }
 
 /// Full-text search execution context
@@ -376,6 +511,24 @@ pub fn register_fulltext_functions(
     registry.register_builtin(
         crate::query::executor::expression::functions::BuiltinFunction::Fulltext(
             FulltextFunction::Snippet,
+        ),
+    );
+
+    registry.register_builtin(
+        crate::query::executor::expression::functions::BuiltinFunction::Fulltext(
+            FulltextFunction::Rank,
+        ),
+    );
+
+    registry.register_builtin(
+        crate::query::executor::expression::functions::BuiltinFunction::Fulltext(
+            FulltextFunction::SearchMatch,
+        ),
+    );
+
+    registry.register_builtin(
+        crate::query::executor::expression::functions::BuiltinFunction::Fulltext(
+            FulltextFunction::FieldScore,
         ),
     );
 }

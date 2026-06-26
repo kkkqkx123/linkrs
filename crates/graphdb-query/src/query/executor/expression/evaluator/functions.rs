@@ -446,6 +446,36 @@ impl FunctionEvaluator {
                 let result: Vec<String> = values.iter().map(|v| format!("{}", v)).collect();
                 Ok(Value::String(result.join(separator)))
             }
+            AggregateFunction::GroupConcatWithOrder(_, separator, order_by_fields) => {
+                if args.is_empty() {
+                    return Err(ExpressionError::argument_count_error(1, args.len()));
+                }
+
+                let values = match &args[0] {
+                    Value::List(list) => list,
+                    _ => return Err(ExpressionError::type_error("First argument must be a list")),
+                };
+
+                if values.is_empty() {
+                    return Ok(Value::String(String::new()));
+                }
+
+                let mut indexed_values: Vec<(usize, &Value)> = values.iter().enumerate().collect();
+
+                if !order_by_fields.is_empty() {
+                    indexed_values.sort_by(|(_, val_a), (_, val_b)| {
+                        let cmp_a = format!("{}", val_a);
+                        let cmp_b = format!("{}", val_b);
+                        cmp_a.cmp(&cmp_b)
+                    });
+                }
+
+                let result: Vec<String> = indexed_values
+                    .iter()
+                    .map(|(_, v)| format!("{}", v))
+                    .collect();
+                Ok(Value::String(result.join(separator)))
+            }
             AggregateFunction::VecSum(_) => {
                 if args.is_empty() {
                     return Err(ExpressionError::argument_count_error(1, args.len()));

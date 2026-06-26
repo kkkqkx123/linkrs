@@ -32,6 +32,7 @@ pub enum GraphFunction {
     Bfs,
     ConnectedComponents,
     VariableLengthPath,
+    PageRank,
 }
 
 impl GraphFunction {
@@ -56,6 +57,7 @@ impl GraphFunction {
             Self::Bfs => "bfs",
             Self::ConnectedComponents => "connected_components",
             Self::VariableLengthPath => "variable_length_path",
+            Self::PageRank => "pagerank",
         }
     }
 
@@ -80,6 +82,7 @@ impl GraphFunction {
             Self::Bfs => 2,
             Self::ConnectedComponents => 0,
             Self::VariableLengthPath => 3,
+            Self::PageRank => 0,
         }
     }
 
@@ -109,6 +112,7 @@ impl GraphFunction {
             Self::Bfs => "Breadth-first search traversal (start_vid, max_depth)",
             Self::ConnectedComponents => "Find all connected components in the graph",
             Self::VariableLengthPath => "Find all paths between two vertices within a depth range (start_vid, end_vid, max_depth) or (start_vid, end_vid, min_depth, max_depth)",
+            Self::PageRank => "Calculate PageRank scores for all vertices in the graph",
         }
     }
 
@@ -132,6 +136,7 @@ impl GraphFunction {
             Self::Bfs => execute_bfs(args),
             Self::ConnectedComponents => execute_connected_components(args),
             Self::VariableLengthPath => execute_variable_length_path(args),
+            Self::PageRank => execute_pagerank(args),
         }
     }
 
@@ -151,6 +156,7 @@ impl GraphFunction {
             Self::Bfs => execute_bfs_with_storage(args, storage),
             Self::ConnectedComponents => execute_connected_components_with_storage(args, storage),
             Self::VariableLengthPath => execute_variable_length_path_with_storage(args, storage),
+            Self::PageRank => execute_pagerank_with_storage(args, storage),
             _ => self.execute(args),
         }
     }
@@ -700,6 +706,12 @@ fn execute_variable_length_path(_args: &[Value]) -> Result<Value, ExpressionErro
     ))
 }
 
+fn execute_pagerank(_args: &[Value]) -> Result<Value, ExpressionError> {
+    Err(ExpressionError::function_error(
+        "pagerank() requires graph storage access; use within a query context".to_string(),
+    ))
+}
+
 fn execute_variable_length_path_with_storage(
     args: &[Value],
     storage: &GraphStorageRef,
@@ -825,6 +837,106 @@ fn execute_variable_length_path_with_storage(
     Ok(Value::list(List {
         values: path_values,
     }))
+}
+
+fn execute_pagerank_with_storage(
+    _args: &[Value],
+    storage: &GraphStorageRef,
+) -> Result<Value, ExpressionError> {
+    if !_args.is_empty() {
+        return Err(ExpressionError::type_error(
+            "The pagerank function takes no arguments",
+        ));
+    }
+
+    let reader = storage.storage.read();
+    let all_vertices = reader
+        .scan_vertices(&storage.space)
+        .map_err(|e| ExpressionError::function_error(format!("Storage error: {}", e)))?;
+    drop(reader);
+
+    let vertex_count = all_vertices.len();
+    if vertex_count == 0 {
+        return Ok(Value::map(std::collections::HashMap::new()));
+    }
+
+    use std::collections::HashMap;
+
+    let vertex_ids: Vec<VertexId> = all_vertices.iter().map(|v| v.vid).collect();
+    let mut vid_to_index: HashMap<VertexId, usize> = HashMap::new();
+    for (i, vid) in vertex_ids.iter().enumerate() {
+        vid_to_index.insert(*vid, i);
+    }
+
+    let damping_factor: f64 = 0.85;
+    let max_iterations: usize = 100;
+    let tolerance: f64 = 1e-6;
+
+    let mut scores: Vec<f64> = vec![1.0 / vertex_count as f64; vertex_count];
+    let mut out_degrees: Vec<usize> = vec![0; vertex_count];
+
+    let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); vertex_count];
+
+    for vid in &vertex_ids {
+        let reader = storage.storage.read();
+        let edges = reader
+            .get_node_edges(&storage.space, vid, crate::core::types::EdgeDirection::Out)
+            .map_err(|e| ExpressionError::function_error(format!("Storage error: {}", e)))?;
+        drop(reader);
+
+        let src_index = vid_to_index[vid];
+        out_degrees[src_index] = edges.len();
+
+        for edge in edges {
+            if let Some(&dst_index) = vid_to_index.get(&edge.dst) {
+                adjacency[src_index].push(dst_index);
+            }
+        }
+    }
+
+    for _ in 0..max_iterations {
+        let mut new_scores: Vec<f64> = vec![0.0; vertex_count];
+        let mut dangling_sum: f64 = 0.0;
+
+        for i in 0..vertex_count {
+            if out_degrees[i] == 0 {
+                dangling_sum += scores[i];
+            }
+        }
+
+        for i in 0..vertex_count {
+            new_scores[i] = (1.0 - damping_factor) / vertex_count as f64
+                + damping_factor * dangling_sum / vertex_count as f64;
+        }
+
+        for i in 0..vertex_count {
+            if out_degrees[i] > 0 {
+                let share = scores[i] / out_degrees[i] as f64;
+                for &j in &adjacency[i] {
+                    new_scores[j] += damping_factor * share;
+                }
+            }
+        }
+
+        let mut diff: f64 = 0.0;
+        for i in 0..vertex_count {
+            diff += (new_scores[i] - scores[i]).abs();
+        }
+
+        scores = new_scores;
+
+        if diff < tolerance {
+            break;
+        }
+    }
+
+    let mut result: HashMap<String, Value> = HashMap::new();
+    for (i, vid) in vertex_ids.iter().enumerate() {
+        let vid_str = vid.as_int64().map(|v| v.to_string()).unwrap_or_default();
+        result.insert(vid_str, Value::Double(scores[i]));
+    }
+
+    Ok(Value::map(result))
 }
 
 #[cfg(test)]
