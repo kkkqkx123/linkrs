@@ -341,6 +341,7 @@ impl FunctionRegistry {
         self.register_builtin(BuiltinFunction::Graph(GraphFunction::ShortestPath));
         self.register_builtin(BuiltinFunction::Graph(GraphFunction::Bfs));
         self.register_builtin(BuiltinFunction::Graph(GraphFunction::ConnectedComponents));
+        self.register_builtin(BuiltinFunction::Graph(GraphFunction::VariableLengthPath));
 
         // Register container operation functions
         use super::ContainerFunction;

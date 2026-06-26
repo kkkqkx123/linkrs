@@ -143,3 +143,11 @@ pub struct RollupApplyConfig {
     pub collect_col: Expression,
     pub col_names: Vec<String>,
 }
+
+/// Apply actuator configuration for correlated subqueries
+pub struct ApplyConfig {
+    pub left_input_var: String,
+    pub right_input_var: String,
+    pub correlated_cols: Vec<Expression>,
+    pub col_names: Vec<String>,
+}

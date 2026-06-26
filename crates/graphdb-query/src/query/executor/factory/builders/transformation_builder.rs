@@ -5,12 +5,13 @@
 use crate::core::error::query::QueryError;
 use crate::query::executor::base::ExecutorEnum;
 use crate::query::executor::base::{
-    AppendVerticesConfig, ExecutionContext, ExecutorConfig, PatternApplyConfig, RollupApplyConfig,
+    AppendVerticesConfig, ApplyConfig, ExecutionContext, ExecutorConfig, PatternApplyConfig,
+    RollupApplyConfig,
 };
 use crate::query::executor::graph_operations::MaterializeExecutor;
 use crate::query::executor::result_processing::transformations::{
-    AppendVerticesExecutor, AssignExecutor, PatternApplyExecutor, RollUpApplyExecutor,
-    UnwindExecutor,
+    ApplyExecutor, AppendVerticesExecutor, AssignExecutor, PatternApplyExecutor,
+    RollUpApplyExecutor, UnwindExecutor,
 };
 use crate::query::planning::plan::core::nodes::{
     AppendVerticesNode, ApplyNode, AssignNode, MaterializeNode, PatternApplyNode, RollUpApplyNode,
@@ -235,17 +236,70 @@ impl<S: StorageClient + Send + 'static> TransformationBuilder<S> {
             .map(|col| crate::core::Expression::Variable(col.clone()))
             .collect();
 
-        let executor = PatternApplyExecutor::new(
-            ExecutorConfig::new(node.id(), storage, context.expression_context().clone()),
-            PatternApplyConfig {
-                left_input_var,
-                right_input_var,
-                key_cols: correlated_cols,
-                col_names: node.col_names().to_vec(),
-                is_anti_predicate: node.is_anti(),
-            },
-        );
-        Ok(ExecutorEnum::PatternApply(executor))
+        match node.apply_kind() {
+            crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::ApplyKind::Standard => {
+                let executor = ApplyExecutor::new(
+                    ExecutorConfig::new(node.id(), storage, context.expression_context().clone()),
+                    ApplyConfig {
+                        left_input_var,
+                        right_input_var,
+                        correlated_cols,
+                        col_names: node.col_names().to_vec(),
+                    },
+                );
+                Ok(ExecutorEnum::Apply(executor))
+            }
+            crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::ApplyKind::Semi => {
+                let executor = PatternApplyExecutor::new(
+                    ExecutorConfig::new(node.id(), storage, context.expression_context().clone()),
+                    PatternApplyConfig {
+                        left_input_var,
+                        right_input_var,
+                        key_cols: correlated_cols,
+                        col_names: node.col_names().to_vec(),
+                        is_anti_predicate: false,
+                    },
+                );
+                Ok(ExecutorEnum::PatternApply(executor))
+            }
+            crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::ApplyKind::Anti => {
+                let executor = PatternApplyExecutor::new(
+                    ExecutorConfig::new(node.id(), storage, context.expression_context().clone()),
+                    PatternApplyConfig {
+                        left_input_var,
+                        right_input_var,
+                        key_cols: correlated_cols,
+                        col_names: node.col_names().to_vec(),
+                        is_anti_predicate: true,
+                    },
+                );
+                Ok(ExecutorEnum::PatternApply(executor))
+            }
+            crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::ApplyKind::Single => {
+                let executor = ApplyExecutor::new(
+                    ExecutorConfig::new(node.id(), storage, context.expression_context().clone()),
+                    ApplyConfig {
+                        left_input_var,
+                        right_input_var,
+                        correlated_cols,
+                        col_names: node.col_names().to_vec(),
+                    },
+                );
+                Ok(ExecutorEnum::Apply(executor))
+            }
+            crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::ApplyKind::All => {
+                let executor = ApplyExecutor::new(
+                    ExecutorConfig::new(node.id(), storage, context.expression_context().clone()),
+                    ApplyConfig {
+                        left_input_var,
+                        right_input_var,
+                        correlated_cols,
+                        col_names: node.col_names().to_vec(),
+                    },
+                );
+                Ok(ExecutorEnum::Apply(executor))
+            }
+        }
     }
 }
 

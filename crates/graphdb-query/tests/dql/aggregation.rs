@@ -14,6 +14,87 @@ use common::test_scenario::TestScenario;
 use graphdb_query::core::Value;
 use graphdb_query::query::parser::Parser;
 
+// ==================== GROUPING SETS / ROLLUP / CUBE Tests ====================
+
+#[test]
+fn test_group_by_rollup_parser() {
+    // Standalone GROUP BY syntax
+    let query = "GROUP BY ROLLUP(category, name) YIELD category, name, count(*) AS cnt";
+    let mut parser = Parser::new(query);
+    let result = parser.parse();
+    assert!(
+        result.is_ok(),
+        "GROUP BY ROLLUP parsing should succeed: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn test_group_by_cube_parser() {
+    let query = "GROUP BY CUBE(category, name) YIELD category, name, count(*) AS cnt";
+    let mut parser = Parser::new(query);
+    let result = parser.parse();
+    assert!(
+        result.is_ok(),
+        "GROUP BY CUBE parsing should succeed: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn test_group_by_grouping_sets_parser() {
+    let query = "GROUP BY GROUPING SETS((category), (name)) YIELD category, name, count(*) AS cnt";
+    let mut parser = Parser::new(query);
+    let result = parser.parse();
+    assert!(
+        result.is_ok(),
+        "GROUP BY GROUPING SETS parsing should succeed: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn test_group_by_with_rollup_execution() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Sale(category STRING, amount INT)")
+        .exec_dml(
+            "INSERT VERTEX Sale(category, amount) VALUES 1:('Electronics', 100), 2:('Electronics', 200), 3:('Clothing', 150)",
+        )
+        .assert_success()
+        .query("GROUP BY ROLLUP(category) YIELD category, SUM(amount) AS total")
+        .assert_success();
+}
+
+#[test]
+fn test_group_by_with_cube_execution() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Sale(category STRING, amount INT)")
+        .exec_dml(
+            "INSERT VERTEX Sale(category, amount) VALUES 1:('Electronics', 100), 2:('Electronics', 200), 3:('Clothing', 150)",
+        )
+        .assert_success()
+        .query("GROUP BY CUBE(category) YIELD category, SUM(amount) AS total")
+        .assert_success();
+}
+
+#[test]
+fn test_group_by_with_grouping_sets_execution() {
+    TestScenario::new()
+        .expect("Failed to create test scenario")
+        .setup_space("test_space")
+        .exec_ddl("CREATE TAG Sale(category STRING, amount INT)")
+        .exec_dml(
+            "INSERT VERTEX Sale(category, amount) VALUES 1:('Electronics', 100), 2:('Electronics', 200), 3:('Clothing', 150)",
+        )
+        .assert_success()
+        .query("GROUP BY GROUPING SETS((category)) YIELD category, SUM(amount) AS total")
+        .assert_success();
+}
+
 // ==================== GROUP BY Parser Tests ====================
 
 #[test]

@@ -33,6 +33,10 @@ pub use append_vertices::AppendVerticesExecutor;
 pub mod pattern_apply;
 pub use pattern_apply::PatternApplyExecutor;
 
+// Correlated subquery executor
+pub mod apply;
+pub use apply::ApplyExecutor;
+
 // Aggregation Operation Executor
 pub mod rollup_apply;
 pub use rollup_apply::RollUpApplyExecutor;

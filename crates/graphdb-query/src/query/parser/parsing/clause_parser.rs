@@ -99,12 +99,55 @@ impl ClauseParser {
         }
 
         // Consume GROUP BY items if present (group keys are extracted from non-aggregate return columns)
+        // Supports ROLLUP, CUBE, and GROUPING SETS syntax
         if ctx.match_token(TokenKind::Group) {
             ctx.expect_token(TokenKind::By)?;
-            loop {
-                self.parse_expression(ctx)?;
-                if !ctx.match_token(TokenKind::Comma) {
-                    break;
+
+            if ctx.match_token(TokenKind::Rollup) {
+                // GROUP BY ROLLUP(...)
+                ctx.expect_token(TokenKind::LParen)?;
+                loop {
+                    self.parse_expression(ctx)?;
+                    if !ctx.match_token(TokenKind::Comma) {
+                        break;
+                    }
+                }
+                ctx.expect_token(TokenKind::RParen)?;
+            } else if ctx.match_token(TokenKind::Cube) {
+                // GROUP BY CUBE(...)
+                ctx.expect_token(TokenKind::LParen)?;
+                loop {
+                    self.parse_expression(ctx)?;
+                    if !ctx.match_token(TokenKind::Comma) {
+                        break;
+                    }
+                }
+                ctx.expect_token(TokenKind::RParen)?;
+            } else if ctx.match_token(TokenKind::Grouping) {
+                // GROUP BY GROUPING SETS((...), (...))
+                ctx.expect_token(TokenKind::Sets)?;
+                ctx.expect_token(TokenKind::LParen)?;
+                loop {
+                    ctx.expect_token(TokenKind::LParen)?;
+                    loop {
+                        self.parse_expression(ctx)?;
+                        if !ctx.match_token(TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                    ctx.expect_token(TokenKind::RParen)?;
+                    if !ctx.match_token(TokenKind::Comma) {
+                        break;
+                    }
+                }
+                ctx.expect_token(TokenKind::RParen)?;
+            } else {
+                // Standard GROUP BY expr, expr, ...
+                loop {
+                    self.parse_expression(ctx)?;
+                    if !ctx.match_token(TokenKind::Comma) {
+                        break;
+                    }
                 }
             }
         }

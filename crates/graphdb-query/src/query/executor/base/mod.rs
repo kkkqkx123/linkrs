@@ -21,9 +21,9 @@ pub mod manage_executor_enums;
 pub mod result_processor;
 
 pub use config::{
-    AllPathsConfig, AppendVerticesConfig, BfsShortestConfig, ExecutorConfig, IndexScanConfig,
-    JoinConfig, JoinConfigWithDesc, LoopConfig, MultiShortestPathConfig, PathConfig,
-    PatternApplyConfig, RollupApplyConfig, ShortestPathConfig,
+    AllPathsConfig, AppendVerticesConfig, ApplyConfig, BfsShortestConfig, ExecutorConfig,
+    IndexScanConfig, JoinConfig, JoinConfigWithDesc, LoopConfig, MultiShortestPathConfig,
+    PathConfig, PatternApplyConfig, RollupApplyConfig, ShortestPathConfig,
 };
 pub use execution_context::ExecutionContext;
 pub use execution_result::{DBResult, ExecutionResult, IntoExecutionResult};

@@ -31,6 +31,7 @@ pub enum GraphFunction {
     ShortestPath,
     Bfs,
     ConnectedComponents,
+    VariableLengthPath,
 }
 
 impl GraphFunction {
@@ -54,6 +55,7 @@ impl GraphFunction {
             Self::ShortestPath => "shortest_path",
             Self::Bfs => "bfs",
             Self::ConnectedComponents => "connected_components",
+            Self::VariableLengthPath => "variable_length_path",
         }
     }
 
@@ -77,12 +79,13 @@ impl GraphFunction {
             Self::ShortestPath => 2,
             Self::Bfs => 2,
             Self::ConnectedComponents => 0,
+            Self::VariableLengthPath => 3,
         }
     }
 
     /// Is it a function with variable parameters?
     pub fn is_variadic(&self) -> bool {
-        false
+        matches!(self, Self::VariableLengthPath)
     }
 
     /// Obtain the function description
@@ -105,6 +108,7 @@ impl GraphFunction {
             Self::ShortestPath => "Find the shortest path between two vertices (returns path length)",
             Self::Bfs => "Breadth-first search traversal (start_vid, max_depth)",
             Self::ConnectedComponents => "Find all connected components in the graph",
+            Self::VariableLengthPath => "Find all paths between two vertices within a depth range (start_vid, end_vid, max_depth) or (start_vid, end_vid, min_depth, max_depth)",
         }
     }
 
@@ -127,6 +131,7 @@ impl GraphFunction {
             Self::ShortestPath => execute_shortest_path(args),
             Self::Bfs => execute_bfs(args),
             Self::ConnectedComponents => execute_connected_components(args),
+            Self::VariableLengthPath => execute_variable_length_path(args),
         }
     }
 
@@ -145,6 +150,7 @@ impl GraphFunction {
             Self::ShortestPath => execute_shortest_path_with_storage(args, storage),
             Self::Bfs => execute_bfs_with_storage(args, storage),
             Self::ConnectedComponents => execute_connected_components_with_storage(args, storage),
+            Self::VariableLengthPath => execute_variable_length_path_with_storage(args, storage),
             _ => self.execute(args),
         }
     }
@@ -685,6 +691,139 @@ fn execute_connected_components_with_storage(
 
     Ok(Value::list(List {
         values: component_lists,
+    }))
+}
+
+fn execute_variable_length_path(_args: &[Value]) -> Result<Value, ExpressionError> {
+    Err(ExpressionError::type_error(
+        "variable_length_path() requires graph storage access; use within a query context",
+    ))
+}
+
+fn execute_variable_length_path_with_storage(
+    args: &[Value],
+    storage: &GraphStorageRef,
+) -> Result<Value, ExpressionError> {
+    let (start_vid, end_vid, min_depth, max_depth) = match args.len() {
+        3 => {
+            let sv = extract_vertex_id(&args[0])?;
+            let ev = extract_vertex_id(&args[1])?;
+            let md = match &args[2] {
+                Value::BigInt(d) => *d,
+                Value::Int(d) => *d as i64,
+                _ => {
+                    return Err(ExpressionError::type_error(
+                        "variable_length_path max_depth must be an integer",
+                    ))
+                }
+            };
+            (sv, ev, 1i64, md)
+        }
+        4 => {
+            let sv = extract_vertex_id(&args[0])?;
+            let ev = extract_vertex_id(&args[1])?;
+            let mind = match &args[2] {
+                Value::BigInt(d) => *d,
+                Value::Int(d) => *d as i64,
+                _ => {
+                    return Err(ExpressionError::type_error(
+                        "variable_length_path min_depth must be an integer",
+                    ))
+                }
+            };
+            let maxd = match &args[3] {
+                Value::BigInt(d) => *d,
+                Value::Int(d) => *d as i64,
+                _ => {
+                    return Err(ExpressionError::type_error(
+                        "variable_length_path max_depth must be an integer",
+                    ))
+                }
+            };
+            (sv, ev, mind, maxd)
+        }
+        _ => {
+            return Err(ExpressionError::type_error(
+                "variable_length_path takes 3 or 4 arguments (start_vid, end_vid, max_depth) or (start_vid, end_vid, min_depth, max_depth)",
+            ))
+        }
+    };
+
+    if min_depth < 1 || max_depth < min_depth {
+        return Err(ExpressionError::type_error(
+            "variable_length_path: min_depth must be >= 1 and max_depth must be >= min_depth",
+        ));
+    }
+
+    if start_vid == end_vid {
+        if min_depth <= 0 {
+            return Ok(Value::list(List {
+                values: vec![Value::list(List { values: vec![
+                    Value::BigInt(start_vid.as_int64().unwrap_or(0)),
+                ] })],
+            }));
+        }
+    }
+
+    // DFS with depth limit to find all paths from start_vid to end_vid
+    // within the depth range [min_depth, max_depth]
+    use std::collections::VecDeque;
+    // Each element: (current_vertex, path_so_far, depth)
+    // path_so_far is the list of vertex IDs visited (excluding current)
+    let mut results: Vec<Vec<Value>> = Vec::new();
+    let mut queue: VecDeque<(VertexId, Vec<Value>, i64)> = VecDeque::new();
+
+    queue.push_back((
+        start_vid,
+        vec![Value::BigInt(start_vid.as_int64().unwrap_or(0))],
+        0,
+    ));
+
+    while let Some((current, path, depth)) = queue.pop_front() {
+        if depth >= max_depth {
+            continue;
+        }
+
+        let neighbors = match storage.get_neighbors(&current) {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+
+        for (neighbor_id, _) in neighbors {
+            // Avoid cycles - skip if neighbor already in path
+            let neighbor_val = Value::BigInt(neighbor_id.as_int64().unwrap_or(0));
+            if path.contains(&neighbor_val) {
+                continue;
+            }
+
+            let new_depth = depth + 1;
+            let mut new_path = path.clone();
+            new_path.push(neighbor_val.clone());
+
+            if neighbor_id == end_vid && new_depth >= min_depth {
+                results.push(new_path.clone());
+            }
+
+            // Limit total results to avoid excessive memory usage
+            if results.len() >= 1000 {
+                break;
+            }
+
+            queue.push_back((neighbor_id, new_path, new_depth));
+        }
+
+        if results.len() >= 1000 {
+            break;
+        }
+    }
+
+    let path_values: Vec<Value> = results
+        .into_iter()
+        .map(|path| Value::list(List { values: path }))
+        .collect();
+
+    Ok(Value::list(List {
+        values: path_values,
     }))
 }
 
