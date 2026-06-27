@@ -406,13 +406,241 @@ use crate::query::core::{NodeCategory, NodeType};
 impl<S: StorageClient + Send + 'static> NodeType for ExecutorEnum<S> {
     fn node_type_id(&self) -> &'static str {
         match self {
-            node_type_id_match_arms!()
+            // Basic Executors
+            ExecutorEnum::Start(_) => "start",
+            ExecutorEnum::Base(_) => "base",
+
+            // Data Access Executors
+            ExecutorEnum::GetVertices(_) => "get_vertices",
+            ExecutorEnum::GetEdges(_) => "get_edges",
+            ExecutorEnum::GetNeighbors(_) => "get_neighbors",
+            ExecutorEnum::GetProp(_) => "get_prop",
+            ExecutorEnum::ScanEdges(_) => "scan_edges",
+            ExecutorEnum::ScanVertices(_) => "scan_vertices",
+            ExecutorEnum::IndexScan(_) => "index_scan",
+
+            // Join Executors
+            ExecutorEnum::Join(exec) => match exec {
+                JoinExecutor::Inner(_) => "inner_join",
+                JoinExecutor::HashInner(_) => "hash_inner_join",
+                JoinExecutor::Left(_) => "left_join",
+                JoinExecutor::HashLeft(_) => "hash_left_join",
+                JoinExecutor::FullOuter(_) => "full_outer_join",
+                JoinExecutor::Cross(_) => "cross_join",
+            },
+
+            // Graph Operation Executors
+            ExecutorEnum::GraphOperation(exec) => match exec {
+                GraphOperationExecutor::AllPaths(_) => "all_paths",
+                GraphOperationExecutor::Expand(_) => "expand",
+                GraphOperationExecutor::ExpandAll(_) => "expand_all",
+                GraphOperationExecutor::Traverse(_) => "traverse",
+                GraphOperationExecutor::BiExpand(_) => "bi_expand",
+                GraphOperationExecutor::BiTraverse(_) => "bi_traverse",
+                GraphOperationExecutor::ShortestPath(_) => "shortest_path",
+                GraphOperationExecutor::MultiShortestPath(_) => "multi_shortest_path",
+                GraphOperationExecutor::BFSShortest(_) => "bfs_shortest",
+            },
+
+            // Set Operations
+            ExecutorEnum::Union(_) => "union",
+            ExecutorEnum::UnionAll(_) => "union_all",
+            ExecutorEnum::Minus(_) => "minus",
+            ExecutorEnum::Intersect(_) => "intersect",
+
+            // Basic Relational Operators
+            ExecutorEnum::Filter(_) => "filter",
+            ExecutorEnum::Project(_) => "project",
+
+            // Result Processing Executors
+            ExecutorEnum::ResultProcessing(exec) => match exec {
+                ResultProcessingExecutor::Limit(_) => "limit",
+                ResultProcessingExecutor::Sort(_) => "sort",
+                ResultProcessingExecutor::TopN(_) => "topn",
+                ResultProcessingExecutor::Sample(_) => "sample",
+                ResultProcessingExecutor::Aggregate(_) => "aggregate",
+                ResultProcessingExecutor::GroupBy(_) => "group_by",
+                ResultProcessingExecutor::Having(_) => "having",
+                ResultProcessingExecutor::Window(_) => "window",
+                ResultProcessingExecutor::Dedup(_) => "dedup",
+                ResultProcessingExecutor::Unwind(_) => "unwind",
+                ResultProcessingExecutor::Assign(_) => "assign",
+                ResultProcessingExecutor::Materialize(_) => "materialize",
+                ResultProcessingExecutor::AppendVertices(_) => "append_vertices",
+                ResultProcessingExecutor::RollUpApply(_) => "rollup_apply",
+                ResultProcessingExecutor::PatternApply(_) => "pattern_apply",
+                ResultProcessingExecutor::Apply(_) => "apply",
+                ResultProcessingExecutor::Remove(_) => "remove",
+            },
+
+            // Data Modification Executors
+            ExecutorEnum::InsertVertices(_) => "insert_vertices",
+            ExecutorEnum::InsertEdges(_) => "insert_edges",
+            ExecutorEnum::Update(_) => "update",
+            ExecutorEnum::Delete(_) => "delete",
+            ExecutorEnum::PipeDelete(_) => "pipe_delete",
+
+            // Control Flow Executors
+            ExecutorEnum::Loop(_) => "loop",
+            ExecutorEnum::ForLoop(_) => "for_loop",
+            ExecutorEnum::WhileLoop(_) => "while_loop",
+            ExecutorEnum::Select(_) => "select",
+
+            // Utility Executors
+            ExecutorEnum::Argument(_) => "argument",
+            ExecutorEnum::PassThrough(_) => "pass_through",
+            ExecutorEnum::DataCollect(_) => "data_collect",
+
+            // Management Executors
+            ExecutorEnum::SpaceManage(e) => e.node_type_id(),
+            ExecutorEnum::TagManage(e) => e.node_type_id(),
+            ExecutorEnum::EdgeManage(e) => e.node_type_id(),
+            ExecutorEnum::IndexManage(e) => e.node_type_id(),
+            ExecutorEnum::UserManage(e) => e.node_type_id(),
+            #[cfg(feature = "fulltext-search")]
+            ExecutorEnum::FulltextManage(e) => e.node_type_id(),
+            #[cfg(feature = "qdrant")]
+            ExecutorEnum::VectorManage(e) => e.node_type_id(),
+
+            // Statistics Executors
+            ExecutorEnum::ShowStats(_) => "show_stats",
+            ExecutorEnum::Analyze(_) => "analyze",
+
+            // Full-text Search Executors
+            #[cfg(feature = "fulltext-search")]
+            ExecutorEnum::FulltextSearch(_) => "fulltext_search",
+            #[cfg(feature = "fulltext-search")]
+            ExecutorEnum::FulltextLookup(_) => "fulltext_lookup",
+            #[cfg(feature = "fulltext-search")]
+            ExecutorEnum::MatchFulltext(_) => "match_fulltext",
+
+            // Vector Search Executors
+            #[cfg(feature = "qdrant")]
+            ExecutorEnum::VectorSearch(_) => "vector_search",
+            #[cfg(feature = "qdrant")]
+            ExecutorEnum::VectorLookup(_) => "vector_lookup",
+            #[cfg(feature = "qdrant")]
+            ExecutorEnum::VectorMatch(_) => "vector_match",
         }
     }
 
     fn node_type_name(&self) -> &'static str {
         match self {
-            node_type_name_match_arms!()
+            // Basic Executors
+            ExecutorEnum::Start(_) => "Start",
+            ExecutorEnum::Base(_) => "Base",
+
+            // Data Access Executors
+            ExecutorEnum::GetVertices(_) => "Get Vertices",
+            ExecutorEnum::GetEdges(_) => "Get Edges",
+            ExecutorEnum::GetNeighbors(_) => "Get Neighbors",
+            ExecutorEnum::GetProp(_) => "Get Properties",
+            ExecutorEnum::ScanEdges(_) => "Scan Edges",
+            ExecutorEnum::ScanVertices(_) => "Scan Vertices",
+            ExecutorEnum::IndexScan(_) => "Index Scan",
+
+            // Join Executors
+            ExecutorEnum::Join(exec) => match exec {
+                JoinExecutor::Inner(_) => "Inner Join",
+                JoinExecutor::HashInner(_) => "Hash Inner Join",
+                JoinExecutor::Left(_) => "Left Join",
+                JoinExecutor::HashLeft(_) => "Hash Left Join",
+                JoinExecutor::FullOuter(_) => "Full Outer Join",
+                JoinExecutor::Cross(_) => "Cross Join",
+            },
+
+            // Graph Operation Executors
+            ExecutorEnum::GraphOperation(exec) => match exec {
+                GraphOperationExecutor::AllPaths(_) => "All Paths",
+                GraphOperationExecutor::Expand(_) => "Expand",
+                GraphOperationExecutor::ExpandAll(_) => "Expand All",
+                GraphOperationExecutor::Traverse(_) => "Traverse",
+                GraphOperationExecutor::BiExpand(_) => "BiExpand",
+                GraphOperationExecutor::BiTraverse(_) => "BiTraverse",
+                GraphOperationExecutor::ShortestPath(_) => "Shortest Path",
+                GraphOperationExecutor::MultiShortestPath(_) => "Multi Shortest Path",
+                GraphOperationExecutor::BFSShortest(_) => "BFS Shortest",
+            },
+
+            // Set Operations
+            ExecutorEnum::Union(_) => "Union",
+            ExecutorEnum::UnionAll(_) => "Union All",
+            ExecutorEnum::Minus(_) => "Minus",
+            ExecutorEnum::Intersect(_) => "Intersect",
+
+            // Basic Relational Operators
+            ExecutorEnum::Filter(_) => "Filter",
+            ExecutorEnum::Project(_) => "Project",
+
+            // Result Processing Executors
+            ExecutorEnum::ResultProcessing(exec) => match exec {
+                ResultProcessingExecutor::Limit(_) => "Limit",
+                ResultProcessingExecutor::Sort(_) => "Sort",
+                ResultProcessingExecutor::TopN(_) => "Top-N",
+                ResultProcessingExecutor::Sample(_) => "Sample",
+                ResultProcessingExecutor::Aggregate(_) => "Aggregate",
+                ResultProcessingExecutor::GroupBy(_) => "Group By",
+                ResultProcessingExecutor::Having(_) => "Having",
+                ResultProcessingExecutor::Window(_) => "Window",
+                ResultProcessingExecutor::Dedup(_) => "Dedup",
+                ResultProcessingExecutor::Unwind(_) => "Unwind",
+                ResultProcessingExecutor::Assign(_) => "Assign",
+                ResultProcessingExecutor::Materialize(_) => "Materialize",
+                ResultProcessingExecutor::AppendVertices(_) => "Append Vertices",
+                ResultProcessingExecutor::RollUpApply(_) => "Roll Up Apply",
+                ResultProcessingExecutor::PatternApply(_) => "Pattern Apply",
+                ResultProcessingExecutor::Apply(_) => "Apply",
+                ResultProcessingExecutor::Remove(_) => "Remove",
+            },
+
+            // Data Modification Executors
+            ExecutorEnum::InsertVertices(_) => "Insert Vertices",
+            ExecutorEnum::InsertEdges(_) => "Insert Edges",
+            ExecutorEnum::Update(_) => "Update",
+            ExecutorEnum::Delete(_) => "Delete",
+            ExecutorEnum::PipeDelete(_) => "Pipe Delete",
+
+            // Control Flow Executors
+            ExecutorEnum::Loop(_) => "Loop",
+            ExecutorEnum::ForLoop(_) => "For Loop",
+            ExecutorEnum::WhileLoop(_) => "While Loop",
+            ExecutorEnum::Select(_) => "Select",
+
+            // Utility Executors
+            ExecutorEnum::Argument(_) => "Argument",
+            ExecutorEnum::PassThrough(_) => "Pass Through",
+            ExecutorEnum::DataCollect(_) => "Data Collect",
+
+            // Management Executors
+            ExecutorEnum::SpaceManage(e) => e.node_type_name(),
+            ExecutorEnum::TagManage(e) => e.node_type_name(),
+            ExecutorEnum::EdgeManage(e) => e.node_type_name(),
+            ExecutorEnum::IndexManage(e) => e.node_type_name(),
+            ExecutorEnum::UserManage(e) => e.node_type_name(),
+            #[cfg(feature = "fulltext-search")]
+            ExecutorEnum::FulltextManage(e) => e.node_type_name(),
+            #[cfg(feature = "qdrant")]
+            ExecutorEnum::VectorManage(e) => e.node_type_name(),
+
+            // Statistics Executors
+            ExecutorEnum::ShowStats(_) => "Show Stats",
+            ExecutorEnum::Analyze(_) => "Analyze",
+
+            // Full-text Search Executors
+            #[cfg(feature = "fulltext-search")]
+            ExecutorEnum::FulltextSearch(_) => "Fulltext Search",
+            #[cfg(feature = "fulltext-search")]
+            ExecutorEnum::FulltextLookup(_) => "Fulltext Lookup",
+            #[cfg(feature = "fulltext-search")]
+            ExecutorEnum::MatchFulltext(_) => "Match Fulltext",
+
+            // Vector Search Executors
+            #[cfg(feature = "qdrant")]
+            ExecutorEnum::VectorSearch(_) => "Vector Search",
+            #[cfg(feature = "qdrant")]
+            ExecutorEnum::VectorLookup(_) => "Vector Lookup",
+            #[cfg(feature = "qdrant")]
+            ExecutorEnum::VectorMatch(_) => "Vector Match",
         }
     }
 
@@ -774,7 +1002,7 @@ mod macros {
                 ExecutorEnum::Filter(exec) => exec.set_input($input),
                 ExecutorEnum::Project(exec) => exec.set_input($input),
 
-                // Result Processing Executors (all 17 support input chaining)
+                // Result Processing Executors
                 ExecutorEnum::ResultProcessing(exec) => match exec {
                     ResultProcessingExecutor::Limit(e) => e.set_input($input),
                     ResultProcessingExecutor::Sort(e) => e.set_input($input),
@@ -788,11 +1016,12 @@ mod macros {
                     ResultProcessingExecutor::Materialize(e) => e.set_input($input),
                     ResultProcessingExecutor::Unwind(e) => e.set_input($input),
                     ResultProcessingExecutor::Remove(e) => e.set_input($input),
-                    ResultProcessingExecutor::Assign(e) => e.set_input($input),
-                    ResultProcessingExecutor::AppendVertices(e) => e.set_input($input),
-                    ResultProcessingExecutor::RollUpApply(e) => e.set_input($input),
-                    ResultProcessingExecutor::PatternApply(e) => e.set_input($input),
-                    ResultProcessingExecutor::Apply(e) => e.set_input($input),
+                    // Non-input supporting executors
+                    ResultProcessingExecutor::Assign(_) => {},
+                    ResultProcessingExecutor::AppendVertices(_) => {},
+                    ResultProcessingExecutor::RollUpApply(_) => {},
+                    ResultProcessingExecutor::PatternApply(_) => {},
+                    ResultProcessingExecutor::Apply(_) => {},
                 },
 
                 // Graph Operation Executors (support input chaining)
@@ -823,7 +1052,7 @@ mod macros {
                 ExecutorEnum::Filter(exec) => exec.get_input(),
                 ExecutorEnum::Project(exec) => exec.get_input(),
 
-                // Result Processing Executors (all 17 support input chaining)
+                // Result Processing Executors
                 ExecutorEnum::ResultProcessing(exec) => match exec {
                     ResultProcessingExecutor::Limit(e) => e.get_input(),
                     ResultProcessingExecutor::Sort(e) => e.get_input(),
@@ -837,11 +1066,12 @@ mod macros {
                     ResultProcessingExecutor::Materialize(e) => e.get_input(),
                     ResultProcessingExecutor::Unwind(e) => e.get_input(),
                     ResultProcessingExecutor::Remove(e) => e.get_input(),
-                    ResultProcessingExecutor::Assign(e) => e.get_input(),
-                    ResultProcessingExecutor::AppendVertices(e) => e.get_input(),
-                    ResultProcessingExecutor::RollUpApply(e) => e.get_input(),
-                    ResultProcessingExecutor::PatternApply(e) => e.get_input(),
-                    ResultProcessingExecutor::Apply(e) => e.get_input(),
+                    // Non-input supporting executors
+                    ResultProcessingExecutor::Assign(_) => None,
+                    ResultProcessingExecutor::AppendVertices(_) => None,
+                    ResultProcessingExecutor::RollUpApply(_) => None,
+                    ResultProcessingExecutor::PatternApply(_) => None,
+                    ResultProcessingExecutor::Apply(_) => None,
                 },
 
                 // Graph Operation Executors (support input chaining)
@@ -863,258 +1093,10 @@ mod macros {
         };
     }
 
-    /// Generate node_type_id match arms for NodeType trait
-    /// Maps all executor variants to unique string IDs
-    /// Uses recursive matching for sub-enums
-    macro_rules! node_type_id_match_arms {
-        () => {
-            // Basic Executors
-            ExecutorEnum::Start(_) => "start",
-            ExecutorEnum::Base(_) => "base",
-
-            // Data Access Executors
-            ExecutorEnum::GetVertices(_) => "get_vertices",
-            ExecutorEnum::GetEdges(_) => "get_edges",
-            ExecutorEnum::GetNeighbors(_) => "get_neighbors",
-            ExecutorEnum::GetProp(_) => "get_prop",
-            ExecutorEnum::ScanEdges(_) => "scan_edges",
-            ExecutorEnum::ScanVertices(_) => "scan_vertices",
-            ExecutorEnum::IndexScan(_) => "index_scan",
-
-            // Join Executors
-            ExecutorEnum::Join(exec) => match exec {
-                JoinExecutor::Inner(_) => "inner_join",
-                JoinExecutor::HashInner(_) => "hash_inner_join",
-                JoinExecutor::Left(_) => "left_join",
-                JoinExecutor::HashLeft(_) => "hash_left_join",
-                JoinExecutor::FullOuter(_) => "full_outer_join",
-                JoinExecutor::Cross(_) => "cross_join",
-            },
-
-            // Graph Operation Executors
-            ExecutorEnum::GraphOperation(exec) => match exec {
-                GraphOperationExecutor::AllPaths(_) => "all_paths",
-                GraphOperationExecutor::Expand(_) => "expand",
-                GraphOperationExecutor::ExpandAll(_) => "expand_all",
-                GraphOperationExecutor::Traverse(_) => "traverse",
-                GraphOperationExecutor::BiExpand(_) => "bi_expand",
-                GraphOperationExecutor::BiTraverse(_) => "bi_traverse",
-                GraphOperationExecutor::ShortestPath(_) => "shortest_path",
-                GraphOperationExecutor::MultiShortestPath(_) => "multi_shortest_path",
-                GraphOperationExecutor::BFSShortest(_) => "bfs_shortest",
-            },
-
-            // Set Operations
-            ExecutorEnum::Union(_) => "union",
-            ExecutorEnum::UnionAll(_) => "union_all",
-            ExecutorEnum::Minus(_) => "minus",
-            ExecutorEnum::Intersect(_) => "intersect",
-
-            // Basic Relational Operators
-            ExecutorEnum::Filter(_) => "filter",
-            ExecutorEnum::Project(_) => "project",
-
-            // Result Processing Executors
-            ExecutorEnum::ResultProcessing(exec) => match exec {
-                ResultProcessingExecutor::Limit(_) => "limit",
-                ResultProcessingExecutor::Sort(_) => "sort",
-                ResultProcessingExecutor::TopN(_) => "topn",
-                ResultProcessingExecutor::Sample(_) => "sample",
-                ResultProcessingExecutor::Aggregate(_) => "aggregate",
-                ResultProcessingExecutor::GroupBy(_) => "group_by",
-                ResultProcessingExecutor::Having(_) => "having",
-                ResultProcessingExecutor::Window(_) => "window",
-                ResultProcessingExecutor::Dedup(_) => "dedup",
-                ResultProcessingExecutor::Unwind(_) => "unwind",
-                ResultProcessingExecutor::Assign(_) => "assign",
-                ResultProcessingExecutor::Materialize(_) => "materialize",
-                ResultProcessingExecutor::AppendVertices(_) => "append_vertices",
-                ResultProcessingExecutor::RollUpApply(_) => "rollup_apply",
-                ResultProcessingExecutor::PatternApply(_) => "pattern_apply",
-                ResultProcessingExecutor::Apply(_) => "apply",
-                ResultProcessingExecutor::Remove(_) => "remove",
-            },
-
-            // Data Modification Executors
-            ExecutorEnum::InsertVertices(_) => "insert_vertices",
-            ExecutorEnum::InsertEdges(_) => "insert_edges",
-            ExecutorEnum::Update(_) => "update",
-            ExecutorEnum::Delete(_) => "delete",
-            ExecutorEnum::PipeDelete(_) => "pipe_delete",
-
-            // Control Flow Executors
-            ExecutorEnum::Loop(_) => "loop",
-            ExecutorEnum::ForLoop(_) => "for_loop",
-            ExecutorEnum::WhileLoop(_) => "while_loop",
-            ExecutorEnum::Select(_) => "select",
-
-            // Utility Executors
-            ExecutorEnum::Argument(_) => "argument",
-            ExecutorEnum::PassThrough(_) => "pass_through",
-            ExecutorEnum::DataCollect(_) => "data_collect",
-
-            // Management Executors
-            ExecutorEnum::SpaceManage(e) => e.node_type_id(),
-            ExecutorEnum::TagManage(e) => e.node_type_id(),
-            ExecutorEnum::EdgeManage(e) => e.node_type_id(),
-            ExecutorEnum::IndexManage(e) => e.node_type_id(),
-            ExecutorEnum::UserManage(e) => e.node_type_id(),
-            #[cfg(feature = "fulltext-search")]
-            ExecutorEnum::FulltextManage(e) => e.node_type_id(),
-            #[cfg(feature = "qdrant")]
-            ExecutorEnum::VectorManage(e) => e.node_type_id(),
-
-            // Statistics Executors
-            ExecutorEnum::ShowStats(_) => "show_stats",
-            ExecutorEnum::Analyze(_) => "analyze",
-
-            // Full-text Search Executors
-            #[cfg(feature = "fulltext-search")]
-            ExecutorEnum::FulltextSearch(_) => "fulltext_search",
-            #[cfg(feature = "fulltext-search")]
-            ExecutorEnum::FulltextLookup(_) => "fulltext_lookup",
-            #[cfg(feature = "fulltext-search")]
-            ExecutorEnum::MatchFulltext(_) => "match_fulltext",
-
-            // Vector Search Executors
-            #[cfg(feature = "qdrant")]
-            ExecutorEnum::VectorSearch(_) => "vector_search",
-            #[cfg(feature = "qdrant")]
-            ExecutorEnum::VectorLookup(_) => "vector_lookup",
-            #[cfg(feature = "qdrant")]
-            ExecutorEnum::VectorMatch(_) => "vector_match",
-        };
-    }
-
-    /// Generate node_type_name match arms for NodeType trait
-    /// Maps all executor variants to human-readable names
-    /// Uses recursive matching for sub-enums
-    macro_rules! node_type_name_match_arms {
-        () => {
-            // Basic Executors
-            ExecutorEnum::Start(_) => "Start",
-            ExecutorEnum::Base(_) => "Base",
-
-            // Data Access Executors
-            ExecutorEnum::GetVertices(_) => "Get Vertices",
-            ExecutorEnum::GetEdges(_) => "Get Edges",
-            ExecutorEnum::GetNeighbors(_) => "Get Neighbors",
-            ExecutorEnum::GetProp(_) => "Get Properties",
-            ExecutorEnum::ScanEdges(_) => "Scan Edges",
-            ExecutorEnum::ScanVertices(_) => "Scan Vertices",
-            ExecutorEnum::IndexScan(_) => "Index Scan",
-
-            // Join Executors
-            ExecutorEnum::Join(exec) => match exec {
-                JoinExecutor::Inner(_) => "Inner Join",
-                JoinExecutor::HashInner(_) => "Hash Inner Join",
-                JoinExecutor::Left(_) => "Left Join",
-                JoinExecutor::HashLeft(_) => "Hash Left Join",
-                JoinExecutor::FullOuter(_) => "Full Outer Join",
-                JoinExecutor::Cross(_) => "Cross Join",
-            },
-
-            // Graph Operation Executors
-            ExecutorEnum::GraphOperation(exec) => match exec {
-                GraphOperationExecutor::AllPaths(_) => "All Paths",
-                GraphOperationExecutor::Expand(_) => "Expand",
-                GraphOperationExecutor::ExpandAll(_) => "Expand All",
-                GraphOperationExecutor::Traverse(_) => "Traverse",
-                GraphOperationExecutor::BiExpand(_) => "BiExpand",
-                GraphOperationExecutor::BiTraverse(_) => "BiTraverse",
-                GraphOperationExecutor::ShortestPath(_) => "Shortest Path",
-                GraphOperationExecutor::MultiShortestPath(_) => "Multi Shortest Path",
-                GraphOperationExecutor::BFSShortest(_) => "BFS Shortest",
-            },
-
-            // Set Operations
-            ExecutorEnum::Union(_) => "Union",
-            ExecutorEnum::UnionAll(_) => "Union All",
-            ExecutorEnum::Minus(_) => "Minus",
-            ExecutorEnum::Intersect(_) => "Intersect",
-
-            // Basic Relational Operators
-            ExecutorEnum::Filter(_) => "Filter",
-            ExecutorEnum::Project(_) => "Project",
-
-            // Result Processing Executors
-            ExecutorEnum::ResultProcessing(exec) => match exec {
-                ResultProcessingExecutor::Limit(_) => "Limit",
-                ResultProcessingExecutor::Sort(_) => "Sort",
-                ResultProcessingExecutor::TopN(_) => "Top-N",
-                ResultProcessingExecutor::Sample(_) => "Sample",
-                ResultProcessingExecutor::Aggregate(_) => "Aggregate",
-                ResultProcessingExecutor::GroupBy(_) => "Group By",
-                ResultProcessingExecutor::Having(_) => "Having",
-                ResultProcessingExecutor::Window(_) => "Window",
-                ResultProcessingExecutor::Dedup(_) => "Dedup",
-                ResultProcessingExecutor::Unwind(_) => "Unwind",
-                ResultProcessingExecutor::Assign(_) => "Assign",
-                ResultProcessingExecutor::Materialize(_) => "Materialize",
-                ResultProcessingExecutor::AppendVertices(_) => "Append Vertices",
-                ResultProcessingExecutor::RollUpApply(_) => "Roll Up Apply",
-                ResultProcessingExecutor::PatternApply(_) => "Pattern Apply",
-                ResultProcessingExecutor::Apply(_) => "Apply",
-                ResultProcessingExecutor::Remove(_) => "Remove",
-            },
-
-            // Data Modification Executors
-            ExecutorEnum::InsertVertices(_) => "Insert Vertices",
-            ExecutorEnum::InsertEdges(_) => "Insert Edges",
-            ExecutorEnum::Update(_) => "Update",
-            ExecutorEnum::Delete(_) => "Delete",
-            ExecutorEnum::PipeDelete(_) => "Pipe Delete",
-
-            // Control Flow Executors
-            ExecutorEnum::Loop(_) => "Loop",
-            ExecutorEnum::ForLoop(_) => "For Loop",
-            ExecutorEnum::WhileLoop(_) => "While Loop",
-            ExecutorEnum::Select(_) => "Select",
-
-            // Utility Executors
-            ExecutorEnum::Argument(_) => "Argument",
-            ExecutorEnum::PassThrough(_) => "Pass Through",
-            ExecutorEnum::DataCollect(_) => "Data Collect",
-
-            // Management Executors
-            ExecutorEnum::SpaceManage(e) => e.node_type_name(),
-            ExecutorEnum::TagManage(e) => e.node_type_name(),
-            ExecutorEnum::EdgeManage(e) => e.node_type_name(),
-            ExecutorEnum::IndexManage(e) => e.node_type_name(),
-            ExecutorEnum::UserManage(e) => e.node_type_name(),
-            #[cfg(feature = "fulltext-search")]
-            ExecutorEnum::FulltextManage(e) => e.node_type_name(),
-            #[cfg(feature = "qdrant")]
-            ExecutorEnum::VectorManage(e) => e.node_type_name(),
-
-            // Statistics Executors
-            ExecutorEnum::ShowStats(_) => "Show Stats",
-            ExecutorEnum::Analyze(_) => "Analyze",
-
-            // Full-text Search Executors
-            #[cfg(feature = "fulltext-search")]
-            ExecutorEnum::FulltextSearch(_) => "Fulltext Search",
-            #[cfg(feature = "fulltext-search")]
-            ExecutorEnum::FulltextLookup(_) => "Fulltext Lookup",
-            #[cfg(feature = "fulltext-search")]
-            ExecutorEnum::MatchFulltext(_) => "Match Fulltext",
-
-            // Vector Search Executors
-            #[cfg(feature = "qdrant")]
-            ExecutorEnum::VectorSearch(_) => "Vector Search",
-            #[cfg(feature = "qdrant")]
-            ExecutorEnum::VectorLookup(_) => "Vector Lookup",
-            #[cfg(feature = "qdrant")]
-            ExecutorEnum::VectorMatch(_) => "Vector Match",
-        };
-    }
-
     pub(crate) use delegate_to_executor;
     pub(crate) use delegate_to_executor_mut;
     pub(crate) use call_input_executor_set_input;
     pub(crate) use call_input_executor_get_input;
-    pub(crate) use node_type_id_match_arms;
-    pub(crate) use node_type_name_match_arms;
 }
 
-use macros::{delegate_to_executor, delegate_to_executor_mut, call_input_executor_set_input, call_input_executor_get_input, node_type_id_match_arms, node_type_name_match_arms};
+use macros::{delegate_to_executor, delegate_to_executor_mut, call_input_executor_set_input, call_input_executor_get_input};

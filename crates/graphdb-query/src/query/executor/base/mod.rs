@@ -30,7 +30,7 @@ pub use execution_result::{DBResult, ExecutionResult, IntoExecutionResult};
 pub use executor_base::{
     BaseExecutor, ChainableExecutor, Executor, HasInput, HasStorage, InputExecutor, StartExecutor,
 };
-pub use executor_enum::ExecutorEnum;
+pub use executor_enum::{ExecutorEnum, GraphOperationExecutor, JoinExecutor, ResultProcessingExecutor};
 pub use executor_stats::ExecutorStats;
 #[cfg(feature = "fulltext-search")]
 pub use manage_executor_enums::FulltextManageExecutor;

@@ -11,6 +11,7 @@ pub mod graph_operations;
 pub mod macros;
 pub mod relational_algebra;
 pub mod result_processing;
+pub mod streaming;
 pub mod utils;
 
 // Re-export from the base module: The basic types are uniformly exported from the base module.
@@ -66,6 +67,9 @@ pub use admin::{
 
 // Re-export utility executors
 pub use utils::{ArgumentExecutor, DataCollectExecutor, PassThroughExecutor};
+
+// Re-export streaming executors (Phase 0: Streaming Execution Framework)
+pub use streaming::{DataChunk, ExecutionMode, StreamingExecutor};
 
 // Re-export graph traversal executors (graph traversal executor)
 pub use crate::query::executor::graph_operations::graph_traversal::algorithms::BFSShortestExecutor;

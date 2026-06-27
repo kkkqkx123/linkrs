@@ -13,6 +13,7 @@ use crate::query::executor::base::{ExecutionResult, Executor, HasStorage, JoinCo
 use crate::query::executor::expression::evaluation_context::row_context::RowExpressionContext;
 use crate::query::executor::expression::evaluator::expression_evaluator::ExpressionEvaluator;
 use crate::query::executor::relational_algebra::join::base_join::BaseJoinExecutor;
+use crate::query::executor::relational_algebra::join::hash_table::JoinKey;
 use crate::query::executor::relational_algebra::join::ExpressionContextStruct;
 use crate::query::DataSet;
 use crate::query::QueryError;
@@ -22,7 +23,7 @@ use crate::storage::StorageClient;
 pub struct InnerJoinExecutor<S: StorageClient> {
     base_executor: BaseJoinExecutor<S>,
     single_key_hash_table: Option<HashMap<Value, Vec<Vec<Value>>>>,
-    multi_key_hash_table: Option<HashMap<Vec<Value>, Vec<Vec<Value>>>>,
+    multi_key_hash_table: Option<HashMap<JoinKey, Vec<Vec<Value>>>>,
     use_multi_key: bool,
 }
 
@@ -343,7 +344,7 @@ impl<S: StorageClient> InnerJoinExecutor<S> {
         let hash_table = if let Some(cached) = self.base_executor.get_cached_multi_key_hash_table() {
             cached.clone()
         } else {
-            let mut hash_table: HashMap<Vec<Value>, Vec<Vec<Value>>> = HashMap::new();
+            let mut hash_table: HashMap<JoinKey, Vec<Vec<Value>>> = HashMap::new();
 
             for row in &build_dataset.rows {
                 let mut context = RowExpressionContext::from_dataset(row, build_col_names);
@@ -355,7 +356,8 @@ impl<S: StorageClient> InnerJoinExecutor<S> {
                     key_values.push(key);
                 }
 
-                hash_table.entry(key_values).or_default().push(row.to_vec());
+                let join_key = JoinKey::new(key_values);
+                hash_table.entry(join_key).or_default().push(row.to_vec());
             }
             hash_table
         };
@@ -374,7 +376,8 @@ impl<S: StorageClient> InnerJoinExecutor<S> {
                 key_values.push(key);
             }
 
-            if let Some(matching_rows) = hash_table.get(&key_values) {
+            let probe_join_key = JoinKey::new(key_values);
+            if let Some(matching_rows) = hash_table.get(&probe_join_key) {
                 for build_row in matching_rows {
                     // When exchange is true, build_row comes from right_dataset and probe_row comes from left_dataset
                     // But output_col_names is in left-then-right order, so we need to swap the arguments

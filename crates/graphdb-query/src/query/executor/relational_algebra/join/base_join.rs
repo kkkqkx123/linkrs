@@ -121,8 +121,8 @@ impl<S: StorageClient> BaseJoinExecutor<S> {
         }
     }
 
-    /// Check the input dataset (returns references, no cloning).
-    pub fn check_input_datasets(&self) -> Result<(&DataSet, &DataSet), QueryError> {
+    /// Check the input datasets
+    pub fn check_input_datasets(&self) -> Result<(DataSet, DataSet), QueryError> {
         let left_result = self
             .base
             .context
