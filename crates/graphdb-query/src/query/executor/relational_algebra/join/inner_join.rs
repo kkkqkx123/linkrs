@@ -186,15 +186,21 @@ impl<S: StorageClient> InnerJoinExecutor<S> {
                 )
             };
 
-        let mut hash_table: HashMap<Value, Vec<Vec<Value>>> = HashMap::new();
+        // Use cached hash table if available, otherwise build it
+        let hash_table = if let Some(cached) = self.base_executor.get_cached_single_key_hash_table() {
+            cached.clone()
+        } else {
+            let mut hash_table: HashMap<Value, Vec<Vec<Value>>> = HashMap::new();
 
-        for row in &build_dataset.rows {
-            let mut context = RowExpressionContext::from_dataset(row, &build_col_names);
-            let key = ExpressionEvaluator::evaluate(&hash_key, &mut context)
-                .map_err(|e| QueryError::execution(format!("Key evaluation failed: {}", e)))?;
+            for row in &build_dataset.rows {
+                let mut context = RowExpressionContext::from_dataset(row, &build_col_names);
+                let key = ExpressionEvaluator::evaluate(&hash_key, &mut context)
+                    .map_err(|e| QueryError::execution(format!("Key evaluation failed: {}", e)))?;
 
-            hash_table.entry(key).or_default().push(row.to_vec());
-        }
+                hash_table.entry(key).or_default().push(row.to_vec());
+            }
+            hash_table
+        };
 
         let mut result = DataSet::new();
         result.col_names = self.base_executor.get_col_names().clone();
@@ -333,20 +339,26 @@ impl<S: StorageClient> InnerJoinExecutor<S> {
                 )
             };
 
-        let mut hash_table: HashMap<Vec<Value>, Vec<Vec<Value>>> = HashMap::new();
+        // Use cached hash table if available, otherwise build it
+        let hash_table = if let Some(cached) = self.base_executor.get_cached_multi_key_hash_table() {
+            cached.clone()
+        } else {
+            let mut hash_table: HashMap<Vec<Value>, Vec<Vec<Value>>> = HashMap::new();
 
-        for row in &build_dataset.rows {
-            let mut context = RowExpressionContext::from_dataset(row, build_col_names);
-            let mut key_values = Vec::with_capacity(hash_keys.len());
+            for row in &build_dataset.rows {
+                let mut context = RowExpressionContext::from_dataset(row, build_col_names);
+                let mut key_values = Vec::with_capacity(hash_keys.len());
 
-            for hash_key in &hash_keys {
-                let key = ExpressionEvaluator::evaluate(hash_key, &mut context)
-                    .map_err(|e| QueryError::execution(format!("Key evaluation failed: {}", e)))?;
-                key_values.push(key);
+                for hash_key in &hash_keys {
+                    let key = ExpressionEvaluator::evaluate(hash_key, &mut context)
+                        .map_err(|e| QueryError::execution(format!("Key evaluation failed: {}", e)))?;
+                    key_values.push(key);
+                }
+
+                hash_table.entry(key_values).or_default().push(row.to_vec());
             }
-
-            hash_table.entry(key_values).or_default().push(row.to_vec());
-        }
+            hash_table
+        };
 
         let mut result = DataSet::new();
         result.col_names = self.base_executor.get_col_names().clone();

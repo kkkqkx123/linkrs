@@ -7,7 +7,7 @@ use super::super::{
 use super::core::EdgeTableConfig;
 use super::snapshot::{ExportedEdgeSnapshot, SnapshotBuilder};
 use super::stats::{DeletionStats, MergeMetrics, MergeMetricsResult, MergeStats};
-use super::CompactionMode;
+use super::compaction::CompactionMode;
 use crate::core::types::{
     CompactConfig, EdgeId, LabelId, Timestamp, VertexId,
 };

@@ -23,6 +23,12 @@ pub mod persistence;
 pub mod stats;
 pub mod simple;
 
+// Re-export commonly used types
+pub use core::{TimeTravelEdgeStore, UpdateEdgePropertyByOffsetParams};
+pub use compaction::CompactionMode;
+pub use snapshot::ExportedEdgeSnapshot;
+pub use stats::{MergeMetricsResult, MergeStats};
+
 // Re-export from parent
 pub use super::{
     CsrVariant, Nbr, CsrBase,
