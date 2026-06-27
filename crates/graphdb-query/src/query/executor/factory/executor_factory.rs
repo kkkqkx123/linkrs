@@ -110,7 +110,7 @@ impl<S: StorageClient + Send + 'static> ExecutorFactory<S> {
         // Verify the security of the plan nodes.
         self.validate_plan_node(node)?;
 
-        // 使用 dependencies() 方法获取所有依赖，统一处理
+        // Use the dependencies() method to obtain all dependencies and handle them uniformly
         for dep in node.dependencies() {
             self.analyze_plan_node(&dep, loop_layers + 1)?;
         }
