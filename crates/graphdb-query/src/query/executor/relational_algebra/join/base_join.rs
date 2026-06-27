@@ -121,8 +121,8 @@ impl<S: StorageClient> BaseJoinExecutor<S> {
         }
     }
 
-    /// Check the input dataset (returns references to avoid cloning).
-    pub fn check_input_datasets_ref(&self) -> Result<(&DataSet, &DataSet), QueryError> {
+    /// Check the input dataset (returns references, no cloning).
+    pub fn check_input_datasets(&self) -> Result<(&DataSet, &DataSet), QueryError> {
         let left_result = self
             .base
             .context
@@ -161,12 +161,6 @@ impl<S: StorageClient> BaseJoinExecutor<S> {
         };
 
         Ok((left_dataset, right_dataset))
-    }
-
-    /// Check the input dataset.
-    pub fn check_input_datasets(&mut self) -> Result<(DataSet, DataSet), QueryError> {
-        let (left, right) = self.check_input_datasets_ref()?;
-        Ok((left.clone(), right.clone()))
     }
 
     /// Constructing a single-key hash table using JoinKeyEvaluator
