@@ -49,7 +49,6 @@ pub use csr::Csr;
 pub use csr_trait::{CsrBase, MutableCsrTrait};
 pub use csr_variant::CsrVariant;
 pub use edge_table::{EdgeStore};
-pub use edge_table::core::TimeTravelEdgeStore as EdgeTable;
 pub use edge_table::snapshot::ExportedEdgeSnapshot;
 pub use edge_table::core::UpdateEdgePropertyByOffsetParams;
 pub use edge_table::compaction::CompactionMode;

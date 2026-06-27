@@ -3,8 +3,7 @@
 //! Responsible for creating executors for different types of joins (InnerJoin, LeftJoin, FullOuterJoin, CrossJoin)
 
 use crate::core::error::query::QueryError;
-use crate::query::executor::base::ExecutionContext;
-use crate::query::executor::base::ExecutorEnum;
+use crate::query::executor::base::{ExecutionContext, ExecutorEnum, JoinExecutor};
 use crate::query::executor::relational_algebra::join::{
     CrossJoinExecutor, FullOuterJoinExecutor, HashInnerJoinExecutor, HashLeftJoinExecutor,
     InnerJoinConfig, InnerJoinExecutor, LeftJoinConfig, LeftJoinExecutor,
@@ -68,7 +67,7 @@ impl<S: StorageClient + Send + 'static> JoinBuilder<S> {
 
         let executor =
             InnerJoinExecutor::new(storage, context.expression_context().clone(), config);
-        Ok(ExecutorEnum::InnerJoin(executor))
+        Ok(ExecutorEnum::Join(JoinExecutor::Inner(executor)))
     }
 
     /// Constructing the HashInnerJoin executor
@@ -91,7 +90,7 @@ impl<S: StorageClient + Send + 'static> JoinBuilder<S> {
         };
 
         let executor = HashInnerJoinExecutor::with_context(storage, context.clone(), config);
-        Ok(ExecutorEnum::HashInnerJoin(executor))
+        Ok(ExecutorEnum::Join(JoinExecutor::HashInner(executor)))
     }
 
     /// Building the LeftJoin executor
@@ -114,7 +113,7 @@ impl<S: StorageClient + Send + 'static> JoinBuilder<S> {
         };
 
         let executor = LeftJoinExecutor::new(storage, context.expression_context().clone(), config);
-        Ok(ExecutorEnum::LeftJoin(executor))
+        Ok(ExecutorEnum::Join(JoinExecutor::Left(executor)))
     }
 
     /// Constructing the HashLeftJoin executor
@@ -138,7 +137,7 @@ impl<S: StorageClient + Send + 'static> JoinBuilder<S> {
 
         let executor =
             HashLeftJoinExecutor::new(storage, context.expression_context().clone(), config);
-        Ok(ExecutorEnum::HashLeftJoin(executor))
+        Ok(ExecutorEnum::Join(JoinExecutor::HashLeft(executor)))
     }
 
     /// Constructing the FullOuterJoin executor
@@ -165,7 +164,7 @@ impl<S: StorageClient + Send + 'static> JoinBuilder<S> {
             context.expression_context().clone(),
             config,
         );
-        Ok(ExecutorEnum::FullOuterJoin(executor))
+        Ok(ExecutorEnum::Join(JoinExecutor::FullOuter(executor)))
     }
 
     /// Building the CrossJoin executor
@@ -221,7 +220,7 @@ impl<S: StorageClient + Send + 'static> JoinBuilder<S> {
             node.col_names().to_vec(),
             context.clone(),
         );
-        Ok(ExecutorEnum::CrossJoin(executor))
+        Ok(ExecutorEnum::Join(JoinExecutor::Cross(executor)))
     }
 
     /// Building the RightJoin executor
@@ -256,7 +255,7 @@ impl<S: StorageClient + Send + 'static> JoinBuilder<S> {
 
         let executor =
             InnerJoinExecutor::new(storage, context.expression_context().clone(), config);
-        Ok(ExecutorEnum::InnerJoin(executor))
+        Ok(ExecutorEnum::Join(JoinExecutor::Inner(executor)))
     }
 }
 

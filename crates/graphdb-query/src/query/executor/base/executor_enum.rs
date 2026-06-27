@@ -440,7 +440,6 @@ impl<S: StorageClient + Send + 'static> NodeType for ExecutorEnum<S> {
                 GraphOperationExecutor::ShortestPath(_) => NodeCategory::Path,
                 GraphOperationExecutor::MultiShortestPath(_) => NodeCategory::Path,
                 GraphOperationExecutor::BFSShortest(_) => NodeCategory::Path,
-                GraphOperationExecutor::AppendVertices(_) => NodeCategory::Traversal,
                 _ => NodeCategory::Traversal, // Expand, ExpandAll, Traverse, BiExpand, BiTraverse
             },
 

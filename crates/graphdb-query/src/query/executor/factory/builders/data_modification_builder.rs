@@ -6,8 +6,7 @@ use crate::core::error::QueryError;
 use crate::core::types::VertexId;
 use crate::core::vertex_edge_path::Tag;
 use crate::core::{Edge, Value, Vertex};
-use crate::query::executor::base::ExecutionContext;
-use crate::query::executor::base::ExecutorEnum;
+use crate::query::executor::base::{ExecutionContext, ExecutorEnum, ResultProcessingExecutor};
 use crate::query::executor::data_modification::{InsertExecutor, RemoveExecutor, RemoveItem};
 use crate::query::planning::plan::core::nodes::{
     DeleteEdgesNode, DeleteIndexNode, DeleteTagsNode, DeleteVerticesNode, InsertEdgesNode,
@@ -310,7 +309,7 @@ impl<S: StorageClient + Send + 'static> DataModificationBuilder<S> {
             context.expression_context().clone(),
         );
 
-        Ok(ExecutorEnum::Remove(executor))
+        Ok(ExecutorEnum::ResultProcessing(ResultProcessingExecutor::Remove(executor)))
     }
 
     /// Building the DeleteVertices executor (standalone DELETE)

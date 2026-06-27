@@ -24,10 +24,11 @@ pub mod stats;
 pub mod simple;
 
 // Re-export commonly used types
-pub use core::{TimeTravelEdgeStore, UpdateEdgePropertyByOffsetParams};
+pub use core::{UpdateEdgePropertyByOffsetParams};
 pub use compaction::CompactionMode;
 pub use snapshot::ExportedEdgeSnapshot;
-pub use stats::{MergeMetricsResult, MergeStats};
+pub use stats::{MergeMetricsResult, MergeStats, MergeMetrics};
+pub use segment::CsrSegment;
 
 // Re-export from parent
 pub use super::{
@@ -590,8 +591,8 @@ impl<'a> EdgeStoreScanIterator<'a> {
     }
 }
 
-// ── TimeTravelEdgeStore methods (from impl EdgeTable alias) ──
-impl EdgeTable {
+// ── TimeTravelEdgeStore methods ──
+impl core::TimeTravelEdgeStore {
     pub fn register_snapshot(&mut self, ts: Timestamp) {
         self.mvcc.register_active_snapshot(ts);
     }

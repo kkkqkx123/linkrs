@@ -3,8 +3,7 @@
 //! Responsible for creating executors of data processing types (Filter, Project, Limit, Sort, TopN, Sample, Aggregate, Dedup).
 
 use crate::core::error::QueryError;
-use crate::query::executor::base::ExecutionContext;
-use crate::query::executor::base::ExecutorEnum;
+use crate::query::executor::base::{ExecutionContext, ExecutorEnum, ResultProcessingExecutor};
 use crate::query::executor::relational_algebra::{
     AggregateExecutor, AggregateFunctionSpec, FilterExecutor, ProjectExecutor, ProjectionColumn,
     WindowExecutor,
@@ -83,7 +82,7 @@ impl<S: StorageClient + Send + 'static> DataProcessingBuilder<S> {
             Some(node.count() as usize),
             node.offset() as usize,
         );
-        Ok(ExecutorEnum::Limit(executor))
+        Ok(ExecutorEnum::ResultProcessing(ResultProcessingExecutor::Limit(executor)))
     }
 
     /// Building the Sort executor
@@ -117,7 +116,7 @@ impl<S: StorageClient + Send + 'static> DataProcessingBuilder<S> {
         )
         .map_err(|e| QueryError::execution(e.to_string()))?;
 
-        Ok(ExecutorEnum::Sort(executor))
+        Ok(ExecutorEnum::ResultProcessing(ResultProcessingExecutor::Sort(executor)))
     }
 
     /// Building a TopN executor
@@ -143,7 +142,7 @@ impl<S: StorageClient + Send + 'static> DataProcessingBuilder<S> {
 
         let executor =
             TopNExecutor::with_sort_keys(node.id(), storage, node.limit() as usize, sort_keys);
-        Ok(ExecutorEnum::TopN(executor))
+        Ok(ExecutorEnum::ResultProcessing(ResultProcessingExecutor::TopN(executor)))
     }
 
     /// Building the Sample Executor
@@ -160,7 +159,7 @@ impl<S: StorageClient + Send + 'static> DataProcessingBuilder<S> {
             node.count() as usize,
             None, // seed
         );
-        Ok(ExecutorEnum::Sample(executor))
+        Ok(ExecutorEnum::ResultProcessing(ResultProcessingExecutor::Sample(executor)))
     }
 
     /// Building the Aggregate Executor
@@ -224,7 +223,7 @@ impl<S: StorageClient + Send + 'static> DataProcessingBuilder<S> {
             executor = executor.with_grouping_sets(grouping_sets);
         }
 
-        Ok(ExecutorEnum::Aggregate(executor))
+        Ok(ExecutorEnum::ResultProcessing(ResultProcessingExecutor::Aggregate(executor)))
     }
 
     /// Building the Window Executor
@@ -235,7 +234,7 @@ impl<S: StorageClient + Send + 'static> DataProcessingBuilder<S> {
     ) -> Result<ExecutorEnum<S>, QueryError> {
         let window_functions = node.window_functions().to_vec();
         let executor = WindowExecutor::new(node.id(), storage, window_functions);
-        Ok(ExecutorEnum::Window(executor))
+        Ok(ExecutorEnum::ResultProcessing(ResultProcessingExecutor::Window(executor)))
     }
 
     /// Building a Dedup Executor
@@ -254,7 +253,7 @@ impl<S: StorageClient + Send + 'static> DataProcessingBuilder<S> {
             strategy,
             None, // Use the default memory limit.
         );
-        Ok(ExecutorEnum::Dedup(executor))
+        Ok(ExecutorEnum::ResultProcessing(ResultProcessingExecutor::Dedup(executor)))
     }
 }
 

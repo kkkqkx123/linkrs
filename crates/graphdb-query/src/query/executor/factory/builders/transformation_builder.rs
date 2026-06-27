@@ -3,7 +3,7 @@
 //! Responsible for creating executors for various data transformation types (Unwind, Assign, Materialize, AppendVertices, RollUpApply, PatternApply).
 
 use crate::core::error::query::QueryError;
-use crate::query::executor::base::ExecutorEnum;
+use crate::query::executor::base::{ExecutorEnum, ResultProcessingExecutor};
 use crate::query::executor::base::{
     AppendVerticesConfig, ApplyConfig, ExecutionContext, ExecutorConfig, PatternApplyConfig,
     RollupApplyConfig,
@@ -65,7 +65,7 @@ impl<S: StorageClient + Send + 'static> TransformationBuilder<S> {
             true,
             context.expression_context().clone(),
         );
-        Ok(ExecutorEnum::Unwind(executor))
+        Ok(ExecutorEnum::ResultProcessing(ResultProcessingExecutor::Unwind(executor)))
     }
 
     /// Constructing the Assign executor
@@ -91,7 +91,7 @@ impl<S: StorageClient + Send + 'static> TransformationBuilder<S> {
             parsed_assignments,
             context.expression_context().clone(),
         );
-        Ok(ExecutorEnum::Assign(executor))
+        Ok(ExecutorEnum::ResultProcessing(ResultProcessingExecutor::Assign(executor)))
     }
 
     /// Building the Materialize executor
@@ -107,7 +107,7 @@ impl<S: StorageClient + Send + 'static> TransformationBuilder<S> {
             None, // Use the default memory limit.
             context.expression_context().clone(),
         );
-        Ok(ExecutorEnum::Materialize(executor))
+        Ok(ExecutorEnum::ResultProcessing(ResultProcessingExecutor::Materialize(executor)))
     }
 
     /// Constructing the AppendVertices executor
@@ -138,7 +138,7 @@ impl<S: StorageClient + Send + 'static> TransformationBuilder<S> {
                 need_fetch_prop: node.need_fetch_prop(),
             },
         );
-        Ok(ExecutorEnum::AppendVertices(executor))
+        Ok(ExecutorEnum::ResultProcessing(ResultProcessingExecutor::AppendVertices(executor)))
     }
 
     /// Constructing the RollUpApply executor
@@ -177,7 +177,7 @@ impl<S: StorageClient + Send + 'static> TransformationBuilder<S> {
                 col_names: node.col_names().to_vec(),
             },
         );
-        Ok(ExecutorEnum::RollUpApply(executor))
+        Ok(ExecutorEnum::ResultProcessing(ResultProcessingExecutor::RollUpApply(executor)))
     }
 
     /// Constructing the PatternApply executor
@@ -211,7 +211,7 @@ impl<S: StorageClient + Send + 'static> TransformationBuilder<S> {
                 is_anti_predicate: node.is_anti_predicate(),
             },
         );
-        Ok(ExecutorEnum::PatternApply(executor))
+        Ok(ExecutorEnum::ResultProcessing(ResultProcessingExecutor::PatternApply(executor)))
     }
 
     /// Constructing the Apply executor
@@ -247,7 +247,7 @@ impl<S: StorageClient + Send + 'static> TransformationBuilder<S> {
                         col_names: node.col_names().to_vec(),
                     },
                 );
-                Ok(ExecutorEnum::Apply(executor))
+                Ok(ExecutorEnum::ResultProcessing(ResultProcessingExecutor::Apply(executor)))
             }
             crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::ApplyKind::Semi => {
                 let executor = PatternApplyExecutor::new(
@@ -260,7 +260,7 @@ impl<S: StorageClient + Send + 'static> TransformationBuilder<S> {
                         is_anti_predicate: false,
                     },
                 );
-                Ok(ExecutorEnum::PatternApply(executor))
+                Ok(ExecutorEnum::ResultProcessing(ResultProcessingExecutor::PatternApply(executor)))
             }
             crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::ApplyKind::Anti => {
                 let executor = PatternApplyExecutor::new(
@@ -273,7 +273,7 @@ impl<S: StorageClient + Send + 'static> TransformationBuilder<S> {
                         is_anti_predicate: true,
                     },
                 );
-                Ok(ExecutorEnum::PatternApply(executor))
+                Ok(ExecutorEnum::ResultProcessing(ResultProcessingExecutor::PatternApply(executor)))
             }
             crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::ApplyKind::Single => {
                 let executor = ApplyExecutor::new(
@@ -285,7 +285,7 @@ impl<S: StorageClient + Send + 'static> TransformationBuilder<S> {
                         col_names: node.col_names().to_vec(),
                     },
                 );
-                Ok(ExecutorEnum::Apply(executor))
+                Ok(ExecutorEnum::ResultProcessing(ResultProcessingExecutor::Apply(executor)))
             }
             crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::ApplyKind::All => {
                 let executor = ApplyExecutor::new(
@@ -297,7 +297,7 @@ impl<S: StorageClient + Send + 'static> TransformationBuilder<S> {
                         col_names: node.col_names().to_vec(),
                     },
                 );
-                Ok(ExecutorEnum::Apply(executor))
+                Ok(ExecutorEnum::ResultProcessing(ResultProcessingExecutor::Apply(executor)))
             }
         }
     }

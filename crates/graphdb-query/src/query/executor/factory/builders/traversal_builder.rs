@@ -4,7 +4,7 @@
 
 use crate::core::error::query::QueryError;
 use crate::core::types::{EdgeDirection, VertexId};
-use crate::query::executor::base::ExecutorEnum;
+use crate::query::executor::base::{ExecutorEnum, GraphOperationExecutor};
 use crate::query::executor::base::{
     AllPathsConfig, ExecutionContext, ExecutorConfig, MultiShortestPathConfig, ShortestPathConfig,
 };
@@ -64,7 +64,7 @@ impl<S: StorageClient + Send + 'static> TraversalBuilder<S> {
             node.step_limit().map(|s| s as usize),
             context.expression_context().clone(),
         );
-        Ok(ExecutorEnum::Expand(executor))
+        Ok(ExecutorEnum::GraphOperation(GraphOperationExecutor::Expand(executor)))
     }
 
     /// Building the ExpandAll executor
@@ -120,7 +120,7 @@ impl<S: StorageClient + Send + 'static> TraversalBuilder<S> {
             executor = executor.with_col_names(node.col_names().to_vec());
         }
 
-        Ok(ExecutorEnum::ExpandAll(executor))
+        Ok(ExecutorEnum::GraphOperation(GraphOperationExecutor::ExpandAll(executor)))
     }
 
     /// Building the Traverse executor
@@ -139,7 +139,7 @@ impl<S: StorageClient + Send + 'static> TraversalBuilder<S> {
             None, // conditions
             context.expression_context().clone(),
         );
-        Ok(ExecutorEnum::Traverse(executor))
+        Ok(ExecutorEnum::GraphOperation(GraphOperationExecutor::Traverse(executor)))
     }
 
     /// Building the AllPaths executor
@@ -160,7 +160,7 @@ impl<S: StorageClient + Send + 'static> TraversalBuilder<S> {
                 space_name,
             },
         );
-        Ok(ExecutorEnum::AllPaths(executor))
+        Ok(ExecutorEnum::GraphOperation(GraphOperationExecutor::AllPaths(executor)))
     }
 
     /// Building the ShortestPath executor
@@ -195,7 +195,7 @@ impl<S: StorageClient + Send + 'static> TraversalBuilder<S> {
         );
         executor.set_end_vertex_ids(end_vertex_ids);
         executor.max_depth = Some(node.max_step());
-        Ok(ExecutorEnum::ShortestPath(executor))
+        Ok(ExecutorEnum::GraphOperation(GraphOperationExecutor::ShortestPath(executor)))
     }
 
     /// Building the BFSShortest executor
@@ -222,7 +222,7 @@ impl<S: StorageClient + Send + 'static> TraversalBuilder<S> {
                 space_name,
             },
         );
-        Ok(ExecutorEnum::BFSShortest(executor))
+        Ok(ExecutorEnum::GraphOperation(GraphOperationExecutor::BFSShortest(executor)))
     }
 
     /// Constructing the MultiShortestPath executor
@@ -246,7 +246,7 @@ impl<S: StorageClient + Send + 'static> TraversalBuilder<S> {
                 space_name,
             },
         );
-        Ok(ExecutorEnum::MultiShortestPath(executor))
+        Ok(ExecutorEnum::GraphOperation(GraphOperationExecutor::MultiShortestPath(executor)))
     }
 
     /// Constructing the BiExpand executor
@@ -264,7 +264,7 @@ impl<S: StorageClient + Send + 'static> TraversalBuilder<S> {
             Some(node.max_hops()),
             context.expression_context().clone(),
         );
-        Ok(ExecutorEnum::BiExpand(executor))
+        Ok(ExecutorEnum::GraphOperation(GraphOperationExecutor::BiExpand(executor)))
     }
 
     /// Constructing the BiTraverse executor
@@ -282,7 +282,7 @@ impl<S: StorageClient + Send + 'static> TraversalBuilder<S> {
             Some(node.max_hops()),
             context.expression_context().clone(),
         );
-        Ok(ExecutorEnum::BiTraverse(executor))
+        Ok(ExecutorEnum::GraphOperation(GraphOperationExecutor::BiTraverse(executor)))
     }
 }
 
