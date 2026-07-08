@@ -1,0 +1,15 @@
+target
+/data
+/logs
+test_logs
+default_db_path
+**/repomix-output.xml
+.mypy_cache
+tests/c_api/build
+.translator
+*.exe
+*.db
+Cargo.lock
+__pycache__
+*.pyc
+*.log

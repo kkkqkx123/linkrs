@@ -1,0 +1,72 @@
+[build-dependencies]
+tonic-build = { workspace = true, optional = true }
+prost-build = { workspace = true, optional = true }
+
+[package]
+name = "graphdb-api"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+graphdb-core = { path = "../graphdb-core" }
+graphdb-config = { path = "../graphdb-config" }
+graphdb-storage = { path = "../graphdb-storage" }
+graphdb-query = { path = "../graphdb-query" }
+graphdb-transaction = { path = "../graphdb-transaction" }
+graphdb-sync = { path = "../graphdb-sync" }
+graphdb-search = { path = "../graphdb-search" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+clap.workspace = true
+futures.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+dashmap.workspace = true
+chrono.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+regex.workspace = true
+sysinfo.workspace = true
+num_cpus.workspace = true
+bcrypt.workspace = true
+
+axum = { workspace = true, optional = true, features = ["multipart"] }
+tower = { workspace = true, optional = true }
+tower-http = { workspace = true, optional = true }
+http = { workspace = true, optional = true }
+tonic = { workspace = true, optional = true }
+prost = { workspace = true, optional = true }
+sqlx = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
+vector-client = { path = "../vector-client", features = ["qdrant-grpc"], optional = true }
+
+[features]
+server = [
+    "dep:axum",
+    "dep:tower",
+    "dep:tower-http",
+    "dep:http",
+    "dep:sqlx",
+    "dep:async-trait",
+    "graphdb-config/server",
+]
+grpc = ["server", "dep:tonic", "dep:prost", "dep:tonic-build", "dep:prost-build"]
+qdrant = [
+    "dep:vector-client",
+    "graphdb-config/qdrant",
+    "graphdb-sync/qdrant",
+    "graphdb-query/qdrant",
+]
+fulltext-search = [
+    "graphdb-search/fulltext-search",
+    "graphdb-sync/fulltext-search",
+    "graphdb-query/fulltext-search",
+]
+c_api = []
+embedded = []
+
+[dev-dependencies]
+graphdb-storage = { path = "../graphdb-storage", features = ["test-support"] }

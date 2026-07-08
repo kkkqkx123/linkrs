@@ -1,0 +1,66 @@
+.drawerTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.countTag {
+  margin-left: auto;
+}
+
+.drawerFooter {
+  padding: 12px 0;
+}
+
+.favoriteList {
+  :global {
+    .ant-list-item {
+      padding: 12px 0;
+    }
+  }
+}
+
+.favoriteItem {
+  cursor: pointer;
+  transition: background-color 0.2s;
+  border-radius: 4px;
+  padding: 12px !important;
+  
+  &:hover {
+    background-color: #f5f5f5;
+  }
+}
+
+.itemContent {
+  width: 100%;
+}
+
+.itemHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.itemName {
+  font-size: 14px;
+}
+
+.itemDate {
+  font-size: 12px;
+}
+
+.queryText {
+  margin-bottom: 8px;
+}
+
+.queryParagraph {
+  margin-bottom: 0 !important;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', monospace;
+  font-size: 12px;
+  color: #666;
+}
+
+.empty {
+  padding: 48px 0;
+}

@@ -1,0 +1,36 @@
+.section {
+  margin-bottom: 24px;
+}
+
+.sectionHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.gqlPreview {
+  background-color: #f6f8fa;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  padding: 12px;
+  margin-top: 8px;
+
+  pre {
+    margin: 0;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #24292f;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+}
+
+.propertiesTable {
+  :global {
+    .ant-table-cell {
+      padding: 8px !important;
+    }
+  }
+}

@@ -1,0 +1,260 @@
+-- Social Network E2E Test Data
+-- Generated: 2026-04-28T12:18:48.902299
+
+-- Create test space
+CREATE SPACE IF NOT EXISTS e2e_social_network (vid_type=STRING)
+USE e2e_social_network
+
+-- Create tags
+CREATE TAG IF NOT EXISTS person(
+    name: STRING NOT NULL,
+    age: INT,
+    email: STRING,
+    city: STRING,
+    created_at: TIMESTAMP
+)
+
+CREATE TAG IF NOT EXISTS company(
+    name: STRING NOT NULL,
+    industry: STRING,
+    founded_year: INT,
+    headquarters: STRING
+)
+
+-- Create edge types
+CREATE EDGE IF NOT EXISTS friend(
+    degree: FLOAT DEFAULT 0.5,
+    since: DATE,
+    trust_level: INT
+)
+
+CREATE EDGE IF NOT EXISTS works_at(
+    position: STRING,
+    since: DATE,
+    salary_range: STRING
+)
+
+-- Create city tag before lives_in edge (edge requires FROM person TO city)
+CREATE TAG IF NOT EXISTS city(
+    name: STRING NOT NULL
+)
+
+CREATE EDGE IF NOT EXISTS lives_in(
+    since: DATE,
+    address: STRING
+) FROM person TO city
+
+INSERT VERTEX city(name) VALUES "Beijing": ("Beijing")
+INSERT VERTEX city(name) VALUES "Guangzhou": ("Guangzhou")
+INSERT VERTEX city(name) VALUES "Shanghai": ("Shanghai")
+INSERT VERTEX city(name) VALUES "Shenzhen": ("Shenzhen")
+
+-- Create indexes
+CREATE TAG INDEX IF NOT EXISTS idx_person_name ON person(name)
+CREATE TAG INDEX IF NOT EXISTS idx_person_age ON person(age)
+CREATE TAG INDEX IF NOT EXISTS idx_person_city ON person(city)
+
+-- Generate 20 persons
+INSERT VERTEX person(name, age, email, city, created_at) VALUES "p1":
+    ("Alice", 34, "alice@example.com", "Beijing", "2020-01-13T00:00:00")
+INSERT VERTEX person(name, age, email, city, created_at) VALUES "p2":
+    ("Bob", 35, "bob@example.com", "Shenzhen", "2020-05-05T00:00:00")
+INSERT VERTEX person(name, age, email, city, created_at) VALUES "p3":
+    ("Charlie", 27, "charlie@example.com", "Shanghai", "2020-02-22T00:00:00")
+INSERT VERTEX person(name, age, email, city, created_at) VALUES "p4":
+    ("David", 34, "david@example.com", "Beijing", "2020-10-29T00:00:00")
+INSERT VERTEX person(name, age, email, city, created_at) VALUES "p5":
+    ("Eve", 30, "eve@example.com", "Beijing", "2020-01-16T00:00:00")
+INSERT VERTEX person(name, age, email, city, created_at) VALUES "p6":
+    ("Frank", 25, "frank@example.com", "Shanghai", "2020-04-29T00:00:00")
+INSERT VERTEX person(name, age, email, city, created_at) VALUES "p7":
+    ("Grace", 32, "grace@example.com", "Beijing", "2020-10-14T00:00:00")
+INSERT VERTEX person(name, age, email, city, created_at) VALUES "p8":
+    ("Henry", 27, "henry@example.com", "Guangzhou", "2020-04-22T00:00:00")
+INSERT VERTEX person(name, age, email, city, created_at) VALUES "p9":
+    ("Ivy", 31, "ivy@example.com", "Shenzhen", "2020-01-04T00:00:00")
+INSERT VERTEX person(name, age, email, city, created_at) VALUES "p10":
+    ("Jack", 36, "jack@example.com", "Shanghai", "2020-12-23T00:00:00")
+INSERT VERTEX person(name, age, email, city, created_at) VALUES "p11":
+    ("Kate", 30, "kate@example.com", "Shenzhen", "2020-05-22T00:00:00")
+INSERT VERTEX person(name, age, email, city, created_at) VALUES "p12":
+    ("Leo", 26, "leo@example.com", "Shanghai", "2020-06-21T00:00:00")
+INSERT VERTEX person(name, age, email, city, created_at) VALUES "p13":
+    ("Mary", 25, "mary@example.com", "Beijing", "2020-07-13T00:00:00")
+INSERT VERTEX person(name, age, email, city, created_at) VALUES "p14":
+    ("Nick", 25, "nick@example.com", "Shenzhen", "2020-06-25T00:00:00")
+INSERT VERTEX person(name, age, email, city, created_at) VALUES "p15":
+    ("Olivia", 33, "olivia@example.com", "Shenzhen", "2020-01-23T00:00:00")
+INSERT VERTEX person(name, age, email, city, created_at) VALUES "p16":
+    ("Paul", 35, "paul@example.com", "Guangzhou", "2020-10-01T00:00:00")
+INSERT VERTEX person(name, age, email, city, created_at) VALUES "p17":
+    ("Quinn", 25, "quinn@example.com", "Guangzhou", "2020-02-10T00:00:00")
+INSERT VERTEX person(name, age, email, city, created_at) VALUES "p18":
+    ("Rose", 32, "rose@example.com", "Shenzhen", "2020-11-17T00:00:00")
+INSERT VERTEX person(name, age, email, city, created_at) VALUES "p19":
+    ("Sam", 33, "sam@example.com", "Shenzhen", "2020-10-22T00:00:00")
+INSERT VERTEX person(name, age, email, city, created_at) VALUES "p20":
+    ("Tom", 27, "tom@example.com", "Beijing", "2020-01-24T00:00:00")
+
+-- Generate 5 companies
+INSERT VERTEX company(name, industry, founded_year, headquarters) VALUES "c1":
+    ("TechCorp", "Technology", 2010, "Beijing")
+INSERT VERTEX company(name, industry, founded_year, headquarters) VALUES "c2":
+    ("SoftSys", "Software", 2012, "Shanghai")
+INSERT VERTEX company(name, industry, founded_year, headquarters) VALUES "c3":
+    ("CloudNet", "Cloud Services", 2015, "Shenzhen")
+INSERT VERTEX company(name, industry, founded_year, headquarters) VALUES "c4":
+    ("DataWise", "Consulting", 2008, "Beijing")
+INSERT VERTEX company(name, industry, founded_year, headquarters) VALUES "c5":
+    ("WebPlus", "Internet", 2016, "Guangzhou")
+
+-- Generate 30 friend relationships
+INSERT EDGE friend(degree, since, trust_level) VALUES "p8" -> "p3" @0:
+    (0.69, "2018-09-10", 5)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p18" -> "p6" @0:
+    (0.79, "2020-02-04", 5)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p19" -> "p18" @0:
+    (0.75, "2019-08-21", 4)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p14" -> "p4" @0:
+    (0.73, "2018-05-22", 5)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p15" -> "p5" @0:
+    (0.77, "2020-02-13", 1)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p9" -> "p3" @0:
+    (0.9, "2018-06-06", 2)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p16" -> "p13" @0:
+    (0.88, "2019-03-09", 5)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p18" -> "p8" @0:
+    (0.62, "2019-01-26", 5)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p4" -> "p1" @0:
+    (0.95, "2019-06-26", 3)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p10" -> "p6" @0:
+    (0.94, "2020-05-31", 1)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p13" -> "p6" @0:
+    (0.84, "2018-04-28", 5)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p7" -> "p4" @0:
+    (0.86, "2020-02-27", 3)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p11" -> "p2" @0:
+    (0.64, "2019-03-22", 2)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p13" -> "p9" @0:
+    (0.76, "2020-09-03", 3)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p20" -> "p8" @0:
+    (0.94, "2020-02-20", 2)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p9" -> "p8" @0:
+    (0.78, "2018-04-19", 3)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p3" -> "p2" @0:
+    (0.89, "2019-06-04", 5)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p11" -> "p7" @0:
+    (0.67, "2019-01-18", 2)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p17" -> "p3" @0:
+    (0.79, "2020-03-08", 5)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p11" -> "p13" @0:
+    (0.92, "2019-09-06", 3)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p8" -> "p2" @0:
+    (0.77, "2018-04-25", 3)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p5" -> "p2" @0:
+    (0.91, "2020-05-01", 3)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p2" -> "p1" @0:
+    (0.68, "2018-09-04", 5)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p11" -> "p3" @0:
+    (0.93, "2018-03-29", 4)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p16" -> "p5" @0:
+    (0.89, "2020-02-18", 5)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p6" -> "p15" @0:
+    (0.87, "2018-05-12", 4)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p6" -> "p1" @0:
+    (0.93, "2018-06-19", 3)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p12" -> "p6" @0:
+    (0.78, "2019-09-14", 4)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p15" -> "p11" @0:
+    (0.94, "2020-08-09", 5)
+INSERT EDGE friend(degree, since, trust_level) VALUES "p7" -> "p19" @0:
+    (0.86, "2019-12-08", 2)
+
+-- Generate work relationships
+INSERT EDGE works_at(position, since, salary_range) VALUES "p1" -> "c1" @0:
+    ("Director", "2020-02-13", "30k-50k")
+INSERT EDGE works_at(position, since, salary_range) VALUES "p2" -> "c2" @0:
+    ("Analyst", "2020-06-13", "50k-80k")
+INSERT EDGE works_at(position, since, salary_range) VALUES "p3" -> "c3" @0:
+    ("Engineer", "2019-09-11", "20k-30k")
+INSERT EDGE works_at(position, since, salary_range) VALUES "p4" -> "c4" @0:
+    ("Engineer", "2019-12-13", "10k-20k")
+INSERT EDGE works_at(position, since, salary_range) VALUES "p5" -> "c5" @0:
+    ("Designer", "2020-07-21", "20k-30k")
+INSERT EDGE works_at(position, since, salary_range) VALUES "p6" -> "c1" @0:
+    ("Designer", "2019-08-14", "10k-20k")
+INSERT EDGE works_at(position, since, salary_range) VALUES "p7" -> "c2" @0:
+    ("Engineer", "2020-12-25", "10k-20k")
+INSERT EDGE works_at(position, since, salary_range) VALUES "p8" -> "c3" @0:
+    ("Manager", "2019-03-11", "10k-20k")
+INSERT EDGE works_at(position, since, salary_range) VALUES "p9" -> "c4" @0:
+    ("Director", "2019-03-14", "80k+")
+INSERT EDGE works_at(position, since, salary_range) VALUES "p10" -> "c5" @0:
+    ("Manager", "2019-10-13", "50k-80k")
+INSERT EDGE works_at(position, since, salary_range) VALUES "p11" -> "c1" @0:
+    ("Manager", "2020-07-06", "20k-30k")
+INSERT EDGE works_at(position, since, salary_range) VALUES "p12" -> "c2" @0:
+    ("Designer", "2020-08-13", "50k-80k")
+INSERT EDGE works_at(position, since, salary_range) VALUES "p13" -> "c3" @0:
+    ("Manager", "2020-04-29", "50k-80k")
+INSERT EDGE works_at(position, since, salary_range) VALUES "p14" -> "c4" @0:
+    ("Manager", "2019-04-07", "10k-20k")
+INSERT EDGE works_at(position, since, salary_range) VALUES "p15" -> "c5" @0:
+    ("Analyst", "2019-12-29", "50k-80k")
+INSERT EDGE works_at(position, since, salary_range) VALUES "p16" -> "c1" @0:
+    ("Analyst", "2020-04-23", "10k-20k")
+INSERT EDGE works_at(position, since, salary_range) VALUES "p17" -> "c2" @0:
+    ("Engineer", "2019-03-04", "50k-80k")
+INSERT EDGE works_at(position, since, salary_range) VALUES "p18" -> "c3" @0:
+    ("Director", "2019-04-22", "20k-30k")
+INSERT EDGE works_at(position, since, salary_range) VALUES "p19" -> "c4" @0:
+    ("Manager", "2019-07-14", "80k+")
+INSERT EDGE works_at(position, since, salary_range) VALUES "p20" -> "c5" @0:
+    ("Analyst", "2019-05-24", "50k-80k")
+
+-- Generate lives_in relationships
+INSERT EDGE lives_in(since, address) VALUES "p1" -> "Shanghai" @0:
+    ("2017-10-13", "Street 60, Shanghai")
+INSERT EDGE lives_in(since, address) VALUES "p2" -> "Shanghai" @0:
+    ("2019-06-15", "Street 10, Shanghai")
+INSERT EDGE lives_in(since, address) VALUES "p3" -> "Guangzhou" @0:
+    ("2019-04-08", "Street 71, Guangzhou")
+INSERT EDGE lives_in(since, address) VALUES "p4" -> "Beijing" @0:
+    ("2017-02-21", "Street 84, Beijing")
+INSERT EDGE lives_in(since, address) VALUES "p5" -> "Beijing" @0:
+    ("2019-09-20", "Street 12, Beijing")
+INSERT EDGE lives_in(since, address) VALUES "p6" -> "Shanghai" @0:
+    ("2017-06-20", "Street 53, Shanghai")
+INSERT EDGE lives_in(since, address) VALUES "p7" -> "Guangzhou" @0:
+    ("2018-05-08", "Street 28, Guangzhou")
+INSERT EDGE lives_in(since, address) VALUES "p8" -> "Guangzhou" @0:
+    ("2019-07-14", "Street 8, Guangzhou")
+INSERT EDGE lives_in(since, address) VALUES "p9" -> "Shanghai" @0:
+    ("2018-01-24", "Street 1, Shanghai")
+INSERT EDGE lives_in(since, address) VALUES "p10" -> "Guangzhou" @0:
+    ("2017-09-29", "Street 59, Guangzhou")
+INSERT EDGE lives_in(since, address) VALUES "p11" -> "Shenzhen" @0:
+    ("2018-03-10", "Street 90, Shenzhen")
+INSERT EDGE lives_in(since, address) VALUES "p12" -> "Guangzhou" @0:
+    ("2017-06-08", "Street 25, Guangzhou")
+INSERT EDGE lives_in(since, address) VALUES "p13" -> "Shenzhen" @0:
+    ("2017-08-11", "Street 8, Shenzhen")
+INSERT EDGE lives_in(since, address) VALUES "p14" -> "Beijing" @0:
+    ("2019-02-05", "Street 41, Beijing")
+INSERT EDGE lives_in(since, address) VALUES "p15" -> "Beijing" @0:
+    ("2017-02-21", "Street 75, Beijing")
+INSERT EDGE lives_in(since, address) VALUES "p16" -> "Guangzhou" @0:
+    ("2018-05-30", "Street 68, Guangzhou")
+INSERT EDGE lives_in(since, address) VALUES "p17" -> "Shanghai" @0:
+    ("2017-02-28", "Street 66, Shanghai")
+INSERT EDGE lives_in(since, address) VALUES "p18" -> "Beijing" @0:
+    ("2019-05-22", "Street 24, Beijing")
+INSERT EDGE lives_in(since, address) VALUES "p19" -> "Beijing" @0:
+    ("2018-09-02", "Street 9, Beijing")
+INSERT EDGE lives_in(since, address) VALUES "p20" -> "Shanghai" @0:
+    ("2018-02-18", "Street 16, Shanghai")
+
+-- Verify data
+MATCH (p:person) RETURN count(p) AS person_count
+MATCH ()-[f:friend]->() RETURN count(f) AS friend_count
+MATCH ()-[w:works_at]->() RETURN count(w) AS works_count

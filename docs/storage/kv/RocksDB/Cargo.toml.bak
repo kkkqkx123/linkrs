@@ -1,0 +1,43 @@
+[package]
+name = "graphdb"
+version = "0.1.0"
+edition = "2021"
+description = "A lightweight single-node graph database implemented in Rust"
+authors = ["GraphDB Contributors"]
+license = "Apache-2.0"
+repository = "https://github.com/vesoft-inc/nebula"
+homepage = "https://github.com/vesoft-inc/nebula"
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+tokio = { version = "1.48.0", features = ["full"] }
+rocksdb = { version = "0.21.0", features = ["lz4"], default-features = false, optional = true }
+clap = { version = "4.5.53", features = ["derive"] }
+log = "0.4.29"
+env_logger = "0.11.8"
+thiserror = "2.0.17"
+anyhow = "1.0.100"
+lru = "0.16.2"
+bincode = { version = "2.0.1", features = ["serde", "derive"] }
+toml = "0.9.8"
+signal-hook = { version = "0.3.18", features = ["iterator"] }
+futures = "0.3.31"
+once_cell = "1.21.3"
+num_cpus = "1.17.0"
+uuid = { version = "1.19.0", features = ["v4"] }
+encoding_rs = "0.8.34"
+chrono = { version = "0.4.38", features = ["serde"] }
+regex = "1.11.1"
+async-trait = "0.1.83"
+rand = "0.8.5"
+rayon = "1.10.0"
+dashmap = "6.1"
+
+[features]
+default = []
+rocksdb = ["dep:rocksdb"]
+
+[dev-dependencies]
+tokio-test = "0.4.4"
+tempfile = "3.23.0"

@@ -1,0 +1,16 @@
+[package]
+name = "graphdb-migration"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+graphdb-core = { path = "../graphdb-core" }
+graphdb-storage = { path = "../graphdb-storage" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+graphdb-storage = { path = "../graphdb-storage", features = ["test-support"] }
+tempfile.workspace = true
