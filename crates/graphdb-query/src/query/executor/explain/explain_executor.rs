@@ -7,19 +7,16 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::core::error::DBResult;
-use crate::query::core::NodeType;
 use crate::query::executor::base::{
     BaseExecutor, DBResult as ExecutorDBResult, ExecutionResult, Executor, ExecutorStats,
 };
 use crate::query::parser::ast::stmt::ExplainFormat;
 use crate::query::planning::plan::explain::{DescribeVisitor, PlanDescription, ProfilingStats};
 use crate::query::planning::plan::ExecutionPlan;
-use crate::query::validator::context::ExpressionAnalysisContext;
 use crate::storage::StorageClient;
 
 use super::execution_stats_context::{ExecutionStatsContext, NodeExecutionStats};
 use super::format::{format_plan_as_dot, format_plan_with_output_table};
-use super::instrumented_executor::InstrumentedExecutor;
 
 /// Explain execution mode
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -77,20 +74,12 @@ impl<S: StorageClient + Send + 'static> ExplainExecutor<S> {
     }
 
     /// Execute the inner plan with instrumentation
+    /// TODO: wire up StreamingQueryExecutor for actual execution
     fn execute_with_instrumentation(
         &mut self,
     ) -> DBResult<(ExecutionResult, Arc<ExecutionStatsContext>)> {
         let stats_context = Arc::new(ExecutionStatsContext::new());
-
-        // TODO: Refactor to use StreamingQueryExecutor instead of ExecutorFactory
-        // ExecutorFactory is deprecated - need to integrate with new streaming model
-        let exec_result = ExecutionResult::Empty;
-
-        Ok((exec_result, stats_context))
-    }
-
-    fn get_storage(&self) -> &Arc<parking_lot::RwLock<S>> {
-        self.base.storage.as_ref().expect("Storage not set")
+        Ok((ExecutionResult::Empty, stats_context))
     }
 
     /// Attach execution statistics to plan description

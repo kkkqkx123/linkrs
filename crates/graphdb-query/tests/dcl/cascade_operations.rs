@@ -261,16 +261,11 @@ fn test_no_orphaned_permissions_after_user_delete() {
         .exec_dcl("GRANT DBA ON orphan_test_space TO orphan_test_user")
         .assert_success();
 
-    let roles_before = scenario
+    let _ = scenario
         .exec_dcl("SHOW ROLES IN orphan_test_space")
-        .assert_success();
-
-    roles_before
+        .assert_success()
         .exec_dcl("DROP USER orphan_test_user")
-        .assert_success();
-
-    // No orphaned permissions should exist
-    roles_before
+        .assert_success()
         .exec_dcl("SHOW ROLES IN orphan_test_space")
         .assert_success();
 }

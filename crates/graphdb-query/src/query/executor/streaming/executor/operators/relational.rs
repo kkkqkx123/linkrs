@@ -7,8 +7,7 @@ use crate::core::error::QueryError;
 use crate::core::Value;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
-use super::super::{StreamingExecutor, SortDirection, ValueRowContext};
-use super::super::helpers::comparison;
+use super::super::{StreamingExecutor, ValueRowContext};
 
 // ============ TopN ============
 
@@ -456,9 +455,10 @@ pub fn close_datacollect(executor: &mut StreamingExecutor) -> Result<(), QueryEr
 
 pub fn open_unwind(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::Unwind { input, opened, .. } => {
+        StreamingExecutor::Unwind { input, opened, col_index, .. } => {
             input.open()?;
             *opened = true;
+            *col_index = None;
             Ok(())
         }
         _ => Err(QueryError::execution("Type mismatch in open_unwind".to_string())),
@@ -470,27 +470,81 @@ pub fn next_unwind(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
         StreamingExecutor::Unwind {
             input,
             unwind_column,
+            col_index,
             all_rows,
-            current_row_index: _,
-            current_unwind_index: _,
+            current_row_index,
+            current_unwind_index,
             opened,
         } => {
             if !*opened {
                 return Err(QueryError::execution("Unwind not opened".to_string()));
             }
 
-            // Placeholder implementation
+            // Collect all rows on first call
             if all_rows.is_empty() {
                 while let Some(chunk) = input.next()? {
+                    if col_index.is_none() && !chunk.rows.is_empty() {
+                        // Compute column index from schema
+                        let names = chunk.col_names();
+                        *col_index = names.iter().position(|n| n == unwind_column.as_str());
+                    }
                     all_rows.extend(chunk.rows);
                 }
             }
 
-            // Return "not yet implemented" error
-            Err(QueryError::execution(format!(
-                "Unwind operator not yet implemented for column: {}",
-                unwind_column
-            )))
+            if all_rows.is_empty() {
+                return Ok(None);
+            }
+
+            let col_idx = col_index.unwrap_or(0);
+            const CHUNK_SIZE: usize = 1024;
+            let mut result_rows = Vec::new();
+
+            while result_rows.len() < CHUNK_SIZE && *current_row_index < all_rows.len() {
+                let row = &all_rows[*current_row_index];
+                if col_idx < row.len() {
+                    let val = &row[col_idx];
+                    match val {
+                        Value::List(list) => {
+                            if list.values.is_empty() {
+                                *current_row_index += 1;
+                                *current_unwind_index = 0;
+                            } else {
+                                let elements = &list.values;
+                                while *current_unwind_index < elements.len() && result_rows.len() < CHUNK_SIZE {
+                                    let mut new_row = row.clone();
+                                    new_row[col_idx] = elements[*current_unwind_index].clone();
+                                    result_rows.push(new_row);
+                                    *current_unwind_index += 1;
+                                }
+                                if *current_unwind_index >= elements.len() {
+                                    *current_row_index += 1;
+                                    *current_unwind_index = 0;
+                                }
+                            }
+                        }
+                        Value::Null(_) => {
+                            *current_row_index += 1;
+                            *current_unwind_index = 0;
+                        }
+                        _ => {
+                            result_rows.push(row.clone());
+                            *current_row_index += 1;
+                            *current_unwind_index = 0;
+                        }
+                    }
+                } else {
+                    result_rows.push(row.clone());
+                    *current_row_index += 1;
+                    *current_unwind_index = 0;
+                }
+            }
+
+            if result_rows.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(DataChunk::from_rows(result_rows)))
+            }
         }
         _ => Err(QueryError::execution("Type mismatch in next_unwind".to_string())),
     }
@@ -498,8 +552,9 @@ pub fn next_unwind(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
 
 pub fn stop_unwind(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::Unwind { input, .. } => {
+        StreamingExecutor::Unwind { input, col_index, .. } => {
             input.stop()?;
+            *col_index = None;
             Ok(())
         }
         _ => Err(QueryError::execution("Type mismatch in stop_unwind".to_string())),
@@ -511,10 +566,12 @@ pub fn close_unwind(executor: &mut StreamingExecutor) -> Result<(), QueryError> 
         StreamingExecutor::Unwind {
             input,
             all_rows,
+            col_index,
             ..
         } => {
             input.close()?;
             all_rows.clear();
+            *col_index = None;
             Ok(())
         }
         _ => Err(QueryError::execution("Type mismatch in close_unwind".to_string())),

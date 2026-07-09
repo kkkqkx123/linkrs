@@ -503,9 +503,76 @@ pub fn open_rightjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError
 }
 
 pub fn next_rightjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
-    Err(QueryError::execution(
-        "RightJoin not yet fully implemented".to_string(),
-    ))
+    match executor {
+        StreamingExecutor::RightJoin {
+            left,
+            right,
+            join_condition,
+            build_side_tuples,
+            right_consumed,
+            ..
+        } => {
+            if !*right_consumed {
+                while let Some(chunk) = left.next()? {
+                    for row in chunk.rows {
+                        build_side_tuples.push(row);
+                    }
+                }
+                *right_consumed = true;
+            }
+
+            if let Some(right_chunk) = right.next()? {
+                let right_col_names = right_chunk.col_names();
+                let mut result_rows = Vec::new();
+
+                for right_row in &right_chunk.rows {
+                    let mut matched = false;
+                    for left_row in build_side_tuples.iter() {
+                        let condition_satisfied = if let Some(condition) = join_condition {
+                            let mut combined_row = left_row.clone();
+                            combined_row.extend(right_row.clone());
+                            let mut combined_col_names = right_col_names.clone();
+                            for i in 0..left_row.len() {
+                                combined_col_names.push(format!("left_{}", i));
+                            }
+                            let mut context = ValueRowContext::new(combined_row, combined_col_names);
+                            match ExpressionEvaluator::evaluate(condition, &mut context) {
+                                Ok(Value::Bool(b)) => b,
+                                _ => false,
+                            }
+                        } else {
+                            true
+                        };
+
+                        if condition_satisfied {
+                            matched = true;
+                            let mut joined_row = left_row.clone();
+                            joined_row.extend(right_row.clone());
+                            result_rows.push(joined_row);
+                        }
+                    }
+
+                    if !matched {
+                        let mut unmatched_row = Vec::new();
+                        for _ in 0..build_side_tuples.get(0).map(|r| r.len()).unwrap_or(0) {
+                            unmatched_row.push(Value::Null(crate::core::value::NullType::Null));
+                        }
+                        unmatched_row.extend(right_row.clone());
+                        result_rows.push(unmatched_row);
+                    }
+                }
+
+                if result_rows.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(DataChunk::from_rows(result_rows)))
+                }
+            } else {
+                Ok(None)
+            }
+        }
+        _ => unreachable!(),
+    }
 }
 
 pub fn stop_rightjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
@@ -559,9 +626,124 @@ pub fn open_fullouterjoin(executor: &mut StreamingExecutor) -> Result<(), QueryE
 }
 
 pub fn next_fullouterjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
-    Err(QueryError::execution(
-        "FullOuterJoin not yet fully implemented".to_string(),
-    ))
+    match executor {
+        StreamingExecutor::FullOuterJoin {
+            left,
+            right,
+            join_condition,
+            left_rows,
+            right_rows,
+            matched_right_indices,
+            result_iter,
+            phase,
+            ..
+        } => {
+            loop {
+                match phase {
+                    crate::query::executor::streaming::executor::FullOuterJoinPhase::BuildingRight => {
+                        // Collect all left and right rows
+                        while let Some(chunk) = left.next()? {
+                            for row in chunk.rows {
+                                left_rows.push(row);
+                            }
+                        }
+                        while let Some(chunk) = right.next()? {
+                            for row in chunk.rows {
+                                right_rows.push(row);
+                            }
+                        }
+                        *phase = crate::query::executor::streaming::executor::FullOuterJoinPhase::ProbeLeft;
+                    }
+
+                    crate::query::executor::streaming::executor::FullOuterJoinPhase::ProbeLeft => {
+                        let right_col_count = right_rows.get(0).map(|r| r.len()).unwrap_or(0);
+                        let mut all_results = Vec::new();
+
+                        for (left_idx, left_row) in left_rows.iter().enumerate() {
+                            let mut matched = false;
+                            for (right_idx, right_row) in right_rows.iter().enumerate() {
+                                let condition_satisfied = if let Some(condition) = join_condition {
+                                    let left_col_names: Vec<String> = (0..left_row.len()).map(|i| format!("col_{}", i)).collect();
+                                    let mut combined_row = left_row.clone();
+                                    combined_row.extend(right_row.clone());
+                                    let mut combined_col_names = left_col_names.clone();
+                                    for i in 0..right_row.len() {
+                                        combined_col_names.push(format!("right_{}", i));
+                                    }
+                                    let mut context = ValueRowContext::new(combined_row, combined_col_names);
+                                    match ExpressionEvaluator::evaluate(condition, &mut context) {
+                                        Ok(Value::Bool(b)) => b,
+                                        _ => false,
+                                    }
+                                } else {
+                                    true
+                                };
+
+                                if condition_satisfied {
+                                    matched = true;
+                                    matched_right_indices.insert(right_idx);
+                                    let mut joined_row = left_row.clone();
+                                    joined_row.extend(right_row.clone());
+                                    all_results.push(joined_row);
+                                }
+                            }
+
+                            if !matched {
+                                let mut unmatched_row = left_row.clone();
+                                if left_idx == 0 {
+                                    for _ in 0..right_col_count {
+                                        unmatched_row.push(Value::Null(crate::core::value::NullType::Null));
+                                    }
+                                } else {
+                                    for _ in 0..right_col_count {
+                                        unmatched_row.push(Value::Null(crate::core::value::NullType::Null));
+                                    }
+                                }
+                                all_results.push(unmatched_row);
+                            }
+                        }
+
+                        *phase = crate::query::executor::streaming::executor::FullOuterJoinPhase::EmitUnmatchedRight;
+                        if !all_results.is_empty() {
+                            *result_iter = Some(all_results.into_iter());
+                        }
+                        continue;
+                    }
+
+                    crate::query::executor::streaming::executor::FullOuterJoinPhase::EmitUnmatchedRight => {
+                        // Drain buffered matched+unmatched-left results first
+                        if let Some(iter) = result_iter {
+                            let rows: Vec<Vec<Value>> = iter.collect();
+                            if !rows.is_empty() {
+                                return Ok(Some(DataChunk::from_rows(rows)));
+                            }
+                            *result_iter = None;
+                        }
+
+                        // Emit unmatched right rows
+                        let left_col_count = left_rows.get(0).map(|r| r.len()).unwrap_or(0);
+                        let mut unmatched = Vec::new();
+                        for (right_idx, right_row) in right_rows.iter().enumerate() {
+                            if !matched_right_indices.contains(&right_idx) {
+                                let mut row = Vec::new();
+                                for _ in 0..left_col_count {
+                                    row.push(Value::Null(crate::core::value::NullType::Null));
+                                }
+                                row.extend(right_row.clone());
+                                unmatched.push(row);
+                            }
+                        }
+
+                        if unmatched.is_empty() {
+                            return Ok(None);
+                        }
+                        return Ok(Some(DataChunk::from_rows(unmatched)));
+                    }
+                }
+            }
+        }
+        _ => unreachable!(),
+    }
 }
 
 pub fn stop_fullouterjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError> {

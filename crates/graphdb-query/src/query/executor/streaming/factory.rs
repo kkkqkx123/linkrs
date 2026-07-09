@@ -20,7 +20,7 @@ use crate::query::planning::plan::PlanNodeEnum;
 /// High-level streaming execution interface
 ///
 /// Encapsulates the creation and execution of streaming queries
-/// from a plan node without exposing ExecutorEnum complexity.
+/// from a plan node without exposing executor complexity.
 pub struct StreamingQueryExecutor {
     engine: Option<StreamingExecutionEngine>,
     col_names: Option<Vec<String>>,

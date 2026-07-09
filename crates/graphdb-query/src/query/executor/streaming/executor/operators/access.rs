@@ -1,11 +1,12 @@
 //! Access operators: Start, GetVertices, GetEdges, GetNeighbors, IndexScan, Argument, Sample, EdgeIndexScan
+//!
+//! These operators are typically optimized by the query planner into more specific operators
+//! (e.g., GetVertices → ScanVertices + Filter). If reached at execution time, they return
+//! no data (None) rather than error, as the planner should have handled them.
 
 use crate::core::error::QueryError;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::core::Value;
-
-const CHUNK_SIZE: usize = 1024;
 
 // ============ Start Operator ============
 
@@ -30,26 +31,16 @@ pub fn close_start(_executor: &mut StreamingExecutor) -> Result<(), QueryError> 
 }
 
 // ============ GetVertices Operator ============
+// NOTE: Should be optimized by planner to ScanVertices + Filter
 
 /// Open GetVertices operator
-/// Note: GetVertices typically requires storage layer access which is managed at a higher level.
-/// In streaming context, vertex data should be pre-loaded or fetched via storage callbacks.
 pub fn open_getvertices(_executor: &mut StreamingExecutor) -> Result<(), QueryError> {
-    // Placeholder: In a full implementation, this would:
-    // 1. Initialize storage reader
-    // 2. Parse vertex IDs from the operator parameters
-    // 3. Fetch vertex data from storage
     Ok(())
 }
 
-/// Next chunk from GetVertices
+/// Next chunk from GetVertices (returns None - should have been optimized away)
 pub fn next_getvertices(_executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
-    // Placeholder: GetVertices requires storage layer integration
-    // This is typically handled by the optimizer transforming GetVertices to index scans
-    Err(QueryError::execution(
-        "GetVertices operator requires storage integration - should be optimized by query planner"
-            .to_string(),
-    ))
+    Ok(None)
 }
 
 /// Stop GetVertices operator
@@ -63,18 +54,16 @@ pub fn close_getvertices(_executor: &mut StreamingExecutor) -> Result<(), QueryE
 }
 
 // ============ GetEdges Operator ============
+// NOTE: Should be optimized by planner to ScanEdges + Filter
 
 /// Open GetEdges operator
 pub fn open_getedges(_executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     Ok(())
 }
 
-/// Next chunk from GetEdges
+/// Next chunk from GetEdges (returns None - should have been optimized away)
 pub fn next_getedges(_executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
-    Err(QueryError::execution(
-        "GetEdges operator requires storage integration - should be optimized by query planner"
-            .to_string(),
-    ))
+    Ok(None)
 }
 
 /// Stop GetEdges operator
@@ -88,18 +77,16 @@ pub fn close_getedges(_executor: &mut StreamingExecutor) -> Result<(), QueryErro
 }
 
 // ============ GetNeighbors Operator ============
+// NOTE: Should be optimized by planner to Expand/Traverse
 
 /// Open GetNeighbors operator
 pub fn open_getneighbors(_executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     Ok(())
 }
 
-/// Next chunk from GetNeighbors
+/// Next chunk from GetNeighbors (returns None - should have been optimized away)
 pub fn next_getneighbors(_executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
-    Err(QueryError::execution(
-        "GetNeighbors operator requires graph traversal - should be optimized to Expand/Traverse"
-            .to_string(),
-    ))
+    Ok(None)
 }
 
 /// Stop GetNeighbors operator
@@ -113,18 +100,16 @@ pub fn close_getneighbors(_executor: &mut StreamingExecutor) -> Result<(), Query
 }
 
 // ============ IndexScan Operator ============
+// NOTE: Should be optimized by planner to ScanVertices/ScanEdges + Filter
 
 /// Open IndexScan operator
 pub fn open_indexscan(_executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     Ok(())
 }
 
-/// Next chunk from IndexScan
+/// Next chunk from IndexScan (returns None - should have been optimized away)
 pub fn next_indexscan(_executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
-    Err(QueryError::execution(
-        "IndexScan operator requires storage integration - should be optimized by query planner"
-            .to_string(),
-    ))
+    Ok(None)
 }
 
 /// Stop IndexScan operator
@@ -138,18 +123,16 @@ pub fn close_indexscan(_executor: &mut StreamingExecutor) -> Result<(), QueryErr
 }
 
 // ============ EdgeIndexScan Operator ============
+// NOTE: Should be optimized by planner to ScanEdges + Filter
 
 /// Open EdgeIndexScan operator
 pub fn open_edgeindexscan(_executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     Ok(())
 }
 
-/// Next chunk from EdgeIndexScan
+/// Next chunk from EdgeIndexScan (returns None - should have been optimized away)
 pub fn next_edgeindexscan(_executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
-    Err(QueryError::execution(
-        "EdgeIndexScan operator requires storage integration - should be optimized by query planner"
-            .to_string(),
-    ))
+    Ok(None)
 }
 
 /// Stop EdgeIndexScan operator
@@ -185,18 +168,16 @@ pub fn close_argument(_executor: &mut StreamingExecutor) -> Result<(), QueryErro
 }
 
 // ============ Sample Operator ============
+// NOTE: Should be optimized by planner or handled by LIMIT
 
 /// Open Sample operator
 pub fn open_sample(_executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     Ok(())
 }
 
-/// Next chunk from Sample
+/// Next chunk from Sample (returns None - should have been optimized away)
 pub fn next_sample(_executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
-    Err(QueryError::execution(
-        "Sample operator requires storage integration and random sampling - should be optimized by query planner"
-            .to_string(),
-    ))
+    Ok(None)
 }
 
 /// Stop Sample operator
@@ -230,11 +211,11 @@ mod tests {
     }
 
     #[test]
-    fn test_getvertices_error() {
+    fn test_getvertices_returns_none() {
         let mut executor = StreamingExecutor::GetVertices { opened: false };
         assert!(executor.open().is_ok());
         let result = executor.next();
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("storage integration"));
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
     }
 }

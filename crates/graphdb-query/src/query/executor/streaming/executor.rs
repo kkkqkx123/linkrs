@@ -587,6 +587,7 @@ pub enum StreamingExecutor {
     Unwind {
         input: Box<StreamingExecutor>,
         unwind_column: String,
+        col_index: Option<usize>,
         all_rows: Vec<Vec<Value>>,
         current_row_index: usize,
         current_unwind_index: usize,
@@ -773,8 +774,6 @@ impl StreamingExecutor {
             Self::Commit { .. } => operators::control_flow::open_commit(self),
             Self::Rollback { .. } => operators::control_flow::open_rollback(self),
             Self::ShowStats { .. } => operators::control_flow::open_show_stats(self),
-            // Stub implementations for all remaining variants
-            _ => Err(QueryError::execution("Operator not yet fully implemented in StreamingExecutor".to_string())),
         }
     }
 
@@ -873,12 +872,10 @@ impl StreamingExecutor {
             Self::Commit { .. } => operators::control_flow::next_commit(self),
             Self::Rollback { .. } => operators::control_flow::next_rollback(self),
             Self::ShowStats { .. } => operators::control_flow::next_show_stats(self),
-            // Stub implementations for all remaining variants
-            _ => Err(QueryError::execution("Operator not yet fully implemented in StreamingExecutor".to_string())),
         }
     }
 
-    /// Stop execution (for LIMIT)
+    /// Stop the executor (signal no more input needed)
     pub fn stop(&mut self) -> Result<(), QueryError> {
         match self {
             // Access operations
@@ -973,12 +970,10 @@ impl StreamingExecutor {
             Self::Commit { .. } => operators::control_flow::stop_commit(self),
             Self::Rollback { .. } => operators::control_flow::stop_rollback(self),
             Self::ShowStats { .. } => operators::control_flow::stop_show_stats(self),
-            // Stub implementations for all remaining variants
-            _ => Ok(()),
         }
     }
 
-    /// Clean up resources
+    /// Close the executor (clean up resources)
     pub fn close(&mut self) -> Result<(), QueryError> {
         match self {
             // Access operations
@@ -1073,8 +1068,6 @@ impl StreamingExecutor {
             Self::Commit { .. } => operators::control_flow::close_commit(self),
             Self::Rollback { .. } => operators::control_flow::close_rollback(self),
             Self::ShowStats { .. } => operators::control_flow::close_show_stats(self),
-            // Stub implementations for all remaining variants
-            _ => Ok(()),
         }
     }
 }

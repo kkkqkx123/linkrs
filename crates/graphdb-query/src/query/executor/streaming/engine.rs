@@ -9,7 +9,6 @@ use super::partition::PartitionView;
 use super::scheduler::{PipelineScheduler, SchedulerConfig, Task};
 use super::worker::{BackpressureControl, WorkerPool};
 use crate::core::error::QueryError;
-use crate::core::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 

@@ -12,7 +12,13 @@ use crate::core::types::operators::AggregateFunction;
 use crate::core::Value;
 use crate::query::executor::base::ExecutionContext;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
-use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
+use crate::query::planning::plan::core::nodes::base::plan_node_traits::{MultipleInputNode, SingleInputNode};
+use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
+use crate::query::planning::plan::core::nodes::management::manage_node_enums::{
+    EdgeManageNode, FulltextManageNode, IndexManageNode, SpaceManageNode, TagManageNode,
+    UserManageNode, VectorManageNode,
+};
+
 
 /// Builder for constructing StreamingExecutor instances
 pub struct StreamingExecutorBuilder {
@@ -321,6 +327,291 @@ impl StreamingExecutorBuilder {
                 })
             }
 
+            // ======== Management/DDL Operations ========
+            PlanNodeEnum::SpaceManage(manage_node) => {
+                let action = manage_node.name().to_string();
+                let space_name = Self::extract_space_manage_name(manage_node);
+                Ok(StreamingExecutor::SpaceManage {
+                    input: Box::new(StreamingExecutor::Start { opened: false }),
+                    action,
+                    space_name,
+                    opened: false,
+                })
+            }
+
+            PlanNodeEnum::TagManage(manage_node) => {
+                let action = manage_node.name().to_string();
+                let tag_name = Self::extract_tag_manage_name(manage_node);
+                Ok(StreamingExecutor::TagManage {
+                    input: Box::new(StreamingExecutor::Start { opened: false }),
+                    action,
+                    tag_name,
+                    opened: false,
+                })
+            }
+
+            PlanNodeEnum::EdgeManage(manage_node) => {
+                let action = manage_node.name().to_string();
+                let edge_type = Self::extract_edge_manage_name(manage_node);
+                Ok(StreamingExecutor::EdgeManage {
+                    input: Box::new(StreamingExecutor::Start { opened: false }),
+                    action,
+                    edge_type,
+                    opened: false,
+                })
+            }
+
+            PlanNodeEnum::IndexManage(manage_node) => {
+                let action = manage_node.name().to_string();
+                let index_name = Self::extract_index_manage_name(manage_node);
+                Ok(StreamingExecutor::IndexManage {
+                    input: Box::new(StreamingExecutor::Start { opened: false }),
+                    action,
+                    index_name,
+                    opened: false,
+                })
+            }
+
+            PlanNodeEnum::UserManage(manage_node) => {
+                let action = manage_node.name().to_string();
+                let username = Self::extract_user_manage_name(manage_node);
+                Ok(StreamingExecutor::UserManage {
+                    input: Box::new(StreamingExecutor::Start { opened: false }),
+                    action,
+                    username,
+                    opened: false,
+                })
+            }
+
+            PlanNodeEnum::FulltextManage(manage_node) => {
+                let action = manage_node.name().to_string();
+                let index_name = Self::extract_fulltext_manage_name(manage_node);
+                Ok(StreamingExecutor::FulltextManage {
+                    input: Box::new(StreamingExecutor::Start { opened: false }),
+                    action,
+                    index_name,
+                    opened: false,
+                })
+            }
+
+            PlanNodeEnum::VectorManage(manage_node) => {
+                let action = manage_node.name().to_string();
+                let index_name = Self::extract_vector_manage_name(manage_node);
+                Ok(StreamingExecutor::VectorManage {
+                    input: Box::new(StreamingExecutor::Start { opened: false }),
+                    action,
+                    index_name,
+                    opened: false,
+                })
+            }
+
+            // ======== Graph Traversal Operations ========
+            PlanNodeEnum::Expand(expand_node) => {
+                let input_plan = expand_node.inputs().first()
+                    .ok_or_else(|| QueryError::execution("Expand requires an input".to_string()))?;
+                let input_executor = Self::from_plan_node(input_plan, _context)?;
+
+                let edge_type = expand_node.edge_types().first()
+                    .cloned()
+                    .unwrap_or_default();
+                let direction = format!("{:?}", expand_node.direction());
+
+                Ok(StreamingExecutor::Expand {
+                    input: Box::new(input_executor),
+                    edge_type,
+                    direction,
+                    filter_expr: None,
+                    opened: false,
+                })
+            }
+
+            PlanNodeEnum::ExpandAll(expand_all_node) => {
+                let input_plan = expand_all_node.inputs().first()
+                    .ok_or_else(|| QueryError::execution("ExpandAll requires an input".to_string()))?;
+                let input_executor = Self::from_plan_node(input_plan, _context)?;
+
+                let edge_type = expand_all_node.edge_types().first()
+                    .cloned()
+                    .unwrap_or_default();
+                let direction = expand_all_node.direction().to_string();
+
+                Ok(StreamingExecutor::ExpandAll {
+                    input: Box::new(input_executor),
+                    edge_type,
+                    direction,
+                    filter_expr: None,
+                    opened: false,
+                })
+            }
+
+            PlanNodeEnum::Traverse(traverse_node) => {
+                let input_plan = traverse_node.input();
+                let input_executor = Self::from_plan_node(input_plan, _context)?;
+
+                let edge_type = traverse_node.edge_types().first()
+                    .cloned()
+                    .unwrap_or_default();
+                let direction = format!("{:?}", traverse_node.direction());
+                let min_depth = traverse_node.min_steps();
+                let max_depth = traverse_node.max_steps();
+
+                Ok(StreamingExecutor::Traverse {
+                    input: Box::new(input_executor),
+                    edge_type,
+                    direction,
+                    min_depth,
+                    max_depth,
+                    filter_expr: None,
+                    visited: std::collections::HashSet::new(),
+                    opened: false,
+                })
+            }
+
+            // ======== Data Modification Operations ========
+            PlanNodeEnum::InsertVertices(insert_node) => {
+                Ok(StreamingExecutor::InsertVertices {
+                    input: Box::new(StreamingExecutor::Start { opened: false }),
+                    vertex_properties: Vec::new(),
+                    tags: insert_node.tag_names(),
+                    rows_inserted: 0,
+                    opened: false,
+                })
+            }
+
+            PlanNodeEnum::InsertEdges(insert_node) => {
+                Ok(StreamingExecutor::InsertEdges {
+                    input: Box::new(StreamingExecutor::Start { opened: false }),
+                    src_col: "src".to_string(),
+                    dst_col: "dst".to_string(),
+                    edge_type: insert_node.edge_name().to_string(),
+                    edge_properties: Vec::new(),
+                    rows_inserted: 0,
+                    opened: false,
+                })
+            }
+
+            PlanNodeEnum::UpdateVertices(_update_node) => {
+                Ok(StreamingExecutor::UpdateVertices {
+                    input: Box::new(StreamingExecutor::Start { opened: false }),
+                    updates: Vec::new(),
+                    rows_updated: 0,
+                    opened: false,
+                })
+            }
+
+            PlanNodeEnum::Update(_update_node) => {
+                Ok(StreamingExecutor::UpdateVertices {
+                    input: Box::new(StreamingExecutor::Start { opened: false }),
+                    updates: Vec::new(),
+                    rows_updated: 0,
+                    opened: false,
+                })
+            }
+
+            PlanNodeEnum::UpdateEdges(_update_node) => {
+                Ok(StreamingExecutor::UpdateEdges {
+                    input: Box::new(StreamingExecutor::Start { opened: false }),
+                    updates: Vec::new(),
+                    rows_updated: 0,
+                    opened: false,
+                })
+            }
+
+            PlanNodeEnum::DeleteVertices(_delete_node) => {
+                Ok(StreamingExecutor::DeleteVertices {
+                    input: Box::new(StreamingExecutor::Start { opened: false }),
+                    vertex_id_col: "vid".to_string(),
+                    rows_deleted: 0,
+                    opened: false,
+                })
+            }
+
+            PlanNodeEnum::DeleteEdges(_delete_node) => {
+                Ok(StreamingExecutor::DeleteEdges {
+                    input: Box::new(StreamingExecutor::Start { opened: false }),
+                    src_col: "src".to_string(),
+                    dst_col: "dst".to_string(),
+                    rows_deleted: 0,
+                    opened: false,
+                })
+            }
+
+            PlanNodeEnum::PipeDeleteVertices(delete_node) => {
+                let input_plan = delete_node.input();
+                let input_executor = Self::from_plan_node(input_plan, _context)?;
+                Ok(StreamingExecutor::PipeDeleteVertices {
+                    input: Box::new(input_executor),
+                    vertex_id_col: "vid".to_string(),
+                    rows_deleted: 0,
+                    opened: false,
+                })
+            }
+
+            PlanNodeEnum::PipeDeleteEdges(delete_node) => {
+                let input_plan = delete_node.input();
+                let input_executor = Self::from_plan_node(input_plan, _context)?;
+                Ok(StreamingExecutor::PipeDeleteEdges {
+                    input: Box::new(input_executor),
+                    src_col: "src".to_string(),
+                    dst_col: "dst".to_string(),
+                    rows_deleted: 0,
+                    opened: false,
+                })
+            }
+
+            // ======== Data Access Operations ========
+            PlanNodeEnum::GetVertices(_get_node) => {
+                Ok(StreamingExecutor::GetVertices {
+                    opened: false,
+                })
+            }
+
+            PlanNodeEnum::GetEdges(_get_node) => {
+                Ok(StreamingExecutor::GetEdges {
+                    opened: false,
+                })
+            }
+
+            PlanNodeEnum::GetNeighbors(_get_node) => {
+                Ok(StreamingExecutor::GetNeighbors {
+                    opened: false,
+                })
+            }
+
+            // ======== Search Operations ========
+            PlanNodeEnum::FulltextSearch(search_node) => {
+                Ok(StreamingExecutor::FulltextSearch {
+                    input: Box::new(StreamingExecutor::Start { opened: false }),
+                    search_query: search_node.index_name.clone(),
+                    search_field: Some(search_node.field_name.clone()),
+                    opened: false,
+                })
+            }
+
+            PlanNodeEnum::BeginTransaction(_) => {
+                Ok(StreamingExecutor::BeginTransaction {
+                    input: Box::new(StreamingExecutor::Start { opened: false }),
+                    transaction_id: None,
+                    opened: false,
+                })
+            }
+
+            PlanNodeEnum::Commit(_) => {
+                Ok(StreamingExecutor::Commit {
+                    input: Box::new(StreamingExecutor::Start { opened: false }),
+                    transaction_id: None,
+                    opened: false,
+                })
+            }
+
+            PlanNodeEnum::Rollback(_) => {
+                Ok(StreamingExecutor::Rollback {
+                    input: Box::new(StreamingExecutor::Start { opened: false }),
+                    transaction_id: None,
+                    opened: false,
+                })
+            }
+
             _ => {
                 // Unsupported node types for streaming execution
                 Err(QueryError::execution(format!(
@@ -328,6 +619,103 @@ impl StreamingExecutorBuilder {
                     node.name()
                 )))
             }
+        }
+    }
+
+    /// Helper: extract space name from SpaceManageNode
+    fn extract_space_manage_name(node: &SpaceManageNode) -> Option<String> {
+        use crate::query::planning::plan::core::nodes::management::manage_node_enums::SpaceManageNode::*;
+        match node {
+            Create(n) => Some(n.info().space_name.clone()),
+            Drop(n) => Some(n.space_name().to_string()),
+            Desc(n) => Some(n.space_name().to_string()),
+            Show(_) => None,
+            ShowCreate(n) => Some(n.space_name().to_string()),
+            Switch(n) => Some(n.space_name().to_string()),
+            Alter(n) => Some(n.space_name().to_string()),
+            Clear(n) => Some(n.space_name().to_string()),
+        }
+    }
+
+    /// Helper: extract tag name from TagManageNode
+    fn extract_tag_manage_name(node: &TagManageNode) -> Option<String> {
+        use crate::query::planning::plan::core::nodes::management::manage_node_enums::TagManageNode::*;
+        match node {
+            Create(n) => Some(n.info().tag_name.clone()),
+            Alter(n) => Some(n.info().tag_name.clone()),
+            Desc(n) => Some(n.tag_name().to_string()),
+            Drop(n) => Some(n.tag_name().to_string()),
+            Show(_) => None,
+            ShowCreate(n) => Some(n.tag_name().to_string()),
+        }
+    }
+
+    /// Helper: extract edge type name from EdgeManageNode
+    fn extract_edge_manage_name(node: &EdgeManageNode) -> Option<String> {
+        use crate::query::planning::plan::core::nodes::management::manage_node_enums::EdgeManageNode::*;
+        match node {
+            Create(n) => Some(n.info().edge_name.clone()),
+            Alter(n) => Some(n.info().edge_name.clone()),
+            Desc(n) => Some(n.edge_name().to_string()),
+            Drop(n) => Some(n.edge_name().to_string()),
+            Show(_) => None,
+            ShowCreate(n) => Some(n.edge_name().to_string()),
+        }
+    }
+
+    /// Helper: extract index name from IndexManageNode
+    fn extract_index_manage_name(node: &IndexManageNode) -> Option<String> {
+        use crate::query::planning::plan::core::nodes::management::manage_node_enums::IndexManageNode::*;
+        match node {
+            CreateTagIndex(n) => Some(n.info().index_name.clone()),
+            DropTagIndex(n) => Some(n.index_name().to_string()),
+            DescTagIndex(n) => Some(n.index_name().to_string()),
+            ShowTagIndexes(_) => None,
+            RebuildTagIndex(n) => Some(n.index_name().to_string()),
+            CreateEdgeIndex(n) => Some(n.info().index_name.clone()),
+            DropEdgeIndex(n) => Some(n.index_name().to_string()),
+            DescEdgeIndex(n) => Some(n.index_name().to_string()),
+            ShowEdgeIndexes(_) => None,
+            RebuildEdgeIndex(n) => Some(n.index_name().to_string()),
+            ShowIndexes(_) => None,
+            ShowCreateIndex(n) => Some(n.index_name().to_string()),
+        }
+    }
+
+    /// Helper: extract username from UserManageNode
+    fn extract_user_manage_name(node: &UserManageNode) -> Option<String> {
+        use crate::query::planning::plan::core::nodes::management::manage_node_enums::UserManageNode::*;
+        match node {
+            Create(n) => Some(n.username().to_string()),
+            Alter(n) => Some(n.username().to_string()),
+            Drop(n) => Some(n.username().to_string()),
+            ChangePassword(_) => None,
+            GrantRole(n) => Some(n.username().to_string()),
+            RevokeRole(n) => Some(n.username().to_string()),
+            DescribeUser(n) => Some(n.username().to_string()),
+            ShowRoles(_) => None,
+            ShowUsers(_) => None,
+        }
+    }
+
+    /// Helper: extract index name from FulltextManageNode
+    fn extract_fulltext_manage_name(node: &FulltextManageNode) -> Option<String> {
+        use crate::query::planning::plan::core::nodes::management::manage_node_enums::FulltextManageNode::*;
+        match node {
+            Create(n) => Some(n.index_name.clone()),
+            Alter(n) => Some(n.index_name.clone()),
+            Describe(n) => Some(n.index_name.clone()),
+            Drop(n) => Some(n.index_name.clone()),
+            Show(_) => None,
+        }
+    }
+
+    /// Helper: extract index name from VectorManageNode
+    fn extract_vector_manage_name(node: &VectorManageNode) -> Option<String> {
+        use crate::query::planning::plan::core::nodes::management::manage_node_enums::VectorManageNode::*;
+        match node {
+            Create(n) => Some(n.index_name.clone()),
+            Drop(n) => Some(n.index_name.clone()),
         }
     }
 

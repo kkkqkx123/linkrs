@@ -2,11 +2,29 @@
 //!
 //! Includes: InsertVertices, InsertEdges, UpdateVertices, UpdateEdges,
 //! DeleteVertices, DeleteEdges, PipeDeleteVertices, PipeDeleteEdges
+//!
+//! Operators track row counts and produce a final result chunk with totals.
+//! Actual storage writes require storage layer integration.
 
+use std::sync::Arc;
 use crate::core::error::QueryError;
 use crate::core::Value;
-use crate::query::executor::streaming::chunk::DataChunk;
+use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use super::super::StreamingExecutor;
+
+fn make_modify_result(op: &str, count: u64) -> DataChunk {
+    let schema = Arc::new(Schema::new(vec![
+        ColumnInfo { name: "operation".to_string(), data_type: "string".to_string() },
+        ColumnInfo { name: "rows_affected".to_string(), data_type: "bigint".to_string() },
+    ]));
+    DataChunk::new(
+        vec![vec![
+            Value::String(op.to_string()),
+            Value::BigInt(count as i64),
+        ]],
+        schema,
+    )
+}
 
 // ============ InsertVertices ============
 
@@ -34,13 +52,13 @@ pub fn next_insertvertices(executor: &mut StreamingExecutor) -> Result<Option<Da
                 return Err(QueryError::execution("InsertVertices not opened".to_string()));
             }
 
-            // Process rows and count insertions
             if let Some(chunk) = input.next()? {
                 let count = chunk.rows.len() as u64;
                 *rows_inserted += count;
                 return Ok(Some(chunk));
             }
-            Ok(None)
+            // Input exhausted: emit final result with total count
+            Ok(Some(make_modify_result("insert_vertices", *rows_inserted)))
         }
         _ => Err(QueryError::execution("Type mismatch in next_insertvertices".to_string())),
     }
@@ -48,8 +66,11 @@ pub fn next_insertvertices(executor: &mut StreamingExecutor) -> Result<Option<Da
 
 pub fn stop_insertvertices(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::InsertVertices { input, .. } => {
-            input.stop()?;
+        StreamingExecutor::InsertVertices { input, opened, .. } => {
+            if *opened {
+                input.stop()?;
+                *opened = false;
+            }
             Ok(())
         }
         _ => Err(QueryError::execution("Type mismatch in stop_insertvertices".to_string())),
@@ -58,8 +79,11 @@ pub fn stop_insertvertices(executor: &mut StreamingExecutor) -> Result<(), Query
 
 pub fn close_insertvertices(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::InsertVertices { input, .. } => {
-            input.close()?;
+        StreamingExecutor::InsertVertices { input, opened, .. } => {
+            if *opened {
+                input.close()?;
+                *opened = false;
+            }
             Ok(())
         }
         _ => Err(QueryError::execution("Type mismatch in close_insertvertices".to_string())),
@@ -83,12 +107,9 @@ pub fn next_insertedges(executor: &mut StreamingExecutor) -> Result<Option<DataC
     match executor {
         StreamingExecutor::InsertEdges {
             input,
-            src_col: _,
-            dst_col: _,
-            edge_type: _,
-            edge_properties: _,
             rows_inserted,
             opened,
+            ..
         } => {
             if !*opened {
                 return Err(QueryError::execution("InsertEdges not opened".to_string()));
@@ -99,7 +120,7 @@ pub fn next_insertedges(executor: &mut StreamingExecutor) -> Result<Option<DataC
                 *rows_inserted += count;
                 return Ok(Some(chunk));
             }
-            Ok(None)
+            Ok(Some(make_modify_result("insert_edges", *rows_inserted)))
         }
         _ => Err(QueryError::execution("Type mismatch in next_insertedges".to_string())),
     }
@@ -107,8 +128,11 @@ pub fn next_insertedges(executor: &mut StreamingExecutor) -> Result<Option<DataC
 
 pub fn stop_insertedges(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::InsertEdges { input, .. } => {
-            input.stop()?;
+        StreamingExecutor::InsertEdges { input, opened, .. } => {
+            if *opened {
+                input.stop()?;
+                *opened = false;
+            }
             Ok(())
         }
         _ => Err(QueryError::execution("Type mismatch in stop_insertedges".to_string())),
@@ -117,8 +141,11 @@ pub fn stop_insertedges(executor: &mut StreamingExecutor) -> Result<(), QueryErr
 
 pub fn close_insertedges(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::InsertEdges { input, .. } => {
-            input.close()?;
+        StreamingExecutor::InsertEdges { input, opened, .. } => {
+            if *opened {
+                input.close()?;
+                *opened = false;
+            }
             Ok(())
         }
         _ => Err(QueryError::execution("Type mismatch in close_insertedges".to_string())),
@@ -142,9 +169,9 @@ pub fn next_updatevertices(executor: &mut StreamingExecutor) -> Result<Option<Da
     match executor {
         StreamingExecutor::UpdateVertices {
             input,
-            updates: _,
             rows_updated,
             opened,
+            ..
         } => {
             if !*opened {
                 return Err(QueryError::execution("UpdateVertices not opened".to_string()));
@@ -155,7 +182,7 @@ pub fn next_updatevertices(executor: &mut StreamingExecutor) -> Result<Option<Da
                 *rows_updated += count;
                 return Ok(Some(chunk));
             }
-            Ok(None)
+            Ok(Some(make_modify_result("update_vertices", *rows_updated)))
         }
         _ => Err(QueryError::execution("Type mismatch in next_updatevertices".to_string())),
     }
@@ -163,8 +190,11 @@ pub fn next_updatevertices(executor: &mut StreamingExecutor) -> Result<Option<Da
 
 pub fn stop_updatevertices(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::UpdateVertices { input, .. } => {
-            input.stop()?;
+        StreamingExecutor::UpdateVertices { input, opened, .. } => {
+            if *opened {
+                input.stop()?;
+                *opened = false;
+            }
             Ok(())
         }
         _ => Err(QueryError::execution("Type mismatch in stop_updatevertices".to_string())),
@@ -173,8 +203,11 @@ pub fn stop_updatevertices(executor: &mut StreamingExecutor) -> Result<(), Query
 
 pub fn close_updatevertices(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::UpdateVertices { input, .. } => {
-            input.close()?;
+        StreamingExecutor::UpdateVertices { input, opened, .. } => {
+            if *opened {
+                input.close()?;
+                *opened = false;
+            }
             Ok(())
         }
         _ => Err(QueryError::execution("Type mismatch in close_updatevertices".to_string())),
@@ -198,9 +231,9 @@ pub fn next_updateedges(executor: &mut StreamingExecutor) -> Result<Option<DataC
     match executor {
         StreamingExecutor::UpdateEdges {
             input,
-            updates: _,
             rows_updated,
             opened,
+            ..
         } => {
             if !*opened {
                 return Err(QueryError::execution("UpdateEdges not opened".to_string()));
@@ -211,7 +244,7 @@ pub fn next_updateedges(executor: &mut StreamingExecutor) -> Result<Option<DataC
                 *rows_updated += count;
                 return Ok(Some(chunk));
             }
-            Ok(None)
+            Ok(Some(make_modify_result("update_edges", *rows_updated)))
         }
         _ => Err(QueryError::execution("Type mismatch in next_updateedges".to_string())),
     }
@@ -219,8 +252,11 @@ pub fn next_updateedges(executor: &mut StreamingExecutor) -> Result<Option<DataC
 
 pub fn stop_updateedges(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::UpdateEdges { input, .. } => {
-            input.stop()?;
+        StreamingExecutor::UpdateEdges { input, opened, .. } => {
+            if *opened {
+                input.stop()?;
+                *opened = false;
+            }
             Ok(())
         }
         _ => Err(QueryError::execution("Type mismatch in stop_updateedges".to_string())),
@@ -229,8 +265,11 @@ pub fn stop_updateedges(executor: &mut StreamingExecutor) -> Result<(), QueryErr
 
 pub fn close_updateedges(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::UpdateEdges { input, .. } => {
-            input.close()?;
+        StreamingExecutor::UpdateEdges { input, opened, .. } => {
+            if *opened {
+                input.close()?;
+                *opened = false;
+            }
             Ok(())
         }
         _ => Err(QueryError::execution("Type mismatch in close_updateedges".to_string())),
@@ -254,9 +293,9 @@ pub fn next_deletevertices(executor: &mut StreamingExecutor) -> Result<Option<Da
     match executor {
         StreamingExecutor::DeleteVertices {
             input,
-            vertex_id_col: _,
             rows_deleted,
             opened,
+            ..
         } => {
             if !*opened {
                 return Err(QueryError::execution("DeleteVertices not opened".to_string()));
@@ -267,7 +306,7 @@ pub fn next_deletevertices(executor: &mut StreamingExecutor) -> Result<Option<Da
                 *rows_deleted += count;
                 return Ok(Some(chunk));
             }
-            Ok(None)
+            Ok(Some(make_modify_result("delete_vertices", *rows_deleted)))
         }
         _ => Err(QueryError::execution("Type mismatch in next_deletevertices".to_string())),
     }
@@ -275,8 +314,11 @@ pub fn next_deletevertices(executor: &mut StreamingExecutor) -> Result<Option<Da
 
 pub fn stop_deletevertices(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::DeleteVertices { input, .. } => {
-            input.stop()?;
+        StreamingExecutor::DeleteVertices { input, opened, .. } => {
+            if *opened {
+                input.stop()?;
+                *opened = false;
+            }
             Ok(())
         }
         _ => Err(QueryError::execution("Type mismatch in stop_deletevertices".to_string())),
@@ -285,8 +327,11 @@ pub fn stop_deletevertices(executor: &mut StreamingExecutor) -> Result<(), Query
 
 pub fn close_deletevertices(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::DeleteVertices { input, .. } => {
-            input.close()?;
+        StreamingExecutor::DeleteVertices { input, opened, .. } => {
+            if *opened {
+                input.close()?;
+                *opened = false;
+            }
             Ok(())
         }
         _ => Err(QueryError::execution("Type mismatch in close_deletevertices".to_string())),
@@ -310,10 +355,9 @@ pub fn next_deleteedges(executor: &mut StreamingExecutor) -> Result<Option<DataC
     match executor {
         StreamingExecutor::DeleteEdges {
             input,
-            src_col: _,
-            dst_col: _,
             rows_deleted,
             opened,
+            ..
         } => {
             if !*opened {
                 return Err(QueryError::execution("DeleteEdges not opened".to_string()));
@@ -324,7 +368,7 @@ pub fn next_deleteedges(executor: &mut StreamingExecutor) -> Result<Option<DataC
                 *rows_deleted += count;
                 return Ok(Some(chunk));
             }
-            Ok(None)
+            Ok(Some(make_modify_result("delete_edges", *rows_deleted)))
         }
         _ => Err(QueryError::execution("Type mismatch in next_deleteedges".to_string())),
     }
@@ -332,8 +376,11 @@ pub fn next_deleteedges(executor: &mut StreamingExecutor) -> Result<Option<DataC
 
 pub fn stop_deleteedges(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::DeleteEdges { input, .. } => {
-            input.stop()?;
+        StreamingExecutor::DeleteEdges { input, opened, .. } => {
+            if *opened {
+                input.stop()?;
+                *opened = false;
+            }
             Ok(())
         }
         _ => Err(QueryError::execution("Type mismatch in stop_deleteedges".to_string())),
@@ -342,8 +389,11 @@ pub fn stop_deleteedges(executor: &mut StreamingExecutor) -> Result<(), QueryErr
 
 pub fn close_deleteedges(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::DeleteEdges { input, .. } => {
-            input.close()?;
+        StreamingExecutor::DeleteEdges { input, opened, .. } => {
+            if *opened {
+                input.close()?;
+                *opened = false;
+            }
             Ok(())
         }
         _ => Err(QueryError::execution("Type mismatch in close_deleteedges".to_string())),
@@ -367,9 +417,9 @@ pub fn next_pipedeletevertices(executor: &mut StreamingExecutor) -> Result<Optio
     match executor {
         StreamingExecutor::PipeDeleteVertices {
             input,
-            vertex_id_col: _,
             rows_deleted,
             opened,
+            ..
         } => {
             if !*opened {
                 return Err(QueryError::execution("PipeDeleteVertices not opened".to_string()));
@@ -380,7 +430,7 @@ pub fn next_pipedeletevertices(executor: &mut StreamingExecutor) -> Result<Optio
                 *rows_deleted += count;
                 return Ok(Some(chunk));
             }
-            Ok(None)
+            Ok(Some(make_modify_result("pipe_delete_vertices", *rows_deleted)))
         }
         _ => Err(QueryError::execution("Type mismatch in next_pipedeletevertices".to_string())),
     }
@@ -423,10 +473,9 @@ pub fn next_pipedeleteedges(executor: &mut StreamingExecutor) -> Result<Option<D
     match executor {
         StreamingExecutor::PipeDeleteEdges {
             input,
-            src_col: _,
-            dst_col: _,
             rows_deleted,
             opened,
+            ..
         } => {
             if !*opened {
                 return Err(QueryError::execution("PipeDeleteEdges not opened".to_string()));
@@ -437,7 +486,7 @@ pub fn next_pipedeleteedges(executor: &mut StreamingExecutor) -> Result<Option<D
                 *rows_deleted += count;
                 return Ok(Some(chunk));
             }
-            Ok(None)
+            Ok(Some(make_modify_result("pipe_delete_edges", *rows_deleted)))
         }
         _ => Err(QueryError::execution("Type mismatch in next_pipedeleteedges".to_string())),
     }

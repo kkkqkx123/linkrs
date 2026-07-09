@@ -6,8 +6,6 @@
 
 use super::super::super::chunk::DataChunk;
 use crate::core::error::QueryError;
-use crate::core::types::expr::Expression;
-use crate::core::Value;
 use super::super::StreamingExecutor;
 
 // ============ FulltextSearch ============

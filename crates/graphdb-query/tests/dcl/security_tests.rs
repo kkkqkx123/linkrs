@@ -19,12 +19,10 @@ fn test_sql_injection_in_username() {
     let scenario = new_scenario();
 
     // Attempt SQL injection in username
-    scenario
+    let _ = scenario
         .exec_dcl("CREATE USER \"'; DROP USER --\" WITH PASSWORD 'pass'")
-        .assert_success();
-
-    // Username should be treated as literal, not executed
-    scenario
+        .assert_success()
+        // Username should be treated as literal, not executed
         .exec_dcl("DESCRIBE USER \"'; DROP USER --\"")
         .assert_success()
         // Original system should remain intact

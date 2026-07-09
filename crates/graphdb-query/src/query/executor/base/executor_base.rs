@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::query::validator::context::ExpressionAnalysisContext;
-use crate::storage::StorageClient;
 use parking_lot::RwLock;
 
 use super::execution_context::ExecutionContext;

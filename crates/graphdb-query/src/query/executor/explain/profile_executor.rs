@@ -8,7 +8,6 @@ use std::time::Instant;
 
 use crate::core::error::DBResult as ExecutorDBResult;
 use crate::core::Value;
-use crate::query::core::NodeType;
 use crate::query::executor::base::{BaseExecutor, ExecutionResult, Executor, ExecutorStats};
 use crate::query::parser::ast::stmt::ExplainFormat;
 use crate::query::planning::plan::explain::{DescribeVisitor, PlanDescription, ProfilingStats};
@@ -17,7 +16,6 @@ use crate::query::DataSet;
 use crate::storage::StorageClient;
 
 use super::execution_stats_context::ExecutionStatsContext;
-use super::instrumented_executor::InstrumentedExecutor;
 
 /// Profile executor
 ///
@@ -36,10 +34,6 @@ impl<S: StorageClient + Send + 'static> ProfileExecutor<S> {
             inner_plan,
             format,
         }
-    }
-
-    fn get_storage(&self) -> &Arc<parking_lot::RwLock<S>> {
-        self.base.storage.as_ref().expect("Storage not set")
     }
 
     /// Generate plan description from execution plan
@@ -62,16 +56,12 @@ impl<S: StorageClient + Send + 'static> ProfileExecutor<S> {
     }
 
     /// Execute the inner plan with full instrumentation
+    /// TODO: wire up StreamingQueryExecutor for actual execution
     fn execute_profiled(
         &mut self,
     ) -> ExecutorDBResult<(ExecutionResult, Arc<ExecutionStatsContext>)> {
         let stats_context = Arc::new(ExecutionStatsContext::new());
-
-        // TODO: Refactor to use StreamingQueryExecutor instead of ExecutorFactory
-        // ExecutorFactory is deprecated - need to integrate with new streaming model
-        let _exec_result = ExecutionResult::Empty;
-
-        Ok((_exec_result, stats_context))
+        Ok((ExecutionResult::Empty, stats_context))
     }
 
     /// Attach execution statistics to plan description

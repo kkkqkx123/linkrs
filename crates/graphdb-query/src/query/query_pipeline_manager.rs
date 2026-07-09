@@ -1112,7 +1112,7 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         plan: crate::query::planning::plan::ExecutionPlan,
     ) -> DBResult<ExecutionResult> {
         // Unified execution path: all queries use StreamingExecutor
-        use crate::query::planning::plan::ExecutionMode;
+        
 
         let exec_mode = plan.execution_mode;
         log::debug!("Executing with StreamingExecutor, mode: {} (reason: {})",

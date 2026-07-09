@@ -15,7 +15,6 @@ pub mod execution_context;
 pub mod execution_result;
 pub mod executor_base;
 pub mod executor_stats;
-pub mod manage_executor_enums;
 pub mod result_processor;
 
 pub use config::{
@@ -29,20 +28,6 @@ pub use executor_base::{
     BaseExecutor, Executor, HasInput, HasStorage, StartExecutor,
 };
 pub use executor_stats::ExecutorStats;
-#[cfg(feature = "fulltext-search")]
-pub use manage_executor_enums::FulltextManageExecutor;
-#[cfg(feature = "qdrant")]
-pub use manage_executor_enums::VectorManageExecutor;
-pub use manage_executor_enums::{
-    EdgeManageExecutor, IndexManageExecutor, SpaceManageExecutor, TagManageExecutor,
-    UserManageExecutor,
-};
 pub use result_processor::{BaseResultProcessor, ResultProcessor, ResultProcessorContext};
 
 pub use crate::core::types::EdgeDirection;
-
-// Stub for backward compatibility - ExecutorEnum has been removed in favor of StreamingExecutor
-// Legacy code still references this type; it's kept as a stub to allow compilation
-pub enum ExecutorEnum<S> {
-    _Phantom(std::marker::PhantomData<S>),
-}

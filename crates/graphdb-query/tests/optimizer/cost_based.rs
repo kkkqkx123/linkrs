@@ -418,7 +418,7 @@ mod bidirectional_traversal {
 
 // ==================== Aggregate Strategy Selection ====================
 
-mod aggregate_strategy {
+mod aggregate_strategy_selection {
     use super::*;
 
     #[test]

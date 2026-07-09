@@ -1,7 +1,7 @@
 //! Unified Interface for Node Types
 //!
-//! provides a unified trait interface for PlanNodeEnum and ExecutorEnum.
-//! Used to ensure consistency and traceability between two enumerations.
+//! Provides a unified trait interface for plan and executor nodes.
+//! Used to ensure consistency and traceability across the system.
 
 /// Classification of nodes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -60,8 +60,8 @@ impl NodeCategory {
 
 /// Unified Interface for Node Types
 ///
-/// This trait is used to unify the interfaces of PlanNodeEnum and ExecutorEnum.
-/// Ensure that the two enumerations are semantically consistent.
+/// This trait provides a common interface for nodes in the query plan
+/// and execution pipeline, ensuring semantic consistency.
 pub trait NodeType {
     /// Get a unique identifier for the node type
     ///
@@ -81,7 +81,7 @@ pub trait NodeType {
 
 /// Node type mapping trait
 ///
-/// Used to map a PlanNodeEnum to a corresponding ExecutorEnum.
+/// Used to map a plan node to its corresponding executor type.
 pub trait NodeTypeMapping {
     /// Get the corresponding actuator type ID
     fn corresponding_executor_type(&self) -> Option<&'static str>;
