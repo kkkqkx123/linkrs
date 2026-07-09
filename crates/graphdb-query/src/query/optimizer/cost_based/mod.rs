@@ -34,7 +34,6 @@ pub mod bidirectional_traversal;
 pub mod expression_precomputation;
 pub mod index;
 pub mod join_order;
-pub mod materialization;
 pub mod memory_budget;
 pub mod subquery_unnesting;
 pub mod topn_optimization;
@@ -73,10 +72,6 @@ pub use topn_optimization::{
 
 pub use subquery_unnesting::{
     KeepReason, SubqueryUnnestingOptimizer, UnnestDecision, UnnestReason,
-};
-
-pub use materialization::{
-    MaterializationDecision, MaterializationOptimizer, MaterializeReason, NoMaterializeReason,
 };
 
 pub use memory_budget::{MemoryBudgetAllocation, MemoryBudgetAllocator, OperatorImplementation};

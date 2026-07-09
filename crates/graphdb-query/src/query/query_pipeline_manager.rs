@@ -43,7 +43,7 @@ use crate::query::validator::{ValidatedStatement, ValidationInfo};
 use crate::query::QueryContext;
 use crate::query::QueryRequestContext;
 use crate::query::executor::streaming::{
-    decide_execution_mode, StreamingDecisionConfig, StreamingMode, StreamingQueryExecutor,
+    StreamingQueryExecutor,
 };
 #[cfg(feature = "fulltext-search")]
 use crate::search::manager::FulltextIndexManager;
@@ -78,8 +78,6 @@ pub struct QueryPipelineManager<S: StorageClient + 'static> {
     /// Vector coordinator for vector search (feature-gated)
     #[cfg(feature = "qdrant")]
     vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
-    /// Streaming execution configuration
-    streaming_config: StreamingDecisionConfig,
 }
 
 impl<S: StorageClient + 'static> QueryPipelineManager<S> {
@@ -119,7 +117,6 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             fulltext_manager: None,
             #[cfg(feature = "qdrant")]
             vector_coordinator: None,
-            streaming_config: StreamingDecisionConfig::default(),
         }
     }
 
@@ -162,7 +159,6 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             fulltext_manager: None,
             #[cfg(feature = "qdrant")]
             vector_coordinator: None,
-            streaming_config: StreamingDecisionConfig::default(),
         }
     }
 
@@ -197,12 +193,6 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         vector_coordinator: Arc<VectorSyncCoordinator>,
     ) -> Self {
         self.vector_coordinator = Some(vector_coordinator);
-        self
-    }
-
-    /// Set streaming execution configuration
-    pub fn with_streaming_config(mut self, config: StreamingDecisionConfig) -> Self {
-        self.streaming_config = config;
         self
     }
 
@@ -1208,88 +1198,39 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             .map_err(|e| DBError::from(QueryError::pipeline_execution_error(e)))
     }
 
-    /// Execute plan with streaming decision logic
+    /// Execute plan using streaming executor (supports all execution modes)
     ///
-    /// Decides whether to use streaming or materialized execution based on:
-    /// 1. Streaming config enabled flag
-    /// 2. Plan node compatibility
-    /// 3. Fallback to materialized on streaming failure
+    /// Uses StreamingExecutor for all operations, supporting execution modes
+    /// determined by OptimizerEngine during the optimization phase.
     fn execute_plan_with_streaming_routing(
         &mut self,
         _query_context: Arc<QueryContext>,
         plan: crate::query::planning::plan::ExecutionPlan,
     ) -> DBResult<ExecutionResult> {
-        use crate::query::executor::factory::engine::PlanExecutor;
+        use crate::query::planning::plan::ExecutionMode;
 
-        // Extract plan root, fallback to materialized if no root
-        let plan_root = match &plan.root {
-            Some(root) => root,
-            None => {
-                return Err(DBError::from(QueryError::execution(
-                    "Empty execution plan".to_string(),
-                )))
-            }
-        };
+        // Use the execution mode determined by the optimizer
+        let exec_mode = plan.execution_mode;
+        log::debug!("Executing with StreamingExecutor, mode: {} (reason: {})",
+                   exec_mode.as_str(), plan.execution_mode_reason);
 
-        // Decide execution mode
-        let mode = decide_execution_mode(plan_root, &self.streaming_config);
+        // Get the root plan node
+        let root_node = plan.root.as_ref().ok_or_else(|| {
+            DBError::from(QueryError::execution("Empty execution plan".to_string()))
+        })?;
 
-        match mode {
-            StreamingMode::Streaming => {
-                // Try streaming execution with fallback to materialized
-                match self.execute_with_streaming(plan_root) {
-                    Ok(result) => {
-                        log::debug!("Streaming execution succeeded");
-                        Ok(result)
-                    }
-                    Err(e) => {
-                        // Fallback to materialized execution
-                        log::warn!("Streaming execution failed: {}, falling back to materialized", e);
-                        let mut plan_executor = PlanExecutor::with_object_pool(
-                            self.executor_factory.clone(),
-                            self.object_pool.clone(),
-                        );
-
-                        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
-                        let storage = self.executor_factory.storage.clone().ok_or_else(|| {
-                            DBError::from(QueryError::execution("Storage not available".to_string()))
-                        })?;
-
-                        plan_executor
-                            .execute_plan(&plan, storage, expr_ctx)
-                            .map_err(|e| DBError::from(QueryError::pipeline_execution_error(e)))
-                    }
-                }
-            }
-            StreamingMode::Materialized => {
-                // Use traditional materialized execution
-                let mut plan_executor =
-                    PlanExecutor::with_object_pool(self.executor_factory.clone(), self.object_pool.clone());
-
-                let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
-
-                let storage = self.executor_factory.storage.clone().ok_or_else(|| {
-                    DBError::from(QueryError::execution("Storage not available".to_string()))
-                })?;
-
-                plan_executor
-                    .execute_plan(&plan, storage, expr_ctx)
-                    .map_err(|e| DBError::from(QueryError::pipeline_execution_error(e)))
-            }
-        }
-    }
-
-    /// Execute query using streaming executor
-    fn execute_with_streaming(&self, plan_root: &crate::query::planning::plan::PlanNodeEnum) -> DBResult<ExecutionResult> {
+        // Create streaming executor from plan
         let mut executor = StreamingQueryExecutor::new();
 
         executor
-            .from_plan_node(plan_root, &crate::query::executor::base::ExecutionContext::default())
-            .map_err(|e| DBError::from(QueryError::execution(format!("Failed to create streaming executor: {}", e))))?;
+            .from_plan_node(root_node, &crate::query::executor::base::ExecutionContext::default())
+            .map_err(|e| DBError::from(QueryError::execution(
+                format!("Failed to create streaming executor: {}", e))))?;
 
         executor
             .execute()
-            .map_err(|e| DBError::from(QueryError::execution(format!("Streaming execution error: {}", e))))
+            .map_err(|e| DBError::from(QueryError::execution(
+                format!("Streaming execution failed: {:?}", e))))
     }
 
     /// Execute EXPLAIN statement

@@ -3,6 +3,30 @@
 
 use crate::query::planning::plan::PlanNodeEnum;
 
+/// Execution mode for a query plan
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionMode {
+    /// Use traditional materialized execution (buffer all intermediate results)
+    Materialized,
+    /// Use streaming pull-based execution (process row-at-a-time, minimal buffering)
+    Streaming,
+}
+
+impl ExecutionMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ExecutionMode::Materialized => "Materialized",
+            ExecutionMode::Streaming => "Streaming",
+        }
+    }
+}
+
+impl Default for ExecutionMode {
+    fn default() -> Self {
+        ExecutionMode::Materialized
+    }
+}
+
 /// Execution plan structure
 /// Represents the complete executable plan, including the root node and the plan ID.
 #[derive(Debug, Clone)]
@@ -18,6 +42,12 @@ pub struct ExecutionPlan {
 
     /// Of course! Please provide the text you would like to have translated.
     pub format: String,
+
+    /// Execution mode determined by Phase 3 optimizer (Streaming or Materialized)
+    pub execution_mode: ExecutionMode,
+
+    /// Reason for execution mode selection (for debugging/logging)
+    pub execution_mode_reason: String,
 }
 
 impl ExecutionPlan {
@@ -28,6 +58,8 @@ impl ExecutionPlan {
             id: -1, // This will be allocated later on.
             optimize_time_in_us: 0,
             format: "default".to_string(),
+            execution_mode: ExecutionMode::default(),
+            execution_mode_reason: "default".to_string(),
         }
     }
 
@@ -59,6 +91,22 @@ impl ExecutionPlan {
     /// Set the output format
     pub fn set_format(&mut self, format: String) {
         self.format = format;
+    }
+
+    /// Set the execution mode (determined by Phase 3 optimizer)
+    pub fn set_execution_mode(&mut self, mode: ExecutionMode, reason: &str) {
+        self.execution_mode = mode;
+        self.execution_mode_reason = reason.to_string();
+    }
+
+    /// Get the execution mode
+    pub fn execution_mode(&self) -> ExecutionMode {
+        self.execution_mode
+    }
+
+    /// Get the execution mode reason
+    pub fn execution_mode_reason(&self) -> &str {
+        &self.execution_mode_reason
     }
 
     /// Calculate the number of nodes in the plan.

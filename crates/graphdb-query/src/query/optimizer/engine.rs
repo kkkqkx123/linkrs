@@ -35,10 +35,11 @@
 
 use std::sync::Arc;
 
+use crate::query::optimizer::execution_mode_optimizer::ExecutionModeOptimizer;
 use crate::query::optimizer::heuristic::PlanRewriter;
 use crate::query::optimizer::{
     AggregateStrategySelector, BatchPlanAnalyzer, CostCalculator, CostModelConfig, CteCacheManager,
-    MaterializationOptimizer, SelectivityEstimator, SelectivityFeedbackManager,
+    SelectivityEstimator, SelectivityFeedbackManager,
     SortEliminationOptimizer, StatisticsManager, SubqueryUnnestingOptimizer,
 };
 use crate::query::planning::plan::ExecutionPlan;
@@ -70,8 +71,8 @@ pub struct OptimizerEngine {
     batch_plan_analyzer: BatchPlanAnalyzer,
     /// Subquery de-correlating optimizer
     subquery_unnesting_optimizer: SubqueryUnnestingOptimizer,
-    /// CTE (Common Table Expression) Materialization Optimizer
-    materialization_optimizer: MaterializationOptimizer,
+    /// Execution Mode Optimizer (Phase 3)
+    execution_mode_optimizer: ExecutionModeOptimizer,
     /// Cost model configuration
     cost_config: CostModelConfig,
     /// Heuristic plan rewriter
@@ -80,6 +81,8 @@ pub struct OptimizerEngine {
     enable_heuristic: bool,
     /// Enable cost-based optimization phase
     enable_cost_based: bool,
+    /// Enable execution mode selection phase (Phase 3)
+    enable_execution_mode: bool,
     /// Maximum iterations for heuristic rules
     max_heuristic_iterations: usize,
 }
@@ -151,14 +154,11 @@ impl OptimizerEngine {
         // Create a subquery to de-associate the optimizer.
         let subquery_unnesting_optimizer = SubqueryUnnestingOptimizer::new(&stats_manager);
 
-        // Creating a CTE (Common Table Expression) materialization optimizer
-        let materialization_optimizer = MaterializationOptimizer::with_thresholds(
-            &stats_manager,
-            &cost_config.strategy_thresholds,
-        );
-
         // Create a heuristic plan rewriter
         let heuristic_rewriter = PlanRewriter::default();
+
+        // Create Execution Mode Optimizer (Phase 3)
+        let execution_mode_optimizer = ExecutionModeOptimizer::new(stats_manager.clone());
 
         Self {
             expression_context,
@@ -171,11 +171,12 @@ impl OptimizerEngine {
             aggregate_strategy_selector,
             batch_plan_analyzer,
             subquery_unnesting_optimizer,
-            materialization_optimizer,
+            execution_mode_optimizer,
             cost_config,
             heuristic_rewriter,
             enable_heuristic: true,
             enable_cost_based: true,
+            enable_execution_mode: true,
             max_heuristic_iterations: 100,
         }
     }
@@ -235,9 +236,9 @@ impl OptimizerEngine {
         &self.subquery_unnesting_optimizer
     }
 
-    /// Obtaining the CTE (Common Table Expression) materialization optimizer
-    pub fn materialization_optimizer(&self) -> &MaterializationOptimizer {
-        &self.materialization_optimizer
+    /// Obtaining the Execution Mode Optimizer (Phase 3)
+    pub fn execution_mode_optimizer(&self) -> &ExecutionModeOptimizer {
+        &self.execution_mode_optimizer
     }
 
     /// Obtaining the Selective Feedback Manager
@@ -277,11 +278,6 @@ impl OptimizerEngine {
             AggregateStrategySelector::new(self.cost_calculator.clone());
         // Re-create the subquery to de-associate the optimizer.
         self.subquery_unnesting_optimizer = SubqueryUnnestingOptimizer::new(&self.stats_manager);
-        // Re-create the CTE (Common Table Expression) materialization optimizer
-        self.materialization_optimizer = MaterializationOptimizer::with_thresholds(
-            &self.stats_manager,
-            &self.cost_config.strategy_thresholds,
-        );
         log::info!(
             "Optimizer cost model configuration has been updated: {:?}",
             self.cost_config
@@ -355,6 +351,13 @@ impl OptimizerEngine {
             log::debug!("Phase 2 completed successfully");
         }
 
+        // Phase 3: Execution Mode Selection (Optional)
+        if self.enable_execution_mode {
+            log::debug!("Starting Phase 3: Execution Mode Selection");
+            current_plan = self.apply_execution_mode_selection(current_plan)?;
+            log::debug!("Phase 3 completed successfully");
+        }
+
         Ok(current_plan)
     }
 
@@ -369,7 +372,6 @@ impl OptimizerEngine {
     fn apply_cost_based(&self, plan: ExecutionPlan) -> OptimizeResult<ExecutionPlan> {
         use crate::query::optimizer::context::OptimizationContext;
         use crate::query::optimizer::cost_based::trait_def::StrategyChain;
-        use crate::query::optimizer::cost_based::MaterializationOptimizer;
         use crate::query::optimizer::cost_based::TraversalDirectionOptimizer;
 
         // Create optimization context
@@ -383,15 +385,11 @@ impl OptimizerEngine {
             ctx.set_batch_plan_analysis(batch_analysis);
 
             // Create optimizers
-            let materialization_optimizer =
-                MaterializationOptimizer::new(self.stats_manager.as_ref());
             let traversal_direction_optimizer =
                 TraversalDirectionOptimizer::new(self.cost_calculator.clone());
 
             // Create strategy chain with all registered cost-based strategies
-            // Order matters: materialization first, then traversal direction
             let chain = StrategyChain::new()
-                .add_strategy(Box::new(materialization_optimizer))
                 .add_strategy(Box::new(traversal_direction_optimizer));
 
             // Apply strategies to the plan root
@@ -403,6 +401,16 @@ impl OptimizerEngine {
         }
 
         Ok(current_plan)
+    }
+
+    /// Apply execution mode selection (Phase 3)
+    fn apply_execution_mode_selection(&self, mut plan: ExecutionPlan) -> OptimizeResult<ExecutionPlan> {
+        if let Some(ref root) = plan.root {
+            let (mode, reason) = self.execution_mode_optimizer.decide_execution_mode(root)?;
+            plan.set_execution_mode(mode, &reason);
+            log::info!("Execution mode: {}: {}", mode.as_str(), reason);
+        }
+        Ok(plan)
     }
 
     /// Get the heuristic rewriter

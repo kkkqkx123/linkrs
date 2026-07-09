@@ -49,6 +49,7 @@ pub mod cost;
 pub mod decision;
 pub mod engine;
 pub mod error;
+pub mod execution_mode_optimizer;
 pub mod stats;
 
 // Optimization phases
@@ -59,6 +60,7 @@ pub mod heuristic; // Heuristic rewrite rules
 pub use builder::OptimizerEngineBuilder;
 pub use engine::OptimizerEngine;
 pub use error::{CostError, CostResult, OptimizeError, OptimizeResult};
+pub use execution_mode_optimizer::ExecutionModeOptimizer;
 
 pub use stats::{
     EdgeTypeStatistics, ExecutionFeedbackCollector, FeedbackDrivenSelectivity, OperatorFeedback,
@@ -82,8 +84,7 @@ pub use cost_based::{
     AggregateStrategySelector, CandidateStart, CteCacheConfig, CteCacheDecision,
     CteCacheDecisionMaker, CteCacheEntry, CteCacheManager, CteCacheStats, DegreeInfo,
     DirectionContext, DirectionSelectionReason, IndexSelection, IndexSelector, JoinCondition,
-    JoinOrderOptimizer, JoinOrderResult, KeepReason, MaterializationDecision,
-    MaterializationOptimizer, MaterializeReason, NoMaterializeReason, OptimizationMethod,
+    JoinOrderOptimizer, JoinOrderResult, KeepReason, OptimizationMethod,
     PredicateOperator, PropertyPredicate, SortContext, SortEliminationDecision,
     SortEliminationOptimizer, SortKeepReason, SubqueryUnnestingOptimizer, TableInfo,
     TopNConversionReason, TraversalDirection, TraversalDirectionDecision,

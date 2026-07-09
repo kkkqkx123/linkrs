@@ -14,7 +14,6 @@
 pub mod base;
 pub mod builder;
 pub mod chunk;
-pub mod decision;
 pub mod engine;
 pub mod executor;
 pub mod factory;
@@ -25,7 +24,6 @@ pub mod worker;
 pub use base::ExecutionMode;
 pub use builder::StreamingExecutorBuilder;
 pub use chunk::DataChunk;
-pub use decision::{decide_execution_mode, ExecutionMode as StreamingMode, StreamingDecisionConfig};
 pub use engine::StreamingExecutionEngine;
 pub use executor::StreamingExecutor;
 pub use factory::{StreamingQueryExecutor, convert_chunks_to_dataset, chunks_to_execution_result};

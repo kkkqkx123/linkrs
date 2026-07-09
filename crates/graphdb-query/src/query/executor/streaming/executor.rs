@@ -1,7 +1,7 @@
 //! StreamingExecutor: Enum-based pull executor with modular operator implementation
 //!
 //! This file contains:
-//! - StreamingExecutor enum definition (all 15 operator variants)
+//! - StreamingExecutor enum definition (all 79 operator variants)
 //! - SortDirection enum
 //! - Coordination methods (open, next, stop, close) that dispatch to operator modules
 //!
@@ -9,6 +9,9 @@
 //! - context - Expression evaluation context
 //! - operators/ - Operator implementations (sources, single_input, stateful, binary, set_ops)
 //! - helpers/ - Helper functions (comparison, aggregation, conversion)
+//!
+//! Note: Phase 2c-1 expanded from 16 to 79 variants with stub implementations.
+//! Actual implementations will be added incrementally in Phase 2c-2.
 
 use super::chunk::DataChunk;
 use crate::core::error::QueryError;
@@ -30,14 +33,29 @@ pub enum SortDirection {
     Descending,
 }
 
+/// Phase for FullOuterJoin execution
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FullOuterJoinPhase {
+    BuildingRight,
+    ProbeLeft,
+    EmitUnmatchedRight,
+}
+
 /// Pull-based streaming executor
 ///
-/// Each variant handles different operation types:
-/// - Data sources: ScanVertices, ScanEdges
-/// - Single input: Filter, Project, Limit, Distinct
-/// - Stateful: Aggregate, Sort, GroupBy, WindowFunction
-/// - Binary input: HashJoin, NestedLoopJoin
-/// - Set operations: Union, UnionAll, Intersect, Except
+/// Each variant handles different operation types (79 total):
+/// - Data sources (8): ScanVertices, ScanEdges, GetVertices, GetEdges, GetNeighbors, IndexScan, Sample, Argument
+/// - Single input (6): Filter, Project, Limit, Distinct, Window, Dedup
+/// - Stateful (4): Aggregate, Sort, GroupBy, WindowFunction
+/// - Binary input (8): HashJoin, NestedLoopJoin, InnerJoin, LeftJoin, RightJoin, FullOuterJoin, CrossJoin, SemiJoin
+/// - Set operations (4): Union, UnionAll, Intersect, Except, Minus
+/// - Graph traversal (11): Expand, Traverse, AppendVertices, BiExpand, BiTraverse, ShortestPath, BFSShortest, AllPaths, MultiShortestPath, ExpandAll, TraverseAll
+/// - Data modification (8): InsertVertices, InsertEdges, UpdateVertices, UpdateEdges, DeleteVertices, DeleteEdges, PipeDeleteVertices, PipeDeleteEdges
+/// - Search operations (5): FulltextSearch, FulltextLookup, MatchFulltext, VectorSearch, VectorLookup
+/// - Management/DDL (7): SpaceManage, TagManage, EdgeManage, IndexManage, UserManage, FulltextManage, VectorManage
+/// - Other operations (14): Materialize, Remove, Assign, Apply, PatternApply, RollUpApply, DataCollect, Unwind, TopN, Loop, Select, PassThrough, BeginTransaction, Commit, Rollback, ShowStats
+///
+/// Note: Variants marked as stubs will return "not yet implemented" error until actual implementations are added.
 #[derive(Debug)]
 pub enum StreamingExecutor {
     // ============ Data Sources ============
@@ -209,94 +227,854 @@ pub enum StreamingExecutor {
         right_buffered: bool,
         opened: bool,
     },
+
+    // ============ Access Operations (stub) ============
+    Start { opened: bool },
+    GetVertices { opened: bool },
+    GetEdges { opened: bool },
+    GetNeighbors { opened: bool },
+    EdgeIndexScan { opened: bool },
+    IndexScan { opened: bool },
+    Argument { opened: bool },
+    Sample { opened: bool },
+
+    // ============ Join Operations (stub) ============
+    InnerJoin {
+        left: Box<StreamingExecutor>,
+        right: Box<StreamingExecutor>,
+        join_condition: Option<Expression>,
+        build_side_tuples: Vec<Vec<Value>>,
+        left_consumed: bool,
+        opened: bool,
+    },
+    LeftJoin {
+        left: Box<StreamingExecutor>,
+        right: Box<StreamingExecutor>,
+        join_condition: Option<Expression>,
+        build_side_tuples: Vec<Vec<Value>>,
+        left_consumed: bool,
+        opened: bool,
+    },
+    RightJoin {
+        left: Box<StreamingExecutor>,
+        right: Box<StreamingExecutor>,
+        join_condition: Option<Expression>,
+        build_side_tuples: Vec<Vec<Value>>,
+        right_consumed: bool,
+        opened: bool,
+    },
+    FullOuterJoin {
+        left: Box<StreamingExecutor>,
+        right: Box<StreamingExecutor>,
+        join_condition: Option<Expression>,
+        left_rows: Vec<Vec<Value>>,
+        right_rows: Vec<Vec<Value>>,
+        matched_right_indices: std::collections::HashSet<usize>,
+        result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+        phase: FullOuterJoinPhase,
+        opened: bool,
+    },
+    CrossJoin {
+        left: Box<StreamingExecutor>,
+        right: Box<StreamingExecutor>,
+        all_left_rows: Vec<Vec<Value>>,
+        all_right_rows: Vec<Vec<Value>>,
+        left_consumed: bool,
+        right_consumed: bool,
+        opened: bool,
+    },
+    SemiJoin {
+        left: Box<StreamingExecutor>,
+        right: Box<StreamingExecutor>,
+        join_condition: Option<Expression>,
+        right_rows: Vec<Vec<Value>>,
+        right_consumed: bool,
+        opened: bool,
+    },
+
+    // ============ Graph Traversal Operations ============
+    Expand {
+        input: Box<StreamingExecutor>,
+        edge_type: String,
+        direction: String,
+        filter_expr: Option<Expression>,
+        opened: bool,
+    },
+
+    ExpandAll {
+        input: Box<StreamingExecutor>,
+        edge_type: String,
+        direction: String,
+        filter_expr: Option<Expression>,
+        opened: bool,
+    },
+
+    Traverse {
+        input: Box<StreamingExecutor>,
+        edge_type: String,
+        direction: String,
+        min_depth: u32,
+        max_depth: u32,
+        filter_expr: Option<Expression>,
+        visited: std::collections::HashSet<String>,
+        opened: bool,
+    },
+
+    TraverseAll {
+        input: Box<StreamingExecutor>,
+        edge_type: String,
+        direction: String,
+        min_depth: u32,
+        max_depth: u32,
+        filter_expr: Option<Expression>,
+        visited: std::collections::HashSet<String>,
+        opened: bool,
+    },
+
+    AppendVertices {
+        input: Box<StreamingExecutor>,
+        vertex_properties: Vec<(String, Expression)>,
+        opened: bool,
+    },
+
+    BiExpand {
+        input: Box<StreamingExecutor>,
+        edge_type: String,
+        opened: bool,
+    },
+
+    BiTraverse {
+        input: Box<StreamingExecutor>,
+        edge_type: String,
+        min_depth: u32,
+        max_depth: u32,
+        visited: std::collections::HashSet<String>,
+        opened: bool,
+    },
+
+    ShortestPath {
+        input: Box<StreamingExecutor>,
+        target_vertex: Option<Expression>,
+        edge_type: String,
+        direction: String,
+        opened: bool,
+    },
+
+    BFSShortest {
+        input: Box<StreamingExecutor>,
+        target_vertex: Option<Expression>,
+        edge_type: String,
+        direction: String,
+        frontier: Vec<Vec<Value>>,
+        visited: std::collections::HashSet<String>,
+        opened: bool,
+    },
+
+    AllPaths {
+        input: Box<StreamingExecutor>,
+        target_vertex: Option<Expression>,
+        edge_type: String,
+        direction: String,
+        all_paths: Vec<Vec<Value>>,
+        result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+        opened: bool,
+    },
+
+    MultiShortestPath {
+        input: Box<StreamingExecutor>,
+        target_vertices: Vec<Expression>,
+        edge_type: String,
+        direction: String,
+        all_paths: Vec<Vec<Value>>,
+        result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+        opened: bool,
+    },
+
+    // ============ Data Modification ============
+    InsertVertices {
+        input: Box<StreamingExecutor>,
+        vertex_properties: Vec<(String, Expression)>,
+        tags: Vec<String>,
+        rows_inserted: u64,
+        opened: bool,
+    },
+
+    InsertEdges {
+        input: Box<StreamingExecutor>,
+        src_col: String,
+        dst_col: String,
+        edge_type: String,
+        edge_properties: Vec<(String, Expression)>,
+        rows_inserted: u64,
+        opened: bool,
+    },
+
+    UpdateVertices {
+        input: Box<StreamingExecutor>,
+        updates: Vec<(String, Expression)>,
+        rows_updated: u64,
+        opened: bool,
+    },
+
+    UpdateEdges {
+        input: Box<StreamingExecutor>,
+        updates: Vec<(String, Expression)>,
+        rows_updated: u64,
+        opened: bool,
+    },
+
+    DeleteVertices {
+        input: Box<StreamingExecutor>,
+        vertex_id_col: String,
+        rows_deleted: u64,
+        opened: bool,
+    },
+
+    DeleteEdges {
+        input: Box<StreamingExecutor>,
+        src_col: String,
+        dst_col: String,
+        rows_deleted: u64,
+        opened: bool,
+    },
+
+    PipeDeleteVertices {
+        input: Box<StreamingExecutor>,
+        vertex_id_col: String,
+        rows_deleted: u64,
+        opened: bool,
+    },
+
+    PipeDeleteEdges {
+        input: Box<StreamingExecutor>,
+        src_col: String,
+        dst_col: String,
+        rows_deleted: u64,
+        opened: bool,
+    },
+
+    // ============ Search Operations ============
+    FulltextSearch {
+        input: Box<StreamingExecutor>,
+        search_query: String,
+        search_field: Option<String>,
+        opened: bool,
+    },
+
+    FulltextLookup {
+        input: Box<StreamingExecutor>,
+        search_index: String,
+        lookup_key: Expression,
+        opened: bool,
+    },
+
+    MatchFulltext {
+        input: Box<StreamingExecutor>,
+        match_expr: Expression,
+        match_field: Option<String>,
+        opened: bool,
+    },
+
+    VectorSearch {
+        input: Box<StreamingExecutor>,
+        vector_field: String,
+        query_vector: Vec<f32>,
+        top_k: u32,
+        opened: bool,
+    },
+
+    VectorLookup {
+        input: Box<StreamingExecutor>,
+        vector_index: String,
+        lookup_key: Expression,
+        opened: bool,
+    },
+
+    // ============ Management/DDL ============
+    SpaceManage {
+        input: Box<StreamingExecutor>,
+        action: String,
+        space_name: Option<String>,
+        opened: bool,
+    },
+
+    TagManage {
+        input: Box<StreamingExecutor>,
+        action: String,
+        tag_name: Option<String>,
+        opened: bool,
+    },
+
+    EdgeManage {
+        input: Box<StreamingExecutor>,
+        action: String,
+        edge_type: Option<String>,
+        opened: bool,
+    },
+
+    IndexManage {
+        input: Box<StreamingExecutor>,
+        action: String,
+        index_name: Option<String>,
+        opened: bool,
+    },
+
+    UserManage {
+        input: Box<StreamingExecutor>,
+        action: String,
+        username: Option<String>,
+        opened: bool,
+    },
+
+    FulltextManage {
+        input: Box<StreamingExecutor>,
+        action: String,
+        index_name: Option<String>,
+        opened: bool,
+    },
+
+    VectorManage {
+        input: Box<StreamingExecutor>,
+        action: String,
+        index_name: Option<String>,
+        opened: bool,
+    },
+
+    // ============ Simple Relational Operations ============
+    TopN {
+        input: Box<StreamingExecutor>,
+        n: u32,
+        sort_expressions: Vec<Expression>,
+        sort_directions: Vec<SortDirection>,
+        all_rows: Vec<Vec<Value>>,
+        result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+        opened: bool,
+    },
+
+    Dedup {
+        input: Box<StreamingExecutor>,
+        seen_rows: std::collections::HashSet<String>,
+        opened: bool,
+    },
+
+    Assign {
+        input: Box<StreamingExecutor>,
+        assignments: Vec<(String, Expression)>,
+        opened: bool,
+    },
+
+    Materialize {
+        input: Box<StreamingExecutor>,
+        materialized_rows: Vec<Vec<Value>>,
+        result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+        materialized: bool,
+        opened: bool,
+    },
+
+    Remove {
+        input: Box<StreamingExecutor>,
+        columns_to_remove: Vec<String>,
+        opened: bool,
+    },
+
+    DataCollect {
+        input: Box<StreamingExecutor>,
+        all_rows: Vec<Vec<Value>>,
+        emitted: bool,
+        opened: bool,
+    },
+
+    Unwind {
+        input: Box<StreamingExecutor>,
+        unwind_column: String,
+        all_rows: Vec<Vec<Value>>,
+        current_row_index: usize,
+        current_unwind_index: usize,
+        opened: bool,
+    },
+
+    Apply {
+        input: Box<StreamingExecutor>,
+        apply_expression: Expression,
+        opened: bool,
+    },
+
+    PatternApply {
+        input: Box<StreamingExecutor>,
+        pattern: Expression,
+        all_rows: Vec<Vec<Value>>,
+        result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+        opened: bool,
+    },
+
+    RollUpApply {
+        input: Box<StreamingExecutor>,
+        rollup_expressions: Vec<Expression>,
+        all_rows: Vec<Vec<Value>>,
+        result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+        opened: bool,
+    },
+
+    Minus {
+        left: Box<StreamingExecutor>,
+        right: Box<StreamingExecutor>,
+        exclude_rows: std::collections::HashSet<String>,
+        right_buffered: bool,
+        opened: bool,
+    },
+
+    Window {
+        input: Box<StreamingExecutor>,
+        window_exprs: Vec<Expression>,
+        partition_by_exprs: Vec<Expression>,
+        order_by_exprs: Vec<Expression>,
+        order_by_directions: Vec<SortDirection>,
+        all_rows: Vec<Vec<Value>>,
+        result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+        opened: bool,
+    },
+
+    // ============ Control Flow ============
+    Loop {
+        input: Box<StreamingExecutor>,
+        condition: Option<String>,
+        opened: bool,
+    },
+
+    Select {
+        input: Box<StreamingExecutor>,
+        selection_expr: Option<String>,
+        opened: bool,
+    },
+
+    PassThrough {
+        input: Box<StreamingExecutor>,
+        opened: bool,
+    },
+
+    BeginTransaction {
+        input: Box<StreamingExecutor>,
+        transaction_id: Option<String>,
+        opened: bool,
+    },
+
+    Commit {
+        input: Box<StreamingExecutor>,
+        transaction_id: Option<String>,
+        opened: bool,
+    },
+
+    Rollback {
+        input: Box<StreamingExecutor>,
+        transaction_id: Option<String>,
+        opened: bool,
+    },
+
+    // ============ Other (stub) ============
+    ShowStats {
+        input: Box<StreamingExecutor>,
+        opened: bool,
+    },
 }
 
 impl StreamingExecutor {
     /// Initialize the executor
     pub fn open(&mut self) -> Result<(), QueryError> {
         match self {
+            // Access operations
+            Self::Start { .. } => operators::access::open_start(self),
+            Self::GetVertices { .. } => operators::access::open_getvertices(self),
+            Self::GetEdges { .. } => operators::access::open_getedges(self),
+            Self::GetNeighbors { .. } => operators::access::open_getneighbors(self),
+            Self::IndexScan { .. } => operators::access::open_indexscan(self),
+            Self::EdgeIndexScan { .. } => operators::access::open_edgeindexscan(self),
+            Self::Argument { .. } => operators::access::open_argument(self),
+            Self::Sample { .. } => operators::access::open_sample(self),
+            // Data source operations
             Self::ScanVertices { .. } => operators::sources::open_scanvertices(self),
             Self::ScanEdges { .. } => operators::sources::open_scanedges(self),
+            // Single input operations
             Self::Filter { .. } => operators::single_input::open_filter(self),
             Self::Project { .. } => operators::single_input::open_project(self),
             Self::Limit { .. } => operators::single_input::open_limit(self),
             Self::Distinct { .. } => operators::single_input::open_distinct(self),
+            // Stateful operations
             Self::Aggregate { .. } => operators::stateful::open_aggregate(self),
             Self::Sort { .. } => operators::stateful::open_sort(self),
             Self::GroupBy { .. } => operators::stateful::open_groupby(self),
             Self::WindowFunction { .. } => operators::stateful::open_windowfunction(self),
+            // Binary operations
             Self::HashJoin { .. } => operators::binary::open_hashjoin(self),
             Self::NestedLoopJoin { .. } => operators::binary::open_nestedloopjoin(self),
+            Self::InnerJoin { .. } => operators::binary::open_innerjoin(self),
+            Self::LeftJoin { .. } => operators::binary::open_leftjoin(self),
+            Self::RightJoin { .. } => operators::binary::open_rightjoin(self),
+            Self::FullOuterJoin { .. } => operators::binary::open_fullouterjoin(self),
+            Self::CrossJoin { .. } => operators::binary::open_crossjoin(self),
+            Self::SemiJoin { .. } => operators::binary::open_semijoin(self),
+            // Set operations
             Self::Union { .. } => operators::set_ops::open_union(self),
             Self::UnionAll { .. } => operators::set_ops::open_unionall(self),
             Self::Intersect { .. } => operators::set_ops::open_intersect(self),
             Self::Except { .. } => operators::set_ops::open_except(self),
+            // Relational operations
+            Self::TopN { .. } => operators::relational::open_topn(self),
+            Self::Dedup { .. } => operators::relational::open_dedup(self),
+            Self::Assign { .. } => operators::relational::open_assign(self),
+            Self::Materialize { .. } => operators::relational::open_materialize(self),
+            Self::Remove { .. } => operators::relational::open_remove(self),
+            Self::DataCollect { .. } => operators::relational::open_datacollect(self),
+            Self::Unwind { .. } => operators::relational::open_unwind(self),
+            Self::Apply { .. } => operators::relational::open_apply(self),
+            Self::PatternApply { .. } => operators::relational::open_patternapply(self),
+            Self::RollUpApply { .. } => operators::relational::open_rolluapply(self),
+            Self::Minus { .. } => operators::relational::open_minus(self),
+            Self::Window { .. } => operators::relational::open_window(self),
+            // Data modification operations
+            Self::InsertVertices { .. } => operators::data_modification::open_insertvertices(self),
+            Self::InsertEdges { .. } => operators::data_modification::open_insertedges(self),
+            Self::UpdateVertices { .. } => operators::data_modification::open_updatevertices(self),
+            Self::UpdateEdges { .. } => operators::data_modification::open_updateedges(self),
+            Self::DeleteVertices { .. } => operators::data_modification::open_deletevertices(self),
+            Self::DeleteEdges { .. } => operators::data_modification::open_deleteedges(self),
+            Self::PipeDeleteVertices { .. } => operators::data_modification::open_pipedeletevertices(self),
+            Self::PipeDeleteEdges { .. } => operators::data_modification::open_pipedeleteedges(self),
+            // Graph traversal operations
+            Self::Expand { .. } => operators::graph_traversal::open_expand(self),
+            Self::ExpandAll { .. } => operators::graph_traversal::open_expandall(self),
+            Self::Traverse { .. } => operators::graph_traversal::open_traverse(self),
+            Self::TraverseAll { .. } => operators::graph_traversal::open_traverseall(self),
+            Self::AppendVertices { .. } => operators::graph_traversal::open_appendvertices(self),
+            Self::BiExpand { .. } => operators::graph_traversal::open_biexpand(self),
+            Self::BiTraverse { .. } => operators::graph_traversal::open_bitraverse(self),
+            Self::ShortestPath { .. } => operators::graph_traversal::open_shortestpath(self),
+            Self::BFSShortest { .. } => operators::graph_traversal::open_bfsshortest(self),
+            Self::AllPaths { .. } => operators::graph_traversal::open_allpaths(self),
+            Self::MultiShortestPath { .. } => operators::graph_traversal::open_multishortestpath(self),
+            // Search operations
+            Self::FulltextSearch { .. } => operators::search::open_fulltext_search(self),
+            Self::FulltextLookup { .. } => operators::search::open_fulltext_lookup(self),
+            Self::MatchFulltext { .. } => operators::search::open_match_fulltext(self),
+            Self::VectorSearch { .. } => operators::search::open_vector_search(self),
+            Self::VectorLookup { .. } => operators::search::open_vector_lookup(self),
+            // Management operations
+            Self::SpaceManage { .. } => operators::management::open_space_manage(self),
+            Self::TagManage { .. } => operators::management::open_tag_manage(self),
+            Self::EdgeManage { .. } => operators::management::open_edge_manage(self),
+            Self::IndexManage { .. } => operators::management::open_index_manage(self),
+            Self::UserManage { .. } => operators::management::open_user_manage(self),
+            Self::FulltextManage { .. } => operators::management::open_fulltext_manage(self),
+            Self::VectorManage { .. } => operators::management::open_vector_manage(self),
+            // Control flow operations
+            Self::Loop { .. } => operators::control_flow::open_loop(self),
+            Self::Select { .. } => operators::control_flow::open_select(self),
+            Self::PassThrough { .. } => operators::control_flow::open_passthrough(self),
+            Self::BeginTransaction { .. } => operators::control_flow::open_begin_transaction(self),
+            Self::Commit { .. } => operators::control_flow::open_commit(self),
+            Self::Rollback { .. } => operators::control_flow::open_rollback(self),
+            Self::ShowStats { .. } => operators::control_flow::open_show_stats(self),
+            // Stub implementations for all remaining variants
+            _ => Err(QueryError::execution("Operator not yet fully implemented in StreamingExecutor".to_string())),
         }
     }
 
     /// Pull next chunk from the executor
     pub fn next(&mut self) -> Result<Option<DataChunk>, QueryError> {
         match self {
+            // Access operations
+            Self::Start { .. } => operators::access::next_start(self),
+            Self::GetVertices { .. } => operators::access::next_getvertices(self),
+            Self::GetEdges { .. } => operators::access::next_getedges(self),
+            Self::GetNeighbors { .. } => operators::access::next_getneighbors(self),
+            Self::IndexScan { .. } => operators::access::next_indexscan(self),
+            Self::EdgeIndexScan { .. } => operators::access::next_edgeindexscan(self),
+            Self::Argument { .. } => operators::access::next_argument(self),
+            Self::Sample { .. } => operators::access::next_sample(self),
+            // Data source operations
             Self::ScanVertices { .. } => operators::sources::next_scanvertices(self),
             Self::ScanEdges { .. } => operators::sources::next_scanedges(self),
+            // Single input operations
             Self::Filter { .. } => operators::single_input::next_filter(self),
             Self::Project { .. } => operators::single_input::next_project(self),
             Self::Limit { .. } => operators::single_input::next_limit(self),
             Self::Distinct { .. } => operators::single_input::next_distinct(self),
+            // Stateful operations
             Self::Aggregate { .. } => operators::stateful::next_aggregate(self),
             Self::Sort { .. } => operators::stateful::next_sort(self),
             Self::GroupBy { .. } => operators::stateful::next_groupby(self),
             Self::WindowFunction { .. } => operators::stateful::next_windowfunction(self),
+            // Binary operations
             Self::HashJoin { .. } => operators::binary::next_hashjoin(self),
             Self::NestedLoopJoin { .. } => operators::binary::next_nestedloopjoin(self),
+            Self::InnerJoin { .. } => operators::binary::next_innerjoin(self),
+            Self::LeftJoin { .. } => operators::binary::next_leftjoin(self),
+            Self::RightJoin { .. } => operators::binary::next_rightjoin(self),
+            Self::FullOuterJoin { .. } => operators::binary::next_fullouterjoin(self),
+            Self::CrossJoin { .. } => operators::binary::next_crossjoin(self),
+            Self::SemiJoin { .. } => operators::binary::next_semijoin(self),
+            // Set operations
             Self::Union { .. } => operators::set_ops::next_union(self),
             Self::UnionAll { .. } => operators::set_ops::next_unionall(self),
             Self::Intersect { .. } => operators::set_ops::next_intersect(self),
             Self::Except { .. } => operators::set_ops::next_except(self),
+            // Relational operations
+            Self::TopN { .. } => operators::relational::next_topn(self),
+            Self::Dedup { .. } => operators::relational::next_dedup(self),
+            Self::Assign { .. } => operators::relational::next_assign(self),
+            Self::Materialize { .. } => operators::relational::next_materialize(self),
+            Self::Remove { .. } => operators::relational::next_remove(self),
+            Self::DataCollect { .. } => operators::relational::next_datacollect(self),
+            Self::Unwind { .. } => operators::relational::next_unwind(self),
+            Self::Apply { .. } => operators::relational::next_apply(self),
+            Self::PatternApply { .. } => operators::relational::next_patternapply(self),
+            Self::RollUpApply { .. } => operators::relational::next_rolluapply(self),
+            Self::Minus { .. } => operators::relational::next_minus(self),
+            Self::Window { .. } => operators::relational::next_window(self),
+            // Data modification operations
+            Self::InsertVertices { .. } => operators::data_modification::next_insertvertices(self),
+            Self::InsertEdges { .. } => operators::data_modification::next_insertedges(self),
+            Self::UpdateVertices { .. } => operators::data_modification::next_updatevertices(self),
+            Self::UpdateEdges { .. } => operators::data_modification::next_updateedges(self),
+            Self::DeleteVertices { .. } => operators::data_modification::next_deletevertices(self),
+            Self::DeleteEdges { .. } => operators::data_modification::next_deleteedges(self),
+            Self::PipeDeleteVertices { .. } => operators::data_modification::next_pipedeletevertices(self),
+            Self::PipeDeleteEdges { .. } => operators::data_modification::next_pipedeleteedges(self),
+            // Graph traversal operations
+            Self::Expand { .. } => operators::graph_traversal::next_expand(self),
+            Self::ExpandAll { .. } => operators::graph_traversal::next_expandall(self),
+            Self::Traverse { .. } => operators::graph_traversal::next_traverse(self),
+            Self::TraverseAll { .. } => operators::graph_traversal::next_traverseall(self),
+            Self::AppendVertices { .. } => operators::graph_traversal::next_appendvertices(self),
+            Self::BiExpand { .. } => operators::graph_traversal::next_biexpand(self),
+            Self::BiTraverse { .. } => operators::graph_traversal::next_bitraverse(self),
+            Self::ShortestPath { .. } => operators::graph_traversal::next_shortestpath(self),
+            Self::BFSShortest { .. } => operators::graph_traversal::next_bfsshortest(self),
+            Self::AllPaths { .. } => operators::graph_traversal::next_allpaths(self),
+            Self::MultiShortestPath { .. } => operators::graph_traversal::next_multishortestpath(self),
+            // Search operations
+            Self::FulltextSearch { .. } => operators::search::next_fulltext_search(self),
+            Self::FulltextLookup { .. } => operators::search::next_fulltext_lookup(self),
+            Self::MatchFulltext { .. } => operators::search::next_match_fulltext(self),
+            Self::VectorSearch { .. } => operators::search::next_vector_search(self),
+            Self::VectorLookup { .. } => operators::search::next_vector_lookup(self),
+            // Management operations
+            Self::SpaceManage { .. } => operators::management::next_space_manage(self),
+            Self::TagManage { .. } => operators::management::next_tag_manage(self),
+            Self::EdgeManage { .. } => operators::management::next_edge_manage(self),
+            Self::IndexManage { .. } => operators::management::next_index_manage(self),
+            Self::UserManage { .. } => operators::management::next_user_manage(self),
+            Self::FulltextManage { .. } => operators::management::next_fulltext_manage(self),
+            Self::VectorManage { .. } => operators::management::next_vector_manage(self),
+            // Control flow operations
+            Self::Loop { .. } => operators::control_flow::next_loop(self),
+            Self::Select { .. } => operators::control_flow::next_select(self),
+            Self::PassThrough { .. } => operators::control_flow::next_passthrough(self),
+            Self::BeginTransaction { .. } => operators::control_flow::next_begin_transaction(self),
+            Self::Commit { .. } => operators::control_flow::next_commit(self),
+            Self::Rollback { .. } => operators::control_flow::next_rollback(self),
+            Self::ShowStats { .. } => operators::control_flow::next_show_stats(self),
+            // Stub implementations for all remaining variants
+            _ => Err(QueryError::execution("Operator not yet fully implemented in StreamingExecutor".to_string())),
         }
     }
 
     /// Stop execution (for LIMIT)
     pub fn stop(&mut self) -> Result<(), QueryError> {
         match self {
+            // Access operations
+            Self::Start { .. } => operators::access::stop_start(self),
+            Self::GetVertices { .. } => operators::access::stop_getvertices(self),
+            Self::GetEdges { .. } => operators::access::stop_getedges(self),
+            Self::GetNeighbors { .. } => operators::access::stop_getneighbors(self),
+            Self::IndexScan { .. } => operators::access::stop_indexscan(self),
+            Self::EdgeIndexScan { .. } => operators::access::stop_edgeindexscan(self),
+            Self::Argument { .. } => operators::access::stop_argument(self),
+            Self::Sample { .. } => operators::access::stop_sample(self),
+            // Data source operations
             Self::ScanVertices { .. } => operators::sources::stop_scanvertices(self),
             Self::ScanEdges { .. } => operators::sources::stop_scanedges(self),
+            // Single input operations
             Self::Filter { .. } => operators::single_input::stop_filter(self),
             Self::Project { .. } => operators::single_input::stop_project(self),
             Self::Limit { .. } => operators::single_input::stop_limit(self),
             Self::Distinct { .. } => operators::single_input::stop_distinct(self),
+            // Stateful operations
             Self::Aggregate { .. } => operators::stateful::stop_aggregate(self),
             Self::Sort { .. } => operators::stateful::stop_sort(self),
             Self::GroupBy { .. } => operators::stateful::stop_groupby(self),
             Self::WindowFunction { .. } => operators::stateful::stop_windowfunction(self),
+            // Binary operations
             Self::HashJoin { .. } => operators::binary::stop_hashjoin(self),
             Self::NestedLoopJoin { .. } => operators::binary::stop_nestedloopjoin(self),
+            Self::InnerJoin { .. } => operators::binary::stop_innerjoin(self),
+            Self::LeftJoin { .. } => operators::binary::stop_leftjoin(self),
+            Self::RightJoin { .. } => operators::binary::stop_rightjoin(self),
+            Self::FullOuterJoin { .. } => operators::binary::stop_fullouterjoin(self),
+            Self::CrossJoin { .. } => operators::binary::stop_crossjoin(self),
+            Self::SemiJoin { .. } => operators::binary::stop_semijoin(self),
+            // Set operations
             Self::Union { .. } => operators::set_ops::stop_union(self),
             Self::UnionAll { .. } => operators::set_ops::stop_unionall(self),
             Self::Intersect { .. } => operators::set_ops::stop_intersect(self),
             Self::Except { .. } => operators::set_ops::stop_except(self),
+            // Relational operations
+            Self::TopN { .. } => operators::relational::stop_topn(self),
+            Self::Dedup { .. } => operators::relational::stop_dedup(self),
+            Self::Assign { .. } => operators::relational::stop_assign(self),
+            Self::Materialize { .. } => operators::relational::stop_materialize(self),
+            Self::Remove { .. } => operators::relational::stop_remove(self),
+            Self::DataCollect { .. } => operators::relational::stop_datacollect(self),
+            Self::Unwind { .. } => operators::relational::stop_unwind(self),
+            Self::Apply { .. } => operators::relational::stop_apply(self),
+            Self::PatternApply { .. } => operators::relational::stop_patternapply(self),
+            Self::RollUpApply { .. } => operators::relational::stop_rolluapply(self),
+            Self::Minus { .. } => operators::relational::stop_minus(self),
+            Self::Window { .. } => operators::relational::stop_window(self),
+            // Data modification operations
+            Self::InsertVertices { .. } => operators::data_modification::stop_insertvertices(self),
+            Self::InsertEdges { .. } => operators::data_modification::stop_insertedges(self),
+            Self::UpdateVertices { .. } => operators::data_modification::stop_updatevertices(self),
+            Self::UpdateEdges { .. } => operators::data_modification::stop_updateedges(self),
+            Self::DeleteVertices { .. } => operators::data_modification::stop_deletevertices(self),
+            Self::DeleteEdges { .. } => operators::data_modification::stop_deleteedges(self),
+            Self::PipeDeleteVertices { .. } => operators::data_modification::stop_pipedeletevertices(self),
+            Self::PipeDeleteEdges { .. } => operators::data_modification::stop_pipedeleteedges(self),
+            // Graph traversal operations
+            Self::Expand { .. } => operators::graph_traversal::stop_expand(self),
+            Self::ExpandAll { .. } => operators::graph_traversal::stop_expandall(self),
+            Self::Traverse { .. } => operators::graph_traversal::stop_traverse(self),
+            Self::TraverseAll { .. } => operators::graph_traversal::stop_traverseall(self),
+            Self::AppendVertices { .. } => operators::graph_traversal::stop_appendvertices(self),
+            Self::BiExpand { .. } => operators::graph_traversal::stop_biexpand(self),
+            Self::BiTraverse { .. } => operators::graph_traversal::stop_bitraverse(self),
+            Self::ShortestPath { .. } => operators::graph_traversal::stop_shortestpath(self),
+            Self::BFSShortest { .. } => operators::graph_traversal::stop_bfsshortest(self),
+            Self::AllPaths { .. } => operators::graph_traversal::stop_allpaths(self),
+            Self::MultiShortestPath { .. } => operators::graph_traversal::stop_multishortestpath(self),
+            // Search operations
+            Self::FulltextSearch { .. } => operators::search::stop_fulltext_search(self),
+            Self::FulltextLookup { .. } => operators::search::stop_fulltext_lookup(self),
+            Self::MatchFulltext { .. } => operators::search::stop_match_fulltext(self),
+            Self::VectorSearch { .. } => operators::search::stop_vector_search(self),
+            Self::VectorLookup { .. } => operators::search::stop_vector_lookup(self),
+            // Management operations
+            Self::SpaceManage { .. } => operators::management::stop_space_manage(self),
+            Self::TagManage { .. } => operators::management::stop_tag_manage(self),
+            Self::EdgeManage { .. } => operators::management::stop_edge_manage(self),
+            Self::IndexManage { .. } => operators::management::stop_index_manage(self),
+            Self::UserManage { .. } => operators::management::stop_user_manage(self),
+            Self::FulltextManage { .. } => operators::management::stop_fulltext_manage(self),
+            Self::VectorManage { .. } => operators::management::stop_vector_manage(self),
+            // Control flow operations
+            Self::Loop { .. } => operators::control_flow::stop_loop(self),
+            Self::Select { .. } => operators::control_flow::stop_select(self),
+            Self::PassThrough { .. } => operators::control_flow::stop_passthrough(self),
+            Self::BeginTransaction { .. } => operators::control_flow::stop_begin_transaction(self),
+            Self::Commit { .. } => operators::control_flow::stop_commit(self),
+            Self::Rollback { .. } => operators::control_flow::stop_rollback(self),
+            Self::ShowStats { .. } => operators::control_flow::stop_show_stats(self),
+            // Stub implementations for all remaining variants
+            _ => Ok(()),
         }
     }
 
     /// Clean up resources
     pub fn close(&mut self) -> Result<(), QueryError> {
         match self {
+            // Access operations
+            Self::Start { .. } => operators::access::close_start(self),
+            Self::GetVertices { .. } => operators::access::close_getvertices(self),
+            Self::GetEdges { .. } => operators::access::close_getedges(self),
+            Self::GetNeighbors { .. } => operators::access::close_getneighbors(self),
+            Self::IndexScan { .. } => operators::access::close_indexscan(self),
+            Self::EdgeIndexScan { .. } => operators::access::close_edgeindexscan(self),
+            Self::Argument { .. } => operators::access::close_argument(self),
+            Self::Sample { .. } => operators::access::close_sample(self),
+            // Data source operations
             Self::ScanVertices { .. } => operators::sources::close_scanvertices(self),
             Self::ScanEdges { .. } => operators::sources::close_scanedges(self),
+            // Single input operations
             Self::Filter { .. } => operators::single_input::close_filter(self),
             Self::Project { .. } => operators::single_input::close_project(self),
             Self::Limit { .. } => operators::single_input::close_limit(self),
             Self::Distinct { .. } => operators::single_input::close_distinct(self),
+            // Stateful operations
             Self::Aggregate { .. } => operators::stateful::close_aggregate(self),
             Self::Sort { .. } => operators::stateful::close_sort(self),
             Self::GroupBy { .. } => operators::stateful::close_groupby(self),
             Self::WindowFunction { .. } => operators::stateful::close_windowfunction(self),
+            // Binary operations
             Self::HashJoin { .. } => operators::binary::close_hashjoin(self),
             Self::NestedLoopJoin { .. } => operators::binary::close_nestedloopjoin(self),
+            Self::InnerJoin { .. } => operators::binary::close_innerjoin(self),
+            Self::LeftJoin { .. } => operators::binary::close_leftjoin(self),
+            Self::RightJoin { .. } => operators::binary::close_rightjoin(self),
+            Self::FullOuterJoin { .. } => operators::binary::close_fullouterjoin(self),
+            Self::CrossJoin { .. } => operators::binary::close_crossjoin(self),
+            Self::SemiJoin { .. } => operators::binary::close_semijoin(self),
+            // Set operations
             Self::Union { .. } => operators::set_ops::close_union(self),
             Self::UnionAll { .. } => operators::set_ops::close_unionall(self),
             Self::Intersect { .. } => operators::set_ops::close_intersect(self),
             Self::Except { .. } => operators::set_ops::close_except(self),
+            // Relational operations
+            Self::TopN { .. } => operators::relational::close_topn(self),
+            Self::Dedup { .. } => operators::relational::close_dedup(self),
+            Self::Assign { .. } => operators::relational::close_assign(self),
+            Self::Materialize { .. } => operators::relational::close_materialize(self),
+            Self::Remove { .. } => operators::relational::close_remove(self),
+            Self::DataCollect { .. } => operators::relational::close_datacollect(self),
+            Self::Unwind { .. } => operators::relational::close_unwind(self),
+            Self::Apply { .. } => operators::relational::close_apply(self),
+            Self::PatternApply { .. } => operators::relational::close_patternapply(self),
+            Self::RollUpApply { .. } => operators::relational::close_rolluapply(self),
+            Self::Minus { .. } => operators::relational::close_minus(self),
+            Self::Window { .. } => operators::relational::close_window(self),
+            // Data modification operations
+            Self::InsertVertices { .. } => operators::data_modification::close_insertvertices(self),
+            Self::InsertEdges { .. } => operators::data_modification::close_insertedges(self),
+            Self::UpdateVertices { .. } => operators::data_modification::close_updatevertices(self),
+            Self::UpdateEdges { .. } => operators::data_modification::close_updateedges(self),
+            Self::DeleteVertices { .. } => operators::data_modification::close_deletevertices(self),
+            Self::DeleteEdges { .. } => operators::data_modification::close_deleteedges(self),
+            Self::PipeDeleteVertices { .. } => operators::data_modification::close_pipedeletevertices(self),
+            Self::PipeDeleteEdges { .. } => operators::data_modification::close_pipedeleteedges(self),
+            // Graph traversal operations
+            Self::Expand { .. } => operators::graph_traversal::close_expand(self),
+            Self::ExpandAll { .. } => operators::graph_traversal::close_expandall(self),
+            Self::Traverse { .. } => operators::graph_traversal::close_traverse(self),
+            Self::TraverseAll { .. } => operators::graph_traversal::close_traverseall(self),
+            Self::AppendVertices { .. } => operators::graph_traversal::close_appendvertices(self),
+            Self::BiExpand { .. } => operators::graph_traversal::close_biexpand(self),
+            Self::BiTraverse { .. } => operators::graph_traversal::close_bitraverse(self),
+            Self::ShortestPath { .. } => operators::graph_traversal::close_shortestpath(self),
+            Self::BFSShortest { .. } => operators::graph_traversal::close_bfsshortest(self),
+            Self::AllPaths { .. } => operators::graph_traversal::close_allpaths(self),
+            Self::MultiShortestPath { .. } => operators::graph_traversal::close_multishortestpath(self),
+            // Search operations
+            Self::FulltextSearch { .. } => operators::search::close_fulltext_search(self),
+            Self::FulltextLookup { .. } => operators::search::close_fulltext_lookup(self),
+            Self::MatchFulltext { .. } => operators::search::close_match_fulltext(self),
+            Self::VectorSearch { .. } => operators::search::close_vector_search(self),
+            Self::VectorLookup { .. } => operators::search::close_vector_lookup(self),
+            // Management operations
+            Self::SpaceManage { .. } => operators::management::close_space_manage(self),
+            Self::TagManage { .. } => operators::management::close_tag_manage(self),
+            Self::EdgeManage { .. } => operators::management::close_edge_manage(self),
+            Self::IndexManage { .. } => operators::management::close_index_manage(self),
+            Self::UserManage { .. } => operators::management::close_user_manage(self),
+            Self::FulltextManage { .. } => operators::management::close_fulltext_manage(self),
+            Self::VectorManage { .. } => operators::management::close_vector_manage(self),
+            // Control flow operations
+            Self::Loop { .. } => operators::control_flow::close_loop(self),
+            Self::Select { .. } => operators::control_flow::close_select(self),
+            Self::PassThrough { .. } => operators::control_flow::close_passthrough(self),
+            Self::BeginTransaction { .. } => operators::control_flow::close_begin_transaction(self),
+            Self::Commit { .. } => operators::control_flow::close_commit(self),
+            Self::Rollback { .. } => operators::control_flow::close_rollback(self),
+            Self::ShowStats { .. } => operators::control_flow::close_show_stats(self),
+            // Stub implementations for all remaining variants
+            _ => Ok(()),
         }
     }
 }

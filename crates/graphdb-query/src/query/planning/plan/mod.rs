@@ -4,7 +4,7 @@ pub mod explain;
 pub mod validation;
 
 pub use core::PlanNodeEnum;
-pub use execution_plan::{ExecutionPlan, SubPlan};
+pub use execution_plan::{ExecutionMode, ExecutionPlan, SubPlan};
 
 pub use core::common::{EdgeProp, TagProp};
 pub use core::nodes::*;

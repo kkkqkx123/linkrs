@@ -251,6 +251,557 @@ pub fn close_nestedloopjoin(executor: &mut StreamingExecutor) -> Result<(), Quer
     }
 }
 
+// ============ InnerJoin (standard) ============
+
+pub fn open_innerjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::InnerJoin {
+            left,
+            right,
+            opened,
+            ..
+        } => {
+            left.open()?;
+            right.open()?;
+            *opened = true;
+            Ok(())
+        }
+        _ => unreachable!(),
+    }
+}
+
+pub fn next_innerjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    match executor {
+        StreamingExecutor::InnerJoin {
+            left,
+            right,
+            join_condition,
+            build_side_tuples,
+            left_consumed,
+            ..
+        } => {
+            if !*left_consumed {
+                // Build right side
+                while let Some(chunk) = right.next()? {
+                    for row in chunk.rows {
+                        build_side_tuples.push(row);
+                    }
+                }
+                *left_consumed = true;
+            }
+
+            if let Some(left_chunk) = left.next()? {
+                let left_col_names = left_chunk.col_names();
+                let mut result_rows = Vec::new();
+
+                for left_row in &left_chunk.rows {
+                    for right_row in build_side_tuples.iter() {
+                        let condition_satisfied = if let Some(condition) = join_condition {
+                            let mut combined_row = left_row.clone();
+                            combined_row.extend(right_row.clone());
+                            let mut combined_col_names = left_col_names.clone();
+                            for i in 0..right_row.len() {
+                                combined_col_names.push(format!("right_{}", i));
+                            }
+                            let mut context = ValueRowContext::new(combined_row, combined_col_names);
+                            match ExpressionEvaluator::evaluate(condition, &mut context) {
+                                Ok(Value::Bool(b)) => b,
+                                _ => false,
+                            }
+                        } else {
+                            true
+                        };
+
+                        if condition_satisfied {
+                            let mut joined_row = left_row.clone();
+                            joined_row.extend(right_row.clone());
+                            result_rows.push(joined_row);
+                        }
+                    }
+                }
+
+                if result_rows.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(DataChunk::from_rows(result_rows)))
+                }
+            } else {
+                Ok(None)
+            }
+        }
+        _ => unreachable!(),
+    }
+}
+
+pub fn stop_innerjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::InnerJoin { left, right, .. } => {
+            left.stop()?;
+            right.stop()
+        }
+        _ => unreachable!(),
+    }
+}
+
+pub fn close_innerjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::InnerJoin {
+            left,
+            right,
+            opened,
+            ..
+        } => {
+            if *opened {
+                left.close()?;
+                right.close()?;
+                *opened = false;
+            }
+            Ok(())
+        }
+        _ => unreachable!(),
+    }
+}
+
+// ============ LeftJoin ============
+
+pub fn open_leftjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::LeftJoin {
+            left,
+            right,
+            opened,
+            ..
+        } => {
+            left.open()?;
+            right.open()?;
+            *opened = true;
+            Ok(())
+        }
+        _ => unreachable!(),
+    }
+}
+
+pub fn next_leftjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    match executor {
+        StreamingExecutor::LeftJoin {
+            left,
+            right,
+            join_condition,
+            build_side_tuples,
+            left_consumed,
+            ..
+        } => {
+            if !*left_consumed {
+                while let Some(chunk) = right.next()? {
+                    for row in chunk.rows {
+                        build_side_tuples.push(row);
+                    }
+                }
+                *left_consumed = true;
+            }
+
+            if let Some(left_chunk) = left.next()? {
+                let left_col_names = left_chunk.col_names();
+                let mut result_rows = Vec::new();
+
+                for left_row in &left_chunk.rows {
+                    let mut matched = false;
+                    for right_row in build_side_tuples.iter() {
+                        let condition_satisfied = if let Some(condition) = join_condition {
+                            let mut combined_row = left_row.clone();
+                            combined_row.extend(right_row.clone());
+                            let mut combined_col_names = left_col_names.clone();
+                            for i in 0..right_row.len() {
+                                combined_col_names.push(format!("right_{}", i));
+                            }
+                            let mut context = ValueRowContext::new(combined_row, combined_col_names);
+                            match ExpressionEvaluator::evaluate(condition, &mut context) {
+                                Ok(Value::Bool(b)) => b,
+                                _ => false,
+                            }
+                        } else {
+                            true
+                        };
+
+                        if condition_satisfied {
+                            matched = true;
+                            let mut joined_row = left_row.clone();
+                            joined_row.extend(right_row.clone());
+                            result_rows.push(joined_row);
+                        }
+                    }
+
+                    // If no match, emit left row with NULLs for right columns
+                    if !matched {
+                        let mut unmatched_row = left_row.clone();
+                        for _ in 0..build_side_tuples.get(0).map(|r| r.len()).unwrap_or(0) {
+                            unmatched_row.push(Value::Null(crate::core::value::NullType::Null));
+                        }
+                        result_rows.push(unmatched_row);
+                    }
+                }
+
+                if result_rows.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(DataChunk::from_rows(result_rows)))
+                }
+            } else {
+                Ok(None)
+            }
+        }
+        _ => unreachable!(),
+    }
+}
+
+pub fn stop_leftjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::LeftJoin { left, right, .. } => {
+            left.stop()?;
+            right.stop()
+        }
+        _ => unreachable!(),
+    }
+}
+
+pub fn close_leftjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::LeftJoin {
+            left,
+            right,
+            opened,
+            ..
+        } => {
+            if *opened {
+                left.close()?;
+                right.close()?;
+                *opened = false;
+            }
+            Ok(())
+        }
+        _ => unreachable!(),
+    }
+}
+
+// ============ RightJoin ============
+
+pub fn open_rightjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::RightJoin {
+            left,
+            right,
+            opened,
+            ..
+        } => {
+            left.open()?;
+            right.open()?;
+            *opened = true;
+            Ok(())
+        }
+        _ => unreachable!(),
+    }
+}
+
+pub fn next_rightjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    Err(QueryError::execution(
+        "RightJoin not yet fully implemented".to_string(),
+    ))
+}
+
+pub fn stop_rightjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::RightJoin { left, right, .. } => {
+            left.stop()?;
+            right.stop()
+        }
+        _ => unreachable!(),
+    }
+}
+
+pub fn close_rightjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::RightJoin {
+            left,
+            right,
+            opened,
+            ..
+        } => {
+            if *opened {
+                left.close()?;
+                right.close()?;
+                *opened = false;
+            }
+            Ok(())
+        }
+        _ => unreachable!(),
+    }
+}
+
+// ============ FullOuterJoin ============
+
+pub fn open_fullouterjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::FullOuterJoin {
+            left,
+            right,
+            opened,
+            phase,
+            ..
+        } => {
+            left.open()?;
+            right.open()?;
+            *opened = true;
+            *phase = crate::query::executor::streaming::executor::FullOuterJoinPhase::BuildingRight;
+            Ok(())
+        }
+        _ => unreachable!(),
+    }
+}
+
+pub fn next_fullouterjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    Err(QueryError::execution(
+        "FullOuterJoin not yet fully implemented".to_string(),
+    ))
+}
+
+pub fn stop_fullouterjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::FullOuterJoin { left, right, .. } => {
+            left.stop()?;
+            right.stop()
+        }
+        _ => unreachable!(),
+    }
+}
+
+pub fn close_fullouterjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::FullOuterJoin {
+            left,
+            right,
+            opened,
+            ..
+        } => {
+            if *opened {
+                left.close()?;
+                right.close()?;
+                *opened = false;
+            }
+            Ok(())
+        }
+        _ => unreachable!(),
+    }
+}
+
+// ============ CrossJoin ============
+
+pub fn open_crossjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::CrossJoin {
+            left,
+            right,
+            opened,
+            ..
+        } => {
+            left.open()?;
+            right.open()?;
+            *opened = true;
+            Ok(())
+        }
+        _ => unreachable!(),
+    }
+}
+
+pub fn next_crossjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    match executor {
+        StreamingExecutor::CrossJoin {
+            left,
+            right,
+            all_left_rows,
+            all_right_rows,
+            left_consumed,
+            right_consumed,
+            ..
+        } => {
+            if !*left_consumed {
+                while let Some(chunk) = left.next()? {
+                    for row in chunk.rows {
+                        all_left_rows.push(row);
+                    }
+                }
+                *left_consumed = true;
+            }
+
+            if !*right_consumed {
+                while let Some(chunk) = right.next()? {
+                    for row in chunk.rows {
+                        all_right_rows.push(row);
+                    }
+                }
+                *right_consumed = true;
+            }
+
+            if all_left_rows.is_empty() || all_right_rows.is_empty() {
+                return Ok(None);
+            }
+
+            let mut result_rows = Vec::new();
+            for left_row in all_left_rows.iter() {
+                for right_row in all_right_rows.iter() {
+                    let mut joined_row = left_row.clone();
+                    joined_row.extend(right_row.clone());
+                    result_rows.push(joined_row);
+                }
+            }
+
+            if result_rows.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(DataChunk::from_rows(result_rows)))
+            }
+        }
+        _ => unreachable!(),
+    }
+}
+
+pub fn stop_crossjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::CrossJoin { left, right, .. } => {
+            left.stop()?;
+            right.stop()
+        }
+        _ => unreachable!(),
+    }
+}
+
+pub fn close_crossjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::CrossJoin {
+            left,
+            right,
+            opened,
+            ..
+        } => {
+            if *opened {
+                left.close()?;
+                right.close()?;
+                *opened = false;
+            }
+            Ok(())
+        }
+        _ => unreachable!(),
+    }
+}
+
+// ============ SemiJoin ============
+
+pub fn open_semijoin(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::SemiJoin {
+            left,
+            right,
+            opened,
+            ..
+        } => {
+            left.open()?;
+            right.open()?;
+            *opened = true;
+            Ok(())
+        }
+        _ => unreachable!(),
+    }
+}
+
+pub fn next_semijoin(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    match executor {
+        StreamingExecutor::SemiJoin {
+            left,
+            right,
+            join_condition,
+            right_rows,
+            right_consumed,
+            ..
+        } => {
+            if !*right_consumed {
+                while let Some(chunk) = right.next()? {
+                    for row in chunk.rows {
+                        right_rows.push(row);
+                    }
+                }
+                *right_consumed = true;
+            }
+
+            if let Some(left_chunk) = left.next()? {
+                let left_col_names = left_chunk.col_names();
+                let mut result_rows = Vec::new();
+
+                for left_row in &left_chunk.rows {
+                    for right_row in right_rows.iter() {
+                        let condition_satisfied = if let Some(condition) = join_condition {
+                            let mut combined_row = left_row.clone();
+                            combined_row.extend(right_row.clone());
+                            let mut combined_col_names = left_col_names.clone();
+                            for i in 0..right_row.len() {
+                                combined_col_names.push(format!("right_{}", i));
+                            }
+                            let mut context = ValueRowContext::new(combined_row, combined_col_names);
+                            match ExpressionEvaluator::evaluate(condition, &mut context) {
+                                Ok(Value::Bool(b)) => b,
+                                _ => false,
+                            }
+                        } else {
+                            true
+                        };
+
+                        if condition_satisfied {
+                            result_rows.push(left_row.clone());
+                            break; // SemiJoin only returns one copy of left row
+                        }
+                    }
+                }
+
+                if result_rows.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(DataChunk::from_rows(result_rows)))
+                }
+            } else {
+                Ok(None)
+            }
+        }
+        _ => unreachable!(),
+    }
+}
+
+pub fn stop_semijoin(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::SemiJoin { left, right, .. } => {
+            left.stop()?;
+            right.stop()
+        }
+        _ => unreachable!(),
+    }
+}
+
+pub fn close_semijoin(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::SemiJoin {
+            left,
+            right,
+            opened,
+            ..
+        } => {
+            if *opened {
+                left.close()?;
+                right.close()?;
+                *opened = false;
+            }
+            Ok(())
+        }
+        _ => unreachable!(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
