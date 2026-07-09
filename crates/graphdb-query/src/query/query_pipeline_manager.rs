@@ -31,8 +31,6 @@ use crate::core::{
 };
 use crate::query::executor::base::{BaseExecutor, ExecutionResult, Executor};
 use crate::query::executor::explain::{ExplainExecutor, ExplainMode, ProfileExecutor};
-use crate::query::executor::factory::ExecutorFactory;
-use crate::query::executor::utils::object_pool::{ObjectPoolConfig, ThreadSafeExecutorPool};
 use crate::query::metadata::MetadataContext;
 use crate::query::optimizer::OptimizerEngine;
 use crate::query::parser::ast::stmt::{ExplainStmt, ProfileStmt};
@@ -59,8 +57,6 @@ use std::time::Instant;
 ///
 /// Responsible for coordinating the overall query processing workflow, and utilizing optimization features by leveraging the `OptimizerEngine`.
 pub struct QueryPipelineManager<S: StorageClient + 'static> {
-    executor_factory: ExecutorFactory<S>,
-    object_pool: Arc<ThreadSafeExecutorPool<S>>,
     stats_manager: Arc<StatsManager>,
     /// Optimizer engine (reference to the global instance)
     optimizer_engine: Arc<OptimizerEngine>,
@@ -78,6 +74,10 @@ pub struct QueryPipelineManager<S: StorageClient + 'static> {
     /// Vector coordinator for vector search (feature-gated)
     #[cfg(feature = "qdrant")]
     vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
+    /// Storage client reference for EXPLAIN/PROFILE
+    storage: Option<Arc<RwLock<S>>>,
+    /// Sync manager for admin operations
+    sync_manager: Option<Arc<SyncManager>>,
 }
 
 impl<S: StorageClient + 'static> QueryPipelineManager<S> {
@@ -94,8 +94,6 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         stats_manager: Arc<StatsManager>,
         optimizer_engine: Arc<OptimizerEngine>,
     ) -> Self {
-        let executor_factory = ExecutorFactory::with_storage(storage.clone());
-        let object_pool = Arc::new(ThreadSafeExecutorPool::new(ObjectPoolConfig::default()));
         let plan_cache =
             Arc::new(QueryPlanCache::default().with_stats_manager(stats_manager.clone()));
         let param_handler = ParameterizedQueryHandler::default();
@@ -105,8 +103,6 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         log::info!("Query pipeline manager created, using optimizer engine and query plan cache");
 
         Self {
-            executor_factory,
-            object_pool,
             stats_manager,
             optimizer_engine,
             plan_cache,
@@ -117,6 +113,8 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             fulltext_manager: None,
             #[cfg(feature = "qdrant")]
             vector_coordinator: None,
+            storage: Some(storage),
+            sync_manager: None,
         }
     }
 
@@ -133,8 +131,6 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         optimizer_engine: Arc<OptimizerEngine>,
         plan_cache_config: PlanCacheConfig,
     ) -> Self {
-        let executor_factory = ExecutorFactory::with_storage(storage.clone());
-        let object_pool = Arc::new(ThreadSafeExecutorPool::new(ObjectPoolConfig::default()));
         let plan_cache = Arc::new(
             QueryPlanCache::new(plan_cache_config).with_stats_manager(stats_manager.clone()),
         );
@@ -147,8 +143,6 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         );
 
         Self {
-            executor_factory,
-            object_pool,
             stats_manager,
             optimizer_engine,
             plan_cache,
@@ -159,6 +153,8 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             fulltext_manager: None,
             #[cfg(feature = "qdrant")]
             vector_coordinator: None,
+            storage: Some(storage),
+            sync_manager: None,
         }
     }
 
@@ -212,20 +208,9 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         log::info!("Query plan cache cleared");
     }
 
-    /// Obtain object pool statistics.
-    pub fn object_pool_stats(&self) -> crate::query::executor::utils::object_pool::PoolStats {
-        self.object_pool.stats()
-    }
-
-    /// Clear object pool.
-    pub fn clear_object_pool(&self) {
-        self.object_pool.clear();
-        log::info!("Object pool cleared");
-    }
-
-    /// Set sync manager for executor factory
+    /// Set sync manager for admin operations
     pub fn with_sync_manager(mut self, sync_manager: Arc<SyncManager>) -> Self {
-        self.executor_factory.set_sync_manager(sync_manager);
+        self.sync_manager = Some(sync_manager);
         self
     }
 
@@ -311,9 +296,8 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
 
     /// Execute query with streaming execution support
     ///
-    /// Automatically decides whether to use streaming or materialized execution
-    /// based on the configured StreamingDecisionConfig. Falls back to materialized
-    /// execution if streaming fails.
+    /// This is now the standard execution path (using StreamingExecutor).
+    /// ExecutionModeOptimizer determines streaming vs materialized mode during optimization.
     ///
     /// # Parameters
     /// * `query_text` - The SQL query to execute
@@ -326,64 +310,8 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         query_text: &str,
         space_info: Option<crate::core::types::SpaceInfo>,
     ) -> DBResult<ExecutionResult> {
-        // 1. Create QueryContext
-        let rctx = Arc::new(QueryRequestContext::new(query_text.to_string()));
-        let mut query_context = QueryContext::new(rctx);
-
-        if let Some(ref space) = space_info {
-            query_context.set_space_info(space.clone());
-        }
-
-        let query_context = Arc::new(query_context);
-
-        // 2. Check plan cache
-        if let Some(cached_plan) = self.plan_cache.get(query_text) {
-            log::debug!("Query plan cache hit (streaming)");
-            let execute_start = Instant::now();
-            let result = self.execute_plan_with_streaming_routing(query_context, cached_plan.plan.clone())?;
-            let execution_time_ms = execute_start.elapsed().as_millis() as f64;
-            self.plan_cache.record_execution(query_text, execution_time_ms);
-            return Ok(result);
-        }
-
-        // 3. Parse and validate
-        let parser_result = self.parse_into_context(query_text)?;
-        let validation_info =
-            self.validate_query_with_context(parser_result.ast.clone(), query_context.clone())?;
-        let validated = ValidatedStatement::new(parser_result.ast.clone(), validation_info);
-
-        // 4. Route EXPLAIN/PROFILE
-        match validated.ast.stmt() {
-            crate::query::parser::ast::Stmt::Explain(explain_stmt) => {
-                return self.execute_explain(explain_stmt, query_context);
-            }
-            crate::query::parser::ast::Stmt::Profile(profile_stmt) => {
-                return self.execute_profile(profile_stmt, query_context);
-            }
-            _ => {}
-        }
-
-        // 5. Plan and optimize
-        let execution_plan = self.generate_execution_plan(query_context.clone(), &validated)?;
-        let optimized_plan = self.optimize_execution_plan(execution_plan)?;
-
-        // 6. Execute with streaming routing
-        let execute_start = Instant::now();
-        let result = self.execute_plan_with_streaming_routing(query_context, optimized_plan.clone())?;
-        let execution_time_ms = execute_start.elapsed().as_millis() as f64;
-
-        // 7. Cache plan
-        let should_cache = !matches!(
-            validated.ast.stmt(),
-            crate::query::parser::ast::Stmt::Insert(_)
-        );
-        if should_cache {
-            let param_positions = self.param_handler.extract_params(query_text);
-            self.plan_cache.put(query_text, optimized_plan, param_positions);
-            self.plan_cache.record_execution(query_text, execution_time_ms);
-        }
-
-        Ok(result)
+        // Use the standard execution pipeline (which now uses StreamingExecutor)
+        self.execute_query_with_space(query_text, space_info)
     }
 
     ///
@@ -1183,33 +1111,9 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         _query_context: Arc<QueryContext>,
         plan: crate::query::planning::plan::ExecutionPlan,
     ) -> DBResult<ExecutionResult> {
-        use crate::query::executor::factory::engine::PlanExecutor;
-        let mut plan_executor =
-            PlanExecutor::with_object_pool(self.executor_factory.clone(), self.object_pool.clone());
-
-        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
-
-        let storage = self.executor_factory.storage.clone().ok_or_else(|| {
-            DBError::from(QueryError::execution("Storage not available".to_string()))
-        })?;
-
-        plan_executor
-            .execute_plan(&plan, storage, expr_ctx)
-            .map_err(|e| DBError::from(QueryError::pipeline_execution_error(e)))
-    }
-
-    /// Execute plan using streaming executor (supports all execution modes)
-    ///
-    /// Uses StreamingExecutor for all operations, supporting execution modes
-    /// determined by OptimizerEngine during the optimization phase.
-    fn execute_plan_with_streaming_routing(
-        &mut self,
-        _query_context: Arc<QueryContext>,
-        plan: crate::query::planning::plan::ExecutionPlan,
-    ) -> DBResult<ExecutionResult> {
+        // Unified execution path: all queries use StreamingExecutor
         use crate::query::planning::plan::ExecutionMode;
 
-        // Use the execution mode determined by the optimizer
         let exec_mode = plan.execution_mode;
         log::debug!("Executing with StreamingExecutor, mode: {} (reason: {})",
                    exec_mode.as_str(), plan.execution_mode_reason);
@@ -1260,7 +1164,7 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         let optimized_plan = self.optimize_execution_plan(inner_plan)?;
 
         // 2. Create ExplainExecutor
-        let storage = self.executor_factory.storage.clone().ok_or_else(|| {
+        let storage = self.storage.clone().ok_or_else(|| {
             DBError::from(QueryError::execution("Storage not available".to_string()))
         })?;
 
@@ -1311,7 +1215,7 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         let optimized_plan = self.optimize_execution_plan(inner_plan)?;
 
         // 2. Create ExplainExecutor with Analyze mode
-        let storage = self.executor_factory.storage.clone().ok_or_else(|| {
+        let storage = self.storage.clone().ok_or_else(|| {
             DBError::from(QueryError::execution("Storage not available".to_string()))
         })?;
 
@@ -1362,7 +1266,7 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         let optimized_plan = self.optimize_execution_plan(inner_plan)?;
 
         // 2. Create ProfileExecutor
-        let storage = self.executor_factory.storage.clone().ok_or_else(|| {
+        let storage = self.storage.clone().ok_or_else(|| {
             DBError::from(QueryError::execution("Storage not available".to_string()))
         })?;
 

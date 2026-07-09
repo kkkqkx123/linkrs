@@ -12,7 +12,6 @@ use parking_lot::RwLock;
 use super::execution_context::ExecutionContext;
 use super::execution_result::{DBResult, ExecutionResult};
 use super::executor_stats::ExecutorStats;
-use crate::query::executor::base::ExecutorEnum;
 
 /// A unified Executor trait
 ///
@@ -66,22 +65,6 @@ pub trait HasInput<S> {
     fn set_input(&mut self, input: ExecutionResult);
 }
 
-/// Input Executor trait
-///
-/// Used to process input data from other actuators.
-/// Replace `Box<dyn Executor<S>>` with `ExecutorEnum` to achieve static distribution.
-pub trait InputExecutor<S: StorageClient + Send + 'static> {
-    fn set_input(&mut self, input: ExecutorEnum<S>);
-    fn get_input(&self) -> Option<&ExecutorEnum<S>>;
-}
-
-/// An executor trait that can be executed in a chained manner
-///
-/// Executors that support chained combination can implement this trait.
-pub trait ChainableExecutor<S: StorageClient + Send + 'static>:
-    Executor<S> + InputExecutor<S>
-{
-}
 
 /// Basic Executor
 ///

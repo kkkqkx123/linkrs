@@ -21,10 +21,6 @@ pub mod helpers;
 pub mod assign;
 pub use assign::AssignExecutor;
 
-// List Expansion Executor
-pub mod unwind;
-pub use unwind::UnwindExecutor;
-
 // Additional vertex executor
 pub mod append_vertices;
 pub use append_vertices::AppendVerticesExecutor;

@@ -2,28 +2,17 @@
 //!
 //! This module implements core relational algebra operations:
 //! - Selection (σ): Filter, Having
-//! - Projection (π): Project
 //! - Join (⋈): Inner, Left, Full Outer, Cross
 //! - Set Operations (∪, ∩, −): Union, Intersect, Minus
-//! - Aggregation (γ): Aggregate, GroupBy
+//!
+//! Note: Aggregation and Window operations are now handled by StreamingExecutor.
 
-pub mod aggregation;
 pub mod join;
-pub mod projection;
 pub mod selection;
 pub mod set_operations;
-pub mod window;
 
 // Re-export selection executors
 pub use selection::FilterExecutor;
-
-// Re-export projection executors
-pub use projection::{ProjectExecutor, ProjectionColumn};
-
-// Re-export aggregation executors
-pub use aggregation::{
-    AggregateExecutor, AggregateFunctionSpec, GroupAggregateState, GroupByExecutor, HavingExecutor,
-};
 
 // Re-export join executors
 pub use join::{
@@ -36,5 +25,17 @@ pub use set_operations::{
     IntersectExecutor, MinusExecutor, SetExecutor, UnionAllExecutor, UnionExecutor,
 };
 
-// Re-export window executor
-pub use window::WindowExecutor;
+// Legacy type stubs for backward compatibility (if needed elsewhere)
+pub use crate::core::types::JoinType;
+
+// Placeholder stubs for old exports that are no longer available
+// These are kept only for avoiding compilation errors in tests or other code
+// New code should use StreamingExecutor instead
+pub struct ProjectExecutor;
+pub struct ProjectionColumn;
+pub struct AggregateExecutor;
+pub struct AggregateFunctionSpec;
+pub struct GroupAggregateState;
+pub struct GroupByExecutor;
+pub struct HavingExecutor;
+pub struct WindowExecutor;

@@ -3,8 +3,8 @@
 //! Provide an executor object pool to reduce the frequent allocation and release of memory.
 //! Improving the performance of query execution
 
-use crate::query::executor::base::ExecutorEnum;
 use crate::storage::StorageClient;
+use crate::query::executor::base::ExecutorEnum;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::mem;

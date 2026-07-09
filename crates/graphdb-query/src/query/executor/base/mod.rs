@@ -9,13 +9,11 @@
 //! - executor_base.rs     - Basic executor implementation
 //! - result_processor.rs  - Result processor
 //! - config.rs            - Executor configuration structure
-//! - executor_enum.rs     - Executor enumeration
 
 pub mod config;
 pub mod execution_context;
 pub mod execution_result;
 pub mod executor_base;
-pub mod executor_enum;
 pub mod executor_stats;
 pub mod manage_executor_enums;
 pub mod result_processor;
@@ -28,10 +26,7 @@ pub use config::{
 pub use execution_context::ExecutionContext;
 pub use execution_result::{DBResult, ExecutionResult, IntoExecutionResult};
 pub use executor_base::{
-    BaseExecutor, ChainableExecutor, Executor, HasInput, HasStorage, InputExecutor, StartExecutor,
-};
-pub use executor_enum::{
-    ExecutorEnum, GraphOperationExecutor, JoinExecutor, ResultProcessingExecutor,
+    BaseExecutor, Executor, HasInput, HasStorage, StartExecutor,
 };
 pub use executor_stats::ExecutorStats;
 #[cfg(feature = "fulltext-search")]
@@ -45,3 +40,9 @@ pub use manage_executor_enums::{
 pub use result_processor::{BaseResultProcessor, ResultProcessor, ResultProcessorContext};
 
 pub use crate::core::types::EdgeDirection;
+
+// Stub for backward compatibility - ExecutorEnum has been removed in favor of StreamingExecutor
+// Legacy code still references this type; it's kept as a stub to allow compilation
+pub enum ExecutorEnum<S> {
+    _Phantom(std::marker::PhantomData<S>),
+}

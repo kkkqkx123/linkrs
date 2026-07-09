@@ -9,10 +9,9 @@ use std::time::Instant;
 use crate::core::error::{DBError, DBResult};
 use crate::core::types::VertexId;
 use crate::core::{Edge, Path, Value, Vertex};
-use crate::query::executor::base::ExecutorEnum;
 use crate::query::executor::base::{
     BaseExecutor, DBResult as ExecDBResult, EdgeDirection, ExecutionResult,
-    Executor as BaseExecutorTrait, ExecutorStats, HasStorage, InputExecutor,
+    Executor as BaseExecutorTrait, ExecutorStats, HasStorage,
 };
 use crate::query::validator::context::ExpressionAnalysisContext;
 use crate::query::DataSet;
@@ -396,16 +395,6 @@ impl<S: StorageClient + Send + 'static> BaseExecutorTrait<S> for SubgraphExecuto
 impl<S: StorageClient> HasStorage<S> for SubgraphExecutor<S> {
     fn get_storage(&self) -> &Arc<RwLock<S>> {
         self.base.get_storage()
-    }
-}
-
-impl<S: StorageClient + Send + 'static> InputExecutor<S> for SubgraphExecutor<S> {
-    fn set_input(&mut self, _input: ExecutorEnum<S>) {
-        // Subgraph queries do not require any input.
-    }
-
-    fn get_input(&self) -> Option<&ExecutorEnum<S>> {
-        None
     }
 }
 

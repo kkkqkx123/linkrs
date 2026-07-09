@@ -15,26 +15,6 @@ pub use agg_data::AggData;
 pub mod agg_function_manager;
 pub use agg_function_manager::AggFunctionManager;
 
-// Sorting Executor
-pub mod sort;
-pub use sort::{SortConfig, SortExecutor, SortKey, SortOrder};
-
-// Limit the execution of the actuator
-pub mod limit;
-pub use limit::LimitExecutor;
-
-// De-duplication executor
-pub mod dedup;
-pub use dedup::{DedupExecutor, DedupStrategy};
-
-// Sampling Executor
-pub mod sample;
-pub use sample::{SampleExecutor, SampleMethod};
-
-// TOP N Optimization
-pub mod topn;
-pub use topn::TopNExecutor;
-
 // Data conversion operations
 // These actuators perform data conversion operations, including:
 // Assign (variable assignment)
@@ -45,5 +25,4 @@ pub use topn::TopNExecutor;
 pub mod transformations;
 pub use transformations::{
     AppendVerticesExecutor, AssignExecutor, PatternApplyExecutor, RollUpApplyExecutor,
-    UnwindExecutor,
 };

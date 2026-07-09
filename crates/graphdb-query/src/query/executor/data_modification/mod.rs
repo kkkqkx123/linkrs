@@ -9,7 +9,7 @@ pub mod remove;
 pub mod tag_ops;
 pub mod update;
 
-pub use delete::{DeleteExecutor, PipeDeleteExecutor};
+pub use delete::DeleteExecutor;
 pub use index_ops::{CreateIndexExecutor, DropIndexExecutor};
 pub use insert::InsertExecutor;
 pub use remove::{RemoveExecutor, RemoveItem, RemoveItemType, RemoveResult};

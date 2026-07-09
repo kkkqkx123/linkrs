@@ -6,8 +6,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::query::executor::base::ExecutorEnum;
-use crate::query::executor::base::{DBResult, ExecutionResult, Executor, ExecutorStats};
+use crate::query::executor::base::{DBResult, ExecutionResult, Executor, ExecutorStats, ExecutorEnum};
 use crate::storage::StorageClient;
 
 use super::execution_stats_context::ExecutionStatsContext;

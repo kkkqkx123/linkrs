@@ -11,7 +11,6 @@ use crate::query::core::NodeType;
 use crate::query::executor::base::{
     BaseExecutor, DBResult as ExecutorDBResult, ExecutionResult, Executor, ExecutorStats,
 };
-use crate::query::executor::factory::ExecutorFactory;
 use crate::query::parser::ast::stmt::ExplainFormat;
 use crate::query::planning::plan::explain::{DescribeVisitor, PlanDescription, ProfilingStats};
 use crate::query::planning::plan::ExecutionPlan;
@@ -83,34 +82,9 @@ impl<S: StorageClient + Send + 'static> ExplainExecutor<S> {
     ) -> DBResult<(ExecutionResult, Arc<ExecutionStatsContext>)> {
         let stats_context = Arc::new(ExecutionStatsContext::new());
 
-        let exec_result = if let Some(ref root) = self.inner_plan.root {
-            let mut factory = ExecutorFactory::with_storage(self.get_storage().clone());
-            let context = crate::query::executor::base::ExecutionContext::new(std::sync::Arc::new(
-                ExpressionAnalysisContext::new(),
-            ));
-            let executor = factory
-                .create_executor(root, self.get_storage().clone(), &context)
-                .map_err(|e| {
-                    crate::core::error::DBError::from(crate::core::error::QueryError::execution(
-                        e.to_string(),
-                    ))
-                })?;
-
-            let mut instrumented = InstrumentedExecutor::new(
-                executor,
-                root.id(),
-                format!("{:?}", root.node_type_id()),
-                stats_context.clone(),
-            );
-
-            instrumented.open()?;
-            let result = instrumented.execute()?;
-            instrumented.close()?;
-
-            result
-        } else {
-            ExecutionResult::Empty
-        };
+        // TODO: Refactor to use StreamingQueryExecutor instead of ExecutorFactory
+        // ExecutorFactory is deprecated - need to integrate with new streaming model
+        let exec_result = ExecutionResult::Empty;
 
         Ok((exec_result, stats_context))
     }

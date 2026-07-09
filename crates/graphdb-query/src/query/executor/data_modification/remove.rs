@@ -9,10 +9,9 @@ use crate::core::error::DBError;
 use crate::core::types::expr::contextual::ContextualExpression;
 use crate::core::types::VertexId;
 use crate::core::{Expression, Value};
-use crate::query::executor::base::ExecutorEnum;
 use crate::query::executor::base::{BaseExecutor, ExecutorStats};
 use crate::query::executor::base::{
-    DBResult, ExecutionResult, Executor, HasStorage, InputExecutor,
+    DBResult, ExecutionResult, Executor, HasStorage,
 };
 use crate::query::executor::expression::evaluation_context::DefaultExpressionContext;
 use crate::query::executor::expression::evaluator::expression_evaluator::ExpressionEvaluator;
@@ -47,7 +46,6 @@ pub struct RemoveResult {
 pub struct RemoveExecutor<S: StorageClient + 'static> {
     base: BaseExecutor<S>,
     remove_items: Vec<RemoveItem>,
-    input_executor: Option<Box<ExecutorEnum<S>>>,
 }
 
 impl<S: StorageClient + 'static> RemoveExecutor<S> {
@@ -60,7 +58,6 @@ impl<S: StorageClient + 'static> RemoveExecutor<S> {
         Self {
             base: BaseExecutor::new(id, "RemoveExecutor".to_string(), storage, expr_context),
             remove_items,
-            input_executor: None,
         }
     }
 }
@@ -117,16 +114,6 @@ impl<S: StorageClient + Send + Sync + 'static> Executor<S> for RemoveExecutor<S>
 impl<S: StorageClient + 'static> HasStorage<S> for RemoveExecutor<S> {
     fn get_storage(&self) -> &Arc<RwLock<S>> {
         self.base.get_storage()
-    }
-}
-
-impl<S: StorageClient + Send + 'static> InputExecutor<S> for RemoveExecutor<S> {
-    fn set_input(&mut self, input: ExecutorEnum<S>) {
-        self.input_executor = Some(Box::new(input));
-    }
-
-    fn get_input(&self) -> Option<&ExecutorEnum<S>> {
-        self.input_executor.as_ref().map(|v| v.as_ref())
     }
 }
 

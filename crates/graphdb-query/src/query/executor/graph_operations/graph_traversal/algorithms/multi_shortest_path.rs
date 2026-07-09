@@ -9,10 +9,10 @@ use std::time::Instant;
 use crate::core::error::{DBError, DBResult};
 use crate::core::types::VertexId;
 use crate::core::{Edge, Path, Step, Value, Vertex};
-use crate::query::executor::base::ExecutorEnum;
-use crate::query::executor::base::{
+use crate::query::executor::base::{,
+    ExecutorEnum
     BaseExecutor, DBResult as ExecDBResult, EdgeDirection, ExecutionResult,
-    Executor as BaseExecutorTrait, ExecutorStats, HasStorage, InputExecutor,
+    Executor as BaseExecutorTrait, ExecutorStats, HasStorage,
     MultiShortestPathConfig,
 };
 use crate::query::DataSet;
@@ -507,20 +507,6 @@ impl<S: StorageClient + Send + 'static> BaseExecutorTrait<S> for MultiShortestPa
 impl<S: StorageClient> HasStorage<S> for MultiShortestPathExecutor<S> {
     fn get_storage(&self) -> &Arc<RwLock<S>> {
         self.base.get_storage()
-    }
-}
-
-impl<S: StorageClient + Send + 'static> InputExecutor<S> for MultiShortestPathExecutor<S> {
-    fn set_input(&mut self, input: ExecutorEnum<S>) {
-        if self.left_input.is_none() {
-            self.left_input = Some(Box::new(input));
-        } else if self.right_input.is_none() {
-            self.right_input = Some(Box::new(input));
-        }
-    }
-
-    fn get_input(&self) -> Option<&ExecutorEnum<S>> {
-        self.left_input.as_ref().map(|b| b.as_ref())
     }
 }
 
