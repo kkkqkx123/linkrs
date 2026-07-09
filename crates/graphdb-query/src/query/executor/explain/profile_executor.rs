@@ -6,9 +6,14 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::core::error::DBResult as ExecutorDBResult;
+use parking_lot::RwLock;
+
+use crate::core::error::{DBError, DBResult as ExecutorDBResult, QueryError};
 use crate::core::Value;
-use crate::query::executor::base::{BaseExecutor, ExecutionResult, Executor, ExecutorStats};
+use crate::query::executor::base::{
+    BaseExecutor, ExecutionResult, Executor, ExecutorStats,
+};
+use crate::query::executor::streaming::StreamingQueryExecutor;
 use crate::query::parser::ast::stmt::ExplainFormat;
 use crate::query::planning::plan::explain::{DescribeVisitor, PlanDescription, ProfilingStats};
 use crate::query::planning::plan::ExecutionPlan;
@@ -56,12 +61,33 @@ impl<S: StorageClient + Send + 'static> ProfileExecutor<S> {
     }
 
     /// Execute the inner plan with full instrumentation
-    /// TODO: wire up StreamingQueryExecutor for actual execution
     fn execute_profiled(
         &mut self,
     ) -> ExecutorDBResult<(ExecutionResult, Arc<ExecutionStatsContext>)> {
         let stats_context = Arc::new(ExecutionStatsContext::new());
-        Ok((ExecutionResult::Empty, stats_context))
+        let start = Instant::now();
+
+        let root_node = self.inner_plan.root.as_ref().ok_or_else(|| {
+            DBError::from(QueryError::execution("Empty execution plan".to_string()))
+        })?;
+
+        let mut exec_context = self.base.context.clone();
+        if let Some(ref storage) = self.base.storage {
+            let dyn_storage: Arc<RwLock<dyn StorageClient>> = storage.clone();
+            exec_context.storage = Some(dyn_storage);
+        }
+
+        let mut streaming_executor = StreamingQueryExecutor::new();
+        streaming_executor
+            .from_plan_node(root_node, &exec_context)
+            .map_err(DBError::from)?;
+
+        let result = streaming_executor.execute().map_err(DBError::from)?;
+
+        let exec_time_us = start.elapsed().as_micros() as u64;
+        stats_context.record_global_execution_time(exec_time_us);
+
+        Ok((result, stats_context))
     }
 
     /// Attach execution statistics to plan description

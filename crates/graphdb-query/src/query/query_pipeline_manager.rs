@@ -1126,8 +1126,25 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         // Create streaming executor from plan
         let mut executor = StreamingQueryExecutor::new();
 
+        let mut context = crate::query::executor::base::ExecutionContext::default();
+        if let Some(ref storage) = self.storage {
+            let dyn_storage: Arc<RwLock<dyn StorageClient>> = storage.clone();
+            context.storage = Some(dyn_storage);
+        }
+        #[cfg(feature = "fulltext-search")]
+        {
+            context.fulltext_manager = self.fulltext_manager.clone();
+        }
+        // Try to get space name from variables
+        if let Some(space_val) = context.get_variable("space_name") {
+            match &space_val {
+                crate::core::Value::String(s) => context.space_name = Some(s.clone()),
+                _ => {}
+            }
+        }
+
         executor
-            .from_plan_node(root_node, &crate::query::executor::base::ExecutionContext::default())
+            .from_plan_node(root_node, &context)
             .map_err(|e| DBError::from(QueryError::execution(
                 format!("Failed to create streaming executor: {}", e))))?;
 

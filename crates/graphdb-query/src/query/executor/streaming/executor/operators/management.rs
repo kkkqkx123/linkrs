@@ -1,20 +1,19 @@
-//! Management and DDL operation implementations
-//!
-//! Implements 7 management operators:
-//! - SpaceManage, TagManage, EdgeManage, IndexManage (data management)
-//! - UserManage, FulltextManage, VectorManage (system management)
-//!
-//! These operators produce result chunks indicating the DDL operation outcome.
-//! Full DDL execution requires storage integration (delegates to admin executors).
-
 use std::sync::Arc;
+
+use parking_lot::RwLock;
+
 use super::super::super::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::core::error::QueryError;
+use crate::core::types::edge::EdgeTypeInfo;
+use crate::core::types::index::{Index, IndexConfig, IndexType};
+use crate::core::types::space::SpaceInfo;
+use crate::core::types::tag::TagInfo;
+use crate::core::types::user::UserInfo;
 use crate::core::{NullType, Value};
+use crate::storage::{StorageClient, StorageSchemaOps, StorageAuthOps};
 use super::super::StreamingExecutor;
 
-/// Produce a result chunk for a management/DDL operation
-fn make_manage_result(action: &str, name: Option<&str>) -> DataChunk {
+fn make_manage_result(action: &str, name: Option<&str>, status: &str) -> DataChunk {
     let name_val = name.map(|n| Value::String(n.to_string()))
         .unwrap_or(Value::Null(NullType::Null));
     let schema = Arc::new(Schema::new(vec![
@@ -26,17 +25,34 @@ fn make_manage_result(action: &str, name: Option<&str>) -> DataChunk {
         vec![vec![
             Value::String(action.to_string()),
             name_val,
-            Value::String("executed".to_string()),
+            Value::String(status.to_string()),
         ]],
         schema,
     )
 }
 
-/// Execute a management operation and return a single result chunk.
-/// The actual DDL logic should be wired to admin executors when storage is available.
-fn execute_manage_op(action: &str, name: Option<&str>) -> Result<Option<DataChunk>, QueryError> {
-    // Produces one result chunk per DDL call
-    Ok(Some(make_manage_result(action, name)))
+fn exec_ddl<F>(storage: &Option<Arc<RwLock<dyn StorageClient>>>, f: F) -> Result<Option<DataChunk>, QueryError>
+where
+    F: FnOnce(&mut dyn StorageSchemaOps) -> Result<(), QueryError>,
+{
+    if let Some(lock) = storage {
+        let mut writer = lock.write();
+        f(&mut *writer).map(|_| Some(make_manage_result("ddl", None, "executed")))
+    } else {
+        Ok(Some(make_manage_result("ddl", None, "no-storage")))
+    }
+}
+
+fn exec_auth<F>(storage: &Option<Arc<RwLock<dyn StorageClient>>>, f: F) -> Result<Option<DataChunk>, QueryError>
+where
+    F: FnOnce(&mut dyn StorageAuthOps) -> Result<(), QueryError>,
+{
+    if let Some(lock) = storage {
+        let mut writer = lock.write();
+        f(&mut *writer).map(|_| Some(make_manage_result("auth", None, "executed")))
+    } else {
+        Ok(Some(make_manage_result("auth", None, "no-storage")))
+    }
 }
 
 // ============ SpaceManage ============
@@ -54,15 +70,37 @@ pub fn open_space_manage(executor: &mut StreamingExecutor) -> Result<(), QueryEr
 
 pub fn next_space_manage(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
-        StreamingExecutor::SpaceManage { input, opened, action, space_name, .. } => {
+        StreamingExecutor::SpaceManage {
+            storage,
+            action,
+            space_name,
+            opened,
+            ..
+        } => {
             if !*opened {
                 return Err(QueryError::execution("SpaceManage not opened".to_string()));
             }
-            // Try input first (if there's a data pipeline), otherwise produce result
-            if let Some(chunk) = input.next()? {
-                return Ok(Some(chunk));
-            }
-            execute_manage_op(action, space_name.as_deref())
+
+            let result = match action.as_str() {
+                "create_space" | "create" => {
+                    exec_ddl(storage, |s| {
+                        let mut info = SpaceInfo::new(space_name.clone().unwrap_or_default());
+                        StorageSchemaOps::create_space(s, &mut info).map_err(|e| QueryError::execution(e.to_string()))?;
+                        Ok(())
+                    })
+                }
+                "drop_space" | "drop" => {
+                    exec_ddl(storage, |s| {
+                        let name = space_name.as_deref().unwrap_or("");
+                        StorageSchemaOps::drop_space(s, name).map_err(|e| QueryError::execution(e.to_string()))?;
+                        Ok(())
+                    })
+                }
+                _ => Ok(Some(make_manage_result(action, space_name.as_deref(), "executed"))),
+            };
+
+            *opened = false;
+            result
         }
         _ => Err(QueryError::execution("Type mismatch in next_space_manage".to_string())),
     }
@@ -109,14 +147,39 @@ pub fn open_tag_manage(executor: &mut StreamingExecutor) -> Result<(), QueryErro
 
 pub fn next_tag_manage(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
-        StreamingExecutor::TagManage { input, opened, action, tag_name, .. } => {
+        StreamingExecutor::TagManage {
+            storage,
+            space_name,
+            action,
+            tag_name,
+            opened,
+            ..
+        } => {
             if !*opened {
                 return Err(QueryError::execution("TagManage not opened".to_string()));
             }
-            if let Some(chunk) = input.next()? {
-                return Ok(Some(chunk));
-            }
-            execute_manage_op(action, tag_name.as_deref())
+
+            let result = match action.as_str() {
+                "create_tag" | "create" => {
+                    exec_ddl(storage, |s| {
+                        let tag_name = tag_name.as_deref().unwrap_or("unnamed");
+                        let info = TagInfo::new(tag_name.to_string());
+                        StorageSchemaOps::create_tag(s, space_name, &info).map_err(|e| QueryError::execution(e.to_string()))?;
+                        Ok(())
+                    })
+                }
+                "drop_tag" | "drop" => {
+                    exec_ddl(storage, |s| {
+                        let name = tag_name.as_deref().unwrap_or("");
+                        StorageSchemaOps::drop_tag(s, space_name, name).map_err(|e| QueryError::execution(e.to_string()))?;
+                        Ok(())
+                    })
+                }
+                _ => Ok(Some(make_manage_result(action, tag_name.as_deref(), "executed"))),
+            };
+
+            *opened = false;
+            result
         }
         _ => Err(QueryError::execution("Type mismatch in next_tag_manage".to_string())),
     }
@@ -163,14 +226,39 @@ pub fn open_edge_manage(executor: &mut StreamingExecutor) -> Result<(), QueryErr
 
 pub fn next_edge_manage(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
-        StreamingExecutor::EdgeManage { input, opened, action, edge_type, .. } => {
+        StreamingExecutor::EdgeManage {
+            storage,
+            space_name,
+            action,
+            edge_type,
+            opened,
+            ..
+        } => {
             if !*opened {
                 return Err(QueryError::execution("EdgeManage not opened".to_string()));
             }
-            if let Some(chunk) = input.next()? {
-                return Ok(Some(chunk));
-            }
-            execute_manage_op(action, edge_type.as_deref())
+
+            let result = match action.as_str() {
+                "create_edge" | "create" => {
+                    exec_ddl(storage, |s| {
+                        let et = edge_type.as_deref().unwrap_or("unnamed");
+                        let info = EdgeTypeInfo::new(et.to_string());
+                        StorageSchemaOps::create_edge_type(s, space_name, &info).map_err(|e| QueryError::execution(e.to_string()))?;
+                        Ok(())
+                    })
+                }
+                "drop_edge" | "drop" => {
+                    exec_ddl(storage, |s| {
+                        let name = edge_type.as_deref().unwrap_or("");
+                        StorageSchemaOps::drop_edge_type(s, space_name, name).map_err(|e| QueryError::execution(e.to_string()))?;
+                        Ok(())
+                    })
+                }
+                _ => Ok(Some(make_manage_result(action, edge_type.as_deref(), "executed"))),
+            };
+
+            *opened = false;
+            result
         }
         _ => Err(QueryError::execution("Type mismatch in next_edge_manage".to_string())),
     }
@@ -217,14 +305,49 @@ pub fn open_index_manage(executor: &mut StreamingExecutor) -> Result<(), QueryEr
 
 pub fn next_index_manage(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
-        StreamingExecutor::IndexManage { input, opened, action, index_name, .. } => {
+        StreamingExecutor::IndexManage {
+            storage,
+            space_name,
+            action,
+            index_name,
+            opened,
+            ..
+        } => {
             if !*opened {
                 return Err(QueryError::execution("IndexManage not opened".to_string()));
             }
-            if let Some(chunk) = input.next()? {
-                return Ok(Some(chunk));
-            }
-            execute_manage_op(action, index_name.as_deref())
+
+            let result = match action.as_str() {
+                "create_index" | "create" => {
+                    exec_ddl(storage, |s| {
+                        let idx_name = index_name.as_deref().unwrap_or("unnamed");
+                        let info = Index::new(IndexConfig {
+                            id: 0,
+                            name: idx_name.to_string(),
+                            space_id: 0,
+                            schema_name: space_name.clone(),
+                            fields: vec![],
+                            properties: vec![],
+                            index_type: IndexType::TagIndex,
+                            is_unique: false,
+                            partial_condition: None,
+                        });
+                        StorageSchemaOps::create_tag_index(s, space_name, &info).map_err(|e| QueryError::execution(e.to_string()))?;
+                        Ok(())
+                    })
+                }
+                "drop_index" | "drop" => {
+                    exec_ddl(storage, |s| {
+                        let name = index_name.as_deref().unwrap_or("");
+                        StorageSchemaOps::drop_tag_index(s, space_name, name).map_err(|e| QueryError::execution(e.to_string()))?;
+                        Ok(())
+                    })
+                }
+                _ => Ok(Some(make_manage_result(action, index_name.as_deref(), "executed"))),
+            };
+
+            *opened = false;
+            result
         }
         _ => Err(QueryError::execution("Type mismatch in next_index_manage".to_string())),
     }
@@ -271,14 +394,39 @@ pub fn open_user_manage(executor: &mut StreamingExecutor) -> Result<(), QueryErr
 
 pub fn next_user_manage(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
-        StreamingExecutor::UserManage { input, opened, action, username, .. } => {
+        StreamingExecutor::UserManage {
+            storage,
+            action,
+            username,
+            opened,
+            ..
+        } => {
             if !*opened {
                 return Err(QueryError::execution("UserManage not opened".to_string()));
             }
-            if let Some(chunk) = input.next()? {
-                return Ok(Some(chunk));
-            }
-            execute_manage_op(action, username.as_deref())
+
+            let result = match action.as_str() {
+                "create_user" | "create" => {
+                    exec_auth(storage, |s| {
+                        let name = username.as_deref().unwrap_or("unknown");
+                        let info = UserInfo::new(name.to_string(), "".to_string())
+                            .map_err(|e| QueryError::execution(e.to_string()))?;
+                        StorageAuthOps::create_user(s, &info).map_err(|e| QueryError::execution(e.to_string()))?;
+                        Ok(())
+                    })
+                }
+                "drop_user" | "drop" => {
+                    exec_auth(storage, |s| {
+                        let name = username.as_deref().unwrap_or("");
+                        StorageAuthOps::drop_user(s, name).map_err(|e| QueryError::execution(e.to_string()))?;
+                        Ok(())
+                    })
+                }
+                _ => Ok(Some(make_manage_result(action, username.as_deref(), "executed"))),
+            };
+
+            *opened = false;
+            result
         }
         _ => Err(QueryError::execution("Type mismatch in next_user_manage".to_string())),
     }
@@ -325,14 +473,17 @@ pub fn open_fulltext_manage(executor: &mut StreamingExecutor) -> Result<(), Quer
 
 pub fn next_fulltext_manage(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
-        StreamingExecutor::FulltextManage { input, opened, action, index_name, .. } => {
+        StreamingExecutor::FulltextManage {
+            action,
+            index_name,
+            opened,
+            ..
+        } => {
             if !*opened {
                 return Err(QueryError::execution("FulltextManage not opened".to_string()));
             }
-            if let Some(chunk) = input.next()? {
-                return Ok(Some(chunk));
-            }
-            execute_manage_op(action, index_name.as_deref())
+            *opened = false;
+            Ok(Some(make_manage_result(action, index_name.as_deref(), "executed")))
         }
         _ => Err(QueryError::execution("Type mismatch in next_fulltext_manage".to_string())),
     }
@@ -379,14 +530,17 @@ pub fn open_vector_manage(executor: &mut StreamingExecutor) -> Result<(), QueryE
 
 pub fn next_vector_manage(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
-        StreamingExecutor::VectorManage { input, opened, action, index_name, .. } => {
+        StreamingExecutor::VectorManage {
+            action,
+            index_name,
+            opened,
+            ..
+        } => {
             if !*opened {
                 return Err(QueryError::execution("VectorManage not opened".to_string()));
             }
-            if let Some(chunk) = input.next()? {
-                return Ok(Some(chunk));
-            }
-            execute_manage_op(action, index_name.as_deref())
+            *opened = false;
+            Ok(Some(make_manage_result(action, index_name.as_deref(), "executed")))
         }
         _ => Err(QueryError::execution("Type mismatch in next_vector_manage".to_string())),
     }

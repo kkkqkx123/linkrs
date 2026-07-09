@@ -225,23 +225,24 @@ pub fn open_distinct(executor: &mut StreamingExecutor) -> Result<(), QueryError>
 pub fn next_distinct(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
         StreamingExecutor::Distinct { input, seen_rows, .. } => {
-            if let Some(chunk) = input.next()? {
-                let mut result_rows = Vec::new();
-                for row in chunk.rows {
-                    let row_str = format!("{:?}", row);
-                    if !seen_rows.contains(&row_str) {
-                        seen_rows.insert(row_str);
-                        result_rows.push(row);
-                    }
-                }
+            loop {
+                match input.next()? {
+                    Some(chunk) => {
+                        let mut result_rows = Vec::new();
+                        for row in chunk.rows {
+                            let row_str = format!("{:?}", row);
+                            if !seen_rows.contains(&row_str) {
+                                seen_rows.insert(row_str);
+                                result_rows.push(row);
+                            }
+                        }
 
-                if result_rows.is_empty() {
-                    executor.next()
-                } else {
-                    Ok(Some(DataChunk::from_rows(result_rows)))
+                        if !result_rows.is_empty() {
+                            return Ok(Some(DataChunk::from_rows(result_rows)));
+                        }
+                    }
+                    None => return Ok(None),
                 }
-            } else {
-                Ok(None)
             }
         }
         _ => unreachable!(),

@@ -31,60 +31,68 @@ pub fn next_hashjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
             left,
             right,
             join_condition,
-            build_side_tuples,
+            build_side_hash,
+            all_right_rows,
             left_consumed,
             ..
         } => {
             if !*left_consumed {
-                // Build right side - collect all rows from right executor
                 while let Some(chunk) = right.next()? {
                     for row in chunk.rows {
-                        build_side_tuples.push(row);
+                        all_right_rows.push(row.clone());
+                        let key = format!("{:?}", row);
+                        build_side_hash.entry(key).or_default().push(row);
                     }
                 }
-
                 *left_consumed = true;
+            }
+
+            if all_right_rows.is_empty() {
+                return Ok(None);
             }
 
             if let Some(left_chunk) = left.next()? {
                 let left_col_names = left_chunk.col_names();
                 let mut result_rows = Vec::new();
 
-                for left_row in &left_chunk.rows {
-                    for right_row in build_side_tuples.iter() {
-                        // Check join condition if provided
-                        let condition_satisfied = if let Some(condition) = join_condition {
-                            // Create combined row for context
-                            let mut combined_row = left_row.clone();
-                            combined_row.extend(right_row.clone());
-
-                            // Create schema for combined row with correct column names
-                            let mut combined_col_names = left_col_names.clone();
-                            // Add right columns with "right_" prefix to avoid conflicts
-                            for i in 0..right_row.len() {
-                                combined_col_names.push(format!("right_{}", i));
-                            }
-
-                            let mut context =
-                                ValueRowContext::new(combined_row, combined_col_names);
-
-                            match ExpressionEvaluator::evaluate(condition, &mut context) {
-                                Ok(value) => match value {
-                                    Value::Bool(b) => b,
-                                    Value::Null(_) => false,
-                                    _ => true,
-                                },
-                                Err(_) => false,
-                            }
-                        } else {
-                            // No condition means join all
-                            true
-                        };
-
-                        if condition_satisfied {
+                if join_condition.is_none() {
+                    // Cartesian product: match every left row with every right row
+                    for left_row in &left_chunk.rows {
+                        for right_row in all_right_rows.iter() {
                             let mut joined_row = left_row.clone();
                             joined_row.extend(right_row.clone());
                             result_rows.push(joined_row);
+                        }
+                    }
+                } else {
+                    // Hash join: match left rows via hash key, then verify condition
+                    let condition = join_condition.as_ref().unwrap();
+                    for left_row in &left_chunk.rows {
+                        let probe_key = format!("{:?}", left_row);
+                        if let Some(matching_rows) = build_side_hash.get(&probe_key) {
+                            for right_row in matching_rows {
+                                let mut combined_row = left_row.clone();
+                                combined_row.extend(right_row.clone());
+
+                                let mut combined_col_names = left_col_names.clone();
+                                for i in 0..right_row.len() {
+                                    combined_col_names.push(format!("right_{}", i));
+                                }
+
+                                let mut context =
+                                    ValueRowContext::new(combined_row, combined_col_names);
+
+                                let condition_satisfied = match ExpressionEvaluator::evaluate(condition, &mut context) {
+                                    Ok(Value::Bool(b)) => b,
+                                    _ => false,
+                                };
+
+                                if condition_satisfied {
+                                    let mut joined_row = left_row.clone();
+                                    joined_row.extend(right_row.clone());
+                                    result_rows.push(joined_row);
+                                }
+                            }
                         }
                     }
                 }
@@ -128,6 +136,14 @@ pub fn close_hashjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError
             Ok(())
         }
         _ => unreachable!(),
+    }
+}
+
+pub fn reset_hashjoin(executor: &mut StreamingExecutor) {
+    if let StreamingExecutor::HashJoin { build_side_hash, all_right_rows, left_consumed, .. } = executor {
+        build_side_hash.clear();
+        all_right_rows.clear();
+        *left_consumed = false;
     }
 }
 
@@ -659,7 +675,7 @@ pub fn next_fullouterjoin(executor: &mut StreamingExecutor) -> Result<Option<Dat
                         let right_col_count = right_rows.get(0).map(|r| r.len()).unwrap_or(0);
                         let mut all_results = Vec::new();
 
-                        for (left_idx, left_row) in left_rows.iter().enumerate() {
+                        for left_row in left_rows.iter() {
                             let mut matched = false;
                             for (right_idx, right_row) in right_rows.iter().enumerate() {
                                 let condition_satisfied = if let Some(condition) = join_condition {
@@ -690,14 +706,8 @@ pub fn next_fullouterjoin(executor: &mut StreamingExecutor) -> Result<Option<Dat
 
                             if !matched {
                                 let mut unmatched_row = left_row.clone();
-                                if left_idx == 0 {
-                                    for _ in 0..right_col_count {
-                                        unmatched_row.push(Value::Null(crate::core::value::NullType::Null));
-                                    }
-                                } else {
-                                    for _ in 0..right_col_count {
-                                        unmatched_row.push(Value::Null(crate::core::value::NullType::Null));
-                                    }
+                                for _ in 0..right_col_count {
+                                    unmatched_row.push(Value::Null(crate::core::value::NullType::Null));
                                 }
                                 all_results.push(unmatched_row);
                             }
@@ -1023,7 +1033,8 @@ mod tests {
             left,
             right,
             join_condition: None,
-            build_side_tuples: Vec::new(),
+            build_side_hash: std::collections::HashMap::new(),
+            all_right_rows: Vec::new(),
             left_consumed: false,
             opened: false,
         };
@@ -1050,21 +1061,20 @@ mod tests {
             current_index: 0,
         });
 
-        // Condition that never matches
         let join_condition = Some(Expression::Literal(Value::Bool(false)));
 
         let mut join = StreamingExecutor::HashJoin {
             left,
             right,
             join_condition,
-            build_side_tuples: Vec::new(),
+            build_side_hash: std::collections::HashMap::new(),
+            all_right_rows: Vec::new(),
             left_consumed: false,
             opened: false,
         };
 
         join.open().unwrap();
         let chunk = join.next().unwrap();
-        // No rows match the condition
         assert!(chunk.is_none());
         join.close().unwrap();
     }
@@ -1093,7 +1103,8 @@ mod tests {
             left,
             right,
             join_condition: None,
-            build_side_tuples: Vec::new(),
+            build_side_hash: std::collections::HashMap::new(),
+            all_right_rows: Vec::new(),
             left_consumed: false,
             opened: false,
         };
@@ -1101,7 +1112,7 @@ mod tests {
         join.open().unwrap();
         let chunk = join.next().unwrap();
         assert!(chunk.is_some());
-        // 2 left rows × 2 right rows = 4 result rows
+        // Cartesian product: 2 left rows × 2 right rows = 4 result rows
         assert_eq!(chunk.unwrap().len(), 4);
         join.close().unwrap();
     }
@@ -1199,7 +1210,8 @@ mod tests {
             left,
             right,
             join_condition: None,
-            build_side_tuples: Vec::new(),
+            build_side_hash: std::collections::HashMap::new(),
+            all_right_rows: Vec::new(),
             left_consumed: false,
             opened: false,
         };
@@ -1207,7 +1219,7 @@ mod tests {
         join.open().unwrap();
         let chunk = join.next().unwrap();
         assert!(chunk.is_some());
-        // Both left rows should match: 2 × 1 = 2
+        // Cartesian product: 2 left rows × 1 right row = 2 result rows
         assert_eq!(chunk.unwrap().len(), 2);
         join.close().unwrap();
     }
@@ -1230,7 +1242,8 @@ mod tests {
             left,
             right,
             join_condition: None,
-            build_side_tuples: Vec::new(),
+            build_side_hash: std::collections::HashMap::new(),
+            all_right_rows: Vec::new(),
             left_consumed: false,
             opened: false,
         };

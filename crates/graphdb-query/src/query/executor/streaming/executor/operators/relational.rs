@@ -4,10 +4,12 @@
 //! Apply, PatternApply, RollUpApply, Minus, Window
 
 use crate::core::error::QueryError;
+use crate::core::value::NullType;
 use crate::core::Value;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
-use super::super::{StreamingExecutor, ValueRowContext};
+use super::super::{SortDirection, StreamingExecutor, ValueRowContext};
+use super::super::helpers::comparison::compare_values;
 
 // ============ TopN ============
 
@@ -27,8 +29,8 @@ pub fn next_topn(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, 
         StreamingExecutor::TopN {
             input,
             n,
-            sort_expressions: _sort_expressions,
-            sort_directions: _sort_directions,
+            sort_expressions,
+            sort_directions,
             all_rows,
             result_iter,
             opened,
@@ -37,18 +39,48 @@ pub fn next_topn(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, 
                 return Err(QueryError::execution("TopN not opened".to_string()));
             }
 
-            // Collect all rows on first call
             if result_iter.is_none() {
+                let mut col_names: Vec<String> = vec![];
                 while let Some(chunk) = input.next()? {
+                    if col_names.is_empty() {
+                        col_names = chunk.col_names();
+                    }
                     all_rows.extend(chunk.rows);
                 }
 
-                // Keep only top N (simplified: just take first N rows)
+                all_rows.sort_by(|a, b| {
+                    for (idx, expr) in sort_expressions.iter().enumerate() {
+                        let direction = sort_directions
+                            .get(idx)
+                            .copied()
+                            .unwrap_or(SortDirection::Ascending);
+
+                        let mut ctx_a = ValueRowContext::new(a.clone(), col_names.clone());
+                        let mut ctx_b = ValueRowContext::new(b.clone(), col_names.clone());
+
+                        let val_a = ExpressionEvaluator::evaluate(expr, &mut ctx_a)
+                            .unwrap_or(Value::Null(NullType::Null));
+                        let val_b = ExpressionEvaluator::evaluate(expr, &mut ctx_b)
+                            .unwrap_or(Value::Null(NullType::Null));
+
+                        let cmp = compare_values(&val_a, &val_b);
+
+                        let final_cmp = match direction {
+                            SortDirection::Ascending => cmp,
+                            SortDirection::Descending => cmp.reverse(),
+                        };
+
+                        if final_cmp != std::cmp::Ordering::Equal {
+                            return final_cmp;
+                        }
+                    }
+                    std::cmp::Ordering::Equal
+                });
+
                 all_rows.truncate(*n as usize);
                 *result_iter = Some(all_rows.drain(..).collect::<Vec<_>>().into_iter());
             }
 
-            // Return next chunk
             if let Some(iter) = result_iter {
                 if let Some(row) = iter.next() {
                     Ok(Some(DataChunk::from_rows(vec![row])))

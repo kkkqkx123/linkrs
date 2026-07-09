@@ -206,17 +206,13 @@ pub fn next_intersect(executor: &mut StreamingExecutor) -> Result<Option<DataChu
             right_buffered,
             ..
         } => {
-            // Buffer left side
             if !*left_buffered {
                 while let Some(chunk) = left.next()? {
-                    for row in chunk.rows {
-                        left_rows.insert(format!("{:?}", row));
-                    }
+                    left_rows.extend(chunk.rows);
                 }
                 *left_buffered = true;
             }
 
-            // Buffer right side
             if !*right_buffered {
                 while let Some(chunk) = right.next()? {
                     for row in chunk.rows {
@@ -226,18 +222,16 @@ pub fn next_intersect(executor: &mut StreamingExecutor) -> Result<Option<DataChu
                 *right_buffered = true;
             }
 
-            // Find intersection and convert back to rows
-            let intersection: Vec<String> = left_rows
+            let result_rows: Vec<Vec<Value>> = left_rows
                 .iter()
-                .filter(|row| right_rows.contains(*row))
+                .filter(|row| right_rows.contains(&format!("{:?}", row)))
                 .cloned()
                 .collect();
 
-            if intersection.is_empty() {
+            if result_rows.is_empty() {
                 Ok(None)
             } else {
-                // Parse row strings back to Vec<Value> (simplified - just return as empty for now)
-                Ok(None)
+                Ok(Some(DataChunk::from_rows(result_rows)))
             }
         }
         _ => unreachable!(),
@@ -570,7 +564,7 @@ mod tests {
         let mut intersect = StreamingExecutor::Intersect {
             left,
             right,
-            left_rows: std::collections::HashSet::new(),
+            left_rows: Vec::new(),
             right_rows: std::collections::HashSet::new(),
             left_buffered: false,
             right_buffered: false,
@@ -578,9 +572,10 @@ mod tests {
         };
 
         intersect.open().unwrap();
-        // Note: Intersect's next_intersect has incomplete implementation (returns None)
-        // but we verify it opens and closes correctly
-        let _ = intersect.next();
+        let chunk = intersect.next().unwrap();
+        assert!(chunk.is_some());
+        // Intersection of {1,2,3} and {2,3,4} = {2,3}
+        assert_eq!(chunk.unwrap().len(), 2);
         intersect.close().unwrap();
     }
 
@@ -601,7 +596,7 @@ mod tests {
         let mut intersect = StreamingExecutor::Intersect {
             left,
             right,
-            left_rows: std::collections::HashSet::new(),
+            left_rows: Vec::new(),
             right_rows: std::collections::HashSet::new(),
             left_buffered: false,
             right_buffered: false,

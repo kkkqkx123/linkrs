@@ -13,11 +13,17 @@
 //! Note: Phase 2c-1 expanded from 16 to 79 variants with stub implementations.
 //! Actual implementations will be added incrementally in Phase 2c-2.
 
+use parking_lot::RwLock;
+use std::sync::Arc;
+
 use super::chunk::DataChunk;
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::AggregateFunction;
 use crate::core::Value;
+use crate::storage::StorageClient;
+#[cfg(feature = "fulltext-search")]
+use crate::search::manager::FulltextIndexManager;
 
 pub mod context;
 pub mod helpers;
@@ -127,12 +133,17 @@ pub enum StreamingExecutor {
 
     // ============ Binary Input ============
     /// HashJoin executor with join condition support
+    /// Builds a HashMap on the right side for O(1) probe lookup.
+    /// For condition-less joins (Cartesian product), all_right_rows stores all right rows.
     HashJoin {
         left: Box<StreamingExecutor>,
         right: Box<StreamingExecutor>,
-        /// Join condition expression
+        /// Join condition expression (None means Cartesian product)
         join_condition: Option<Expression>,
-        build_side_tuples: Vec<Vec<Value>>,
+        /// Hash table: stringified row key -> matching right rows
+        build_side_hash: std::collections::HashMap<String, Vec<Vec<Value>>>,
+        /// All right rows (for Cartesian product when no join_condition)
+        all_right_rows: Vec<Vec<Value>>,
         left_consumed: bool,
         opened: bool,
     },
@@ -209,9 +220,9 @@ pub enum StreamingExecutor {
     Intersect {
         left: Box<StreamingExecutor>,
         right: Box<StreamingExecutor>,
-        /// Rows from left side
-        left_rows: std::collections::HashSet<String>,
-        /// Rows from right side
+        /// Rows from left side (stored as Vec for output generation)
+        left_rows: Vec<Vec<Value>>,
+        /// Rows from right side (stored as HashSet for O(1) lookup)
         right_rows: std::collections::HashSet<String>,
         left_buffered: bool,
         right_buffered: bool,
@@ -228,13 +239,42 @@ pub enum StreamingExecutor {
         opened: bool,
     },
 
-    // ============ Access Operations (stub) ============
+    // ============ Access Operations ============
     Start { opened: bool },
-    GetVertices { opened: bool },
-    GetEdges { opened: bool },
-    GetNeighbors { opened: bool },
-    EdgeIndexScan { opened: bool },
-    IndexScan { opened: bool },
+    GetVertices {
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
+        vertex_ids: Option<Vec<Value>>,
+        opened: bool,
+    },
+    GetEdges {
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
+        edge_type: Option<String>,
+        src: Option<String>,
+        dst: Option<String>,
+        rank: i64,
+        opened: bool,
+    },
+    GetNeighbors {
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
+        direction: String,
+        opened: bool,
+    },
+    EdgeIndexScan {
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
+        edge_type: Option<String>,
+        opened: bool,
+    },
+    IndexScan {
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
+        index_name: Option<String>,
+        index_value: Option<Value>,
+        opened: bool,
+    },
     Argument { opened: bool },
     Sample { opened: bool },
 
@@ -295,6 +335,8 @@ pub enum StreamingExecutor {
     // ============ Graph Traversal Operations ============
     Expand {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         edge_type: String,
         direction: String,
         filter_expr: Option<Expression>,
@@ -303,6 +345,8 @@ pub enum StreamingExecutor {
 
     ExpandAll {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         edge_type: String,
         direction: String,
         filter_expr: Option<Expression>,
@@ -311,6 +355,8 @@ pub enum StreamingExecutor {
 
     Traverse {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         edge_type: String,
         direction: String,
         min_depth: u32,
@@ -322,6 +368,8 @@ pub enum StreamingExecutor {
 
     TraverseAll {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         edge_type: String,
         direction: String,
         min_depth: u32,
@@ -339,12 +387,16 @@ pub enum StreamingExecutor {
 
     BiExpand {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         edge_type: String,
         opened: bool,
     },
 
     BiTraverse {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         edge_type: String,
         min_depth: u32,
         max_depth: u32,
@@ -354,6 +406,8 @@ pub enum StreamingExecutor {
 
     ShortestPath {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         target_vertex: Option<Expression>,
         edge_type: String,
         direction: String,
@@ -362,6 +416,8 @@ pub enum StreamingExecutor {
 
     BFSShortest {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         target_vertex: Option<Expression>,
         edge_type: String,
         direction: String,
@@ -372,6 +428,8 @@ pub enum StreamingExecutor {
 
     AllPaths {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         target_vertex: Option<Expression>,
         edge_type: String,
         direction: String,
@@ -382,6 +440,8 @@ pub enum StreamingExecutor {
 
     MultiShortestPath {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         target_vertices: Vec<Expression>,
         edge_type: String,
         direction: String,
@@ -393,6 +453,8 @@ pub enum StreamingExecutor {
     // ============ Data Modification ============
     InsertVertices {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         vertex_properties: Vec<(String, Expression)>,
         tags: Vec<String>,
         rows_inserted: u64,
@@ -401,6 +463,8 @@ pub enum StreamingExecutor {
 
     InsertEdges {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         src_col: String,
         dst_col: String,
         edge_type: String,
@@ -411,6 +475,8 @@ pub enum StreamingExecutor {
 
     UpdateVertices {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         updates: Vec<(String, Expression)>,
         rows_updated: u64,
         opened: bool,
@@ -418,6 +484,8 @@ pub enum StreamingExecutor {
 
     UpdateEdges {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         updates: Vec<(String, Expression)>,
         rows_updated: u64,
         opened: bool,
@@ -425,6 +493,8 @@ pub enum StreamingExecutor {
 
     DeleteVertices {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         vertex_id_col: String,
         rows_deleted: u64,
         opened: bool,
@@ -432,6 +502,8 @@ pub enum StreamingExecutor {
 
     DeleteEdges {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         src_col: String,
         dst_col: String,
         rows_deleted: u64,
@@ -440,6 +512,8 @@ pub enum StreamingExecutor {
 
     PipeDeleteVertices {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         vertex_id_col: String,
         rows_deleted: u64,
         opened: bool,
@@ -447,8 +521,20 @@ pub enum StreamingExecutor {
 
     PipeDeleteEdges {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         src_col: String,
         dst_col: String,
+        rows_deleted: u64,
+        opened: bool,
+    },
+
+    DeleteTags {
+        input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
+        tag_names: Vec<String>,
+        vertex_ids: Option<Vec<Value>>,
         rows_deleted: u64,
         opened: bool,
     },
@@ -456,43 +542,82 @@ pub enum StreamingExecutor {
     // ============ Search Operations ============
     FulltextSearch {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
+        space_id: u64,
+        index_name: String,
         search_query: String,
-        search_field: Option<String>,
+        tag_name: String,
+        field_name: String,
+        #[cfg(feature = "fulltext-search")]
+        fulltext_manager: Option<Arc<FulltextIndexManager>>,
         opened: bool,
     },
 
     FulltextLookup {
         input: Box<StreamingExecutor>,
-        search_index: String,
-        lookup_key: Expression,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
+        space_id: u64,
+        index_name: String,
+        search_query: String,
+        tag_name: String,
+        field_name: String,
+        #[cfg(feature = "fulltext-search")]
+        fulltext_manager: Option<Arc<FulltextIndexManager>>,
         opened: bool,
     },
 
     MatchFulltext {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         match_expr: Expression,
         match_field: Option<String>,
+        tag_name: String,
+        field_name: String,
+        #[cfg(feature = "fulltext-search")]
+        fulltext_manager: Option<Arc<FulltextIndexManager>>,
         opened: bool,
     },
 
     VectorSearch {
         input: Box<StreamingExecutor>,
-        vector_field: String,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
+        index_name: String,
         query_vector: Vec<f32>,
         top_k: u32,
+        tag_name: String,
+        field_name: String,
         opened: bool,
     },
 
     VectorLookup {
         input: Box<StreamingExecutor>,
-        vector_index: String,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
+        index_name: String,
         lookup_key: Expression,
         opened: bool,
     },
 
-    // ============ Management/DDL ============
+    VectorMatch {
+        input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
+        pattern: String,
+        field: String,
+        query_vector: Vec<f32>,
+        threshold: Option<f32>,
+        tag_name: String,
+        field_name: String,
+        space_id: u64,
+        opened: bool,
+    },
     SpaceManage {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
         action: String,
         space_name: Option<String>,
         opened: bool,
@@ -500,6 +625,8 @@ pub enum StreamingExecutor {
 
     TagManage {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         action: String,
         tag_name: Option<String>,
         opened: bool,
@@ -507,6 +634,8 @@ pub enum StreamingExecutor {
 
     EdgeManage {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         action: String,
         edge_type: Option<String>,
         opened: bool,
@@ -514,6 +643,8 @@ pub enum StreamingExecutor {
 
     IndexManage {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         action: String,
         index_name: Option<String>,
         opened: bool,
@@ -521,6 +652,7 @@ pub enum StreamingExecutor {
 
     UserManage {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
         action: String,
         username: Option<String>,
         opened: bool,
@@ -528,6 +660,8 @@ pub enum StreamingExecutor {
 
     FulltextManage {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         action: String,
         index_name: Option<String>,
         opened: bool,
@@ -535,6 +669,8 @@ pub enum StreamingExecutor {
 
     VectorManage {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         action: String,
         index_name: Option<String>,
         opened: bool,
@@ -740,6 +876,7 @@ impl StreamingExecutor {
             Self::DeleteEdges { .. } => operators::data_modification::open_deleteedges(self),
             Self::PipeDeleteVertices { .. } => operators::data_modification::open_pipedeletevertices(self),
             Self::PipeDeleteEdges { .. } => operators::data_modification::open_pipedeleteedges(self),
+            Self::DeleteTags { .. } => operators::data_modification::open_deletetags(self),
             // Graph traversal operations
             Self::Expand { .. } => operators::graph_traversal::open_expand(self),
             Self::ExpandAll { .. } => operators::graph_traversal::open_expandall(self),
@@ -758,6 +895,7 @@ impl StreamingExecutor {
             Self::MatchFulltext { .. } => operators::search::open_match_fulltext(self),
             Self::VectorSearch { .. } => operators::search::open_vector_search(self),
             Self::VectorLookup { .. } => operators::search::open_vector_lookup(self),
+            Self::VectorMatch { .. } => operators::search::open_vector_match(self),
             // Management operations
             Self::SpaceManage { .. } => operators::management::open_space_manage(self),
             Self::TagManage { .. } => operators::management::open_tag_manage(self),
@@ -838,6 +976,7 @@ impl StreamingExecutor {
             Self::DeleteEdges { .. } => operators::data_modification::next_deleteedges(self),
             Self::PipeDeleteVertices { .. } => operators::data_modification::next_pipedeletevertices(self),
             Self::PipeDeleteEdges { .. } => operators::data_modification::next_pipedeleteedges(self),
+            Self::DeleteTags { .. } => operators::data_modification::next_deletetags(self),
             // Graph traversal operations
             Self::Expand { .. } => operators::graph_traversal::next_expand(self),
             Self::ExpandAll { .. } => operators::graph_traversal::next_expandall(self),
@@ -856,6 +995,7 @@ impl StreamingExecutor {
             Self::MatchFulltext { .. } => operators::search::next_match_fulltext(self),
             Self::VectorSearch { .. } => operators::search::next_vector_search(self),
             Self::VectorLookup { .. } => operators::search::next_vector_lookup(self),
+            Self::VectorMatch { .. } => operators::search::next_vector_match(self),
             // Management operations
             Self::SpaceManage { .. } => operators::management::next_space_manage(self),
             Self::TagManage { .. } => operators::management::next_tag_manage(self),
@@ -936,6 +1076,7 @@ impl StreamingExecutor {
             Self::DeleteEdges { .. } => operators::data_modification::stop_deleteedges(self),
             Self::PipeDeleteVertices { .. } => operators::data_modification::stop_pipedeletevertices(self),
             Self::PipeDeleteEdges { .. } => operators::data_modification::stop_pipedeleteedges(self),
+            Self::DeleteTags { .. } => operators::data_modification::stop_deletetags(self),
             // Graph traversal operations
             Self::Expand { .. } => operators::graph_traversal::stop_expand(self),
             Self::ExpandAll { .. } => operators::graph_traversal::stop_expandall(self),
@@ -954,6 +1095,7 @@ impl StreamingExecutor {
             Self::MatchFulltext { .. } => operators::search::stop_match_fulltext(self),
             Self::VectorSearch { .. } => operators::search::stop_vector_search(self),
             Self::VectorLookup { .. } => operators::search::stop_vector_lookup(self),
+            Self::VectorMatch { .. } => operators::search::stop_vector_match(self),
             // Management operations
             Self::SpaceManage { .. } => operators::management::stop_space_manage(self),
             Self::TagManage { .. } => operators::management::stop_tag_manage(self),
@@ -1034,6 +1176,7 @@ impl StreamingExecutor {
             Self::DeleteEdges { .. } => operators::data_modification::close_deleteedges(self),
             Self::PipeDeleteVertices { .. } => operators::data_modification::close_pipedeletevertices(self),
             Self::PipeDeleteEdges { .. } => operators::data_modification::close_pipedeleteedges(self),
+            Self::DeleteTags { .. } => operators::data_modification::close_deletetags(self),
             // Graph traversal operations
             Self::Expand { .. } => operators::graph_traversal::close_expand(self),
             Self::ExpandAll { .. } => operators::graph_traversal::close_expandall(self),
@@ -1052,6 +1195,7 @@ impl StreamingExecutor {
             Self::MatchFulltext { .. } => operators::search::close_match_fulltext(self),
             Self::VectorSearch { .. } => operators::search::close_vector_search(self),
             Self::VectorLookup { .. } => operators::search::close_vector_lookup(self),
+            Self::VectorMatch { .. } => operators::search::close_vector_match(self),
             // Management operations
             Self::SpaceManage { .. } => operators::management::close_space_manage(self),
             Self::TagManage { .. } => operators::management::close_tag_manage(self),

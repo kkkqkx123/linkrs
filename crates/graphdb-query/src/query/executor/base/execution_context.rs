@@ -7,6 +7,9 @@ use crate::core::Value;
 use crate::query::executor::expression::functions::global_registry_ref;
 use crate::query::executor::expression::functions::OwnedFunctionRef;
 use crate::query::validator::context::ExpressionAnalysisContext;
+use crate::storage::StorageClient;
+#[cfg(feature = "fulltext-search")]
+use crate::search::manager::FulltextIndexManager;
 #[cfg(feature = "fulltext-search")]
 use crate::search::tantivy_index::TantivySearchEngine;
 
@@ -17,6 +20,10 @@ pub struct ExecutionContext {
     pub expression_context: Arc<ExpressionAnalysisContext>,
     #[cfg(feature = "fulltext-search")]
     pub search_engine: Option<Arc<TantivySearchEngine>>,
+    #[cfg(feature = "fulltext-search")]
+    pub fulltext_manager: Option<Arc<FulltextIndexManager>>,
+    pub storage: Option<Arc<RwLock<dyn StorageClient>>>,
+    pub space_name: Option<String>,
     pub parameters: Arc<HashMap<String, crate::core::Value>>,
 }
 
@@ -28,6 +35,10 @@ impl ExecutionContext {
             expression_context,
             #[cfg(feature = "fulltext-search")]
             search_engine: None,
+            #[cfg(feature = "fulltext-search")]
+            fulltext_manager: None,
+            storage: None,
+            space_name: None,
             parameters: Arc::new(HashMap::new()),
         }
     }
@@ -42,6 +53,10 @@ impl ExecutionContext {
             expression_context,
             #[cfg(feature = "fulltext-search")]
             search_engine: None,
+            #[cfg(feature = "fulltext-search")]
+            fulltext_manager: None,
+            storage: None,
+            space_name: None,
             parameters: Arc::new(parameters),
         }
     }
@@ -56,6 +71,9 @@ impl ExecutionContext {
             variables: Arc::new(RwLock::new(HashMap::new())),
             expression_context,
             search_engine: Some(search_engine),
+            fulltext_manager: None,
+            storage: None,
+            space_name: None,
             parameters: Arc::new(HashMap::new()),
         }
     }
@@ -114,6 +132,10 @@ impl Default for ExecutionContext {
             expression_context: Arc::new(ExpressionAnalysisContext::new()),
             #[cfg(feature = "fulltext-search")]
             search_engine: None,
+            #[cfg(feature = "fulltext-search")]
+            fulltext_manager: None,
+            storage: None,
+            space_name: None,
             parameters: Arc::new(HashMap::new()),
         }
     }

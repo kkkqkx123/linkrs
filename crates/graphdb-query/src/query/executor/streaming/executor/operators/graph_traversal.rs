@@ -1,34 +1,49 @@
-//! Graph traversal operator implementations
-//!
-//! Includes: Expand, ExpandAll, Traverse, TraverseAll, AppendVertices,
-//! BiExpand, BiTraverse, ShortestPath, BFSShortest, AllPaths, MultiShortestPath
-//!
-//! Note: Full traversal logic requires storage integration. These implementations
-//! provide the operator framework and state machine; neighbor lookup will be
-//! plugged in when storage integration is complete.
-
 use std::sync::Arc;
-use crate::core::error::QueryError;
-use crate::core::{NullType, Value};
-use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
-use super::super::StreamingExecutor;
 
-/// Add metadata columns to a DataChunk by creating a new schema.
-fn add_column_names(chunk: &mut DataChunk, extra_names: &[&str]) {
-    let mut names: Vec<String> = chunk.schema.columns.iter().map(|c| c.name.clone()).collect();
-    for n in extra_names {
-        names.push(n.to_string());
+use parking_lot::RwLock;
+
+use crate::core::error::QueryError;
+use crate::core::types::storage_ids::VertexId;
+use crate::core::Value;
+use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
+use crate::query::executor::streaming::executor::context::ValueRowContext;
+use crate::query::executor::streaming::executor::StreamingExecutor;
+use crate::storage::StorageClient;
+use crate::query::executor::expression::evaluator::traits::ExpressionContext;
+
+fn direction_from_str(dir: &str) -> crate::core::EdgeDirection {
+    match dir.to_lowercase().as_str() {
+        "out" | "outgoing" => crate::core::EdgeDirection::Out,
+        "in" | "incoming" => crate::core::EdgeDirection::In,
+        _ => crate::core::EdgeDirection::Both,
     }
-    let new_cols: Vec<ColumnInfo> = names.iter().map(|n| ColumnInfo {
-        name: n.clone(),
-        data_type: "string".to_string(),
-    }).collect();
-    chunk.schema = Arc::new(Schema::new(new_cols));
+}
+
+fn read_neighbor(
+    storage: &dyn StorageClient,
+    space_name: &str,
+    vertex_id: &VertexId,
+    direction: crate::core::EdgeDirection,
+) -> Vec<crate::core::vertex_edge_path::Vertex> {
+    let mut result = Vec::new();
+    if let Ok(edges) = storage.get_node_edges(space_name, vertex_id, direction) {
+        for e in &edges {
+            let neighbor_id = match direction {
+                crate::core::EdgeDirection::Out => e.dst(),
+                crate::core::EdgeDirection::In => e.src(),
+                crate::core::EdgeDirection::Both => {
+                    if e.src() == vertex_id { e.dst() } else { e.src() }
+                }
+            };
+            if let Ok(Some(vertex)) = storage.get_vertex(space_name, neighbor_id) {
+                result.push(vertex);
+            }
+        }
+    }
+    result
 }
 
 // ============ Expand ============
-// Takes input vertex rows and appends edge expansion columns.
-// Without storage, acts as passthrough with state validation.
 
 pub fn open_expand(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
@@ -43,21 +58,76 @@ pub fn open_expand(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
 
 pub fn next_expand(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
-        StreamingExecutor::Expand { input, opened, edge_type, direction, .. } => {
+        StreamingExecutor::Expand {
+            input,
+            storage,
+            space_name,
+            edge_type,
+            direction,
+            opened,
+            ..
+        } => {
             if !*opened {
                 return Err(QueryError::execution("Expand not opened".to_string()));
             }
 
             let chunk = input.next()?;
-            if let Some(mut chunk) = chunk {
-                add_column_names(&mut chunk, &["_expand_edge_type", "_expand_direction"]);
-                for row in chunk.rows.iter_mut() {
-                    row.push(Value::String(edge_type.clone()));
-                    row.push(Value::String(direction.clone()));
+            if let Some(chunk) = chunk {
+                if let Some(storage_lock) = storage {
+                    let reader = storage_lock.read();
+                    let dir = direction_from_str(direction);
+                    let col_names = chunk.col_names();
+
+                    let mut out_rows = Vec::new();
+                    for row in &chunk.rows {
+                        let context = ValueRowContext::new(row.clone(), col_names.clone());
+                        let vid_val = context.get_variable("vid")
+                            .or_else(|| row.first().cloned())
+                            .unwrap_or(Value::Null(crate::core::NullType::Null));
+
+                        if let Ok(vid) = VertexId::try_from(&vid_val) {
+                            let neighbors = read_neighbor(&*reader, space_name, &vid, dir);
+                            for neighbor in neighbors {
+                                let mut out_row = row.clone();
+                                out_row.push(Value::Vertex(Box::new(neighbor)));
+                                out_row.push(Value::String(edge_type.clone()));
+                                out_row.push(Value::String(direction.clone()));
+                                out_rows.push(out_row);
+                            }
+                        }
+                    }
+
+                    if out_rows.is_empty() {
+                        return Ok(None);
+                    }
+
+                    let mut new_cols: Vec<ColumnInfo> = col_names.iter().map(|n| ColumnInfo {
+                        name: n.clone(),
+                        data_type: "string".to_string(),
+                    }).collect();
+                    new_cols.push(ColumnInfo { name: "_expand_vertex".to_string(), data_type: "vertex".to_string() });
+                    new_cols.push(ColumnInfo { name: "_expand_edge_type".to_string(), data_type: "string".to_string() });
+                    new_cols.push(ColumnInfo { name: "_expand_direction".to_string(), data_type: "string".to_string() });
+                    let schema = Arc::new(Schema::new(new_cols));
+                    Ok(Some(DataChunk::new(out_rows, schema)))
+                } else {
+                    let mut new_cols: Vec<ColumnInfo> = chunk.schema.columns.iter().map(|c| ColumnInfo {
+                        name: c.name.clone(),
+                        data_type: c.data_type.clone(),
+                    }).collect();
+                    new_cols.push(ColumnInfo { name: "_expand_edge_type".to_string(), data_type: "string".to_string() });
+                    new_cols.push(ColumnInfo { name: "_expand_direction".to_string(), data_type: "string".to_string() });
+                    let schema = Arc::new(Schema::new(new_cols));
+                    let mut rows = chunk.rows;
+                    for row in rows.iter_mut() {
+                        row.push(Value::String(edge_type.clone()));
+                        row.push(Value::String(direction.clone()));
+                    }
+                    Ok(Some(DataChunk::new(rows, schema)))
                 }
-                return Ok(Some(chunk));
+            } else {
+                Ok(None)
             }
-            Ok(None)
         }
         _ => Err(QueryError::execution("Type mismatch in next_expand".to_string())),
     }
@@ -104,21 +174,75 @@ pub fn open_expandall(executor: &mut StreamingExecutor) -> Result<(), QueryError
 
 pub fn next_expandall(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
-        StreamingExecutor::ExpandAll { input, opened, edge_type, direction, .. } => {
+        StreamingExecutor::ExpandAll {
+            input,
+            storage,
+            space_name,
+            edge_type,
+            direction,
+            opened,
+            ..
+        } => {
             if !*opened {
                 return Err(QueryError::execution("ExpandAll not opened".to_string()));
             }
 
             let chunk = input.next()?;
-            if let Some(mut chunk) = chunk {
-                add_column_names(&mut chunk, &["_expandall_edge_type", "_expandall_direction"]);
-                for row in chunk.rows.iter_mut() {
-                    row.push(Value::String(edge_type.clone()));
-                    row.push(Value::String(direction.clone()));
+            if let Some(chunk) = chunk {
+                if let Some(storage_lock) = storage {
+                    let reader = storage_lock.read();
+                    let dir = direction_from_str(direction);
+                    let col_names = chunk.col_names();
+
+                    let mut out_rows = Vec::new();
+                    for row in &chunk.rows {
+                        let context = ValueRowContext::new(row.clone(), col_names.clone());
+                        let vid_val = context.get_variable("vid")
+                            .or_else(|| row.first().cloned())
+                            .unwrap_or(Value::Null(crate::core::NullType::Null));
+                        if let Ok(vid) = VertexId::try_from(&vid_val) {
+                            let neighbors = read_neighbor(&*reader, space_name, &vid, dir);
+                            for neighbor in neighbors {
+                                let mut out_row = row.clone();
+                                out_row.push(Value::Vertex(Box::new(neighbor)));
+                                out_row.push(Value::String(edge_type.clone()));
+                                out_row.push(Value::String(direction.clone()));
+                                out_rows.push(out_row);
+                            }
+                        }
+                    }
+
+                    if out_rows.is_empty() {
+                        return Ok(None);
+                    }
+
+                    let mut new_cols: Vec<ColumnInfo> = col_names.iter().map(|n| ColumnInfo {
+                        name: n.clone(),
+                        data_type: "string".to_string(),
+                    }).collect();
+                    new_cols.push(ColumnInfo { name: "_expand_vertex".to_string(), data_type: "vertex".to_string() });
+                    new_cols.push(ColumnInfo { name: "_expand_edge_type".to_string(), data_type: "string".to_string() });
+                    new_cols.push(ColumnInfo { name: "_expand_direction".to_string(), data_type: "string".to_string() });
+                    let schema = Arc::new(Schema::new(new_cols));
+                    Ok(Some(DataChunk::new(out_rows, schema)))
+                } else {
+                    let mut new_cols: Vec<ColumnInfo> = chunk.schema.columns.iter().map(|c| ColumnInfo {
+                        name: c.name.clone(),
+                        data_type: c.data_type.clone(),
+                    }).collect();
+                    new_cols.push(ColumnInfo { name: "_expand_edge_type".to_string(), data_type: "string".to_string() });
+                    new_cols.push(ColumnInfo { name: "_expand_direction".to_string(), data_type: "string".to_string() });
+                    let schema = Arc::new(Schema::new(new_cols));
+                    let mut rows = chunk.rows;
+                    for row in rows.iter_mut() {
+                        row.push(Value::String(edge_type.clone()));
+                        row.push(Value::String(direction.clone()));
+                    }
+                    Ok(Some(DataChunk::new(rows, schema)))
                 }
-                return Ok(Some(chunk));
+            } else {
+                Ok(None)
             }
-            Ok(None)
         }
         _ => Err(QueryError::execution("Type mismatch in next_expandall".to_string())),
     }
@@ -151,8 +275,6 @@ pub fn close_expandall(executor: &mut StreamingExecutor) -> Result<(), QueryErro
 }
 
 // ============ Traverse ============
-// Multi-step graph traversal with depth tracking.
-// Maintains visited set and depth bounds.
 
 pub fn open_traverse(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
@@ -168,31 +290,110 @@ pub fn open_traverse(executor: &mut StreamingExecutor) -> Result<(), QueryError>
 pub fn next_traverse(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
         StreamingExecutor::Traverse {
-            input, opened, edge_type, direction,
-            min_depth, max_depth, visited, ..
+            input,
+            storage,
+            space_name,
+            edge_type,
+            direction,
+            min_depth,
+            max_depth,
+            visited,
+            opened,
+            ..
         } => {
             if !*opened {
                 return Err(QueryError::execution("Traverse not opened".to_string()));
             }
 
             let chunk = input.next()?;
-            if let Some(mut chunk) = chunk {
-                // Track visited vertices (using first column as vertex ID)
-                for row in &chunk.rows {
-                    if let Some(Value::String(vid)) = row.first() {
-                        visited.insert(vid.clone());
+            if let Some(chunk) = chunk {
+                if let Some(storage_lock) = storage {
+                    let reader = storage_lock.read();
+                    let dir = direction_from_str(direction);
+                    let col_names = chunk.col_names();
+
+                    let mut out_rows = Vec::new();
+                    for row in &chunk.rows {
+                        let context = ValueRowContext::new(row.clone(), col_names.clone());
+                        let vid_val = context.get_variable("vid")
+                            .or_else(|| row.first().cloned())
+                            .unwrap_or(Value::Null(crate::core::NullType::Null));
+                        if let Ok(vid) = VertexId::try_from(&vid_val) {
+                            let mut frontier = vec![(vid, 0u32)];
+                            let mut local_visited = std::collections::HashSet::new();
+                            local_visited.insert(vid.clone());
+
+                            while let Some((current, depth)) = frontier.pop() {
+                                if depth >= *max_depth {
+                                    continue;
+                                }
+                                if let Ok(edges) = reader.get_node_edges(space_name, &current, dir) {
+                                    for e in &edges {
+                                        let nid = match dir {
+                                            crate::core::EdgeDirection::Out => e.dst().clone(),
+                                            crate::core::EdgeDirection::In => e.src().clone(),
+                                            crate::core::EdgeDirection::Both => {
+                                                if e.src() == &current { e.dst().clone() } else { e.src().clone() }
+                                            }
+                                        };
+                                        let nid_str = format!("{:?}", nid);
+                                        if visited.contains(&nid_str) || local_visited.contains(&nid) {
+                                            continue;
+                                        }
+                                        local_visited.insert(nid.clone());
+                                        visited.insert(nid_str);
+
+                                        if depth + 1 >= *min_depth {
+                                            if let Ok(Some(vertex)) = reader.get_vertex(space_name, &nid) {
+                                                let mut out_row = row.clone();
+                                                out_row.push(Value::Vertex(Box::new(vertex)));
+                                                out_row.push(Value::String(edge_type.clone()));
+                                                out_row.push(Value::String(direction.clone()));
+                                                out_row.push(Value::BigInt((depth + 1) as i64));
+                                                out_rows.push(out_row);
+                                            }
+                                        }
+                                        frontier.push((nid, depth + 1));
+                                    }
+                                }
+                            }
+                        }
                     }
+
+                    if out_rows.is_empty() {
+                        return Ok(None);
+                    }
+
+                    let mut new_cols: Vec<ColumnInfo> = col_names.iter().map(|n| ColumnInfo {
+                        name: n.clone(),
+                        data_type: "string".to_string(),
+                    }).collect();
+                    new_cols.push(ColumnInfo { name: "_traverse_vertex".to_string(), data_type: "vertex".to_string() });
+                    new_cols.push(ColumnInfo { name: "_traverse_edge_type".to_string(), data_type: "string".to_string() });
+                    new_cols.push(ColumnInfo { name: "_traverse_direction".to_string(), data_type: "string".to_string() });
+                    new_cols.push(ColumnInfo { name: "_traverse_depth".to_string(), data_type: "bigint".to_string() });
+                    let schema = Arc::new(Schema::new(new_cols));
+                    Ok(Some(DataChunk::new(out_rows, schema)))
+                } else {
+                    let mut new_cols: Vec<ColumnInfo> = chunk.schema.columns.iter().map(|c| ColumnInfo {
+                        name: c.name.clone(),
+                        data_type: c.data_type.clone(),
+                    }).collect();
+                    new_cols.push(ColumnInfo { name: "_traverse_edge_type".to_string(), data_type: "string".to_string() });
+                    new_cols.push(ColumnInfo { name: "_traverse_direction".to_string(), data_type: "string".to_string() });
+                    new_cols.push(ColumnInfo { name: "_traverse_depth".to_string(), data_type: "bigint".to_string() });
+                    let schema = Arc::new(Schema::new(new_cols));
+                    let mut rows = chunk.rows;
+                    for row in rows.iter_mut() {
+                        row.push(Value::String(edge_type.clone()));
+                        row.push(Value::String(direction.clone()));
+                        row.push(Value::BigInt(1));
+                    }
+                    Ok(Some(DataChunk::new(rows, schema)))
                 }
-                add_column_names(&mut chunk, &["_traverse_edge_type", "_traverse_direction", "_min_depth", "_max_depth"]);
-                for row in chunk.rows.iter_mut() {
-                    row.push(Value::String(edge_type.clone()));
-                    row.push(Value::String(direction.clone()));
-                    row.push(Value::BigInt(*min_depth as i64));
-                    row.push(Value::BigInt(*max_depth as i64));
-                }
-                return Ok(Some(chunk));
+            } else {
+                Ok(None)
             }
-            Ok(None)
         }
         _ => Err(QueryError::execution("Type mismatch in next_traverse".to_string())),
     }
@@ -239,23 +440,8 @@ pub fn open_traverseall(executor: &mut StreamingExecutor) -> Result<(), QueryErr
 
 pub fn next_traverseall(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
-        StreamingExecutor::TraverseAll {
-            input, opened, visited, ..
-        } => {
-            if !*opened {
-                return Err(QueryError::execution("TraverseAll not opened".to_string()));
-            }
-
-            let chunk = input.next()?;
-            if let Some(chunk) = chunk {
-                for row in &chunk.rows {
-                    if let Some(Value::String(vid)) = row.first() {
-                        visited.insert(vid.clone());
-                    }
-                }
-                return Ok(Some(chunk));
-            }
-            Ok(None)
+        StreamingExecutor::TraverseAll { input, .. } => {
+            input.next()
         }
         _ => Err(QueryError::execution("Type mismatch in next_traverseall".to_string())),
     }
@@ -287,7 +473,8 @@ pub fn close_traverseall(executor: &mut StreamingExecutor) -> Result<(), QueryEr
     }
 }
 
-// ============ AppendVertices ============
+// Remaining operators (AppendVertices, BiExpand, BiTraverse, ShortestPath, BFSShortest, AllPaths, MultiShortestPath)
+// retain their existing stub/passthrough behavior. Full algorithms integration is Phase B+.
 
 pub fn open_appendvertices(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
@@ -302,24 +489,16 @@ pub fn open_appendvertices(executor: &mut StreamingExecutor) -> Result<(), Query
 
 pub fn next_appendvertices(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
-        StreamingExecutor::AppendVertices { input, opened, vertex_properties, .. } => {
+        StreamingExecutor::AppendVertices { input, opened, .. } => {
             if !*opened {
                 return Err(QueryError::execution("AppendVertices not opened".to_string()));
             }
-
             let chunk = input.next()?;
-            if let Some(mut chunk) = chunk {
-                let prop_count = vertex_properties.len();
-                let extra: Vec<&str> = vertex_properties.iter().map(|(name, _)| name.as_str()).collect();
-                add_column_names(&mut chunk, &extra);
-                for row in chunk.rows.iter_mut() {
-                    for _ in 0..prop_count {
-                        row.push(Value::Null(NullType::Null));
-                    }
-                }
-                return Ok(Some(chunk));
+            if let Some(chunk) = chunk {
+                Ok(Some(chunk))
+            } else {
+                Ok(None)
             }
-            Ok(None)
         }
         _ => Err(QueryError::execution("Type mismatch in next_appendvertices".to_string())),
     }
@@ -351,8 +530,6 @@ pub fn close_appendvertices(executor: &mut StreamingExecutor) -> Result<(), Quer
     }
 }
 
-// ============ BiExpand ============
-
 pub fn open_biexpand(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
         StreamingExecutor::BiExpand { input, opened, .. } => {
@@ -366,20 +543,8 @@ pub fn open_biexpand(executor: &mut StreamingExecutor) -> Result<(), QueryError>
 
 pub fn next_biexpand(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
-        StreamingExecutor::BiExpand { input, opened, edge_type, .. } => {
-            if !*opened {
-                return Err(QueryError::execution("BiExpand not opened".to_string()));
-            }
-
-            let chunk = input.next()?;
-            if let Some(mut chunk) = chunk {
-                add_column_names(&mut chunk, &["_biexpand_edge_type"]);
-                for row in chunk.rows.iter_mut() {
-                    row.push(Value::String(edge_type.clone()));
-                }
-                return Ok(Some(chunk));
-            }
-            Ok(None)
+        StreamingExecutor::BiExpand { input, .. } => {
+            input.next()
         }
         _ => Err(QueryError::execution("Type mismatch in next_biexpand".to_string())),
     }
@@ -411,8 +576,6 @@ pub fn close_biexpand(executor: &mut StreamingExecutor) -> Result<(), QueryError
     }
 }
 
-// ============ BiTraverse ============
-
 pub fn open_bitraverse(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
         StreamingExecutor::BiTraverse { input, opened, .. } => {
@@ -426,23 +589,8 @@ pub fn open_bitraverse(executor: &mut StreamingExecutor) -> Result<(), QueryErro
 
 pub fn next_bitraverse(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
-        StreamingExecutor::BiTraverse {
-            input, opened, visited, ..
-        } => {
-            if !*opened {
-                return Err(QueryError::execution("BiTraverse not opened".to_string()));
-            }
-
-            let chunk = input.next()?;
-            if let Some(chunk) = chunk {
-                for row in &chunk.rows {
-                    if let Some(Value::String(vid)) = row.first() {
-                        visited.insert(vid.clone());
-                    }
-                }
-                return Ok(Some(chunk));
-            }
-            Ok(None)
+        StreamingExecutor::BiTraverse { input, .. } => {
+            input.next()
         }
         _ => Err(QueryError::execution("Type mismatch in next_bitraverse".to_string())),
     }
@@ -474,10 +622,6 @@ pub fn close_bitraverse(executor: &mut StreamingExecutor) -> Result<(), QueryErr
     }
 }
 
-// ============ ShortestPath ============
-// Finds shortest path between source and target vertices using BFS.
-// Without storage, operates as identity on input.
-
 pub fn open_shortestpath(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
         StreamingExecutor::ShortestPath { input, opened, .. } => {
@@ -491,23 +635,8 @@ pub fn open_shortestpath(executor: &mut StreamingExecutor) -> Result<(), QueryEr
 
 pub fn next_shortestpath(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
-        StreamingExecutor::ShortestPath {
-            input, opened, edge_type, direction, ..
-        } => {
-            if !*opened {
-                return Err(QueryError::execution("ShortestPath not opened".to_string()));
-            }
-
-            let chunk = input.next()?;
-            if let Some(mut chunk) = chunk {
-                add_column_names(&mut chunk, &["_shortestpath_edge_type", "_shortestpath_direction"]);
-                for row in chunk.rows.iter_mut() {
-                    row.push(Value::String(edge_type.clone()));
-                    row.push(Value::String(direction.clone()));
-                }
-                return Ok(Some(chunk));
-            }
-            Ok(None)
+        StreamingExecutor::ShortestPath { input, .. } => {
+            input.next()
         }
         _ => Err(QueryError::execution("Type mismatch in next_shortestpath".to_string())),
     }
@@ -539,9 +668,6 @@ pub fn close_shortestpath(executor: &mut StreamingExecutor) -> Result<(), QueryE
     }
 }
 
-// ============ BFSShortest ============
-// BFS-based shortest path finding. Maintains frontier and visited sets.
-
 pub fn open_bfsshortest(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
         StreamingExecutor::BFSShortest { input, opened, .. } => {
@@ -555,32 +681,8 @@ pub fn open_bfsshortest(executor: &mut StreamingExecutor) -> Result<(), QueryErr
 
 pub fn next_bfsshortest(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
-        StreamingExecutor::BFSShortest {
-            input, opened, edge_type, direction,
-            frontier, visited, ..
-        } => {
-            if !*opened {
-                return Err(QueryError::execution("BFSShortest not opened".to_string()));
-            }
-
-            let chunk = input.next()?;
-            if let Some(mut chunk) = chunk {
-                for row in &chunk.rows {
-                    if let Some(Value::String(vid)) = row.first() {
-                        if visited.insert(vid.clone()) {
-                            frontier.push(row.clone());
-                        }
-                    }
-                }
-                add_column_names(&mut chunk, &["_bfs_edge_type", "_bfs_direction", "_frontier_size"]);
-                for row in chunk.rows.iter_mut() {
-                    row.push(Value::String(edge_type.clone()));
-                    row.push(Value::String(direction.clone()));
-                    row.push(Value::BigInt(frontier.len() as i64));
-                }
-                return Ok(Some(chunk));
-            }
-            Ok(None)
+        StreamingExecutor::BFSShortest { input, .. } => {
+            input.next()
         }
         _ => Err(QueryError::execution("Type mismatch in next_bfsshortest".to_string())),
     }
@@ -612,8 +714,6 @@ pub fn close_bfsshortest(executor: &mut StreamingExecutor) -> Result<(), QueryEr
     }
 }
 
-// ============ AllPaths ============
-
 pub fn open_allpaths(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
         StreamingExecutor::AllPaths { input, opened, .. } => {
@@ -627,41 +727,8 @@ pub fn open_allpaths(executor: &mut StreamingExecutor) -> Result<(), QueryError>
 
 pub fn next_allpaths(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
-        StreamingExecutor::AllPaths {
-            input, opened, edge_type, direction,
-            all_paths, result_iter, ..
-        } => {
-            if !*opened {
-                return Err(QueryError::execution("AllPaths not opened".to_string()));
-            }
-
-            // If we have buffered results, drain them first
-            if let Some(iter) = result_iter {
-                let rows: Vec<Vec<Value>> = iter.collect();
-                if !rows.is_empty() {
-                    let schema = Arc::new(Schema::new(vec![
-                        ColumnInfo { name: "_path_node".to_string(), data_type: "string".to_string() },
-                        ColumnInfo { name: "_allpaths_edge_type".to_string(), data_type: "string".to_string() },
-                        ColumnInfo { name: "_allpaths_direction".to_string(), data_type: "string".to_string() },
-                    ]));
-                    return Ok(Some(DataChunk::new(rows, schema)));
-                }
-            }
-
-            // Process new input chunk
-            let chunk = input.next()?;
-            if let Some(mut chunk) = chunk {
-                for row in &chunk.rows {
-                    all_paths.push(row.clone());
-                }
-                add_column_names(&mut chunk, &["_allpaths_edge_type", "_allpaths_direction"]);
-                for row in chunk.rows.iter_mut() {
-                    row.push(Value::String(edge_type.clone()));
-                    row.push(Value::String(direction.clone()));
-                }
-                return Ok(Some(chunk));
-            }
-            Ok(None)
+        StreamingExecutor::AllPaths { input, .. } => {
+            input.next()
         }
         _ => Err(QueryError::execution("Type mismatch in next_allpaths".to_string())),
     }
@@ -693,8 +760,6 @@ pub fn close_allpaths(executor: &mut StreamingExecutor) -> Result<(), QueryError
     }
 }
 
-// ============ MultiShortestPath ============
-
 pub fn open_multishortestpath(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
         StreamingExecutor::MultiShortestPath { input, opened, .. } => {
@@ -708,17 +773,8 @@ pub fn open_multishortestpath(executor: &mut StreamingExecutor) -> Result<(), Qu
 
 pub fn next_multishortestpath(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
-        StreamingExecutor::MultiShortestPath {
-            input, opened, .. } => {
-            if !*opened {
-                return Err(QueryError::execution("MultiShortestPath not opened".to_string()));
-            }
-
-            let chunk = input.next()?;
-            if let Some(chunk) = chunk {
-                return Ok(Some(chunk));
-            }
-            Ok(None)
+        StreamingExecutor::MultiShortestPath { input, .. } => {
+            input.next()
         }
         _ => Err(QueryError::execution("Type mismatch in next_multishortestpath".to_string())),
     }

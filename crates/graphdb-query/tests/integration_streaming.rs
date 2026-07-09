@@ -101,15 +101,16 @@ fn test_join_with_small_inputs() {
     ]);
 
     let right = create_scan_with_data(vec![
-        vec![Value::String("x".to_string()), Value::Int(10)],
-        vec![Value::String("y".to_string()), Value::Int(20)],
+        vec![Value::Int(1), Value::String("a".to_string())],
+        vec![Value::Int(2), Value::String("b".to_string())],
     ]);
 
     let mut join = StreamingExecutor::HashJoin {
         left: Box::new(left),
         right: Box::new(right),
         join_condition: None,
-        build_side_tuples: Vec::new(),
+        build_side_hash: std::collections::HashMap::new(),
+        all_right_rows: Vec::new(),
         left_consumed: false,
         opened: false,
     };
