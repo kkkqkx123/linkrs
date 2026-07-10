@@ -356,12 +356,13 @@ pub fn load_properties(path: &Path) -> StorageResult<PropertyTable> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::*;
+    use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
+use super::super::super::*;
     use crate::core::Value;
     use std::fs;
 
-    fn create_edge_table_with_props() -> super::super::super::EdgeTable {
-        let schema = super::super::super::EdgeSchema {
+    fn create_edge_table_with_props() -> TimeTravelEdgeStore {
+        let schema = EdgeSchema {
             label_id: 0,
             label_name: "knows".to_string(),
             src_label: 0,
@@ -374,11 +375,11 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        super::super::super::EdgeTable::new(schema).unwrap()
+        TimeTravelEdgeStore::new(schema).unwrap()
     }
 
-    fn create_edge_table() -> super::super::super::EdgeTable {
-        let schema = super::super::super::EdgeSchema {
+    fn create_edge_table() -> TimeTravelEdgeStore {
+        let schema = EdgeSchema {
             label_id: 0,
             label_name: "knows".to_string(),
             src_label: 0,
@@ -388,7 +389,7 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        super::super::super::EdgeTable::new(schema).unwrap()
+        TimeTravelEdgeStore::new(schema).unwrap()
     }
 
     #[test]
@@ -406,7 +407,7 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        let mut table = super::super::super::EdgeTable::new(schema).unwrap();
+        let mut table = TimeTravelEdgeStore::new(schema).unwrap();
 
         let ts = 100u32;
         table
@@ -442,7 +443,7 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        let mut loaded_table = super::super::super::EdgeTable::new(schema2).unwrap();
+        let mut loaded_table = TimeTravelEdgeStore::new(schema2).unwrap();
         loaded_table.load(&temp_dir).expect("load should succeed");
 
         assert_eq!(loaded_table.out_edges(1, ts).len(), 2);
@@ -473,7 +474,7 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        let mut table = super::super::super::EdgeTable::new(schema).unwrap();
+        let mut table = TimeTravelEdgeStore::new(schema).unwrap();
 
         table
             .insert_edge(1, 2, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
@@ -507,7 +508,7 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        let mut loaded_table = super::super::super::EdgeTable::new(schema2).unwrap();
+        let mut loaded_table = TimeTravelEdgeStore::new(schema2).unwrap();
         loaded_table.load(&temp_dir).expect("load should succeed");
 
         assert_eq!(loaded_table.out_segments.len(), 1);

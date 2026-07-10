@@ -40,8 +40,7 @@ pub fn next_hashjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                 while let Some(chunk) = right.next()? {
                     for row in chunk.rows {
                         all_right_rows.push(row.clone());
-                        let key = format!("{:?}", row);
-                        build_side_hash.entry(key).or_default().push(row);
+                        build_side_hash.entry(row.clone()).or_default().push(row);
                     }
                 }
                 *left_consumed = true;
@@ -56,7 +55,6 @@ pub fn next_hashjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                 let mut result_rows = Vec::new();
 
                 if join_condition.is_none() {
-                    // Cartesian product: match every left row with every right row
                     for left_row in &left_chunk.rows {
                         for right_row in all_right_rows.iter() {
                             let mut joined_row = left_row.clone();
@@ -65,30 +63,30 @@ pub fn next_hashjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                         }
                     }
                 } else {
-                    // Hash join: match left rows via hash key, then verify condition
                     let condition = join_condition.as_ref().unwrap();
                     for left_row in &left_chunk.rows {
-                        let probe_key = format!("{:?}", left_row);
-                        if let Some(matching_rows) = build_side_hash.get(&probe_key) {
+                        if let Some(matching_rows) = build_side_hash.get(left_row) {
                             for right_row in matching_rows {
-                                let mut combined_row = left_row.clone();
-                                combined_row.extend(right_row.clone());
+                                let mut combined = left_row.clone();
+                                combined.extend(right_row.clone());
 
-                                let mut combined_col_names = left_col_names.clone();
+                                let mut combined_names = left_col_names.clone();
                                 for i in 0..right_row.len() {
-                                    combined_col_names.push(format!("right_{}", i));
+                                    combined_names.push(format!("right_{}", i));
                                 }
 
-                                let mut context =
-                                    ValueRowContext::new(combined_row, combined_col_names);
+                                let mut ctx =
+                                    ValueRowContext::new(combined, combined_names);
 
-                                let condition_satisfied =
-                                    match ExpressionEvaluator::evaluate(condition, &mut context) {
-                                        Ok(Value::Bool(b)) => b,
-                                        _ => false,
-                                    };
+                                let satisfied = ExpressionEvaluator::evaluate(condition, &mut ctx)
+                                    .ok()
+                                    .and_then(|v| match v {
+                                        Value::Bool(b) => Some(b),
+                                        _ => None,
+                                    })
+                                    .unwrap_or(false);
 
-                                if condition_satisfied {
+                                if satisfied {
                                     let mut joined_row = left_row.clone();
                                     joined_row.extend(right_row.clone());
                                     result_rows.push(joined_row);
@@ -1036,12 +1034,14 @@ mod tests {
             partition_id: 0,
             buffer: create_left_buffer(),
             current_index: 0,
+            col_names: vec![],
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
             partition_id: 0,
             buffer: create_right_buffer(),
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut join = StreamingExecutor::HashJoin {
@@ -1068,12 +1068,14 @@ mod tests {
             partition_id: 0,
             buffer: vec![vec![Value::Int(10), Value::String("a".to_string())]],
             current_index: 0,
+            col_names: vec![],
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
             partition_id: 0,
             buffer: vec![vec![Value::Int(20), Value::String("b".to_string())]],
             current_index: 0,
+            col_names: vec![],
         });
 
         let join_condition = Some(Expression::Literal(Value::Bool(false)));
@@ -1103,6 +1105,7 @@ mod tests {
                 vec![Value::Int(1), Value::String("a2".to_string())],
             ],
             current_index: 0,
+            col_names: vec![],
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -1112,6 +1115,7 @@ mod tests {
                 vec![Value::Int(1), Value::String("b2".to_string())],
             ],
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut join = StreamingExecutor::HashJoin {
@@ -1138,6 +1142,7 @@ mod tests {
             partition_id: 0,
             buffer: vec![vec![Value::Int(1)], vec![Value::Int(2)]],
             current_index: 0,
+            col_names: vec![],
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -1148,6 +1153,7 @@ mod tests {
                 vec![Value::Int(30)],
             ],
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut join = StreamingExecutor::NestedLoopJoin {
@@ -1173,12 +1179,14 @@ mod tests {
             partition_id: 0,
             buffer: vec![vec![Value::Int(1)], vec![Value::Int(2)]],
             current_index: 0,
+            col_names: vec![],
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
             partition_id: 0,
             buffer: vec![vec![Value::Int(1)], vec![Value::Int(2)]],
             current_index: 0,
+            col_names: vec![],
         });
 
         // Condition: always true
@@ -1210,12 +1218,14 @@ mod tests {
                 vec![Value::Int(2), Value::String("b".to_string())],
             ],
             current_index: 0,
+            col_names: vec![],
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
             partition_id: 0,
             buffer: vec![vec![Value::String("x".to_string()), Value::Int(10)]],
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut join = StreamingExecutor::HashJoin {
@@ -1242,12 +1252,14 @@ mod tests {
             partition_id: 0,
             buffer: vec![vec![Value::Int(1), Value::String("left".to_string())]],
             current_index: 0,
+            col_names: vec![],
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
             partition_id: 0,
             buffer: vec![vec![Value::Int(2), Value::String("right".to_string())]],
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut join = StreamingExecutor::HashJoin {

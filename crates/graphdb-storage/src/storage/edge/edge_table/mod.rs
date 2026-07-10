@@ -1024,6 +1024,8 @@ mod tests {
     use super::*;
     use crate::core::types::{DataType, VertexId};
     use crate::core::Value;
+    use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
+    use crate::storage::edge::EdgeSchema;
     use crate::storage::types::StoragePropertyDef;
 
     fn create_test_schema() -> EdgeSchema {
@@ -1045,7 +1047,7 @@ mod tests {
     #[test]
     fn test_freeze_csr_preserves_reads() {
         let schema = create_test_schema();
-        let mut table = EdgeTable::new(schema).unwrap();
+        let mut table = TimeTravelEdgeStore::new(schema).unwrap();
 
         table
             .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
@@ -1069,7 +1071,7 @@ mod tests {
     #[test]
     fn test_delete_base_segment_uses_tombstone() {
         let schema = create_test_schema();
-        let mut table = EdgeTable::new(schema).unwrap();
+        let mut table = TimeTravelEdgeStore::new(schema).unwrap();
 
         table.insert_edge(0, 1, 0, &[], 100).unwrap();
         table.freeze_csr_only(150);

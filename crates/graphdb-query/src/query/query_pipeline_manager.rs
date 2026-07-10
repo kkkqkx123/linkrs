@@ -222,10 +222,17 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         space_info: Option<crate::core::types::SpaceInfo>,
     ) -> DBResult<ExecutionResult> {
         // 1. First, create a QueryContext (which persists throughout the entire lifecycle of the query).
-        let rctx = Arc::new(QueryRequestContext::new(query_text.to_string()));
+        let mut rctx = QueryRequestContext::new(query_text.to_string());
+
+        // Setting spatial information on BOTH rctx and query_context
+        // (planner reads from rctx.space_name, executor uses query_context.space_info)
+        if let Some(ref space) = space_info {
+            rctx.space_name = Some(space.space_name.clone());
+        }
+
+        let rctx = Arc::new(rctx);
         let mut query_context = QueryContext::new(rctx);
 
-        // Setting spatial information
         if let Some(ref space) = space_info {
             query_context.set_space_info(space.clone());
         }
@@ -1106,7 +1113,7 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
 
     fn execute_plan(
         &mut self,
-        _query_context: Arc<QueryContext>,
+        query_context: Arc<QueryContext>,
         plan: crate::query::planning::plan::ExecutionPlan,
     ) -> DBResult<ExecutionResult> {
         // Unified execution path: all queries use StreamingExecutor
@@ -1139,12 +1146,9 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         {
             context.vector_coordinator = self.vector_coordinator.clone();
         }
-        // Try to get space name from variables
-        if let Some(space_val) = context.get_variable("space_name") {
-            match &space_val {
-                crate::core::Value::String(s) => context.space_name = Some(s.clone()),
-                _ => {}
-            }
+        // Propagate space name from query context to execution context
+        if let Some(ref space_name) = query_context.space_name() {
+            context.space_name = Some(space_name.clone());
         }
 
         executor.from_plan_node(root_node, &context).map_err(|e| {

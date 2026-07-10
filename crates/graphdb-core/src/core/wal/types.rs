@@ -1052,7 +1052,7 @@ mod tests {
         let bytes = header.as_bytes();
         assert_eq!(bytes.len(), WalHeader::SIZE);
 
-        let parsed = WalHeader::from_bytes(bytes).unwrap();
+        let parsed = WalHeader::from_bytes(&bytes).unwrap();
         assert_eq!(parsed.length, 50);
         assert_eq!(parsed.timestamp, 999);
     }
@@ -1081,7 +1081,7 @@ mod tests {
         let bytes = header.as_bytes();
         assert_eq!(bytes.len(), WalFileHeader::SIZE);
 
-        let parsed = WalFileHeader::from_bytes(bytes).unwrap();
+        let parsed = WalFileHeader::from_bytes(&bytes).unwrap();
         assert!(parsed.is_valid());
         assert_eq!(parsed.thread_id, 1);
         assert_eq!(parsed.start_lsn().as_u64(), 1000);

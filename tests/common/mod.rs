@@ -23,6 +23,7 @@ pub mod c_api_helpers;
 
 use graphdb::core::error::DBError;
 use graphdb::core::metadata::SchemaManager;
+use graphdb::storage::PropertyGraphConfig;
 use graphdb::storage::{GraphStorage, StorageSchemaContextOps};
 use parking_lot::RwLock;
 use std::path::PathBuf;
@@ -33,36 +34,36 @@ pub type TestResult<T> = Result<T, Box<DBError>>;
 
 /// Test Storage Instance Wrapper
 ///
-/// Ensure that each test has a separate storage environment using a temporary folder in the project directory.
-/// Automatic cleanup of temporary directories after testing
+/// Creates an in-memory storage instance with minimal resource footprint.
+/// For tests requiring persistence, use `new_with_path()` instead.
 pub struct TestStorage {
     storage: Arc<RwLock<GraphStorage>>,
-    temp_path: PathBuf,
+    temp_path: Option<PathBuf>,
 }
 
 impl TestStorage {
-    /// Creating a New Test Storage Instance
+    /// Creating a New Test Storage Instance (in-memory, minimal resource usage)
     pub fn new() -> TestResult<Self> {
-        let temp_dir = tempfile::tempdir().map_err(|e| DBError::io(e.to_string()))?;
-        let db_path = temp_dir.path().join("test.db");
-
         let storage = Arc::new(RwLock::new(
-            GraphStorage::new_with_path(db_path).map_err(|e| Box::new(DBError::from(e)))?,
+            GraphStorage::new_with_config(PropertyGraphConfig::test())
+                .map_err(|e| Box::new(DBError::from(e)))?,
         ));
         Ok(Self {
             storage,
-            temp_path: temp_dir.path().to_path_buf(),
+            temp_path: None,
         })
     }
 
-    /// Creating a Test Storage Instance with a specific path
+    /// Creating a Test Storage Instance with a specific path and persistence
     pub fn new_with_path(path: PathBuf) -> TestResult<Self> {
         let storage = Arc::new(RwLock::new(
-            GraphStorage::new_with_path(path).map_err(|e| Box::new(DBError::from(e)))?,
+            GraphStorage::new_with_config(PropertyGraphConfig::test())
+                .or_else(|_| GraphStorage::new_with_path(path.clone()))
+                .map_err(|e| Box::new(DBError::from(e)))?,
         ));
         Ok(Self {
             storage,
-            temp_path: PathBuf::new(),
+            temp_path: Some(path),
         })
     }
 
@@ -82,6 +83,8 @@ impl TestStorage {
 
 impl Drop for TestStorage {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.temp_path);
+        if let Some(path) = &self.temp_path {
+            let _ = std::fs::remove_dir_all(path);
+        }
     }
 }

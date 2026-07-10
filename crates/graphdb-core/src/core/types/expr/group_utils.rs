@@ -281,6 +281,7 @@ mod tests {
             func: AggregateFunction::Count(None),
             args: vec![Expression::Variable("x".to_string())],
             distinct: false,
+            filter: None,
         };
 
         suite.add_aggregate(expr.clone());
@@ -325,6 +326,7 @@ mod tests {
                 func: AggregateFunction::Count(None),
                 args: vec![Expression::Variable("x".to_string())],
                 distinct: false,
+                filter: None,
             }),
             right: Box::new(Expression::Variable("y".to_string())),
         };

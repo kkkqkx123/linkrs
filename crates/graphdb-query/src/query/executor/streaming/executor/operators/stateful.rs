@@ -637,6 +637,7 @@ mod tests {
             partition_id: 0,
             buffer,
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut aggregate = StreamingExecutor::Aggregate {
@@ -666,6 +667,7 @@ mod tests {
             partition_id: 0,
             buffer,
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut aggregate = StreamingExecutor::Aggregate {
@@ -701,6 +703,7 @@ mod tests {
             partition_id: 0,
             buffer,
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut sort = StreamingExecutor::Sort {
@@ -726,6 +729,7 @@ mod tests {
             partition_id: 0,
             buffer: vec![],
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut sort = StreamingExecutor::Sort {
@@ -756,6 +760,7 @@ mod tests {
             partition_id: 0,
             buffer,
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut groupby = StreamingExecutor::GroupBy {

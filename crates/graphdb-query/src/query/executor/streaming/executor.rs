@@ -10,8 +10,7 @@
 //! - operators/ - Operator implementations (sources, single_input, stateful, binary, set_ops)
 //! - helpers/ - Helper functions (comparison, aggregation, conversion)
 //!
-//! Note: Phase 2c-1 expanded from 16 to 79 variants with stub implementations.
-//! Actual implementations will be added incrementally in Phase 2c-2.
+//! Note: All 79+ operator variants are fully implemented (no stubs).
 
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -73,6 +72,8 @@ pub enum StreamingExecutor {
         partition_id: usize,
         buffer: Vec<Vec<Value>>,
         current_index: usize,
+        /// Column names from planner (avoids col_N inference)
+        col_names: Vec<String>,
     },
 
     /// Scan edges from a partition
@@ -81,6 +82,8 @@ pub enum StreamingExecutor {
         partition_id: usize,
         buffer: Vec<Vec<Value>>,
         current_index: usize,
+        /// Column names from planner (avoids col_N inference)
+        col_names: Vec<String>,
     },
 
     // ============ Single Input ============
@@ -142,8 +145,8 @@ pub enum StreamingExecutor {
         right: Box<StreamingExecutor>,
         /// Join condition expression (None means Cartesian product)
         join_condition: Option<Expression>,
-        /// Hash table: stringified row key -> matching right rows
-        build_side_hash: std::collections::HashMap<String, Vec<Vec<Value>>>,
+        /// Hash table: row values as key -> matching right rows
+        build_side_hash: std::collections::HashMap<Vec<Value>, Vec<Vec<Value>>>,
         /// All right rows (for Cartesian product when no join_condition)
         all_right_rows: Vec<Vec<Value>>,
         left_consumed: bool,
@@ -679,6 +682,7 @@ pub enum StreamingExecutor {
         space_name: String,
         action: String,
         tag_name: Option<String>,
+        properties: Vec<crate::core::types::PropertyDef>,
         opened: bool,
     },
 
@@ -688,6 +692,7 @@ pub enum StreamingExecutor {
         space_name: String,
         action: String,
         edge_type: Option<String>,
+        properties: Vec<crate::core::types::PropertyDef>,
         opened: bool,
     },
 
@@ -1374,6 +1379,7 @@ mod tests {
             partition_id: 0,
             buffer: buffer.clone(),
             current_index: 0,
+            col_names: vec![],
         };
 
         executor.open().unwrap();
@@ -1402,6 +1408,7 @@ mod tests {
             partition_id: 0,
             buffer: buffer.clone(),
             current_index: 0,
+            col_names: vec![],
         };
 
         executor.open().unwrap();
@@ -1419,6 +1426,7 @@ mod tests {
             partition_id: 0,
             buffer,
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut limit = StreamingExecutor::Limit {
@@ -1470,6 +1478,7 @@ mod tests {
             partition_id: 0,
             buffer: buffer.clone(),
             current_index: 0,
+            col_names: vec![],
         };
 
         executor.open().unwrap();

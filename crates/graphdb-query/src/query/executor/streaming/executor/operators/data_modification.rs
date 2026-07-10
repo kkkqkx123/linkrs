@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use parking_lot::RwLock;
-
 use crate::core::error::QueryError;
 use crate::core::types::storage_ids::VertexId;
 use crate::core::vertex_edge_path::{Edge, Tag, Vertex};

@@ -155,11 +155,16 @@ pub(crate) fn create_tag(
         schema: schema_properties(&tag.properties),
     };
 
-    let properties: Vec<StoragePropertyDef> = tag
+    let mut properties: Vec<StoragePropertyDef> = tag
         .properties
         .iter()
         .map(StoragePropertyDef::from_core)
         .collect();
+
+    // Ensure the primary key property is non-nullable (required by VertexSchema validation)
+    if let Some(prop) = properties.first_mut() {
+        prop.nullable = false;
+    }
 
     let primary_key = tag
         .properties

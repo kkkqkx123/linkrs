@@ -119,7 +119,7 @@ pub fn next_space_manage(
             ..
         } => {
             if !*opened {
-                return Err(QueryError::execution("SpaceManage not opened".to_string()));
+                return Ok(None);
             }
 
             let result = match action.as_str() {
@@ -318,17 +318,19 @@ pub fn next_tag_manage(executor: &mut StreamingExecutor) -> Result<Option<DataCh
             space_name,
             action,
             tag_name,
+            properties,
             opened,
             ..
         } => {
             if !*opened {
-                return Err(QueryError::execution("TagManage not opened".to_string()));
+                return Ok(None);
             }
 
             let result = match action.as_str() {
                 "create_tag" | "create" => exec_ddl(storage, |s| {
                     let tag_name = tag_name.as_deref().unwrap_or("unnamed");
-                    let info = TagInfo::new(tag_name.to_string());
+                    let mut info = TagInfo::new(tag_name.to_string());
+                    info.properties = properties.clone();
                     StorageSchemaOps::create_tag(s, space_name, &info)
                         .map_err(|e| QueryError::execution(e.to_string()))?;
                     Ok(())
@@ -528,17 +530,19 @@ pub fn next_edge_manage(executor: &mut StreamingExecutor) -> Result<Option<DataC
             space_name,
             action,
             edge_type,
+            properties,
             opened,
             ..
         } => {
             if !*opened {
-                return Err(QueryError::execution("EdgeManage not opened".to_string()));
+                return Ok(None);
             }
 
             let result = match action.as_str() {
                 "create_edge" | "create" => exec_ddl(storage, |s| {
                     let et = edge_type.as_deref().unwrap_or("unnamed");
-                    let info = EdgeTypeInfo::new(et.to_string());
+                    let mut info = EdgeTypeInfo::new(et.to_string());
+                    info.properties = properties.clone();
                     StorageSchemaOps::create_edge_type(s, space_name, &info)
                         .map_err(|e| QueryError::execution(e.to_string()))?;
                     Ok(())
@@ -726,7 +730,7 @@ pub fn next_index_manage(
             ..
         } => {
             if !*opened {
-                return Err(QueryError::execution("IndexManage not opened".to_string()));
+                return Ok(None);
             }
 
             let result = match action.as_str() {
@@ -931,7 +935,7 @@ pub fn next_user_manage(executor: &mut StreamingExecutor) -> Result<Option<DataC
             ..
         } => {
             if !*opened {
-                return Err(QueryError::execution("UserManage not opened".to_string()));
+                return Ok(None);
             }
 
             let result = match action.as_str() {
@@ -1073,9 +1077,7 @@ pub fn next_fulltext_manage(
             ..
         } => {
             if !*opened {
-                return Err(QueryError::execution(
-                    "FulltextManage not opened".to_string(),
-                ));
+                return Ok(None);
             }
             *opened = false;
 
@@ -1329,7 +1331,7 @@ pub fn next_vector_manage(
             ..
         } => {
             if !*opened {
-                return Err(QueryError::execution("VectorManage not opened".to_string()));
+                return Ok(None);
             }
 
             let result = match action.as_str() {
@@ -1485,7 +1487,7 @@ pub fn next_analyze(executor: &mut StreamingExecutor) -> Result<Option<DataChunk
             ..
         } => {
             if !*opened {
-                return Err(QueryError::execution("Analyze not opened".to_string()));
+                return Ok(None);
             }
 
             let result = match analyze_target.as_str() {
@@ -1593,7 +1595,7 @@ pub fn next_migrate(executor: &mut StreamingExecutor) -> Result<Option<DataChunk
             ..
         } => {
             if !*opened {
-                return Err(QueryError::execution("Migrate not opened".to_string()));
+                return Ok(None);
             }
 
             let result = match action.as_str() {

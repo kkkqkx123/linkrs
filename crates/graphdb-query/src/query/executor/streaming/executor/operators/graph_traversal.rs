@@ -1,8 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
-use parking_lot::RwLock;
-
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::types::storage_ids::VertexId;

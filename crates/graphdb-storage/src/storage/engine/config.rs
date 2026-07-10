@@ -380,6 +380,38 @@ impl PropertyGraphConfig {
         }
     }
 
+    /// Create a lightweight test configuration
+    ///
+    /// Uses minimal cache (8MB), relaxed flush thresholds, and disables
+    /// adaptive merging to reduce resource usage in test environments.
+    pub fn test() -> Self {
+        Self {
+            enable_cache: true,
+            cache_memory: 8 * 1024 * 1024,
+            flush_config: FlushConfig {
+                flush_threshold: 100000,
+                flush_interval: Duration::from_secs(3600),
+                ..Default::default()
+            },
+            freeze: FreezeConfig {
+                strategy: FreezeStrategyType::Conservative,
+                delta_edge_threshold: 5000,
+                delta_memory_threshold_bytes: 16 * 1024 * 1024,
+                max_segment_age: u32::MAX,
+                deletion_threshold: 0.5,
+                adaptive_segment_threshold: 50,
+                adaptive_maximum_segments: 150,
+                lsm_segment_pressure_threshold: 100,
+            },
+            merge_config: MergeConfig {
+                enable_adaptive_merge: false,
+                enable_lsm_tiering: false,
+                max_segment_age: u32::MAX,
+                ..Default::default()
+            },
+        }
+    }
+
     /// Validate all configurations
     pub fn validate(&self) -> Result<(), StorageError> {
         self.freeze.validate()?;
@@ -545,25 +577,34 @@ mod tests {
 
     #[test]
     fn test_freeze_config_validate_zero_edge_threshold() {
-        let mut config = FreezeConfig::default();
-        config.delta_edge_threshold = 0;
+        let config = FreezeConfig {
+            delta_edge_threshold: 0,
+            ..Default::default()
+        };
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_freeze_config_validate_zero_memory_threshold() {
-        let mut config = FreezeConfig::default();
-        config.delta_memory_threshold_bytes = 0;
+        let config = FreezeConfig {
+            delta_memory_threshold_bytes: 0,
+            ..Default::default()
+        };
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_freeze_config_validate_invalid_deletion_threshold() {
-        let mut config = FreezeConfig::default();
-        config.deletion_threshold = 1.5;
+        let config = FreezeConfig {
+            deletion_threshold: 1.5,
+            ..Default::default()
+        };
         assert!(config.validate().is_err());
 
-        config.deletion_threshold = -0.1;
+        let config = FreezeConfig {
+            deletion_threshold: -0.1,
+            ..Default::default()
+        };
         assert!(config.validate().is_err());
     }
 

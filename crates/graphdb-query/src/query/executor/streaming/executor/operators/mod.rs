@@ -27,12 +27,14 @@ pub mod sources;
 pub mod stateful;
 
 pub use access::{
-    close_argument, close_edgeindexscan, close_getedges, close_getneighbors, close_getvertices,
-    close_indexscan, close_sample, close_start, next_argument, next_edgeindexscan, next_getedges,
-    next_getneighbors, next_getvertices, next_indexscan, next_sample, next_start, open_argument,
-    open_edgeindexscan, open_getedges, open_getneighbors, open_getvertices, open_indexscan,
-    open_sample, open_start, stop_argument, stop_edgeindexscan, stop_getedges, stop_getneighbors,
-    stop_getvertices, stop_indexscan, stop_sample, stop_start,
+    close_argument, close_edgeindexscan, close_getedges, close_getneighbors, close_getprop,
+    close_getvertices, close_indexscan, close_lookupindex, close_sample, close_start,
+    next_argument, next_edgeindexscan, next_getedges, next_getneighbors, next_getprop,
+    next_getvertices, next_indexscan, next_lookupindex, next_sample, next_start, open_argument,
+    open_edgeindexscan, open_getedges, open_getneighbors, open_getprop, open_getvertices,
+    open_indexscan, open_lookupindex, open_sample, open_start, stop_argument, stop_edgeindexscan,
+    stop_getedges, stop_getneighbors, stop_getprop, stop_getvertices, stop_indexscan,
+    stop_lookupindex, stop_sample, stop_start,
 };
 pub use binary::{
     close_crossjoin, close_fullouterjoin, close_hashjoin, close_innerjoin, close_leftjoin,

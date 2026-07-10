@@ -169,14 +169,15 @@ pub struct MergeMetricsResult {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{EdgeSchema, EdgeStrategy, EdgeTable};
+    use super::super::super::{EdgeSchema, EdgeStrategy};
     use super::*;
     use crate::core::types::DataType;
     use crate::core::types::EdgeId;
     use crate::core::Value;
+    use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
     use crate::storage::types::StoragePropertyDef;
 
-    fn create_edge_table() -> EdgeTable {
+    fn create_edge_table() -> TimeTravelEdgeStore {
         let schema = EdgeSchema {
             label_id: 0,
             label_name: "knows".to_string(),
@@ -187,10 +188,10 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        EdgeTable::new(schema).unwrap()
+        TimeTravelEdgeStore::new(schema).unwrap()
     }
 
-    fn create_edge_table_with_props() -> EdgeTable {
+    fn create_edge_table_with_props() -> TimeTravelEdgeStore {
         let schema = EdgeSchema {
             label_id: 0,
             label_name: "knows".to_string(),
@@ -204,7 +205,7 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        EdgeTable::new(schema).unwrap()
+        TimeTravelEdgeStore::new(schema).unwrap()
     }
 
     #[test]

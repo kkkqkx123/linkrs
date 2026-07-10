@@ -436,7 +436,8 @@ pub fn merge_in_place(
 #[cfg(test)]
 mod tests {
     use super::super::*;
-    use super::core::EdgeTableConfig;
+    use crate::storage::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
+    use crate::storage::edge::{EdgeSchema, EdgeStrategy};
     use crate::storage::engine::config::LSMSegmentLevel;
 
     fn create_test_schema() -> EdgeSchema {
@@ -448,6 +449,7 @@ mod tests {
             properties: vec![],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
+            schema_version: 1,
         }
     }
 
@@ -457,7 +459,7 @@ mod tests {
         config.max_segments_per_direction = 3;
         let max_segments = config.max_segments_per_direction;
         let schema = create_test_schema();
-        let mut table = EdgeTable::with_config(schema, config).unwrap();
+        let mut table = TimeTravelEdgeStore::with_config(schema, config).unwrap();
 
         for t in 0..5 {
             for src in 0..10 {
@@ -482,7 +484,7 @@ mod tests {
         let mut config = EdgeTableConfig::default();
         config.max_segments_per_direction = 2;
         let schema = create_test_schema();
-        let mut table = EdgeTable::with_config(schema, config).unwrap();
+        let mut table = TimeTravelEdgeStore::with_config(schema, config).unwrap();
 
         for t in 0..4 {
             for src in 0..5 {
@@ -518,7 +520,7 @@ mod tests {
     #[test]
     fn test_merge_metrics_basic() {
         let schema = create_test_schema();
-        let mut table = EdgeTable::new(schema).unwrap();
+        let mut table = TimeTravelEdgeStore::new(schema).unwrap();
 
         for i in 0..5 {
             table.insert_edge(i, i + 1, 0, &[], 100 + i).unwrap();
@@ -542,7 +544,7 @@ mod tests {
     #[test]
     fn test_merge_metrics_edge_count_accuracy() {
         let schema = create_test_schema();
-        let mut table = EdgeTable::new(schema).unwrap();
+        let mut table = TimeTravelEdgeStore::new(schema).unwrap();
 
         let edge_count = 20;
         for i in 0..edge_count {
@@ -576,7 +578,7 @@ mod tests {
     #[test]
     fn test_merge_metrics_performance_tracking() {
         let schema = create_test_schema();
-        let mut table = EdgeTable::new(schema).unwrap();
+        let mut table = TimeTravelEdgeStore::new(schema).unwrap();
 
         for i in 0..100 {
             let src = i % 20;
@@ -607,7 +609,7 @@ mod tests {
     #[test]
     fn test_lsm_tiered_merge() {
         let schema = create_test_schema();
-        let mut table = EdgeTable::new(schema).unwrap();
+        let mut table = TimeTravelEdgeStore::new(schema).unwrap();
 
         for batch in 0..5 {
             for i in 0..10 {
@@ -661,7 +663,7 @@ mod tests {
     #[test]
     fn test_merge_stats_tracking() {
         let schema = create_test_schema();
-        let mut table = EdgeTable::new(schema).unwrap();
+        let mut table = TimeTravelEdgeStore::new(schema).unwrap();
 
         for batch in 0..3 {
             for i in 0..5 {
@@ -675,7 +677,7 @@ mod tests {
         let initial_count = table.out_segments.len() + table.in_segments.len();
         assert!(initial_count > 0);
 
-        let _merged = table.merge_segments_adaptive(120, 10, 8 * 1024 * 1024);
+        let _merged = table.merge_segments_adaptive(120, 10, 0.5, 8 * 1024 * 1024);
 
         let final_count = table.out_segments.len() + table.in_segments.len();
         assert!(final_count <= initial_count);
@@ -684,7 +686,7 @@ mod tests {
     #[test]
     fn test_adaptive_merge_strategy() {
         let schema = create_test_schema();
-        let mut table = EdgeTable::new(schema).unwrap();
+        let mut table = TimeTravelEdgeStore::new(schema).unwrap();
 
         for batch in 0..3 {
             for i in 0..5 {
@@ -698,7 +700,7 @@ mod tests {
         let initial_segments = table.out_segments.len() + table.in_segments.len();
         assert!(initial_segments > 0);
 
-        let _merged = table.merge_segments_adaptive(120, 10, 8 * 1024 * 1024);
+        let _merged = table.merge_segments_adaptive(120, 10, 0.5, 8 * 1024 * 1024);
 
         let final_segments = table.out_segments.len() + table.in_segments.len();
         assert!(

@@ -9,8 +9,6 @@
 use super::builder::StreamingExecutorBuilder;
 use super::chunk::DataChunk;
 use super::engine::StreamingExecutionEngine;
-use super::partition::PartitionView;
-use super::scheduler::SchedulerConfig;
 use crate::core::error::QueryError;
 use crate::query::data_set::DataSet;
 use crate::query::executor::base::ExecutionContext;
@@ -48,15 +46,9 @@ impl StreamingQueryExecutor {
         plan_node: &PlanNodeEnum,
         context: &ExecutionContext,
     ) -> Result<(), QueryError> {
-        // Create the executor from the plan node
         let executor = StreamingExecutorBuilder::from_plan_node(plan_node, context)?;
 
-        // Create the streaming engine with a single partition
-        let partition_view = PartitionView::single(0..1);
-        let scheduler_config = SchedulerConfig::default();
-        let mut engine = StreamingExecutionEngine::new(scheduler_config, partition_view);
-
-        // Register the root executor
+        let mut engine = StreamingExecutionEngine::new();
         engine.register_executor(0, executor);
 
         self.engine = Some(engine);

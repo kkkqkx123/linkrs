@@ -32,6 +32,7 @@ pub use client::{
     StorageSnapshotOps, StorageStats, StorageSyncContextOps, StorageTransactionContextOps,
     StorageWriter,
 };
+pub use engine::config::PropertyGraphConfig;
 pub use engine::graph_storage::GraphStorage;
 pub use engine::persistence_coordinator::{CheckpointStats, SnapshotStats};
 pub use engine::sync_wrapper::SyncWrapper;

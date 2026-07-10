@@ -5,7 +5,6 @@
 //! to streaming executor operators.
 
 use super::executor::StreamingExecutor;
-use super::partition::PartitionView;
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::{AggregateFunction, BinaryOperator};
@@ -13,6 +12,7 @@ use crate::core::Value;
 use crate::query::executor::base::ExecutionContext;
 use crate::query::parser::ast::fulltext::FulltextQueryExpr;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
+use crate::query::core::NodeType;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
     BinaryInputNode, JoinNode, MultipleInputNode, SingleInputNode,
@@ -23,16 +23,9 @@ use crate::query::planning::plan::core::nodes::management::manage_node_enums::{
 };
 
 /// Builder for constructing StreamingExecutor instances
-pub struct StreamingExecutorBuilder {
-    partition_view: PartitionView,
-}
+pub struct StreamingExecutorBuilder;
 
 impl StreamingExecutorBuilder {
-    /// Create a new builder with partition view
-    pub fn new(partition_view: PartitionView) -> Self {
-        Self { partition_view }
-    }
-
     /// Create a simple scan executor for testing/basic use
     pub fn build_simple_scan(rows: Vec<Vec<Value>>) -> Result<StreamingExecutor, QueryError> {
         if rows.is_empty() {
@@ -40,6 +33,7 @@ impl StreamingExecutorBuilder {
                 partition_id: 0,
                 buffer: vec![],
                 current_index: 0,
+                col_names: vec![],
             });
         }
 
@@ -47,6 +41,7 @@ impl StreamingExecutorBuilder {
             partition_id: 0,
             buffer: rows,
             current_index: 0,
+            col_names: vec![],
         })
     }
 
@@ -60,6 +55,7 @@ impl StreamingExecutorBuilder {
             // ======== Scan Operations ========
             PlanNodeEnum::ScanVertices(scan_node) => {
                 let limit = scan_node.limit();
+                let col_names = scan_node.col_names().to_vec();
                 let mut buffer = if let Some(storage) = &context.storage {
                     let reader = storage.read();
                     reader
@@ -80,6 +76,7 @@ impl StreamingExecutorBuilder {
                     partition_id: 0,
                     buffer,
                     current_index: 0,
+                    col_names,
                 };
 
                 Ok(executor)
@@ -87,6 +84,7 @@ impl StreamingExecutorBuilder {
 
             PlanNodeEnum::ScanEdges(scan_node) => {
                 let limit = scan_node.limit();
+                let col_names = scan_node.col_names().to_vec();
                 let mut buffer = if let Some(storage) = &context.storage {
                     let reader = storage.read();
                     reader
@@ -107,6 +105,7 @@ impl StreamingExecutorBuilder {
                     partition_id: 0,
                     buffer,
                     current_index: 0,
+                    col_names,
                 };
 
                 Ok(executor)
@@ -355,7 +354,7 @@ impl StreamingExecutorBuilder {
 
             // ======== Management/DDL Operations ========
             PlanNodeEnum::SpaceManage(manage_node) => {
-                let action = manage_node.name().to_string();
+                let action = manage_node.node_type_id().to_string();
                 let space_name = Self::extract_space_manage_name(manage_node);
                 Ok(StreamingExecutor::SpaceManage {
                     input: Box::new(StreamingExecutor::Start { opened: false }),
@@ -367,33 +366,37 @@ impl StreamingExecutorBuilder {
             }
 
             PlanNodeEnum::TagManage(manage_node) => {
-                let action = manage_node.name().to_string();
+                let action = manage_node.node_type_id().to_string();
                 let tag_name = Self::extract_tag_manage_name(manage_node);
+                let properties = Self::extract_tag_manage_properties(manage_node);
                 Ok(StreamingExecutor::TagManage {
                     input: Box::new(StreamingExecutor::Start { opened: false }),
                     storage: context.storage.clone(),
                     space_name: context.space_name.clone().unwrap_or_default(),
                     action,
                     tag_name,
+                    properties,
                     opened: false,
                 })
             }
 
             PlanNodeEnum::EdgeManage(manage_node) => {
-                let action = manage_node.name().to_string();
+                let action = manage_node.node_type_id().to_string();
                 let edge_type = Self::extract_edge_manage_name(manage_node);
+                let properties = Self::extract_edge_manage_properties(manage_node);
                 Ok(StreamingExecutor::EdgeManage {
                     input: Box::new(StreamingExecutor::Start { opened: false }),
                     storage: context.storage.clone(),
                     space_name: context.space_name.clone().unwrap_or_default(),
                     action,
                     edge_type,
+                    properties,
                     opened: false,
                 })
             }
 
             PlanNodeEnum::IndexManage(manage_node) => {
-                let action = manage_node.name().to_string();
+                let action = manage_node.node_type_id().to_string();
                 let index_name = Self::extract_index_manage_name(manage_node);
                 Ok(StreamingExecutor::IndexManage {
                     input: Box::new(StreamingExecutor::Start { opened: false }),
@@ -406,7 +409,7 @@ impl StreamingExecutorBuilder {
             }
 
             PlanNodeEnum::UserManage(manage_node) => {
-                let action = manage_node.name().to_string();
+                let action = manage_node.node_type_id().to_string();
                 let username = Self::extract_user_manage_name(manage_node);
                 Ok(StreamingExecutor::UserManage {
                     input: Box::new(StreamingExecutor::Start { opened: false }),
@@ -418,7 +421,7 @@ impl StreamingExecutorBuilder {
             }
 
             PlanNodeEnum::FulltextManage(manage_node) => {
-                let action = manage_node.name().to_string();
+                let action = manage_node.node_type_id().to_string();
                 let index_name = Self::extract_fulltext_manage_name(manage_node);
                 use crate::query::planning::plan::core::nodes::management::manage_node_enums::FulltextManageNode::*;
                 let (tag_name, field_name, space_id) = match manage_node {
@@ -452,7 +455,7 @@ impl StreamingExecutorBuilder {
             }
 
             PlanNodeEnum::VectorManage(manage_node) => {
-                let action = manage_node.name().to_string();
+                let action = manage_node.node_type_id().to_string();
                 let index_name = Self::extract_vector_manage_name(manage_node);
                 use crate::query::planning::plan::core::nodes::management::manage_node_enums::VectorManageNode::*;
                 let (tag_name, field_name, space_id) = match manage_node {
@@ -1497,6 +1500,24 @@ impl StreamingExecutorBuilder {
         }
     }
 
+    /// Helper: extract properties from TagManageNode (only for Create variant)
+    fn extract_tag_manage_properties(node: &TagManageNode) -> Vec<crate::core::types::PropertyDef> {
+        use crate::query::planning::plan::core::nodes::management::manage_node_enums::TagManageNode::*;
+        match node {
+            Create(n) => n.info().properties.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Helper: extract properties from EdgeManageNode (only for Create variant)
+    fn extract_edge_manage_properties(node: &EdgeManageNode) -> Vec<crate::core::types::PropertyDef> {
+        use crate::query::planning::plan::core::nodes::management::manage_node_enums::EdgeManageNode::*;
+        match node {
+            Create(n) => n.info().properties.clone(),
+            _ => Vec::new(),
+        }
+    }
+
     /// Helper: extract edge type name from EdgeManageNode
     fn extract_edge_manage_name(node: &EdgeManageNode) -> Option<String> {
         use crate::query::planning::plan::core::nodes::management::manage_node_enums::EdgeManageNode::*;
@@ -1767,22 +1788,11 @@ impl StreamingExecutorBuilder {
         Ok((expressions, directions))
     }
 
-    /// Get partition view reference
-    pub fn partition_view(&self) -> &PartitionView {
-        &self.partition_view
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_builder_creation() {
-        let pv = PartitionView::single(0..1000);
-        let builder = StreamingExecutorBuilder::new(pv);
-        assert_eq!(builder.partition_view().partition_count, 1);
-    }
 
     #[test]
     fn test_simple_scan_creation() {

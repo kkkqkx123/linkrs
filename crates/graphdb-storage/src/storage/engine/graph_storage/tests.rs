@@ -1398,7 +1398,6 @@ mod tests {
             delta_memory_threshold_bytes: 256 * 1024 * 1024,
             max_segment_age: u32::MAX,
             deletion_threshold: 0.5,
-            max_segment_size_bytes: 8 * 1024 * 1024,
             adaptive_segment_threshold: 50,
             adaptive_maximum_segments: 150,
             lsm_segment_pressure_threshold: 200,

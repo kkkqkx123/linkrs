@@ -370,6 +370,7 @@ mod tests {
                 vec![Value::Int(2), Value::String("b".to_string())],
             ],
             current_index: 0,
+            col_names: vec![],
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -379,6 +380,7 @@ mod tests {
                 vec![Value::Int(3), Value::String("c".to_string())],
             ],
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut union = StreamingExecutor::Union {
@@ -409,12 +411,14 @@ mod tests {
             partition_id: 0,
             buffer: vec![vec![Value::Int(1)]],
             current_index: 0,
+            col_names: vec![],
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
             partition_id: 0,
             buffer: vec![vec![Value::Int(2)]],
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut union = StreamingExecutor::Union {
@@ -444,12 +448,14 @@ mod tests {
             partition_id: 0,
             buffer: vec![],
             current_index: 0,
+            col_names: vec![],
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
             partition_id: 0,
             buffer: vec![vec![Value::Int(1)], vec![Value::Int(2)]],
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut union = StreamingExecutor::Union {
@@ -474,12 +480,14 @@ mod tests {
             partition_id: 0,
             buffer: vec![vec![Value::Int(1)], vec![Value::Int(2)]],
             current_index: 0,
+            col_names: vec![],
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
             partition_id: 0,
             buffer: vec![vec![Value::Int(2)], vec![Value::Int(3)]],
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut unionall = StreamingExecutor::UnionAll {
@@ -507,12 +515,14 @@ mod tests {
             partition_id: 0,
             buffer: vec![vec![Value::Int(1), Value::String("a".to_string())]],
             current_index: 0,
+            col_names: vec![],
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
             partition_id: 0,
             buffer: vec![vec![Value::Int(1), Value::String("a".to_string())]],
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut unionall = StreamingExecutor::UnionAll {
@@ -543,6 +553,7 @@ mod tests {
                 vec![Value::Int(3)],
             ],
             current_index: 0,
+            col_names: vec![],
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -553,6 +564,7 @@ mod tests {
                 vec![Value::Int(4)],
             ],
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut intersect = StreamingExecutor::Intersect {
@@ -579,12 +591,14 @@ mod tests {
             partition_id: 0,
             buffer: vec![vec![Value::Int(1)], vec![Value::Int(2)]],
             current_index: 0,
+            col_names: vec![],
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
             partition_id: 0,
             buffer: vec![vec![Value::Int(3)], vec![Value::Int(4)]],
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut intersect = StreamingExecutor::Intersect {
@@ -616,12 +630,14 @@ mod tests {
                 vec![Value::Int(3)],
             ],
             current_index: 0,
+            col_names: vec![],
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
             partition_id: 0,
             buffer: vec![vec![Value::Int(2)]],
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut except = StreamingExecutor::Except {
@@ -647,12 +663,14 @@ mod tests {
             partition_id: 0,
             buffer: vec![vec![Value::Int(1)], vec![Value::Int(2)]],
             current_index: 0,
+            col_names: vec![],
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
             partition_id: 0,
             buffer: vec![vec![Value::Int(1)], vec![Value::Int(2)]],
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut except = StreamingExecutor::Except {
@@ -676,12 +694,14 @@ mod tests {
             partition_id: 0,
             buffer: vec![vec![Value::Int(1)], vec![Value::Int(2)]],
             current_index: 0,
+            col_names: vec![],
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
             partition_id: 0,
             buffer: vec![],
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut except = StreamingExecutor::Except {

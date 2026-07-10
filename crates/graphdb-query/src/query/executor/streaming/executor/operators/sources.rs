@@ -20,6 +20,7 @@ pub fn next_scanvertices(
         StreamingExecutor::ScanVertices {
             current_index,
             buffer,
+            col_names,
             ..
         } => {
             if *current_index >= buffer.len() {
@@ -33,7 +34,12 @@ pub fn next_scanvertices(
             if chunk_rows.is_empty() {
                 Ok(None)
             } else {
-                Ok(Some(DataChunk::from_rows(chunk_rows)))
+                let col = if col_names.is_empty() {
+                    None
+                } else {
+                    Some(col_names.clone())
+                };
+                Ok(Some(DataChunk::from_rows_with_col_names(chunk_rows, col)))
             }
         }
         _ => unreachable!(),
@@ -61,6 +67,7 @@ pub fn next_scanedges(executor: &mut StreamingExecutor) -> Result<Option<DataChu
         StreamingExecutor::ScanEdges {
             current_index,
             buffer,
+            col_names,
             ..
         } => {
             if *current_index >= buffer.len() {
@@ -74,7 +81,12 @@ pub fn next_scanedges(executor: &mut StreamingExecutor) -> Result<Option<DataChu
             if chunk_rows.is_empty() {
                 Ok(None)
             } else {
-                Ok(Some(DataChunk::from_rows(chunk_rows)))
+                let col = if col_names.is_empty() {
+                    None
+                } else {
+                    Some(col_names.clone())
+                };
+                Ok(Some(DataChunk::from_rows_with_col_names(chunk_rows, col)))
             }
         }
         _ => unreachable!(),
@@ -115,6 +127,7 @@ mod tests {
             partition_id: 0,
             buffer,
             current_index: 0,
+            col_names: vec![],
         };
 
         executor.open().unwrap();
@@ -147,6 +160,7 @@ mod tests {
             partition_id: 0,
             buffer: vec![],
             current_index: 0,
+            col_names: vec![],
         };
 
         executor.open().unwrap();
@@ -163,6 +177,7 @@ mod tests {
             partition_id: 0,
             buffer,
             current_index: 0,
+            col_names: vec![],
         };
 
         executor.open().unwrap();

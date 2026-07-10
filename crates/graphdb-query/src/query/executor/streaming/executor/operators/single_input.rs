@@ -287,6 +287,7 @@ mod tests {
             partition_id: 0,
             buffer,
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut filter = StreamingExecutor::Filter {
@@ -310,6 +311,7 @@ mod tests {
             partition_id: 0,
             buffer,
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut filter = StreamingExecutor::Filter {
@@ -344,6 +346,7 @@ mod tests {
             partition_id: 0,
             buffer,
             current_index: 0,
+            col_names: vec![],
         });
 
         // Project to reorder columns (swap first two)
@@ -373,6 +376,7 @@ mod tests {
             partition_id: 0,
             buffer,
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut project = StreamingExecutor::Project {
@@ -397,6 +401,7 @@ mod tests {
             partition_id: 0,
             buffer,
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut limit = StreamingExecutor::Limit {
@@ -424,6 +429,7 @@ mod tests {
             partition_id: 0,
             buffer,
             current_index: 0,
+            col_names: vec![],
         });
 
         // Limit larger than buffer size
@@ -457,6 +463,7 @@ mod tests {
             partition_id: 0,
             buffer,
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut distinct = StreamingExecutor::Distinct {
@@ -486,6 +493,7 @@ mod tests {
             partition_id: 0,
             buffer,
             current_index: 0,
+            col_names: vec![],
         });
 
         let mut distinct = StreamingExecutor::Distinct {
