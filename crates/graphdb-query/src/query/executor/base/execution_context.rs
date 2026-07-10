@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::execution_result::ExecutionResult;
+use super::MemoryBudget;
 use crate::core::Value;
 use crate::query::executor::expression::functions::global_registry_ref;
 use crate::query::executor::expression::functions::OwnedFunctionRef;
@@ -29,6 +30,8 @@ pub struct ExecutionContext {
     pub storage: Option<Arc<RwLock<dyn StorageClient>>>,
     pub space_name: Option<String>,
     pub parameters: Arc<HashMap<String, crate::core::Value>>,
+    /// Per-query memory budget for blocking operators.
+    pub memory_budget: MemoryBudget,
 }
 
 impl ExecutionContext {
@@ -46,6 +49,7 @@ impl ExecutionContext {
             storage: None,
             space_name: None,
             parameters: Arc::new(HashMap::new()),
+            memory_budget: MemoryBudget::default_budget(),
         }
     }
 
@@ -66,6 +70,7 @@ impl ExecutionContext {
             storage: None,
             space_name: None,
             parameters: Arc::new(parameters),
+            memory_budget: MemoryBudget::default_budget(),
         }
     }
 
@@ -85,6 +90,7 @@ impl ExecutionContext {
             storage: None,
             space_name: None,
             parameters: Arc::new(HashMap::new()),
+            memory_budget: MemoryBudget::default_budget(),
         }
     }
 
@@ -149,6 +155,7 @@ impl Default for ExecutionContext {
             storage: None,
             space_name: None,
             parameters: Arc::new(HashMap::new()),
+            memory_budget: MemoryBudget::default_budget(),
         }
     }
 }

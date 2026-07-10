@@ -83,6 +83,13 @@ impl<S: StorageClient + Send + 'static> ProfileExecutor<S> {
         let result = streaming_executor.execute().map_err(DBError::from)?;
 
         let exec_time_us = start.elapsed().as_micros() as u64;
+        let mut executor_stats = ExecutorStats {
+            num_rows: result.count(),
+            exec_time_us,
+            ..ExecutorStats::default()
+        };
+        executor_stats.total_time_us = exec_time_us;
+        stats_context.on_node_complete(root_node.id(), executor_stats);
         stats_context.record_global_execution_time(exec_time_us);
 
         Ok((result, stats_context))

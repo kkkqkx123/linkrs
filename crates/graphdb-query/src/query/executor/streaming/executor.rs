@@ -20,6 +20,7 @@ use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::AggregateFunction;
 use crate::core::Value;
+use crate::query::executor::base::MemoryBudget;
 #[cfg(feature = "fulltext-search")]
 use crate::search::manager::FulltextIndexManager;
 use crate::storage::StorageClient;
@@ -74,6 +75,23 @@ pub enum StreamingExecutor {
         current_index: usize,
         /// Column names from planner (avoids col_N inference)
         col_names: Vec<String>,
+        /// Plan node ID for debugging and tracking
+        plan_node_id: i64,
+    },
+
+    /// Scan vertices from storage on first pull.
+    ///
+    /// The storage API currently returns a Vec, so this variant is lazy at the
+    /// executor boundary but still depends on a materializing storage call.
+    StorageScanVertices {
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
+        limit: Option<usize>,
+        buffer: Option<Vec<Vec<Value>>>,
+        current_index: usize,
+        col_names: Vec<String>,
+        /// Plan node ID for debugging and tracking
+        plan_node_id: i64,
     },
 
     /// Scan edges from a partition
@@ -84,6 +102,20 @@ pub enum StreamingExecutor {
         current_index: usize,
         /// Column names from planner (avoids col_N inference)
         col_names: Vec<String>,
+        /// Plan node ID for debugging and tracking
+        plan_node_id: i64,
+    },
+
+    /// Scan edges from storage on first pull.
+    StorageScanEdges {
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
+        limit: Option<usize>,
+        buffer: Option<Vec<Vec<Value>>>,
+        current_index: usize,
+        col_names: Vec<String>,
+        /// Plan node ID for debugging and tracking
+        plan_node_id: i64,
     },
 
     // ============ Single Input ============
@@ -92,13 +124,18 @@ pub enum StreamingExecutor {
         input: Box<StreamingExecutor>,
         predicate: Expression,
         opened: bool,
+        /// Plan node ID for debugging and tracking
+        plan_node_id: i64,
     },
 
     /// Project executor with expression-based column selection
     Project {
         input: Box<StreamingExecutor>,
         output_expressions: Vec<Expression>,
+        output_col_names: Vec<String>,
         opened: bool,
+        /// Plan node ID for debugging and tracking
+        plan_node_id: i64,
     },
 
     /// Limit executor
@@ -107,6 +144,8 @@ pub enum StreamingExecutor {
         limit: u32,
         consumed: u32,
         opened: bool,
+        /// Plan node ID for debugging and tracking
+        plan_node_id: i64,
     },
 
     // ============ Stateful ============
@@ -122,6 +161,10 @@ pub enum StreamingExecutor {
         /// Iterator for result chunks
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
         opened: bool,
+        /// Per-query memory budget for blocking buffering.
+        memory_budget: MemoryBudget,
+        /// Plan node ID for debugging and tracking
+        plan_node_id: i64,
     },
 
     /// Sort executor with ORDER BY support
@@ -134,6 +177,10 @@ pub enum StreamingExecutor {
         all_rows: Vec<Vec<Value>>,
         row_iter: Option<std::vec::IntoIter<Vec<Value>>>,
         opened: bool,
+        /// Per-query memory budget for blocking buffering.
+        memory_budget: MemoryBudget,
+        /// Plan node ID for debugging and tracking
+        plan_node_id: i64,
     },
 
     // ============ Binary Input ============
@@ -145,12 +192,22 @@ pub enum StreamingExecutor {
         right: Box<StreamingExecutor>,
         /// Join condition expression (None means Cartesian product)
         join_condition: Option<Expression>,
-        /// Hash table: row values as key -> matching right rows
+        /// Expressions evaluated on right rows to build the hash key.
+        hash_keys: Vec<Expression>,
+        /// Expressions evaluated on left rows to probe the hash table.
+        probe_keys: Vec<Expression>,
+        /// Hash table: join key values -> matching right rows
         build_side_hash: std::collections::HashMap<Vec<Value>, Vec<Vec<Value>>>,
         /// All right rows (for Cartesian product when no join_condition)
         all_right_rows: Vec<Vec<Value>>,
         left_consumed: bool,
         opened: bool,
+        /// Per-query memory budget for blocking buffering.
+        memory_budget: MemoryBudget,
+        /// Column names from the right input (captured at build time).
+        right_col_names: Vec<String>,
+        /// Plan node ID for debugging and tracking
+        plan_node_id: i64,
     },
 
     /// GroupBy executor for independent grouping before aggregation
@@ -163,6 +220,8 @@ pub enum StreamingExecutor {
         /// Iterator for result chunks
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
         opened: bool,
+        /// Plan node ID for debugging and tracking
+        plan_node_id: i64,
     },
 
     /// Distinct executor to eliminate duplicate rows
@@ -170,6 +229,8 @@ pub enum StreamingExecutor {
         input: Box<StreamingExecutor>,
         /// Set of already-seen rows (as serialized strings)
         seen_rows: std::collections::HashSet<String>,
+        /// Plan node ID for debugging and tracking
+        plan_node_id: i64,
         opened: bool,
     },
 
@@ -182,6 +243,10 @@ pub enum StreamingExecutor {
         build_side_tuples: Vec<Vec<Value>>,
         left_consumed: bool,
         opened: bool,
+        /// Per-query memory budget for blocking buffering.
+        memory_budget: MemoryBudget,
+        /// Plan node ID for debugging and tracking
+        plan_node_id: i64,
     },
 
     /// WindowFunction executor for analytic functions
@@ -201,6 +266,8 @@ pub enum StreamingExecutor {
         /// Iterator for result chunks
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
         opened: bool,
+        /// Plan node ID for debugging and tracking
+        plan_node_id: i64,
     },
 
     /// Set Union operation (combines all rows from left and right)
@@ -210,6 +277,8 @@ pub enum StreamingExecutor {
         /// Already-seen rows to eliminate duplicates
         seen_rows: std::collections::HashSet<String>,
         left_consumed: bool,
+        /// Plan node ID for debugging and tracking
+        plan_node_id: i64,
         opened: bool,
     },
 
@@ -218,6 +287,8 @@ pub enum StreamingExecutor {
         left: Box<StreamingExecutor>,
         right: Box<StreamingExecutor>,
         left_consumed: bool,
+        /// Plan node ID for debugging and tracking
+        plan_node_id: i64,
         opened: bool,
     },
 
@@ -232,6 +303,7 @@ pub enum StreamingExecutor {
         left_buffered: bool,
         right_buffered: bool,
         opened: bool,
+        plan_node_id: i64,
     },
 
     /// Set Except/Minus operation (returns rows from left not in right)
@@ -242,6 +314,7 @@ pub enum StreamingExecutor {
         exclude_rows: std::collections::HashSet<String>,
         right_buffered: bool,
         opened: bool,
+        plan_node_id: i64,
     },
 
     // ============ Access Operations ============
@@ -317,6 +390,8 @@ pub enum StreamingExecutor {
         join_condition: Option<Expression>,
         build_side_tuples: Vec<Vec<Value>>,
         left_consumed: bool,
+        /// Plan node ID for debugging and tracking
+        plan_node_id: i64,
         opened: bool,
     },
     LeftJoin {
@@ -325,6 +400,8 @@ pub enum StreamingExecutor {
         join_condition: Option<Expression>,
         build_side_tuples: Vec<Vec<Value>>,
         left_consumed: bool,
+        /// Plan node ID for debugging and tracking
+        plan_node_id: i64,
         opened: bool,
     },
     RightJoin {
@@ -333,6 +410,8 @@ pub enum StreamingExecutor {
         join_condition: Option<Expression>,
         build_side_tuples: Vec<Vec<Value>>,
         right_consumed: bool,
+        /// Plan node ID for debugging and tracking
+        plan_node_id: i64,
         opened: bool,
     },
     FullOuterJoin {
@@ -344,6 +423,8 @@ pub enum StreamingExecutor {
         matched_right_indices: std::collections::HashSet<usize>,
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
         phase: FullOuterJoinPhase,
+        /// Plan node ID for debugging and tracking
+        plan_node_id: i64,
         opened: bool,
     },
     CrossJoin {
@@ -353,6 +434,8 @@ pub enum StreamingExecutor {
         all_right_rows: Vec<Vec<Value>>,
         left_consumed: bool,
         right_consumed: bool,
+        /// Plan node ID for debugging and tracking
+        plan_node_id: i64,
         opened: bool,
     },
     SemiJoin {
@@ -361,6 +444,8 @@ pub enum StreamingExecutor {
         join_condition: Option<Expression>,
         right_rows: Vec<Vec<Value>>,
         right_consumed: bool,
+        /// Plan node ID for debugging and tracking
+        plan_node_id: i64,
         opened: bool,
     },
 
@@ -823,6 +908,7 @@ pub enum StreamingExecutor {
         exclude_rows: std::collections::HashSet<String>,
         right_buffered: bool,
         opened: bool,
+        plan_node_id: i64,
     },
 
     Window {
@@ -917,8 +1003,12 @@ impl StreamingExecutor {
             Self::GetProp { .. } => operators::access::open_getprop(self),
             Self::LookupIndex { .. } => operators::access::open_lookupindex(self),
             // Data source operations
-            Self::ScanVertices { .. } => operators::sources::open_scanvertices(self),
-            Self::ScanEdges { .. } => operators::sources::open_scanedges(self),
+            Self::ScanVertices { .. } | Self::StorageScanVertices { .. } => {
+                operators::sources::open_scanvertices(self)
+            }
+            Self::ScanEdges { .. } | Self::StorageScanEdges { .. } => {
+                operators::sources::open_scanedges(self)
+            }
             // Single input operations
             Self::Filter { .. } => operators::single_input::open_filter(self),
             Self::Project { .. } => operators::single_input::open_project(self),
@@ -1030,8 +1120,12 @@ impl StreamingExecutor {
             Self::GetProp { .. } => operators::access::next_getprop(self),
             Self::LookupIndex { .. } => operators::access::next_lookupindex(self),
             // Data source operations
-            Self::ScanVertices { .. } => operators::sources::next_scanvertices(self),
-            Self::ScanEdges { .. } => operators::sources::next_scanedges(self),
+            Self::ScanVertices { .. } | Self::StorageScanVertices { .. } => {
+                operators::sources::next_scanvertices(self)
+            }
+            Self::ScanEdges { .. } | Self::StorageScanEdges { .. } => {
+                operators::sources::next_scanedges(self)
+            }
             // Single input operations
             Self::Filter { .. } => operators::single_input::next_filter(self),
             Self::Project { .. } => operators::single_input::next_project(self),
@@ -1143,8 +1237,12 @@ impl StreamingExecutor {
             Self::GetProp { .. } => operators::access::stop_getprop(self),
             Self::LookupIndex { .. } => operators::access::stop_lookupindex(self),
             // Data source operations
-            Self::ScanVertices { .. } => operators::sources::stop_scanvertices(self),
-            Self::ScanEdges { .. } => operators::sources::stop_scanedges(self),
+            Self::ScanVertices { .. } | Self::StorageScanVertices { .. } => {
+                operators::sources::stop_scanvertices(self)
+            }
+            Self::ScanEdges { .. } | Self::StorageScanEdges { .. } => {
+                operators::sources::stop_scanedges(self)
+            }
             // Single input operations
             Self::Filter { .. } => operators::single_input::stop_filter(self),
             Self::Project { .. } => operators::single_input::stop_project(self),
@@ -1256,8 +1354,12 @@ impl StreamingExecutor {
             Self::GetProp { .. } => operators::access::close_getprop(self),
             Self::LookupIndex { .. } => operators::access::close_lookupindex(self),
             // Data source operations
-            Self::ScanVertices { .. } => operators::sources::close_scanvertices(self),
-            Self::ScanEdges { .. } => operators::sources::close_scanedges(self),
+            Self::ScanVertices { .. } | Self::StorageScanVertices { .. } => {
+                operators::sources::close_scanvertices(self)
+            }
+            Self::ScanEdges { .. } | Self::StorageScanEdges { .. } => {
+                operators::sources::close_scanedges(self)
+            }
             // Single input operations
             Self::Filter { .. } => operators::single_input::close_filter(self),
             Self::Project { .. } => operators::single_input::close_project(self),
@@ -1380,6 +1482,7 @@ mod tests {
             buffer: buffer.clone(),
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         };
 
         executor.open().unwrap();
@@ -1409,6 +1512,7 @@ mod tests {
             buffer: buffer.clone(),
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         };
 
         executor.open().unwrap();
@@ -1427,6 +1531,7 @@ mod tests {
             buffer,
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut limit = StreamingExecutor::Limit {
@@ -1434,6 +1539,7 @@ mod tests {
             limit: 10,
             consumed: 0,
             opened: false,
+            plan_node_id: 0,
         };
 
         limit.open().unwrap();
@@ -1479,6 +1585,7 @@ mod tests {
             buffer: buffer.clone(),
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         };
 
         executor.open().unwrap();

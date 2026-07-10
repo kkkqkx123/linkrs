@@ -57,12 +57,21 @@ impl DataChunk {
     ///
     /// When col_names is None, falls back to col_N inference (backward compat).
     /// When col_names is Some, uses those names directly.
-    pub fn from_rows_with_col_names(
-        rows: Vec<Vec<Value>>,
-        col_names: Option<Vec<String>>,
-    ) -> Self {
+    pub fn from_rows_with_col_names(rows: Vec<Vec<Value>>, col_names: Option<Vec<String>>) -> Self {
         let schema = if rows.is_empty() {
-            Arc::new(Schema::empty())
+            if let Some(names) = col_names {
+                Arc::new(Schema::new(
+                    names
+                        .into_iter()
+                        .map(|name| ColumnInfo {
+                            name,
+                            data_type: "unknown".to_string(),
+                        })
+                        .collect(),
+                ))
+            } else {
+                Arc::new(Schema::empty())
+            }
         } else {
             let col_count = rows[0].len();
             let columns = (0..col_count)

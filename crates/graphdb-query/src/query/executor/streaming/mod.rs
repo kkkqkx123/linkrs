@@ -6,9 +6,6 @@
 //! Key components:
 //! - DataChunk: Fixed-size batches of rows
 //! - StreamingExecutor: Enum-based pull operators
-//! - PartitionView: Data partitioning for parallel execution
-//! - PipelineScheduler: Task dependency and scheduling
-//! - WorkerPool: Multi-threaded task execution
 //! - StreamingExecutionEngine: Orchestration layer
 
 pub mod base;
@@ -18,8 +15,6 @@ pub mod engine;
 pub mod executor;
 pub mod factory;
 pub mod partition;
-pub mod scheduler;
-pub mod worker;
 
 pub use base::ExecutionMode;
 pub use builder::StreamingExecutorBuilder;
@@ -28,5 +23,3 @@ pub use engine::StreamingExecutionEngine;
 pub use executor::StreamingExecutor;
 pub use factory::{chunks_to_execution_result, convert_chunks_to_dataset, StreamingQueryExecutor};
 pub use partition::PartitionView;
-pub use scheduler::{PipelineScheduler, SchedulerConfig, Task, TaskStatus};
-pub use worker::{BackpressureControl, TaskResult, WorkerPool};

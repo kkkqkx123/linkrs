@@ -1,9 +1,9 @@
-use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
-use crate::storage::edge::{EdgeSchema, EdgeStrategy};
 use super::*;
 use crate::core::types::{DataType, VertexId};
 use crate::core::Value;
 use crate::storage::edge::edge_table::core::EdgeTableConfig;
+use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
+use crate::storage::edge::{EdgeSchema, EdgeStrategy};
 use crate::storage::schema::ChangeDetails;
 use crate::storage::types::StoragePropertyDef;
 

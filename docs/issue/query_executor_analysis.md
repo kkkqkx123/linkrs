@@ -1,294 +1,346 @@
 # Query Executor 模块实现分析
 
-> 分析日期: 2026-07-10
-> 范围: `crates/graphdb-query/src/query/executor`
+> 分析日期：2026-07-10
+> 范围：`crates/graphdb-query/src/query/executor`
 
 ## 结论
 
-`graphdb-query` 当前的 executor 已经具备比较完整的模块骨架：包含基础 `Executor` trait、流式执行框架、表达式求值、图算法执行器、EXPLAIN/PROFILE 入口，以及从 `PlanNodeEnum` 构造 `StreamingExecutor` 的 builder。
+当前 query 包的 executor 已经形成了完整的执行入口：`QueryPipelineManager` 负责 parse / validate / plan / optimize / execute，执行阶段统一走 `StreamingQueryExecutor`，再由 `StreamingExecutorBuilder` 把 `PlanNodeEnum` 递归转换成一棵嵌套的 `StreamingExecutor` enum 树。
 
-但从实现质量看，它更接近“可运行的执行器原型”，还没有形成成熟数据库执行引擎的闭环。核心问题是：名义上采用 streaming / chunk / worker / partition 设计，实际执行路径仍然大量预物化数据、全量收集、全局锁串行化，并且 planner 生成的 schema、变量、统计信息、并行度、事务语义没有稳定贯穿到 executor。
+但从成熟数据库执行引擎的标准看，当前实现仍然更接近“功能型原型”而不是稳定的执行内核。它名义上是 chunk streaming，实际只有单线程 root pull；scan、sort、aggregate、join、window、部分图遍历等算子仍大量全量 materialize；结果最后也会合并成一个 `DataSet` 返回。主要短板集中在执行模型、数据模型、资源治理、schema/slot 绑定、算子语义完整性和 profile 可观测性。
 
 ## 当前实现方式
 
 ### 1. 模块结构
 
-executor 目录主要分为以下部分：
+`crates/graphdb-query/src/query/executor` 主要包括：
 
-- `base/`: 定义传统 `Executor<S>` trait、`BaseExecutor`、`ExecutionContext`、`ExecutionResult`、统计结构。
-- `streaming/`: 当前主执行框架，包含 `StreamingExecutor`、`DataChunk`、`StreamingExecutionEngine`、`PipelineScheduler`、`WorkerPool`、`StreamingExecutorBuilder`。
-- `streaming/executor/operators/`: 按 operator 类型拆分实现，包括 access、sources、single_input、stateful、binary、set_ops、graph_traversal、data_modification、search、management、control_flow。
-- `expression/`: 表达式求值器和内置函数注册表。
-- `algorithms/`: BFS、Dijkstra、A*、多最短路、子图等图算法执行器。
-- `explain/`: EXPLAIN / PROFILE 相关执行器和统计上下文。
+- `base/`：保留传统 `Executor<S>` trait、`BaseExecutor`、`ExecutionContext`、`ExecutionResult`、`ExecutorStats`、`MemoryBudget` 等基础结构。
+- `streaming/`：当前主执行框架，包含 `DataChunk`、`StreamingExecutor`、`StreamingExecutionEngine`、`StreamingExecutorBuilder`、`StreamingQueryExecutor`。
+- `streaming/executor/operators/`：按 operator 类型拆分实现，包括 `sources`、`single_input`、`stateful`、`binary`、`set_ops`、`graph_traversal`、`data_modification`、`search`、`management`、`control_flow` 等。
+- `expression/`：表达式求值、内置函数注册和 evaluation context。
+- `algorithms/`：BFS、Dijkstra、A*、双向 BFS、多最短路、子图等算法实现。
+- `explain/`：EXPLAIN / PROFILE 相关结构和执行器。
+
+`executor/mod.rs` 对外重新导出这些能力，并明确把 streaming executor 标为 primary execution framework。
 
 ### 2. 查询执行主路径
 
-当前生产路径大致为：
+当前普通查询的执行链路如下：
 
-1. `QueryPipelineManager` 生成并优化 `ExecutionPlan`。
-2. 取 root `PlanNodeEnum`。
-3. `StreamingQueryExecutor::from_plan_node()` 调用 `StreamingExecutorBuilder::from_plan_node()`。
-4. builder 递归把 `PlanNodeEnum` 转换为一个嵌套的 `StreamingExecutor` enum 树。
-5. `StreamingExecutionEngine` 创建单 partition 的 `PartitionView::single(0..1)`，注册 root executor。
-6. `StreamingExecutionEngine::execute()` 调度 worker 执行 task。
-7. worker 对 root executor 调用 `next()`，产生 `Vec<DataChunk>`。
-8. `chunks_to_execution_result()` 再把所有 chunk 合并成一个 `DataSet` 返回。
+1. `QueryPipelineManager::execute_query_with_space()` 创建 `QueryContext`。
+2. 解析、验证、生成 `ExecutionPlan`，再调用 optimizer。
+3. `execute_plan()` 取 optimized plan 的 root `PlanNodeEnum`。
+4. 构造 `ExecutionContext`，注入 storage、space、fulltext/vector manager 等运行时资源。
+5. `StreamingQueryExecutor::from_plan_node()` 调用 `StreamingExecutorBuilder::from_plan_node()`。
+6. builder 递归构造一个嵌套的 `StreamingExecutor`。
+7. `StreamingExecutionEngine::execute()` 对 root executor 执行 `open -> next loop -> close`。
+8. root 每次 `next()` 返回 `Option<DataChunk>`。
+9. `chunks_to_execution_result()` 把所有 chunk 合并为一个 `DataSet`，包装成 `ExecutionResult::DataSet`。
 
-这意味着当前执行结果最终仍然是一次性 materialize 到 `DataSet`，没有向 API 层提供真正的增量输出流。
+因此当前执行路径已经统一，但对外结果仍是 materialized result，不是真正面向 API 层的流式结果。
 
 ### 3. 执行模型
 
-局部 operator 是 pull-based：
+当前 `StreamingExecutionEngine` 是简化后的单线程 pull engine：
 
-- 每个 `StreamingExecutor` variant 实现 `open()`、`next()`、`stop()`、`close()`。
-- `Filter`、`Project`、`Limit` 等单输入算子从 child 拉取 `DataChunk`。
-- `Sort`、`Aggregate`、`GroupBy`、`WindowFunction`、Join 和部分集合算子会先把输入全部收集到内存，再产生结果。
+- 只保存一个 `root_executor`。
+- `register_executor()` 实际只替换 root。
+- `execute()` 直接驱动 root，不再使用 task scheduler、worker pool 或 partition machinery。
+- 源码注释也说明 parallel execution infrastructure 仅保留为参考，不在主路径使用。
 
-外层执行引擎试图做 task-based parallel execution：
+`StreamingExecutor` 本身是一个大型 enum，包含数据源、单输入、阻塞算子、join、集合操作、图遍历、DML、全文/向量搜索、DDL/管理、控制流等大量 variant。生命周期方法 `open()`、`next()`、`stop()`、`close()` 通过大 `match` 分发到对应 operator 模块。
 
-- `StreamingExecutionEngine` 根据 executor id 和 partition id 构造 task。
-- `WorkerPool` 通过 channel 接收 task。
-- worker 从共享 `executor_registry` 中取 executor 并调用 `next()`。
-
-但当前只有 root executor 被注册，默认只使用单 partition。即使注册多个 executor，worker 执行 `next()` 时也持有全局 `Mutex<HashMap<usize, Box<StreamingExecutor>>>` 的可变锁，实际并行度会被全局锁严重限制。
+这种设计的优点是实现直观、没有 trait object 调度成本、便于在单文件中看到完整算子表面；缺点是 enum 过大，新增算子需要修改 variant、四个生命周期分发、builder 和 operator 实现，维护成本较高。
 
 ### 4. 数据表示
 
 执行期数据以 `DataChunk` 表示：
 
 - 行存格式：`Vec<Vec<Value>>`
-- schema：`Arc<Schema>`，列名和类型都是简单字符串
-- 默认通过首行推断 schema，列名生成 `col_0`、`col_1` 等
+- schema：`Arc<Schema>`
+- 列信息：`ColumnInfo { name: String, data_type: String }`
+- 默认通过首行推断类型，没有列名时生成 `col_0`、`col_1`
+- chunk size 在 source operator 中固定为 1024
 
-这是一种简单、易调试的表示，但不是高性能执行格式。它会导致大量 `Value` clone、行级动态分派、缓存局部性差，并且容易丢失 planner 阶段的变量名、别名和类型信息。
+这是一种易实现、易调试的数据表示，但不是高性能执行格式。表达式求值经常按行构造 `ValueRowContext`，复制 row 和 col_names，然后通过字符串列名访问变量。
+
+### 5. 代表性算子实现
+
+数据源：
+
+- `ScanVertices` / `ScanEdges` 可从预加载 buffer 分块输出。
+- `StorageScanVertices` / `StorageScanEdges` 在第一次 `next()` 时调用 storage scan，把全部 vertex/edge 收集到 `Vec<Vec<Value>>`，之后再按 1024 行切 chunk。
+- 这意味着 scan 在 executor 边界是 lazy 的，但底层 storage API 仍然是 materializing 调用。
+
+单输入算子：
+
+- `Filter`、`Project`、`Limit` 等按 chunk 从 child 拉取。
+- 表达式按行求值，依赖 `ValueRowContext` 和列名映射。
+
+阻塞算子：
+
+- `Aggregate`、`Sort`、`GroupBy`、`WindowFunction` 会先拉完全部输入。
+- `Aggregate`、`Sort`、`HashJoin`、`NestedLoopJoin` 等部分算子接入 `MemoryBudget`，超过预算会报错。
+- 但没有外部排序、hash aggregate spill、hash join spill，也没有统一释放预算的生命周期。
+
+Join：
+
+- `HashJoin` 会先全量读取 right side，构建 hash table，再 probe left chunk。
+- `NestedLoopJoin` 同样全量读取 right side。
+- `InnerJoin` 在 builder 中映射为 `NestedLoopJoin`，`HashInnerJoin` 才映射为 `HashJoin`。
+- 右侧列名、join key 和条件表达式仍比较依赖字符串列名和临时 schema 拼接。
+
+图遍历：
+
+- `Expand`、`Traverse`、`ShortestPath` 等 operator 直接持有 storage，执行期在 operator 内调用 `get_node_edges()`、`get_vertex()` 等接口。
+- visited set、frontier、path state 分散在具体 variant 字段里。
+- planner/optimizer 的图模式、起点选择、方向选择、边类型过滤与执行期 traversal runtime 还没有形成强约束闭环。
+
+Builder：
+
+- `StreamingExecutorBuilder::from_plan_node()` 覆盖了大量 `PlanNodeEnum`。
+- 但不少映射是简化实现：例如部分 plan node 的 right input 被解析但没有真正用于输出，路径目标或 edge type 使用默认值，`Sample` 忽略 input，部分 DML/控制流只是 start/pass-through 风格。
+- 这说明 executor 表面覆盖很宽，但各算子的语义成熟度不一致。
 
 ## 与其他数据库执行引擎的对比
 
 ### PostgreSQL / Volcano Iterator
 
-PostgreSQL 的执行器是典型 Volcano iterator 模型，每个 plan node 暴露类似 `ExecProcNode()` 的接口，父节点逐行拉取子节点结果。它的优点是模型清晰、算子组合简单、生命周期明确；缺点是函数调用和逐行处理开销较高。
+PostgreSQL 的执行器是经典 Volcano iterator：每个 plan node 有明确生命周期和 `ExecProcNode()` 类似接口，父节点逐行拉取子节点。它的强项是 plan node、tuple slot、expression context、executor state、resource owner 和 instrumentation 之间关系稳定。
 
-当前项目也采用 pull-based 思路，但和成熟 Volcano 模型相比存在差距：
+当前项目也采用 pull-based 思路，但差距在于：
 
-- plan node 到 executor 的映射不完整，很多 variant 是占位或部分语义。
-- tuple slot / schema / expression context 没有稳定贯穿。
-- 执行状态、取消、错误、资源释放、统计采样没有统一生命周期协议。
-- 部分算子错误吞掉表达式失败并返回 `Null` 或 `false`，不利于调试和语义一致性。
+- 没有稳定的 tuple slot / slot id layout，仍大量依赖字符串列名。
+- schema 可能在执行期从首行推断，而不是 planning 后固定。
+- 生命周期中没有统一记录 input/output rows、时间、内存、IO。
+- 资源释放、取消、事务状态没有深入所有 operator。
+- builder 到 executor 的映射存在简化和语义缺口。
 
 ### DuckDB / Velox / DataFusion 等向量化执行
 
-现代分析型执行引擎通常使用 vectorized batch：
+现代分析型执行器通常按 vectorized batch 处理：
 
-- 数据按列或 columnar batch 表示。
-- 表达式一次处理一批值。
-- filter/project/join/aggregate 尽量减少 per-row 虚调用和对象分配。
-- 算子之间传递的是 Arrow RecordBatch、Vector、SelectionVector 或类似结构。
+- 数据以 columnar vector / Arrow RecordBatch / selection vector 表示。
+- 表达式对一批值执行，而不是逐行构造上下文。
+- filter/project/join/aggregate 尽量减少对象 clone 和字符串查找。
+- pipeline breaker 明确管理内存和 spill。
 
-当前项目虽然有 `DataChunk`，但内部仍是 `Vec<Vec<Value>>` 行存，表达式求值逐行构造 `ValueRowContext`，每行复制 row 和列名。它具备“批”的外形，但没有获得向量化执行的主要收益。
+当前项目虽然有 `DataChunk`，但它是 row-oriented `Vec<Vec<Value>>`，表达式也是 row-at-a-time。它具备“批”的外形，但没有获得列式向量化的主要收益。
 
 ### HyPer / morsel-driven parallelism
 
-HyPer 一类执行引擎常见设计是把数据切成 morsel，由 worker 独立处理局部分片；调度器负责 work stealing、pipeline breaker、NUMA/cache 局部性等。并行度来自“每个 worker 处理独立数据片段”，而不是多个 worker 争抢同一个 executor。
+HyPer 类执行器通常把数据切成 morsel，由 worker 独立处理不同分片；pipeline breaker 会切断 pipeline，调度器做 work stealing 和局部性控制。并行的关键是 per-partition operator state，而不是多个 worker 推进同一个 mutable executor。
 
-当前项目有 partition、scheduler、worker、backpressure 等概念，但执行树和状态没有按 partition 实例化。多个 task 最终可能访问同一个 executor 实例，且受全局 mutex 保护。因此当前并行框架更多是结构雏形，还没有形成真正的 morsel-driven execution。
+当前主路径没有并行调度，`engine.rs` 已经退化为单 root 单线程 pull。这个选择比“假并行”更清晰，但也意味着当前 executor 还没有真正利用 partition、worker、morsel 或 pipeline DAG。
 
 ### Neo4j / Memgraph 等图数据库执行器
 
-图数据库执行器通常围绕 graph pattern、expand、variable binding、path state、visited set、index seek、label scan、relationship scan 建模。成熟实现会重点处理：
+图数据库执行器通常围绕 variable binding、slot、expand、path state、visited set、index seek、label scan、relationship scan、路径去重和 early pruning 建模。成熟实现会让 optimizer 的 cardinality/selectivity 估计影响起点、方向、expand 顺序和 join/expand 策略。
 
-- variable binding 的槽位布局。
-- path expansion 的去重、最短路和可变长度路径语义。
-- 从 cardinality 和 selectivity 选择起点、方向、join/expand 顺序。
-- traversal 过程中的 early pruning。
-
-当前项目已经有 graph traversal operator 和算法执行器，但执行期仍然主要基于 `Vec<Value>` 和字符串列名处理变量。visited set、路径状态、filter pushdown、方向和边类型选择还没有和 optimizer 形成稳定闭环，图查询执行更偏“功能映射”，不是成熟的 slot/pipeline runtime。
+当前项目有图遍历 operator 和独立算法实现，但整体仍是 `Vec<Value>` + 字符串列名 + operator 内直接 storage call 的模式。图查询可以执行部分功能，但还不是成熟的 graph pattern runtime。
 
 ## 主要不足
 
-### 1. “流式执行”没有真正贯穿到结果输出
+### 1. Streaming 只存在于 executor 内部，对外仍 materialize
 
-`StreamingExecutionEngine::execute()` 返回 `Vec<DataChunk>`，随后 `chunks_to_execution_result()` 合并成单个 `DataSet`。这会抵消 streaming 的主要价值：
+`StreamingExecutionEngine::execute()` 返回 `Vec<DataChunk>`，`StreamingQueryExecutor::execute()` 随后合并为一个 `DataSet`。
 
-- 大结果集仍然必须完整驻留内存。
-- API 层无法边执行边返回。
-- LIMIT、客户端取消、网络背压无法自然传导到存储扫描。
+影响：
 
-建议后续把执行结果改为 pull/iterator/stream 形式，API 层按 chunk 消费，只有确实需要兼容老接口时才 materialize。
+- 大结果集仍要完整驻留内存。
+- API 层不能边执行边返回。
+- 客户端取消、网络背压、分页拉取无法自然传导到 executor。
+- `LIMIT` 之后的下游 stop/cancel 价值有限。
 
-### 2. scan 节点预先全量读取存储
+建议：引入面向 API 的 chunk stream / iterator result。兼容旧接口时再显式 materialize。
 
-`StreamingExecutorBuilder::from_plan_node()` 对 `ScanVertices` 和 `ScanEdges` 直接调用存储层 scan，把结果收集成 `Vec<Vec<Value>>`，然后交给 scan source 分块输出。
+### 2. Scan 仍然全量读取 storage
 
-这会导致：
+`StorageScanVertices` 和 `StorageScanEdges` 第一次 `next()` 会调用 storage scan，并把全部结果放进 buffer。之后才按 chunk 输出。
 
-- 存储层无法按需读取。
+影响：
+
 - filter/limit 无法提前减少 IO。
-- 大图扫描会首先消耗大量内存。
-- partition 信息没有用于真实分片扫描。
+- 大图扫描内存峰值高。
+- partition id 没有真实映射到存储范围。
+- storage cursor 生命周期没有进入 executor lifecycle。
 
-成熟做法应是 scan executor 持有存储层 iterator / cursor / batch reader，并在 `next()` 中按 chunk 拉取。
+建议：storage 层提供 cursor / batch reader，scan operator 在 `next()` 中按 chunk 拉取，并让 limit、predicate、projection、index seek 尽早下推。
 
-### 3. 并行执行框架基本被全局锁串行化
+### 3. Row-based `Vec<Vec<Value>>` 限制性能上限
 
-`WorkerPool` 中所有 executor 存在共享 `HashMap`，worker 执行 task 时获取整个 registry 的 mutex，然后对 executor 调用 `next()`。这意味着同一时刻只有一个 worker 能真正推进 executor。
+当前 `DataChunk` 是行存，表达式执行频繁 clone row 和 col_names。
 
-此外：
+影响：
 
-- task 的 partition id 没有传入 executor 的 `next()`。
-- 默认只注册 root executor 和单 partition。
-- `build_tasks()` 对非 source executor 的依赖关系很粗糙，不能表达任意 DAG 的 pipeline 边。
-- child executor 嵌套在 parent 的 `Box<StreamingExecutor>` 中，和 registry/task DAG 是两套并存模型。
+- CPU cache locality 差。
+- `Value` 动态类型开销高。
+- 字符串列名查找频繁。
+- 批处理无法向量化。
 
-建议选择一种主模型：要么保留嵌套 pull iterator，先做单线程正确性；要么重构为 pipeline DAG，每个 partition 有独立 operator state。
+建议：短期建立 slot-based row layout，去掉字符串查找；中长期可引入 columnar chunk 或 typed vector。
 
-### 4. schema 和变量绑定不稳定
+### 4. Schema 和变量绑定不稳定
 
-`DataChunk::from_rows()` 根据首行推断 schema，列名默认是 `col_N`。Filter、Project、Join、Aggregate 再基于这些列名构造 `ValueRowContext`。
+`DataChunk::from_rows()` 默认从首行推断 schema，空结果、首行 null、混合类型都会导致不稳定。join 右侧列名可能临时生成 `right_N`，project/aggregate 又依赖变量名表达式。
 
-问题包括：
+影响：
 
-- planner 里的变量名、别名、tag/edge 字段名可能丢失。
-- join 后右表列名临时生成 `right_N`，容易和表达式中的变量引用不一致。
-- 类型由首行推断，遇到空 chunk、null 首行、混合类型时不稳定。
-- 每行求值时复制 row 和 col_names，性能成本高。
+- planner 阶段的变量、别名、tag/edge 字段可能丢失。
+- join/project/filter 中变量引用容易和执行期列名不一致。
+- 错误会在运行时才暴露，甚至被吞成 `Null` 或 `false`。
 
-成熟执行器通常会在 planning/validation 后生成稳定 slot layout：变量、列、表达式输出都映射到固定 slot id，执行期按 slot 访问，不依赖字符串查找。
+建议：validation/planning 后生成固定 schema 和 slot mapping，executor 只按 slot id 访问。
 
-### 5. 阻塞算子缺少内存控制和 spill 机制
+### 5. 阻塞算子只有预算检查，没有 spill 能力
 
-Sort、Aggregate、GroupBy、WindowFunction、NestedLoopJoin、HashJoin、Intersect、Except 等都会全量收集输入或 build side。
+`Aggregate`、`Sort`、`WindowFunction`、`HashJoin`、`NestedLoopJoin` 等会收集全部输入或 build side。部分算子已经使用 `MemoryBudget`，这是进步，但当前策略只是超预算报错。
 
-当前缺少：
+缺失：
 
-- per-query memory budget。
-- operator 级内存估算和限制。
-- 外部排序、hash aggregate spill、hash join spill。
-- 大结果集的分批输出策略。
+- 外部排序。
+- hash aggregate spill。
+- hash join partition/spill。
+- blocking operator 的统一内存释放和峰值统计。
+- optimizer cost/memory estimate 与 executor runtime 的闭环。
 
-这会使查询在稍大数据集上出现内存峰值不可控。项目已有 cost/memory budget 相关 optimizer 模块，但 executor 尚未真正执行这些约束。
+建议：先统一所有 blocking operator 的 memory accounting，再为 sort/hash aggregate/hash join 预留 spill 接口。
 
-### 6. Join 实现语义和性能都较弱
+### 6. Join 语义和执行策略还不成熟
 
-当前 join 主要问题：
+主要问题：
 
-- `HashJoin` 使用整行 `format!("{:?}", row)` 作为 hash key，而不是 planner 提供的 join key。
-- 条件求值依赖拼接后的列名，右侧列名临时生成 `right_N`。
-- `NestedLoopJoin` 预先收集整个 right side，对非小表 join 风险很高。
-- left/right/full/semi/cross join 虽有 variant，但语义完整性需要逐一验证。
-- 没有 bloom filter、runtime filter、join reordering 执行配合。
+- 普通 `InnerJoin` builder 映射到 `NestedLoopJoin`，容易在大输入上退化。
+- `HashJoin` 只覆盖 `HashInnerJoin` 路径，build/probe key、右侧列名、条件表达式仍需严格验证。
+- outer/semi/full/cross join variant 很多，但不同 join 的 null 语义、输出 schema、重复行、空输入行为需要系统测试确认。
+- 没有 runtime filter、bloom filter、join spill、adaptive build side 选择。
 
-建议优先实现基于 slot 的 equi-hash-join，并明确 build/probe side、null 语义、输出 schema 和内存上限。
+建议：优先收敛 equi-hash-join 的正确性：固定输出 schema、slot key、null 语义、build/probe side、内存预算，再扩展 outer/semi/full。
 
-### 7. 表达式执行成本高且错误处理不一致
+### 7. 图遍历 runtime 和 optimizer 结合弱
 
-Filter 和 Project 等算子逐行创建 `ValueRowContext`，并频繁 clone row / col_names。表达式求值失败时，不同算子分别返回 false、Null 或忽略错误。
+当前图遍历 operator 在执行期直接读 storage，路径状态和 visited set 由各 operator 自己维护。
 
-这会导致：
+不足：
 
-- 语义错误被静默吞掉。
-- 性能难以优化。
-- 调试复杂查询时无法定位真实表达式失败原因。
+- 起点选择、方向选择、边类型过滤、深度限制和 filter pushdown 没有稳定的执行协议。
+- 可变长度路径、最短路、all paths 的路径去重和剪枝策略需要更明确。
+- traversal 中缺少周期性取消检查和预算检查。
+- `algorithms/` 中的算法实现与 streaming graph traversal operator 存在并行体系，边界不够清晰。
 
-建议把表达式编译为可执行计划，输入为 slot layout；同时统一表达式错误策略，区分类型转换失败、字段缺失、函数不存在、运行时 null 传播等情况。
+建议：抽象统一的 traversal runtime：frontier、visited policy、path policy、edge filter、vertex filter、depth/limit/cancel/budget 都作为执行参数。
 
-### 8. executor enum 过大，扩展成本高
+### 8. Builder 覆盖面宽但语义深度不一致
 
-`StreamingExecutor` 是一个包含大量 variant 的大 enum，并通过巨大的 `match` 分发 `open/next/stop/close`。优点是静态分发、容易定位；缺点是：
+`StreamingExecutorBuilder` 支持大量 `PlanNodeEnum`，但不少节点采用默认值或简化映射。
 
-- 每新增算子需要修改 enum、四个生命周期 match、builder 和 operator 模块。
-- 编译期和代码审查成本上升。
-- 很多 variant 只是部分实现或占位，真实能力容易被 API 表面掩盖。
+风险：
 
-短期可以接受这种方式，但需要建立“支持矩阵”和测试覆盖，明确哪些算子是 production ready，哪些只是 stub。
+- API 表面看似支持，实际结果可能不符合完整语义。
+- 新 plan node 很容易被“能编译的默认映射”掩盖问题。
+- 测试如果只覆盖 happy path，难以发现 builder 丢失输入、目标、schema 或条件。
 
-### 9. EXPLAIN / PROFILE 与实际执行统计连接不足
+建议：维护 `PlanNodeEnum -> StreamingExecutor` 支持矩阵，标注 production ready / partial / unsupported，并为 partial 映射补充失败用例或显式 error。
 
-项目有 `ExecutionStatsContext`、`NodeExecutionStats`、`ExecutorStats` 等结构，但当前 streaming operator 没有稳定记录：
+### 9. EXPLAIN / PROFILE 与实际 operator 执行脱节
 
-- 每个 plan node 的 input/output rows。
-- 每个 operator 的 wall time / CPU time。
-- peak memory。
+项目已有 `ExecutionStatsContext`、`NodeExecutionStats`、`ExecutorStats` 等结构，但 streaming operator 没有统一 instrumentation。
+
+缺少：
+
+- 每个 plan node 的 input rows / output rows。
+- 每个 operator 的 open/next/close 耗时。
 - storage read rows / bytes。
 - filtered rows。
+- peak memory。
 - spill 次数。
+- 实际 cardinality 与 optimizer 估算对比。
 
-成熟数据库的 PROFILE 能回答“哪个算子慢、估算和实际差多少、内存耗在哪里”。当前实现还没有把统计信息作为 executor 生命周期的一部分。
+建议：把 plan_node_id 作为 instrumentation key，所有 operator 生命周期统一记录统计，再让 PROFILE 展示估算与实际差异。
 
-### 10. 事务、取消和资源治理没有深入 executor
+### 10. 取消、事务和资源治理没有贯穿
 
-`QueryExecutionManager` 有 killed 标志，executor 也有 `stop()`，但两者没有形成完整链路：
+当前 executor 有 `stop()`，查询上下文也有执行管理结构，但长时间 scan、sort、join、traversal 内部没有统一取消检查。
 
-- 长时间 scan、sort、join、traversal 内部没有周期性检查取消。
-- storage cursor 生命周期没有进入 executor close/drop 管理。
-- DML operator 和事务提交/回滚语义没有和 transaction manager 深度绑定。
-- backpressure 只是 chunk 计数器，且 add 后马上 remove，无法代表真实消费者压力。
+影响：
 
-这会影响长查询治理、客户端断开、超时、事务一致性和资源释放。
+- 客户端断开或超时后，长查询可能不能及时停止。
+- DML/transaction operator 与 transaction manager 的关系不够强。
+- storage cursor、临时 buffer、内存预算缺少统一 close/drop 约束。
+
+建议：建立 `ExecutionRuntime` 或类似上下文，提供 cancel token、transaction handle、memory tracker、profile sink、resource owner，由所有 operator 持有并周期性检查。
 
 ## 建议优先级
 
-### P0: 收敛执行模型
+### P0：收敛执行内核语义
 
-先明确当前阶段的目标：
+当前主路径已经是单线程 root pull，建议短期明确接受这个模型，先把正确性、schema、统计、资源释放做扎实。不要在当前嵌套 enum tree 上重新叠加半成品 worker 并行。
 
-- 如果目标是快速保证正确性，建议保留单线程 pull executor，移除或弱化当前 task/worker 并行假象。
-- 如果目标是并行执行，建议重构为 pipeline DAG + per-partition operator state，不再让多个 worker 共享同一个 mutable executor。
+### P1：建立 slot-based schema
 
-在模型明确前继续增加 operator，会放大后续重构成本。
+从 planner 输出稳定 layout：
 
-### P1: 建立 slot-based row layout
-
-从 planner 输出稳定 schema：
-
-- 每个变量/表达式输出对应 slot id。
-- `DataChunk` 保存 schema，而不是每次从首行推断。
-- 表达式按 slot 访问，不使用字符串列名查找。
+- 每个变量、别名、表达式输出对应 slot id。
+- `DataChunk` 保存固定 schema，不从首行推断。
+- 表达式按 slot 访问，不按字符串查找。
 - join/project/aggregate 明确输出 schema。
 
-这是修复表达式、join、project、profile、类型推断问题的基础。
+这是修复表达式、join、profile、类型推断和性能问题的基础。
 
-### P1: scan 改为 cursor/chunk reader
+### P1：把 scan 改为 cursor/chunk reader
 
-把 `ScanVertices` / `ScanEdges` 从 buffer source 改为存储游标 source：
+目标：
 
-- `open()` 创建 cursor。
-- `next()` 从存储层读取最多 N 行。
-- limit/filter/index seek 能尽早减少扫描。
-- partition id 真实映射到数据范围或 shard/range。
+- `open()` 创建 storage cursor。
+- `next()` 最多读取一个 chunk。
+- limit/predicate/projection/index seek 尽可能下推。
+- partition id 真正映射到数据范围。
 
-### P2: 给阻塞算子加内存预算
+### P2：完善 blocking operator 的资源模型
 
-至少先做到：
+目标：
 
-- sort/aggregate/join 记录估算内存。
-- 超过 query memory budget 时返回明确错误。
-- 为 sort 预留外部排序接口。
-- 为 hash join / aggregate 预留 spill 分区接口。
+- 所有 blocking operator 使用同一个 memory tracker。
+- 记录 peak memory。
+- 超预算错误明确带 operator 和 plan node。
+- sort/hash aggregate/hash join 预留 spill 能力。
 
-### P2: 完善 operator 支持矩阵和测试
+### P2：建立 executor 支持矩阵和测试矩阵
 
-建议新增文档或测试矩阵：
+至少覆盖：
 
-- 每个 `PlanNodeEnum` 是否可 builder 转换。
-- 每个 `StreamingExecutor` variant 是否完整实现。
-- 支持哪些 Cypher/nGQL 语义。
-- 单元测试、集成测试、错误路径测试、空输入测试、大输入测试覆盖状态。
+- 每个 `PlanNodeEnum` 的 builder 映射状态。
+- 每个 `StreamingExecutor` variant 的实现状态。
+- 空输入、null、类型错误、schema 不匹配、大输入、取消、内存超限。
+- DML/DDL/search/traversal 的语义边界。
 
-### P3: 执行统计和 PROFILE 闭环
+### P3：PROFILE 闭环
 
-每个 operator 统一记录：
+把每个 operator 的实际统计接入 EXPLAIN ANALYZE / PROFILE：
 
-- open/next/close 时间。
-- input/output rows。
-- 内存峰值。
+- estimated rows vs actual rows。
+- time。
+- memory。
 - storage IO。
-- 错误和取消状态。
+- filtered rows。
+- blocking/spill 状态。
 
-然后让 EXPLAIN ANALYZE 展示估算值与实际值差异。
+### P3：再引入真正并行
+
+等单线程 pull executor 正确且可观测后，再设计并行：
+
+- pipeline DAG。
+- per-partition operator state。
+- morsel/chunk scheduler。
+- pipeline breaker。
+- work stealing。
+- runtime filter。
+
+不要让多个 worker 共享同一个 mutable root executor。
 
 ## 总体评价
 
-当前 executor 的价值在于已经把执行器所需的主要概念摆出来了：operator、chunk、builder、scheduler、worker、expression、graph algorithm、profile 都有入口。但这些入口之间还没有形成成熟数据库引擎所需的强约束关系。
+当前 executor 的最大价值是把数据库执行器的主要表面都搭出来了：统一 pipeline、plan-to-executor builder、chunk、表达式、join、图遍历、DML、全文/向量、EXPLAIN/PROFILE 都有入口。当前最主要的问题不是“缺少某一个算子”，而是执行模型、数据模型、资源模型和可观测性没有形成强约束。
 
-最主要的技术债不是“缺少某几个算子”，而是执行模型、数据模型和资源模型没有统一。建议下一阶段优先收敛到一个可验证的最小执行内核：slot-based schema、cursor scan、单线程 pull pipeline、明确阻塞算子边界和完整统计。等正确性和可观测性稳定后，再引入真正的 partition 并行和 spill。
+下一阶段建议把目标缩小为一个可靠的最小执行内核：单线程 pull、cursor scan、slot schema、统一 memory tracker、明确 blocking boundary、operator instrumentation。这个内核稳定后，再扩展 spill、图遍历 runtime 和真正的 partition 并行。

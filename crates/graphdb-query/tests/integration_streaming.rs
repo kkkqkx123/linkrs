@@ -5,6 +5,7 @@
 
 use graphdb_query::core::types::expr::Expression;
 use graphdb_query::core::Value;
+use graphdb_query::query::executor::base::MemoryBudget;
 use graphdb_query::query::executor::streaming::executor::StreamingExecutor;
 
 // ====== Test Helpers ======
@@ -19,6 +20,7 @@ fn create_simple_scan(size: usize) -> StreamingExecutor {
         buffer,
         current_index: 0,
         col_names: vec![],
+        plan_node_id: 0,
     }
 }
 
@@ -28,6 +30,7 @@ fn create_scan_with_data(data: Vec<Vec<Value>>) -> StreamingExecutor {
         buffer: data,
         current_index: 0,
         col_names: vec![],
+        plan_node_id: 0,
     }
 }
 
@@ -42,6 +45,7 @@ fn test_filter_then_limit_pipeline() {
         input: Box::new(scan),
         predicate: Expression::Literal(Value::Bool(true)),
         opened: false,
+        plan_node_id: 0,
     };
 
     let mut pipeline = StreamingExecutor::Limit {
@@ -49,6 +53,7 @@ fn test_filter_then_limit_pipeline() {
         limit: 10,
         consumed: 0,
         opened: false,
+        plan_node_id: 0,
     };
 
     pipeline.open().unwrap();
@@ -72,13 +77,16 @@ fn test_project_then_distinct_pipeline() {
     let project = StreamingExecutor::Project {
         input: Box::new(scan),
         output_expressions: vec![Expression::Literal(Value::Int(0))],
+        output_col_names: vec![],
         opened: false,
+        plan_node_id: 0,
     };
 
     let mut pipeline = StreamingExecutor::Distinct {
         input: Box::new(project),
         seen_rows: std::collections::HashSet::new(),
         opened: false,
+        plan_node_id: 0,
     };
 
     pipeline.open().unwrap();
@@ -104,10 +112,15 @@ fn test_join_with_small_inputs() {
         left: Box::new(left),
         right: Box::new(right),
         join_condition: None,
+        hash_keys: vec![],
+        probe_keys: vec![],
         build_side_hash: std::collections::HashMap::new(),
         all_right_rows: Vec::new(),
         left_consumed: false,
+        memory_budget: MemoryBudget::default_budget(),
         opened: false,
+        right_col_names: vec![],
+        plan_node_id: 0,
     };
 
     join.open().unwrap();
@@ -131,6 +144,7 @@ fn test_union_then_limit_pipeline() {
         seen_rows: std::collections::HashSet::new(),
         left_consumed: false,
         opened: false,
+        plan_node_id: 0,
     };
 
     let mut pipeline = StreamingExecutor::Limit {
@@ -138,6 +152,7 @@ fn test_union_then_limit_pipeline() {
         limit: 2,
         consumed: 0,
         opened: false,
+        plan_node_id: 0,
     };
 
     pipeline.open().unwrap();
@@ -164,12 +179,14 @@ fn test_except_then_filter_pipeline() {
         exclude_rows: std::collections::HashSet::new(),
         right_buffered: false,
         opened: false,
+        plan_node_id: 0,
     };
 
     let mut pipeline = StreamingExecutor::Filter {
         input: Box::new(except),
         predicate: Expression::Literal(Value::Bool(true)),
         opened: false,
+        plan_node_id: 0,
     };
 
     pipeline.open().unwrap();

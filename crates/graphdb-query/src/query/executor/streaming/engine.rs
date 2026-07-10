@@ -92,6 +92,7 @@ mod tests {
             buffer,
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         };
         engine.register_executor(0, scan);
 
@@ -113,6 +114,7 @@ mod tests {
             buffer,
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         };
 
         let limit = StreamingExecutor::Limit {
@@ -120,6 +122,7 @@ mod tests {
             limit: 10,
             consumed: 0,
             opened: false,
+            plan_node_id: 0,
         };
 
         engine.register_executor(0, limit);

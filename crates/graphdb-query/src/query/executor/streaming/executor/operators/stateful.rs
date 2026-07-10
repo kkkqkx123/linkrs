@@ -3,6 +3,7 @@
 use crate::core::error::QueryError;
 use crate::core::value::NullType;
 use crate::core::Value;
+use crate::query::executor::base::MemoryBudget;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::helpers::*;
@@ -32,6 +33,7 @@ pub fn next_aggregate(executor: &mut StreamingExecutor) -> Result<Option<DataChu
             aggregate_functions,
             all_rows,
             result_iter,
+            memory_budget,
             ..
         } => {
             // First time: collect all rows and build groups
@@ -41,6 +43,10 @@ pub fn next_aggregate(executor: &mut StreamingExecutor) -> Result<Option<DataChu
                 while let Some(chunk) = input.next()? {
                     if col_names.is_empty() {
                         col_names = chunk.col_names();
+                    }
+                    for row in &chunk.rows {
+                        let row_mem = row.capacity() * std::mem::size_of::<Value>();
+                        memory_budget.try_reserve(row_mem)?;
                     }
                     all_rows.extend(chunk.rows);
                 }
@@ -156,6 +162,7 @@ pub fn next_sort(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, 
             sort_directions,
             all_rows,
             row_iter,
+            memory_budget,
             ..
         } => {
             if row_iter.is_none() {
@@ -164,6 +171,10 @@ pub fn next_sort(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, 
                 while let Some(chunk) = input.next()? {
                     if col_names.is_empty() {
                         col_names = chunk.col_names();
+                    }
+                    for row in &chunk.rows {
+                        let row_mem = row.capacity() * std::mem::size_of::<Value>();
+                        memory_budget.try_reserve(row_mem)?;
                     }
                     all_rows.extend(chunk.rows);
                 }
@@ -638,6 +649,7 @@ mod tests {
             buffer,
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut aggregate = StreamingExecutor::Aggregate {
@@ -649,7 +661,9 @@ mod tests {
             )],
             all_rows: Vec::new(),
             result_iter: None,
+            memory_budget: MemoryBudget::default_budget(),
             opened: false,
+            plan_node_id: 0,
         };
 
         aggregate.open().unwrap();
@@ -668,6 +682,7 @@ mod tests {
             buffer,
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut aggregate = StreamingExecutor::Aggregate {
@@ -679,7 +694,9 @@ mod tests {
             )],
             all_rows: Vec::new(),
             result_iter: None,
+            memory_budget: MemoryBudget::default_budget(),
             opened: false,
+            plan_node_id: 0,
         };
 
         aggregate.open().unwrap();
@@ -704,6 +721,7 @@ mod tests {
             buffer,
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut sort = StreamingExecutor::Sort {
@@ -712,7 +730,9 @@ mod tests {
             sort_directions: vec![SortDirection::Ascending],
             all_rows: Vec::new(),
             row_iter: None,
+            memory_budget: MemoryBudget::default_budget(),
             opened: false,
+            plan_node_id: 0,
         };
 
         sort.open().unwrap();
@@ -730,6 +750,7 @@ mod tests {
             buffer: vec![],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut sort = StreamingExecutor::Sort {
@@ -738,7 +759,9 @@ mod tests {
             sort_directions: vec![],
             all_rows: Vec::new(),
             row_iter: None,
+            memory_budget: MemoryBudget::default_budget(),
             opened: false,
+            plan_node_id: 0,
         };
 
         sort.open().unwrap();
@@ -761,6 +784,7 @@ mod tests {
             buffer,
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut groupby = StreamingExecutor::GroupBy {
@@ -769,6 +793,7 @@ mod tests {
             all_rows: Vec::new(),
             result_iter: None,
             opened: false,
+            plan_node_id: 0,
         };
 
         groupby.open().unwrap();

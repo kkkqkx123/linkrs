@@ -13,9 +13,8 @@ pub use base::{
 
 // Re-export streaming executors (Primary Execution Framework)
 pub use streaming::{
-    BackpressureControl, DataChunk, ExecutionMode, PartitionView, PipelineScheduler,
-    SchedulerConfig, StreamingExecutionEngine, StreamingExecutor, StreamingExecutorBuilder, Task,
-    TaskResult, TaskStatus, WorkerPool,
+    DataChunk, ExecutionMode, PartitionView, StreamingExecutionEngine, StreamingExecutor,
+    StreamingExecutorBuilder,
 };
 
 // Re-export explain/profile executors

@@ -9,6 +9,7 @@
 pub(crate) mod cache;
 pub(crate) mod client;
 pub(crate) mod compression;
+pub mod cursor;
 pub(crate) mod edge;
 pub(crate) mod encoding;
 pub(crate) mod engine;
@@ -31,6 +32,9 @@ pub use client::{
     StorageReader, StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps,
     StorageSnapshotOps, StorageStats, StorageSyncContextOps, StorageTransactionContextOps,
     StorageWriter,
+};
+pub use cursor::{
+    open_edge_scan, open_vertex_scan, EdgeCursor, VecEdgeCursor, VecVertexCursor, VertexCursor,
 };
 pub use engine::config::PropertyGraphConfig;
 pub use engine::graph_storage::GraphStorage;

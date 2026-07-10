@@ -26,11 +26,12 @@ pub fn next_filter(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
             input, predicate, ..
         } => loop {
             match input.next()? {
-                Some(mut chunk) => {
+                Some(chunk) => {
                     let col_names = chunk.col_names();
-                    chunk.rows.retain(|row| {
+                    let mut filtered_rows = Vec::new();
+                    for row in chunk.rows {
                         let mut context = ValueRowContext::new(row.clone(), col_names.clone());
-                        match ExpressionEvaluator::evaluate(predicate, &mut context) {
+                        let keep = match ExpressionEvaluator::evaluate(predicate, &mut context) {
                             Ok(value) => match value {
                                 Value::Bool(b) => b,
                                 Value::Null(_) => false,
@@ -41,12 +42,23 @@ pub fn next_filter(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
                                 Value::String(s) => !s.is_empty(),
                                 _ => true,
                             },
-                            Err(_) => false,
+                            Err(e) => {
+                                return Err(QueryError::execution(format!(
+                                    "Filter predicate evaluation failed: {}",
+                                    e
+                                )));
+                            }
+                        };
+                        if keep {
+                            filtered_rows.push(row);
                         }
-                    });
+                    }
 
-                    if !chunk.rows.is_empty() {
-                        return Ok(Some(chunk));
+                    if !filtered_rows.is_empty() {
+                        return Ok(Some(DataChunk::from_rows_with_col_names(
+                            filtered_rows,
+                            Some(col_names),
+                        )));
                     }
                 }
                 None => return Ok(None),
@@ -94,6 +106,7 @@ pub fn next_project(executor: &mut StreamingExecutor) -> Result<Option<DataChunk
         StreamingExecutor::Project {
             input,
             output_expressions,
+            output_col_names,
             ..
         } => {
             if let Some(chunk) = input.next()? {
@@ -109,8 +122,11 @@ pub fn next_project(executor: &mut StreamingExecutor) -> Result<Option<DataChunk
                             Ok(value) => {
                                 projected_row.push(value);
                             }
-                            Err(_) => {
-                                projected_row.push(Value::Null(NullType::Null));
+                            Err(e) => {
+                                return Err(QueryError::execution(format!(
+                                    "Project expression evaluation failed: {}",
+                                    e
+                                )));
                             }
                         }
                     }
@@ -118,7 +134,15 @@ pub fn next_project(executor: &mut StreamingExecutor) -> Result<Option<DataChunk
                     projected_rows.push(projected_row);
                 }
 
-                Ok(Some(DataChunk::from_rows(projected_rows)))
+                let col_names = if output_col_names.is_empty() {
+                    None
+                } else {
+                    Some(output_col_names.clone())
+                };
+                Ok(Some(DataChunk::from_rows_with_col_names(
+                    projected_rows,
+                    col_names,
+                )))
             } else {
                 Ok(None)
             }
@@ -288,12 +312,14 @@ mod tests {
             buffer,
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut filter = StreamingExecutor::Filter {
             input: scan,
             predicate: Expression::Literal(Value::Bool(true)),
             opened: false,
+            plan_node_id: 0,
         };
 
         filter.open().unwrap();
@@ -312,12 +338,14 @@ mod tests {
             buffer,
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut filter = StreamingExecutor::Filter {
             input: scan,
             predicate: Expression::Literal(Value::Bool(false)),
             opened: false,
+            plan_node_id: 0,
         };
 
         filter.open().unwrap();
@@ -347,6 +375,7 @@ mod tests {
             buffer,
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         // Project to reorder columns (swap first two)
@@ -356,7 +385,9 @@ mod tests {
                 Expression::Literal(Value::Int(0)),
                 Expression::Literal(Value::Int(0)),
             ],
+            output_col_names: vec![],
             opened: false,
+            plan_node_id: 0,
         };
 
         project.open().unwrap();
@@ -377,12 +408,15 @@ mod tests {
             buffer,
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut project = StreamingExecutor::Project {
             input: scan,
             output_expressions: vec![Expression::Literal(Value::String("col1".to_string()))],
+            output_col_names: vec![],
             opened: false,
+            plan_node_id: 0,
         };
 
         project.open().unwrap();
@@ -402,6 +436,7 @@ mod tests {
             buffer,
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut limit = StreamingExecutor::Limit {
@@ -409,6 +444,7 @@ mod tests {
             limit: 10,
             consumed: 0,
             opened: false,
+            plan_node_id: 0,
         };
 
         limit.open().unwrap();
@@ -430,6 +466,7 @@ mod tests {
             buffer,
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         // Limit larger than buffer size
@@ -438,6 +475,7 @@ mod tests {
             limit: 100,
             consumed: 0,
             opened: false,
+            plan_node_id: 0,
         };
 
         limit.open().unwrap();
@@ -464,12 +502,14 @@ mod tests {
             buffer,
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut distinct = StreamingExecutor::Distinct {
             input: scan,
             seen_rows: std::collections::HashSet::new(),
             opened: false,
+            plan_node_id: 0,
         };
 
         distinct.open().unwrap();
@@ -494,12 +534,14 @@ mod tests {
             buffer,
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut distinct = StreamingExecutor::Distinct {
             input: scan,
             seen_rows: std::collections::HashSet::new(),
             opened: false,
+            plan_node_id: 0,
         };
 
         distinct.open().unwrap();

@@ -356,9 +356,9 @@ pub fn load_properties(path: &Path) -> StorageResult<PropertyTable> {
 
 #[cfg(test)]
 mod tests {
-    use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
-use super::super::super::*;
+    use super::super::super::*;
     use crate::core::Value;
+    use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
     use std::fs;
 
     fn create_edge_table_with_props() -> TimeTravelEdgeStore {

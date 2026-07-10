@@ -960,6 +960,7 @@ pub fn next_minus(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>,
             exclude_rows,
             right_buffered,
             opened,
+            ..
         } => {
             if !*opened {
                 return Err(QueryError::execution("Minus not opened".to_string()));

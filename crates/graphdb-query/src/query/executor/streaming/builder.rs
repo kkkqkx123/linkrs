@@ -9,10 +9,10 @@ use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::{AggregateFunction, BinaryOperator};
 use crate::core::Value;
+use crate::query::core::NodeType;
 use crate::query::executor::base::ExecutionContext;
 use crate::query::parser::ast::fulltext::FulltextQueryExpr;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
-use crate::query::core::NodeType;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
     BinaryInputNode, JoinNode, MultipleInputNode, SingleInputNode,
@@ -34,6 +34,7 @@ impl StreamingExecutorBuilder {
                 buffer: vec![],
                 current_index: 0,
                 col_names: vec![],
+                plan_node_id: 0,
             });
         }
 
@@ -42,6 +43,7 @@ impl StreamingExecutorBuilder {
             buffer: rows,
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         })
     }
 
@@ -54,58 +56,36 @@ impl StreamingExecutorBuilder {
         match node {
             // ======== Scan Operations ========
             PlanNodeEnum::ScanVertices(scan_node) => {
-                let limit = scan_node.limit();
+                let limit = scan_node
+                    .limit()
+                    .and_then(|value| (value >= 0).then_some(value as usize));
                 let col_names = scan_node.col_names().to_vec();
-                let mut buffer = if let Some(storage) = &context.storage {
-                    let reader = storage.read();
-                    reader
-                        .scan_vertices(&context.space_name.clone().unwrap_or_default())
-                        .map_err(|e| QueryError::execution(e.to_string()))?
-                        .into_iter()
-                        .map(|vertex| vec![Value::Vertex(Box::new(vertex))])
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-                if let Some(limit_val) = limit {
-                    if limit_val >= 0 {
-                        buffer.truncate(limit_val as usize);
-                    }
-                }
-                let executor = StreamingExecutor::ScanVertices {
-                    partition_id: 0,
-                    buffer,
+                let executor = StreamingExecutor::StorageScanVertices {
+                    storage: context.storage.clone(),
+                    space_name: context.space_name.clone().unwrap_or_default(),
+                    limit,
+                    buffer: None,
                     current_index: 0,
                     col_names,
+                    plan_node_id: node.id(),
                 };
 
                 Ok(executor)
             }
 
             PlanNodeEnum::ScanEdges(scan_node) => {
-                let limit = scan_node.limit();
+                let limit = scan_node
+                    .limit()
+                    .and_then(|value| (value >= 0).then_some(value as usize));
                 let col_names = scan_node.col_names().to_vec();
-                let mut buffer = if let Some(storage) = &context.storage {
-                    let reader = storage.read();
-                    reader
-                        .scan_all_edges(&context.space_name.clone().unwrap_or_default())
-                        .map_err(|e| QueryError::execution(e.to_string()))?
-                        .into_iter()
-                        .map(|edge| vec![Value::Edge(Box::new(edge))])
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-                if let Some(limit_val) = limit {
-                    if limit_val >= 0 {
-                        buffer.truncate(limit_val as usize);
-                    }
-                }
-                let executor = StreamingExecutor::ScanEdges {
-                    partition_id: 0,
-                    buffer,
+                let executor = StreamingExecutor::StorageScanEdges {
+                    storage: context.storage.clone(),
+                    space_name: context.space_name.clone().unwrap_or_default(),
+                    limit,
+                    buffer: None,
                     current_index: 0,
                     col_names,
+                    plan_node_id: node.id(),
                 };
 
                 Ok(executor)
@@ -123,6 +103,7 @@ impl StreamingExecutorBuilder {
                     input: Box::new(input_executor),
                     predicate,
                     opened: false,
+                    plan_node_id: node.id(),
                 })
             }
 
@@ -137,7 +118,9 @@ impl StreamingExecutorBuilder {
                 Ok(StreamingExecutor::Project {
                     input: Box::new(input_executor),
                     output_expressions,
+                    output_col_names: project_node.col_names().to_vec(),
                     opened: false,
+                    plan_node_id: node.id(),
                 })
             }
 
@@ -158,6 +141,7 @@ impl StreamingExecutorBuilder {
                     limit: count as u32,
                     consumed: 0,
                     opened: false,
+                    plan_node_id: node.id(),
                 })
             }
 
@@ -197,6 +181,7 @@ impl StreamingExecutorBuilder {
                     })
                     .collect();
 
+                let memory_budget = context.memory_budget.clone();
                 Ok(StreamingExecutor::Aggregate {
                     input: Box::new(input_executor),
                     group_by_expressions,
@@ -204,6 +189,8 @@ impl StreamingExecutorBuilder {
                     all_rows: vec![],
                     result_iter: None,
                     opened: false,
+                    memory_budget,
+                    plan_node_id: node.id(),
                 })
             }
 
@@ -220,6 +207,7 @@ impl StreamingExecutorBuilder {
                     right_plan.col_names(),
                 )?;
 
+                let memory_budget = context.memory_budget.clone();
                 Ok(StreamingExecutor::NestedLoopJoin {
                     left: Box::new(left_executor),
                     right: Box::new(right_executor),
@@ -227,6 +215,8 @@ impl StreamingExecutorBuilder {
                     build_side_tuples: vec![],
                     left_consumed: false,
                     opened: false,
+                    memory_budget,
+                    plan_node_id: node.id(),
                 })
             }
 
@@ -249,6 +239,7 @@ impl StreamingExecutorBuilder {
                     build_side_tuples: vec![],
                     left_consumed: false,
                     opened: false,
+                    plan_node_id: node.id(),
                 })
             }
 
@@ -259,6 +250,7 @@ impl StreamingExecutorBuilder {
                 let right_executor = Self::from_plan_node(right_plan, context)?;
 
                 // Cross join has no condition
+                let memory_budget = context.memory_budget.clone();
                 Ok(StreamingExecutor::NestedLoopJoin {
                     left: Box::new(left_executor),
                     right: Box::new(right_executor),
@@ -266,6 +258,8 @@ impl StreamingExecutorBuilder {
                     build_side_tuples: vec![],
                     left_consumed: false,
                     opened: false,
+                    memory_budget,
+                    plan_node_id: node.id(),
                 })
             }
 
@@ -282,6 +276,7 @@ impl StreamingExecutorBuilder {
                     seen_rows: std::collections::HashSet::new(),
                     left_consumed: false,
                     opened: false,
+                    plan_node_id: node.id(),
                 })
             }
 
@@ -299,6 +294,7 @@ impl StreamingExecutorBuilder {
                     left_buffered: false,
                     right_buffered: false,
                     opened: false,
+                    plan_node_id: node.id(),
                 })
             }
 
@@ -314,6 +310,7 @@ impl StreamingExecutorBuilder {
                     exclude_rows: std::collections::HashSet::new(),
                     right_buffered: false,
                     opened: false,
+                    plan_node_id: node.id(),
                 })
             }
 
@@ -330,6 +327,7 @@ impl StreamingExecutorBuilder {
                     let (sort_expressions, sort_directions) =
                         Self::sort_items_to_expressions(sort_items)?;
 
+                    let memory_budget = context.memory_budget.clone();
                     Ok(StreamingExecutor::Sort {
                         input: Box::new(input_executor),
                         sort_expressions,
@@ -337,6 +335,8 @@ impl StreamingExecutorBuilder {
                         all_rows: vec![],
                         row_iter: None,
                         opened: false,
+                        memory_budget,
+                        plan_node_id: node.id(),
                     })
                 }
             }
@@ -349,6 +349,7 @@ impl StreamingExecutorBuilder {
                     input: Box::new(input_executor),
                     seen_rows: std::collections::HashSet::new(),
                     opened: false,
+                    plan_node_id: node.id(),
                 })
             }
 
@@ -937,6 +938,7 @@ impl StreamingExecutorBuilder {
                     all_rows: vec![],
                     result_iter: None,
                     opened: false,
+                    plan_node_id: node.id(),
                 })
             }
 
@@ -1038,7 +1040,9 @@ impl StreamingExecutorBuilder {
             PlanNodeEnum::Sample(sample_node) => {
                 let input_plan = sample_node.input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
-                Ok(StreamingExecutor::Sample { opened: false })
+                Ok(StreamingExecutor::Sample {
+                    opened: false,
+                })
             }
 
             // ======== TopN ========
@@ -1077,6 +1081,7 @@ impl StreamingExecutorBuilder {
                     build_side_tuples: vec![],
                     right_consumed: false,
                     opened: false,
+                    plan_node_id: node.id(),
                 })
             }
 
@@ -1101,6 +1106,7 @@ impl StreamingExecutorBuilder {
                     result_iter: None,
                     phase: super::executor::FullOuterJoinPhase::BuildingRight,
                     opened: false,
+                    plan_node_id: node.id(),
                 })
             }
 
@@ -1122,6 +1128,7 @@ impl StreamingExecutorBuilder {
                     right_rows: vec![],
                     right_consumed: false,
                     opened: false,
+                    plan_node_id: node.id(),
                 })
             }
 
@@ -1136,13 +1143,22 @@ impl StreamingExecutorBuilder {
                     join_node.probe_keys(),
                     right_plan.col_names(),
                 )?;
-                Ok(StreamingExecutor::NestedLoopJoin {
+                let probe_keys = Self::join_keys_to_expressions(join_node.hash_keys())?;
+                let hash_keys = Self::join_keys_to_expressions(join_node.probe_keys())?;
+                let memory_budget = context.memory_budget.clone();
+                Ok(StreamingExecutor::HashJoin {
                     left: Box::new(left_executor),
                     right: Box::new(right_executor),
                     join_condition: condition,
-                    build_side_tuples: vec![],
+                    hash_keys,
+                    probe_keys,
+                    build_side_hash: std::collections::HashMap::new(),
+                    all_right_rows: vec![],
                     left_consumed: false,
                     opened: false,
+                    memory_budget,
+                    right_col_names: vec![],
+                    plan_node_id: node.id(),
                 })
             }
 
@@ -1164,6 +1180,7 @@ impl StreamingExecutorBuilder {
                     build_side_tuples: vec![],
                     left_consumed: false,
                     opened: false,
+                    plan_node_id: node.id(),
                 })
             }
 
@@ -1510,7 +1527,9 @@ impl StreamingExecutorBuilder {
     }
 
     /// Helper: extract properties from EdgeManageNode (only for Create variant)
-    fn extract_edge_manage_properties(node: &EdgeManageNode) -> Vec<crate::core::types::PropertyDef> {
+    fn extract_edge_manage_properties(
+        node: &EdgeManageNode,
+    ) -> Vec<crate::core::types::PropertyDef> {
         use crate::query::planning::plan::core::nodes::management::manage_node_enums::EdgeManageNode::*;
         match node {
             Create(n) => n.info().properties.clone(),
@@ -1730,6 +1749,12 @@ impl StreamingExecutorBuilder {
         Ok(condition)
     }
 
+    fn join_keys_to_expressions(
+        keys: &[crate::core::types::expr::ContextualExpression],
+    ) -> Result<Vec<Expression>, QueryError> {
+        keys.iter().map(Self::contextual_to_expression).collect()
+    }
+
     fn rewrite_right_join_expr(expr: Expression, right_col_names: &[String]) -> Expression {
         match expr {
             Expression::Variable(name) => {
@@ -1787,7 +1812,6 @@ impl StreamingExecutorBuilder {
 
         Ok((expressions, directions))
     }
-
 }
 
 #[cfg(test)]

@@ -371,6 +371,7 @@ mod tests {
             ],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -381,6 +382,7 @@ mod tests {
             ],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut union = StreamingExecutor::Union {
@@ -389,6 +391,7 @@ mod tests {
             seen_rows: std::collections::HashSet::new(),
             left_consumed: false,
             opened: false,
+            plan_node_id: 0,
         };
 
         union.open().unwrap();
@@ -412,6 +415,7 @@ mod tests {
             buffer: vec![vec![Value::Int(1)]],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -419,6 +423,7 @@ mod tests {
             buffer: vec![vec![Value::Int(2)]],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut union = StreamingExecutor::Union {
@@ -427,6 +432,7 @@ mod tests {
             seen_rows: std::collections::HashSet::new(),
             left_consumed: false,
             opened: false,
+            plan_node_id: 0,
         };
 
         union.open().unwrap();
@@ -449,6 +455,7 @@ mod tests {
             buffer: vec![],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -456,6 +463,7 @@ mod tests {
             buffer: vec![vec![Value::Int(1)], vec![Value::Int(2)]],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut union = StreamingExecutor::Union {
@@ -464,6 +472,7 @@ mod tests {
             seen_rows: std::collections::HashSet::new(),
             left_consumed: false,
             opened: false,
+            plan_node_id: 0,
         };
 
         union.open().unwrap();
@@ -481,6 +490,7 @@ mod tests {
             buffer: vec![vec![Value::Int(1)], vec![Value::Int(2)]],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -488,6 +498,7 @@ mod tests {
             buffer: vec![vec![Value::Int(2)], vec![Value::Int(3)]],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut unionall = StreamingExecutor::UnionAll {
@@ -495,6 +506,7 @@ mod tests {
             right,
             left_consumed: false,
             opened: false,
+            plan_node_id: 0,
         };
 
         unionall.open().unwrap();
@@ -516,6 +528,7 @@ mod tests {
             buffer: vec![vec![Value::Int(1), Value::String("a".to_string())]],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -523,6 +536,7 @@ mod tests {
             buffer: vec![vec![Value::Int(1), Value::String("a".to_string())]],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut unionall = StreamingExecutor::UnionAll {
@@ -530,6 +544,7 @@ mod tests {
             right,
             left_consumed: false,
             opened: false,
+            plan_node_id: 0,
         };
 
         unionall.open().unwrap();
@@ -554,6 +569,7 @@ mod tests {
             ],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -565,6 +581,7 @@ mod tests {
             ],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut intersect = StreamingExecutor::Intersect {
@@ -575,6 +592,7 @@ mod tests {
             left_buffered: false,
             right_buffered: false,
             opened: false,
+            plan_node_id: 0,
         };
 
         intersect.open().unwrap();
@@ -592,6 +610,7 @@ mod tests {
             buffer: vec![vec![Value::Int(1)], vec![Value::Int(2)]],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -599,6 +618,7 @@ mod tests {
             buffer: vec![vec![Value::Int(3)], vec![Value::Int(4)]],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut intersect = StreamingExecutor::Intersect {
@@ -609,6 +629,7 @@ mod tests {
             left_buffered: false,
             right_buffered: false,
             opened: false,
+            plan_node_id: 0,
         };
 
         intersect.open().unwrap();
@@ -631,6 +652,7 @@ mod tests {
             ],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -638,6 +660,7 @@ mod tests {
             buffer: vec![vec![Value::Int(2)]],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut except = StreamingExecutor::Except {
@@ -646,6 +669,7 @@ mod tests {
             exclude_rows: std::collections::HashSet::new(),
             right_buffered: false,
             opened: false,
+            plan_node_id: 0,
         };
 
         except.open().unwrap();
@@ -664,6 +688,7 @@ mod tests {
             buffer: vec![vec![Value::Int(1)], vec![Value::Int(2)]],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -671,6 +696,7 @@ mod tests {
             buffer: vec![vec![Value::Int(1)], vec![Value::Int(2)]],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut except = StreamingExecutor::Except {
@@ -679,6 +705,7 @@ mod tests {
             exclude_rows: std::collections::HashSet::new(),
             right_buffered: false,
             opened: false,
+            plan_node_id: 0,
         };
 
         except.open().unwrap();
@@ -695,6 +722,7 @@ mod tests {
             buffer: vec![vec![Value::Int(1)], vec![Value::Int(2)]],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -702,6 +730,7 @@ mod tests {
             buffer: vec![],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut except = StreamingExecutor::Except {
@@ -710,6 +739,7 @@ mod tests {
             exclude_rows: std::collections::HashSet::new(),
             right_buffered: false,
             opened: false,
+            plan_node_id: 0,
         };
 
         except.open().unwrap();

@@ -2,6 +2,7 @@
 
 use crate::core::error::QueryError;
 use crate::core::Value;
+use crate::query::executor::base::MemoryBudget;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::{StreamingExecutor, ValueRowContext};
@@ -31,18 +32,37 @@ pub fn next_hashjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
             left,
             right,
             join_condition,
+            hash_keys,
+            probe_keys,
             build_side_hash,
             all_right_rows,
             left_consumed,
+            memory_budget,
+            right_col_names,
             ..
         } => {
             if !*left_consumed {
+                let mut captured_right_names = Vec::new();
                 while let Some(chunk) = right.next()? {
+                    if captured_right_names.is_empty() {
+                        captured_right_names = chunk.col_names();
+                    }
                     for row in chunk.rows {
+                        let row_mem = row.capacity() * std::mem::size_of::<Value>();
+                        memory_budget.try_reserve(row_mem)?;
                         all_right_rows.push(row.clone());
-                        build_side_hash.entry(row.clone()).or_default().push(row);
+                        if !hash_keys.is_empty() {
+                            let names = if captured_right_names.is_empty() {
+                                &(0..row.len()).map(|i| format!("right_{}", i)).collect()
+                            } else {
+                                &captured_right_names
+                            };
+                            let key = evaluate_join_key(&row, names, hash_keys)?;
+                            build_side_hash.entry(key).or_default().push(row);
+                        }
                     }
                 }
+                *right_col_names = captured_right_names;
                 *left_consumed = true;
             }
 
@@ -54,7 +74,7 @@ pub fn next_hashjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                 let left_col_names = left_chunk.col_names();
                 let mut result_rows = Vec::new();
 
-                if join_condition.is_none() {
+                if hash_keys.is_empty() && probe_keys.is_empty() {
                     for left_row in &left_chunk.rows {
                         for right_row in all_right_rows.iter() {
                             let mut joined_row = left_row.clone();
@@ -63,28 +83,29 @@ pub fn next_hashjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                         }
                     }
                 } else {
-                    let condition = join_condition.as_ref().unwrap();
                     for left_row in &left_chunk.rows {
-                        if let Some(matching_rows) = build_side_hash.get(left_row) {
+                        let probe_key = evaluate_join_key(left_row, &left_col_names, probe_keys)?;
+                        if let Some(matching_rows) = build_side_hash.get(&probe_key) {
                             for right_row in matching_rows {
-                                let mut combined = left_row.clone();
-                                combined.extend(right_row.clone());
+                                let combined = left_row.clone();
+                                let combined_names = build_combined_names(&left_col_names, right_col_names, right_row.len());
+                                let mut ctx = ValueRowContext::new(combined, combined_names);
 
-                                let mut combined_names = left_col_names.clone();
-                                for i in 0..right_row.len() {
-                                    combined_names.push(format!("right_{}", i));
-                                }
-
-                                let mut ctx =
-                                    ValueRowContext::new(combined, combined_names);
-
-                                let satisfied = ExpressionEvaluator::evaluate(condition, &mut ctx)
-                                    .ok()
-                                    .and_then(|v| match v {
-                                        Value::Bool(b) => Some(b),
-                                        _ => None,
-                                    })
-                                    .unwrap_or(false);
+                                let satisfied = if let Some(condition) = join_condition {
+                                    match ExpressionEvaluator::evaluate(condition, &mut ctx) {
+                                        Ok(Value::Bool(b)) => b,
+                                        Ok(Value::Null(_)) => false,
+                                        Ok(_) => true,
+                                        Err(e) => {
+                                            return Err(QueryError::execution(format!(
+                                                "HashJoin condition evaluation failed: {}",
+                                                e
+                                            )));
+                                        }
+                                    }
+                                } else {
+                                    true
+                                };
 
                                 if satisfied {
                                     let mut joined_row = left_row.clone();
@@ -99,7 +120,11 @@ pub fn next_hashjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                 if result_rows.is_empty() {
                     Ok(None)
                 } else {
-                    Ok(Some(DataChunk::from_rows(result_rows)))
+                    let output_col_names = build_combined_names(&left_col_names, right_col_names, 0);
+                    Ok(Some(DataChunk::from_rows_with_col_names(
+                        result_rows,
+                        Some(output_col_names),
+                    )))
                 }
             } else {
                 Ok(None)
@@ -143,13 +168,52 @@ pub fn reset_hashjoin(executor: &mut StreamingExecutor) {
         build_side_hash,
         all_right_rows,
         left_consumed,
+        right_col_names,
         ..
     } = executor
     {
         build_side_hash.clear();
         all_right_rows.clear();
         *left_consumed = false;
+        right_col_names.clear();
     }
+}
+
+/// Build combined column names from left and right inputs.
+/// Falls back to `right_N` when right column names are unavailable.
+fn build_combined_names(
+    left_col_names: &[String],
+    right_col_names: &[String],
+    fallback_right_width: usize,
+) -> Vec<String> {
+    let mut names = left_col_names.to_vec();
+    if !right_col_names.is_empty() {
+        names.extend_from_slice(right_col_names);
+    } else {
+        for i in 0..fallback_right_width {
+            names.push(format!("right_{}", i));
+        }
+    }
+    names
+}
+
+fn evaluate_join_key(
+    row: &[Value],
+    col_names: &[String],
+    key_expressions: &[crate::core::types::expr::Expression],
+) -> Result<Vec<Value>, QueryError> {
+    if key_expressions.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut key = Vec::with_capacity(key_expressions.len());
+    for expr in key_expressions {
+        let mut context = ValueRowContext::new(row.to_vec(), col_names.to_vec());
+        let value = ExpressionEvaluator::evaluate(expr, &mut context)
+            .map_err(|e| QueryError::execution(format!("HashJoin key evaluation failed: {}", e)))?;
+        key.push(value);
+    }
+    Ok(key)
 }
 
 // ============ NestedLoopJoin ============
@@ -181,12 +245,15 @@ pub fn next_nestedloopjoin(
             join_condition,
             build_side_tuples,
             left_consumed,
+            memory_budget,
             ..
         } => {
             if !*left_consumed {
                 // Build right side - collect all rows
                 while let Some(chunk) = right.next()? {
                     for row in chunk.rows {
+                        let row_mem = row.capacity() * std::mem::size_of::<Value>();
+                        memory_budget.try_reserve(row_mem)?;
                         build_side_tuples.push(row);
                     }
                 }
@@ -217,7 +284,12 @@ pub fn next_nestedloopjoin(
                                     Value::Null(_) => false,
                                     _ => true,
                                 },
-                                Err(_) => false,
+                                Err(e) => {
+                                    return Err(QueryError::execution(format!(
+                                        "NestedLoopJoin condition evaluation failed: {}",
+                                        e
+                                    )));
+                                }
                             }
                         } else {
                             // Cartesian product
@@ -1035,6 +1107,7 @@ mod tests {
             buffer: create_left_buffer(),
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -1042,16 +1115,22 @@ mod tests {
             buffer: create_right_buffer(),
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut join = StreamingExecutor::HashJoin {
             left,
             right,
             join_condition: None,
+            hash_keys: vec![],
+            probe_keys: vec![],
             build_side_hash: std::collections::HashMap::new(),
             all_right_rows: Vec::new(),
             left_consumed: false,
             opened: false,
+            memory_budget: MemoryBudget::default_budget(),
+            right_col_names: vec![],
+            plan_node_id: 0,
         };
 
         join.open().unwrap();
@@ -1069,6 +1148,7 @@ mod tests {
             buffer: vec![vec![Value::Int(10), Value::String("a".to_string())]],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -1076,6 +1156,7 @@ mod tests {
             buffer: vec![vec![Value::Int(20), Value::String("b".to_string())]],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let join_condition = Some(Expression::Literal(Value::Bool(false)));
@@ -1084,10 +1165,15 @@ mod tests {
             left,
             right,
             join_condition,
+            hash_keys: vec![],
+            probe_keys: vec![],
             build_side_hash: std::collections::HashMap::new(),
             all_right_rows: Vec::new(),
             left_consumed: false,
             opened: false,
+            memory_budget: MemoryBudget::default_budget(),
+            right_col_names: vec![],
+            plan_node_id: 0,
         };
 
         join.open().unwrap();
@@ -1106,6 +1192,7 @@ mod tests {
             ],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -1116,16 +1203,22 @@ mod tests {
             ],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut join = StreamingExecutor::HashJoin {
             left,
             right,
             join_condition: None,
+            hash_keys: vec![],
+            probe_keys: vec![],
             build_side_hash: std::collections::HashMap::new(),
             all_right_rows: Vec::new(),
             left_consumed: false,
             opened: false,
+            memory_budget: MemoryBudget::default_budget(),
+            right_col_names: vec![],
+            plan_node_id: 0,
         };
 
         join.open().unwrap();
@@ -1143,6 +1236,7 @@ mod tests {
             buffer: vec![vec![Value::Int(1)], vec![Value::Int(2)]],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -1154,6 +1248,7 @@ mod tests {
             ],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut join = StreamingExecutor::NestedLoopJoin {
@@ -1163,6 +1258,8 @@ mod tests {
             build_side_tuples: Vec::new(),
             left_consumed: false,
             opened: false,
+            memory_budget: MemoryBudget::default_budget(),
+            plan_node_id: 0,
         };
 
         join.open().unwrap();
@@ -1180,6 +1277,7 @@ mod tests {
             buffer: vec![vec![Value::Int(1)], vec![Value::Int(2)]],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -1187,6 +1285,7 @@ mod tests {
             buffer: vec![vec![Value::Int(1)], vec![Value::Int(2)]],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         // Condition: always true
@@ -1199,6 +1298,8 @@ mod tests {
             build_side_tuples: Vec::new(),
             left_consumed: false,
             opened: false,
+            memory_budget: MemoryBudget::default_budget(),
+            plan_node_id: 0,
         };
 
         join.open().unwrap();
@@ -1219,6 +1320,7 @@ mod tests {
             ],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -1226,16 +1328,22 @@ mod tests {
             buffer: vec![vec![Value::String("x".to_string()), Value::Int(10)]],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut join = StreamingExecutor::HashJoin {
             left,
             right,
             join_condition: None,
+            hash_keys: vec![],
+            probe_keys: vec![],
             build_side_hash: std::collections::HashMap::new(),
             all_right_rows: Vec::new(),
             left_consumed: false,
             opened: false,
+            memory_budget: MemoryBudget::default_budget(),
+            right_col_names: vec![],
+            plan_node_id: 0,
         };
 
         join.open().unwrap();
@@ -1253,6 +1361,7 @@ mod tests {
             buffer: vec![vec![Value::Int(1), Value::String("left".to_string())]],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -1260,16 +1369,22 @@ mod tests {
             buffer: vec![vec![Value::Int(2), Value::String("right".to_string())]],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         });
 
         let mut join = StreamingExecutor::HashJoin {
             left,
             right,
             join_condition: None,
+            hash_keys: vec![],
+            probe_keys: vec![],
             build_side_hash: std::collections::HashMap::new(),
             all_right_rows: Vec::new(),
             left_consumed: false,
             opened: false,
+            memory_budget: MemoryBudget::default_budget(),
+            right_col_names: vec![],
+            plan_node_id: 0,
         };
 
         join.open().unwrap();

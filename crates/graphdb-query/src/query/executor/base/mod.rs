@@ -15,6 +15,7 @@ pub mod execution_context;
 pub mod execution_result;
 pub mod executor_base;
 pub mod executor_stats;
+pub mod memory_budget;
 pub mod result_processor;
 
 pub use config::{
@@ -26,6 +27,7 @@ pub use execution_context::ExecutionContext;
 pub use execution_result::{DBResult, ExecutionResult, IntoExecutionResult};
 pub use executor_base::{BaseExecutor, Executor, HasInput, HasStorage, StartExecutor};
 pub use executor_stats::ExecutorStats;
+pub use memory_budget::MemoryBudget;
 pub use result_processor::{BaseResultProcessor, ResultProcessor, ResultProcessorContext};
 
 pub use crate::core::types::EdgeDirection;

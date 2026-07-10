@@ -4,6 +4,7 @@ use crate::core::error::QueryError;
 use crate::core::Value;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
+use crate::storage::cursor::{open_edge_scan, open_vertex_scan, EdgeCursor, VertexCursor};
 
 const CHUNK_SIZE: usize = 1024;
 
@@ -42,6 +43,67 @@ pub fn next_scanvertices(
                 Ok(Some(DataChunk::from_rows_with_col_names(chunk_rows, col)))
             }
         }
+        StreamingExecutor::StorageScanVertices {
+            storage,
+            space_name,
+            limit,
+            buffer,
+            current_index,
+            col_names,
+            ..
+        } => {
+            if buffer.is_none() {
+                let mut rows = if let Some(storage) = storage {
+                    let mut cursor = open_vertex_scan(storage, space_name)
+                        .map_err(|e| QueryError::execution(e.to_string()))?;
+                    let mut all = Vec::new();
+                    loop {
+                        let batch = cursor
+                            .next_batch(CHUNK_SIZE)
+                            .map_err(|e| QueryError::execution(e.to_string()))?;
+                        if batch.is_empty() {
+                            break;
+                        }
+                        all.extend(
+                            batch
+                                .into_iter()
+                                .map(|vertex| vec![Value::Vertex(Box::new(vertex))]),
+                        );
+                    }
+                    all
+                } else {
+                    Vec::new()
+                };
+
+                if let Some(limit) = *limit {
+                    rows.truncate(limit);
+                }
+
+                *buffer = Some(rows);
+            }
+
+            let rows = buffer
+                .as_ref()
+                .ok_or_else(|| QueryError::execution("Storage scan buffer not initialized"))?;
+            if *current_index >= rows.len() {
+                return Ok(None);
+            }
+
+            let end = (*current_index + CHUNK_SIZE).min(rows.len());
+            let chunk_rows: Vec<Vec<Value>> = rows[*current_index..end].to_vec();
+            *current_index = end;
+
+            if chunk_rows.is_empty() {
+                Ok(None)
+            } else {
+                let col = if col_names.is_empty() {
+                    None
+                } else {
+                    Some(col_names.clone())
+                };
+                Ok(Some(DataChunk::from_rows_with_col_names(chunk_rows, col)))
+            }
+        }
         _ => unreachable!(),
     }
 }
@@ -52,7 +114,16 @@ pub fn stop_scanvertices(_executor: &mut StreamingExecutor) -> Result<(), QueryE
 }
 
 /// Close ScanVertices operator
-pub fn close_scanvertices(_executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+pub fn close_scanvertices(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    if let StreamingExecutor::StorageScanVertices {
+        buffer,
+        current_index,
+        ..
+    } = executor
+    {
+        *buffer = None;
+        *current_index = 0;
+    }
     Ok(())
 }
 
@@ -89,6 +160,67 @@ pub fn next_scanedges(executor: &mut StreamingExecutor) -> Result<Option<DataChu
                 Ok(Some(DataChunk::from_rows_with_col_names(chunk_rows, col)))
             }
         }
+        StreamingExecutor::StorageScanEdges {
+            storage,
+            space_name,
+            limit,
+            buffer,
+            current_index,
+            col_names,
+            ..
+        } => {
+            if buffer.is_none() {
+                let mut rows = if let Some(storage) = storage {
+                    let mut cursor = open_edge_scan(storage, space_name, None)
+                        .map_err(|e| QueryError::execution(e.to_string()))?;
+                    let mut all = Vec::new();
+                    loop {
+                        let batch = cursor
+                            .next_batch(CHUNK_SIZE)
+                            .map_err(|e| QueryError::execution(e.to_string()))?;
+                        if batch.is_empty() {
+                            break;
+                        }
+                        all.extend(
+                            batch
+                                .into_iter()
+                                .map(|edge| vec![Value::Edge(Box::new(edge))]),
+                        );
+                    }
+                    all
+                } else {
+                    Vec::new()
+                };
+
+                if let Some(limit) = *limit {
+                    rows.truncate(limit);
+                }
+
+                *buffer = Some(rows);
+            }
+
+            let rows = buffer
+                .as_ref()
+                .ok_or_else(|| QueryError::execution("Storage scan buffer not initialized"))?;
+            if *current_index >= rows.len() {
+                return Ok(None);
+            }
+
+            let end = (*current_index + CHUNK_SIZE).min(rows.len());
+            let chunk_rows: Vec<Vec<Value>> = rows[*current_index..end].to_vec();
+            *current_index = end;
+
+            if chunk_rows.is_empty() {
+                Ok(None)
+            } else {
+                let col = if col_names.is_empty() {
+                    None
+                } else {
+                    Some(col_names.clone())
+                };
+                Ok(Some(DataChunk::from_rows_with_col_names(chunk_rows, col)))
+            }
+        }
         _ => unreachable!(),
     }
 }
@@ -99,7 +231,16 @@ pub fn stop_scanedges(_executor: &mut StreamingExecutor) -> Result<(), QueryErro
 }
 
 /// Close ScanEdges operator
-pub fn close_scanedges(_executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+pub fn close_scanedges(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    if let StreamingExecutor::StorageScanEdges {
+        buffer,
+        current_index,
+        ..
+    } = executor
+    {
+        *buffer = None;
+        *current_index = 0;
+    }
     Ok(())
 }
 
@@ -128,6 +269,7 @@ mod tests {
             buffer,
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         };
 
         executor.open().unwrap();
@@ -161,6 +303,7 @@ mod tests {
             buffer: vec![],
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         };
 
         executor.open().unwrap();
@@ -178,6 +321,7 @@ mod tests {
             buffer,
             current_index: 0,
             col_names: vec![],
+            plan_node_id: 0,
         };
 
         executor.open().unwrap();
