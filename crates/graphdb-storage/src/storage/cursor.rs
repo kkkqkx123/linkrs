@@ -19,8 +19,54 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use crate::core::StorageError;
-use crate::core::Value;
 use crate::storage::StorageClient;
+
+// ---------------------------------------------------------------------------
+// Scan options
+// ---------------------------------------------------------------------------
+
+/// Unified scan options that configure cursor behavior.
+///
+/// This is the contract between the query planner/executor and the storage
+/// layer.  Future phases will add predicate pushdown, projection, partition,
+/// range, and snapshot support.
+#[derive(Debug, Clone, Default)]
+pub struct ScanOptions {
+    /// Optional edge type filter (for edge scans only).
+    pub edge_type: Option<String>,
+    /// Maximum number of rows to return (None = unlimited).
+    pub limit: Option<usize>,
+    /// Batch size for cursor reads.
+    pub batch_size: usize,
+}
+
+impl ScanOptions {
+    pub const DEFAULT_BATCH_SIZE: usize = 1024;
+
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Builder: set edge type filter.
+    pub fn with_edge_type(mut self, edge_type: String) -> Self {
+        self.edge_type = Some(edge_type);
+        self
+    }
+
+    /// Builder: set row limit.
+    pub fn with_limit(mut self, limit: usize) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
+    pub fn batch_size(&self) -> usize {
+        if self.batch_size == 0 {
+            Self::DEFAULT_BATCH_SIZE
+        } else {
+            self.batch_size
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Cursor traits
@@ -99,21 +145,21 @@ impl EdgeCursor for VecEdgeCursor {
 /// Uses the default Vec-backed cursor unless the client provides a
 /// native cursor implementation.
 ///
-/// When `limit` is `Some(n)`, at most `n` vertices are returned.
+/// When `options.limit` is `Some(n)`, at most `n` vertices are returned.
 pub fn open_vertex_scan(
     storage: &Arc<RwLock<dyn StorageClient>>,
     space: &str,
-    limit: Option<usize>,
+    options: &ScanOptions,
 ) -> Result<Box<dyn VertexCursor>, StorageError> {
     let reader = storage.read();
     let mut vertices = reader.scan_vertices(space)?;
-    if let Some(limit) = limit {
+    if let Some(limit) = options.limit {
         vertices.truncate(limit);
     }
     Ok(Box::new(VecVertexCursor::new(vertices)))
 }
 
-/// Open a vertex scan cursor bound by a limit.
+/// Open a vertex scan cursor with a limit.
 ///
 /// Convenience wrapper – delegates to [`open_vertex_scan`] with a limit.
 pub fn open_vertex_scan_with_limit(
@@ -121,7 +167,8 @@ pub fn open_vertex_scan_with_limit(
     space: &str,
     limit: usize,
 ) -> Result<Box<dyn VertexCursor>, StorageError> {
-    open_vertex_scan(storage, space, Some(limit))
+    let options = ScanOptions::new().with_limit(limit);
+    open_vertex_scan(storage, space, &options)
 }
 
 /// Open an edge scan cursor through a storage client.
@@ -129,20 +176,23 @@ pub fn open_vertex_scan_with_limit(
 /// Uses the default Vec-backed cursor unless the client provides a
 /// native cursor implementation.
 ///
-/// When `limit` is `Some(n)`, at most `n` edges are returned.
+/// When `options.edge_type` is set, only edges of that type are scanned.
+/// When `options.limit` is `Some(n)`, at most `n` edges are returned.
+///
+/// Phase 3 improvement: `edge_type` from the plan node is now passed
+/// through `ScanOptions` instead of a separate parameter.
 pub fn open_edge_scan(
     storage: &Arc<RwLock<dyn StorageClient>>,
     space: &str,
-    edge_type: Option<&str>,
-    limit: Option<usize>,
+    options: &ScanOptions,
 ) -> Result<Box<dyn EdgeCursor>, StorageError> {
     let reader = storage.read();
-    let mut edges = if let Some(et) = edge_type {
+    let mut edges = if let Some(ref et) = options.edge_type {
         reader.scan_edges_by_type(space, et)?
     } else {
         reader.scan_all_edges(space)?
     };
-    if let Some(limit) = limit {
+    if let Some(limit) = options.limit {
         edges.truncate(limit);
     }
     Ok(Box::new(VecEdgeCursor::new(edges)))

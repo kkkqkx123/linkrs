@@ -2,7 +2,7 @@
 
 use crate::core::error::QueryError;
 use crate::core::Value;
-use crate::query::executor::base::MemoryTracker;
+use crate::query::executor::base::{MemoryBudget, MemoryTracker};
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 
@@ -96,9 +96,11 @@ pub fn close_union(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
             left,
             right,
             opened,
+            seen_rows,
             ..
         } => {
             if *opened {
+                seen_rows.clear();
                 left.close()?;
                 right.close()?;
                 *opened = false;
@@ -263,9 +265,14 @@ pub fn close_intersect(executor: &mut StreamingExecutor) -> Result<(), QueryErro
             left,
             right,
             opened,
+            left_rows,
+            memory_tracker,
             ..
         } => {
             if *opened {
+                let mem = MemoryBudget::estimate_rows_memory(left_rows);
+                memory_tracker.release(mem);
+                left_rows.clear();
                 left.close()?;
                 right.close()?;
                 *opened = false;
@@ -354,9 +361,11 @@ pub fn close_except(executor: &mut StreamingExecutor) -> Result<(), QueryError> 
             left,
             right,
             opened,
+            exclude_rows,
             ..
         } => {
             if *opened {
+                exclude_rows.clear();
                 left.close()?;
                 right.close()?;
                 *opened = false;

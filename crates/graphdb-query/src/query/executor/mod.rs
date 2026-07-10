@@ -3,7 +3,9 @@ pub mod algorithms;
 pub mod base;
 pub mod explain;
 pub mod expression;
+pub mod pipeline;
 pub mod streaming;
+pub mod traversal;
 
 // Re-export from the base module: The basic types are uniformly exported from the base module.
 pub use base::{
@@ -21,6 +23,11 @@ pub use streaming::{
 // Re-export explain/profile executors
 pub use explain::{
     ExecutionStatsContext, ExplainExecutor, ExplainMode, NodeExecutionStats, ProfileExecutor,
+};
+
+// Re-export pipeline types
+pub use pipeline::{
+    PipelineBreakerKind, PipelineGraph, PipelineAnalyzer, PipelineRunner, Pipeline, PipelineSink, PipelineSource,
 };
 
 // Re-export algorithm types

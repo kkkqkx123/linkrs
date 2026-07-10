@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::core::error::QueryError;
 use crate::core::Value;
-use crate::query::executor::base::MemoryTracker;
+use crate::query::executor::base::{MemoryBudget, MemoryTracker};
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::{StreamingExecutor, ValueRowContext};
@@ -179,9 +179,16 @@ pub fn close_hashjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError
             left,
             right,
             opened,
+            build_side_hash,
+            all_right_rows,
+            memory_tracker,
             ..
         } => {
             if *opened {
+                let mem = MemoryBudget::estimate_rows_memory(all_right_rows);
+                memory_tracker.release(mem);
+                build_side_hash.clear();
+                all_right_rows.clear();
                 left.close()?;
                 right.close()?;
                 *opened = false;
@@ -361,9 +368,14 @@ pub fn close_nestedloopjoin(executor: &mut StreamingExecutor) -> Result<(), Quer
             left,
             right,
             opened,
+            build_side_tuples,
+            memory_tracker,
             ..
         } => {
             if *opened {
+                let mem = MemoryBudget::estimate_rows_memory(build_side_tuples);
+                memory_tracker.release(mem);
+                build_side_tuples.clear();
                 left.close()?;
                 right.close()?;
                 *opened = false;
@@ -475,9 +487,14 @@ pub fn close_innerjoin(executor: &mut StreamingExecutor) -> Result<(), QueryErro
             left,
             right,
             opened,
+            build_side_tuples,
+            memory_tracker,
             ..
         } => {
             if *opened {
+                let mem = MemoryBudget::estimate_rows_memory(build_side_tuples);
+                memory_tracker.release(mem);
+                build_side_tuples.clear();
                 left.close()?;
                 right.close()?;
                 *opened = false;
@@ -599,9 +616,14 @@ pub fn close_leftjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError
             left,
             right,
             opened,
+            build_side_tuples,
+            memory_tracker,
             ..
         } => {
             if *opened {
+                let mem = MemoryBudget::estimate_rows_memory(build_side_tuples);
+                memory_tracker.release(mem);
+                build_side_tuples.clear();
                 left.close()?;
                 right.close()?;
                 *opened = false;
@@ -723,9 +745,14 @@ pub fn close_rightjoin(executor: &mut StreamingExecutor) -> Result<(), QueryErro
             left,
             right,
             opened,
+            build_side_tuples,
+            memory_tracker,
             ..
         } => {
             if *opened {
+                let mem = MemoryBudget::estimate_rows_memory(build_side_tuples);
+                memory_tracker.release(mem);
+                build_side_tuples.clear();
                 left.close()?;
                 right.close()?;
                 *opened = false;
@@ -893,9 +920,17 @@ pub fn close_fullouterjoin(executor: &mut StreamingExecutor) -> Result<(), Query
             left,
             right,
             opened,
+            left_rows,
+            right_rows,
+            memory_tracker,
             ..
         } => {
             if *opened {
+                let mem_left = MemoryBudget::estimate_rows_memory(left_rows);
+                let mem_right = MemoryBudget::estimate_rows_memory(right_rows);
+                memory_tracker.release(mem_left + mem_right);
+                left_rows.clear();
+                right_rows.clear();
                 left.close()?;
                 right.close()?;
                 *opened = false;
@@ -996,9 +1031,17 @@ pub fn close_crossjoin(executor: &mut StreamingExecutor) -> Result<(), QueryErro
             left,
             right,
             opened,
+            all_left_rows,
+            all_right_rows,
+            memory_tracker,
             ..
         } => {
             if *opened {
+                let mem_left = MemoryBudget::estimate_rows_memory(all_left_rows);
+                let mem_right = MemoryBudget::estimate_rows_memory(all_right_rows);
+                memory_tracker.release(mem_left + mem_right);
+                all_left_rows.clear();
+                all_right_rows.clear();
                 left.close()?;
                 right.close()?;
                 *opened = false;
@@ -1108,9 +1151,14 @@ pub fn close_semijoin(executor: &mut StreamingExecutor) -> Result<(), QueryError
             left,
             right,
             opened,
+            right_rows,
+            memory_tracker,
             ..
         } => {
             if *opened {
+                let mem = MemoryBudget::estimate_rows_memory(right_rows);
+                memory_tracker.release(mem);
+                right_rows.clear();
                 left.close()?;
                 right.close()?;
                 *opened = false;

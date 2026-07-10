@@ -10,6 +10,9 @@ use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::executor::context::ValueRowContext;
 use crate::query::executor::streaming::executor::StreamingExecutor;
+use crate::query::executor::traversal::config::{TraversalConfig, VisitedPolicy};
+use crate::query::executor::traversal::graph_reader::TraversalGraphReader;
+use crate::query::executor::traversal::runtime::TraversalRuntime;
 use crate::storage::StorageClient;
 
 fn direction_from_str(dir: &str) -> crate::core::EdgeDirection {
@@ -30,34 +33,6 @@ fn row_passes_filter(row: &[Value], col_names: &[String], filter: &Option<Expres
         ExpressionEvaluator::evaluate(expr, &mut context),
         Ok(Value::Bool(true))
     )
-}
-
-fn read_neighbor(
-    storage: &dyn StorageClient,
-    space_name: &str,
-    vertex_id: &VertexId,
-    direction: crate::core::EdgeDirection,
-) -> Vec<crate::core::vertex_edge_path::Vertex> {
-    let mut result = Vec::new();
-    if let Ok(edges) = storage.get_node_edges(space_name, vertex_id, direction) {
-        for e in &edges {
-            let neighbor_id = match direction {
-                crate::core::EdgeDirection::Out => e.dst(),
-                crate::core::EdgeDirection::In => e.src(),
-                crate::core::EdgeDirection::Both => {
-                    if e.src() == vertex_id {
-                        e.dst()
-                    } else {
-                        e.src()
-                    }
-                }
-            };
-            if let Ok(Some(vertex)) = storage.get_vertex(space_name, neighbor_id) {
-                result.push(vertex);
-            }
-        }
-    }
-    result
 }
 
 fn bidir_bfs_shortest_path(
@@ -244,6 +219,83 @@ pub fn open_expand(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     }
 }
 
+fn expand_on_chunk(
+    chunk: DataChunk,
+    reader: &dyn StorageClient,
+    space_name: &str,
+    edge_type: &str,
+    direction: &str,
+    filter_expr: &Option<Expression>,
+) -> Result<Option<DataChunk>, QueryError> {
+    let dir = direction_from_str(direction);
+    let col_names = chunk.col_names();
+    let greader = TraversalGraphReader::new(reader);
+
+    let mut out_rows = Vec::new();
+    for row in &chunk.rows {
+        let context = ValueRowContext::new(row.clone(), col_names.clone());
+        let vid_val = context
+            .get_variable("vid")
+            .or_else(|| row.first().cloned())
+            .unwrap_or(Value::Null(crate::core::NullType::Null));
+
+        if let Ok(vid) = VertexId::try_from(&vid_val) {
+            let config = TraversalConfig::expand(
+                space_name.to_string(),
+                dir,
+            );
+            let runtime_reader = TraversalGraphReader::new(reader);
+            let mut runtime = TraversalRuntime::new(runtime_reader, config);
+
+            if let Ok(Some(vertex)) = reader.get_vertex(space_name, &vid) {
+                runtime.seed_from_vertex(vertex);
+            } else {
+                continue;
+            }
+
+            while let Some(event) = runtime.next_event() {
+                let mut out_row = row.clone();
+                out_row.push(Value::Vertex(Box::new(event.vertex)));
+                out_row.push(Value::String(edge_type.to_string()));
+                out_row.push(Value::String(direction.to_string()));
+                let mut out_col_names = col_names.clone();
+                out_col_names.push("_expand_vertex".to_string());
+                out_col_names.push("_expand_edge_type".to_string());
+                out_col_names.push("_expand_direction".to_string());
+                if row_passes_filter(&out_row, &out_col_names, filter_expr) {
+                    out_rows.push(out_row);
+                }
+            }
+        }
+    }
+
+    if out_rows.is_empty() {
+        return Ok(None);
+    }
+
+    let mut new_cols: Vec<ColumnInfo> = col_names
+        .iter()
+        .map(|n| ColumnInfo {
+            name: n.clone(),
+            data_type: "string".to_string(),
+        })
+        .collect();
+    new_cols.push(ColumnInfo {
+        name: "_expand_vertex".to_string(),
+        data_type: "vertex".to_string(),
+    });
+    new_cols.push(ColumnInfo {
+        name: "_expand_edge_type".to_string(),
+        data_type: "string".to_string(),
+    });
+    new_cols.push(ColumnInfo {
+        name: "_expand_direction".to_string(),
+        data_type: "string".to_string(),
+    });
+    let schema = Arc::new(Schema::new(new_cols));
+    Ok(Some(DataChunk::new(out_rows, schema)))
+}
+
 pub fn next_expand(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
         StreamingExecutor::Expand {
@@ -264,60 +316,9 @@ pub fn next_expand(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
             if let Some(chunk) = chunk {
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
-                    let dir = direction_from_str(direction);
-                    let col_names = chunk.col_names();
-
-                    let mut out_rows = Vec::new();
-                    for row in &chunk.rows {
-                        let context = ValueRowContext::new(row.clone(), col_names.clone());
-                        let vid_val = context
-                            .get_variable("vid")
-                            .or_else(|| row.first().cloned())
-                            .unwrap_or(Value::Null(crate::core::NullType::Null));
-
-                        if let Ok(vid) = VertexId::try_from(&vid_val) {
-                            let neighbors = read_neighbor(&*reader, space_name, &vid, dir);
-                            for neighbor in neighbors {
-                                let mut out_row = row.clone();
-                                out_row.push(Value::Vertex(Box::new(neighbor)));
-                                out_row.push(Value::String(edge_type.clone()));
-                                out_row.push(Value::String(direction.clone()));
-                                let mut out_col_names = col_names.clone();
-                                out_col_names.push("_expand_vertex".to_string());
-                                out_col_names.push("_expand_edge_type".to_string());
-                                out_col_names.push("_expand_direction".to_string());
-                                if row_passes_filter(&out_row, &out_col_names, filter_expr) {
-                                    out_rows.push(out_row);
-                                }
-                            }
-                        }
-                    }
-
-                    if out_rows.is_empty() {
-                        return Ok(None);
-                    }
-
-                    let mut new_cols: Vec<ColumnInfo> = col_names
-                        .iter()
-                        .map(|n| ColumnInfo {
-                            name: n.clone(),
-                            data_type: "string".to_string(),
-                        })
-                        .collect();
-                    new_cols.push(ColumnInfo {
-                        name: "_expand_vertex".to_string(),
-                        data_type: "vertex".to_string(),
-                    });
-                    new_cols.push(ColumnInfo {
-                        name: "_expand_edge_type".to_string(),
-                        data_type: "string".to_string(),
-                    });
-                    new_cols.push(ColumnInfo {
-                        name: "_expand_direction".to_string(),
-                        data_type: "string".to_string(),
-                    });
-                    let schema = Arc::new(Schema::new(new_cols));
-                    Ok(Some(DataChunk::new(out_rows, schema)))
+                    expand_on_chunk(
+                        chunk, &*reader, space_name, edge_type, direction, filter_expr,
+                    )
                 } else {
                     let mut new_cols: Vec<ColumnInfo> = chunk
                         .schema
@@ -424,53 +425,9 @@ pub fn next_expandall(executor: &mut StreamingExecutor) -> Result<Option<DataChu
             if let Some(chunk) = chunk {
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
-                    let dir = direction_from_str(direction);
-                    let col_names = chunk.col_names();
-
-                    let mut out_rows = Vec::new();
-                    for row in &chunk.rows {
-                        let context = ValueRowContext::new(row.clone(), col_names.clone());
-                        let vid_val = context
-                            .get_variable("vid")
-                            .or_else(|| row.first().cloned())
-                            .unwrap_or(Value::Null(crate::core::NullType::Null));
-                        if let Ok(vid) = VertexId::try_from(&vid_val) {
-                            let neighbors = read_neighbor(&*reader, space_name, &vid, dir);
-                            for neighbor in neighbors {
-                                let mut out_row = row.clone();
-                                out_row.push(Value::Vertex(Box::new(neighbor)));
-                                out_row.push(Value::String(edge_type.clone()));
-                                out_row.push(Value::String(direction.clone()));
-                                out_rows.push(out_row);
-                            }
-                        }
-                    }
-
-                    if out_rows.is_empty() {
-                        return Ok(None);
-                    }
-
-                    let mut new_cols: Vec<ColumnInfo> = col_names
-                        .iter()
-                        .map(|n| ColumnInfo {
-                            name: n.clone(),
-                            data_type: "string".to_string(),
-                        })
-                        .collect();
-                    new_cols.push(ColumnInfo {
-                        name: "_expand_vertex".to_string(),
-                        data_type: "vertex".to_string(),
-                    });
-                    new_cols.push(ColumnInfo {
-                        name: "_expand_edge_type".to_string(),
-                        data_type: "string".to_string(),
-                    });
-                    new_cols.push(ColumnInfo {
-                        name: "_expand_direction".to_string(),
-                        data_type: "string".to_string(),
-                    });
-                    let schema = Arc::new(Schema::new(new_cols));
-                    Ok(Some(DataChunk::new(out_rows, schema)))
+                    expand_on_chunk(
+                        chunk, &*reader, space_name, edge_type, direction, &None,
+                    )
                 } else {
                     let mut new_cols: Vec<ColumnInfo> = chunk
                         .schema
@@ -552,6 +509,91 @@ pub fn open_traverse(executor: &mut StreamingExecutor) -> Result<(), QueryError>
     }
 }
 
+fn traverse_on_chunk(
+    chunk: DataChunk,
+    reader: &dyn StorageClient,
+    space_name: &str,
+    edge_type: &str,
+    direction: &str,
+    min_depth: u32,
+    max_depth: u32,
+    visited: &mut HashSet<String>,
+) -> Result<Option<DataChunk>, QueryError> {
+    let dir = direction_from_str(direction);
+    let col_names = chunk.col_names();
+
+    let mut out_rows = Vec::new();
+    for row in &chunk.rows {
+        let context = ValueRowContext::new(row.clone(), col_names.clone());
+        let vid_val = context
+            .get_variable("vid")
+            .or_else(|| row.first().cloned())
+            .unwrap_or(Value::Null(crate::core::NullType::Null));
+        if let Ok(vid) = VertexId::try_from(&vid_val) {
+            let config = TraversalConfig::traverse(
+                space_name.to_string(),
+                dir,
+                min_depth,
+                max_depth,
+                vec![edge_type.to_string()],
+            );
+            let runtime_reader = TraversalGraphReader::new(reader);
+            let mut runtime = TraversalRuntime::new(runtime_reader, config);
+
+            if let Ok(Some(vertex)) = reader.get_vertex(space_name, &vid) {
+                runtime.seed_from_vertex(vertex);
+            } else {
+                continue;
+            }
+
+            while let Some(event) = runtime.next_event() {
+                let nid_str = format!("{:?}", event.vertex.vid());
+                if visited.contains(&nid_str) {
+                    continue;
+                }
+                visited.insert(nid_str);
+
+                let mut out_row = row.clone();
+                out_row.push(Value::Vertex(Box::new(event.vertex)));
+                out_row.push(Value::String(edge_type.to_string()));
+                out_row.push(Value::String(direction.to_string()));
+                out_row.push(Value::BigInt(event.depth as i64));
+                out_rows.push(out_row);
+            }
+        }
+    }
+
+    if out_rows.is_empty() {
+        return Ok(None);
+    }
+
+    let mut new_cols: Vec<ColumnInfo> = col_names
+        .iter()
+        .map(|n| ColumnInfo {
+            name: n.clone(),
+            data_type: "string".to_string(),
+        })
+        .collect();
+    new_cols.push(ColumnInfo {
+        name: "_traverse_vertex".to_string(),
+        data_type: "vertex".to_string(),
+    });
+    new_cols.push(ColumnInfo {
+        name: "_traverse_edge_type".to_string(),
+        data_type: "string".to_string(),
+    });
+    new_cols.push(ColumnInfo {
+        name: "_traverse_direction".to_string(),
+        data_type: "string".to_string(),
+    });
+    new_cols.push(ColumnInfo {
+        name: "_traverse_depth".to_string(),
+        data_type: "bigint".to_string(),
+    });
+    let schema = Arc::new(Schema::new(new_cols));
+    Ok(Some(DataChunk::new(out_rows, schema)))
+}
+
 pub fn next_traverse(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
         StreamingExecutor::Traverse {
@@ -574,96 +616,16 @@ pub fn next_traverse(executor: &mut StreamingExecutor) -> Result<Option<DataChun
             if let Some(chunk) = chunk {
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
-                    let dir = direction_from_str(direction);
-                    let col_names = chunk.col_names();
-
-                    let mut out_rows = Vec::new();
-                    for row in &chunk.rows {
-                        let context = ValueRowContext::new(row.clone(), col_names.clone());
-                        let vid_val = context
-                            .get_variable("vid")
-                            .or_else(|| row.first().cloned())
-                            .unwrap_or(Value::Null(crate::core::NullType::Null));
-                        if let Ok(vid) = VertexId::try_from(&vid_val) {
-                            let mut frontier = vec![(vid, 0u32)];
-                            let mut local_visited = std::collections::HashSet::new();
-                            local_visited.insert(vid.clone());
-
-                            while let Some((current, depth)) = frontier.pop() {
-                                if depth >= *max_depth {
-                                    continue;
-                                }
-                                if let Ok(edges) = reader.get_node_edges(space_name, &current, dir)
-                                {
-                                    for e in &edges {
-                                        let nid = match dir {
-                                            crate::core::EdgeDirection::Out => e.dst().clone(),
-                                            crate::core::EdgeDirection::In => e.src().clone(),
-                                            crate::core::EdgeDirection::Both => {
-                                                if e.src() == &current {
-                                                    e.dst().clone()
-                                                } else {
-                                                    e.src().clone()
-                                                }
-                                            }
-                                        };
-                                        let nid_str = format!("{:?}", nid);
-                                        if visited.contains(&nid_str)
-                                            || local_visited.contains(&nid)
-                                        {
-                                            continue;
-                                        }
-                                        local_visited.insert(nid.clone());
-                                        visited.insert(nid_str);
-
-                                        if depth + 1 >= *min_depth {
-                                            if let Ok(Some(vertex)) =
-                                                reader.get_vertex(space_name, &nid)
-                                            {
-                                                let mut out_row = row.clone();
-                                                out_row.push(Value::Vertex(Box::new(vertex)));
-                                                out_row.push(Value::String(edge_type.clone()));
-                                                out_row.push(Value::String(direction.clone()));
-                                                out_row.push(Value::BigInt((depth + 1) as i64));
-                                                out_rows.push(out_row);
-                                            }
-                                        }
-                                        frontier.push((nid, depth + 1));
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    if out_rows.is_empty() {
-                        return Ok(None);
-                    }
-
-                    let mut new_cols: Vec<ColumnInfo> = col_names
-                        .iter()
-                        .map(|n| ColumnInfo {
-                            name: n.clone(),
-                            data_type: "string".to_string(),
-                        })
-                        .collect();
-                    new_cols.push(ColumnInfo {
-                        name: "_traverse_vertex".to_string(),
-                        data_type: "vertex".to_string(),
-                    });
-                    new_cols.push(ColumnInfo {
-                        name: "_traverse_edge_type".to_string(),
-                        data_type: "string".to_string(),
-                    });
-                    new_cols.push(ColumnInfo {
-                        name: "_traverse_direction".to_string(),
-                        data_type: "string".to_string(),
-                    });
-                    new_cols.push(ColumnInfo {
-                        name: "_traverse_depth".to_string(),
-                        data_type: "bigint".to_string(),
-                    });
-                    let schema = Arc::new(Schema::new(new_cols));
-                    Ok(Some(DataChunk::new(out_rows, schema)))
+                    traverse_on_chunk(
+                        chunk,
+                        &*reader,
+                        space_name,
+                        edge_type,
+                        direction,
+                        *min_depth,
+                        *max_depth,
+                        visited,
+                    )
                 } else {
                     let mut new_cols: Vec<ColumnInfo> = chunk
                         .schema

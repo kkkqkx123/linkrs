@@ -3,7 +3,7 @@
 use crate::core::error::QueryError;
 use crate::core::value::NullType;
 use crate::core::Value;
-use crate::query::executor::base::MemoryTracker;
+use crate::query::executor::base::{MemoryBudget, MemoryTracker};
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::helpers::*;
@@ -129,8 +129,17 @@ pub fn stop_aggregate(executor: &mut StreamingExecutor) -> Result<(), QueryError
 
 pub fn close_aggregate(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::Aggregate { input, opened, .. } => {
+        StreamingExecutor::Aggregate {
+            input,
+            opened,
+            all_rows,
+            memory_tracker,
+            ..
+        } => {
             if *opened {
+                let mem = MemoryBudget::estimate_rows_memory(all_rows);
+                memory_tracker.release(mem);
+                all_rows.clear();
                 input.close()?;
                 *opened = false;
             }
@@ -240,8 +249,17 @@ pub fn stop_sort(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
 
 pub fn close_sort(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::Sort { input, opened, .. } => {
+        StreamingExecutor::Sort {
+            input,
+            opened,
+            all_rows,
+            memory_tracker,
+            ..
+        } => {
             if *opened {
+                let mem = MemoryBudget::estimate_rows_memory(all_rows);
+                memory_tracker.release(mem);
+                all_rows.clear();
                 input.close()?;
                 *opened = false;
             }
@@ -341,8 +359,17 @@ pub fn stop_groupby(executor: &mut StreamingExecutor) -> Result<(), QueryError> 
 
 pub fn close_groupby(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::GroupBy { input, opened, .. } => {
+        StreamingExecutor::GroupBy {
+            input,
+            opened,
+            all_rows,
+            memory_tracker,
+            ..
+        } => {
             if *opened {
+                let mem = MemoryBudget::estimate_rows_memory(all_rows);
+                memory_tracker.release(mem);
+                all_rows.clear();
                 input.close()?;
                 *opened = false;
             }
@@ -614,8 +641,17 @@ pub fn stop_windowfunction(executor: &mut StreamingExecutor) -> Result<(), Query
 
 pub fn close_windowfunction(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::WindowFunction { input, opened, .. } => {
+        StreamingExecutor::WindowFunction {
+            input,
+            opened,
+            all_rows,
+            memory_tracker,
+            ..
+        } => {
             if *opened {
+                let mem = MemoryBudget::estimate_rows_memory(all_rows);
+                memory_tracker.release(mem);
+                all_rows.clear();
                 input.close()?;
                 *opened = false;
             }

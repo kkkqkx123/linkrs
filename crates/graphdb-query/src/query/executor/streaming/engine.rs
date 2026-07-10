@@ -10,6 +10,7 @@
 use std::sync::Arc;
 
 use super::chunk::DataChunk;
+use super::driver::ExecutorDriver;
 use super::executor::StreamingExecutor;
 use super::runtime::ExecutionRuntime;
 use super::stream::ResultStream;
@@ -23,7 +24,9 @@ use crate::core::error::QueryError;
 /// 3. close() the root executor
 ///
 /// An optional [`ExecutionRuntime`] can be attached to enable cancellation,
-/// memory tracking, and profiling.
+/// memory tracking, and profiling.  When present operator calls are routed
+/// through [`ExecutorDriver`] which adds uniform cancel checking and
+/// profile instrumentation.
 pub struct StreamingExecutionEngine {
     root_executor: Option<Box<StreamingExecutor>>,
     runtime: Option<Arc<ExecutionRuntime>>,
@@ -59,7 +62,13 @@ impl StreamingExecutionEngine {
             .root_executor
             .as_mut()
             .ok_or_else(|| QueryError::execution("No executor registered".to_string()))?;
-        executor.open()
+        // Clone runtime before borrowing executor to satisfy borrow checker.
+        if let Some(ref rt) = self.runtime {
+            let d = ExecutorDriver::new(rt.clone());
+            d.open(executor)
+        } else {
+            executor.open()
+        }
     }
 
     /// Pull the next chunk from the root executor (used by [`ResultStream`]).
@@ -68,13 +77,23 @@ impl StreamingExecutionEngine {
             .root_executor
             .as_mut()
             .ok_or_else(|| QueryError::execution("No executor registered".to_string()))?;
-        executor.next()
+        if let Some(ref rt) = self.runtime {
+            let d = ExecutorDriver::new(rt.clone());
+            d.next(executor)
+        } else {
+            executor.next()
+        }
     }
 
     /// Close the root executor (used by [`ResultStream`]).
     pub fn close_root(&mut self) -> Result<(), QueryError> {
         let result = if let Some(ref mut executor) = self.root_executor {
-            executor.close()
+            if let Some(ref rt) = self.runtime {
+                let d = ExecutorDriver::new(rt.clone());
+                d.close(executor)
+            } else {
+                executor.close()
+            }
         } else {
             Ok(())
         };
@@ -86,36 +105,50 @@ impl StreamingExecutionEngine {
 
     /// Execute the streaming query via direct single-thread pull
     ///
-    /// Checks the runtime's cancel token between chunks (if a runtime
-    /// has been attached).  Blocking operators that make internal
-    /// collection loops should check the cancel token directly in
-    /// future phases.
+    /// When a runtime has been attached all operator calls are routed
+    /// through [`ExecutorDriver`] which provides cancel checking and
+    /// profile instrumentation on every `open`/`next`/`close`.
     pub fn execute(&mut self) -> Result<Vec<DataChunk>, QueryError> {
+        if let Some(ref rt) = self.runtime {
+            rt.profile_start();
+        }
+
+        let mut output_chunks = Vec::new();
+
         let executor = self
             .root_executor
             .as_mut()
             .ok_or_else(|| QueryError::execution("No executor registered".to_string()))?;
 
         if let Some(ref rt) = self.runtime {
-            rt.profile_start();
-        }
-
-        executor.open()?;
-
-        let mut output_chunks = Vec::new();
-        while let Some(chunk) = executor.next()? {
-            if let Some(ref rt) = self.runtime {
-                rt.ensure_not_cancelled()?;
-                rt.profile_add_rows(chunk.len() as u64);
+            let d = ExecutorDriver::new(rt.clone());
+            d.open(executor)?;
+            while let Some(chunk) = d.next(executor)? {
+                output_chunks.push(chunk);
             }
-            output_chunks.push(chunk);
+            d.close(executor)?;
+        } else {
+            executor.open()?;
+            while let Some(chunk) = executor.next()? {
+                output_chunks.push(chunk);
+            }
+            executor.close()?;
         }
-
-        executor.close()?;
 
         if let Some(ref rt) = self.runtime {
             rt.profile_end();
             rt.release_resources();
+        }
+
+        // Extract peak memory from executor and record in profile.
+        if let Some(ref rt) = self.runtime {
+            if let Some(ref root) = self.root_executor {
+                let peak = extract_peak_memory(root);
+                if peak > 0 {
+                    let d = ExecutorDriver::new(rt.clone());
+                    d.record_peak_memory(root, peak);
+                }
+            }
         }
 
         Ok(output_chunks)
@@ -132,6 +165,34 @@ impl StreamingExecutionEngine {
             .ok_or_else(|| QueryError::execution("No ExecutionRuntime attached".to_string()))?;
         runtime.profile_start();
         Ok(ResultStream::new(self, runtime))
+    }
+}
+
+/// Extract peak memory from a root executor by inspecting its MemoryTracker,
+/// if it is a blocking operator variant.
+fn extract_peak_memory(executor: &StreamingExecutor) -> u64 {
+    use StreamingExecutor::*;
+    match executor {
+        Sort { memory_tracker, .. } => memory_tracker.peak() as u64,
+        Aggregate { memory_tracker, .. } => memory_tracker.peak() as u64,
+        HashJoin { memory_tracker, .. } => memory_tracker.peak() as u64,
+        NestedLoopJoin { memory_tracker, .. } => memory_tracker.peak() as u64,
+        InnerJoin { memory_tracker, .. } => memory_tracker.peak() as u64,
+        LeftJoin { memory_tracker, .. } => memory_tracker.peak() as u64,
+        RightJoin { memory_tracker, .. } => memory_tracker.peak() as u64,
+        FullOuterJoin { memory_tracker, .. } => memory_tracker.peak() as u64,
+        CrossJoin { memory_tracker, .. } => memory_tracker.peak() as u64,
+        SemiJoin { memory_tracker, .. } => memory_tracker.peak() as u64,
+        GroupBy { memory_tracker, .. } => memory_tracker.peak() as u64,
+        Distinct { memory_tracker, .. } => memory_tracker.peak() as u64,
+        WindowFunction { memory_tracker, .. } => memory_tracker.peak() as u64,
+        Union { memory_tracker, .. } => memory_tracker.peak() as u64,
+        Intersect { memory_tracker, .. } => memory_tracker.peak() as u64,
+        Except { memory_tracker, .. } => memory_tracker.peak() as u64,
+        Minus { memory_tracker, .. } => memory_tracker.peak() as u64,
+        TopN { memory_tracker, .. } => memory_tracker.peak() as u64,
+        Materialize { memory_tracker, .. } => memory_tracker.peak() as u64,
+        _ => 0,
     }
 }
 

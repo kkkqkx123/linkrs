@@ -117,6 +117,8 @@ pub enum StreamingExecutor {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         limit: Option<usize>,
+        /// Optional edge type filter (Phase 3: now passed from plan node).
+        edge_type: Option<String>,
         cursor: Option<Box<dyn EdgeCursor>>,
         buffer: Vec<Vec<Value>>,
         current_index: usize,

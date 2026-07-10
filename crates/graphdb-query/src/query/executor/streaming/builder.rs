@@ -79,10 +79,13 @@ impl StreamingExecutorBuilder {
                     .limit()
                     .and_then(|value| (value >= 0).then_some(value as usize));
                 let col_names = scan_node.col_names().to_vec();
+                // Phase 3: extract optional edge_type from the plan node.
+                let edge_type = scan_node.edge_type().map(|s| s.to_string());
                 let executor = StreamingExecutor::StorageScanEdges {
                     storage: context.storage.clone(),
                     space_name: context.space_name.clone().unwrap_or_default(),
                     limit,
+                    edge_type,
                     cursor: None,
                     buffer: Vec::new(),
                     current_index: 0,

@@ -8,7 +8,7 @@ use super::super::{SortDirection, StreamingExecutor, ValueRowContext};
 use crate::core::error::QueryError;
 use crate::core::value::NullType;
 use crate::core::Value;
-use crate::query::executor::base::MemoryTracker;
+use crate::query::executor::base::{MemoryBudget, MemoryTracker};
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
 
@@ -122,11 +122,14 @@ pub fn close_topn(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
             input,
             all_rows,
             result_iter,
+            memory_tracker,
             ..
         } => {
-            input.close()?;
+            let mem = MemoryBudget::estimate_rows_memory(all_rows);
+            memory_tracker.release(mem);
             all_rows.clear();
             *result_iter = None;
+            input.close()?;
             Ok(())
         }
         _ => Err(QueryError::execution(
@@ -362,11 +365,14 @@ pub fn close_materialize(executor: &mut StreamingExecutor) -> Result<(), QueryEr
             input,
             materialized_rows,
             result_iter,
+            memory_tracker,
             ..
         } => {
-            input.close()?;
+            let mem = MemoryBudget::estimate_rows_memory(materialized_rows);
+            memory_tracker.release(mem);
             materialized_rows.clear();
             *result_iter = None;
+            input.close()?;
             Ok(())
         }
         _ => Err(QueryError::execution(
@@ -528,10 +534,15 @@ pub fn stop_datacollect(executor: &mut StreamingExecutor) -> Result<(), QueryErr
 pub fn close_datacollect(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
         StreamingExecutor::DataCollect {
-            input, all_rows, ..
+            input,
+            all_rows,
+            memory_tracker,
+            ..
         } => {
-            input.close()?;
+            let mem = MemoryBudget::estimate_rows_memory(all_rows);
+            memory_tracker.release(mem);
             all_rows.clear();
+            input.close()?;
             Ok(())
         }
         _ => Err(QueryError::execution(
@@ -1040,10 +1051,15 @@ pub fn stop_minus(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
 pub fn close_minus(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
         StreamingExecutor::Minus {
-            left, exclude_rows, ..
+            left,
+            exclude_rows,
+            memory_tracker,
+            ..
         } => {
-            left.close()?;
+            let mem = exclude_rows.len() * 256;
+            memory_tracker.release(mem);
             exclude_rows.clear();
+            left.close()?;
             Ok(())
         }
         _ => Err(QueryError::execution(
@@ -1204,11 +1220,14 @@ pub fn close_window(executor: &mut StreamingExecutor) -> Result<(), QueryError> 
             input,
             all_rows,
             result_iter,
+            memory_tracker,
             ..
         } => {
-            input.close()?;
+            let mem = MemoryBudget::estimate_rows_memory(all_rows);
+            memory_tracker.release(mem);
             all_rows.clear();
             *result_iter = None;
+            input.close()?;
             Ok(())
         }
         _ => Err(QueryError::execution(

@@ -9,7 +9,7 @@ use crate::core::error::QueryError;
 use crate::core::Value;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::storage::cursor::{open_edge_scan, open_vertex_scan};
+use crate::storage::cursor::{open_edge_scan, open_vertex_scan, ScanOptions};
 
 const CHUNK_SIZE: usize = 1024;
 
@@ -67,8 +67,12 @@ pub fn next_scanvertices(
             // Initialize cursor on first pull
             if cursor.is_none() {
                 *cursor = if let Some(storage) = storage.as_ref() {
+                    let opts = ScanOptions {
+                        limit: *limit,
+                        ..ScanOptions::default()
+                    };
                     Some(
-                        open_vertex_scan(storage, space_name, *limit)
+                        open_vertex_scan(storage, space_name, &opts)
                             .map_err(|e| QueryError::execution(e.to_string()))?,
                     )
                 } else {
@@ -110,12 +114,19 @@ pub fn stop_scanvertices(_executor: &mut StreamingExecutor) -> Result<(), QueryE
 
 /// Close ScanVertices operator – drops the cursor to release resources.
 pub fn close_scanvertices(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
-    if let StreamingExecutor::StorageScanVertices {
-        cursor, current_index, ..
-    } = executor
-    {
-        *cursor = None;
-        *current_index = 0;
+    match executor {
+        StreamingExecutor::StorageScanVertices {
+            cursor, current_index, ..
+        } => {
+            *cursor = None;
+            *current_index = 0;
+        }
+        StreamingExecutor::ScanVertices {
+            current_index, ..
+        } => {
+            *current_index = 0;
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -163,6 +174,7 @@ pub fn next_scanedges(executor: &mut StreamingExecutor) -> Result<Option<DataChu
             storage,
             space_name,
             limit,
+            edge_type,
             cursor,
             buffer: _,
             current_index: _,
@@ -172,8 +184,13 @@ pub fn next_scanedges(executor: &mut StreamingExecutor) -> Result<Option<DataChu
             // Initialize cursor on first pull
             if cursor.is_none() {
                 *cursor = if let Some(storage) = storage.as_ref() {
+                    let opts = ScanOptions {
+                        limit: *limit,
+                        edge_type: edge_type.clone(),
+                        ..ScanOptions::default()
+                    };
                     Some(
-                        open_edge_scan(storage, space_name, None, *limit)
+                        open_edge_scan(storage, space_name, &opts)
                             .map_err(|e| QueryError::execution(e.to_string()))?,
                     )
                 } else {
@@ -215,12 +232,19 @@ pub fn stop_scanedges(_executor: &mut StreamingExecutor) -> Result<(), QueryErro
 
 /// Close ScanEdges operator – drops the cursor to release resources.
 pub fn close_scanedges(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
-    if let StreamingExecutor::StorageScanEdges {
-        cursor, current_index, ..
-    } = executor
-    {
-        *cursor = None;
-        *current_index = 0;
+    match executor {
+        StreamingExecutor::StorageScanEdges {
+            cursor, current_index, ..
+        } => {
+            *cursor = None;
+            *current_index = 0;
+        }
+        StreamingExecutor::ScanEdges {
+            current_index, ..
+        } => {
+            *current_index = 0;
+        }
+        _ => {}
     }
     Ok(())
 }
