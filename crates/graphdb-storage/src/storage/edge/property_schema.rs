@@ -3,8 +3,8 @@
 //! Contains schema definitions and compaction statistics for property storage.
 //! These types are separated from the table implementation for better modularity.
 
-use crate::core::DataType;
 use crate::core::types::Timestamp;
+use crate::core::DataType;
 
 /// Sentinel value meaning "no properties"
 pub const PROP_OFFSET_NONE: u32 = 0;
@@ -152,7 +152,8 @@ impl PropertyCompactionStats {
         // This handles the case where many small records are deleted
         if self.live_records > 0 && self.reclaimable_bytes > 0 {
             // If reclaimable bytes exceed 50% of total table size, compact
-            let total_size = self.live_records * std::mem::size_of::<PropertyRecord>() + self.reclaimable_bytes;
+            let total_size =
+                self.live_records * std::mem::size_of::<PropertyRecord>() + self.reclaimable_bytes;
             if total_size > 0 && (self.reclaimable_bytes as f64 / total_size as f64) > 0.5 {
                 return true;
             }

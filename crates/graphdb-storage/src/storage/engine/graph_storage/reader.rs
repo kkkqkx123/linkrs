@@ -490,11 +490,11 @@ pub(crate) fn scan_edges_by_type_paginated(
     };
 
     let endpoint_to_edge = |ctx: &GraphStorageContext,
-                           record: crate::storage::edge::EdgeRecord,
-                           tbl_src: u32,
-                           tbl_dst: u32,
-                           edge_type: &str,
-                           edges: &mut Vec<Edge>| {
+                            record: crate::storage::edge::EdgeRecord,
+                            tbl_src: u32,
+                            tbl_dst: u32,
+                            edge_type: &str,
+                            edges: &mut Vec<Edge>| {
         let src_internal = record.src_vid.as_int64().unwrap_or(0) as u32;
         let dst_internal = record.dst_vid.as_int64().unwrap_or(0) as u32;
 
@@ -548,7 +548,14 @@ pub(crate) fn scan_edges_by_type_paginated(
     }) {
         let mut iter = table.scan_paginated_iter(ts, offset, limit);
         for record in iter.by_ref() {
-            endpoint_to_edge(ctx, record, src_label_id, dst_label_id, edge_type, &mut edges);
+            endpoint_to_edge(
+                ctx,
+                record,
+                src_label_id,
+                dst_label_id,
+                edge_type,
+                &mut edges,
+            );
         }
         if iter.has_more() && edges.len() < offset + limit {
             log::debug!("scan_edges_by_type_paginated: more records available beyond page");
@@ -589,9 +596,15 @@ pub(crate) fn count_edges_by_type(
     space: &str,
     edge_type: &str,
 ) -> StorageResult<u64> {
-    let edge_info = ctx.schema_manager().get_edge_type(space, edge_type)?.ok_or_else(|| {
-        StorageError::not_found(format!("Edge type {} not found in space {}", edge_type, space))
-    })?;
+    let edge_info = ctx
+        .schema_manager()
+        .get_edge_type(space, edge_type)?
+        .ok_or_else(|| {
+            StorageError::not_found(format!(
+                "Edge type {} not found in space {}",
+                edge_type, space
+            ))
+        })?;
 
     let edge_label_id = edge_info.edge_type_id;
 
@@ -620,10 +633,7 @@ pub(crate) fn count_edges_by_type(
         edge_label_id,
     );
     let edge_tables = ctx.data_store().edge_tables().read();
-    let count = edge_tables
-        .get(&key)
-        .map(|t| t.edge_count())
-        .unwrap_or(0);
+    let count = edge_tables.get(&key).map(|t| t.edge_count()).unwrap_or(0);
     Ok(count)
 }
 

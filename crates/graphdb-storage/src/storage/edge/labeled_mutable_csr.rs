@@ -102,7 +102,8 @@ impl LabeledMutableCsr {
             return;
         }
         let additional = new_vertex_capacity - self.vertex_capacity;
-        self.label_ranges.extend(std::iter::repeat_n(Vec::new(), additional));
+        self.label_ranges
+            .extend(std::iter::repeat_n(Vec::new(), additional));
         self.degrees.extend(std::iter::repeat_n(0, additional));
         self.vertex_capacity = new_vertex_capacity;
     }
@@ -158,7 +159,6 @@ impl LabeledMutableCsr {
         self.edge_count.fetch_add(1, Ordering::Relaxed);
         true
     }
-
 }
 
 impl CsrBase for LabeledMutableCsr {
@@ -491,8 +491,8 @@ pub struct LabeledMutableCsrIterator<'a> {
     csr: &'a LabeledMutableCsr,
     ts: Timestamp,
     current_vertex: usize,
-    range_idx: usize,  // Index in the label_ranges of current vertex
-    edge_idx: usize,   // Index within the current label range
+    range_idx: usize, // Index in the label_ranges of current vertex
+    edge_idx: usize,  // Index within the current label range
 }
 
 impl<'a> LabeledMutableCsrIterator<'a> {
@@ -574,7 +574,7 @@ mod tests {
         assert!(csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 4, 20));
 
         // Query at different timestamps
-        assert_eq!(csr.edges_of(0, 5).len(), 0);  // Before any edge created
+        assert_eq!(csr.edges_of(0, 5).len(), 0); // Before any edge created
         assert_eq!(csr.edges_of(0, 10).len(), 1); // After first edge
         assert_eq!(csr.edges_of(0, 25).len(), 2); // After both edges
 
@@ -615,7 +615,13 @@ mod tests {
         for src in 0..5 {
             for dst in 0..3 {
                 let edge_id = (src * 3 + dst) as u64;
-                assert!(csr.insert_edge(src, VertexId::from_int64(100 + dst as i64), EdgeId(edge_id), 0, 1));
+                assert!(csr.insert_edge(
+                    src,
+                    VertexId::from_int64(100 + dst as i64),
+                    EdgeId(edge_id),
+                    0,
+                    1
+                ));
             }
         }
 
@@ -628,5 +634,3 @@ mod tests {
         }
     }
 }
-
-

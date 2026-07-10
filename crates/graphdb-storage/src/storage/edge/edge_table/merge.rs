@@ -6,9 +6,9 @@
 //! - In-place: balances time-gaps and size constraints
 //! - Aggressive: size-only, used when segment limit exceeded
 
+use super::super::{Csr, CsrBase, Nbr};
 use super::segment::{CsrSegment, DeletionInfo};
 use super::stats::DirectionMergeMetrics;
-use super::super::{Csr, Nbr, CsrBase};
 use crate::core::types::Timestamp;
 
 /// Result of freezing delta CSR to segments
@@ -46,16 +46,23 @@ pub fn merge_selected_segments_with_deletion_filter(
         min_create_ts = min_create_ts.min(seg.create_ts_min);
         max_create_ts = max_create_ts.max(seg.create_ts_max);
 
-    for (edge_position, (src, immutable_nbr)) in seg.csr.iter().enumerate() {
-        let edge_id = seg.recover_edge_id(immutable_nbr, edge_position);
+        for (edge_position, (src, immutable_nbr)) in seg.csr.iter().enumerate() {
+            let edge_id = seg.recover_edge_id(immutable_nbr, edge_position);
 
             // Skip physically deleted edges if minimum snapshot ts is provided
             if let Some(min_ts) = min_active_snapshot_ts {
-                if let DeletionInfo::HasDeletes { min_ts: del_min, .. } = seg.deletion_info {
+                if let DeletionInfo::HasDeletes {
+                    min_ts: del_min, ..
+                } = seg.deletion_info
+                {
                     if del_min < min_ts {
                         // This segment has deletions older than the min active snapshot
                         // Check if this specific edge was deleted before min_ts
-                        if let DeletionInfo::HasDeletes { min_ts: edge_del_ts, .. } = seg.deletion_info {
+                        if let DeletionInfo::HasDeletes {
+                            min_ts: edge_del_ts,
+                            ..
+                        } = seg.deletion_info
+                        {
                             if edge_del_ts < min_ts {
                                 physically_deleted_count += 1;
                                 continue;
@@ -92,7 +99,11 @@ pub fn merge_selected_segments_with_deletion_filter(
         let final_deletion_info = if physically_deleted_count > 0 {
             match merged_deletion_info {
                 DeletionInfo::NoDeletes => DeletionInfo::NoDeletes,
-                DeletionInfo::HasDeletes { min_ts, max_ts, deleted_count } => {
+                DeletionInfo::HasDeletes {
+                    min_ts,
+                    max_ts,
+                    deleted_count,
+                } => {
                     let new_count = deleted_count.saturating_sub(physically_deleted_count);
                     DeletionInfo::with_count(min_ts, max_ts, new_count)
                 }
@@ -409,7 +420,9 @@ pub fn merge_in_place(
 
     // Log deletion percentages for observability
     for (idx, segment) in segments.iter().enumerate() {
-        let del_pct = segment.deletion_info.deletion_percentage(segment.csr.edge_count());
+        let del_pct = segment
+            .deletion_info
+            .deletion_percentage(segment.csr.edge_count());
         if del_pct > 0 {
             log::debug!("Merged segment[{}] deletion percentage: {}%", idx, del_pct);
         }
@@ -448,7 +461,9 @@ mod tests {
 
         for t in 0..5 {
             for src in 0..10 {
-                table.insert_edge(src as u32, src as u32 + 1, t as i64, &[], t as u32).unwrap();
+                table
+                    .insert_edge(src as u32, src as u32 + 1, t as i64, &[], t as u32)
+                    .unwrap();
             }
             table.freeze_csr_only(t as u32);
         }
@@ -472,7 +487,9 @@ mod tests {
         for t in 0..4 {
             for src in 0..5 {
                 let dst = src + 1;
-                table.insert_edge(src as u32, dst as u32, t as i64, &[], t as u32).unwrap();
+                table
+                    .insert_edge(src as u32, dst as u32, t as i64, &[], t as u32)
+                    .unwrap();
             }
             table.freeze_csr_only(t as u32);
         }
@@ -480,11 +497,22 @@ mod tests {
         let snapshot = table.export_snapshot(u32::MAX).unwrap();
         for src in 0..5 {
             let edges = snapshot.get_out_edges(src as u32);
-            assert!(!edges.is_empty(), "Snapshot should contain edges from {}", src);
+            assert!(
+                !edges.is_empty(),
+                "Snapshot should contain edges from {}",
+                src
+            );
         }
 
-        let total_edges: usize = table.out_segments.iter().map(|s| s.csr.edge_count() as usize).sum();
-        assert!(total_edges > 0, "Segments should contain edges after aggressive merge");
+        let total_edges: usize = table
+            .out_segments
+            .iter()
+            .map(|s| s.csr.edge_count() as usize)
+            .sum();
+        assert!(
+            total_edges > 0,
+            "Segments should contain edges after aggressive merge"
+        );
     }
 
     #[test]
@@ -520,14 +548,18 @@ mod tests {
         for i in 0..edge_count {
             let src = i % 5;
             let dst = (i / 5) + 5;
-            table.insert_edge(src, dst, 0, &[], 100 + (i as u32)).unwrap();
+            table
+                .insert_edge(src, dst, 0, &[], 100 + (i as u32))
+                .unwrap();
         }
         table.freeze_csr_only(100 + edge_count as u32);
 
         for i in 0..10 {
             let src = (i + 10) % 5;
             let dst = 20 + i;
-            table.insert_edge(src, dst, 0, &[], 200 + (i as u32)).unwrap();
+            table
+                .insert_edge(src, dst, 0, &[], 200 + (i as u32))
+                .unwrap();
         }
         table.freeze_csr_only(210);
 
@@ -549,14 +581,18 @@ mod tests {
         for i in 0..100 {
             let src = i % 20;
             let dst = 100 + (i / 20) * 20 + i % 20;
-            table.insert_edge(src, dst, 0, &[], 1000 + (i as u32)).unwrap();
+            table
+                .insert_edge(src, dst, 0, &[], 1000 + (i as u32))
+                .unwrap();
         }
         table.freeze_csr_only(1100);
 
         for i in 0..50 {
             let src = (i + 5) % 20;
             let dst = 500 + i;
-            table.insert_edge(src, dst, 0, &[], 2000 + (i as u32)).unwrap();
+            table
+                .insert_edge(src, dst, 0, &[], 2000 + (i as u32))
+                .unwrap();
         }
         table.freeze_csr_only(2050);
 
@@ -588,15 +624,27 @@ mod tests {
         let _merged = table.merge_segments_lsm_tiered(120);
 
         let final_count = table.out_segments.len() + table.in_segments.len();
-        assert!(final_count <= initial_count, "LSM tiering should not increase segment count");
+        assert!(
+            final_count <= initial_count,
+            "LSM tiering should not increase segment count"
+        );
     }
 
     #[test]
     fn test_lsm_segment_level_classification() {
         assert_eq!(LSMSegmentLevel::for_size(500_000), LSMSegmentLevel::L0);
-        assert_eq!(LSMSegmentLevel::for_size(5 * 1024 * 1024), LSMSegmentLevel::L1);
-        assert_eq!(LSMSegmentLevel::for_size(16 * 1024 * 1024), LSMSegmentLevel::L2);
-        assert_eq!(LSMSegmentLevel::for_size(50 * 1024 * 1024), LSMSegmentLevel::L3Plus);
+        assert_eq!(
+            LSMSegmentLevel::for_size(5 * 1024 * 1024),
+            LSMSegmentLevel::L1
+        );
+        assert_eq!(
+            LSMSegmentLevel::for_size(16 * 1024 * 1024),
+            LSMSegmentLevel::L2
+        );
+        assert_eq!(
+            LSMSegmentLevel::for_size(50 * 1024 * 1024),
+            LSMSegmentLevel::L3Plus
+        );
 
         assert_eq!(LSMSegmentLevel::L0.merge_trigger_count(), 4);
         assert_eq!(LSMSegmentLevel::L1.merge_trigger_count(), 3);
@@ -605,7 +653,9 @@ mod tests {
 
         assert!(LSMSegmentLevel::L0.merge_target_size() < LSMSegmentLevel::L1.merge_target_size());
         assert!(LSMSegmentLevel::L1.merge_target_size() < LSMSegmentLevel::L2.merge_target_size());
-        assert!(LSMSegmentLevel::L2.merge_target_size() < LSMSegmentLevel::L3Plus.merge_target_size());
+        assert!(
+            LSMSegmentLevel::L2.merge_target_size() < LSMSegmentLevel::L3Plus.merge_target_size()
+        );
     }
 
     #[test]
@@ -651,6 +701,9 @@ mod tests {
         let _merged = table.merge_segments_adaptive(120, 10, 8 * 1024 * 1024);
 
         let final_segments = table.out_segments.len() + table.in_segments.len();
-        assert!(final_segments <= initial_segments, "Merge should reduce or maintain segment count");
+        assert!(
+            final_segments <= initial_segments,
+            "Merge should reduce or maintain segment count"
+        );
     }
 }

@@ -6,11 +6,11 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use crate::core::types::Timestamp;
 use crate::core::wal::types::{
     Lsn, RecordType, UpdateWalUnit, WalCompression, WalError, WalFileHeader, WalHeader,
     WalRecoveryMode, WalResult, WAL_FILE_HEADER_SIZE, WAL_HEADER_SIZE,
 };
-use crate::core::types::Timestamp;
 
 /// WAL parser trait
 pub trait WalParser: Send + Sync {

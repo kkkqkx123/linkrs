@@ -22,36 +22,36 @@ pub fn open_filter(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
 
 pub fn next_filter(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
-        StreamingExecutor::Filter { input, predicate, .. } => {
-            loop {
-                match input.next()? {
-                    Some(mut chunk) => {
-                        let col_names = chunk.col_names();
-                        chunk.rows.retain(|row| {
-                            let mut context = ValueRowContext::new(row.clone(), col_names.clone());
-                            match ExpressionEvaluator::evaluate(predicate, &mut context) {
-                                Ok(value) => match value {
-                                    Value::Bool(b) => b,
-                                    Value::Null(_) => false,
-                                    Value::Int(i) => i != 0,
-                                    Value::BigInt(i) => i != 0,
-                                    Value::Float(f) => f != 0.0,
-                                    Value::Double(f) => f != 0.0,
-                                    Value::String(s) => !s.is_empty(),
-                                    _ => true,
-                                },
-                                Err(_) => false,
-                            }
-                        });
-
-                        if !chunk.rows.is_empty() {
-                            return Ok(Some(chunk));
+        StreamingExecutor::Filter {
+            input, predicate, ..
+        } => loop {
+            match input.next()? {
+                Some(mut chunk) => {
+                    let col_names = chunk.col_names();
+                    chunk.rows.retain(|row| {
+                        let mut context = ValueRowContext::new(row.clone(), col_names.clone());
+                        match ExpressionEvaluator::evaluate(predicate, &mut context) {
+                            Ok(value) => match value {
+                                Value::Bool(b) => b,
+                                Value::Null(_) => false,
+                                Value::Int(i) => i != 0,
+                                Value::BigInt(i) => i != 0,
+                                Value::Float(f) => f != 0.0,
+                                Value::Double(f) => f != 0.0,
+                                Value::String(s) => !s.is_empty(),
+                                _ => true,
+                            },
+                            Err(_) => false,
                         }
+                    });
+
+                    if !chunk.rows.is_empty() {
+                        return Ok(Some(chunk));
                     }
-                    None => return Ok(None),
                 }
+                None => return Ok(None),
             }
-        }
+        },
         _ => unreachable!(),
     }
 }
@@ -224,27 +224,27 @@ pub fn open_distinct(executor: &mut StreamingExecutor) -> Result<(), QueryError>
 
 pub fn next_distinct(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
-        StreamingExecutor::Distinct { input, seen_rows, .. } => {
-            loop {
-                match input.next()? {
-                    Some(chunk) => {
-                        let mut result_rows = Vec::new();
-                        for row in chunk.rows {
-                            let row_str = format!("{:?}", row);
-                            if !seen_rows.contains(&row_str) {
-                                seen_rows.insert(row_str);
-                                result_rows.push(row);
-                            }
-                        }
-
-                        if !result_rows.is_empty() {
-                            return Ok(Some(DataChunk::from_rows(result_rows)));
+        StreamingExecutor::Distinct {
+            input, seen_rows, ..
+        } => loop {
+            match input.next()? {
+                Some(chunk) => {
+                    let mut result_rows = Vec::new();
+                    for row in chunk.rows {
+                        let row_str = format!("{:?}", row);
+                        if !seen_rows.contains(&row_str) {
+                            seen_rows.insert(row_str);
+                            result_rows.push(row);
                         }
                     }
-                    None => return Ok(None),
+
+                    if !result_rows.is_empty() {
+                        return Ok(Some(DataChunk::from_rows(result_rows)));
+                    }
                 }
+                None => return Ok(None),
             }
-        }
+        },
         _ => unreachable!(),
     }
 }
@@ -276,12 +276,7 @@ mod tests {
 
     fn create_test_buffer(size: usize) -> Vec<Vec<Value>> {
         (0..size)
-            .map(|i| {
-                vec![
-                    Value::Int(i as i32),
-                    Value::String(format!("item_{}", i)),
-                ]
-            })
+            .map(|i| vec![Value::Int(i as i32), Value::String(format!("item_{}", i))])
             .collect()
     }
 
@@ -333,8 +328,16 @@ mod tests {
     #[test]
     fn test_project_reorder() {
         let buffer = vec![
-            vec![Value::Int(1), Value::String("a".to_string()), Value::Int(100)],
-            vec![Value::Int(2), Value::String("b".to_string()), Value::Int(200)],
+            vec![
+                Value::Int(1),
+                Value::String("a".to_string()),
+                Value::Int(100),
+            ],
+            vec![
+                Value::Int(2),
+                Value::String("b".to_string()),
+                Value::Int(200),
+            ],
         ];
 
         let scan = Box::new(StreamingExecutor::ScanVertices {
@@ -374,9 +377,7 @@ mod tests {
 
         let mut project = StreamingExecutor::Project {
             input: scan,
-            output_expressions: vec![
-                Expression::Literal(Value::String("col1".to_string())),
-            ],
+            output_expressions: vec![Expression::Literal(Value::String("col1".to_string()))],
             opened: false,
         };
 
@@ -499,4 +500,3 @@ mod tests {
         distinct.close().unwrap();
     }
 }
-

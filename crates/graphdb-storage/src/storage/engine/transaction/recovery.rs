@@ -94,12 +94,10 @@ impl RecoveryApplier for GraphStorageContext {
         let endpoints_exist = {
             let vertex_tables = self.data_store().vertex_tables().read();
             let src_exists = vertex_tables.contains_key(&redo.src_label)
-                && resolve_external_vid(&vertex_tables, redo.src_label, redo.src_vid, ts)
-                    .is_some();
+                && resolve_external_vid(&vertex_tables, redo.src_label, redo.src_vid, ts).is_some();
 
             let dst_exists = vertex_tables.contains_key(&redo.dst_label)
-                && resolve_external_vid(&vertex_tables, redo.dst_label, redo.dst_vid, ts)
-                    .is_some();
+                && resolve_external_vid(&vertex_tables, redo.dst_label, redo.dst_vid, ts).is_some();
 
             src_exists && dst_exists
         };
@@ -205,8 +203,6 @@ impl RecoveryApplier for GraphStorageContext {
         Ok(())
     }
 
-
-
     // ========================================================================
     // Schema Operations
     // ========================================================================
@@ -232,8 +228,7 @@ impl RecoveryApplier for GraphStorageContext {
         }
         for edge_type in edge_types {
             let storage_name = format!("space_{space_id}:edge:{}", edge_type.edge_type_name);
-            let _ =
-                self.drop_edge_type(&storage_name);
+            let _ = self.drop_edge_type(&storage_name);
         }
 
         let _ = self.schema_manager().drop_space(&redo.space_name)?;
@@ -255,8 +250,7 @@ impl RecoveryApplier for GraphStorageContext {
         }
         for edge_type in edge_types {
             let storage_name = format!("space_{space_id}:edge:{}", edge_type.edge_type_name);
-            let _ =
-                self.drop_edge_type(&storage_name);
+            let _ = self.drop_edge_type(&storage_name);
         }
 
         let _ = self.schema_manager().clear_space(&redo.space_name)?;
@@ -380,10 +374,10 @@ impl RecoveryApplier for GraphStorageContext {
             .get_space_id(&redo.space_name)
             .unwrap_or(0);
         let label_id = if let Some(label_id) = redo.label_id {
-        let _space_id = self
-            .schema_manager()
-            .get_space_id(&redo.space_name)
-            .unwrap_or(0);
+            let _space_id = self
+                .schema_manager()
+                .get_space_id(&redo.space_name)
+                .unwrap_or(0);
             let storage_name = format!("space_{space_id}:edge:{}", redo.edge_label);
             match self.create_edge_type_with_id(
                 CreateEdgeTypeParams {
@@ -461,7 +455,8 @@ impl RecoveryApplier for GraphStorageContext {
         let _space_name = redo.space_name.as_deref().unwrap_or("");
         if let Some(space_name) = &redo.space_name {
             if let Ok(Some(space_info)) = self.schema_manager().get_space(space_name) {
-                let storage_name = format!("space_{}:edge:{}", space_info.space_id, redo.edge_label);
+                let storage_name =
+                    format!("space_{}:edge:{}", space_info.space_id, redo.edge_label);
                 self.drop_edge_type(&storage_name)?;
             }
         }
@@ -499,12 +494,13 @@ impl RecoveryApplier for GraphStorageContext {
                         // Column exists - need to record schema change for recovery
                         let mut vertex_tables = self.data_store().vertex_tables().write();
                         if let Some(table) = vertex_tables.get_mut(&redo.label) {
-                            let change_details = crate::storage::schema::ChangeDetails::PropertyAdded {
-                                name: prop.name.clone(),
-                                data_type: prop.data_type.clone(),
-                                nullable: prop.nullable,
-                                default_value: None,
-                            };
+                            let change_details =
+                                crate::storage::schema::ChangeDetails::PropertyAdded {
+                                    name: prop.name.clone(),
+                                    data_type: prop.data_type.clone(),
+                                    nullable: prop.nullable,
+                                    default_value: None,
+                                };
                             table.rebuild_schema_change_from_redo(change_details)?;
                             added_props.push((prop.name, prop.data_type));
                         }
@@ -557,12 +553,13 @@ impl RecoveryApplier for GraphStorageContext {
 
                                 let mut edge_tables = self.data_store().edge_tables().write();
                                 if let Some(table) = edge_tables.get_mut(&key) {
-                                    let change_details = crate::storage::schema::ChangeDetails::PropertyAdded {
-                                        name: prop.name.clone(),
-                                        data_type: prop.data_type.clone(),
-                                        nullable: prop.nullable,
-                                        default_value: None,
-                                    };
+                                    let change_details =
+                                        crate::storage::schema::ChangeDetails::PropertyAdded {
+                                            name: prop.name.clone(),
+                                            data_type: prop.data_type.clone(),
+                                            nullable: prop.nullable,
+                                            default_value: None,
+                                        };
                                     table.rebuild_schema_change_from_redo(change_details)?;
                                 }
                             } else {
@@ -801,26 +798,27 @@ impl GraphStorageContext {
             redo.edge_label,
         );
 
-        let (src_internal, dst_internal) = {
-            let vertex_tables = self.data_store().vertex_tables().read();
-            let src_internal =
-                resolve_external_vid(&vertex_tables, redo.src_label, redo.src_vid, ts)
-                    .ok_or_else(|| {
-                        StorageError::db_error(format!(
+        let (src_internal, dst_internal) =
+            {
+                let vertex_tables = self.data_store().vertex_tables().read();
+                let src_internal =
+                    resolve_external_vid(&vertex_tables, redo.src_label, redo.src_vid, ts)
+                        .ok_or_else(|| {
+                            StorageError::db_error(format!(
                         "Source vertex not found during delete-edge recovery: label={}, vid={:?}",
                         redo.src_label, redo.src_vid
                     ))
-                    })?;
-            let dst_internal =
-                resolve_external_vid(&vertex_tables, redo.dst_label, redo.dst_vid, ts)
-                    .ok_or_else(|| {
-                        StorageError::db_error(format!(
+                        })?;
+                let dst_internal =
+                    resolve_external_vid(&vertex_tables, redo.dst_label, redo.dst_vid, ts)
+                        .ok_or_else(|| {
+                            StorageError::db_error(format!(
                     "Destination vertex not found during delete-edge recovery: label={}, vid={:?}",
                     redo.dst_label, redo.dst_vid
                 ))
-                    })?;
-            (src_internal, dst_internal)
-        };
+                        })?;
+                (src_internal, dst_internal)
+            };
 
         {
             let mut edge_tables = self.data_store().edge_tables().write();
@@ -923,7 +921,6 @@ impl GraphStorageContext {
         Ok(())
     }
 }
-
 
 fn parse_data_type(raw: &str) -> StorageResult<DataType> {
     let upper = raw.trim().to_ascii_uppercase();
@@ -1194,18 +1191,17 @@ mod tests {
         );
         assert!(vertex.properties.iter().all(|(name, _)| name != "age"));
 
-        ctx
-            .insert_edge(InsertEdgeParams {
-                edge_label: lives_in_label,
-                src_label: person_label,
-                src_id: VertexId::from_int64(1001),
-                dst_label: city_label,
-                dst_id: VertexId::from_int64(2001),
-                rank: 0,
-                properties: &[("started".to_string(), Value::Int(2012))],
-                ts: 5,
-            })
-            .expect("Edge insert should succeed after property replay");
+        ctx.insert_edge(InsertEdgeParams {
+            edge_label: lives_in_label,
+            src_label: person_label,
+            src_id: VertexId::from_int64(1001),
+            dst_label: city_label,
+            dst_id: VertexId::from_int64(2001),
+            rank: 0,
+            properties: &[("started".to_string(), Value::Int(2012))],
+            ts: 5,
+        })
+        .expect("Edge insert should succeed after property replay");
 
         let edge = ctx
             .get_edge(

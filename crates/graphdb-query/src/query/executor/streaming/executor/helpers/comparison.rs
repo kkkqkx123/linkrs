@@ -98,4 +98,3 @@ mod tests {
         assert_eq!(compare_values(&v3, &v4), Ordering::Greater);
     }
 }
-

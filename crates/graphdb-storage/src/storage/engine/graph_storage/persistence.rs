@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::core::types::{CompactTarget, CompactConfig};
+use crate::core::types::{CompactConfig, CompactTarget};
 use crate::core::{StorageError, StorageResult};
 use crate::storage::engine::paths::StoragePaths;
 use crate::storage::engine::persistence_coordinator::{
@@ -280,13 +280,10 @@ pub(crate) fn compact_transactional(
     let mut wal_writer_guard = wal_writer.write();
     let version_manager = ctx.version_manager().as_ref();
 
-    let txn = CompactTransaction::new(
-        ctx,
-        version_manager,
-        &mut *wal_writer_guard,
-        config,
-    )
-    .map_err(|e| StorageError::db_error(format!("Failed to create compact transaction: {}", e)))?;
+    let txn = CompactTransaction::new(ctx, version_manager, &mut *wal_writer_guard, config)
+        .map_err(|e| {
+            StorageError::db_error(format!("Failed to create compact transaction: {}", e))
+        })?;
 
     let before_stats = txn.storage_stats();
     log::info!(

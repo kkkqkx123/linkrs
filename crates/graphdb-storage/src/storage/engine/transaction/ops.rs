@@ -219,8 +219,8 @@ impl TransactionOps {
             .get_mut(&label)
             .ok_or(UndoLogError::LabelNotFound(label))?;
 
-        let internal_id = Self::resolve_vertex_id(table, vid, ts)
-            .ok_or(UndoLogError::VertexNotFound(vid))?;
+        let internal_id =
+            Self::resolve_vertex_id(table, vid, ts).ok_or(UndoLogError::VertexNotFound(vid))?;
 
         table
             .delete_by_internal_id(internal_id, ts)
@@ -359,17 +359,12 @@ impl TransactionOps {
             .get_mut(&label)
             .ok_or(UndoLogError::LabelNotFound(label))?;
 
-        let internal_id = Self::resolve_vertex_id(table, vid, ts)
-            .ok_or(UndoLogError::VertexNotFound(vid))?;
+        let internal_id =
+            Self::resolve_vertex_id(table, vid, ts).ok_or(UndoLogError::VertexNotFound(vid))?;
 
         let value = property_value_to_value(old_value);
         table
-            .update_property_by_id(
-                internal_id,
-                col_id.0 as i32,
-                &value,
-                ts,
-            )
+            .update_property_by_id(internal_id, col_id.0 as i32, &value, ts)
             .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
         Ok(())
     }
@@ -522,7 +517,8 @@ impl TransactionOps {
         if let Some(table) = vertex_tables.get_mut(&label_id) {
             let _new_schema = table.schema().clone();
             for (current, original) in current_names.iter().zip(original_names.iter()) {
-                if let Some(prop) = table.schema_mut()
+                if let Some(prop) = table
+                    .schema_mut()
                     .properties
                     .iter_mut()
                     .find(|p| p.name == *current)
@@ -561,7 +557,8 @@ impl TransactionOps {
         let key = EdgeTableKey::new(src_label_id, dst_label_id, edge_label_id);
         if let Some(table) = edge_tables.get_mut(&key) {
             for (current, original) in current_names.iter().zip(original_names.iter()) {
-                if let Some(prop) = table.schema_mut()
+                if let Some(prop) = table
+                    .schema_mut()
                     .properties
                     .iter_mut()
                     .find(|p| p.name == *current)
@@ -590,7 +587,10 @@ impl TransactionOps {
             .ok_or(UndoLogError::LabelNotFound(0))?;
 
         for prop_name in prop_names {
-            table.schema_mut().properties.retain(|p| p.name != *prop_name);
+            table
+                .schema_mut()
+                .properties
+                .retain(|p| p.name != *prop_name);
         }
 
         Ok(())
@@ -624,11 +624,12 @@ impl TransactionOps {
             .ok_or(UndoLogError::LabelNotFound(0))?;
 
         for prop_name in prop_names {
-            table.schema_mut().properties.retain(|p| p.name != *prop_name);
+            table
+                .schema_mut()
+                .properties
+                .retain(|p| p.name != *prop_name);
         }
 
         Ok(())
     }
 }
-
-

@@ -1,6 +1,6 @@
 use crate::core::types::CompactConfig;
 use crate::core::StorageResult;
-use crate::storage::engine::background_freeze::{FreezeStats, FreezeGuard};
+use crate::storage::engine::background_freeze::{FreezeGuard, FreezeStats};
 
 use super::GraphStorageContext;
 
@@ -13,15 +13,16 @@ impl GraphStorageContext {
     }
 
     pub fn trigger_background_freeze(&self) -> StorageResult<()> {
-        let config = CompactConfig::with_fixed_ratio(true, 2.0)
-            .enable_segment_merge(1000);
+        let config = CompactConfig::with_fixed_ratio(true, 2.0).enable_segment_merge(1000);
         let ts = u32::MAX;
         let mut total_frozen = 0u64;
         let mut any_frozen = false;
         let mut freeze_reasons = std::collections::HashSet::new();
 
         // Use FreezeGuard to manage freeze statistics
-        let mut freeze_guard = self.runtime.background_freeze_manager
+        let mut freeze_guard = self
+            .runtime
+            .background_freeze_manager
             .as_ref()
             .map(|m| FreezeGuard::new(m.clone()));
 
@@ -51,7 +52,11 @@ impl GraphStorageContext {
                             decision.summary()
                         );
 
-                        let frozen = table.compact_and_freeze(ts, &config, crate::storage::edge::edge_table::CompactionMode::Standard);
+                        let frozen = table.compact_and_freeze(
+                            ts,
+                            &config,
+                            crate::storage::edge::edge_table::CompactionMode::Standard,
+                        );
                         total_frozen += frozen as u64;
                         any_frozen = true;
                     } else if log::log_enabled!(log::Level::Debug) {
@@ -63,7 +68,11 @@ impl GraphStorageContext {
                     }
                 } else {
                     if delta_edges >= self.persistent.config.freeze.delta_edge_threshold {
-                        let frozen = table.compact_and_freeze(ts, &config, crate::storage::edge::edge_table::CompactionMode::Standard);
+                        let frozen = table.compact_and_freeze(
+                            ts,
+                            &config,
+                            crate::storage::edge::edge_table::CompactionMode::Standard,
+                        );
                         total_frozen += frozen as u64;
                         any_frozen = true;
                     }

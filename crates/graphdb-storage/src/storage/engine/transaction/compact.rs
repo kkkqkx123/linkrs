@@ -9,8 +9,10 @@ impl CompactTarget for GraphStorageContext {
                 format!("fixed(ratio={})", ratio)
             }
             crate::core::types::CompactionStrategy::Adaptive(cfg) => {
-                format!("adaptive(base={}, reduced={}, threshold={})",
-                    cfg.base_ratio, cfg.reduced_ratio, cfg.size_threshold)
+                format!(
+                    "adaptive(base={}, reduced={}, threshold={})",
+                    cfg.base_ratio, cfg.reduced_ratio, cfg.size_threshold
+                )
             }
         };
         log::info!(

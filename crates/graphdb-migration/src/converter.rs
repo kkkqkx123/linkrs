@@ -219,28 +219,31 @@ pub fn convert_value(value: &Value, target_type: &DataType) -> Result<Value, Con
         (Value::Double(d), DataType::Float) => Ok(Value::Float(*d as f32)),
         (Value::Double(d), DataType::String) => Ok(Value::String(d.to_string())),
 
-        (Value::String(s), DataType::SmallInt) => {
-            s.parse::<i16>().map(Value::SmallInt).map_err(|e| conversion_err!("Cannot parse '{}' as SMALLINT: {}", s, e))
-        }
-        (Value::String(s), DataType::Int) => {
-            s.parse::<i32>().map(Value::Int).map_err(|e| conversion_err!("Cannot parse '{}' as INT: {}", s, e))
-        }
-        (Value::String(s), DataType::BigInt) => {
-            s.parse::<i64>().map(Value::BigInt).map_err(|e| conversion_err!("Cannot parse '{}' as BIGINT: {}", s, e))
-        }
-        (Value::String(s), DataType::Float) => {
-            s.parse::<f32>().map(Value::Float).map_err(|e| conversion_err!("Cannot parse '{}' as FLOAT: {}", s, e))
-        }
-        (Value::String(s), DataType::Double) => {
-            s.parse::<f64>().map(Value::Double).map_err(|e| conversion_err!("Cannot parse '{}' as DOUBLE: {}", s, e))
-        }
-        (Value::String(s), DataType::Bool) => {
-            match s.to_lowercase().as_str() {
-                "true" | "yes" | "1" => Ok(Value::Bool(true)),
-                "false" | "no" | "0" => Ok(Value::Bool(false)),
-                _ => Err(conversion_err!("Cannot parse '{}' as BOOL", s)),
-            }
-        }
+        (Value::String(s), DataType::SmallInt) => s
+            .parse::<i16>()
+            .map(Value::SmallInt)
+            .map_err(|e| conversion_err!("Cannot parse '{}' as SMALLINT: {}", s, e)),
+        (Value::String(s), DataType::Int) => s
+            .parse::<i32>()
+            .map(Value::Int)
+            .map_err(|e| conversion_err!("Cannot parse '{}' as INT: {}", s, e)),
+        (Value::String(s), DataType::BigInt) => s
+            .parse::<i64>()
+            .map(Value::BigInt)
+            .map_err(|e| conversion_err!("Cannot parse '{}' as BIGINT: {}", s, e)),
+        (Value::String(s), DataType::Float) => s
+            .parse::<f32>()
+            .map(Value::Float)
+            .map_err(|e| conversion_err!("Cannot parse '{}' as FLOAT: {}", s, e)),
+        (Value::String(s), DataType::Double) => s
+            .parse::<f64>()
+            .map(Value::Double)
+            .map_err(|e| conversion_err!("Cannot parse '{}' as DOUBLE: {}", s, e)),
+        (Value::String(s), DataType::Bool) => match s.to_lowercase().as_str() {
+            "true" | "yes" | "1" => Ok(Value::Bool(true)),
+            "false" | "no" | "0" => Ok(Value::Bool(false)),
+            _ => Err(conversion_err!("Cannot parse '{}' as BOOL", s)),
+        },
 
         (_, DataType::String) => Ok(Value::String(format!("{}", value))),
 
@@ -260,17 +263,46 @@ pub fn is_compatible_type(from: &DataType, to: &DataType) -> bool {
     }
     match (from, to) {
         // SmallInt widening
-        (DataType::SmallInt, DataType::Int | DataType::BigInt | DataType::Float | DataType::Double | DataType::String) => true,
+        (
+            DataType::SmallInt,
+            DataType::Int
+            | DataType::BigInt
+            | DataType::Float
+            | DataType::Double
+            | DataType::String,
+        ) => true,
         // Int widening/narrowing
-        (DataType::Int, DataType::SmallInt | DataType::BigInt | DataType::Float | DataType::Double | DataType::String) => true,
+        (
+            DataType::Int,
+            DataType::SmallInt
+            | DataType::BigInt
+            | DataType::Float
+            | DataType::Double
+            | DataType::String,
+        ) => true,
         // BigInt widening/narrowing
-        (DataType::BigInt, DataType::Int | DataType::SmallInt | DataType::Float | DataType::Double | DataType::String) => true,
+        (
+            DataType::BigInt,
+            DataType::Int
+            | DataType::SmallInt
+            | DataType::Float
+            | DataType::Double
+            | DataType::String,
+        ) => true,
         // Float widening
         (DataType::Float, DataType::Double | DataType::String) => true,
         // Double narrowing
         (DataType::Double, DataType::Float | DataType::String) => true,
         // String parsing
-        (DataType::String, DataType::SmallInt | DataType::Int | DataType::BigInt | DataType::Float | DataType::Double | DataType::Bool) => true,
+        (
+            DataType::String,
+            DataType::SmallInt
+            | DataType::Int
+            | DataType::BigInt
+            | DataType::Float
+            | DataType::Double
+            | DataType::Bool,
+        ) => true,
         // Any type to String
         (_, DataType::String) => true,
         _ => false,

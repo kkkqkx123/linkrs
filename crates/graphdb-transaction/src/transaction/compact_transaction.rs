@@ -4,12 +4,14 @@
 //! A compact transaction performs garbage collection and storage optimization,
 //! including CSR compaction and removal of old versions.
 
+use super::mvcc::{VersionManager, VersionManagerError};
 use super::read_transaction::RELEASED_TIMESTAMP;
-use crate::core::wal::types::WalHeader;
 use super::wal::writer::WalWriter;
 use super::wal::Timestamp;
-use super::mvcc::{VersionManager, VersionManagerError};
-use crate::core::types::{CompactConfig, CompactError, CompactStats, CompactTarget, CompactionStrategy};
+use crate::core::types::{
+    CompactConfig, CompactError, CompactStats, CompactTarget, CompactionStrategy,
+};
+use crate::core::wal::types::WalHeader;
 
 /// Compact transaction error
 #[derive(Debug, Clone, thiserror::Error)]
@@ -118,7 +120,11 @@ impl<'a, T: CompactTarget + ?Sized> CompactTransaction<'a, T> {
             return Ok(());
         }
 
-        let header = WalHeader::new(crate::core::wal::types::WalOpType::Compact, self.timestamp, 0);
+        let header = WalHeader::new(
+            crate::core::wal::types::WalOpType::Compact,
+            self.timestamp,
+            0,
+        );
         let header_bytes = header.as_bytes();
         self.wal_buffer[..WalHeader::SIZE].copy_from_slice(&header_bytes);
 

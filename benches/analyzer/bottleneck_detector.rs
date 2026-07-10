@@ -1,8 +1,8 @@
 // benches/analyzer/bottleneck_detector.rs
 //! Performance bottleneck detection module
 
-use serde::{Deserialize, Serialize};
 use crate::analyzer::AnalysisMetrics;
+use serde::{Deserialize, Serialize};
 
 /// Performance bottleneck types
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -270,9 +270,7 @@ impl BottleneckDetector {
                 "Check and update table statistics".to_string(),
                 "Consider breaking complex query into multiple simpler ones".to_string(),
             ],
-            Bottleneck::SlowExecution {
-                node_name, ..
-            } => vec![
+            Bottleneck::SlowExecution { node_name, .. } => vec![
                 format!("Analyze why {} node is slow", node_name),
                 "Check if indexes are being used".to_string(),
                 "Verify data distribution".to_string(),
@@ -428,10 +426,7 @@ impl Bottleneck {
                 )
             }
             Bottleneck::HighStartupLatency { time_ms, .. } => {
-                format!(
-                    "Startup latency is {:.2}ms (threshold: 50ms)",
-                    time_ms
-                )
+                format!("Startup latency is {:.2}ms (threshold: 50ms)", time_ms)
             }
             Bottleneck::LowCacheHitRate { hit_rate, .. } => {
                 format!(
@@ -440,10 +435,7 @@ impl Bottleneck {
                 )
             }
             Bottleneck::ComplexPlan { node_count, .. } => {
-                format!(
-                    "Execution plan has {} nodes (threshold: 10)",
-                    node_count
-                )
+                format!("Execution plan has {} nodes (threshold: 10)", node_count)
             }
         }
     }

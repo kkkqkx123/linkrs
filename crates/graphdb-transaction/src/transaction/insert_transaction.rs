@@ -9,13 +9,13 @@ use std::collections::HashMap;
 
 use postcard::{from_bytes, to_allocvec};
 
+use super::mvcc::{VersionManager, VersionManagerError};
 use super::read_transaction::RELEASED_TIMESTAMP;
-use crate::core::wal::redo::{InsertEdgeRedo, InsertVertexRedo};
-use crate::core::wal::types::{WalHeader, WalOpType};
 use super::wal::writer::WalWriter;
 use super::wal::{EdgeId, LabelId, Timestamp};
-use super::mvcc::{VersionManager, VersionManagerError};
 use crate::core::types::VertexId;
+use crate::core::wal::redo::{InsertEdgeRedo, InsertVertexRedo};
+use crate::core::wal::types::{WalHeader, WalOpType};
 
 /// Insert transaction error
 #[derive(Debug, Clone, thiserror::Error)]

@@ -15,8 +15,8 @@ use std::time::{Duration, Instant};
 
 use parking_lot::{Condvar, Mutex, RwLock};
 
-use crate::core::types::Timestamp;
 use super::snapshot_tracker::SnapshotTracker;
+use crate::core::types::Timestamp;
 
 const RING_BUF_SIZE: u32 = 1024 * 1024;
 const RING_INDEX_MASK: u32 = RING_BUF_SIZE - 1;
@@ -108,7 +108,7 @@ impl Default for VersionManagerConfig {
             thread_num: 1,
             wait_timeout: Duration::from_secs(5),
             update_acquire_timeout: Duration::from_secs(10),
-            partition_conflict_detection: false,  // Disabled by default; enable for mixed workloads
+            partition_conflict_detection: false, // Disabled by default; enable for mixed workloads
         }
     }
 }
@@ -218,7 +218,8 @@ impl VersionManager {
                     log::warn!(
                         "Too many pending read requests: {}. Ring buffer capacity: {}. \
                         Consider increasing max_concurrent_reads or reducing read intensity.",
-                        pr, RING_BUF_SIZE
+                        pr,
+                        RING_BUF_SIZE
                     );
                     self.condvar.wait(&mut guard);
                     continue;
@@ -248,7 +249,8 @@ impl VersionManager {
                 if pr >= (RING_BUF_SIZE as i32 - 1) {
                     log::warn!(
                         "Too many pending read requests: {}. Ring buffer capacity: {}.",
-                        pr, RING_BUF_SIZE
+                        pr,
+                        RING_BUF_SIZE
                     );
                     let elapsed = start.elapsed();
                     if elapsed >= timeout {
@@ -306,7 +308,8 @@ impl VersionManager {
                     log::warn!(
                         "Too many pending insert requests: {}. Ring buffer capacity: {}. \
                         Consider increasing max_concurrent_inserts or reducing write intensity.",
-                        pr, RING_BUF_SIZE
+                        pr,
+                        RING_BUF_SIZE
                     );
                     self.condvar.wait(&mut guard);
                     continue;
@@ -345,7 +348,8 @@ impl VersionManager {
                 if pr >= (RING_BUF_SIZE as i32 - 1) {
                     log::warn!(
                         "Too many pending insert requests: {}. Ring buffer capacity: {}.",
-                        pr, RING_BUF_SIZE
+                        pr,
+                        RING_BUF_SIZE
                     );
                     let elapsed = start.elapsed();
                     if elapsed >= timeout {
@@ -769,6 +773,6 @@ mod tests {
 
         // Release last
         vm.release_insert_timestamp(ts3);
-        assert_eq!(tracker.cleanup_threshold(), u32::MAX);  // No active snapshots
+        assert_eq!(tracker.cleanup_threshold(), u32::MAX); // No active snapshots
     }
 }

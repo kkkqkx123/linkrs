@@ -191,9 +191,8 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoT
 
         let txn_manager = self.session.txn_manager();
         let ctx = txn_manager.get_context(self.txn_handle.0)?;
-        ctx.check_timeouts().map_err(|e| {
-            CoreError::TransactionFailed(format!("Transaction timeout: {}", e))
-        })?;
+        ctx.check_timeouts()
+            .map_err(|e| CoreError::TransactionFailed(format!("Transaction timeout: {}", e)))?;
 
         let query_ctx = QueryRequest {
             space_id: self.session.space_id(),
@@ -227,9 +226,8 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoT
 
         let txn_manager = self.session.txn_manager();
         let ctx = txn_manager.get_context(self.txn_handle.0)?;
-        ctx.check_timeouts().map_err(|e| {
-            CoreError::TransactionFailed(format!("Transaction timeout: {}", e))
-        })?;
+        ctx.check_timeouts()
+            .map_err(|e| CoreError::TransactionFailed(format!("Transaction timeout: {}", e)))?;
 
         let query_ctx = QueryRequest {
             space_id: self.session.space_id(),
@@ -258,9 +256,8 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoT
 
         let txn_manager = self.session.txn_manager();
         let ctx = txn_manager.get_context(self.txn_handle.0)?;
-        ctx.check_timeouts().map_err(|e| {
-            CoreError::TransactionFailed(format!("Transaction timeout: {}", e))
-        })?;
+        ctx.check_timeouts()
+            .map_err(|e| CoreError::TransactionFailed(format!("Transaction timeout: {}", e)))?;
 
         txn_manager
             .commit_transaction(self.txn_handle.0)
@@ -282,9 +279,8 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoT
 
         let txn_manager = self.session.txn_manager();
         let ctx = txn_manager.get_context(self.txn_handle.0)?;
-        ctx.check_timeouts().map_err(|e| {
-            CoreError::TransactionFailed(format!("Transaction timeout: {}", e))
-        })?;
+        ctx.check_timeouts()
+            .map_err(|e| CoreError::TransactionFailed(format!("Transaction timeout: {}", e)))?;
 
         txn_manager
             .abort_transaction(self.txn_handle.0)

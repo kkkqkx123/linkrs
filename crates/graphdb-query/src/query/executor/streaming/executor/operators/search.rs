@@ -1,15 +1,13 @@
 //! Search operation implementations
 //!
-//! Implements 5 search operators:
+//! Implements 6 search operators:
 //! - FulltextSearch, FulltextLookup, MatchFulltext (fulltext operations)
-//! - VectorSearch, VectorLookup (vector operations)
+//! - VectorSearch, VectorLookup, VectorMatch (vector operations)
 
 use super::super::super::chunk::DataChunk;
+use super::super::StreamingExecutor;
 use crate::core::error::QueryError;
 use crate::core::Value;
-use super::super::StreamingExecutor;
-
-
 
 // ============ FulltextSearch ============
 
@@ -20,11 +18,15 @@ pub fn open_fulltext_search(executor: &mut StreamingExecutor) -> Result<(), Quer
             *opened = true;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in open_fulltext_search".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_fulltext_search".to_string(),
+        )),
     }
 }
 
-pub fn next_fulltext_search(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+pub fn next_fulltext_search(
+    executor: &mut StreamingExecutor,
+) -> Result<Option<DataChunk>, QueryError> {
     match executor {
         StreamingExecutor::FulltextSearch {
             input,
@@ -38,21 +40,25 @@ pub fn next_fulltext_search(executor: &mut StreamingExecutor) -> Result<Option<D
             ..
         } => {
             if !*opened {
-                return Err(QueryError::execution("FulltextSearch not opened".to_string()));
+                return Err(QueryError::execution(
+                    "FulltextSearch not opened".to_string(),
+                ));
             }
 
             #[cfg(feature = "fulltext-search")]
             {
                 if let Some(manager) = fulltext_manager {
-                    let search_results = futures::executor::block_on(
-                        manager.search(*space_id, tag_name, field_name, search_query, 100)
-                    ).map_err(|e| QueryError::execution(format!("Fulltext search failed: {}", e)))?;
+                    let search_results = futures::executor::block_on(manager.search(
+                        *space_id,
+                        tag_name,
+                        field_name,
+                        search_query,
+                        100,
+                    ))
+                    .map_err(|e| QueryError::execution(format!("Fulltext search failed: {}", e)))?;
                     let mut rows = Vec::new();
                     for result in search_results {
-                        rows.push(vec![
-                            result.doc_id,
-                            Value::Double(result.score as f64),
-                        ]);
+                        rows.push(vec![result.doc_id, Value::Double(result.score as f64)]);
                     }
                     return if rows.is_empty() {
                         Ok(None)
@@ -68,7 +74,9 @@ pub fn next_fulltext_search(executor: &mut StreamingExecutor) -> Result<Option<D
             }
             Ok(None)
         }
-        _ => Err(QueryError::execution("Type mismatch in next_fulltext_search".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_fulltext_search".to_string(),
+        )),
     }
 }
 
@@ -81,7 +89,9 @@ pub fn stop_fulltext_search(executor: &mut StreamingExecutor) -> Result<(), Quer
             }
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in stop_fulltext_search".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_fulltext_search".to_string(),
+        )),
     }
 }
 
@@ -94,7 +104,9 @@ pub fn close_fulltext_search(executor: &mut StreamingExecutor) -> Result<(), Que
             }
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in close_fulltext_search".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_fulltext_search".to_string(),
+        )),
     }
 }
 
@@ -107,11 +119,15 @@ pub fn open_fulltext_lookup(executor: &mut StreamingExecutor) -> Result<(), Quer
             *opened = true;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in open_fulltext_lookup".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_fulltext_lookup".to_string(),
+        )),
     }
 }
 
-pub fn next_fulltext_lookup(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+pub fn next_fulltext_lookup(
+    executor: &mut StreamingExecutor,
+) -> Result<Option<DataChunk>, QueryError> {
     match executor {
         StreamingExecutor::FulltextLookup {
             input,
@@ -125,21 +141,25 @@ pub fn next_fulltext_lookup(executor: &mut StreamingExecutor) -> Result<Option<D
             ..
         } => {
             if !*opened {
-                return Err(QueryError::execution("FulltextLookup not opened".to_string()));
+                return Err(QueryError::execution(
+                    "FulltextLookup not opened".to_string(),
+                ));
             }
 
             #[cfg(feature = "fulltext-search")]
             {
                 if let Some(manager) = fulltext_manager {
-                    let search_results = futures::executor::block_on(
-                        manager.search(*space_id, tag_name, field_name, search_query, 100)
-                    ).map_err(|e| QueryError::execution(format!("Fulltext lookup failed: {}", e)))?;
+                    let search_results = futures::executor::block_on(manager.search(
+                        *space_id,
+                        tag_name,
+                        field_name,
+                        search_query,
+                        100,
+                    ))
+                    .map_err(|e| QueryError::execution(format!("Fulltext lookup failed: {}", e)))?;
                     let mut rows = Vec::new();
                     for result in search_results {
-                        rows.push(vec![
-                            result.doc_id,
-                            Value::Double(result.score as f64),
-                        ]);
+                        rows.push(vec![result.doc_id, Value::Double(result.score as f64)]);
                     }
                     return if rows.is_empty() {
                         Ok(None)
@@ -154,7 +174,9 @@ pub fn next_fulltext_lookup(executor: &mut StreamingExecutor) -> Result<Option<D
             }
             Ok(None)
         }
-        _ => Err(QueryError::execution("Type mismatch in next_fulltext_lookup".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_fulltext_lookup".to_string(),
+        )),
     }
 }
 
@@ -167,7 +189,9 @@ pub fn stop_fulltext_lookup(executor: &mut StreamingExecutor) -> Result<(), Quer
             }
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in stop_fulltext_lookup".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_fulltext_lookup".to_string(),
+        )),
     }
 }
 
@@ -180,7 +204,9 @@ pub fn close_fulltext_lookup(executor: &mut StreamingExecutor) -> Result<(), Que
             }
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in close_fulltext_lookup".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_fulltext_lookup".to_string(),
+        )),
     }
 }
 
@@ -193,22 +219,68 @@ pub fn open_match_fulltext(executor: &mut StreamingExecutor) -> Result<(), Query
             *opened = true;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in open_match_fulltext".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_match_fulltext".to_string(),
+        )),
     }
 }
 
-pub fn next_match_fulltext(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+pub fn next_match_fulltext(
+    executor: &mut StreamingExecutor,
+) -> Result<Option<DataChunk>, QueryError> {
     match executor {
-        StreamingExecutor::MatchFulltext { input, opened, .. } => {
+        StreamingExecutor::MatchFulltext {
+            input,
+            storage: _,
+            space_name: _,
+            match_expr,
+            match_field: _,
+            tag_name,
+            field_name,
+            opened,
+            #[cfg(feature = "fulltext-search")]
+            fulltext_manager,
+            ..
+        } => {
             if !*opened {
-                return Err(QueryError::execution("MatchFulltext not opened".to_string()));
+                return Err(QueryError::execution(
+                    "MatchFulltext not opened".to_string(),
+                ));
             }
+
+            #[cfg(feature = "fulltext-search")]
+            {
+                if let Some(manager) = fulltext_manager {
+                    let expr_str = format!("{:?}", match_expr);
+                    let space_id = 0; // Will be resolved from context in real impl
+                    let search_results = futures::executor::block_on(
+                        manager.search(space_id, tag_name, field_name, &expr_str, 100),
+                    )
+                    .map_err(|e| QueryError::execution(format!("Fulltext match failed: {}", e)))?;
+                    let mut rows = Vec::new();
+                    for result in search_results {
+                        rows.push(vec![result.doc_id, Value::Double(result.score as f64)]);
+                    }
+                    *opened = false;
+                    return if rows.is_empty() {
+                        Ok(None)
+                    } else {
+                        Ok(Some(DataChunk::from_rows(rows)))
+                    };
+                }
+            }
+
+            // Fallback: pass-through input
             if let Some(chunk) = input.next()? {
+                *opened = false;
                 return Ok(Some(chunk));
             }
+            *opened = false;
             Ok(None)
         }
-        _ => Err(QueryError::execution("Type mismatch in next_match_fulltext".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_match_fulltext".to_string(),
+        )),
     }
 }
 
@@ -221,7 +293,9 @@ pub fn stop_match_fulltext(executor: &mut StreamingExecutor) -> Result<(), Query
             }
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in stop_match_fulltext".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_match_fulltext".to_string(),
+        )),
     }
 }
 
@@ -234,7 +308,9 @@ pub fn close_match_fulltext(executor: &mut StreamingExecutor) -> Result<(), Quer
             }
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in close_match_fulltext".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_match_fulltext".to_string(),
+        )),
     }
 }
 
@@ -247,22 +323,73 @@ pub fn open_vector_search(executor: &mut StreamingExecutor) -> Result<(), QueryE
             *opened = true;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in open_vector_search".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_vector_search".to_string(),
+        )),
     }
 }
 
-pub fn next_vector_search(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+pub fn next_vector_search(
+    executor: &mut StreamingExecutor,
+) -> Result<Option<DataChunk>, QueryError> {
     match executor {
-        StreamingExecutor::VectorSearch { input, opened, .. } => {
+        StreamingExecutor::VectorSearch {
+            input,
+            space_id,
+            tag_name,
+            field_name,
+            query_vector,
+            top_k,
+            opened,
+            #[cfg(feature = "qdrant")]
+            vector_coordinator,
+            ..
+        } => {
             if !*opened {
                 return Err(QueryError::execution("VectorSearch not opened".to_string()));
             }
+
+            #[cfg(feature = "qdrant")]
+            {
+                if let Some(coordinator) = vector_coordinator {
+                    let options = crate::sync::vector_sync::SearchOptions::new(
+                        *space_id,
+                        tag_name.clone(),
+                        field_name.clone(),
+                        query_vector.clone(),
+                        *top_k as usize,
+                    );
+                    let search_results =
+                        futures::executor::block_on(coordinator.search_with_options(options))
+                            .map_err(|e| {
+                                QueryError::execution(format!("Vector search failed: {}", e))
+                            })?;
+                    let mut rows = Vec::new();
+                    for result in search_results {
+                        rows.push(vec![
+                            Value::String(result.id.to_string()),
+                            Value::Double(result.score as f64),
+                        ]);
+                    }
+                    *opened = false;
+                    return if rows.is_empty() {
+                        Ok(None)
+                    } else {
+                        Ok(Some(DataChunk::from_rows(rows)))
+                    };
+                }
+            }
+
             if let Some(chunk) = input.next()? {
+                *opened = false;
                 return Ok(Some(chunk));
             }
+            *opened = false;
             Ok(None)
         }
-        _ => Err(QueryError::execution("Type mismatch in next_vector_search".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_vector_search".to_string(),
+        )),
     }
 }
 
@@ -275,7 +402,9 @@ pub fn stop_vector_search(executor: &mut StreamingExecutor) -> Result<(), QueryE
             }
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in stop_vector_search".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_vector_search".to_string(),
+        )),
     }
 }
 
@@ -288,7 +417,9 @@ pub fn close_vector_search(executor: &mut StreamingExecutor) -> Result<(), Query
             }
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in close_vector_search".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_vector_search".to_string(),
+        )),
     }
 }
 
@@ -301,11 +432,15 @@ pub fn open_vector_lookup(executor: &mut StreamingExecutor) -> Result<(), QueryE
             *opened = true;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in open_vector_lookup".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_vector_lookup".to_string(),
+        )),
     }
 }
 
-pub fn next_vector_lookup(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+pub fn next_vector_lookup(
+    executor: &mut StreamingExecutor,
+) -> Result<Option<DataChunk>, QueryError> {
     match executor {
         StreamingExecutor::VectorLookup { input, opened, .. } => {
             if !*opened {
@@ -316,7 +451,9 @@ pub fn next_vector_lookup(executor: &mut StreamingExecutor) -> Result<Option<Dat
             }
             Ok(None)
         }
-        _ => Err(QueryError::execution("Type mismatch in next_vector_lookup".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_vector_lookup".to_string(),
+        )),
     }
 }
 
@@ -329,7 +466,9 @@ pub fn stop_vector_lookup(executor: &mut StreamingExecutor) -> Result<(), QueryE
             }
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in stop_vector_lookup".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_vector_lookup".to_string(),
+        )),
     }
 }
 
@@ -342,7 +481,9 @@ pub fn close_vector_lookup(executor: &mut StreamingExecutor) -> Result<(), Query
             }
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in close_vector_lookup".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_vector_lookup".to_string(),
+        )),
     }
 }
 
@@ -355,22 +496,73 @@ pub fn open_vector_match(executor: &mut StreamingExecutor) -> Result<(), QueryEr
             *opened = true;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in open_vector_match".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_vector_match".to_string(),
+        )),
     }
 }
 
-pub fn next_vector_match(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+pub fn next_vector_match(
+    executor: &mut StreamingExecutor,
+) -> Result<Option<DataChunk>, QueryError> {
     match executor {
-        StreamingExecutor::VectorMatch { input, opened, .. } => {
+        StreamingExecutor::VectorMatch {
+            input,
+            space_id,
+            tag_name,
+            field_name,
+            query_vector,
+            threshold,
+            opened,
+            #[cfg(feature = "qdrant")]
+            vector_coordinator,
+            ..
+        } => {
             if !*opened {
                 return Err(QueryError::execution("VectorMatch not opened".to_string()));
             }
+
+            #[cfg(feature = "qdrant")]
+            {
+                if let Some(coordinator) = vector_coordinator {
+                    let thr = threshold.unwrap_or(0.5);
+                    let search_results = futures::executor::block_on(
+                        coordinator.search_with_threshold(
+                            *space_id,
+                            tag_name,
+                            field_name,
+                            query_vector.clone(),
+                            100,
+                            thr,
+                        ),
+                    )
+                    .map_err(|e| QueryError::execution(format!("Vector match failed: {}", e)))?;
+                    let mut rows = Vec::new();
+                    for result in search_results {
+                        rows.push(vec![
+                            Value::String(result.id.to_string()),
+                            Value::Double(result.score as f64),
+                        ]);
+                    }
+                    *opened = false;
+                    return if rows.is_empty() {
+                        Ok(None)
+                    } else {
+                        Ok(Some(DataChunk::from_rows(rows)))
+                    };
+                }
+            }
+
             if let Some(chunk) = input.next()? {
+                *opened = false;
                 return Ok(Some(chunk));
             }
+            *opened = false;
             Ok(None)
         }
-        _ => Err(QueryError::execution("Type mismatch in next_vector_match".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_vector_match".to_string(),
+        )),
     }
 }
 
@@ -383,7 +575,9 @@ pub fn stop_vector_match(executor: &mut StreamingExecutor) -> Result<(), QueryEr
             }
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in stop_vector_match".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_vector_match".to_string(),
+        )),
     }
 }
 
@@ -396,6 +590,8 @@ pub fn close_vector_match(executor: &mut StreamingExecutor) -> Result<(), QueryE
             }
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in close_vector_match".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_vector_match".to_string(),
+        )),
     }
 }

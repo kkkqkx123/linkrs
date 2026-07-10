@@ -656,9 +656,7 @@ impl WildcardReplacer {
                 func: func.clone(),
                 args: args.iter().map(|arg| self.replace_internal(arg)).collect(),
                 distinct: *distinct,
-                filter: filter
-                    .as_ref()
-                    .map(|f| Box::new(self.replace_internal(f))),
+                filter: filter.as_ref().map(|f| Box::new(self.replace_internal(f))),
             },
             Expression::Case {
                 test_expr,
@@ -765,20 +763,34 @@ impl WildcardReplacer {
             Expression::Parameter(name) => Expression::Parameter(name.clone()),
             Expression::Vector(data) => Expression::Vector(data.clone()),
             Expression::Exists { body } => Expression::Exists { body: body.clone() },
-            Expression::In { expr, subquery, negated } => Expression::In {
+            Expression::In {
+                expr,
+                subquery,
+                negated,
+            } => Expression::In {
                 expr: Box::new(self.replace_internal(expr)),
                 subquery: subquery.clone(),
                 negated: *negated,
             },
-            Expression::WindowFunction { name, args, over_partition_by, over_order_by, over_order_desc } => {
-                Expression::WindowFunction {
-                    name: name.clone(),
-                    args: args.iter().map(|a| self.replace_internal(a)).collect(),
-                    over_partition_by: over_partition_by.iter().map(|e| self.replace_internal(e)).collect(),
-                    over_order_by: over_order_by.iter().map(|e| self.replace_internal(e)).collect(),
-                    over_order_desc: over_order_desc.clone(),
-                }
-            }
+            Expression::WindowFunction {
+                name,
+                args,
+                over_partition_by,
+                over_order_by,
+                over_order_desc,
+            } => Expression::WindowFunction {
+                name: name.clone(),
+                args: args.iter().map(|a| self.replace_internal(a)).collect(),
+                over_partition_by: over_partition_by
+                    .iter()
+                    .map(|e| self.replace_internal(e))
+                    .collect(),
+                over_order_by: over_order_by
+                    .iter()
+                    .map(|e| self.replace_internal(e))
+                    .collect(),
+                over_order_desc: over_order_desc.clone(),
+            },
         }
     }
 }
@@ -865,7 +877,12 @@ impl ExpressionVisitor for AggregateFunctionChecker {
         }
     }
 
-    fn visit_aggregate(&mut self, _func: &AggregateFunction, _args: &[Expression], _distinct: bool) {
+    fn visit_aggregate(
+        &mut self,
+        _func: &AggregateFunction,
+        _args: &[Expression],
+        _distinct: bool,
+    ) {
         self.contains_aggregate = true;
     }
 
@@ -1414,7 +1431,7 @@ impl ExpressionVisitor for PathBuildContainsChecker {
                 if self.contains_path_build {
                     break;
                 }
-}
+            }
         }
     }
 

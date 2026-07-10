@@ -142,10 +142,10 @@ pub enum Expression {
     /// Used to represent query parameters, e.g. `$param`.
     Parameter(String),
 
-/// Vector literal expression
-///
-/// Represents vector literals like VECTOR[0.1, 0.2, 0.3] or [0.1, 0.2]::VECTOR
-Vector(Vec<f32>),
+    /// Vector literal expression
+    ///
+    /// Represents vector literals like VECTOR[0.1, 0.2, 0.3] or [0.1, 0.2]::VECTOR
+    Vector(Vec<f32>),
 
     /// Window function expression with OVER clause
     WindowFunction {

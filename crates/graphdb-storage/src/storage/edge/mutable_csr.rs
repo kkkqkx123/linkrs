@@ -880,7 +880,6 @@ impl MutableCsr {
             total_wasted,
         )
     }
-
 }
 
 impl Default for MutableCsr {
@@ -1292,7 +1291,10 @@ mod tests {
         }
 
         let ratio_before = csr.fragmentation_ratio();
-        assert!(ratio_before > 1.5, "Setup failed: insufficient fragmentation");
+        assert!(
+            ratio_before > 1.5,
+            "Setup failed: insufficient fragmentation"
+        );
 
         csr.compact_with_ts(1, 0.25);
 
@@ -1318,7 +1320,11 @@ mod tests {
 
         // Test iter_edges_of yields same neighbors as edges_of without allocation
         let iter_neighbors: Vec<_> = csr.iter_edges_of(0u32, 1).map(|nbr| nbr.neighbor).collect();
-        let vec_neighbors: Vec<_> = csr.edges_of(0u32, 1).iter().map(|nbr| nbr.neighbor).collect();
+        let vec_neighbors: Vec<_> = csr
+            .edges_of(0u32, 1)
+            .iter()
+            .map(|nbr| nbr.neighbor)
+            .collect();
 
         assert_eq!(iter_neighbors.len(), vec_neighbors.len());
         assert_eq!(iter_neighbors, vec_neighbors);

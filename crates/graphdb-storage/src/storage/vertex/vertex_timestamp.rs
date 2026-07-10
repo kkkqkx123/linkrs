@@ -243,8 +243,8 @@ mod tests {
     fn test_timestamp_boundary_conditions() {
         let mut vts = VertexTimestamp::new();
 
-        vts.insert(0, 100);  // Created at ts=100
-        vts.remove(0, 200);  // Deleted at ts=200
+        vts.insert(0, 100); // Created at ts=100
+        vts.remove(0, 200); // Deleted at ts=200
 
         // Verify visibility boundaries: [100, 200)
         assert!(!vts.is_valid(0, 99), "Not visible before start");
@@ -264,7 +264,10 @@ mod tests {
         for i in 0..10 {
             let ts = 100 + i;
             vts.insert(i, ts);
-            assert!(ts > last_ts, "Timestamps should be monotonically increasing");
+            assert!(
+                ts > last_ts,
+                "Timestamps should be monotonically increasing"
+            );
             last_ts = ts;
         }
     }
@@ -299,7 +302,10 @@ mod tests {
 
         // Try to revert with wrong timestamp (too late)
         let result = vts.revert_remove(0, 300);
-        assert!(!result, "Revert should fail if timestamp > deletion timestamp");
+        assert!(
+            !result,
+            "Revert should fail if timestamp > deletion timestamp"
+        );
 
         // Verify vertex is still deleted
         assert!(!vts.is_valid(0, 250));
@@ -313,9 +319,9 @@ mod tests {
         vts.insert(0, 100);
         vts.insert(1, 101);
         vts.insert(2, 102);
-        vts.remove(0, 200);  // v0 deleted
-        // v1 remains active
-        vts.remove(2, 200);  // v2 deleted
+        vts.remove(0, 200); // v0 deleted
+                            // v1 remains active
+        vts.remove(2, 200); // v2 deleted
 
         let initial_count = vts.start_ts.len();
         assert_eq!(initial_count, 3);
@@ -359,10 +365,10 @@ mod tests {
         vts.remove(1, 300);
 
         assert_eq!(vts.get_start_ts(0), Some(100));
-        assert_eq!(vts.get_end_ts(0), None);  // Not deleted
+        assert_eq!(vts.get_end_ts(0), None); // Not deleted
 
         assert_eq!(vts.get_start_ts(1), Some(200));
-        assert_eq!(vts.get_end_ts(1), Some(300));  // Deleted at 300
+        assert_eq!(vts.get_end_ts(1), Some(300)); // Deleted at 300
     }
 
     /// Test: Verify behavior with u32::MAX timestamp

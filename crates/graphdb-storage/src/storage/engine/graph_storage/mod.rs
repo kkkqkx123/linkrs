@@ -10,8 +10,8 @@ mod index_manager;
 mod ops;
 mod persistence;
 mod reader;
-mod schema_writer;
 mod schema_engine;
+mod schema_writer;
 mod writer;
 
 #[cfg(test)]
@@ -23,6 +23,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::core::metadata::SchemaManager;
+use crate::core::stats::StatsManager;
 use crate::core::types::TransactionContextInfo;
 use crate::core::types::{
     CompactConfig, EdgeTypeInfo, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo,
@@ -31,7 +32,6 @@ use crate::core::types::{
 use crate::core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
 use crate::storage::engine::background_freeze::{BackgroundFreezeManager, FreezeStats};
 use crate::storage::engine::graph_storage::context::ExportedEdgeSnapshotRecord;
-use crate::core::stats::StatsManager;
 use crate::storage::engine::PersistenceConfig;
 use crate::storage::index::IndexGcConfig;
 use crate::storage::{
@@ -62,7 +62,9 @@ impl GraphStorage {
     }
 
     /// Create with a custom property graph configuration.
-    pub fn new_with_config(config: crate::storage::engine::config::PropertyGraphConfig) -> StorageResult<Self> {
+    pub fn new_with_config(
+        config: crate::storage::engine::config::PropertyGraphConfig,
+    ) -> StorageResult<Self> {
         Ok(Self {
             ctx: Arc::new(GraphStorageContext::new_with_config(config)),
         })
@@ -75,12 +77,16 @@ impl GraphStorage {
 
     /// Create with production configuration for small systems.
     pub fn new_production_small() -> StorageResult<Self> {
-        Self::new_with_config(crate::storage::engine::config::PropertyGraphConfig::production_small())
+        Self::new_with_config(
+            crate::storage::engine::config::PropertyGraphConfig::production_small(),
+        )
     }
 
     /// Create with production configuration for large systems (LSM tiered freeze).
     pub fn new_production_large() -> StorageResult<Self> {
-        Self::new_with_config(crate::storage::engine::config::PropertyGraphConfig::production_large())
+        Self::new_with_config(
+            crate::storage::engine::config::PropertyGraphConfig::production_large(),
+        )
     }
 
     pub fn new_with_path(path: PathBuf) -> StorageResult<Self> {
@@ -141,7 +147,9 @@ impl GraphStorage {
     pub fn with_background_freeze(mut self) -> Self {
         let freeze_config = self.ctx.get_freeze_config_full();
         let manager = Arc::new(BackgroundFreezeManager::from_config(freeze_config));
-        let new_ctx = (*self.ctx).clone().with_background_freeze(Arc::clone(&manager));
+        let new_ctx = (*self.ctx)
+            .clone()
+            .with_background_freeze(Arc::clone(&manager));
         self.ctx = Arc::new(new_ctx);
         self
     }
@@ -472,7 +480,9 @@ impl GraphStorage {
 
         let edge_infos = self.ctx.schema_manager().list_edge_types(space)?;
         for edge_info in edge_infos {
-            if let Some(history) = self.get_edge_version_history(space, &edge_info.edge_type_name)? {
+            if let Some(history) =
+                self.get_edge_version_history(space, &edge_info.edge_type_name)?
+            {
                 schema_history.add_edge_history(history);
             }
         }

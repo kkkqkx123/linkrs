@@ -196,8 +196,8 @@ impl StreamingExecutionEngine {
                             .push(chunk.clone());
                         output_chunks.push(chunk);
 
-                        self.scheduler.mark_done(result.task_id)?;
                         self.backpressure.add_chunk()?;
+                        self.backpressure.remove_chunk()?;
                     } else {
                         self.scheduler.mark_done(result.task_id)?;
                     }

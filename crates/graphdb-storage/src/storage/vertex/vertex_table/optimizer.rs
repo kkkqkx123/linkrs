@@ -7,10 +7,10 @@
 //! - Range-based column copying instead of row-by-row operations
 //! - Deferred encoding application to reduce memory churn
 
-use crate::core::StorageResult;
-use crate::storage::vertex::IdKey;
-use crate::storage::encoding::EncodingType;
 use super::core::VertexTable;
+use crate::core::StorageResult;
+use crate::storage::encoding::EncodingType;
+use crate::storage::vertex::IdKey;
 
 impl VertexTable {
     pub fn apply_deferred_encodings(&mut self) -> StorageResult<()> {
@@ -25,7 +25,8 @@ impl VertexTable {
             .collect();
 
         for (col_name, encoding_type) in encodings {
-            self.columns.apply_encoding_to_column(&col_name, encoding_type)?;
+            self.columns
+                .apply_encoding_to_column(&col_name, encoding_type)?;
         }
 
         self.deferred_encodings.clear();
@@ -41,7 +42,10 @@ impl VertexTable {
         Ok(())
     }
 
-    pub fn compact_with_ts_collect(&mut self, ts: crate::core::types::Timestamp) -> StorageResult<Vec<IdKey>> {
+    pub fn compact_with_ts_collect(
+        &mut self,
+        ts: crate::core::types::Timestamp,
+    ) -> StorageResult<Vec<IdKey>> {
         let deleted_ids: Vec<u32> = self.timestamps.iter_deleted(ts).collect();
 
         let mut removed_keys = Vec::with_capacity(deleted_ids.len());

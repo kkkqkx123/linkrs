@@ -105,7 +105,12 @@ impl Expression {
                 }
                 c
             }
-            Expression::WindowFunction { args, over_partition_by, over_order_by, .. } => {
+            Expression::WindowFunction {
+                args,
+                over_partition_by,
+                over_order_by,
+                ..
+            } => {
                 let mut c: Vec<&Expression> = vec![];
                 c.extend(args);
                 c.extend(over_partition_by);
@@ -215,7 +220,12 @@ impl Expression {
                 }
                 c
             }
-            Expression::WindowFunction { args, over_partition_by, over_order_by, .. } => {
+            Expression::WindowFunction {
+                args,
+                over_partition_by,
+                over_order_by,
+                ..
+            } => {
                 let mut c: Vec<&mut Expression> = vec![];
                 c.extend(args);
                 c.extend(over_partition_by);
@@ -326,9 +336,7 @@ impl Expression {
                 func: func.clone(),
                 args: args.iter().map(|arg| arg.transform(transformer)).collect(),
                 distinct: *distinct,
-                filter: filter
-                    .as_ref()
-                    .map(|f| Box::new(f.transform(transformer))),
+                filter: filter.as_ref().map(|f| Box::new(f.transform(transformer))),
             },
             Expression::List(items) => Expression::List(
                 items
@@ -426,16 +434,32 @@ impl Expression {
             Expression::Parameter(_) => self.clone(),
             Expression::Vector(_) => self.clone(),
             Expression::Exists { body: _ } => self.clone(),
-            Expression::In { expr, subquery, negated } => Expression::In {
+            Expression::In {
+                expr,
+                subquery,
+                negated,
+            } => Expression::In {
                 expr: Box::new(expr.transform(transformer)),
                 subquery: subquery.clone(),
                 negated: *negated,
             },
-            Expression::WindowFunction { name, args, over_partition_by, over_order_by, over_order_desc } => Expression::WindowFunction {
+            Expression::WindowFunction {
+                name,
+                args,
+                over_partition_by,
+                over_order_by,
+                over_order_desc,
+            } => Expression::WindowFunction {
                 name: name.clone(),
                 args: args.iter().map(|e| e.transform(transformer)).collect(),
-                over_partition_by: over_partition_by.iter().map(|e| e.transform(transformer)).collect(),
-                over_order_by: over_order_by.iter().map(|e| e.transform(transformer)).collect(),
+                over_partition_by: over_partition_by
+                    .iter()
+                    .map(|e| e.transform(transformer))
+                    .collect(),
+                over_order_by: over_order_by
+                    .iter()
+                    .map(|e| e.transform(transformer))
+                    .collect(),
                 over_order_desc: over_order_desc.clone(),
             },
         }

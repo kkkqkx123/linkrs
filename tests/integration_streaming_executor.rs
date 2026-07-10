@@ -3,23 +3,18 @@
 //! Tests the workflow: StreamingExecutor construction → execution call chain
 //! Focus: verify call chain integrity and executor lifecycle
 
-use graphdb::query::executor::streaming::StreamingExecutor;
-use graphdb::query::executor::streaming::executor::SortDirection;
 use graphdb::core::error::QueryError;
-use graphdb::core::Value;
 use graphdb::core::types::expr::Expression;
+use graphdb::core::Value;
+use graphdb::query::executor::streaming::executor::SortDirection;
+use graphdb::query::executor::streaming::StreamingExecutor;
 
 // ============ Test Helpers ============
 
 /// Create a test executor that produces data
 fn create_scan_executor(rows: usize) -> StreamingExecutor {
     let buffer: Vec<Vec<Value>> = (0..rows)
-        .map(|i| {
-            vec![
-                Value::Int(i as i32),
-                Value::String(format!("item_{}", i)),
-            ]
-        })
+        .map(|i| vec![Value::Int(i as i32), Value::String(format!("item_{}", i))])
         .collect();
 
     StreamingExecutor::ScanVertices {
@@ -32,7 +27,7 @@ fn create_scan_executor(rows: usize) -> StreamingExecutor {
 /// Verify executor lifecycle: open → next → close
 fn verify_executor_lifecycle(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     executor.open()?;
-    let _result = executor.next()?;  // May be Some or None
+    let _result = executor.next()?; // May be Some or None
     executor.close()?;
     Ok(())
 }
@@ -50,8 +45,16 @@ fn test_scan_vertices_lifecycle() {
 #[test]
 fn test_scan_edges_lifecycle() {
     let buffer = vec![
-        vec![Value::Int(1), Value::Int(2), Value::String("edge".to_string())],
-        vec![Value::Int(2), Value::Int(3), Value::String("edge".to_string())],
+        vec![
+            Value::Int(1),
+            Value::Int(2),
+            Value::String("edge".to_string()),
+        ],
+        vec![
+            Value::Int(2),
+            Value::Int(3),
+            Value::String("edge".to_string()),
+        ],
     ];
 
     let mut executor = StreamingExecutor::ScanEdges {
@@ -97,7 +100,11 @@ fn test_project_in_chain() {
     assert!(chunk.is_some(), "Project should produce output");
     // Verify column count matches projection
     if let Some(chunk_data) = chunk {
-        assert_eq!(chunk_data.rows[0].len(), 1, "Should have 1 column after projection");
+        assert_eq!(
+            chunk_data.rows[0].len(),
+            1,
+            "Should have 1 column after projection"
+        );
     }
     project.close().unwrap();
 }
@@ -131,7 +138,7 @@ fn test_limit_in_chain() {
 fn test_distinct_in_chain() {
     let buffer = vec![
         vec![Value::Int(1), Value::String("a".to_string())],
-        vec![Value::Int(1), Value::String("a".to_string())],  // Duplicate
+        vec![Value::Int(1), Value::String("a".to_string())], // Duplicate
         vec![Value::Int(2), Value::String("b".to_string())],
     ];
 
@@ -229,7 +236,10 @@ fn test_pipeline_scan_filter_project() {
 
     pipeline.open().unwrap();
     let result = pipeline.next().unwrap();
-    assert!(result.is_some(), "Three-step pipeline should produce output");
+    assert!(
+        result.is_some(),
+        "Three-step pipeline should produce output"
+    );
     pipeline.close().unwrap();
 }
 
@@ -252,7 +262,10 @@ fn test_pipeline_scan_filter_limit() {
 
     pipeline.open().unwrap();
     let result = pipeline.next().unwrap();
-    assert!(result.is_some(), "Three-step pipeline should produce output");
+    assert!(
+        result.is_some(),
+        "Three-step pipeline should produce output"
+    );
     if let Some(chunk) = result {
         assert_eq!(chunk.len(), 8, "Limit should apply across filter");
     }
@@ -311,9 +324,10 @@ fn test_aggregate_in_chain() {
     let mut agg = StreamingExecutor::Aggregate {
         input: scan,
         group_by_expressions: vec![Expression::Literal(Value::Int(0))],
-        aggregate_functions: vec![
-            (AggregateFunction::Count(None), Expression::Literal(Value::Int(1))),
-        ],
+        aggregate_functions: vec![(
+            AggregateFunction::Count(None),
+            Expression::Literal(Value::Int(1)),
+        )],
         all_rows: vec![],
         result_iter: None,
         opened: false,
@@ -355,7 +369,7 @@ fn test_hash_join_in_chain() {
     };
 
     join.open().unwrap();
-    let _result = join.next().unwrap();  // May be Some or None
+    let _result = join.next().unwrap(); // May be Some or None
     join.close().unwrap();
 }
 
@@ -546,7 +560,10 @@ fn test_union_of_filtered_scans() {
 
     union.open().unwrap();
     let result = union.next().unwrap();
-    assert!(result.is_some(), "Union of filtered scans should produce output");
+    assert!(
+        result.is_some(),
+        "Union of filtered scans should produce output"
+    );
     union.close().unwrap();
 }
 

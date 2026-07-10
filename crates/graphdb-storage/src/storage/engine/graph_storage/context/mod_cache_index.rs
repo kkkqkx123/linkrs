@@ -40,7 +40,13 @@ impl GraphStorageContext {
         index_names: &[String],
         ts: Timestamp,
     ) -> StorageResult<()> {
-        super::super::index_engine::delete_vertex_indexes_mvcc(self, space_id, vertex_id, index_names, ts)
+        super::super::index_engine::delete_vertex_indexes_mvcc(
+            self,
+            space_id,
+            vertex_id,
+            index_names,
+            ts,
+        )
     }
 
     pub(crate) fn gc_index_tombstones(&self, ts: Timestamp) -> StorageResult<GcStats> {
@@ -83,5 +89,4 @@ impl GraphStorageContext {
         }
         Ok(results)
     }
-
 }

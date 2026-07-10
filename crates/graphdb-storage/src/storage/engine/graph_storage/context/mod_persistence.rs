@@ -1,7 +1,7 @@
-use std::path::Path;
 use crate::core::types::LabelId;
 use crate::core::StorageResult;
 use crate::storage::engine::data_store::EdgeTableKey;
+use std::path::Path;
 
 use super::GraphStorageContext;
 

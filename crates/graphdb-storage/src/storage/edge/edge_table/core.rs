@@ -3,14 +3,16 @@
 //! Provides fundamental edge table functionality including insertion, deletion,
 //! querying, property management, and basic maintenance operations.
 
-use super::segment::{CsrSegment, SegmentVersion};
+use super::super::{Csr, CsrBase, CsrVariant, EdgeRecord, EdgeSchema, MutableCsrTrait, Nbr};
 use super::mvcc::MVCCManager;
-use super::super::{Csr, CsrVariant, EdgeSchema, Nbr, EdgeRecord, CsrBase, MutableCsrTrait};
-use crate::core::types::{EdgeId, LabelId, VertexId, Timestamp};
+use super::segment::{CsrSegment, SegmentVersion};
+use crate::core::types::{EdgeId, LabelId, Timestamp, VertexId};
 use crate::core::{DataType, StorageError, StorageResult, Value};
-use crate::storage::types::{PropertyId, StoragePropertyDef};
 use crate::storage::edge::PropertyTable;
-use crate::storage::schema::{LabelVersionHistory, SchemaObjectType, ChangeDetails, PropertyChange};
+use crate::storage::schema::{
+    ChangeDetails, LabelVersionHistory, PropertyChange, SchemaObjectType,
+};
+use crate::storage::types::{PropertyId, StoragePropertyDef};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
@@ -135,9 +137,11 @@ impl TimeTravelEdgeStore {
         let label_id = schema.label_id;
         let label_name = schema.label_name.clone();
 
-        let version_history = Arc::new(Mutex::new(
-            LabelVersionHistory::new(label_id, label_name.clone(), SchemaObjectType::Edge)
-        ));
+        let version_history = Arc::new(Mutex::new(LabelVersionHistory::new(
+            label_id,
+            label_name.clone(),
+            SchemaObjectType::Edge,
+        )));
 
         let mut property_index_cache = HashMap::new();
         for (idx, prop) in schema.properties.iter().enumerate() {
@@ -199,7 +203,6 @@ impl TimeTravelEdgeStore {
     pub fn set_stats_manager(&mut self, stats: std::sync::Arc<crate::core::stats::StatsManager>) {
         self.stats_manager = Some(stats);
     }
-
 
     fn base_get_edge(
         &self,
@@ -532,7 +535,13 @@ impl TimeTravelEdgeStore {
             return Ok(true);
         }
 
-        if let Some(nbr) = self.base_get_edge(&self.out_segments, Some(&self.sparse_vertex_index_out), src, dst_key, ts) {
+        if let Some(nbr) = self.base_get_edge(
+            &self.out_segments,
+            Some(&self.sparse_vertex_index_out),
+            src,
+            dst_key,
+            ts,
+        ) {
             let edge_id = nbr.edge_id;
             self.mvcc.pending_segment_deletions.insert(edge_id, ts);
             self.mvcc.tombstones.insert(edge_id, ts);
@@ -594,7 +603,14 @@ impl TimeTravelEdgeStore {
         }
 
         let dst_key = Self::edge_endpoint_key(dst, rank);
-        let nbr = self.merged_get_edge(&self.out_csr, &self.out_segments, Some(&self.sparse_vertex_index_out), src, dst_key, ts)?;
+        let nbr = self.merged_get_edge(
+            &self.out_csr,
+            &self.out_segments,
+            Some(&self.sparse_vertex_index_out),
+            src,
+            dst_key,
+            ts,
+        )?;
         let properties = self.properties_for_offset(nbr.prop_offset);
 
         Some(EdgeRecord {
@@ -610,11 +626,18 @@ impl TimeTravelEdgeStore {
             return Vec::new();
         }
 
-        let nbrs = if ts == u32::MAX && !self.snapshot_dirty && self.current_snapshot_out.is_some() {
+        let nbrs = if ts == u32::MAX && !self.snapshot_dirty && self.current_snapshot_out.is_some()
+        {
             // Fast path: use current snapshot (single CSR lookup instead of per-segment iteration)
             self.merged_edges_of_current(&self.out_csr, src)
         } else {
-            self.merged_edges_of(&self.out_csr, &self.out_segments, Some(&self.sparse_vertex_index_out), src, ts)
+            self.merged_edges_of(
+                &self.out_csr,
+                &self.out_segments,
+                Some(&self.sparse_vertex_index_out),
+                src,
+                ts,
+            )
         };
 
         // Optimization: prefetch all properties first to improve cache locality
@@ -657,7 +680,13 @@ impl TimeTravelEdgeStore {
         let nbrs = if ts == u32::MAX && !self.snapshot_dirty && self.current_snapshot_in.is_some() {
             self.merged_edges_of_current_in(&self.in_csr, dst)
         } else {
-            self.merged_edges_of(&self.in_csr, &self.in_segments, Some(&self.sparse_vertex_index_in), dst, ts)
+            self.merged_edges_of(
+                &self.in_csr,
+                &self.in_segments,
+                Some(&self.sparse_vertex_index_in),
+                dst,
+                ts,
+            )
         };
 
         // Optimization: prefetch all properties first to improve cache locality
@@ -697,8 +726,15 @@ impl TimeTravelEdgeStore {
             return false;
         }
         let dst_key = Self::edge_endpoint_key(dst, rank);
-        self.merged_get_edge(&self.out_csr, &self.out_segments, Some(&self.sparse_vertex_index_out), src, dst_key, ts)
-            .is_some()
+        self.merged_get_edge(
+            &self.out_csr,
+            &self.out_segments,
+            Some(&self.sparse_vertex_index_out),
+            src,
+            dst_key,
+            ts,
+        )
+        .is_some()
     }
 
     pub fn edge_count(&self) -> u64 {
@@ -731,7 +767,12 @@ impl TimeTravelEdgeStore {
     /// Scan edges with pagination support.
     /// Returns at most `page_size` edges starting from `offset`.
     /// Returns (edges, has_more) where has_more indicates if there are more edges beyond this page.
-    pub fn scan_paginated(&self, ts: Timestamp, offset: usize, page_size: usize) -> (Vec<EdgeRecord>, bool) {
+    pub fn scan_paginated(
+        &self,
+        ts: Timestamp,
+        offset: usize,
+        page_size: usize,
+    ) -> (Vec<EdgeRecord>, bool) {
         if !self.is_open {
             return (Vec::new(), false);
         }
@@ -755,7 +796,12 @@ impl TimeTravelEdgeStore {
     }
 
     /// Create a scan iterator with pagination support
-    pub fn scan_paginated_iter(&self, ts: Timestamp, offset: usize, page_size: usize) -> EdgeTableScanIterator<'_> {
+    pub fn scan_paginated_iter(
+        &self,
+        ts: Timestamp,
+        offset: usize,
+        page_size: usize,
+    ) -> EdgeTableScanIterator<'_> {
         let mut iter = EdgeTableScanIterator::with_limit(self, ts, Some(page_size));
         // Skip offset records
         for _ in 0..offset {
@@ -772,7 +818,8 @@ impl TimeTravelEdgeStore {
     /// 3. Recording it in the version history
     fn record_schema_change(&mut self, details: ChangeDetails) -> StorageResult<()> {
         // Get the next version number from history
-        let mut history_guard = self.version_history
+        let mut history_guard = self
+            .version_history
             .lock()
             .map_err(|_| StorageError::db_error("Failed to lock version_history"))?;
 
@@ -810,9 +857,7 @@ impl TimeTravelEdgeStore {
 
         let prop_def = StoragePropertyDef::new(name.clone(), data_type.clone());
         let new_idx = self.schema.properties.len();
-        self.schema
-            .properties
-            .push(prop_def);
+        self.schema.properties.push(prop_def);
         self.property_index_cache.insert(name.clone(), new_idx);
 
         self.record_schema_change(ChangeDetails::PropertyAdded {
@@ -927,8 +972,14 @@ impl TimeTravelEdgeStore {
             .ok_or_else(|| StorageError::column_not_found(prop_name.to_string()))?;
 
         let dst_key = Self::edge_endpoint_key(dst, rank);
-        if let Some(nbr) = self.merged_get_edge(&self.out_csr, &self.out_segments, Some(&self.sparse_vertex_index_out), src, dst_key, ts)
-        {
+        if let Some(nbr) = self.merged_get_edge(
+            &self.out_csr,
+            &self.out_segments,
+            Some(&self.sparse_vertex_index_out),
+            src,
+            dst_key,
+            ts,
+        ) {
             self.properties
                 .set_property(nbr.prop_offset, prop_name, Some(value.clone()), ts)?;
             return Ok(true);
@@ -954,7 +1005,12 @@ impl TimeTravelEdgeStore {
             dst_key,
             params.ts,
         ) {
-            self.properties.set_property_by_id(nbr.prop_offset, PropertyId(params.prop_id), Some(params.value.clone()), params.ts)?;
+            self.properties.set_property_by_id(
+                nbr.prop_offset,
+                PropertyId(params.prop_id),
+                Some(params.value.clone()),
+                params.ts,
+            )?;
 
             let src_key = Self::edge_endpoint_key(params.src, params.rank);
             if let Some(ie_nbr) = self.merged_get_edge(
@@ -966,12 +1022,10 @@ impl TimeTravelEdgeStore {
                 params.ts,
             ) {
                 if nbr.prop_offset != ie_nbr.prop_offset {
-                    return Err(StorageError::data_corruption(
-                        format!(
-                            "property offset mismatch: out_csr={}, in_csr={} at edge ({}, {})",
-                            nbr.prop_offset, ie_nbr.prop_offset, params.src, params.dst
-                        ),
-                    ));
+                    return Err(StorageError::data_corruption(format!(
+                        "property offset mismatch: out_csr={}, in_csr={} at edge ({}, {})",
+                        nbr.prop_offset, ie_nbr.prop_offset, params.src, params.dst
+                    )));
                 }
             }
             return Ok(true);
@@ -1076,9 +1130,14 @@ impl TimeTravelEdgeStore {
         let estimated = out_edges * out_bytes_per_edge + in_edges * in_bytes_per_edge;
 
         let total_capacity = out_edges + in_edges;
-        let frag_stats = crate::storage::edge::FragmentationStats::new(total_capacity, out_edges.min(in_edges));
+        let frag_stats =
+            crate::storage::edge::FragmentationStats::new(total_capacity, out_edges.min(in_edges));
         if frag_stats.fragmentation_ratio() > 2.0 {
-            log::debug!("EdgeTable[{}] high fragmentation: {:.2}", self.label, frag_stats.fragmentation_ratio());
+            log::debug!(
+                "EdgeTable[{}] high fragmentation: {:.2}",
+                self.label,
+                frag_stats.fragmentation_ratio()
+            );
         }
 
         estimated
@@ -1205,11 +1264,7 @@ impl TimeTravelEdgeStore {
 
     /// Fast path for out_edges at ts=MAX: use current snapshot + mutable CSR,
     /// avoiding per-segment iteration.
-    fn merged_edges_of_current(
-        &self,
-        delta: &CsrVariant,
-        src: u32,
-    ) -> Vec<Nbr> {
+    fn merged_edges_of_current(&self, delta: &CsrVariant, src: u32) -> Vec<Nbr> {
         let mut seen = HashSet::new();
         let mut result = Vec::new();
 
@@ -1246,11 +1301,7 @@ impl TimeTravelEdgeStore {
     }
 
     /// Fast path for in_edges at ts=MAX.
-    fn merged_edges_of_current_in(
-        &self,
-        delta: &CsrVariant,
-        dst: u32,
-    ) -> Vec<Nbr> {
+    fn merged_edges_of_current_in(&self, delta: &CsrVariant, dst: u32) -> Vec<Nbr> {
         let mut seen = HashSet::new();
         let mut result = Vec::new();
 
@@ -1329,7 +1380,11 @@ impl<'a> EdgeTableScanIterator<'a> {
     }
 
     /// Create a scan iterator with a maximum record limit
-    pub fn with_limit(table: &'a TimeTravelEdgeStore, ts: Timestamp, max_records: Option<usize>) -> Self {
+    pub fn with_limit(
+        table: &'a TimeTravelEdgeStore,
+        ts: Timestamp,
+        max_records: Option<usize>,
+    ) -> Self {
         let mut seen = HashSet::new();
         let mut records = Vec::new();
 
@@ -1423,6 +1478,3 @@ impl<'a> Iterator for EdgeTableScanIterator<'a> {
 #[cfg(test)]
 #[path = "core_tests.rs"]
 mod tests;
-
-
-

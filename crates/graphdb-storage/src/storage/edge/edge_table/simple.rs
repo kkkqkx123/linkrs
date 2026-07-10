@@ -4,13 +4,11 @@ use std::sync::{Arc, Mutex};
 use super::super::{
     CsrBase, CsrVariant, EdgeRecord, EdgeSchema, MutableCsrTrait, Nbr, PropertyTable,
 };
+use super::compaction::CompactionMode;
 use super::core::EdgeTableConfig;
 use super::snapshot::{ExportedEdgeSnapshot, SnapshotBuilder};
 use super::stats::{DeletionStats, MergeMetrics, MergeMetricsResult, MergeStats};
-use super::compaction::CompactionMode;
-use crate::core::types::{
-    CompactConfig, EdgeId, LabelId, Timestamp, VertexId,
-};
+use crate::core::types::{CompactConfig, EdgeId, LabelId, Timestamp, VertexId};
 use crate::core::{DataType, StorageError, StorageResult, Value};
 use crate::storage::persistence::write_header_to;
 use crate::storage::schema::{
@@ -149,7 +147,8 @@ impl SimpleEdgeStore {
         let mut total = 0;
         total += self.out_csr.used_memory_size();
         total += self.in_csr.used_memory_size();
-        total += self.deleted_edges.len() * (std::mem::size_of::<EdgeId>() + std::mem::size_of::<Timestamp>());
+        total += self.deleted_edges.len()
+            * (std::mem::size_of::<EdgeId>() + std::mem::size_of::<Timestamp>());
         total += self.properties.used_memory_size();
         total += self.property_index_cache.len()
             * (std::mem::size_of::<String>() + std::mem::size_of::<usize>());
@@ -180,7 +179,12 @@ impl SimpleEdgeStore {
         0
     }
 
-    pub fn compact_and_freeze(&mut self, _ts: Timestamp, _config: &CompactConfig, _mode: CompactionMode) -> usize {
+    pub fn compact_and_freeze(
+        &mut self,
+        _ts: Timestamp,
+        _config: &CompactConfig,
+        _mode: CompactionMode,
+    ) -> usize {
         0
     }
 
@@ -329,7 +333,8 @@ impl SimpleEdgeStore {
                 self.properties.delete(prop_offset);
             }
             return Err(StorageError::edge_already_exists(format!(
-                "{} -> {}@{}", src, dst, rank
+                "{} -> {}@{}",
+                src, dst, rank
             )));
         }
 
@@ -337,29 +342,43 @@ impl SimpleEdgeStore {
         let src_key = Self::edge_endpoint_key(src, rank);
         let edge_id = self.next_edge_id.fetch_add();
 
-        if !self.out_csr.insert_edge(src, dst_key, edge_id, prop_offset, ts) {
+        if !self
+            .out_csr
+            .insert_edge(src, dst_key, edge_id, prop_offset, ts)
+        {
             if prop_offset > 0 {
                 self.properties.delete(prop_offset);
             }
             return Err(StorageError::edge_already_exists(format!(
-                "{} -> {}@{}", src, dst, rank
+                "{} -> {}@{}",
+                src, dst, rank
             )));
         }
 
-        if !self.in_csr.insert_edge(dst, src_key, edge_id, prop_offset, ts) {
+        if !self
+            .in_csr
+            .insert_edge(dst, src_key, edge_id, prop_offset, ts)
+        {
             self.out_csr.delete_edge(src, edge_id, ts);
             if prop_offset > 0 {
                 self.properties.delete(prop_offset);
             }
             return Err(StorageError::edge_already_exists(format!(
-                "{} -> {}@{}", dst, src, rank
+                "{} -> {}@{}",
+                dst, src, rank
             )));
         }
 
         Ok(())
     }
 
-    pub fn delete_edge(&mut self, src: u32, dst: u32, rank: i64, ts: Timestamp) -> StorageResult<bool> {
+    pub fn delete_edge(
+        &mut self,
+        src: u32,
+        dst: u32,
+        rank: i64,
+        ts: Timestamp,
+    ) -> StorageResult<bool> {
         if !self.is_open {
             return Err(StorageError::storage_not_open());
         }
@@ -444,7 +463,12 @@ impl SimpleEdgeStore {
         }
         self.properties
             .get(prop_offset, None)
-            .map(|props| props.into_iter().filter_map(|(k, v)| v.map(|v| (k, v))).collect())
+            .map(|props| {
+                props
+                    .into_iter()
+                    .filter_map(|(k, v)| v.map(|v| (k, v)))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -508,7 +532,12 @@ impl SimpleEdgeStore {
                     .properties
                     .get_fast(nbr.prop_offset, None)
                     .or_else(|| self.properties.get(nbr.prop_offset, None))
-                    .map(|props| props.into_iter().filter_map(|(k, v)| v.map(|v| (k, v))).collect())
+                    .map(|props| {
+                        props
+                            .into_iter()
+                            .filter_map(|(k, v)| v.map(|v| (k, v)))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 EdgeRecord {
                     src_vid: VertexId::from_int64(src as i64),
@@ -545,7 +574,12 @@ impl SimpleEdgeStore {
                     .properties
                     .get_fast(nbr.prop_offset, None)
                     .or_else(|| self.properties.get(nbr.prop_offset, None))
-                    .map(|props| props.into_iter().filter_map(|(k, v)| v.map(|v| (k, v))).collect())
+                    .map(|props| {
+                        props
+                            .into_iter()
+                            .filter_map(|(k, v)| v.map(|v| (k, v)))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 EdgeRecord {
                     src_vid,
@@ -635,14 +669,20 @@ impl SimpleEdgeStore {
         Ok(())
     }
 
-    pub fn add_property(&mut self, name: String, data_type: DataType, nullable: bool) -> StorageResult<()> {
+    pub fn add_property(
+        &mut self,
+        name: String,
+        data_type: DataType,
+        nullable: bool,
+    ) -> StorageResult<()> {
         if !self.is_open {
             return Err(StorageError::storage_not_open());
         }
         if self.properties.has_property(&name) {
             return Err(StorageError::column_already_exists(name));
         }
-        self.properties.add_property(name.clone(), data_type.clone(), nullable);
+        self.properties
+            .add_property(name.clone(), data_type.clone(), nullable);
         let prop_def = StoragePropertyDef::new(name.clone(), data_type.clone());
         let new_idx = self.schema.properties.len();
         self.schema.properties.push(prop_def);
@@ -690,7 +730,12 @@ impl SimpleEdgeStore {
         if !self.is_open {
             return Err(StorageError::storage_not_open());
         }
-        if self.schema.properties.iter().any(|prop| prop.name == new_name) {
+        if self
+            .schema
+            .properties
+            .iter()
+            .any(|prop| prop.name == new_name)
+        {
             return Err(StorageError::column_already_exists(new_name.to_string()));
         }
         let index = self
@@ -718,7 +763,12 @@ impl SimpleEdgeStore {
         self.iter(ts).collect()
     }
 
-    pub fn scan_paginated(&self, ts: Timestamp, offset: usize, page_size: usize) -> (Vec<EdgeRecord>, bool) {
+    pub fn scan_paginated(
+        &self,
+        ts: Timestamp,
+        offset: usize,
+        page_size: usize,
+    ) -> (Vec<EdgeRecord>, bool) {
         if !self.is_open {
             return (Vec::new(), false);
         }
@@ -737,7 +787,12 @@ impl SimpleEdgeStore {
         (edges, false)
     }
 
-    pub fn scan_paginated_iter(&self, ts: Timestamp, offset: usize, page_size: usize) -> SimpleScanIterator<'_> {
+    pub fn scan_paginated_iter(
+        &self,
+        ts: Timestamp,
+        offset: usize,
+        page_size: usize,
+    ) -> SimpleScanIterator<'_> {
         let mut iter = SimpleScanIterator::with_limit(self, ts, Some(page_size));
         for _ in 0..offset {
             iter.next();
@@ -760,8 +815,11 @@ impl SimpleEdgeStore {
 
         let meta_path = path.join("meta.bin");
         let mut meta_file = std::fs::File::create(&meta_path)?;
-        write_header_to(&mut meta_file, crate::storage::persistence::section::EDGE_META)
-            .map_err(|e| StorageError::io_error(format!("Failed to write edge meta header: {}", e)))?;
+        write_header_to(
+            &mut meta_file,
+            crate::storage::persistence::section::EDGE_META,
+        )
+        .map_err(|e| StorageError::io_error(format!("Failed to write edge meta header: {}", e)))?;
         super::persistence::flush_metadata(
             &mut meta_file,
             self.label,
@@ -817,7 +875,8 @@ impl SimpleEdgeStore {
             if sid != crate::storage::persistence::section::EDGE_META {
                 return Err(StorageError::deserialize_error(format!(
                     "unexpected section id in edge meta: expected {:#06x}, got {:#06x}",
-                    crate::storage::persistence::section::EDGE_META, sid
+                    crate::storage::persistence::section::EDGE_META,
+                    sid
                 )));
             }
         }
@@ -826,11 +885,23 @@ impl SimpleEdgeStore {
         meta_cursor.read_exact(&mut version_bytes)?;
         let version = u32::from_le_bytes(version_bytes);
         if version != 2 {
-            return Err(StorageError::deserialize_error(format!("unsupported edge meta version: {}", version)));
+            return Err(StorageError::deserialize_error(format!(
+                "unsupported edge meta version: {}",
+                version
+            )));
         }
 
-        let (label, src_label, dst_label, label_name, is_open, schema, next_edge_id, _tombstones, _min_snapshot_ts) =
-            super::persistence::load_metadata(&mut meta_cursor)?;
+        let (
+            label,
+            src_label,
+            dst_label,
+            label_name,
+            is_open,
+            schema,
+            next_edge_id,
+            _tombstones,
+            _min_snapshot_ts,
+        ) = super::persistence::load_metadata(&mut meta_cursor)?;
 
         self.label = label;
         self.src_label = src_label;
@@ -878,7 +949,11 @@ impl<'a> SimpleScanIterator<'a> {
         Self::with_limit(table, ts, None)
     }
 
-    pub fn with_limit(table: &'a SimpleEdgeStore, ts: Timestamp, max_records: Option<usize>) -> Self {
+    pub fn with_limit(
+        table: &'a SimpleEdgeStore,
+        ts: Timestamp,
+        max_records: Option<usize>,
+    ) -> Self {
         let mut seen = HashSet::new();
         let mut records = Vec::new();
 

@@ -5,9 +5,9 @@
 mod common;
 
 use graphdb_storage::core::types::VertexId;
+use graphdb_storage::storage::{StorageReader, StorageWriter};
 use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
-use graphdb_storage::storage::{StorageReader, StorageWriter};
 
 /// Test: Concurrent transactions see consistent snapshots
 #[test]
@@ -48,7 +48,10 @@ fn test_snapshot_isolation_consistency() {
             // If snapshot isolation is correct, both reads should see same count
             // or at least a consistent state
             println!("Thread A: First read={}, Second read={}", count_a, count_a2);
-            assert!(count_a2 >= count_a, "Later read should have >= earlier data");
+            assert!(
+                count_a2 >= count_a,
+                "Later read should have >= earlier data"
+            );
         });
         handles.push(handle);
     }
@@ -88,7 +91,10 @@ fn test_snapshot_isolation_consistency() {
 
             // C should see all data including modifications
             println!("Thread C: Read {} vertices", vertices_c.len());
-            assert!(vertices_c.len() >= 15, "Later transaction should see all modifications");
+            assert!(
+                vertices_c.len() >= 15,
+                "Later transaction should see all modifications"
+            );
         });
         handles.push(handle);
     }
@@ -131,7 +137,10 @@ fn test_concurrent_vertex_updates_consistency() {
                     if let Some(v) = st.get_vertex("test_space", &vid).unwrap() {
                         // Verify data is consistent
                         assert!(!v.tags.is_empty(), "Vertex should have tags");
-                        assert!(v.properties.contains_key("name"), "Vertex should have name property");
+                        assert!(
+                            v.properties.contains_key("name"),
+                            "Vertex should have name property"
+                        );
 
                         // Verify property types are correct
                         if let Some(name) = v.properties.get("name") {
@@ -187,7 +196,11 @@ fn test_concurrent_readers_consistency() {
             for _ in 0..10 {
                 let st = storage.lock().unwrap();
                 let vertices = st.scan_vertices("test_space").unwrap();
-                assert_eq!(vertices.len(), 20, "All readers should see same vertex count");
+                assert_eq!(
+                    vertices.len(),
+                    20,
+                    "All readers should see same vertex count"
+                );
             }
         });
         handles.push(handle);

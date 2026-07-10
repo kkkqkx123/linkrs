@@ -7,9 +7,8 @@ pub mod streaming;
 
 // Re-export from the base module: The basic types are uniformly exported from the base module.
 pub use base::{
-    BaseExecutor, ExecutionContext, ExecutionResult, Executor,
-    ExecutorStats, HasInput, HasStorage, ResultProcessor, ResultProcessorContext,
-    StartExecutor,
+    BaseExecutor, ExecutionContext, ExecutionResult, Executor, ExecutorStats, HasInput, HasStorage,
+    ResultProcessor, ResultProcessorContext, StartExecutor,
 };
 
 // Re-export streaming executors (Primary Execution Framework)
@@ -26,7 +25,7 @@ pub use explain::{
 
 // Re-export algorithm types
 pub use algorithms::{
-    AStar, AlgorithmContext, AlgorithmStats, BidirectionalBFS, BFSShortestExecutor, Dijkstra,
+    AStar, AlgorithmContext, AlgorithmStats, BFSShortestExecutor, BidirectionalBFS, Dijkstra,
     MultiShortestPathExecutor, PathFindingAlgorithm, ShortestPathAlgorithm,
     ShortestPathAlgorithmType, SubgraphExecutor, TraversalAlgorithm,
 };

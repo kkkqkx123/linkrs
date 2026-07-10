@@ -21,10 +21,10 @@
 use crate::core::StorageResult;
 
 use super::{
-    CsrBase, EdgeId, EdgeStrategy, FragmentationStats, LabeledMutableCsr, LabeledMutableCsrIterator,
-    MutableCsr, MutableCsrIterator, MutableCsrTrait, MultiSingleMutableCsr,
-    MultiSingleMutableCsrIterator, Nbr, SingleMutableCsr, SingleMutableCsrIterator, Timestamp,
-    VertexId,
+    CsrBase, EdgeId, EdgeStrategy, FragmentationStats, LabeledMutableCsr,
+    LabeledMutableCsrIterator, MultiSingleMutableCsr, MultiSingleMutableCsrIterator, MutableCsr,
+    MutableCsrIterator, MutableCsrTrait, Nbr, SingleMutableCsr, SingleMutableCsrIterator,
+    Timestamp, VertexId,
 };
 
 /// Macro for dispatching method calls to the underlying CSR variant (mutable methods).
@@ -150,12 +150,9 @@ impl CsrVariant {
             EdgeStrategy::Single => Ok(CsrVariant::Single(SingleMutableCsr::with_capacity(
                 vertex_capacity,
             ))),
-            EdgeStrategy::MultiSingle { max_edges } => {
-                Ok(CsrVariant::MultiSingle(MultiSingleMutableCsr::with_capacity(
-                    vertex_capacity,
-                    max_edges,
-                )))
-            }
+            EdgeStrategy::MultiSingle { max_edges } => Ok(CsrVariant::MultiSingle(
+                MultiSingleMutableCsr::with_capacity(vertex_capacity, max_edges),
+            )),
             EdgeStrategy::Labeled => Ok(CsrVariant::Labeled(LabeledMutableCsr::with_capacity(
                 vertex_capacity,
                 edge_capacity,
@@ -171,7 +168,7 @@ impl CsrVariant {
             CsrVariant::Single(csr) => csr.clear(),
             CsrVariant::MultiSingle(csr) => csr.clear(),
             CsrVariant::Labeled(csr) => csr.clear(),
-            CsrVariant::None { .. } => {},
+            CsrVariant::None { .. } => {}
         }
     }
 
@@ -208,7 +205,7 @@ impl CsrVariant {
                     stats.zombie_blocks,
                     stats.wasted_capacity,
                 ))
-            },
+            }
             _ => None,
         }
     }
@@ -392,7 +389,11 @@ impl CsrVariant {
     }
 
     /// Iterate edges of a vertex without allocating (only for Multiple strategy).
-    pub fn iter_edges_of(&self, src_vid: u32, ts: Timestamp) -> Option<super::mutable_csr::VertexEdgesIter<'_>> {
+    pub fn iter_edges_of(
+        &self,
+        src_vid: u32,
+        ts: Timestamp,
+    ) -> Option<super::mutable_csr::VertexEdgesIter<'_>> {
         match self {
             CsrVariant::Multiple(csr) => Some(csr.iter_edges_of(src_vid, ts)),
             _ => None,
@@ -461,7 +462,8 @@ mod tests {
 
     #[test]
     fn test_multi_single_csr_variant() {
-        let mut csr = CsrVariant::from_strategy(EdgeStrategy::MultiSingle { max_edges: 4 }, 10, 100).unwrap();
+        let mut csr =
+            CsrVariant::from_strategy(EdgeStrategy::MultiSingle { max_edges: 4 }, 10, 100).unwrap();
 
         assert!(csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1));
         assert_eq!(csr.edge_count(), 1);

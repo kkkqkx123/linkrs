@@ -350,7 +350,9 @@ pub struct ChangeInfo {
 }
 
 /// Parse is_edge query parameter, failing on invalid values
-fn parse_is_edge_param(query: &std::collections::HashMap<String, String>) -> Result<bool, HttpError> {
+fn parse_is_edge_param(
+    query: &std::collections::HashMap<String, String>,
+) -> Result<bool, HttpError> {
     match query.get("is_edge") {
         None => Ok(false),
         Some(v) => match v.to_lowercase().as_str() {
@@ -398,21 +400,23 @@ pub async fn get_version_history<
                     .get_versions()
                     .iter()
                     .map(|&version| {
-                        let changes: Vec<_> = h.change_log
+                        let changes: Vec<_> = h
+                            .change_log
                             .get_version_changes(version)
                             .cloned()
                             .unwrap_or_default()
                             .into_iter()
-                            .map(|change| {
-                                ChangeInfo {
-                                    change_type: format!("{:?}", change.details),
-                                    description: change.details.description(),
-                                    details: {
-                                        let mut d = std::collections::HashMap::new();
-                                        d.insert("description".to_string(), change.details.description());
-                                        d
-                                    },
-                                }
+                            .map(|change| ChangeInfo {
+                                change_type: format!("{:?}", change.details),
+                                description: change.details.description(),
+                                details: {
+                                    let mut d = std::collections::HashMap::new();
+                                    d.insert(
+                                        "description".to_string(),
+                                        change.details.description(),
+                                    );
+                                    d
+                                },
                             })
                             .collect();
 
@@ -458,12 +462,10 @@ pub async fn get_schema_changes<
 
     // Validate version range: from_version must be <= to_version
     if from_version > to_version {
-        return Err(HttpError::BadRequest(
-            format!(
-                "Invalid version range: from_version ({}) must be <= to_version ({})",
-                from_version, to_version
-            )
-        ));
+        return Err(HttpError::BadRequest(format!(
+            "Invalid version range: from_version ({}) must be <= to_version ({})",
+            from_version, to_version
+        )));
     }
 
     let result = task::spawn_blocking(move || {
@@ -524,12 +526,10 @@ pub async fn detect_breaking_changes<
 
     // Validate version range: from_version must be <= to_version
     if from_version > to_version {
-        return Err(HttpError::BadRequest(
-            format!(
-                "Invalid version range: from_version ({}) must be <= to_version ({})",
-                from_version, to_version
-            )
-        ));
+        return Err(HttpError::BadRequest(format!(
+            "Invalid version range: from_version ({}) must be <= to_version ({})",
+            from_version, to_version
+        )));
     }
 
     let result = task::spawn_blocking(move || {
@@ -541,7 +541,9 @@ pub async fn detect_breaking_changes<
         } else {
             storage_read.detect_vertex_breaking_changes(&space, &label, from_version, to_version)
         }
-        .map_err(|e| HttpError::InternalError(format!("Failed to detect breaking changes: {}", e)))?;
+        .map_err(|e| {
+            HttpError::InternalError(format!("Failed to detect breaking changes: {}", e))
+        })?;
 
         let has_breaking = !changes.is_empty();
         let change_list: Vec<_> = changes
@@ -582,5 +584,3 @@ pub async fn detect_breaking_changes<
 
     Ok(JsonResponse(result?))
 }
-
-

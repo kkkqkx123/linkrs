@@ -58,10 +58,7 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
     let storage_path = PathBuf::from(config.storage_path());
     let mut graph_storage = GraphStorage::open(storage_path)?;
     graph_storage = graph_storage.set_stats_manager(stats_manager.clone());
-    let inner_storage = Arc::new(MetricsStorage::new(
-        graph_storage,
-        stats_manager.clone(),
-    ));
+    let inner_storage = Arc::new(MetricsStorage::new(graph_storage, stats_manager.clone()));
     info!(
         "Storage initialized (persistent mode at {}, metrics enabled)",
         config.storage_path()

@@ -3,9 +3,9 @@
 //! Enables consistent point-in-time snapshots of the edge table for
 //! backup, replication, and time-travel queries.
 
-use super::super::{Csr, Nbr, EdgeSchema, LabelId, VertexId, CsrBase};
+use super::super::{Csr, CsrBase, EdgeSchema, LabelId, Nbr, VertexId};
 use super::segment::CsrSegment;
-use crate::core::types::{Timestamp, EdgeId};
+use crate::core::types::{EdgeId, Timestamp};
 use crate::core::StorageResult;
 use crate::storage::edge::PropertyTable;
 use std::collections::HashMap;
@@ -39,9 +39,17 @@ impl ExportedEdgeSnapshot {
     /// Returns edges as they existed at snapshot_ts.
     /// No timestamp filtering needed - snapshot is already filtered.
     pub fn get_out_edges(&self, src: u32) -> Vec<Nbr> {
-        self.out_csr.edges_of(src)
+        self.out_csr
+            .edges_of(src)
             .iter()
-            .map(|edge| Nbr::new(edge.neighbor, edge.edge_id, edge.prop_offset, edge.timestamp))
+            .map(|edge| {
+                Nbr::new(
+                    edge.neighbor,
+                    edge.edge_id,
+                    edge.prop_offset,
+                    edge.timestamp,
+                )
+            })
             .collect()
     }
 
@@ -49,16 +57,30 @@ impl ExportedEdgeSnapshot {
     ///
     /// Returns edges as they existed at snapshot_ts.
     pub fn get_in_edges(&self, dst: u32) -> Vec<Nbr> {
-        self.in_csr.edges_of(dst)
+        self.in_csr
+            .edges_of(dst)
             .iter()
-            .map(|edge| Nbr::new(edge.neighbor, edge.edge_id, edge.prop_offset, edge.timestamp))
+            .map(|edge| {
+                Nbr::new(
+                    edge.neighbor,
+                    edge.edge_id,
+                    edge.prop_offset,
+                    edge.timestamp,
+                )
+            })
             .collect()
     }
 
     /// Get a specific edge in the snapshot (if it exists)
     pub fn get_edge(&self, src: u32, dst: VertexId) -> Option<Nbr> {
-        self.out_csr.get_edge(src, dst)
-            .map(|edge| Nbr::new(edge.neighbor, edge.edge_id, edge.prop_offset, edge.timestamp))
+        self.out_csr.get_edge(src, dst).map(|edge| {
+            Nbr::new(
+                edge.neighbor,
+                edge.edge_id,
+                edge.prop_offset,
+                edge.timestamp,
+            )
+        })
     }
 
     /// Check if an edge exists in this snapshot
@@ -98,7 +120,10 @@ impl SnapshotBuilder {
         }
 
         if segment.deletion_info.all_deleted_before(ts)
-            && segment.deletion_info.all_edges_deleted(segment.csr.edge_count()) {
+            && segment
+                .deletion_info
+                .all_edges_deleted(segment.csr.edge_count())
+        {
             return;
         }
 
@@ -149,10 +174,7 @@ impl SnapshotBuilder {
     }
 
     /// Build CSR from collected edges
-    pub fn build_csr(
-        edges: Vec<(u32, Nbr)>,
-        vertex_capacity: usize,
-    ) -> StorageResult<Csr> {
+    pub fn build_csr(edges: Vec<(u32, Nbr)>, vertex_capacity: usize) -> StorageResult<Csr> {
         Ok(Csr::from_nbr_entries(&edges, vertex_capacity))
     }
 
@@ -182,7 +204,7 @@ mod tests {
             )],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
-        schema_version: 1,
+            schema_version: 1,
         };
         super::super::super::EdgeTable::new(schema).unwrap()
     }
@@ -194,8 +216,12 @@ mod tests {
         let ts1: Timestamp = 100;
         let ts2: Timestamp = 200;
 
-        table.insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], ts1).unwrap();
-        table.insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.5))], ts1).unwrap();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], ts1)
+            .unwrap();
+        table
+            .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.5))], ts1)
+            .unwrap();
 
         let snapshot = table.export_snapshot(ts1).unwrap();
         assert_eq!(snapshot.snapshot_ts, ts1);
@@ -204,7 +230,9 @@ mod tests {
         let out_edges = snapshot.out_csr.edges_of(0);
         assert_eq!(out_edges.len(), 2);
 
-        table.insert_edge(0, 3, 0, &[("weight".to_string(), Value::Double(3.5))], ts2).unwrap();
+        table
+            .insert_edge(0, 3, 0, &[("weight".to_string(), Value::Double(3.5))], ts2)
+            .unwrap();
 
         let snapshot_ts1 = table.export_snapshot(ts1).unwrap();
         assert_eq!(snapshot_ts1.out_csr.edges_of(0).len(), 2);
@@ -221,9 +249,15 @@ mod tests {
         let ts2: Timestamp = 100;
         let ts3: Timestamp = 150;
 
-        table.insert_edge(1, 2, 0, &[("weight".to_string(), Value::Double(1.0))], ts1).unwrap();
-        table.insert_edge(1, 3, 0, &[("weight".to_string(), Value::Double(2.0))], ts2).unwrap();
-        table.insert_edge(1, 4, 0, &[("weight".to_string(), Value::Double(3.0))], ts3).unwrap();
+        table
+            .insert_edge(1, 2, 0, &[("weight".to_string(), Value::Double(1.0))], ts1)
+            .unwrap();
+        table
+            .insert_edge(1, 3, 0, &[("weight".to_string(), Value::Double(2.0))], ts2)
+            .unwrap();
+        table
+            .insert_edge(1, 4, 0, &[("weight".to_string(), Value::Double(3.0))], ts3)
+            .unwrap();
 
         let snap_before_ts1 = table.export_snapshot(ts1 - 1).unwrap();
         assert_eq!(snap_before_ts1.out_csr.edges_of(1).len(), 0);
@@ -245,12 +279,18 @@ mod tests {
         let ts1: Timestamp = 100;
         let ts2: Timestamp = 200;
 
-        table.insert_edge(5, 10, 0, &[("weight".to_string(), Value::Double(1.0))], ts1).unwrap();
-        table.insert_edge(5, 11, 0, &[("weight".to_string(), Value::Double(2.0))], ts1).unwrap();
+        table
+            .insert_edge(5, 10, 0, &[("weight".to_string(), Value::Double(1.0))], ts1)
+            .unwrap();
+        table
+            .insert_edge(5, 11, 0, &[("weight".to_string(), Value::Double(2.0))], ts1)
+            .unwrap();
 
         table.freeze_csr_only(ts1);
 
-        table.insert_edge(5, 12, 0, &[("weight".to_string(), Value::Double(3.0))], ts2).unwrap();
+        table
+            .insert_edge(5, 12, 0, &[("weight".to_string(), Value::Double(3.0))], ts2)
+            .unwrap();
 
         let snapshot = table.export_snapshot(ts1).unwrap();
         assert_eq!(snapshot.out_csr.edges_of(5).len(), 2);
@@ -265,7 +305,9 @@ mod tests {
 
         let ts1: Timestamp = 100;
 
-        table.insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], ts1).unwrap();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], ts1)
+            .unwrap();
 
         let out_edges_before = table.out_edges(0, ts1);
         assert_eq!(out_edges_before.len(), 1);

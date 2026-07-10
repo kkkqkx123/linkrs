@@ -8,18 +8,19 @@ use super::executor::StreamingExecutor;
 use super::partition::PartitionView;
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
-use crate::core::types::operators::AggregateFunction;
+use crate::core::types::operators::{AggregateFunction, BinaryOperator};
 use crate::core::Value;
 use crate::query::executor::base::ExecutionContext;
-use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
-use crate::query::planning::plan::core::nodes::base::plan_node_traits::{MultipleInputNode, SingleInputNode};
-use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::query::parser::ast::fulltext::FulltextQueryExpr;
+use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
+use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
+use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
+    BinaryInputNode, JoinNode, MultipleInputNode, SingleInputNode,
+};
 use crate::query::planning::plan::core::nodes::management::manage_node_enums::{
     EdgeManageNode, FulltextManageNode, IndexManageNode, SpaceManageNode, TagManageNode,
     UserManageNode, VectorManageNode,
 };
-
 
 /// Builder for constructing StreamingExecutor instances
 pub struct StreamingExecutorBuilder {
@@ -59,44 +60,56 @@ impl StreamingExecutorBuilder {
             // ======== Scan Operations ========
             PlanNodeEnum::ScanVertices(scan_node) => {
                 let limit = scan_node.limit();
+                let mut buffer = if let Some(storage) = &context.storage {
+                    let reader = storage.read();
+                    reader
+                        .scan_vertices(&context.space_name.clone().unwrap_or_default())
+                        .map_err(|e| QueryError::execution(e.to_string()))?
+                        .into_iter()
+                        .map(|vertex| vec![Value::Vertex(Box::new(vertex))])
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                if let Some(limit_val) = limit {
+                    if limit_val >= 0 {
+                        buffer.truncate(limit_val as usize);
+                    }
+                }
                 let executor = StreamingExecutor::ScanVertices {
                     partition_id: 0,
-                    buffer: vec![],
+                    buffer,
                     current_index: 0,
                 };
 
-                // If limit is specified, wrap in Limit operator
-                if let Some(limit_val) = limit {
-                    Ok(StreamingExecutor::Limit {
-                        input: Box::new(executor),
-                        limit: limit_val as u32,
-                        consumed: 0,
-                        opened: false,
-                    })
-                } else {
-                    Ok(executor)
-                }
+                Ok(executor)
             }
 
             PlanNodeEnum::ScanEdges(scan_node) => {
                 let limit = scan_node.limit();
+                let mut buffer = if let Some(storage) = &context.storage {
+                    let reader = storage.read();
+                    reader
+                        .scan_all_edges(&context.space_name.clone().unwrap_or_default())
+                        .map_err(|e| QueryError::execution(e.to_string()))?
+                        .into_iter()
+                        .map(|edge| vec![Value::Edge(Box::new(edge))])
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                if let Some(limit_val) = limit {
+                    if limit_val >= 0 {
+                        buffer.truncate(limit_val as usize);
+                    }
+                }
                 let executor = StreamingExecutor::ScanEdges {
                     partition_id: 0,
-                    buffer: vec![],
+                    buffer,
                     current_index: 0,
                 };
 
-                // If limit is specified, wrap in Limit operator
-                if let Some(limit_val) = limit {
-                    Ok(StreamingExecutor::Limit {
-                        input: Box::new(executor),
-                        limit: limit_val as u32,
-                        consumed: 0,
-                        opened: false,
-                    })
-                } else {
-                    Ok(executor)
-                }
+                Ok(executor)
             }
 
             // ======== Filter Operation ========
@@ -168,12 +181,16 @@ impl StreamingExecutorBuilder {
                     .iter()
                     .map(|func| {
                         let expr = match func {
-                            AggregateFunction::Count(Some(field)) => Expression::Variable(field.clone()),
+                            AggregateFunction::Count(Some(field)) => {
+                                Expression::Variable(field.clone())
+                            }
                             AggregateFunction::Sum(field) => Expression::Variable(field.clone()),
                             AggregateFunction::Avg(field) => Expression::Variable(field.clone()),
                             AggregateFunction::Min(field) => Expression::Variable(field.clone()),
                             AggregateFunction::Max(field) => Expression::Variable(field.clone()),
-                            AggregateFunction::Collect(field) => Expression::Variable(field.clone()),
+                            AggregateFunction::Collect(field) => {
+                                Expression::Variable(field.clone())
+                            }
                             AggregateFunction::Count(None) => Expression::Literal(Value::Int(1)),
                             _ => Expression::Literal(Value::Int(1)),
                         };
@@ -198,16 +215,17 @@ impl StreamingExecutorBuilder {
                 let left_executor = Self::from_plan_node(left_plan, context)?;
                 let right_executor = Self::from_plan_node(right_plan, context)?;
 
-                // For joins, we use hash_keys and probe_keys instead of explicit conditions
-                // Create a simple condition from the first pair of keys if available
-                let condition = None; // Simplified: join conditions will be handled via hash/probe keys
+                let condition = Self::join_keys_to_condition(
+                    join_node.hash_keys(),
+                    join_node.probe_keys(),
+                    right_plan.col_names(),
+                )?;
 
-                Ok(StreamingExecutor::HashJoin {
+                Ok(StreamingExecutor::NestedLoopJoin {
                     left: Box::new(left_executor),
                     right: Box::new(right_executor),
                     join_condition: condition,
-                    build_side_hash: std::collections::HashMap::new(),
-                    all_right_rows: Vec::new(),
+                    build_side_tuples: vec![],
                     left_consumed: false,
                     opened: false,
                 })
@@ -219,10 +237,16 @@ impl StreamingExecutorBuilder {
                 let left_executor = Self::from_plan_node(left_plan, context)?;
                 let right_executor = Self::from_plan_node(right_plan, context)?;
 
+                let condition = Self::join_keys_to_condition(
+                    join_node.hash_keys(),
+                    join_node.probe_keys(),
+                    right_plan.col_names(),
+                )?;
+
                 Ok(StreamingExecutor::LeftJoin {
                     left: Box::new(left_executor),
                     right: Box::new(right_executor),
-                    join_condition: None,
+                    join_condition: condition,
                     build_side_tuples: vec![],
                     left_consumed: false,
                     opened: false,
@@ -396,12 +420,33 @@ impl StreamingExecutorBuilder {
             PlanNodeEnum::FulltextManage(manage_node) => {
                 let action = manage_node.name().to_string();
                 let index_name = Self::extract_fulltext_manage_name(manage_node);
+                use crate::query::planning::plan::core::nodes::management::manage_node_enums::FulltextManageNode::*;
+                let (tag_name, field_name, space_id) = match manage_node {
+                    Create(n) => (
+                        Some(n.schema_name.clone()),
+                        Some(
+                            n.fields
+                                .first()
+                                .map(|f| f.field_name.clone())
+                                .unwrap_or_default(),
+                        ),
+                        Some(n.space_id),
+                    ),
+                    _ => (None, None, None),
+                };
+                #[cfg(feature = "fulltext-search")]
+                let fulltext_manager = context.fulltext_manager.clone();
                 Ok(StreamingExecutor::FulltextManage {
                     input: Box::new(StreamingExecutor::Start { opened: false }),
                     storage: context.storage.clone(),
                     space_name: context.space_name.clone().unwrap_or_default(),
+                    space_id: space_id.unwrap_or(0),
                     action,
                     index_name,
+                    tag_name,
+                    field_name,
+                    #[cfg(feature = "fulltext-search")]
+                    fulltext_manager,
                     opened: false,
                 })
             }
@@ -409,23 +454,41 @@ impl StreamingExecutorBuilder {
             PlanNodeEnum::VectorManage(manage_node) => {
                 let action = manage_node.name().to_string();
                 let index_name = Self::extract_vector_manage_name(manage_node);
+                use crate::query::planning::plan::core::nodes::management::manage_node_enums::VectorManageNode::*;
+                let (tag_name, field_name, space_id) = match manage_node {
+                    Create(n) => (
+                        Some(n.tag_name.clone()),
+                        Some(n.field_name.clone()),
+                        Some(n.space_id),
+                    ),
+                    _ => (None, None, None),
+                };
                 Ok(StreamingExecutor::VectorManage {
                     input: Box::new(StreamingExecutor::Start { opened: false }),
                     storage: context.storage.clone(),
                     space_name: context.space_name.clone().unwrap_or_default(),
+                    space_id: space_id.unwrap_or(0),
                     action,
                     index_name,
+                    tag_name,
+                    field_name,
+                    #[cfg(feature = "qdrant")]
+                    vector_coordinator: context.vector_coordinator.clone(),
                     opened: false,
                 })
             }
 
             // ======== Graph Traversal Operations ========
             PlanNodeEnum::Expand(expand_node) => {
-                let input_plan = expand_node.inputs().first()
+                let input_plan = expand_node
+                    .inputs()
+                    .first()
                     .ok_or_else(|| QueryError::execution("Expand requires an input".to_string()))?;
                 let input_executor = Self::from_plan_node(input_plan, context)?;
 
-                let edge_type = expand_node.edge_types().first()
+                let edge_type = expand_node
+                    .edge_types()
+                    .first()
                     .cloned()
                     .unwrap_or_default();
                 let direction = format!("{:?}", expand_node.direction());
@@ -436,17 +499,23 @@ impl StreamingExecutorBuilder {
                     space_name: context.space_name.clone().unwrap_or_default(),
                     edge_type,
                     direction,
-                    filter_expr: None,
+                    filter_expr: expand_node
+                        .filter()
+                        .map(Self::contextual_to_expression)
+                        .transpose()?,
                     opened: false,
                 })
             }
 
             PlanNodeEnum::ExpandAll(expand_all_node) => {
-                let input_plan = expand_all_node.inputs().first()
-                    .ok_or_else(|| QueryError::execution("ExpandAll requires an input".to_string()))?;
+                let input_plan = expand_all_node.inputs().first().ok_or_else(|| {
+                    QueryError::execution("ExpandAll requires an input".to_string())
+                })?;
                 let input_executor = Self::from_plan_node(input_plan, context)?;
 
-                let edge_type = expand_all_node.edge_types().first()
+                let edge_type = expand_all_node
+                    .edge_types()
+                    .first()
                     .cloned()
                     .unwrap_or_default();
                 let direction = expand_all_node.direction().to_string();
@@ -457,7 +526,10 @@ impl StreamingExecutorBuilder {
                     space_name: context.space_name.clone().unwrap_or_default(),
                     edge_type,
                     direction,
-                    filter_expr: None,
+                    filter_expr: expand_all_node
+                        .filter()
+                        .map(Self::contextual_to_expression)
+                        .transpose()?,
                     opened: false,
                 })
             }
@@ -466,7 +538,9 @@ impl StreamingExecutorBuilder {
                 let input_plan = traverse_node.input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
 
-                let edge_type = traverse_node.edge_types().first()
+                let edge_type = traverse_node
+                    .edge_types()
+                    .first()
                     .cloned()
                     .unwrap_or_default();
                 let direction = format!("{:?}", traverse_node.direction());
@@ -481,7 +555,11 @@ impl StreamingExecutorBuilder {
                     direction,
                     min_depth,
                     max_depth,
-                    filter_expr: None,
+                    filter_expr: traverse_node
+                        .e_filter()
+                        .or_else(|| traverse_node.v_filter())
+                        .map(Self::contextual_to_expression)
+                        .transpose()?,
                     visited: std::collections::HashSet::new(),
                     opened: false,
                 })
@@ -489,11 +567,34 @@ impl StreamingExecutorBuilder {
 
             // ======== Data Modification Operations ========
             PlanNodeEnum::InsertVertices(insert_node) => {
+                let mut rows = Vec::new();
+                let mut vertex_properties =
+                    vec![("vid".to_string(), Expression::Variable("col_0".to_string()))];
+                let prop_names: Vec<String> = insert_node
+                    .tags()
+                    .iter()
+                    .flat_map(|tag| tag.prop_names.iter().cloned())
+                    .collect();
+                for (idx, prop_name) in prop_names.iter().enumerate() {
+                    vertex_properties.push((
+                        prop_name.clone(),
+                        Expression::Variable(format!("col_{}", idx + 1)),
+                    ));
+                }
+                for (vid_expr, tag_values) in insert_node.values() {
+                    let mut row = vec![Self::contextual_to_value(vid_expr)?];
+                    for values in tag_values {
+                        for value_expr in values {
+                            row.push(Self::contextual_to_value(value_expr)?);
+                        }
+                    }
+                    rows.push(row);
+                }
                 Ok(StreamingExecutor::InsertVertices {
-                    input: Box::new(StreamingExecutor::Start { opened: false }),
+                    input: Box::new(Self::build_simple_scan(rows)?),
                     storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    vertex_properties: Vec::new(),
+                    space_name: insert_node.space_name().to_string(),
+                    vertex_properties,
                     tags: insert_node.tag_names(),
                     rows_inserted: 0,
                     opened: false,
@@ -501,70 +602,144 @@ impl StreamingExecutorBuilder {
             }
 
             PlanNodeEnum::InsertEdges(insert_node) => {
+                let mut rows = Vec::new();
+                for (src, dst, rank, props) in insert_node.edges() {
+                    let mut row = vec![
+                        Self::contextual_to_value(src)?,
+                        Self::contextual_to_value(dst)?,
+                    ];
+                    row.push(match rank {
+                        Some(rank_expr) => Self::contextual_to_value(rank_expr)?,
+                        None => Value::BigInt(0),
+                    });
+                    for prop in props {
+                        row.push(Self::contextual_to_value(prop)?);
+                    }
+                    rows.push(row);
+                }
+                let edge_properties = insert_node
+                    .prop_names()
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, prop)| {
+                        (
+                            prop.clone(),
+                            Expression::Variable(format!("col_{}", idx + 3)),
+                        )
+                    })
+                    .collect();
                 Ok(StreamingExecutor::InsertEdges {
-                    input: Box::new(StreamingExecutor::Start { opened: false }),
+                    input: Box::new(Self::build_simple_scan(rows)?),
                     storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    src_col: "src".to_string(),
-                    dst_col: "dst".to_string(),
+                    space_name: insert_node.space_name().to_string(),
+                    src_col: "col_0".to_string(),
+                    dst_col: "col_1".to_string(),
                     edge_type: insert_node.edge_name().to_string(),
-                    edge_properties: Vec::new(),
+                    edge_properties,
                     rows_inserted: 0,
                     opened: false,
                 })
             }
 
-            PlanNodeEnum::UpdateVertices(_update_node) => {
+            PlanNodeEnum::UpdateVertices(update_node) => {
+                let mut rows = Vec::new();
+                let mut updates = Vec::new();
+                for update in update_node.updates() {
+                    rows.push(vec![Self::contextual_to_value(&update.vertex_id)?]);
+                    for (name, expr) in &update.properties {
+                        updates.push((name.clone(), Self::contextual_to_expression(expr)?));
+                    }
+                }
                 Ok(StreamingExecutor::UpdateVertices {
-                    input: Box::new(StreamingExecutor::Start { opened: false }),
+                    input: Box::new(Self::build_simple_scan(rows)?),
                     storage: context.storage.clone(),
                     space_name: context.space_name.clone().unwrap_or_default(),
-                    updates: Vec::new(),
+                    updates,
                     rows_updated: 0,
                     opened: false,
                 })
             }
 
-            PlanNodeEnum::Update(_update_node) => {
-                Ok(StreamingExecutor::UpdateVertices {
-                    input: Box::new(StreamingExecutor::Start { opened: false }),
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    updates: Vec::new(),
-                    rows_updated: 0,
-                    opened: false,
-                })
-            }
+            PlanNodeEnum::Update(_update_node) => Ok(StreamingExecutor::UpdateVertices {
+                input: Box::new(StreamingExecutor::Start { opened: false }),
+                storage: context.storage.clone(),
+                space_name: context.space_name.clone().unwrap_or_default(),
+                updates: Vec::new(),
+                rows_updated: 0,
+                opened: false,
+            }),
 
-            PlanNodeEnum::UpdateEdges(_update_node) => {
+            PlanNodeEnum::UpdateEdges(update_node) => {
+                let updates: Vec<(String, Expression)> = update_node
+                    .updates()
+                    .iter()
+                    .flat_map(|u| {
+                        u.properties
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone().into_expression()))
+                    })
+                    .collect();
+                let src_col = update_node
+                    .updates()
+                    .first()
+                    .and_then(|u| u.src.as_variable())
+                    .unwrap_or_else(|| "src".to_string());
+                let dst_col = update_node
+                    .updates()
+                    .first()
+                    .and_then(|u| u.dst.as_variable())
+                    .unwrap_or_else(|| "dst".to_string());
+                let edge_type = update_node
+                    .updates()
+                    .first()
+                    .and_then(|u| u.edge_type.clone())
+                    .unwrap_or_default();
                 Ok(StreamingExecutor::UpdateEdges {
                     input: Box::new(StreamingExecutor::Start { opened: false }),
                     storage: context.storage.clone(),
                     space_name: context.space_name.clone().unwrap_or_default(),
-                    updates: Vec::new(),
+                    src_col,
+                    dst_col,
+                    edge_type,
+                    updates,
                     rows_updated: 0,
                     opened: false,
                 })
             }
 
-            PlanNodeEnum::DeleteVertices(_delete_node) => {
+            PlanNodeEnum::DeleteVertices(delete_node) => {
+                let rows = delete_node
+                    .vertex_ids()
+                    .iter()
+                    .map(|id| Self::contextual_to_value(id).map(|value| vec![value]))
+                    .collect::<Result<Vec<_>, _>>()?;
                 Ok(StreamingExecutor::DeleteVertices {
-                    input: Box::new(StreamingExecutor::Start { opened: false }),
+                    input: Box::new(Self::build_simple_scan(rows)?),
                     storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    vertex_id_col: "vid".to_string(),
+                    space_name: delete_node.space_name().to_string(),
+                    vertex_id_col: "col_0".to_string(),
                     rows_deleted: 0,
                     opened: false,
                 })
             }
 
-            PlanNodeEnum::DeleteEdges(_delete_node) => {
+            PlanNodeEnum::DeleteEdges(delete_node) => {
+                let rows = delete_node
+                    .edges()
+                    .iter()
+                    .map(|(src, dst, _rank)| {
+                        Ok(vec![
+                            Self::contextual_to_value(src)?,
+                            Self::contextual_to_value(dst)?,
+                        ])
+                    })
+                    .collect::<Result<Vec<_>, QueryError>>()?;
                 Ok(StreamingExecutor::DeleteEdges {
-                    input: Box::new(StreamingExecutor::Start { opened: false }),
+                    input: Box::new(Self::build_simple_scan(rows)?),
                     storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    src_col: "src".to_string(),
-                    dst_col: "dst".to_string(),
+                    space_name: delete_node.space_name().to_string(),
+                    src_col: "col_0".to_string(),
+                    dst_col: "col_1".to_string(),
                     rows_deleted: 0,
                     opened: false,
                 })
@@ -598,35 +773,29 @@ impl StreamingExecutorBuilder {
             }
 
             // ======== Data Access Operations ========
-            PlanNodeEnum::GetVertices(_get_node) => {
-                Ok(StreamingExecutor::GetVertices {
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    vertex_ids: None,
-                    opened: false,
-                })
-            }
+            PlanNodeEnum::GetVertices(_get_node) => Ok(StreamingExecutor::GetVertices {
+                storage: context.storage.clone(),
+                space_name: context.space_name.clone().unwrap_or_default(),
+                vertex_ids: None,
+                opened: false,
+            }),
 
-            PlanNodeEnum::GetEdges(_get_node) => {
-                Ok(StreamingExecutor::GetEdges {
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    edge_type: None,
-                    src: None,
-                    dst: None,
-                    rank: 0,
-                    opened: false,
-                })
-            }
+            PlanNodeEnum::GetEdges(_get_node) => Ok(StreamingExecutor::GetEdges {
+                storage: context.storage.clone(),
+                space_name: context.space_name.clone().unwrap_or_default(),
+                edge_type: None,
+                src: None,
+                dst: None,
+                rank: 0,
+                opened: false,
+            }),
 
-            PlanNodeEnum::GetNeighbors(_get_node) => {
-                Ok(StreamingExecutor::GetNeighbors {
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    direction: "both".to_string(),
-                    opened: false,
-                })
-            }
+            PlanNodeEnum::GetNeighbors(_get_node) => Ok(StreamingExecutor::GetNeighbors {
+                storage: context.storage.clone(),
+                space_name: context.space_name.clone().unwrap_or_default(),
+                direction: "both".to_string(),
+                opened: false,
+            }),
 
             // ======== Search Operations ========
             PlanNodeEnum::FulltextSearch(search_node) => {
@@ -693,37 +862,40 @@ impl StreamingExecutorBuilder {
                     input: Box::new(StreamingExecutor::Start { opened: false }),
                     storage: context.storage.clone(),
                     space_name: context.space_name.clone().unwrap_or_default(),
+                    space_id: search_node.space_id,
                     index_name: search_node.index_name.clone(),
                     query_vector: query_vec,
                     top_k: search_node.limit as u32,
                     tag_name: search_node.tag_name.clone(),
                     field_name: search_node.field_name.clone(),
+                    vector_coordinator: context.vector_coordinator.clone(),
                     opened: false,
                 })
             }
 
             #[cfg(feature = "qdrant")]
-            PlanNodeEnum::VectorLookup(lookup_node) => {
-                Ok(StreamingExecutor::VectorLookup {
-                    input: Box::new(StreamingExecutor::Start { opened: false }),
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    index_name: lookup_node.index_name.clone(),
-                    lookup_key: Expression::Literal(Value::String(lookup_node.query.query_data.clone())),
-                    opened: false,
-                })
-            }
+            PlanNodeEnum::VectorLookup(lookup_node) => Ok(StreamingExecutor::VectorLookup {
+                input: Box::new(StreamingExecutor::Start { opened: false }),
+                storage: context.storage.clone(),
+                space_name: context.space_name.clone().unwrap_or_default(),
+                index_name: lookup_node.index_name.clone(),
+                lookup_key: Expression::Literal(Value::String(
+                    lookup_node.query.query_data.clone(),
+                )),
+                vector_coordinator: context.vector_coordinator.clone(),
+                opened: false,
+            }),
 
             PlanNodeEnum::Window(window_node) => {
                 let input_plan = window_node.input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
                 let window_functions = window_node.window_functions();
-                
+
                 let mut window_exprs = Vec::new();
                 let mut partition_by_exprs = Vec::new();
                 let mut order_by_exprs = Vec::new();
                 let mut order_by_directions = Vec::new();
-                
+
                 for wf in window_functions {
                     let window_expr = Expression::WindowFunction {
                         name: wf.name.clone(),
@@ -733,22 +905,26 @@ impl StreamingExecutorBuilder {
                         over_order_desc: wf.order_desc.clone(),
                     };
                     window_exprs.push(window_expr);
-                    
+
                     if partition_by_exprs.is_empty() {
                         partition_by_exprs = wf.partition_by.clone();
                     }
                     if order_by_exprs.is_empty() {
                         order_by_exprs = wf.order_by.clone();
-                        order_by_directions = wf.order_desc.iter().map(|&desc| {
-                            if desc {
-                                super::executor::SortDirection::Descending
-                            } else {
-                                super::executor::SortDirection::Ascending
-                            }
-                        }).collect();
+                        order_by_directions = wf
+                            .order_desc
+                            .iter()
+                            .map(|&desc| {
+                                if desc {
+                                    super::executor::SortDirection::Descending
+                                } else {
+                                    super::executor::SortDirection::Ascending
+                                }
+                            })
+                            .collect();
                     }
                 }
-                
+
                 Ok(StreamingExecutor::WindowFunction {
                     input: Box::new(input_executor),
                     window_exprs,
@@ -765,8 +941,9 @@ impl StreamingExecutorBuilder {
                 let input_plan = remove_node.input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
                 let remove_items = remove_node.remove_items();
-                let columns_to_remove: Vec<String> = remove_items.iter().map(|(col, _)| col.clone()).collect();
-                
+                let columns_to_remove: Vec<String> =
+                    remove_items.iter().map(|(col, _)| col.clone()).collect();
+
                 Ok(StreamingExecutor::Remove {
                     input: Box::new(input_executor),
                     columns_to_remove,
@@ -777,16 +954,20 @@ impl StreamingExecutorBuilder {
             PlanNodeEnum::DeleteTags(delete_tags_node) => {
                 let space_name = delete_tags_node.space_name().to_string();
                 let tag_names = delete_tags_node.tag_names().to_vec();
-                let vertex_ids: Vec<Value> = delete_tags_node.vertex_ids().iter().filter_map(|expr| {
-                    expr.get_expression().and_then(|e| {
-                        if let Expression::Literal(v) = e {
-                            Some(v.clone())
-                        } else {
-                            None
-                        }
+                let vertex_ids: Vec<Value> = delete_tags_node
+                    .vertex_ids()
+                    .iter()
+                    .filter_map(|expr| {
+                        expr.get_expression().and_then(|e| {
+                            if let Expression::Literal(v) = e {
+                                Some(v.clone())
+                            } else {
+                                None
+                            }
+                        })
                     })
-                }).collect();
-                
+                    .collect();
+
                 Ok(StreamingExecutor::DeleteTags {
                     input: Box::new(StreamingExecutor::Start { opened: false }),
                     storage: context.storage.clone(),
@@ -812,22 +993,468 @@ impl StreamingExecutorBuilder {
                     tag_name: match_node.tag_name.clone(),
                     field_name: match_node.field_name.clone(),
                     space_id: match_node.space_id,
+                    vector_coordinator: context.vector_coordinator.clone(),
                     opened: false,
                 })
             }
 
-            PlanNodeEnum::Commit(_) => {
-                Ok(StreamingExecutor::Commit {
-                    input: Box::new(StreamingExecutor::Start { opened: false }),
-                    transaction_id: None,
+            PlanNodeEnum::Commit(_) => Ok(StreamingExecutor::Commit {
+                input: Box::new(StreamingExecutor::Start { opened: false }),
+                transaction_id: None,
+                opened: false,
+            }),
+
+            PlanNodeEnum::Rollback(_) => Ok(StreamingExecutor::Rollback {
+                input: Box::new(StreamingExecutor::Start { opened: false }),
+                transaction_id: None,
+                opened: false,
+            }),
+
+            // ======== Start / Argument (leaf nodes) ========
+            PlanNodeEnum::Start(_) => Ok(StreamingExecutor::Start { opened: false }),
+
+            PlanNodeEnum::Argument(_) => Ok(StreamingExecutor::Argument { opened: false }),
+
+            // ======== Index & EdgeIndex Scan ========
+            PlanNodeEnum::EdgeIndexScan(scan_node) => Ok(StreamingExecutor::EdgeIndexScan {
+                storage: context.storage.clone(),
+                space_name: context.space_name.clone().unwrap_or_default(),
+                edge_type: Some(scan_node.edge_type().to_string()),
+                opened: false,
+            }),
+
+            PlanNodeEnum::IndexScan(scan_node) => Ok(StreamingExecutor::IndexScan {
+                storage: context.storage.clone(),
+                space_name: context.space_name.clone().unwrap_or_default(),
+                index_name: Some(scan_node.index_name().to_string()),
+                index_value: None,
+                opened: false,
+            }),
+
+            // ======== Sample ========
+            PlanNodeEnum::Sample(sample_node) => {
+                let input_plan = sample_node.input();
+                let input_executor = Self::from_plan_node(input_plan, context)?;
+                Ok(StreamingExecutor::Sample { opened: false })
+            }
+
+            // ======== TopN ========
+            PlanNodeEnum::TopN(topn_node) => {
+                let input_plan = topn_node.input();
+                let input_executor = Self::from_plan_node(input_plan, context)?;
+                let sort_items = topn_node.sort_items();
+                let (sort_expressions, sort_directions) =
+                    Self::sort_items_to_expressions(sort_items)?;
+                Ok(StreamingExecutor::TopN {
+                    input: Box::new(input_executor),
+                    n: topn_node.limit() as u32,
+                    sort_expressions,
+                    sort_directions,
+                    all_rows: vec![],
+                    result_iter: None,
                     opened: false,
                 })
             }
 
-            PlanNodeEnum::Rollback(_) => {
-                Ok(StreamingExecutor::Rollback {
+            // ======== RightJoin ========
+            PlanNodeEnum::RightJoin(join_node) => {
+                let left_plan = join_node.left_input();
+                let right_plan = join_node.right_input();
+                let left_executor = Self::from_plan_node(left_plan, context)?;
+                let right_executor = Self::from_plan_node(right_plan, context)?;
+                let condition = Self::join_keys_to_condition(
+                    join_node.hash_keys(),
+                    join_node.probe_keys(),
+                    right_plan.col_names(),
+                )?;
+                Ok(StreamingExecutor::RightJoin {
+                    left: Box::new(left_executor),
+                    right: Box::new(right_executor),
+                    join_condition: condition,
+                    build_side_tuples: vec![],
+                    right_consumed: false,
+                    opened: false,
+                })
+            }
+
+            // ======== FullOuterJoin ========
+            PlanNodeEnum::FullOuterJoin(join_node) => {
+                let left_plan = join_node.left_input();
+                let right_plan = join_node.right_input();
+                let left_executor = Self::from_plan_node(left_plan, context)?;
+                let right_executor = Self::from_plan_node(right_plan, context)?;
+                let condition = Self::join_keys_to_condition(
+                    join_node.hash_keys(),
+                    join_node.probe_keys(),
+                    right_plan.col_names(),
+                )?;
+                Ok(StreamingExecutor::FullOuterJoin {
+                    left: Box::new(left_executor),
+                    right: Box::new(right_executor),
+                    join_condition: condition,
+                    left_rows: vec![],
+                    right_rows: vec![],
+                    matched_right_indices: std::collections::HashSet::new(),
+                    result_iter: None,
+                    phase: super::executor::FullOuterJoinPhase::BuildingRight,
+                    opened: false,
+                })
+            }
+
+            // ======== SemiJoin ========
+            PlanNodeEnum::SemiJoin(join_node) => {
+                let left_plan = join_node.left_input();
+                let right_plan = join_node.right_input();
+                let left_executor = Self::from_plan_node(left_plan, context)?;
+                let right_executor = Self::from_plan_node(right_plan, context)?;
+                let condition = Self::join_keys_to_condition(
+                    join_node.hash_keys(),
+                    join_node.probe_keys(),
+                    right_plan.col_names(),
+                )?;
+                Ok(StreamingExecutor::SemiJoin {
+                    left: Box::new(left_executor),
+                    right: Box::new(right_executor),
+                    join_condition: condition,
+                    right_rows: vec![],
+                    right_consumed: false,
+                    opened: false,
+                })
+            }
+
+            // ======== HashInnerJoin (maps to HashJoin) ========
+            PlanNodeEnum::HashInnerJoin(join_node) => {
+                let left_plan = join_node.left_input();
+                let right_plan = join_node.right_input();
+                let left_executor = Self::from_plan_node(left_plan, context)?;
+                let right_executor = Self::from_plan_node(right_plan, context)?;
+                let condition = Self::join_keys_to_condition(
+                    join_node.hash_keys(),
+                    join_node.probe_keys(),
+                    right_plan.col_names(),
+                )?;
+                Ok(StreamingExecutor::NestedLoopJoin {
+                    left: Box::new(left_executor),
+                    right: Box::new(right_executor),
+                    join_condition: condition,
+                    build_side_tuples: vec![],
+                    left_consumed: false,
+                    opened: false,
+                })
+            }
+
+            // ======== HashLeftJoin (maps to LeftJoin) ========
+            PlanNodeEnum::HashLeftJoin(join_node) => {
+                let left_plan = join_node.left_input();
+                let right_plan = join_node.right_input();
+                let left_executor = Self::from_plan_node(left_plan, context)?;
+                let right_executor = Self::from_plan_node(right_plan, context)?;
+                let condition = Self::join_keys_to_condition(
+                    join_node.hash_keys(),
+                    join_node.probe_keys(),
+                    right_plan.col_names(),
+                )?;
+                Ok(StreamingExecutor::LeftJoin {
+                    left: Box::new(left_executor),
+                    right: Box::new(right_executor),
+                    join_condition: condition,
+                    build_side_tuples: vec![],
+                    left_consumed: false,
+                    opened: false,
+                })
+            }
+
+            // ======== AppendVertices ========
+            PlanNodeEnum::AppendVertices(node) => {
+                let input_plan = node.inputs().first().ok_or_else(|| {
+                    QueryError::execution("AppendVertices requires an input".to_string())
+                })?;
+                let input_executor = Self::from_plan_node(input_plan, context)?;
+                let vertex_properties: Vec<(String, Expression)> = node
+                    .vertex_props()
+                    .iter()
+                    .flat_map(|p| {
+                        let tag = p.tag.clone();
+                        let props = p.props.clone();
+                        props.into_iter().map(move |prop_name| {
+                            (
+                                prop_name.clone(),
+                                Expression::Variable(format!("{}.{}", tag, prop_name)),
+                            )
+                        })
+                    })
+                    .collect();
+                Ok(StreamingExecutor::AppendVertices {
+                    input: Box::new(input_executor),
+                    vertex_properties,
+                    opened: false,
+                })
+            }
+
+            // ======== BiExpand ========
+            PlanNodeEnum::BiExpand(node) => {
+                let left_plan = node.left_input();
+                let right_plan = node.right_input();
+                let left_executor = Self::from_plan_node(left_plan, context)?;
+                let right_executor = Self::from_plan_node(right_plan, context)?;
+                let edge_type = node.edge_types().first().cloned().unwrap_or_default();
+                Ok(StreamingExecutor::BiExpand {
+                    input: Box::new(left_executor),
+                    storage: context.storage.clone(),
+                    space_name: context.space_name.clone().unwrap_or_default(),
+                    edge_type,
+                    opened: false,
+                })
+            }
+
+            // ======== BiTraverse ========
+            PlanNodeEnum::BiTraverse(node) => {
+                let input_plan = node.left_input();
+                let input_executor = Self::from_plan_node(input_plan, context)?;
+                let edge_type = node.edge_types().first().cloned().unwrap_or_default();
+                Ok(StreamingExecutor::BiTraverse {
+                    input: Box::new(input_executor),
+                    storage: context.storage.clone(),
+                    space_name: context.space_name.clone().unwrap_or_default(),
+                    edge_type,
+                    min_depth: node.min_hops() as u32,
+                    max_depth: node.max_hops() as u32,
+                    visited: std::collections::HashSet::new(),
+                    opened: false,
+                })
+            }
+
+            // ======== ShortestPath ========
+            PlanNodeEnum::ShortestPath(node) => {
+                let input_plan = node.left_input();
+                let input_executor = Self::from_plan_node(input_plan, context)?;
+                let edge_type = node.edge_types().first().cloned().unwrap_or_default();
+                Ok(StreamingExecutor::ShortestPath {
+                    input: Box::new(input_executor),
+                    storage: context.storage.clone(),
+                    space_name: context.space_name.clone().unwrap_or_default(),
+                    target_vertex: None,
+                    edge_type,
+                    direction: "both".to_string(),
+                    opened: false,
+                })
+            }
+
+            // ======== BFSShortest ========
+            PlanNodeEnum::BFSShortest(node) => {
+                let input_plan = node.left_input();
+                let input_executor = Self::from_plan_node(input_plan, context)?;
+                let edge_type = node.edge_types().first().cloned().unwrap_or_default();
+                Ok(StreamingExecutor::BFSShortest {
+                    input: Box::new(input_executor),
+                    storage: context.storage.clone(),
+                    space_name: context.space_name.clone().unwrap_or_default(),
+                    target_vertex: None,
+                    edge_type,
+                    direction: "both".to_string(),
+                    frontier: vec![],
+                    visited: std::collections::HashSet::new(),
+                    opened: false,
+                })
+            }
+
+            // ======== AllPaths ========
+            PlanNodeEnum::AllPaths(node) => {
+                let input_plan = node.left_input();
+                let input_executor = Self::from_plan_node(input_plan, context)?;
+                let edge_type = node.edge_types().first().cloned().unwrap_or_default();
+                Ok(StreamingExecutor::AllPaths {
+                    input: Box::new(input_executor),
+                    storage: context.storage.clone(),
+                    space_name: context.space_name.clone().unwrap_or_default(),
+                    target_vertex: None,
+                    edge_type,
+                    direction: "both".to_string(),
+                    all_paths: vec![],
+                    result_iter: None,
+                    opened: false,
+                })
+            }
+
+            // ======== MultiShortestPath ========
+            PlanNodeEnum::MultiShortestPath(node) => {
+                let input_plan = node.left_input();
+                let input_executor = Self::from_plan_node(input_plan, context)?;
+                Ok(StreamingExecutor::MultiShortestPath {
+                    input: Box::new(input_executor),
+                    storage: context.storage.clone(),
+                    space_name: context.space_name.clone().unwrap_or_default(),
+                    target_vertices: vec![],
+                    edge_type: String::new(),
+                    direction: "both".to_string(),
+                    all_paths: vec![],
+                    result_iter: None,
+                    opened: false,
+                })
+            }
+
+            // ======== DataCollect ========
+            PlanNodeEnum::DataCollect(node) => {
+                let input_plan = node.input();
+                let input_executor = Self::from_plan_node(input_plan, context)?;
+                Ok(StreamingExecutor::DataCollect {
+                    input: Box::new(input_executor),
+                    all_rows: vec![],
+                    emitted: false,
+                    opened: false,
+                })
+            }
+
+            // ======== Unwind ========
+            PlanNodeEnum::Unwind(node) => {
+                let input_plan = node.input();
+                let input_executor = Self::from_plan_node(input_plan, context)?;
+                Ok(StreamingExecutor::Unwind {
+                    input: Box::new(input_executor),
+                    unwind_column: node.alias().to_string(),
+                    col_index: None,
+                    all_rows: vec![],
+                    current_row_index: 0,
+                    current_unwind_index: 0,
+                    opened: false,
+                })
+            }
+
+            // ======== Materialize ========
+            PlanNodeEnum::Materialize(node) => {
+                let input_plan = node.input();
+                let input_executor = Self::from_plan_node(input_plan, context)?;
+                Ok(StreamingExecutor::Materialize {
+                    input: Box::new(input_executor),
+                    materialized_rows: vec![],
+                    result_iter: None,
+                    materialized: false,
+                    opened: false,
+                })
+            }
+
+            // ======== Assign ========
+            PlanNodeEnum::Assign(node) => {
+                let input_plan = node.input();
+                let input_executor = Self::from_plan_node(input_plan, context)?;
+                let assignments: Vec<(String, Expression)> = node
+                    .assignments()
+                    .iter()
+                    .filter_map(|(name, expr)| expr.get_expression().map(|e| (name.clone(), e)))
+                    .collect();
+                Ok(StreamingExecutor::Assign {
+                    input: Box::new(input_executor),
+                    assignments,
+                    opened: false,
+                })
+            }
+
+            // ======== Apply ========
+            PlanNodeEnum::Apply(node) => {
+                let left_plan = node.left_input();
+                let right_plan = node.right_input();
+                let left_executor = Self::from_plan_node(left_plan, context)?;
+                Ok(StreamingExecutor::Apply {
+                    input: Box::new(left_executor),
+                    apply_expression: Expression::Literal(Value::String(format!(
+                        "{:?}",
+                        node.apply_kind()
+                    ))),
+                    opened: false,
+                })
+            }
+
+            // ======== PatternApply ========
+            PlanNodeEnum::PatternApply(node) => {
+                let input_plan = node.left_input();
+                let input_executor = Self::from_plan_node(input_plan, context)?;
+                Ok(StreamingExecutor::PatternApply {
+                    input: Box::new(input_executor),
+                    pattern: Expression::Literal(Value::Null(crate::core::NullType::Null)),
+                    all_rows: vec![],
+                    result_iter: None,
+                    opened: false,
+                })
+            }
+
+            // ======== RollUpApply ========
+            PlanNodeEnum::RollUpApply(node) => {
+                let input_plan = node.left_input();
+                let input_executor = Self::from_plan_node(input_plan, context)?;
+                let rollup_expressions: Vec<Expression> = node
+                    .compare_cols()
+                    .iter()
+                    .map(|c| Expression::Variable(c.clone()))
+                    .collect();
+                Ok(StreamingExecutor::RollUpApply {
+                    input: Box::new(input_executor),
+                    rollup_expressions,
+                    all_rows: vec![],
+                    result_iter: None,
+                    opened: false,
+                })
+            }
+
+            // ======== Loop ========
+            PlanNodeEnum::Loop(node) => {
+                let body_executor = if let Some(body) = node.body() {
+                    Self::from_plan_node(body, context)?
+                } else {
+                    StreamingExecutor::Start { opened: false }
+                };
+                Ok(StreamingExecutor::Loop {
+                    input: Box::new(body_executor),
+                    condition: Some(format!("{:?}", node.condition())),
+                    opened: false,
+                })
+            }
+
+            // ======== PassThrough ========
+            PlanNodeEnum::PassThrough(_) => Ok(StreamingExecutor::PassThrough {
+                input: Box::new(StreamingExecutor::Start { opened: false }),
+                opened: false,
+            }),
+
+            // ======== Select ========
+            PlanNodeEnum::Select(node) => {
+                let branch_executor = if let Some(if_branch) = node.if_branch() {
+                    Self::from_plan_node(if_branch, context)?
+                } else if let Some(else_branch) = node.else_branch() {
+                    Self::from_plan_node(else_branch, context)?
+                } else {
+                    StreamingExecutor::Start { opened: false }
+                };
+                Ok(StreamingExecutor::Select {
+                    input: Box::new(branch_executor),
+                    selection_expr: None,
+                    opened: false,
+                })
+            }
+
+            // ======== BeginTransaction ========
+            PlanNodeEnum::BeginTransaction(_) => Ok(StreamingExecutor::BeginTransaction {
+                input: Box::new(StreamingExecutor::Start { opened: false }),
+                transaction_id: None,
+                opened: false,
+            }),
+
+            // ======== ShowStats ========
+            PlanNodeEnum::ShowStats(_) => Ok(StreamingExecutor::ShowStats {
+                input: Box::new(StreamingExecutor::Start { opened: false }),
+                storage: context.storage.clone(),
+                space_name: context.space_name.clone().unwrap_or_default(),
+                opened: false,
+            }),
+
+            // ======== DeleteIndex (map to IndexManage for backward compat) ========
+            PlanNodeEnum::DeleteIndex(node) => {
+                let info = node.info();
+                Ok(StreamingExecutor::IndexManage {
                     input: Box::new(StreamingExecutor::Start { opened: false }),
-                    transaction_id: None,
+                    storage: context.storage.clone(),
+                    space_name: info.space_name.clone(),
+                    action: "drop_tag_index".to_string(),
+                    index_name: Some(info.index_name.clone()),
                     opened: false,
                 })
             }
@@ -836,7 +1463,7 @@ impl StreamingExecutorBuilder {
                 // Unsupported node types for streaming execution
                 Err(QueryError::execution(format!(
                     "Plan node type '{}' not yet supported in streaming executor",
-                    node.name()
+                    node.type_name()
                 )))
             }
         }
@@ -954,7 +1581,11 @@ impl StreamingExecutorBuilder {
                 }
             }
             FulltextQueryExpr::Wildcard(text) => text.clone(),
-            FulltextQueryExpr::Boolean { must, should, must_not } => {
+            FulltextQueryExpr::Boolean {
+                must,
+                should,
+                must_not,
+            } => {
                 let mut parts = Vec::new();
                 for e in must {
                     parts.push(format!("+({})", Self::fulltext_query_to_string(e)));
@@ -972,18 +1603,29 @@ impl StreamingExecutorBuilder {
                 .map(|(f, t)| format!("{}:{}", f, t))
                 .collect::<Vec<_>>()
                 .join(" OR "),
-            FulltextQueryExpr::Range { field, lower, upper, include_lower, include_upper } => {
+            FulltextQueryExpr::Range {
+                field,
+                lower,
+                upper,
+                include_lower,
+                include_upper,
+            } => {
                 let lower_bound = if *include_lower { "[" } else { "{" };
                 let upper_bound = if *include_upper { "]" } else { "}" };
                 let lower_val = lower.as_deref().unwrap_or("*");
                 let upper_val = upper.as_deref().unwrap_or("*");
-                format!("{}:{}{} TO {}{}", field, lower_bound, lower_val, upper_val, upper_bound)
+                format!(
+                    "{}:{}{} TO {}{}",
+                    field, lower_bound, lower_val, upper_val, upper_bound
+                )
             }
         }
     }
 
     /// Convert FulltextMatchCondition to a simple string
-    fn fulltext_match_to_string(condition: &crate::query::parser::ast::fulltext::FulltextMatchCondition) -> String {
+    fn fulltext_match_to_string(
+        condition: &crate::query::parser::ast::fulltext::FulltextMatchCondition,
+    ) -> String {
         format!("{}:{}", condition.field, condition.query)
     }
 
@@ -1005,8 +1647,88 @@ impl StreamingExecutorBuilder {
         expr: &crate::core::types::expr::ContextualExpression,
     ) -> Result<Expression, QueryError> {
         // Extract the underlying expression from ContextualExpression
-        expr.get_expression()
-            .ok_or_else(|| QueryError::execution("Failed to get expression from ContextualExpression".to_string()))
+        expr.get_expression().ok_or_else(|| {
+            QueryError::execution("Failed to get expression from ContextualExpression".to_string())
+        })
+    }
+
+    fn contextual_to_value(
+        expr: &crate::core::types::expr::ContextualExpression,
+    ) -> Result<Value, QueryError> {
+        if let Some(value) = expr.constant_value() {
+            return Ok(value);
+        }
+
+        match Self::contextual_to_expression(expr)? {
+            Expression::Literal(value) => Ok(value),
+            other => Err(QueryError::execution(format!(
+                "Standalone data modification requires constant values, got {:?}",
+                other
+            ))),
+        }
+    }
+
+    fn join_keys_to_condition(
+        hash_keys: &[crate::core::types::expr::ContextualExpression],
+        probe_keys: &[crate::core::types::expr::ContextualExpression],
+        right_col_names: &[String],
+    ) -> Result<Option<Expression>, QueryError> {
+        if hash_keys.is_empty() && probe_keys.is_empty() {
+            return Ok(None);
+        }
+        if hash_keys.len() != probe_keys.len() {
+            return Err(QueryError::execution(format!(
+                "Join key count mismatch: {} hash keys vs {} probe keys",
+                hash_keys.len(),
+                probe_keys.len()
+            )));
+        }
+
+        let mut condition = None;
+        for (hash_key, probe_key) in hash_keys.iter().zip(probe_keys.iter()) {
+            let left = Self::contextual_to_expression(hash_key)?;
+            let right = Self::rewrite_right_join_expr(
+                Self::contextual_to_expression(probe_key)?,
+                right_col_names,
+            );
+            let equality = Expression::Binary {
+                left: Box::new(left),
+                op: BinaryOperator::Equal,
+                right: Box::new(right),
+            };
+            condition = Some(match condition {
+                Some(existing) => Expression::Binary {
+                    left: Box::new(existing),
+                    op: BinaryOperator::And,
+                    right: Box::new(equality),
+                },
+                None => equality,
+            });
+        }
+
+        Ok(condition)
+    }
+
+    fn rewrite_right_join_expr(expr: Expression, right_col_names: &[String]) -> Expression {
+        match expr {
+            Expression::Variable(name) => {
+                if let Some(index) = right_col_names.iter().position(|col| col == &name) {
+                    Expression::Variable(format!("right_{}", index))
+                } else {
+                    Expression::Variable(name)
+                }
+            }
+            Expression::Binary { left, op, right } => Expression::Binary {
+                left: Box::new(Self::rewrite_right_join_expr(*left, right_col_names)),
+                op,
+                right: Box::new(Self::rewrite_right_join_expr(*right, right_col_names)),
+            },
+            Expression::Unary { op, operand } => Expression::Unary {
+                op,
+                operand: Box::new(Self::rewrite_right_join_expr(*operand, right_col_names)),
+            },
+            other => other,
+        }
     }
 
     /// Helper: Convert YieldColumn to Expressions

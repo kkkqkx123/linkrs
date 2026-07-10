@@ -16,7 +16,7 @@ pub use import::{
 };
 pub use json::{JsonExporter, JsonImporter};
 pub use progress::ProgressBar;
-pub use schema_io::{SchemaExportFormat, SchemaIoConfig, SchemaExporter, SchemaImporter};
+pub use schema_io::{SchemaExportFormat, SchemaExporter, SchemaImporter, SchemaIoConfig};
 pub use space_export::{SpaceExportConfig, SpaceExportStats, SpaceExporter};
 pub use streaming::{ExportStream, StreamingExport};
 

@@ -1,11 +1,11 @@
 //! HTTP handler for data export operations
 
+use axum::body::Body;
+use axum::http::{header, StatusCode};
 use axum::{
     extract::{Query, State},
     response::Response,
 };
-use axum::body::Body;
-use axum::http::{header, StatusCode};
 use serde::Deserialize;
 
 use crate::api::server::http::{error::HttpError, state::AppState};
@@ -49,7 +49,8 @@ pub async fn export_data<
             "message": "Export endpoint - implementation pending storage integration",
             "space": params.space,
             "query": params.query,
-        }).to_string(),
+        })
+        .to_string(),
         "jsonl" => "{\"status\":\"ok\"}\n".to_string(),
         _ => "status\nok\n".to_string(),
     };

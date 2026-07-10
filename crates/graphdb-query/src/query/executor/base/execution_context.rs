@@ -7,11 +7,13 @@ use crate::core::Value;
 use crate::query::executor::expression::functions::global_registry_ref;
 use crate::query::executor::expression::functions::OwnedFunctionRef;
 use crate::query::validator::context::ExpressionAnalysisContext;
-use crate::storage::StorageClient;
 #[cfg(feature = "fulltext-search")]
 use crate::search::manager::FulltextIndexManager;
 #[cfg(feature = "fulltext-search")]
 use crate::search::tantivy_index::TantivySearchEngine;
+use crate::storage::StorageClient;
+#[cfg(feature = "qdrant")]
+use crate::sync::VectorSyncCoordinator;
 
 #[derive(Debug, Clone)]
 pub struct ExecutionContext {
@@ -22,6 +24,8 @@ pub struct ExecutionContext {
     pub search_engine: Option<Arc<TantivySearchEngine>>,
     #[cfg(feature = "fulltext-search")]
     pub fulltext_manager: Option<Arc<FulltextIndexManager>>,
+    #[cfg(feature = "qdrant")]
+    pub vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     pub storage: Option<Arc<RwLock<dyn StorageClient>>>,
     pub space_name: Option<String>,
     pub parameters: Arc<HashMap<String, crate::core::Value>>,
@@ -37,6 +41,8 @@ impl ExecutionContext {
             search_engine: None,
             #[cfg(feature = "fulltext-search")]
             fulltext_manager: None,
+            #[cfg(feature = "qdrant")]
+            vector_coordinator: None,
             storage: None,
             space_name: None,
             parameters: Arc::new(HashMap::new()),
@@ -55,6 +61,8 @@ impl ExecutionContext {
             search_engine: None,
             #[cfg(feature = "fulltext-search")]
             fulltext_manager: None,
+            #[cfg(feature = "qdrant")]
+            vector_coordinator: None,
             storage: None,
             space_name: None,
             parameters: Arc::new(parameters),
@@ -72,6 +80,8 @@ impl ExecutionContext {
             expression_context,
             search_engine: Some(search_engine),
             fulltext_manager: None,
+            #[cfg(feature = "qdrant")]
+            vector_coordinator: None,
             storage: None,
             space_name: None,
             parameters: Arc::new(HashMap::new()),
@@ -134,6 +144,8 @@ impl Default for ExecutionContext {
             search_engine: None,
             #[cfg(feature = "fulltext-search")]
             fulltext_manager: None,
+            #[cfg(feature = "qdrant")]
+            vector_coordinator: None,
             storage: None,
             space_name: None,
             parameters: Arc::new(HashMap::new()),

@@ -64,7 +64,9 @@ pub fn open_getvertices(executor: &mut StreamingExecutor) -> Result<(), QueryErr
             *opened = true;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in open_getvertices".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_getvertices".to_string(),
+        )),
     }
 }
 
@@ -94,7 +96,9 @@ pub fn next_getvertices(executor: &mut StreamingExecutor) -> Result<Option<DataC
                 Ok(Some(DataChunk::from_rows(rows)))
             }
         }
-        _ => Err(QueryError::execution("Type mismatch in next_getvertices".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_getvertices".to_string(),
+        )),
     }
 }
 
@@ -104,7 +108,9 @@ pub fn stop_getvertices(executor: &mut StreamingExecutor) -> Result<(), QueryErr
             *opened = false;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in stop_getvertices".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_getvertices".to_string(),
+        )),
     }
 }
 
@@ -114,7 +120,9 @@ pub fn close_getvertices(executor: &mut StreamingExecutor) -> Result<(), QueryEr
             *opened = false;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in close_getvertices".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_getvertices".to_string(),
+        )),
     }
 }
 
@@ -126,7 +134,9 @@ pub fn open_getedges(executor: &mut StreamingExecutor) -> Result<(), QueryError>
             *opened = true;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in open_getedges".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_getedges".to_string(),
+        )),
     }
 }
 
@@ -152,7 +162,9 @@ pub fn next_getedges(executor: &mut StreamingExecutor) -> Result<Option<DataChun
             let storage = storage_lock.read();
 
             let et = edge_type.as_deref();
-            let edges = if let (Some(src_str), Some(dst_str), Some(et)) = (src.as_deref(), dst.as_deref(), et) {
+            let edges = if let (Some(src_str), Some(dst_str), Some(et)) =
+                (src.as_deref(), dst.as_deref(), et)
+            {
                 let src_vid = if let Ok(id) = src_str.parse::<i64>() {
                     VertexId::from_int64(id)
                 } else {
@@ -182,7 +194,9 @@ pub fn next_getedges(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                 Ok(Some(DataChunk::from_rows(rows)))
             }
         }
-        _ => Err(QueryError::execution("Type mismatch in next_getedges".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_getedges".to_string(),
+        )),
     }
 }
 
@@ -192,7 +206,9 @@ pub fn stop_getedges(executor: &mut StreamingExecutor) -> Result<(), QueryError>
             *opened = false;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in stop_getedges".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_getedges".to_string(),
+        )),
     }
 }
 
@@ -202,7 +218,9 @@ pub fn close_getedges(executor: &mut StreamingExecutor) -> Result<(), QueryError
             *opened = false;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in close_getedges".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_getedges".to_string(),
+        )),
     }
 }
 
@@ -214,11 +232,15 @@ pub fn open_getneighbors(executor: &mut StreamingExecutor) -> Result<(), QueryEr
             *opened = true;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in open_getneighbors".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_getneighbors".to_string(),
+        )),
     }
 }
 
-pub fn next_getneighbors(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+pub fn next_getneighbors(
+    executor: &mut StreamingExecutor,
+) -> Result<Option<DataChunk>, QueryError> {
     match executor {
         StreamingExecutor::GetNeighbors {
             storage,
@@ -277,7 +299,9 @@ pub fn next_getneighbors(executor: &mut StreamingExecutor) -> Result<Option<Data
                 Ok(Some(DataChunk::from_rows(rows)))
             }
         }
-        _ => Err(QueryError::execution("Type mismatch in next_getneighbors".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_getneighbors".to_string(),
+        )),
     }
 }
 
@@ -287,7 +311,9 @@ pub fn stop_getneighbors(executor: &mut StreamingExecutor) -> Result<(), QueryEr
             *opened = false;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in stop_getneighbors".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_getneighbors".to_string(),
+        )),
     }
 }
 
@@ -297,7 +323,9 @@ pub fn close_getneighbors(executor: &mut StreamingExecutor) -> Result<(), QueryE
             *opened = false;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in close_getneighbors".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_getneighbors".to_string(),
+        )),
     }
 }
 
@@ -309,7 +337,9 @@ pub fn open_indexscan(executor: &mut StreamingExecutor) -> Result<(), QueryError
             *opened = true;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in open_indexscan".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_indexscan".to_string(),
+        )),
     }
 }
 
@@ -355,7 +385,9 @@ pub fn next_indexscan(executor: &mut StreamingExecutor) -> Result<Option<DataChu
                 Ok(Some(DataChunk::from_rows(rows)))
             }
         }
-        _ => Err(QueryError::execution("Type mismatch in next_indexscan".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_indexscan".to_string(),
+        )),
     }
 }
 
@@ -365,7 +397,9 @@ pub fn stop_indexscan(executor: &mut StreamingExecutor) -> Result<(), QueryError
             *opened = false;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in stop_indexscan".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_indexscan".to_string(),
+        )),
     }
 }
 
@@ -375,7 +409,9 @@ pub fn close_indexscan(executor: &mut StreamingExecutor) -> Result<(), QueryErro
             *opened = false;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in close_indexscan".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_indexscan".to_string(),
+        )),
     }
 }
 
@@ -387,11 +423,15 @@ pub fn open_edgeindexscan(executor: &mut StreamingExecutor) -> Result<(), QueryE
             *opened = true;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in open_edgeindexscan".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_edgeindexscan".to_string(),
+        )),
     }
 }
 
-pub fn next_edgeindexscan(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+pub fn next_edgeindexscan(
+    executor: &mut StreamingExecutor,
+) -> Result<Option<DataChunk>, QueryError> {
     match executor {
         StreamingExecutor::EdgeIndexScan {
             storage,
@@ -401,7 +441,9 @@ pub fn next_edgeindexscan(executor: &mut StreamingExecutor) -> Result<Option<Dat
             ..
         } => {
             if !*opened {
-                return Err(QueryError::execution("EdgeIndexScan not opened".to_string()));
+                return Err(QueryError::execution(
+                    "EdgeIndexScan not opened".to_string(),
+                ));
             }
 
             let storage_lock = storage
@@ -424,7 +466,9 @@ pub fn next_edgeindexscan(executor: &mut StreamingExecutor) -> Result<Option<Dat
                 Ok(Some(DataChunk::from_rows(rows)))
             }
         }
-        _ => Err(QueryError::execution("Type mismatch in next_edgeindexscan".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_edgeindexscan".to_string(),
+        )),
     }
 }
 
@@ -434,7 +478,9 @@ pub fn stop_edgeindexscan(executor: &mut StreamingExecutor) -> Result<(), QueryE
             *opened = false;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in stop_edgeindexscan".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_edgeindexscan".to_string(),
+        )),
     }
 }
 
@@ -444,7 +490,9 @@ pub fn close_edgeindexscan(executor: &mut StreamingExecutor) -> Result<(), Query
             *opened = false;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in close_edgeindexscan".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_edgeindexscan".to_string(),
+        )),
     }
 }
 
@@ -482,6 +530,192 @@ pub fn stop_sample(_executor: &mut StreamingExecutor) -> Result<(), QueryError> 
 
 pub fn close_sample(_executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     Ok(())
+}
+
+// ============ GetProp Operator ============
+
+pub fn open_getprop(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::GetProp { opened, .. } => {
+            *opened = true;
+            Ok(())
+        }
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_getprop".to_string(),
+        )),
+    }
+}
+
+pub fn next_getprop(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    match executor {
+        StreamingExecutor::GetProp {
+            storage,
+            space_name,
+            vertex_ids,
+            edge_ids,
+            prop_names,
+            opened,
+            ..
+        } => {
+            if !*opened {
+                return Err(QueryError::execution("GetProp not opened".to_string()));
+            }
+
+            let storage_lock = storage
+                .as_ref()
+                .ok_or_else(|| QueryError::execution("No storage in GetProp".to_string()))?;
+            let storage = storage_lock.read();
+
+            let mut props = Vec::new();
+
+            if let Some(ref vids) = vertex_ids {
+                for vid_val in vids {
+                    if let Ok(vid) = VertexId::try_from(vid_val) {
+                        if let Ok(Some(vertex)) = storage.get_vertex(space_name, &vid) {
+                            for prop_name in prop_names.iter() {
+                                if let Some(val) = vertex.get_property_any(prop_name) {
+                                    props.push(val.clone());
+                                } else {
+                                    props.push(Value::Null(crate::core::NullType::Null));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(ref eids) = edge_ids {
+                for edge_val in eids {
+                    if let Value::Edge(edge) = edge_val {
+                        for prop_name in prop_names.iter() {
+                            if let Some(val) = edge.get_property(prop_name) {
+                                props.push(val.clone());
+                            } else {
+                                props.push(Value::Null(crate::core::NullType::Null));
+                            }
+                        }
+                    }
+                }
+            }
+
+            let rows: Vec<Vec<Value>> = props.into_iter().map(|v| vec![v]).collect();
+            if rows.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(DataChunk::from_rows(rows)))
+            }
+        }
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_getprop".to_string(),
+        )),
+    }
+}
+
+pub fn stop_getprop(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::GetProp { opened, .. } => {
+            *opened = false;
+            Ok(())
+        }
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_getprop".to_string(),
+        )),
+    }
+}
+
+pub fn close_getprop(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::GetProp { opened, .. } => {
+            *opened = false;
+            Ok(())
+        }
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_getprop".to_string(),
+        )),
+    }
+}
+
+// ============ LookupIndex Operator ============
+
+pub fn open_lookupindex(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::LookupIndex { opened, .. } => {
+            *opened = true;
+            Ok(())
+        }
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_lookupindex".to_string(),
+        )),
+    }
+}
+
+pub fn next_lookupindex(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    match executor {
+        StreamingExecutor::LookupIndex {
+            storage,
+            space_name,
+            index_name,
+            index_condition,
+            limit,
+            opened,
+            ..
+        } => {
+            if !*opened {
+                return Err(QueryError::execution("LookupIndex not opened".to_string()));
+            }
+
+            let storage_lock = storage
+                .as_ref()
+                .ok_or_else(|| QueryError::execution("No storage in LookupIndex".to_string()))?;
+            let storage = storage_lock.read();
+
+            let mut results: Vec<Value> = if let Some((_field, ref val)) = index_condition {
+                storage
+                    .lookup_index(space_name, index_name, val)
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+
+            if let Some(lim) = limit {
+                results.truncate(*lim);
+            }
+
+            let rows: Vec<Vec<Value>> = results.into_iter().map(|v| vec![v]).collect();
+            if rows.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(DataChunk::from_rows(rows)))
+            }
+        }
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_lookupindex".to_string(),
+        )),
+    }
+}
+
+pub fn stop_lookupindex(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::LookupIndex { opened, .. } => {
+            *opened = false;
+            Ok(())
+        }
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_lookupindex".to_string(),
+        )),
+    }
+}
+
+pub fn close_lookupindex(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::LookupIndex { opened, .. } => {
+            *opened = false;
+            Ok(())
+        }
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_lookupindex".to_string(),
+        )),
+    }
 }
 
 #[cfg(test)]

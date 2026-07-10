@@ -28,7 +28,9 @@ mod tests {
 
     #[test]
     fn test_drop_column_safety() {
-        let step = MigrationStep::DropColumn { name: "email".into() };
+        let step = MigrationStep::DropColumn {
+            name: "email".into(),
+        };
         assert_eq!(step.safety_level(), SafetyLevel::Dangerous);
         assert!(step.is_data_modifying());
     }
@@ -62,9 +64,15 @@ mod tests {
             nullable: true,
             default_value: None,
         };
-        assert_eq!(add.reverse(), Some(MigrationStep::DropColumn { name: "x".into() }));
+        assert_eq!(
+            add.reverse(),
+            Some(MigrationStep::DropColumn { name: "x".into() })
+        );
 
-        assert_eq!(MigrationStep::DropColumn { name: "x".into() }.reverse(), None);
+        assert_eq!(
+            MigrationStep::DropColumn { name: "x".into() }.reverse(),
+            None
+        );
 
         let rename = MigrationStep::RenameColumn {
             old_name: "a".into(),
@@ -227,8 +235,16 @@ impl MigrationStep {
 
     pub fn description(&self) -> String {
         match self {
-            MigrationStep::AddColumn { name, data_type: dt, nullable, .. } => {
-                format!("Add column '{}' of type {:?} (nullable: {})", name, dt, nullable)
+            MigrationStep::AddColumn {
+                name,
+                data_type: dt,
+                nullable,
+                ..
+            } => {
+                format!(
+                    "Add column '{}' of type {:?} (nullable: {})",
+                    name, dt, nullable
+                )
             }
             MigrationStep::DropColumn { name } => {
                 format!("Drop column '{}' - existing data will be lost", name)
@@ -236,13 +252,30 @@ impl MigrationStep {
             MigrationStep::RenameColumn { old_name, new_name } => {
                 format!("Rename column '{}' to '{}'", old_name, new_name)
             }
-            MigrationStep::ConvertType { name, from_type, to_type } => {
-                format!("Convert column '{}' from {:?} to {:?}", name, from_type, to_type)
+            MigrationStep::ConvertType {
+                name,
+                from_type,
+                to_type,
+            } => {
+                format!(
+                    "Convert column '{}' from {:?} to {:?}",
+                    name, from_type, to_type
+                )
             }
-            MigrationStep::SetDefault { name, default_value } => {
-                format!("Set default value for column '{}' to {:?}", name, default_value)
+            MigrationStep::SetDefault {
+                name,
+                default_value,
+            } => {
+                format!(
+                    "Set default value for column '{}' to {:?}",
+                    name, default_value
+                )
             }
-            MigrationStep::ChangeNullability { name, was_nullable, now_nullable } => {
+            MigrationStep::ChangeNullability {
+                name,
+                was_nullable,
+                now_nullable,
+            } => {
                 format!(
                     "Change column '{}' nullability from {} to {}",
                     name, was_nullable, now_nullable
@@ -263,26 +296,31 @@ impl MigrationStep {
                     new_name: old_name.clone(),
                 })
             }
-            MigrationStep::ConvertType { name, from_type, to_type } => {
-                Some(MigrationStep::ConvertType {
-                    name: name.clone(),
-                    from_type: to_type.clone(),
-                    to_type: from_type.clone(),
-                })
-            }
-            MigrationStep::SetDefault { name, default_value } => {
-                Some(MigrationStep::SetDefault {
-                    name: name.clone(),
-                    default_value: default_value.clone(),
-                })
-            }
-            MigrationStep::ChangeNullability { name, was_nullable, now_nullable } => {
-                Some(MigrationStep::ChangeNullability {
-                    name: name.clone(),
-                    was_nullable: *now_nullable,
-                    now_nullable: *was_nullable,
-                })
-            }
+            MigrationStep::ConvertType {
+                name,
+                from_type,
+                to_type,
+            } => Some(MigrationStep::ConvertType {
+                name: name.clone(),
+                from_type: to_type.clone(),
+                to_type: from_type.clone(),
+            }),
+            MigrationStep::SetDefault {
+                name,
+                default_value,
+            } => Some(MigrationStep::SetDefault {
+                name: name.clone(),
+                default_value: default_value.clone(),
+            }),
+            MigrationStep::ChangeNullability {
+                name,
+                was_nullable,
+                now_nullable,
+            } => Some(MigrationStep::ChangeNullability {
+                name: name.clone(),
+                was_nullable: *now_nullable,
+                now_nullable: *was_nullable,
+            }),
         }
     }
 }
@@ -351,10 +389,18 @@ impl MigrationPlan {
             "Migration Plan: {} v{} → v{} ({} row(s))\n",
             self.target.label, self.version_range.from, self.version_range.to, self.estimated_rows
         ));
-        out.push_str(&format!("Safety: {} ({:?})\n", self.overall_safety.label(), self.overall_safety));
+        out.push_str(&format!(
+            "Safety: {} ({:?})\n",
+            self.overall_safety.label(),
+            self.overall_safety
+        ));
         out.push_str(&format!("Steps: {}\n", self.steps.len()));
         for (i, step) in self.steps.iter().enumerate() {
-            let prefix = if self.completed_steps.contains(&i) { "[DONE] " } else { "" };
+            let prefix = if self.completed_steps.contains(&i) {
+                "[DONE] "
+            } else {
+                ""
+            };
             out.push_str(&format!(
                 "  {}. {}[{:?}] {}\n",
                 i + 1,

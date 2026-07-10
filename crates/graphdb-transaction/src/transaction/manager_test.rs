@@ -524,12 +524,8 @@ fn test_check_write_set_conflict_no_conflict() {
         .expect("Failed to begin txn2");
 
     // Record different vertex writes
-    let ctx1 = manager
-        .get_context(txn1)
-        .expect("Failed to get context 1");
-    let ctx2 = manager
-        .get_context(txn2)
-        .expect("Failed to get context 2");
+    let ctx1 = manager.get_context(txn1).expect("Failed to get context 1");
+    let ctx2 = manager.get_context(txn2).expect("Failed to get context 2");
 
     let vid1 = VertexId::from_int64(1);
     let vid2 = VertexId::from_int64(2);
@@ -539,7 +535,10 @@ fn test_check_write_set_conflict_no_conflict() {
 
     // Check conflict - should be Ok because writes are on different vertices
     let conflict_check = manager.check_write_set_conflict(txn1);
-    assert!(conflict_check.is_ok(), "Should be no conflict for different vertices");
+    assert!(
+        conflict_check.is_ok(),
+        "Should be no conflict for different vertices"
+    );
 
     manager
         .commit_transaction(txn1)
@@ -565,12 +564,8 @@ fn test_check_write_set_conflict_with_conflict() {
         .expect("Failed to begin txn2");
 
     // Record same vertex write
-    let ctx1 = manager
-        .get_context(txn1)
-        .expect("Failed to get context 1");
-    let ctx2 = manager
-        .get_context(txn2)
-        .expect("Failed to get context 2");
+    let ctx1 = manager.get_context(txn1).expect("Failed to get context 1");
+    let ctx2 = manager.get_context(txn2).expect("Failed to get context 2");
 
     let vid = VertexId::from_int64(1);
 

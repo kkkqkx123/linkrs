@@ -10,8 +10,9 @@ use crate::core::types::{
 use crate::core::{Edge, EdgeDirection, RoleType, StorageError, Value, Vertex};
 use crate::storage::{
     StorageAdmin, StorageAuthOps, StorageClient, StorageGcOps, StoragePersistenceOps,
-    StorageReader, StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps, StorageSnapshotOps,
-    StorageStats, StorageSyncContextOps, StorageTransactionContextOps, StorageWriter,
+    StorageReader, StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps,
+    StorageSnapshotOps, StorageStats, StorageSyncContextOps, StorageTransactionContextOps,
+    StorageWriter,
 };
 use crate::sync::SyncManager;
 
@@ -280,7 +281,10 @@ impl<S: StorageClient> StoragePersistenceOps for MetricsStorage<S> {
         self.inner.snapshot_stats()
     }
 
-    fn compact(&self, config: &crate::core::types::CompactConfig) -> crate::core::StorageResult<()> {
+    fn compact(
+        &self,
+        config: &crate::core::types::CompactConfig,
+    ) -> crate::core::StorageResult<()> {
         self.inner.compact(config)
     }
 
@@ -370,8 +374,15 @@ where
     }
 }
 
-impl<S: crate::storage::client::StorageClient + StorageSnapshotOps + 'static> crate::storage::client::StorageSnapshotOps for MetricsStorage<S> {
-    fn export_snapshot(&self, ts: crate::core::types::Timestamp) -> crate::core::StorageResult<Vec<crate::storage::engine::graph_storage::context::ExportedEdgeSnapshotRecord>> {
+impl<S: crate::storage::client::StorageClient + StorageSnapshotOps + 'static>
+    crate::storage::client::StorageSnapshotOps for MetricsStorage<S>
+{
+    fn export_snapshot(
+        &self,
+        ts: crate::core::types::Timestamp,
+    ) -> crate::core::StorageResult<
+        Vec<crate::storage::engine::graph_storage::context::ExportedEdgeSnapshotRecord>,
+    > {
         self.inner.export_snapshot(ts)
     }
 

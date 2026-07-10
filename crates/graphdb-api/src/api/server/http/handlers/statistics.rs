@@ -550,7 +550,10 @@ pub async fn trigger_freeze<
             "status": "ok",
             "message": "Background freeze triggered successfully",
         }))),
-        Err(e) => Err(HttpError::internal(format!("Background freeze failed: {}", e))),
+        Err(e) => Err(HttpError::internal(format!(
+            "Background freeze failed: {}",
+            e
+        ))),
     }
 }
 

@@ -11,8 +11,7 @@ use crate::core::types::VertexId;
 use crate::core::{Edge, Path, Step, Value, Vertex};
 use crate::query::executor::base::{
     BaseExecutor, DBResult as ExecDBResult, EdgeDirection, ExecutionResult,
-    Executor as BaseExecutorTrait, ExecutorStats, HasStorage,
-    MultiShortestPathConfig,
+    Executor as BaseExecutorTrait, ExecutorStats, HasStorage, MultiShortestPathConfig,
 };
 use crate::query::DataSet;
 use crate::storage::StorageClient;

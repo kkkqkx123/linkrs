@@ -21,7 +21,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::core::{StorageError, StorageResult};
 use crate::storage::persistence::{read_u32_le, read_u64_le};
 
-use super::{CsrBase, EdgeId, MutableCsrTrait, Nbr, Timestamp, VertexId, INVALID_EDGE_ID, INVALID_TIMESTAMP};
+use super::{
+    CsrBase, EdgeId, MutableCsrTrait, Nbr, Timestamp, VertexId, INVALID_EDGE_ID, INVALID_TIMESTAMP,
+};
 
 const DEFAULT_VERTEX_CAPACITY: usize = 1024;
 const DEFAULT_EDGES_PER_VERTEX: usize = 4;
@@ -474,7 +476,6 @@ impl<'a> Iterator for MultiSingleMutableCsrIterator<'a> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -545,7 +546,10 @@ mod tests {
         assert_eq!(edges_from_iter.len(), 4);
 
         // Verify each edge is present
-        let edge_ids: Vec<_> = edges_from_iter.iter().map(|(_, nbr)| nbr.edge_id.0).collect();
+        let edge_ids: Vec<_> = edges_from_iter
+            .iter()
+            .map(|(_, nbr)| nbr.edge_id.0)
+            .collect();
         assert!(edge_ids.contains(&1));
         assert!(edge_ids.contains(&2));
         assert!(edge_ids.contains(&3));
@@ -562,17 +566,17 @@ mod tests {
         assert!(csr.insert_edge(0, VertexId::from_int64(3), EdgeId(102), 8, 30));
 
         // Query at different timestamps
-        assert_eq!(csr.edges_of(0, 5).len(), 0);   // Before any edge
-        assert_eq!(csr.edges_of(0, 10).len(), 1);  // After first edge
-        assert_eq!(csr.edges_of(0, 25).len(), 2);  // After second edge
-        assert_eq!(csr.edges_of(0, 35).len(), 3);  // After all edges
+        assert_eq!(csr.edges_of(0, 5).len(), 0); // Before any edge
+        assert_eq!(csr.edges_of(0, 10).len(), 1); // After first edge
+        assert_eq!(csr.edges_of(0, 25).len(), 2); // After second edge
+        assert_eq!(csr.edges_of(0, 35).len(), 3); // After all edges
 
         // Delete one edge
         assert!(csr.delete_edge(0, EdgeId(101), 40));
 
         // Query after deletion
-        assert_eq!(csr.edges_of(0, 35).len(), 3);  // Before deletion
-        assert_eq!(csr.edges_of(0, 40).len(), 2);  // After deletion
+        assert_eq!(csr.edges_of(0, 35).len(), 3); // Before deletion
+        assert_eq!(csr.edges_of(0, 40).len(), 2); // After deletion
     }
 
     #[test]
@@ -607,9 +611,21 @@ mod tests {
         // Add to each vertex (with limited capacity)
         for src in 0..5 {
             assert!(csr.insert_edge(src, VertexId::from_int64(100), EdgeId(src as u64 * 2), 0, 1));
-            assert!(csr.insert_edge(src, VertexId::from_int64(101), EdgeId(src as u64 * 2 + 1), 4, 1));
+            assert!(csr.insert_edge(
+                src,
+                VertexId::from_int64(101),
+                EdgeId(src as u64 * 2 + 1),
+                4,
+                1
+            ));
             // Third edge should fail (capacity is 2)
-            assert!(!csr.insert_edge(src, VertexId::from_int64(102), EdgeId(src as u64 * 2 + 2), 8, 1));
+            assert!(!csr.insert_edge(
+                src,
+                VertexId::from_int64(102),
+                EdgeId(src as u64 * 2 + 2),
+                8,
+                1
+            ));
         }
 
         assert_eq!(csr.edge_count(), 10); // 5 vertices * 2 edges each
@@ -621,4 +637,3 @@ mod tests {
         }
     }
 }
-

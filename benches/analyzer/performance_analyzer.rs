@@ -145,8 +145,7 @@ impl PerformanceAnalyzer {
 
     /// Extract floating point value after a label
     fn extract_float_value(output: &str, label: &str) -> Option<f64> {
-        let re = Regex::new(&format!(r"{}\s*([\d.]+)", regex::escape(label)))
-            .ok()?;
+        let re = Regex::new(&format!(r"{}\s*([\d.]+)", regex::escape(label))).ok()?;
 
         re.captures(output)
             .and_then(|cap| cap.get(1))
@@ -155,8 +154,7 @@ impl PerformanceAnalyzer {
 
     /// Extract unsigned integer value after a label
     fn extract_usize_value(output: &str, label: &str) -> Option<usize> {
-        let re = Regex::new(&format!(r"{}\s*(\d+)", regex::escape(label)))
-            .ok()?;
+        let re = Regex::new(&format!(r"{}\s*(\d+)", regex::escape(label))).ok()?;
 
         re.captures(output)
             .and_then(|cap| cap.get(1))
@@ -165,8 +163,7 @@ impl PerformanceAnalyzer {
 
     /// Extract memory value after a label (supports KB, MB, GB)
     fn extract_memory_value(output: &str, label: &str) -> Option<usize> {
-        let re = Regex::new(&format!(r"{}\s*([\d.]+)\s*([KMGT]B)", regex::escape(label)))
-            .ok()?;
+        let re = Regex::new(&format!(r"{}\s*([\d.]+)\s*([KMGT]B)", regex::escape(label))).ok()?;
 
         let caps = re.captures(output)?;
         let value = caps.get(1)?.as_str().parse::<f64>().ok()?;
@@ -185,8 +182,7 @@ impl PerformanceAnalyzer {
 
     /// Parse time value (supports ms, s, us)
     fn parse_time(time_str: &str) -> Result<f64, String> {
-        let re = Regex::new(r"([\d.]+)\s*(ms|s|us)")
-            .map_err(|e| format!("Regex error: {}", e))?;
+        let re = Regex::new(r"([\d.]+)\s*(ms|s|us)").map_err(|e| format!("Regex error: {}", e))?;
 
         let caps = re
             .captures(time_str)
@@ -213,8 +209,7 @@ impl PerformanceAnalyzer {
 
     /// Parse memory value
     fn parse_memory(memory_str: &str) -> Result<usize, String> {
-        let re = Regex::new(r"([\d.]+)\s*([KMGT]B)")
-            .map_err(|e| format!("Regex error: {}", e))?;
+        let re = Regex::new(r"([\d.]+)\s*([KMGT]B)").map_err(|e| format!("Regex error: {}", e))?;
 
         let caps = re
             .captures(memory_str)
@@ -287,7 +282,10 @@ mod tests {
 
     #[test]
     fn test_parse_memory() {
-        assert_eq!(PerformanceAnalyzer::parse_memory("512 KB").unwrap(), 512 * 1024);
+        assert_eq!(
+            PerformanceAnalyzer::parse_memory("512 KB").unwrap(),
+            512 * 1024
+        );
         assert_eq!(
             PerformanceAnalyzer::parse_memory("1.5 MB").unwrap(),
             (1.5 * 1024.0 * 1024.0) as usize

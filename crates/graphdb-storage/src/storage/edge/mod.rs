@@ -26,6 +26,7 @@
 //! | `Single` | `SingleMutableCsr` | One-to-one relationships (spouse, current_employer) | O(1) |
 //! | `None` | - | No edges stored | - |
 
+pub mod bloom_filter;
 pub mod csr;
 pub mod csr_trait;
 pub mod csr_variant;
@@ -33,12 +34,11 @@ pub mod csr_variant;
 pub mod edge_table;
 pub mod fragmentation_stats;
 pub mod labeled_mutable_csr;
-pub mod mutable_csr;
 pub mod multi_single_mutable_csr;
-pub mod property_table;
+pub mod mutable_csr;
 pub mod property_schema;
+pub mod property_table;
 pub mod single_mutable_csr;
-pub mod bloom_filter;
 
 use crate::core::types::{EdgeId, LabelId, Timestamp, VertexId, INVALID_TIMESTAMP};
 use crate::core::{Edge, Value};
@@ -48,14 +48,14 @@ pub use crate::core::types::EdgeStrategy;
 pub use csr::Csr;
 pub use csr_trait::{CsrBase, MutableCsrTrait};
 pub use csr_variant::CsrVariant;
-pub use edge_table::{EdgeStore};
-pub use edge_table::snapshot::ExportedEdgeSnapshot;
-pub use edge_table::core::UpdateEdgePropertyByOffsetParams;
 pub use edge_table::compaction::CompactionMode;
+pub use edge_table::core::UpdateEdgePropertyByOffsetParams;
+pub use edge_table::snapshot::ExportedEdgeSnapshot;
+pub use edge_table::EdgeStore;
 pub use fragmentation_stats::FragmentationStats;
 pub use labeled_mutable_csr::{LabeledMutableCsr, LabeledMutableCsrIterator};
-pub use mutable_csr::{MutableCsr, MutableCsrIterator};
 pub use multi_single_mutable_csr::{MultiSingleMutableCsr, MultiSingleMutableCsrIterator};
+pub use mutable_csr::{MutableCsr, MutableCsrIterator};
 pub use property_table::PropertyTable;
 pub use single_mutable_csr::{SingleMutableCsr, SingleMutableCsrIterator};
 
@@ -115,10 +115,11 @@ impl EdgeSchema {
     /// At least one of out-edge or in-edge must be enabled (not None).
     pub fn validate(&self) -> crate::core::StorageResult<()> {
         if self.oe_strategy == EdgeStrategy::None && self.ie_strategy == EdgeStrategy::None {
-            return Err(crate::core::StorageError::invalid_operation(
-                format!("EdgeSchema '{}': both oe_strategy and ie_strategy are None. \
-                         At least one direction must be enabled", self.label_name),
-            ));
+            return Err(crate::core::StorageError::invalid_operation(format!(
+                "EdgeSchema '{}': both oe_strategy and ie_strategy are None. \
+                         At least one direction must be enabled",
+                self.label_name
+            )));
         }
         Ok(())
     }
@@ -142,18 +143,18 @@ impl EdgeSchema {
         let mut seen_names = std::collections::HashSet::new();
         for prop in &self.properties {
             if !seen_names.insert(&prop.name) {
-                return Err(crate::core::StorageError::invalid_operation(
-                    format!("Duplicate property name in edge type '{}': '{}'",
-                            self.label_name, prop.name),
-                ));
+                return Err(crate::core::StorageError::invalid_operation(format!(
+                    "Duplicate property name in edge type '{}': '{}'",
+                    self.label_name, prop.name
+                )));
             }
 
             // Validate property name format
             if prop.name.is_empty() {
-                return Err(crate::core::StorageError::invalid_operation(
-                    format!("Property name cannot be empty in edge type '{}'",
-                            self.label_name),
-                ));
+                return Err(crate::core::StorageError::invalid_operation(format!(
+                    "Property name cannot be empty in edge type '{}'",
+                    self.label_name
+                )));
             }
 
             Self::validate_identifier_internal(&prop.name)?;
@@ -169,9 +170,11 @@ impl EdgeSchema {
     fn validate_identifier_internal(name: &str) -> crate::core::StorageResult<()> {
         let first_char = match name.chars().next() {
             Some(c) => c,
-            None => return Err(crate::core::StorageError::invalid_operation(
-                "Identifier cannot be empty".to_string(),
-            )),
+            None => {
+                return Err(crate::core::StorageError::invalid_operation(
+                    "Identifier cannot be empty".to_string(),
+                ))
+            }
         };
 
         if !first_char.is_ascii_alphabetic() && first_char != '_' {
@@ -202,18 +205,14 @@ impl EdgeSchema {
         use crate::core::DataType;
 
         match data_type {
-            DataType::Empty => {
-                Err(crate::core::StorageError::invalid_operation(format!(
-                    "Property '{}' cannot have type Empty - properties must have valid types",
-                    prop_name
-                )))
-            }
-            DataType::Null => {
-                Err(crate::core::StorageError::invalid_operation(format!(
-                    "Property '{}' cannot have type Null - use nullable=true instead",
-                    prop_name
-                )))
-            }
+            DataType::Empty => Err(crate::core::StorageError::invalid_operation(format!(
+                "Property '{}' cannot have type Empty - properties must have valid types",
+                prop_name
+            ))),
+            DataType::Null => Err(crate::core::StorageError::invalid_operation(format!(
+                "Property '{}' cannot have type Null - use nullable=true instead",
+                prop_name
+            ))),
             _ => Ok(()),
         }
     }
@@ -312,7 +311,10 @@ mod tests {
 
         let result = schema.validate();
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("both oe_strategy and ie_strategy are None"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("both oe_strategy and ie_strategy are None"));
     }
 
     #[test]
@@ -342,7 +344,7 @@ mod tests {
             properties: vec![],
             oe_strategy: EdgeStrategy::None,
             ie_strategy: EdgeStrategy::Multiple,
-        schema_version: 1,
+            schema_version: 1,
         };
 
         let result = schema.validate();
@@ -359,7 +361,7 @@ mod tests {
             properties: vec![],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Single,
-        schema_version: 1,
+            schema_version: 1,
         };
 
         let result = schema.validate();

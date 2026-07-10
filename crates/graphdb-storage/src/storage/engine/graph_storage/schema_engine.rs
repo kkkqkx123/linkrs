@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 
 use crate::core::types::LabelId;
 use crate::core::{StorageError, StorageResult};
-use crate::storage::edge::{EdgeSchema, EdgeStrategy, EdgeStore};
+use crate::storage::edge::{EdgeSchema, EdgeStore, EdgeStrategy};
 use crate::storage::engine::data_store::EdgeTableKey;
 use crate::storage::engine::params::CreateEdgeTypeParams;
 use crate::storage::types::StoragePropertyDef;
@@ -827,7 +827,10 @@ mod tests {
             ],
             "id",
         );
-        assert!(result.is_err(), "Property name should not start with number");
+        assert!(
+            result.is_err(),
+            "Property name should not start with number"
+        );
 
         // Test property name with invalid characters
         let result = ctx.create_vertex_type(
@@ -858,7 +861,7 @@ mod tests {
                 "id",
             )
             .expect("All property names are valid");
-        assert!(label_id >= 0);  // Just check it was created successfully
+        assert!(label_id >= 0); // Just check it was created successfully
     }
 
     #[test]
@@ -1030,10 +1033,7 @@ mod tests {
         for expected_version in 2..=5 {
             ctx.add_vertex_property(
                 0,
-                StoragePropertyDef::new(
-                    format!("prop{}", expected_version),
-                    DataType::String,
-                ),
+                StoragePropertyDef::new(format!("prop{}", expected_version), DataType::String),
             )
             .expect("add_vertex_property should succeed");
 
@@ -1143,7 +1143,11 @@ mod tests {
             .schema()
             .schema_version;
 
-        assert_eq!(v2, v1 + 1, "Version should increment after delete_edge_property");
+        assert_eq!(
+            v2,
+            v1 + 1,
+            "Version should increment after delete_edge_property"
+        );
     }
 
     #[test]
@@ -1187,7 +1191,11 @@ mod tests {
             .schema()
             .schema_version;
 
-        assert_eq!(v2, v1 + 1, "Version should increment after rename_edge_property");
+        assert_eq!(
+            v2,
+            v1 + 1,
+            "Version should increment after rename_edge_property"
+        );
     }
 
     #[test]
@@ -1208,10 +1216,7 @@ mod tests {
         for expected_version in 2..=4 {
             ctx.add_edge_property(
                 0,
-                StoragePropertyDef::new(
-                    format!("prop{}", expected_version),
-                    DataType::String,
-                ),
+                StoragePropertyDef::new(format!("prop{}", expected_version), DataType::String),
             )
             .expect("add_edge_property should succeed");
 

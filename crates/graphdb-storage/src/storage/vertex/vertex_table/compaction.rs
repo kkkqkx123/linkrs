@@ -30,9 +30,9 @@
 //! the three structures. This allows the caller (VertexTable) to retain ownership
 //! while the coordinator orchestrates the operations.
 
-use std::collections::HashMap;
-use crate::core::StorageResult;
 use super::core::VertexTable;
+use crate::core::StorageResult;
+use std::collections::HashMap;
 
 /// Unified compaction coordinator for VertexTable
 ///
@@ -150,14 +150,8 @@ impl CompactionCoordinator {
             return Ok(());
         }
 
-        let max_new_id = self
-            .id_mapping
-            .values()
-            .max()
-            .copied()
-            .unwrap_or(0) as usize;
-        let mut new_timestamps =
-            super::super::VertexTimestamp::with_capacity(max_new_id + 1);
+        let max_new_id = self.id_mapping.values().max().copied().unwrap_or(0) as usize;
+        let mut new_timestamps = super::super::VertexTimestamp::with_capacity(max_new_id + 1);
 
         for (old_id, new_id) in &self.id_mapping {
             if let Some(start_ts) = table.timestamps.get_start_ts(*old_id) {
@@ -183,24 +177,14 @@ impl CompactionCoordinator {
             return Ok(());
         }
 
-        let max_old_id = self
-            .id_mapping
-            .keys()
-            .max()
-            .copied()
-            .unwrap_or(0) as usize;
+        let max_old_id = self.id_mapping.keys().max().copied().unwrap_or(0) as usize;
         if max_old_id >= table.columns.row_count() {
             return Ok(());
         }
 
-        let mut new_columns =
-            super::super::ColumnStore::with_capacity(table.id_indexer.len());
+        let mut new_columns = super::super::ColumnStore::with_capacity(table.id_indexer.len());
         for prop in &table.schema.properties {
-            new_columns.add_column(
-                prop.name.clone(),
-                prop.data_type.clone(),
-                prop.nullable,
-            );
+            new_columns.add_column(prop.name.clone(), prop.data_type.clone(), prop.nullable);
         }
 
         // Batch copy: O(vertices) instead of O(vertices × properties)

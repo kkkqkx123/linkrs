@@ -83,7 +83,6 @@ pub(crate) fn drop_space(ctx: &GraphStorageContext, space: &str) -> StorageResul
     ctx.schema_manager().drop_space(space)
 }
 
-
 pub(crate) fn clear_space(ctx: &GraphStorageContext, space: &str) -> StorageResult<bool> {
     let Some(space_info) = ctx.schema_manager().get_space(space)? else {
         return Ok(false);
@@ -218,7 +217,6 @@ pub(crate) fn drop_tag(
     ctx.schema_manager().drop_tag(space, tag_name)
 }
 
-
 pub(crate) fn alter_tag(
     ctx: &GraphStorageContext,
     space: &str,
@@ -233,8 +231,9 @@ pub(crate) fn alter_tag(
         .ok_or_else(|| StorageError::label_not_found(tag_name.to_string()))?;
 
     // Execute modifications in schema_manager first
-    let result = ctx.schema_manager()
-        .alter_tag(space, tag_name, additions.clone(), deletions.clone())?;
+    let result =
+        ctx.schema_manager()
+            .alter_tag(space, tag_name, additions.clone(), deletions.clone())?;
 
     if !result {
         return Ok(false);
@@ -369,7 +368,6 @@ pub(crate) fn drop_edge_type(
 
     ctx.schema_manager().drop_edge_type(space, edge_type_name)
 }
-
 
 pub(crate) fn ensure_graph_types_from_schema(ctx: &GraphStorageContext) -> StorageResult<()> {
     for space in ctx.schema_manager().list_spaces()? {

@@ -13,10 +13,10 @@ use common::TestStorage;
 use graphdb_query::core::types::VertexId;
 use graphdb_query::core::vertex_edge_path::Tag;
 use graphdb_query::core::{Edge, Path, Step, Value, Vertex};
-use graphdb_query::query::executor::base::{EdgeDirection as ExecEdgeDirection, Executor};
 use graphdb_query::query::executor::algorithms::{
     AlgorithmContext, AlgorithmStats, MultiShortestPathExecutor, SubgraphConfig, SubgraphExecutor,
 };
+use graphdb_query::query::executor::base::{EdgeDirection as ExecEdgeDirection, Executor};
 use graphdb_query::query::validator::context::ExpressionAnalysisContext;
 use std::collections::HashMap;
 use std::sync::Arc;

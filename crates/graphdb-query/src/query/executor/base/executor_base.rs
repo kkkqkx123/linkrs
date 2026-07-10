@@ -64,7 +64,6 @@ pub trait HasInput<S> {
     fn set_input(&mut self, input: ExecutionResult);
 }
 
-
 /// Basic Executor
 ///
 /// Provide general functions for actuators, including storage access, statistical information, lifecycle management, etc.

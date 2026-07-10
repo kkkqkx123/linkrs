@@ -77,11 +77,7 @@ impl Expression {
     }
 
     /// Create a multi-argument aggregate function expression (e.g. CORR, COVAR).
-    pub fn aggregate_multi(
-        func: AggregateFunction,
-        args: Vec<Expression>,
-        distinct: bool,
-    ) -> Self {
+    pub fn aggregate_multi(func: AggregateFunction, args: Vec<Expression>, distinct: bool) -> Self {
         Expression::Aggregate {
             func,
             args,

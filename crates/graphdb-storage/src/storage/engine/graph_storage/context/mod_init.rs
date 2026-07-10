@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::core::stats::StatsManager;
 use crate::core::StorageResult;
 use crate::storage::engine::background_freeze::BackgroundFreezeManager;
-use crate::storage::index::IndexGcConfig;
 use crate::storage::engine::PersistenceConfig;
-use crate::core::stats::StatsManager;
+use crate::storage::index::IndexGcConfig;
 
 use super::{GraphStorageContext, GraphStoragePersistent, GraphStorageRuntime};
 
@@ -22,10 +22,7 @@ impl GraphStorageContext {
         Self::new_with_persistence(path, config)
     }
 
-    pub fn new_with_persistence(
-        path: PathBuf,
-        config: PersistenceConfig,
-    ) -> StorageResult<Self> {
+    pub fn new_with_persistence(path: PathBuf, config: PersistenceConfig) -> StorageResult<Self> {
         GraphStoragePersistent::new_with_persistence(path, config).map(|persistent| Self {
             persistent,
             runtime: GraphStorageRuntime::new(),
@@ -42,10 +39,7 @@ impl GraphStorageContext {
         self
     }
 
-    pub fn with_background_freeze(
-        &self,
-        manager: Arc<BackgroundFreezeManager>,
-    ) -> Self {
+    pub fn with_background_freeze(&self, manager: Arc<BackgroundFreezeManager>) -> Self {
         let runtime = self.runtime.with_background_freeze(manager);
         Self {
             persistent: self.persistent.clone(),

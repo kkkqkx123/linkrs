@@ -21,9 +21,11 @@ use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::AggregateFunction;
 use crate::core::Value;
-use crate::storage::StorageClient;
 #[cfg(feature = "fulltext-search")]
 use crate::search::manager::FulltextIndexManager;
+use crate::storage::StorageClient;
+#[cfg(feature = "qdrant")]
+use crate::sync::VectorSyncCoordinator;
 
 pub mod context;
 pub mod helpers;
@@ -240,7 +242,9 @@ pub enum StreamingExecutor {
     },
 
     // ============ Access Operations ============
-    Start { opened: bool },
+    Start {
+        opened: bool,
+    },
     GetVertices {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
@@ -275,8 +279,33 @@ pub enum StreamingExecutor {
         index_value: Option<Value>,
         opened: bool,
     },
-    Argument { opened: bool },
-    Sample { opened: bool },
+    Argument {
+        opened: bool,
+    },
+    Sample {
+        opened: bool,
+    },
+
+    // ============ Property & Index Lookup ============
+    /// Get properties from vertices or edges by ID
+    GetProp {
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
+        vertex_ids: Option<Vec<Value>>,
+        edge_ids: Option<Vec<Value>>,
+        prop_names: Vec<String>,
+        opened: bool,
+    },
+
+    /// Lookup vertices by index key
+    LookupIndex {
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
+        index_name: String,
+        index_condition: Option<(String, Value)>,
+        limit: Option<usize>,
+        opened: bool,
+    },
 
     // ============ Join Operations (stub) ============
     InnerJoin {
@@ -450,6 +479,17 @@ pub enum StreamingExecutor {
         opened: bool,
     },
 
+    /// Subgraph extraction: find subgraph within N steps from seed vertices
+    Subgraph {
+        input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
+        steps: u32,
+        direction: String,
+        edge_types: Vec<String>,
+        opened: bool,
+    },
+
     // ============ Data Modification ============
     InsertVertices {
         input: Box<StreamingExecutor>,
@@ -486,6 +526,9 @@ pub enum StreamingExecutor {
         input: Box<StreamingExecutor>,
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
+        src_col: String,
+        dst_col: String,
+        edge_type: String,
         updates: Vec<(String, Expression)>,
         rows_updated: u64,
         opened: bool,
@@ -585,11 +628,14 @@ pub enum StreamingExecutor {
         input: Box<StreamingExecutor>,
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
+        space_id: u64,
         index_name: String,
         query_vector: Vec<f32>,
         top_k: u32,
         tag_name: String,
         field_name: String,
+        #[cfg(feature = "qdrant")]
+        vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
         opened: bool,
     },
 
@@ -599,6 +645,8 @@ pub enum StreamingExecutor {
         space_name: String,
         index_name: String,
         lookup_key: Expression,
+        #[cfg(feature = "qdrant")]
+        vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
         opened: bool,
     },
 
@@ -613,6 +661,8 @@ pub enum StreamingExecutor {
         tag_name: String,
         field_name: String,
         space_id: u64,
+        #[cfg(feature = "qdrant")]
+        vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
         opened: bool,
     },
     SpaceManage {
@@ -662,8 +712,13 @@ pub enum StreamingExecutor {
         input: Box<StreamingExecutor>,
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
+        space_id: u64,
         action: String,
         index_name: Option<String>,
+        tag_name: Option<String>,
+        field_name: Option<String>,
+        #[cfg(feature = "fulltext-search")]
+        fulltext_manager: Option<Arc<FulltextIndexManager>>,
         opened: bool,
     },
 
@@ -671,8 +726,13 @@ pub enum StreamingExecutor {
         input: Box<StreamingExecutor>,
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
+        space_id: u64,
         action: String,
         index_name: Option<String>,
+        tag_name: Option<String>,
+        field_name: Option<String>,
+        #[cfg(feature = "qdrant")]
+        vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
         opened: bool,
     },
 
@@ -810,6 +870,27 @@ pub enum StreamingExecutor {
     // ============ Other (stub) ============
     ShowStats {
         input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
+        opened: bool,
+    },
+
+    // ============ Analysis & Migration ============
+    Analyze {
+        input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
+        analyze_target: String,
+        target_name: Option<String>,
+        opened: bool,
+    },
+
+    Migrate {
+        input: Box<StreamingExecutor>,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
+        action: String,
+        migration_data: Option<String>,
         opened: bool,
     },
 }
@@ -827,6 +908,9 @@ impl StreamingExecutor {
             Self::EdgeIndexScan { .. } => operators::access::open_edgeindexscan(self),
             Self::Argument { .. } => operators::access::open_argument(self),
             Self::Sample { .. } => operators::access::open_sample(self),
+            // Property & Index lookup
+            Self::GetProp { .. } => operators::access::open_getprop(self),
+            Self::LookupIndex { .. } => operators::access::open_lookupindex(self),
             // Data source operations
             Self::ScanVertices { .. } => operators::sources::open_scanvertices(self),
             Self::ScanEdges { .. } => operators::sources::open_scanedges(self),
@@ -874,8 +958,12 @@ impl StreamingExecutor {
             Self::UpdateEdges { .. } => operators::data_modification::open_updateedges(self),
             Self::DeleteVertices { .. } => operators::data_modification::open_deletevertices(self),
             Self::DeleteEdges { .. } => operators::data_modification::open_deleteedges(self),
-            Self::PipeDeleteVertices { .. } => operators::data_modification::open_pipedeletevertices(self),
-            Self::PipeDeleteEdges { .. } => operators::data_modification::open_pipedeleteedges(self),
+            Self::PipeDeleteVertices { .. } => {
+                operators::data_modification::open_pipedeletevertices(self)
+            }
+            Self::PipeDeleteEdges { .. } => {
+                operators::data_modification::open_pipedeleteedges(self)
+            }
             Self::DeleteTags { .. } => operators::data_modification::open_deletetags(self),
             // Graph traversal operations
             Self::Expand { .. } => operators::graph_traversal::open_expand(self),
@@ -888,7 +976,10 @@ impl StreamingExecutor {
             Self::ShortestPath { .. } => operators::graph_traversal::open_shortestpath(self),
             Self::BFSShortest { .. } => operators::graph_traversal::open_bfsshortest(self),
             Self::AllPaths { .. } => operators::graph_traversal::open_allpaths(self),
-            Self::MultiShortestPath { .. } => operators::graph_traversal::open_multishortestpath(self),
+            Self::MultiShortestPath { .. } => {
+                operators::graph_traversal::open_multishortestpath(self)
+            }
+            Self::Subgraph { .. } => operators::graph_traversal::open_subgraph(self),
             // Search operations
             Self::FulltextSearch { .. } => operators::search::open_fulltext_search(self),
             Self::FulltextLookup { .. } => operators::search::open_fulltext_lookup(self),
@@ -912,6 +1003,9 @@ impl StreamingExecutor {
             Self::Commit { .. } => operators::control_flow::open_commit(self),
             Self::Rollback { .. } => operators::control_flow::open_rollback(self),
             Self::ShowStats { .. } => operators::control_flow::open_show_stats(self),
+            // Analysis & Migration
+            Self::Analyze { .. } => operators::management::open_analyze(self),
+            Self::Migrate { .. } => operators::management::open_migrate(self),
         }
     }
 
@@ -927,6 +1021,9 @@ impl StreamingExecutor {
             Self::EdgeIndexScan { .. } => operators::access::next_edgeindexscan(self),
             Self::Argument { .. } => operators::access::next_argument(self),
             Self::Sample { .. } => operators::access::next_sample(self),
+            // Property & Index lookup
+            Self::GetProp { .. } => operators::access::next_getprop(self),
+            Self::LookupIndex { .. } => operators::access::next_lookupindex(self),
             // Data source operations
             Self::ScanVertices { .. } => operators::sources::next_scanvertices(self),
             Self::ScanEdges { .. } => operators::sources::next_scanedges(self),
@@ -974,8 +1071,12 @@ impl StreamingExecutor {
             Self::UpdateEdges { .. } => operators::data_modification::next_updateedges(self),
             Self::DeleteVertices { .. } => operators::data_modification::next_deletevertices(self),
             Self::DeleteEdges { .. } => operators::data_modification::next_deleteedges(self),
-            Self::PipeDeleteVertices { .. } => operators::data_modification::next_pipedeletevertices(self),
-            Self::PipeDeleteEdges { .. } => operators::data_modification::next_pipedeleteedges(self),
+            Self::PipeDeleteVertices { .. } => {
+                operators::data_modification::next_pipedeletevertices(self)
+            }
+            Self::PipeDeleteEdges { .. } => {
+                operators::data_modification::next_pipedeleteedges(self)
+            }
             Self::DeleteTags { .. } => operators::data_modification::next_deletetags(self),
             // Graph traversal operations
             Self::Expand { .. } => operators::graph_traversal::next_expand(self),
@@ -988,7 +1089,10 @@ impl StreamingExecutor {
             Self::ShortestPath { .. } => operators::graph_traversal::next_shortestpath(self),
             Self::BFSShortest { .. } => operators::graph_traversal::next_bfsshortest(self),
             Self::AllPaths { .. } => operators::graph_traversal::next_allpaths(self),
-            Self::MultiShortestPath { .. } => operators::graph_traversal::next_multishortestpath(self),
+            Self::MultiShortestPath { .. } => {
+                operators::graph_traversal::next_multishortestpath(self)
+            }
+            Self::Subgraph { .. } => operators::graph_traversal::next_subgraph(self),
             // Search operations
             Self::FulltextSearch { .. } => operators::search::next_fulltext_search(self),
             Self::FulltextLookup { .. } => operators::search::next_fulltext_lookup(self),
@@ -1012,6 +1116,9 @@ impl StreamingExecutor {
             Self::Commit { .. } => operators::control_flow::next_commit(self),
             Self::Rollback { .. } => operators::control_flow::next_rollback(self),
             Self::ShowStats { .. } => operators::control_flow::next_show_stats(self),
+            // Analysis & Migration
+            Self::Analyze { .. } => operators::management::next_analyze(self),
+            Self::Migrate { .. } => operators::management::next_migrate(self),
         }
     }
 
@@ -1027,6 +1134,9 @@ impl StreamingExecutor {
             Self::EdgeIndexScan { .. } => operators::access::stop_edgeindexscan(self),
             Self::Argument { .. } => operators::access::stop_argument(self),
             Self::Sample { .. } => operators::access::stop_sample(self),
+            // Property & Index lookup
+            Self::GetProp { .. } => operators::access::stop_getprop(self),
+            Self::LookupIndex { .. } => operators::access::stop_lookupindex(self),
             // Data source operations
             Self::ScanVertices { .. } => operators::sources::stop_scanvertices(self),
             Self::ScanEdges { .. } => operators::sources::stop_scanedges(self),
@@ -1074,8 +1184,12 @@ impl StreamingExecutor {
             Self::UpdateEdges { .. } => operators::data_modification::stop_updateedges(self),
             Self::DeleteVertices { .. } => operators::data_modification::stop_deletevertices(self),
             Self::DeleteEdges { .. } => operators::data_modification::stop_deleteedges(self),
-            Self::PipeDeleteVertices { .. } => operators::data_modification::stop_pipedeletevertices(self),
-            Self::PipeDeleteEdges { .. } => operators::data_modification::stop_pipedeleteedges(self),
+            Self::PipeDeleteVertices { .. } => {
+                operators::data_modification::stop_pipedeletevertices(self)
+            }
+            Self::PipeDeleteEdges { .. } => {
+                operators::data_modification::stop_pipedeleteedges(self)
+            }
             Self::DeleteTags { .. } => operators::data_modification::stop_deletetags(self),
             // Graph traversal operations
             Self::Expand { .. } => operators::graph_traversal::stop_expand(self),
@@ -1088,7 +1202,10 @@ impl StreamingExecutor {
             Self::ShortestPath { .. } => operators::graph_traversal::stop_shortestpath(self),
             Self::BFSShortest { .. } => operators::graph_traversal::stop_bfsshortest(self),
             Self::AllPaths { .. } => operators::graph_traversal::stop_allpaths(self),
-            Self::MultiShortestPath { .. } => operators::graph_traversal::stop_multishortestpath(self),
+            Self::MultiShortestPath { .. } => {
+                operators::graph_traversal::stop_multishortestpath(self)
+            }
+            Self::Subgraph { .. } => operators::graph_traversal::stop_subgraph(self),
             // Search operations
             Self::FulltextSearch { .. } => operators::search::stop_fulltext_search(self),
             Self::FulltextLookup { .. } => operators::search::stop_fulltext_lookup(self),
@@ -1112,6 +1229,9 @@ impl StreamingExecutor {
             Self::Commit { .. } => operators::control_flow::stop_commit(self),
             Self::Rollback { .. } => operators::control_flow::stop_rollback(self),
             Self::ShowStats { .. } => operators::control_flow::stop_show_stats(self),
+            // Analysis & Migration
+            Self::Analyze { .. } => operators::management::stop_analyze(self),
+            Self::Migrate { .. } => operators::management::stop_migrate(self),
         }
     }
 
@@ -1127,6 +1247,9 @@ impl StreamingExecutor {
             Self::EdgeIndexScan { .. } => operators::access::close_edgeindexscan(self),
             Self::Argument { .. } => operators::access::close_argument(self),
             Self::Sample { .. } => operators::access::close_sample(self),
+            // Property & Index lookup
+            Self::GetProp { .. } => operators::access::close_getprop(self),
+            Self::LookupIndex { .. } => operators::access::close_lookupindex(self),
             // Data source operations
             Self::ScanVertices { .. } => operators::sources::close_scanvertices(self),
             Self::ScanEdges { .. } => operators::sources::close_scanedges(self),
@@ -1174,8 +1297,12 @@ impl StreamingExecutor {
             Self::UpdateEdges { .. } => operators::data_modification::close_updateedges(self),
             Self::DeleteVertices { .. } => operators::data_modification::close_deletevertices(self),
             Self::DeleteEdges { .. } => operators::data_modification::close_deleteedges(self),
-            Self::PipeDeleteVertices { .. } => operators::data_modification::close_pipedeletevertices(self),
-            Self::PipeDeleteEdges { .. } => operators::data_modification::close_pipedeleteedges(self),
+            Self::PipeDeleteVertices { .. } => {
+                operators::data_modification::close_pipedeletevertices(self)
+            }
+            Self::PipeDeleteEdges { .. } => {
+                operators::data_modification::close_pipedeleteedges(self)
+            }
             Self::DeleteTags { .. } => operators::data_modification::close_deletetags(self),
             // Graph traversal operations
             Self::Expand { .. } => operators::graph_traversal::close_expand(self),
@@ -1188,7 +1315,10 @@ impl StreamingExecutor {
             Self::ShortestPath { .. } => operators::graph_traversal::close_shortestpath(self),
             Self::BFSShortest { .. } => operators::graph_traversal::close_bfsshortest(self),
             Self::AllPaths { .. } => operators::graph_traversal::close_allpaths(self),
-            Self::MultiShortestPath { .. } => operators::graph_traversal::close_multishortestpath(self),
+            Self::MultiShortestPath { .. } => {
+                operators::graph_traversal::close_multishortestpath(self)
+            }
+            Self::Subgraph { .. } => operators::graph_traversal::close_subgraph(self),
             // Search operations
             Self::FulltextSearch { .. } => operators::search::close_fulltext_search(self),
             Self::FulltextLookup { .. } => operators::search::close_fulltext_lookup(self),
@@ -1212,6 +1342,9 @@ impl StreamingExecutor {
             Self::Commit { .. } => operators::control_flow::close_commit(self),
             Self::Rollback { .. } => operators::control_flow::close_rollback(self),
             Self::ShowStats { .. } => operators::control_flow::close_show_stats(self),
+            // Analysis & Migration
+            Self::Analyze { .. } => operators::management::close_analyze(self),
+            Self::Migrate { .. } => operators::management::close_migrate(self),
         }
     }
 }

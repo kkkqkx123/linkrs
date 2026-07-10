@@ -3,8 +3,8 @@
 //! Unified WAL (Write-Ahead Log) manager that properly integrates with LocalWalWriter.
 //! This module provides a single source of truth for LSN management and WAL operations.
 
-use crate::core::{StorageError, StorageResult};
 use crate::core::wal::types::WalOpType;
+use crate::core::{StorageError, StorageResult};
 use crate::transaction::wal::writer::WalWriter;
 use crate::transaction::wal::{LocalWalWriter, Lsn, WalConfig};
 use parking_lot::RwLock;

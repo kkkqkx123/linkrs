@@ -84,12 +84,11 @@ pub use cost_based::{
     AggregateStrategySelector, CandidateStart, CteCacheConfig, CteCacheDecision,
     CteCacheDecisionMaker, CteCacheEntry, CteCacheManager, CteCacheStats, DegreeInfo,
     DirectionContext, DirectionSelectionReason, IndexSelection, IndexSelector, JoinCondition,
-    JoinOrderOptimizer, JoinOrderResult, KeepReason, OptimizationMethod,
-    PredicateOperator, PropertyPredicate, SortContext, SortEliminationDecision,
-    SortEliminationOptimizer, SortKeepReason, SubqueryUnnestingOptimizer, TableInfo,
-    TopNConversionReason, TraversalDirection, TraversalDirectionDecision,
-    TraversalDirectionOptimizer, TraversalSelectionReason, TraversalStartSelector, UnnestDecision,
-    UnnestReason,
+    JoinOrderOptimizer, JoinOrderResult, KeepReason, OptimizationMethod, PredicateOperator,
+    PropertyPredicate, SortContext, SortEliminationDecision, SortEliminationOptimizer,
+    SortKeepReason, SubqueryUnnestingOptimizer, TableInfo, TopNConversionReason,
+    TraversalDirection, TraversalDirectionDecision, TraversalDirectionOptimizer,
+    TraversalSelectionReason, TraversalStartSelector, UnnestDecision, UnnestReason,
 };
 
 // Re-export heuristic types

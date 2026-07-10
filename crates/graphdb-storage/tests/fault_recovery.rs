@@ -5,7 +5,7 @@
 mod common;
 
 use graphdb_storage::core::types::VertexId;
-use graphdb_storage::storage::{StorageReader, StorageWriter, StorageAdmin, StoragePersistenceOps};
+use graphdb_storage::storage::{StorageAdmin, StoragePersistenceOps, StorageReader, StorageWriter};
 
 /// Test: Recovery after partial write during vertex insertion
 #[test]
@@ -87,17 +87,17 @@ fn test_recovery_after_concurrent_crash() {
 
         // Check data consistency
         let vertices = storage.scan_vertices("test_space").unwrap();
-        assert!(
-            vertices.len() >= 2,
-            "Should recover at least original data"
-        );
+        assert!(vertices.len() >= 2, "Should recover at least original data");
 
         // Verify no corruption in recovered data
         for v in &vertices {
             assert!(!v.tags.is_empty(), "Recovered vertex should have tags");
         }
 
-        println!("Recovered {} vertices after concurrent crash", vertices.len());
+        println!(
+            "Recovered {} vertices after concurrent crash",
+            vertices.len()
+        );
     }
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -189,7 +189,9 @@ fn test_recovery_deleted_vertex_integrity() {
 
         // Either both deletions and insertions are applied (full recovery)
         // or neither (checkpoint-based recovery), but not partial state
-        let has_v1 = all_vertices.iter().any(|v| v.vid == VertexId::from_int64(1));
+        let has_v1 = all_vertices
+            .iter()
+            .any(|v| v.vid == VertexId::from_int64(1));
         let has_new = all_vertices
             .iter()
             .any(|v| v.vid == VertexId::from_int64(100));
@@ -246,16 +248,9 @@ fn test_multiple_crash_recovery_cycles() {
         {
             let storage = common::open_persistent_storage(&dir);
             let vertices = storage.scan_vertices("test_space").unwrap();
-            assert!(
-                vertices.len() >= 2,
-                "Cycle {}: Should have vertices", cycle
-            );
+            assert!(vertices.len() >= 2, "Cycle {}: Should have vertices", cycle);
 
-            println!(
-                "Cycle {}: Recovered {} vertices",
-                cycle,
-                vertices.len()
-            );
+            println!("Cycle {}: Recovered {} vertices", cycle, vertices.len());
         }
     }
 

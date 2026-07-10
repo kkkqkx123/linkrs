@@ -14,8 +14,6 @@ pub mod utils;
 
 pub mod wal;
 
-
-
 // Error and result types
 pub use error::{
     DBError, DBResult, ErrorCategory, GraphDBResult, ManagerError, ManagerResult,
@@ -57,4 +55,7 @@ pub use stats::{
 // Session statistics type
 pub use session_stats::SessionStatistics;
 
-pub use types::dump_restore::{CompressionType, DumpConfig, DumpError, DumpFormat, DumpMetadata, RestoreConfig, RestoreError, RestoreStats, SpaceDumpInfo};
+pub use types::dump_restore::{
+    CompressionType, DumpConfig, DumpError, DumpFormat, DumpMetadata, RestoreConfig, RestoreError,
+    RestoreStats, SpaceDumpInfo,
+};

@@ -5,8 +5,10 @@ use crate::core::value::NullType;
 use crate::core::Value;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
-use crate::query::executor::streaming::executor::{SortDirection, StreamingExecutor, ValueRowContext};
 use crate::query::executor::streaming::executor::helpers::*;
+use crate::query::executor::streaming::executor::{
+    SortDirection, StreamingExecutor, ValueRowContext,
+};
 use std::collections::HashMap;
 
 // ============ Aggregate ============
@@ -54,8 +56,7 @@ pub fn next_aggregate(executor: &mut StreamingExecutor) -> Result<Option<DataChu
                         group_key.push(Value::Null(NullType::Null));
                     } else {
                         for expr in group_by_expressions.iter() {
-                            let mut context =
-                                ValueRowContext::new(row.clone(), col_names.clone());
+                            let mut context = ValueRowContext::new(row.clone(), col_names.clone());
                             match ExpressionEvaluator::evaluate(expr, &mut context) {
                                 Ok(value) => group_key.push(value),
                                 Err(_) => group_key.push(Value::Null(NullType::Null)),
@@ -289,11 +290,9 @@ pub fn next_groupby(executor: &mut StreamingExecutor) -> Result<Option<DataChunk
                 for row in all_rows.iter() {
                     let mut key_parts: Vec<String> = Vec::new();
                     for expr in group_by_expressions.iter() {
-                        let mut context =
-                            ValueRowContext::new(row.clone(), col_names.clone());
-                        let key_val =
-                            ExpressionEvaluator::evaluate(expr, &mut context)
-                                .unwrap_or(Value::Null(NullType::Null));
+                        let mut context = ValueRowContext::new(row.clone(), col_names.clone());
+                        let key_val = ExpressionEvaluator::evaluate(expr, &mut context)
+                            .unwrap_or(Value::Null(NullType::Null));
                         key_parts.push(format!("{:?}", key_val));
                     }
                     let key = key_parts.join("|");
@@ -301,8 +300,7 @@ pub fn next_groupby(executor: &mut StreamingExecutor) -> Result<Option<DataChunk
                 }
 
                 // Return all rows from all groups (preserving all data)
-                let result_rows: Vec<Vec<Value>> =
-                    groups.into_values().flatten().collect();
+                let result_rows: Vec<Vec<Value>> = groups.into_values().flatten().collect();
 
                 *result_iter = Some(result_rows.into_iter());
             }
@@ -360,7 +358,9 @@ pub fn open_windowfunction(executor: &mut StreamingExecutor) -> Result<(), Query
     }
 }
 
-pub fn next_windowfunction(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+pub fn next_windowfunction(
+    executor: &mut StreamingExecutor,
+) -> Result<Option<DataChunk>, QueryError> {
     match executor {
         StreamingExecutor::WindowFunction {
             input,
@@ -384,8 +384,9 @@ pub fn next_windowfunction(executor: &mut StreamingExecutor) -> Result<Option<Da
                 if all_rows.is_empty() {
                     *result_iter = Some(vec![].into_iter());
                 } else {
-                    let mut partitions: BTreeMap<Vec<Value>, Vec<(usize, Vec<Value>)>> = BTreeMap::new();
-                    
+                    let mut partitions: BTreeMap<Vec<Value>, Vec<(usize, Vec<Value>)>> =
+                        BTreeMap::new();
+
                     for (idx, row) in all_rows.iter().enumerate() {
                         let mut partition_key = Vec::new();
                         if partition_by_exprs.is_empty() {
@@ -399,7 +400,10 @@ pub fn next_windowfunction(executor: &mut StreamingExecutor) -> Result<Option<Da
                                 }
                             }
                         }
-                        partitions.entry(partition_key).or_insert_with(Vec::new).push((idx, row.clone()));
+                        partitions
+                            .entry(partition_key)
+                            .or_insert_with(Vec::new)
+                            .push((idx, row.clone()));
                     }
 
                     let mut result_rows = Vec::new();
@@ -407,11 +411,18 @@ pub fn next_windowfunction(executor: &mut StreamingExecutor) -> Result<Option<Da
                         if !order_by_exprs.is_empty() {
                             partition_rows.sort_by(|a, b| {
                                 for (idx, expr) in order_by_exprs.iter().enumerate() {
-                                    let direction = order_by_directions.get(idx).copied().unwrap_or(SortDirection::Ascending);
-                                    let mut ctx_a = ValueRowContext::new(a.1.clone(), col_names.clone());
-                                    let mut ctx_b = ValueRowContext::new(b.1.clone(), col_names.clone());
-                                    let val_a = ExpressionEvaluator::evaluate(expr, &mut ctx_a).unwrap_or(Value::Null(NullType::Null));
-                                    let val_b = ExpressionEvaluator::evaluate(expr, &mut ctx_b).unwrap_or(Value::Null(NullType::Null));
+                                    let direction = order_by_directions
+                                        .get(idx)
+                                        .copied()
+                                        .unwrap_or(SortDirection::Ascending);
+                                    let mut ctx_a =
+                                        ValueRowContext::new(a.1.clone(), col_names.clone());
+                                    let mut ctx_b =
+                                        ValueRowContext::new(b.1.clone(), col_names.clone());
+                                    let val_a = ExpressionEvaluator::evaluate(expr, &mut ctx_a)
+                                        .unwrap_or(Value::Null(NullType::Null));
+                                    let val_b = ExpressionEvaluator::evaluate(expr, &mut ctx_b)
+                                        .unwrap_or(Value::Null(NullType::Null));
                                     let cmp = comparison::compare_values(&val_a, &val_b);
                                     let final_cmp = match direction {
                                         SortDirection::Ascending => cmp,
@@ -429,16 +440,26 @@ pub fn next_windowfunction(executor: &mut StreamingExecutor) -> Result<Option<Da
                             let mut result_row = row.clone();
                             for window_expr in window_exprs.iter() {
                                 if let Expression::WindowFunction { name, args, .. } = window_expr {
-                                    let func_args: Vec<Value> = args.iter().map(|arg| {
-                                        let mut ctx = ValueRowContext::new(row.clone(), col_names.clone());
-                                        ExpressionEvaluator::evaluate(arg, &mut ctx).unwrap_or(Value::Null(NullType::Null))
-                                    }).collect();
-                                    
+                                    let func_args: Vec<Value> = args
+                                        .iter()
+                                        .map(|arg| {
+                                            let mut ctx = ValueRowContext::new(
+                                                row.clone(),
+                                                col_names.clone(),
+                                            );
+                                            ExpressionEvaluator::evaluate(arg, &mut ctx)
+                                                .unwrap_or(Value::Null(NullType::Null))
+                                        })
+                                        .collect();
+
                                     let window_result = compute_window_function(
                                         name,
                                         &func_args,
                                         &partition_rows,
-                                        partition_rows.iter().position(|(i, _)| i == row_idx).unwrap_or(0),
+                                        partition_rows
+                                            .iter()
+                                            .position(|(i, _)| i == row_idx)
+                                            .unwrap_or(0),
                                     );
                                     result_row.push(window_result);
                                 }
@@ -485,39 +506,79 @@ fn compute_window_function(
         "rank" => Value::BigInt((current_pos + 1) as i64),
         "dense_rank" => Value::BigInt((current_pos + 1) as i64),
         "lead" => {
-            let offset = if !args.is_empty() { value_to_i64(&args[0]) as usize } else { 1 };
-            let default_val = if args.len() > 1 { args[1].clone() } else { Value::Null(NullType::Null) };
+            let offset = if !args.is_empty() {
+                value_to_i64(&args[0]) as usize
+            } else {
+                1
+            };
+            let default_val = if args.len() > 1 {
+                args[1].clone()
+            } else {
+                Value::Null(NullType::Null)
+            };
             if current_pos + offset < partition_rows.len() {
-                partition_rows[current_pos + offset].1.first().cloned().unwrap_or(default_val)
+                partition_rows[current_pos + offset]
+                    .1
+                    .first()
+                    .cloned()
+                    .unwrap_or(default_val)
             } else {
                 default_val
             }
         }
         "lag" => {
-            let offset = if !args.is_empty() { value_to_i64(&args[0]) as usize } else { 1 };
-            let default_val = if args.len() > 1 { args[1].clone() } else { Value::Null(NullType::Null) };
+            let offset = if !args.is_empty() {
+                value_to_i64(&args[0]) as usize
+            } else {
+                1
+            };
+            let default_val = if args.len() > 1 {
+                args[1].clone()
+            } else {
+                Value::Null(NullType::Null)
+            };
             if current_pos >= offset {
-                partition_rows[current_pos - offset].1.first().cloned().unwrap_or(default_val)
+                partition_rows[current_pos - offset]
+                    .1
+                    .first()
+                    .cloned()
+                    .unwrap_or(default_val)
             } else {
                 default_val
             }
         }
-        "first_value" => {
-            partition_rows.first().map(|(_, r)| r.first().cloned()).flatten().unwrap_or(Value::Null(NullType::Null))
-        }
-        "last_value" => {
-            partition_rows.last().map(|(_, r)| r.first().cloned()).flatten().unwrap_or(Value::Null(NullType::Null))
-        }
+        "first_value" => partition_rows
+            .first()
+            .map(|(_, r)| r.first().cloned())
+            .flatten()
+            .unwrap_or(Value::Null(NullType::Null)),
+        "last_value" => partition_rows
+            .last()
+            .map(|(_, r)| r.first().cloned())
+            .flatten()
+            .unwrap_or(Value::Null(NullType::Null)),
         "nth_value" => {
-            let n = if !args.is_empty() { value_to_i64(&args[0]) as usize } else { 1 };
+            let n = if !args.is_empty() {
+                value_to_i64(&args[0]) as usize
+            } else {
+                1
+            };
             if n > 0 && n <= partition_rows.len() {
-                partition_rows[n - 1].1.first().cloned().unwrap_or(Value::Null(NullType::Null))
+                partition_rows[n - 1]
+                    .1
+                    .first()
+                    .cloned()
+                    .unwrap_or(Value::Null(NullType::Null))
             } else {
                 Value::Null(NullType::Null)
             }
         }
         "ntile" => {
-            let n = if !args.is_empty() { value_to_i64(&args[0]) } else { 1 };
+            let n = if !args.is_empty() {
+                value_to_i64(&args[0])
+            } else {
+                1
+            };
             if n > 0 {
                 let bucket_size = (partition_rows.len() as i64 + n - 1) / n;
                 Value::BigInt((current_pos as i64 / bucket_size) + 1)
@@ -552,10 +613,10 @@ pub fn close_windowfunction(executor: &mut StreamingExecutor) -> Result<(), Quer
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Value;
     use crate::core::types::expr::Expression;
     use crate::core::types::operators::AggregateFunction;
     use crate::core::value::NullType;
+    use crate::core::Value;
 
     fn create_test_buffer(size: usize) -> Vec<Vec<Value>> {
         (0..size)

@@ -58,21 +58,25 @@ pub async fn import_file<
     let mut batch_size = Some(1000usize);
     let mut file_data: Option<Vec<u8>> = None;
 
-    while let Some(field) = multipart.next_field().await.map_err(|e| {
-        HttpError::BadRequest(format!("Multipart error: {}", e))
-    })? {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| HttpError::BadRequest(format!("Multipart error: {}", e)))?
+    {
         let name = field.name().unwrap_or("").to_string();
 
         match name.as_str() {
             "space" => {
-                space = field.text().await.map_err(|e| {
-                    HttpError::BadRequest(format!("Invalid space field: {}", e))
-                })?;
+                space = field
+                    .text()
+                    .await
+                    .map_err(|e| HttpError::BadRequest(format!("Invalid space field: {}", e)))?;
             }
             "format" => {
-                format = field.text().await.map_err(|e| {
-                    HttpError::BadRequest(format!("Invalid format field: {}", e))
-                })?;
+                format = field
+                    .text()
+                    .await
+                    .map_err(|e| HttpError::BadRequest(format!("Invalid format field: {}", e)))?;
             }
             "target_type" => {
                 target_type = field.text().await.map_err(|e| {
@@ -91,9 +95,13 @@ pub async fn import_file<
                 batch_size = bs.parse().ok();
             }
             "file" => {
-                file_data = Some(field.bytes().await.map_err(|e| {
-                    HttpError::BadRequest(format!("Failed to read file: {}", e))
-                 })?.to_vec());
+                file_data = Some(
+                    field
+                        .bytes()
+                        .await
+                        .map_err(|e| HttpError::BadRequest(format!("Failed to read file: {}", e)))?
+                        .to_vec(),
+                );
             }
             _ => {}
         }
@@ -103,11 +111,12 @@ pub async fn import_file<
         return Err(HttpError::BadRequest("Missing 'space' field".to_string()));
     }
     if target_name.is_empty() {
-        return Err(HttpError::BadRequest("Missing 'target_name' field".to_string()));
+        return Err(HttpError::BadRequest(
+            "Missing 'target_name' field".to_string(),
+        ));
     }
-    let file_data = file_data.ok_or_else(|| {
-        HttpError::BadRequest("Missing 'file' field".to_string())
-    })?;
+    let file_data =
+        file_data.ok_or_else(|| HttpError::BadRequest("Missing 'file' field".to_string()))?;
 
     let import_id = uuid::Uuid::new_v4().to_string();
 

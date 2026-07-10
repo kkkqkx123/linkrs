@@ -7,7 +7,11 @@ pub struct DataGenerator;
 
 impl DataGenerator {
     /// Generate benchmark data GQL file
-    pub fn generate_storage_bench_data(path: &str, vertex_count: usize, edges_per_vertex: usize) -> std::io::Result<()> {
+    pub fn generate_storage_bench_data(
+        path: &str,
+        vertex_count: usize,
+        edges_per_vertex: usize,
+    ) -> std::io::Result<()> {
         let mut content = String::new();
 
         content.push_str("-- Storage Benchmark Data\n");
@@ -108,7 +112,9 @@ impl DataGenerator {
             let name = format!("node_{}", i);
             content.push_str(&format!(
                 "INSERT VERTEX Node(name, value) VALUES \"n{}\"(\"{}\", {})\n",
-                i, name, i as f64 * 0.1
+                i,
+                name,
+                i as f64 * 0.1
             ));
         }
 
@@ -121,7 +127,9 @@ impl DataGenerator {
                 let j = (i + k) % vertex_count;
                 content.push_str(&format!(
                     "INSERT EDGE Link(weight) VALUES \"n{}\"->\"n{}\"({})\n",
-                    i, j, 1.0 / k as f64
+                    i,
+                    j,
+                    1.0 / k as f64
                 ));
             }
         }
@@ -143,7 +151,13 @@ impl DataGenerator {
         content.push_str("    timestamp: INT\n");
         content.push_str(")\n\n");
 
-        let keywords = ["performance", "database", "query", "optimization", "benchmark"];
+        let keywords = [
+            "performance",
+            "database",
+            "query",
+            "optimization",
+            "benchmark",
+        ];
 
         for i in 0..document_count {
             let keyword = keywords[i % keywords.len()];
@@ -164,7 +178,11 @@ impl DataGenerator {
     }
 
     /// Generate vector search benchmark data
-    pub fn generate_vector_bench_data(path: &str, vector_count: usize, dimensions: usize) -> std::io::Result<()> {
+    pub fn generate_vector_bench_data(
+        path: &str,
+        vector_count: usize,
+        dimensions: usize,
+    ) -> std::io::Result<()> {
         let mut content = String::new();
 
         content.push_str("-- Vector Search Benchmark Data\n");

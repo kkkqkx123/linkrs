@@ -65,10 +65,7 @@ pub fn edge_to_row(edge: &Edge) -> Vec<Value> {
 }
 
 /// Convert Vertex collection to rows, filtering by partition range
-pub fn vertices_to_rows(
-    vertices: Vec<Vertex>,
-    partition_range: &Range<u32>,
-) -> Vec<Vec<Value>> {
+pub fn vertices_to_rows(vertices: Vec<Vertex>, partition_range: &Range<u32>) -> Vec<Vec<Value>> {
     vertices
         .into_iter()
         // Filter by partition range using vertex id
@@ -163,4 +160,3 @@ mod tests {
         assert_eq!(rows.len(), 2);
     }
 }
-

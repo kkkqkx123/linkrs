@@ -38,8 +38,8 @@
 //! handle.join().unwrap();
 //! ```
 
-use crate::transaction::VersionManager;
 use crate::core::types::Timestamp;
+use crate::transaction::VersionManager;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -286,8 +286,8 @@ impl Clone for IndexGcManager {
 mod tests {
     use std::sync::Arc;
 
-    use crate::transaction::VersionManager;
     use crate::storage::index::*;
+    use crate::transaction::VersionManager;
 
     #[test]
     fn test_gc_config_default() {

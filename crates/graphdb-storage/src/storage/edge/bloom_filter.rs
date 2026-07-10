@@ -29,7 +29,8 @@ impl EdgeDeletionBloomFilter {
         let word_count = bit_count.div_ceil(64);
 
         // Number of hash functions: k = (bit_count / capacity) * ln(2)
-        let hash_functions = (((bit_count as f64 / capacity.max(1) as f64) * 0.693) as usize).max(1);
+        let hash_functions =
+            (((bit_count as f64 / capacity.max(1) as f64) * 0.693) as usize).max(1);
 
         Self {
             bits: vec![0u64; word_count],
@@ -119,7 +120,11 @@ mod tests {
         }
 
         // Should have reasonable false positive rate (~1%)
-        assert!(false_positives < 10, "Too many false positives: {}", false_positives);
+        assert!(
+            false_positives < 10,
+            "Too many false positives: {}",
+            false_positives
+        );
     }
 
     #[test]

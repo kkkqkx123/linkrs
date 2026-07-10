@@ -533,7 +533,9 @@ impl<S: StorageClient + 'static> StorageGcOps for SyncWrapper<S> {
     );
 }
 
-impl<S: crate::storage::client::StorageClient + StorageSnapshotOps + 'static> crate::storage::client::StorageSnapshotOps for SyncWrapper<S> {
+impl<S: crate::storage::client::StorageClient + StorageSnapshotOps + 'static>
+    crate::storage::client::StorageSnapshotOps for SyncWrapper<S>
+{
     forward_storage_methods!(inner;
         fn export_snapshot(&self, ts: crate::core::types::Timestamp) -> crate::core::StorageResult<Vec<crate::storage::engine::graph_storage::context::ExportedEdgeSnapshotRecord>>;
         fn get_freeze_stats(&self) -> Option<crate::storage::engine::background_freeze::FreezeStats>;

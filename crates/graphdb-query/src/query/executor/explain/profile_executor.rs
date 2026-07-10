@@ -10,9 +10,7 @@ use parking_lot::RwLock;
 
 use crate::core::error::{DBError, DBResult as ExecutorDBResult, QueryError};
 use crate::core::Value;
-use crate::query::executor::base::{
-    BaseExecutor, ExecutionResult, Executor, ExecutorStats,
-};
+use crate::query::executor::base::{BaseExecutor, ExecutionResult, Executor, ExecutorStats};
 use crate::query::executor::streaming::StreamingQueryExecutor;
 use crate::query::parser::ast::stmt::ExplainFormat;
 use crate::query::planning::plan::explain::{DescribeVisitor, PlanDescription, ProfilingStats};

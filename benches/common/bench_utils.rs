@@ -1,7 +1,7 @@
 // benches/common/bench_utils.rs
 //! Benchmark utility functions
 
-use criterion::{Criterion, BenchmarkGroup};
+use criterion::{BenchmarkGroup, Criterion};
 use std::time::Duration;
 
 /// Create a standard benchmark group configuration

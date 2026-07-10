@@ -33,10 +33,10 @@ pub enum BinaryOperator {
     Subscript,
     Attribute,
     // JSONB operators
-    JsonGet,        // -> 
-    JsonGetText,    // ->>
-    JsonPathGet,    // #>
-    JsonPathGetText,// #>>
+    JsonGet,         // ->
+    JsonGetText,     // ->>
+    JsonPathGet,     // #>
+    JsonPathGetText, // #>>
     Union,
     Intersect,
     Except,

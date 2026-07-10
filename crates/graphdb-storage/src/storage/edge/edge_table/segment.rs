@@ -3,7 +3,7 @@
 //! Segments represent frozen portions of the edge table, storing compressed sparse row (CSR)
 //! data with metadata for time-travel queries and MVCC support.
 
-use super::super::{Csr, EdgeId, CsrBase};
+use super::super::{Csr, CsrBase, EdgeId};
 use crate::core::types::Timestamp;
 
 /// Deletion information for a CSR segment.
@@ -31,7 +31,11 @@ impl DeletionInfo {
         if min == u32::MAX || max == 0 {
             DeletionInfo::NoDeletes
         } else {
-            DeletionInfo::HasDeletes { min_ts: min, max_ts: max, deleted_count: 0 }
+            DeletionInfo::HasDeletes {
+                min_ts: min,
+                max_ts: max,
+                deleted_count: 0,
+            }
         }
     }
 
@@ -40,7 +44,11 @@ impl DeletionInfo {
         if min == u32::MAX || max == 0 || deleted_count == 0 {
             DeletionInfo::NoDeletes
         } else {
-            DeletionInfo::HasDeletes { min_ts: min, max_ts: max, deleted_count }
+            DeletionInfo::HasDeletes {
+                min_ts: min,
+                max_ts: max,
+                deleted_count,
+            }
         }
     }
 
@@ -66,9 +74,9 @@ impl DeletionInfo {
     pub fn deletion_percentage(&self, total_edge_count: u64) -> u32 {
         match self {
             DeletionInfo::NoDeletes => 0,
-            DeletionInfo::HasDeletes { deleted_count, .. } => {
-                total_edge_count.checked_div(*deleted_count as u64).map_or(0, |v| v as u32)
-            }
+            DeletionInfo::HasDeletes { deleted_count, .. } => total_edge_count
+                .checked_div(*deleted_count as u64)
+                .map_or(0, |v| v as u32),
         }
     }
 
@@ -76,18 +84,42 @@ impl DeletionInfo {
     pub fn merge(&self, other: &DeletionInfo) -> DeletionInfo {
         match (self, other) {
             (DeletionInfo::NoDeletes, DeletionInfo::NoDeletes) => DeletionInfo::NoDeletes,
-            (DeletionInfo::NoDeletes, DeletionInfo::HasDeletes { min_ts, max_ts, deleted_count }) |
-            (DeletionInfo::HasDeletes { min_ts, max_ts, deleted_count }, DeletionInfo::NoDeletes) => {
-                DeletionInfo::HasDeletes { min_ts: *min_ts, max_ts: *max_ts, deleted_count: *deleted_count }
-            }
-            (DeletionInfo::HasDeletes { min_ts: min1, max_ts: max1, deleted_count: count1 },
-             DeletionInfo::HasDeletes { min_ts: min2, max_ts: max2, deleted_count: count2 }) => {
+            (
+                DeletionInfo::NoDeletes,
                 DeletionInfo::HasDeletes {
-                    min_ts: (*min1).min(*min2),
-                    max_ts: (*max1).max(*max2),
-                    deleted_count: count1.saturating_add(*count2),
-                }
-            }
+                    min_ts,
+                    max_ts,
+                    deleted_count,
+                },
+            )
+            | (
+                DeletionInfo::HasDeletes {
+                    min_ts,
+                    max_ts,
+                    deleted_count,
+                },
+                DeletionInfo::NoDeletes,
+            ) => DeletionInfo::HasDeletes {
+                min_ts: *min_ts,
+                max_ts: *max_ts,
+                deleted_count: *deleted_count,
+            },
+            (
+                DeletionInfo::HasDeletes {
+                    min_ts: min1,
+                    max_ts: max1,
+                    deleted_count: count1,
+                },
+                DeletionInfo::HasDeletes {
+                    min_ts: min2,
+                    max_ts: max2,
+                    deleted_count: count2,
+                },
+            ) => DeletionInfo::HasDeletes {
+                min_ts: (*min1).min(*min2),
+                max_ts: (*max1).max(*max2),
+                deleted_count: count1.saturating_add(*count2),
+            },
         }
     }
 }
@@ -102,15 +134,15 @@ pub struct SegmentVersion {
 impl SegmentVersion {
     /// Create a new segment version
     pub fn new() -> Self {
-        Self {
-            checksum: 0,
-        }
+        Self { checksum: 0 }
     }
 
     /// Compute CRC32 checksum for segment
     pub fn compute_checksum(segment: &CsrSegment) -> u32 {
         let mut crc = 0u32;
-        crc = crc.wrapping_mul(31).wrapping_add(segment.csr.edge_count() as u32);
+        crc = crc
+            .wrapping_mul(31)
+            .wrapping_add(segment.csr.edge_count() as u32);
         crc = crc.wrapping_mul(31).wrapping_add(segment.create_ts_min);
         crc = crc.wrapping_mul(31).wrapping_add(segment.create_ts_max);
         crc
@@ -146,13 +178,22 @@ pub struct CsrSegment {
 }
 
 impl CsrSegment {
-    pub fn new(csr: Csr, create_ts_min: Timestamp, create_ts_max: Timestamp,
-               deletion_info: DeletionInfo) -> Self {
+    pub fn new(
+        csr: Csr,
+        create_ts_min: Timestamp,
+        create_ts_max: Timestamp,
+        deletion_info: DeletionInfo,
+    ) -> Self {
         Self::with_creation_ts(csr, create_ts_min, create_ts_max, deletion_info, u32::MAX)
     }
 
-    pub fn with_creation_ts(csr: Csr, create_ts_min: Timestamp, create_ts_max: Timestamp,
-                            deletion_info: DeletionInfo, created_at_ts: Timestamp) -> Self {
+    pub fn with_creation_ts(
+        csr: Csr,
+        create_ts_min: Timestamp,
+        create_ts_max: Timestamp,
+        deletion_info: DeletionInfo,
+        created_at_ts: Timestamp,
+    ) -> Self {
         let mut seg = Self {
             csr,
             create_ts_min,
@@ -212,8 +253,8 @@ impl CsrSegment {
     /// Estimate memory usage of this segment in bytes
     pub fn estimated_bytes(&self) -> usize {
         let csr_bytes = self.csr.used_memory_size();
-        let metadata_bytes = std::mem::size_of::<Timestamp>() * 2
-            + std::mem::size_of::<DeletionInfo>();
+        let metadata_bytes =
+            std::mem::size_of::<Timestamp>() * 2 + std::mem::size_of::<DeletionInfo>();
         csr_bytes + metadata_bytes
     }
 }
@@ -235,7 +276,7 @@ mod tests {
             )],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
-        schema_version: 1,
+            schema_version: 1,
         };
         super::super::super::EdgeTable::new(schema).unwrap()
     }
@@ -245,7 +286,9 @@ mod tests {
         let mut table = create_edge_table_with_props();
 
         for i in 0..10 {
-            table.insert_edge(0, i, 0, &[("weight".to_string(), Value::Double(1.0))], 100).unwrap();
+            table
+                .insert_edge(0, i, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+                .unwrap();
         }
 
         table.freeze_csr_only(100);

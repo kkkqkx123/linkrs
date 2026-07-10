@@ -87,7 +87,7 @@ impl Csr {
     ///
     /// Returns ~24 bytes per edge (immutable CSR storage).
     pub fn bytes_per_edge(&self) -> usize {
-        24  // Immutable CSR uses ~24 bytes per edge (compressed format)
+        24 // Immutable CSR uses ~24 bytes per edge (compressed format)
     }
 
     /// Resize vertex capacity

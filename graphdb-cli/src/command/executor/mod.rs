@@ -332,83 +332,63 @@ impl CommandExecutor {
                 )
                 .await
             }
-             MetaCommand::Copy {
-                 direction,
-                 target,
-                 file_path,
-                 streaming,
-                 chunk_size,
-             } => {
-                 meta::io::execute_copy(
-                     self,
-                     direction,
-                     target,
-                     file_path,
-                     streaming,
-                     chunk_size,
-                     session_mgr,
-                 )
-                 .await
-             }
-              MetaCommand::Dump {
-                  database,
-                  output_path,
-                  format,
-                  compress,
-              } => {
-meta::io::execute_dump(
-                       self,
-                       database,
-                       output_path,
-                       format,
-                       compress,
-                   )
-                   .await
-              }
-              MetaCommand::Restore {
-                  source_path,
-                  database,
-                  overwrite,
-                  strict,
-              } => {
-meta::io::execute_restore(
-                       self,
-                       source_path,
-                       database,
-                       overwrite,
-                       strict,
-                   )
-                   .await
-              }
-              MetaCommand::ExportSpace {
-                  space_name,
-                  output_path,
-                  format,
-                  tags,
-                  edge_types,
-              } => {
-                  meta::io::execute_export_space(
-                      self,
-                      space_name,
-                      output_path,
-                      format,
-                      tags,
-                      edge_types,
-                      session_mgr,
-                  )
-                  .await
-              }
-              MetaCommand::ExportSchema {
-                  output_path,
-                  format,
-              } => {
-                  meta::io::execute_export_schema(self, output_path, format, session_mgr).await
-              }
-              MetaCommand::ImportSchema { file_path } => {
-                  meta::io::execute_import_schema(self, file_path, session_mgr).await
-              }
-          }
-     }
+            MetaCommand::Copy {
+                direction,
+                target,
+                file_path,
+                streaming,
+                chunk_size,
+            } => {
+                meta::io::execute_copy(
+                    self,
+                    direction,
+                    target,
+                    file_path,
+                    streaming,
+                    chunk_size,
+                    session_mgr,
+                )
+                .await
+            }
+            MetaCommand::Dump {
+                database,
+                output_path,
+                format,
+                compress,
+            } => meta::io::execute_dump(self, database, output_path, format, compress).await,
+            MetaCommand::Restore {
+                source_path,
+                database,
+                overwrite,
+                strict,
+            } => meta::io::execute_restore(self, source_path, database, overwrite, strict).await,
+            MetaCommand::ExportSpace {
+                space_name,
+                output_path,
+                format,
+                tags,
+                edge_types,
+            } => {
+                meta::io::execute_export_space(
+                    self,
+                    space_name,
+                    output_path,
+                    format,
+                    tags,
+                    edge_types,
+                    session_mgr,
+                )
+                .await
+            }
+            MetaCommand::ExportSchema {
+                output_path,
+                format,
+            } => meta::io::execute_export_schema(self, output_path, format, session_mgr).await,
+            MetaCommand::ImportSchema { file_path } => {
+                meta::io::execute_import_schema(self, file_path, session_mgr).await
+            }
+        }
+    }
 
     fn handle_conditional(
         &mut self,

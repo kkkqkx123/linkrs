@@ -9,17 +9,17 @@
 
 mod common;
 
+#[cfg(feature = "qdrant")]
+use common::storage_helpers::knows_edge_type_info;
 use common::{
     assertions::{assert_count, assert_none, assert_ok, assert_some},
     storage_helpers::{create_test_space, person_tag_info},
     TestStorage,
 };
 use graphdb::core::types::{Index, IndexField, IndexStatus, IndexType, VertexId};
-use graphdb::core::{Value, Vertex};
-#[cfg(feature = "qdrant")]
-use common::storage_helpers::knows_edge_type_info;
 #[cfg(feature = "qdrant")]
 use graphdb::core::Edge;
+use graphdb::core::{Value, Vertex};
 use graphdb::query::planning::plan::{IndexLimit, ScanType};
 use graphdb::storage::{GraphStorage, StorageReader, StorageSchemaOps, StorageWriter};
 use parking_lot::RwLock;

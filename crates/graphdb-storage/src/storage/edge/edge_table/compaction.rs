@@ -5,11 +5,11 @@
 //! MVCC visibility guarantees through proper timestamp tracking.
 
 use super::core::TimeTravelEdgeStore;
-use super::stats::DeletionStats;
 use super::segment::DeletionInfo;
-use crate::core::types::{Timestamp, CompactConfig};
+use super::stats::DeletionStats;
+use crate::core::types::{CompactConfig, Timestamp};
 
-use crate::storage::edge::{MutableCsrTrait, CsrBase};
+use crate::storage::edge::{CsrBase, MutableCsrTrait};
 
 /// Compaction mode for the unified compact_and_freeze pipeline.
 ///
@@ -64,7 +64,9 @@ impl TimeTravelEdgeStore {
         let in_stats = self.in_csr.fragmentation_stats();
         let out_wasted = self.out_csr.wasted_bytes_estimate();
         let in_wasted = self.in_csr.wasted_bytes_estimate();
-        if out_stats.as_ref().is_some_and(|s| s.should_compact(threshold))
+        if out_stats
+            .as_ref()
+            .is_some_and(|s| s.should_compact(threshold))
             || self.out_csr.fragmentation_ratio() >= threshold
         {
             self.out_csr.compact_with_ts(ts, RESERVE_RATIO);
@@ -78,7 +80,9 @@ impl TimeTravelEdgeStore {
                 );
             }
         }
-        if in_stats.as_ref().is_some_and(|s| s.should_compact(threshold))
+        if in_stats
+            .as_ref()
+            .is_some_and(|s| s.should_compact(threshold))
             || self.in_csr.fragmentation_ratio() >= threshold
         {
             self.in_csr.compact_with_ts(ts, RESERVE_RATIO);
@@ -195,7 +199,11 @@ impl TimeTravelEdgeStore {
 
             match segment.deletion_info {
                 DeletionInfo::NoDeletes => {}
-                DeletionInfo::HasDeletes { min_ts, max_ts, deleted_count } => {
+                DeletionInfo::HasDeletes {
+                    min_ts,
+                    max_ts,
+                    deleted_count,
+                } => {
                     total_deleted_count += deleted_count as u64;
                     stats.segments_with_deletions += 1;
 
@@ -226,8 +234,15 @@ impl TimeTravelEdgeStore {
 
     /// Get total memory used by all segments in bytes.
     pub fn segments_total_bytes(&self) -> usize {
-        self.out_segments.iter().map(|s| s.estimated_bytes()).sum::<usize>()
-            + self.in_segments.iter().map(|s| s.estimated_bytes()).sum::<usize>()
+        self.out_segments
+            .iter()
+            .map(|s| s.estimated_bytes())
+            .sum::<usize>()
+            + self
+                .in_segments
+                .iter()
+                .map(|s| s.estimated_bytes())
+                .sum::<usize>()
     }
 
     /// Unified compaction pipeline with configurable mode.
@@ -247,7 +262,12 @@ impl TimeTravelEdgeStore {
     /// - **Layer 1** (Mutable CSR): compact_csr_only() removes tombstoned entries from delta
     /// - **Layer 2** (Frozen Segments): merge with deletion filter removes edges deleted before min_active_snapshot_ts
     /// - **Layer 3** (Property Table): compact_properties() reclaims unused property offsets
-    pub fn compact_and_freeze(&mut self, ts: Timestamp, config: &CompactConfig, mode: CompactionMode) -> usize {
+    pub fn compact_and_freeze(
+        &mut self,
+        ts: Timestamp,
+        config: &CompactConfig,
+        mode: CompactionMode,
+    ) -> usize {
         let edge_count = self.edge_count() as usize;
         let reserve_ratio = config.compute_reserve_ratio(edge_count, 0);
 
@@ -282,7 +302,10 @@ impl TimeTravelEdgeStore {
                     }
                 }
                 _ => {
-                    let result = self.merge_segments_with_config(config.segment_merge_threshold, merge_threshold);
+                    let result = self.merge_segments_with_config(
+                        config.segment_merge_threshold,
+                        merge_threshold,
+                    );
                     if result.metrics.edges_merged > 0 {
                         result.metrics.log();
                         if result.segments_reduced > 0 {

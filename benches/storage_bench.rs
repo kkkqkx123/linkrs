@@ -2,7 +2,7 @@
 //! Storage layer performance benchmarks
 //! Tests: vertex operations, edge operations, and persistence
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::time::Duration;
 
 fn create_benchmark_group<'a>(
@@ -24,7 +24,10 @@ fn setup_benchmark_database() -> String {
 
 fn generate_gql_for_vertex_insert(count: usize) -> String {
     let mut gql = String::new();
-    gql.push_str(&format!("CREATE SPACE IF NOT EXISTS bench_v{} (vid_type=STRING)\n", count));
+    gql.push_str(&format!(
+        "CREATE SPACE IF NOT EXISTS bench_v{} (vid_type=STRING)\n",
+        count
+    ));
     gql.push_str(&format!("USE bench_v{}\n\n", count));
 
     gql.push_str("CREATE TAG IF NOT EXISTS TestVertex(\n");
@@ -49,8 +52,14 @@ fn generate_gql_for_vertex_insert(count: usize) -> String {
 
 fn generate_gql_for_edge_insert(vertex_count: usize, edges_per_vertex: usize) -> String {
     let mut gql = String::new();
-    gql.push_str(&format!("CREATE SPACE IF NOT EXISTS bench_e{}_{} (vid_type=STRING)\n", vertex_count, edges_per_vertex));
-    gql.push_str(&format!("USE bench_e{}_{}\n\n", vertex_count, edges_per_vertex));
+    gql.push_str(&format!(
+        "CREATE SPACE IF NOT EXISTS bench_e{}_{} (vid_type=STRING)\n",
+        vertex_count, edges_per_vertex
+    ));
+    gql.push_str(&format!(
+        "USE bench_e{}_{}\n\n",
+        vertex_count, edges_per_vertex
+    ));
 
     gql.push_str("CREATE TAG IF NOT EXISTS TestVertex(\n");
     gql.push_str("    name: STRING\n");
@@ -91,17 +100,13 @@ fn bench_vertex_insert(c: &mut Criterion) {
     for count in &[10, 100, 1000] {
         let gql = generate_gql_for_vertex_insert(*count);
 
-        group.bench_with_input(
-            BenchmarkId::from_parameter(count),
-            count,
-            |b, _| {
-                b.iter(|| {
-                    // Simulate batch vertex insertion
-                    let insert_count = gql.matches("INSERT VERTEX").count();
-                    black_box(insert_count)
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter(count), count, |b, _| {
+            b.iter(|| {
+                // Simulate batch vertex insertion
+                let insert_count = gql.matches("INSERT VERTEX").count();
+                black_box(insert_count)
+            });
+        });
     }
 
     group.finish();
@@ -119,9 +124,7 @@ fn bench_edge_insert(c: &mut Criterion) {
                 BenchmarkId::from_parameter(format!("v{}_e{}", vertex_count, edges_per_vertex)),
                 &(*vertex_count, *edges_per_vertex),
                 |b, _| {
-                    b.iter(|| {
-                        black_box(edge_count)
-                    });
+                    b.iter(|| black_box(edge_count));
                 },
             );
         }
@@ -134,15 +137,11 @@ fn bench_data_generation(c: &mut Criterion) {
     let mut group = create_benchmark_group(c, "data_generation");
 
     group.bench_function("generate_storage_data_1k", |b| {
-        b.iter(|| {
-            black_box(generate_gql_for_vertex_insert(1000))
-        });
+        b.iter(|| black_box(generate_gql_for_vertex_insert(1000)));
     });
 
     group.bench_function("generate_storage_data_10k", |b| {
-        b.iter(|| {
-            black_box(generate_gql_for_vertex_insert(10000))
-        });
+        b.iter(|| black_box(generate_gql_for_vertex_insert(10000)));
     });
 
     group.finish();

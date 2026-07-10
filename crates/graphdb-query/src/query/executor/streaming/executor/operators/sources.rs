@@ -1,9 +1,9 @@
 //! Data source operators: ScanVertices, ScanEdges
 
 use crate::core::error::QueryError;
+use crate::core::Value;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::core::Value;
 
 const CHUNK_SIZE: usize = 1024;
 
@@ -13,7 +13,9 @@ pub fn open_scanvertices(_executor: &mut StreamingExecutor) -> Result<(), QueryE
 }
 
 /// Next chunk from ScanVertices
-pub fn next_scanvertices(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+pub fn next_scanvertices(
+    executor: &mut StreamingExecutor,
+) -> Result<Option<DataChunk>, QueryError> {
     match executor {
         StreamingExecutor::ScanVertices {
             current_index,

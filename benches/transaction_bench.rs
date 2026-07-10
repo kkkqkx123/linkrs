@@ -2,7 +2,7 @@
 //! Transaction layer performance benchmarks
 //! Tests: transaction operations, MVCC, concurrency
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::time::Duration;
 
 fn create_benchmark_group<'a>(
@@ -20,7 +20,10 @@ fn create_benchmark_group<'a>(
 #[allow(dead_code)]
 fn generate_gql_for_transaction_bench(vertex_count: usize) -> String {
     let mut gql = String::new();
-    gql.push_str(&format!("CREATE SPACE IF NOT EXISTS bench_txn{} (vid_type=STRING)\n", vertex_count));
+    gql.push_str(&format!(
+        "CREATE SPACE IF NOT EXISTS bench_txn{} (vid_type=STRING)\n",
+        vertex_count
+    ));
     gql.push_str(&format!("USE bench_txn{}\n\n", vertex_count));
 
     gql.push_str("CREATE TAG IF NOT EXISTS Data(\n");
@@ -42,21 +45,15 @@ fn bench_transaction_create_commit(c: &mut Criterion) {
     let mut group = create_benchmark_group(c, "transaction_ops");
 
     group.bench_function("transaction_create", |b| {
-        b.iter(|| {
-            black_box("BEGIN".to_string())
-        });
+        b.iter(|| black_box("BEGIN".to_string()));
     });
 
     group.bench_function("transaction_commit", |b| {
-        b.iter(|| {
-            black_box("COMMIT".to_string())
-        });
+        b.iter(|| black_box("COMMIT".to_string()));
     });
 
     group.bench_function("transaction_rollback", |b| {
-        b.iter(|| {
-            black_box("ROLLBACK".to_string())
-        });
+        b.iter(|| black_box("ROLLBACK".to_string()));
     });
 
     group.finish();
@@ -69,19 +66,16 @@ fn bench_transaction_batch_operations(c: &mut Criterion) {
         let mut gql = String::new();
         gql.push_str("BEGIN\n");
         for i in 0..*op_count {
-            gql.push_str(&format!("INSERT VERTEX Data(value, counter) VALUES \"v{}\"({}, 0)\n", i, i));
+            gql.push_str(&format!(
+                "INSERT VERTEX Data(value, counter) VALUES \"v{}\"({}, 0)\n",
+                i, i
+            ));
         }
         gql.push_str("COMMIT\n");
 
-        group.bench_with_input(
-            BenchmarkId::from_parameter(op_count),
-            op_count,
-            |b, _| {
-                b.iter(|| {
-                    black_box(gql.matches("INSERT VERTEX").count())
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter(op_count), op_count, |b, _| {
+            b.iter(|| black_box(gql.matches("INSERT VERTEX").count()));
+        });
     }
 
     group.finish();
@@ -117,9 +111,7 @@ fn bench_write_conflict_detection(c: &mut Criterion) {
             conflict_count,
             |b, _| {
                 // Simulate conflict checking
-                b.iter(|| {
-                    black_box((0..*conflict_count).map(|c| c * 2).sum::<usize>() as i32)
-                });
+                b.iter(|| black_box((0..*conflict_count).map(|c| c * 2).sum::<usize>() as i32));
             },
         );
     }
@@ -130,13 +122,16 @@ fn bench_write_conflict_detection(c: &mut Criterion) {
 fn bench_isolation_levels(c: &mut Criterion) {
     let mut group = create_benchmark_group(c, "isolation_levels");
 
-    let isolation_levels = vec!["READ_UNCOMMITTED", "READ_COMMITTED", "REPEATABLE_READ", "SERIALIZABLE"];
+    let isolation_levels = vec![
+        "READ_UNCOMMITTED",
+        "READ_COMMITTED",
+        "REPEATABLE_READ",
+        "SERIALIZABLE",
+    ];
 
     for level in isolation_levels {
         group.bench_function(format!("isolation_{}", level), |b| {
-            b.iter(|| {
-                black_box(format!("BEGIN ISOLATION_LEVEL {}", level))
-            });
+            b.iter(|| black_box(format!("BEGIN ISOLATION_LEVEL {}", level)));
         });
     }
 

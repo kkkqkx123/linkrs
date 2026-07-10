@@ -34,7 +34,10 @@ impl ExecutionModeOptimizer {
     ///
     /// # Returns
     /// A tuple of (ExecutionMode, reason_string)
-    pub fn decide_execution_mode(&self, root: &PlanNodeEnum) -> OptimizeResult<(ExecutionMode, String)> {
+    pub fn decide_execution_mode(
+        &self,
+        root: &PlanNodeEnum,
+    ) -> OptimizeResult<(ExecutionMode, String)> {
         // Check if plan is streamable (all nodes supported in streaming mode)
         if !self.is_plan_streamable(root) {
             return Ok((
@@ -246,4 +249,3 @@ mod tests {
         assert!(optimizer.is_node_streaming_compatible(&start));
     }
 }
-

@@ -8,7 +8,9 @@ use crate::engine::{DisabledEngine, VectorEngine};
 use crate::error::{Result, VectorClientError};
 use crate::types::*;
 
-use super::core::{CollectionApi, CollectionApiDyn, PointApi, PointApiDyn, SearchApi, SearchApiDyn};
+use super::core::{
+    CollectionApi, CollectionApiDyn, PointApi, PointApiDyn, SearchApi, SearchApiDyn,
+};
 
 #[derive(Debug)]
 pub struct VectorClient {

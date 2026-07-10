@@ -118,10 +118,10 @@ fn show_general_help() -> String {
         "  {:25} {}\n",
         "\\export <fmt> <file> <query> [opts]", "Export query results to file"
     ));
-     output.push_str(&format!(
-         "  {:25} {}\n",
-         "\\copy <target> from|to <file> [opts]", "Copy data to/from file"
-     ));
+    output.push_str(&format!(
+        "  {:25} {}\n",
+        "\\copy <target> from|to <file> [opts]", "Copy data to/from file"
+    ));
     output.push_str(&format!(
         "  {:25} {}\n",
         "\\export-space <sp> <path>", "Export full space (by tag/edge-type)"

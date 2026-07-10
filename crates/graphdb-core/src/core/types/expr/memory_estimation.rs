@@ -135,15 +135,39 @@ impl MemoryEstimatable for Expression {
                     + mapping.estimate_memory()
             }
             Expression::Vector(data) => base_size + data.len() * std::mem::size_of::<f32>(),
-            Expression::WindowFunction { args, over_partition_by, over_order_by, .. } => {
-                base_size + args.iter().map(|e| e.estimate_memory()).sum::<usize>()
-                    + over_partition_by.iter().map(|e| e.estimate_memory()).sum::<usize>()
-                    + over_order_by.iter().map(|e| e.estimate_memory()).sum::<usize>()
+            Expression::WindowFunction {
+                args,
+                over_partition_by,
+                over_order_by,
+                ..
+            } => {
+                base_size
+                    + args.iter().map(|e| e.estimate_memory()).sum::<usize>()
+                    + over_partition_by
+                        .iter()
+                        .map(|e| e.estimate_memory())
+                        .sum::<usize>()
+                    + over_order_by
+                        .iter()
+                        .map(|e| e.estimate_memory())
+                        .sum::<usize>()
             }
-            Expression::Exists { body } => base_size + body.patterns.iter().map(estimate_string_memory).sum::<usize>(),
+            Expression::Exists { body } => {
+                base_size
+                    + body
+                        .patterns
+                        .iter()
+                        .map(estimate_string_memory)
+                        .sum::<usize>()
+            }
             Expression::In { expr, subquery, .. } => {
-                base_size + expr.estimate_memory()
-                    + subquery.patterns.iter().map(estimate_string_memory).sum::<usize>()
+                base_size
+                    + expr.estimate_memory()
+                    + subquery
+                        .patterns
+                        .iter()
+                        .map(estimate_string_memory)
+                        .sum::<usize>()
             }
         }
     }
@@ -375,8 +399,14 @@ impl Expression {
                         stack.push(return_expr);
                     }
                 }
-                Expression::WindowFunction { args, over_partition_by, over_order_by, .. } => {
-                    total += std::mem::size_of::<Expression>() * (args.len() + over_partition_by.len() + over_order_by.len());
+                Expression::WindowFunction {
+                    args,
+                    over_partition_by,
+                    over_order_by,
+                    ..
+                } => {
+                    total += std::mem::size_of::<Expression>()
+                        * (args.len() + over_partition_by.len() + over_order_by.len());
                     for arg in args {
                         stack.push(arg);
                     }

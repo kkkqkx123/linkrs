@@ -31,6 +31,7 @@ use crate::core::{
 };
 use crate::query::executor::base::{BaseExecutor, ExecutionResult, Executor};
 use crate::query::executor::explain::{ExplainExecutor, ExplainMode, ProfileExecutor};
+use crate::query::executor::streaming::StreamingQueryExecutor;
 use crate::query::metadata::MetadataContext;
 use crate::query::optimizer::OptimizerEngine;
 use crate::query::parser::ast::stmt::{ExplainStmt, ProfileStmt};
@@ -40,9 +41,6 @@ use crate::query::validator::context::ExpressionAnalysisContext;
 use crate::query::validator::{ValidatedStatement, ValidationInfo};
 use crate::query::QueryContext;
 use crate::query::QueryRequestContext;
-use crate::query::executor::streaming::{
-    StreamingQueryExecutor,
-};
 #[cfg(feature = "fulltext-search")]
 use crate::search::manager::FulltextIndexManager;
 use crate::storage::StorageClient;
@@ -1112,11 +1110,13 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         plan: crate::query::planning::plan::ExecutionPlan,
     ) -> DBResult<ExecutionResult> {
         // Unified execution path: all queries use StreamingExecutor
-        
 
         let exec_mode = plan.execution_mode;
-        log::debug!("Executing with StreamingExecutor, mode: {} (reason: {})",
-                   exec_mode.as_str(), plan.execution_mode_reason);
+        log::debug!(
+            "Executing with StreamingExecutor, mode: {} (reason: {})",
+            exec_mode.as_str(),
+            plan.execution_mode_reason
+        );
 
         // Get the root plan node
         let root_node = plan.root.as_ref().ok_or_else(|| {
@@ -1135,6 +1135,10 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         {
             context.fulltext_manager = self.fulltext_manager.clone();
         }
+        #[cfg(feature = "qdrant")]
+        {
+            context.vector_coordinator = self.vector_coordinator.clone();
+        }
         // Try to get space name from variables
         if let Some(space_val) = context.get_variable("space_name") {
             match &space_val {
@@ -1143,15 +1147,19 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             }
         }
 
-        executor
-            .from_plan_node(root_node, &context)
-            .map_err(|e| DBError::from(QueryError::execution(
-                format!("Failed to create streaming executor: {}", e))))?;
+        executor.from_plan_node(root_node, &context).map_err(|e| {
+            DBError::from(QueryError::execution(format!(
+                "Failed to create streaming executor: {}",
+                e
+            )))
+        })?;
 
-        executor
-            .execute()
-            .map_err(|e| DBError::from(QueryError::execution(
-                format!("Streaming execution failed: {:?}", e))))
+        executor.execute().map_err(|e| {
+            DBError::from(QueryError::execution(format!(
+                "Streaming execution failed: {:?}",
+                e
+            )))
+        })
     }
 
     /// Execute EXPLAIN statement

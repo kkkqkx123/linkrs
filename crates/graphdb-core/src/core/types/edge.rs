@@ -11,7 +11,9 @@ pub enum EdgeStrategy {
     #[default]
     Multiple,
     /// Multi-edge with fixed capacity per vertex (default: 4 edges)
-    MultiSingle { max_edges: usize },
+    MultiSingle {
+        max_edges: usize,
+    },
     /// Label-aware multi-edge CSR
     Labeled,
 }

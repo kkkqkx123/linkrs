@@ -4,7 +4,7 @@
 mod tests {
     use graphdb_storage::core::{DataType, Value};
     use graphdb_storage::storage::mvcc::MVCCTable;
-    use graphdb_storage::storage::{VertexTable, VertexSchema, StoragePropertyDef};
+    use graphdb_storage::storage::{StoragePropertyDef, VertexSchema, VertexTable};
 
     fn create_test_schema() -> VertexSchema {
         VertexSchema {
@@ -51,7 +51,10 @@ mod tests {
 
         // Snapshot at ts=100 should still see data (before deletion)
         let record_at_snap = table.get_by_internal_id(id1, 100);
-        assert!(record_at_snap.is_some(), "Snapshot should see data at ts=100");
+        assert!(
+            record_at_snap.is_some(),
+            "Snapshot should see data at ts=100"
+        );
         let record = record_at_snap.unwrap();
         assert_eq!(record.properties.len(), 2);
         assert_eq!(
@@ -64,7 +67,10 @@ mod tests {
         );
 
         // Current view should not see deleted data
-        assert!(table.get_by_internal_id(id1, 250).is_none(), "Current view should not see deleted data");
+        assert!(
+            table.get_by_internal_id(id1, 250).is_none(),
+            "Current view should not see deleted data"
+        );
 
         // Unregister snapshot
         table.unregister_snapshot(snap1).unwrap();
@@ -187,16 +193,10 @@ mod tests {
 
         // Use MVCCTable trait methods
         let snap = <VertexTable as MVCCTable>::register_snapshot(&mut table, 100).unwrap();
-        assert_eq!(
-            <VertexTable as MVCCTable>::active_snapshot_count(&table),
-            1
-        );
+        assert_eq!(<VertexTable as MVCCTable>::active_snapshot_count(&table), 1);
 
         <VertexTable as MVCCTable>::unregister_snapshot(&mut table, snap).unwrap();
-        assert_eq!(
-            <VertexTable as MVCCTable>::active_snapshot_count(&table),
-            0
-        );
+        assert_eq!(<VertexTable as MVCCTable>::active_snapshot_count(&table), 0);
 
         // GC should be a no-op for VertexTable
         let gc_count = <VertexTable as MVCCTable>::gc(&mut table, 200).unwrap();

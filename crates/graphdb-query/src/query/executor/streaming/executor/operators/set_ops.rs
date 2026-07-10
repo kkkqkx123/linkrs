@@ -472,19 +472,13 @@ mod tests {
     fn test_unionall_basic() {
         let left = Box::new(StreamingExecutor::ScanVertices {
             partition_id: 0,
-            buffer: vec![
-                vec![Value::Int(1)],
-                vec![Value::Int(2)],
-            ],
+            buffer: vec![vec![Value::Int(1)], vec![Value::Int(2)]],
             current_index: 0,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
             partition_id: 0,
-            buffer: vec![
-                vec![Value::Int(2)],
-                vec![Value::Int(3)],
-            ],
+            buffer: vec![vec![Value::Int(2)], vec![Value::Int(3)]],
             current_index: 0,
         });
 
@@ -626,9 +620,7 @@ mod tests {
 
         let right = Box::new(StreamingExecutor::ScanVertices {
             partition_id: 0,
-            buffer: vec![
-                vec![Value::Int(2)],
-            ],
+            buffer: vec![vec![Value::Int(2)]],
             current_index: 0,
         });
 

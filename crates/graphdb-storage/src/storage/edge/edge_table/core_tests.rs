@@ -1,9 +1,9 @@
-use super::*;
 use super::core::TimeTravelEdgeStore;
-use crate::core::types::{VertexId, DataType};
+use super::*;
+use crate::core::types::{DataType, VertexId};
 use crate::core::Value;
-use crate::storage::types::StoragePropertyDef;
 use crate::storage::schema::ChangeDetails;
+use crate::storage::types::StoragePropertyDef;
 
 // Type alias for backward compatibility with existing tests
 #[allow(dead_code)]
@@ -120,10 +120,14 @@ fn test_self_loop_edge() {
     assert!(table.has_edge(0, 0, 0, 100));
 
     let out_edges = table.out_edges(0, 100);
-    assert!(out_edges.iter().any(|edge| edge.dst_vid == VertexId::from_int64(0)));
+    assert!(out_edges
+        .iter()
+        .any(|edge| edge.dst_vid == VertexId::from_int64(0)));
 
     let in_edges = table.in_edges(0, 100);
-    assert!(in_edges.iter().any(|edge| edge.src_vid == VertexId::from_int64(0)));
+    assert!(in_edges
+        .iter()
+        .any(|edge| edge.src_vid == VertexId::from_int64(0)));
 }
 
 #[test]
@@ -182,7 +186,13 @@ fn test_property_updates_multiple_edges() {
 
     for i in 0..3 {
         table
-            .insert_edge(0, 1, i as i64, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .insert_edge(
+                0,
+                1,
+                i as i64,
+                &[("weight".to_string(), Value::Double(1.0))],
+                100,
+            )
             .unwrap();
     }
 
@@ -219,7 +229,13 @@ fn test_reverse_index_consistency_insert() {
     let ts = 100u32;
 
     table
-        .insert_edge(src, dst, rank, &[("weight".to_string(), Value::Double(2.5))], ts)
+        .insert_edge(
+            src,
+            dst,
+            rank,
+            &[("weight".to_string(), Value::Double(2.5))],
+            ts,
+        )
         .unwrap();
 
     let out = table.out_edges(src, ts);
@@ -245,7 +261,13 @@ fn test_reverse_index_consistency_delete() {
     let rank = 10i64;
 
     table
-        .insert_edge(src, dst, rank, &[("weight".to_string(), Value::Double(2.5))], 100)
+        .insert_edge(
+            src,
+            dst,
+            rank,
+            &[("weight".to_string(), Value::Double(2.5))],
+            100,
+        )
         .unwrap();
 
     let deleted = table.delete_edge(src, dst, rank, 200).unwrap();
@@ -274,7 +296,13 @@ fn test_reverse_index_consistency_parallel_edges() {
 
     for rank in 0..3 {
         table
-            .insert_edge(src, dst, rank, &[("weight".to_string(), Value::Double(rank as f64))], 100)
+            .insert_edge(
+                src,
+                dst,
+                rank,
+                &[("weight".to_string(), Value::Double(rank as f64))],
+                100,
+            )
             .unwrap();
     }
 
@@ -306,7 +334,13 @@ fn test_p0_segment_reverse_index_sync_on_delete() {
     let rank = 100i64;
 
     table
-        .insert_edge(src, dst, rank, &[("weight".to_string(), Value::Double(1.5))], 100)
+        .insert_edge(
+            src,
+            dst,
+            rank,
+            &[("weight".to_string(), Value::Double(1.5))],
+            100,
+        )
         .unwrap();
 
     assert!(table.has_edge(src, dst, rank, 100));
@@ -347,7 +381,13 @@ fn test_p0_multi_edge_segment_delete_consistency() {
 
     for rank in 0..3 {
         table
-            .insert_edge(src, dst, rank, &[("weight".to_string(), Value::Double(rank as f64))], 100)
+            .insert_edge(
+                src,
+                dst,
+                rank,
+                &[("weight".to_string(), Value::Double(rank as f64))],
+                100,
+            )
             .unwrap();
     }
 
@@ -456,10 +496,14 @@ fn test_write_backpressure_disabled() {
 
     // Verify no freeze was triggered from backpressure
     // (segments might exist from other freezes, but not from backpressure)
-    let freeze_count = stats.get_value(crate::core::stats::MetricType::MutableCsrFreezeCount)
+    let freeze_count = stats
+        .get_value(crate::core::stats::MetricType::MutableCsrFreezeCount)
         .unwrap_or(0);
     // Should be 0 since backpressure is disabled
-    assert_eq!(freeze_count, 0, "No freeze should occur when backpressure is disabled");
+    assert_eq!(
+        freeze_count, 0,
+        "No freeze should occur when backpressure is disabled"
+    );
 }
 
 #[test]
@@ -497,7 +541,8 @@ fn test_add_property_increments_version() {
     let v1 = table.schema().schema_version;
     assert_eq!(v1, 1, "Initial version should be 1");
 
-    table.add_property("strength".to_string(), DataType::Double, false)
+    table
+        .add_property("strength".to_string(), DataType::Double, false)
         .expect("add_property should succeed");
 
     let v2 = table.schema().schema_version;
@@ -511,7 +556,8 @@ fn test_remove_property_increments_version() {
 
     let v1 = table.schema().schema_version;
 
-    table.remove_property("weight")
+    table
+        .remove_property("weight")
         .expect("remove_property should succeed");
 
     let v2 = table.schema().schema_version;
@@ -525,7 +571,8 @@ fn test_rename_property_increments_version() {
 
     let v1 = table.schema().schema_version;
 
-    table.rename_property("weight", "edge_weight")
+    table
+        .rename_property("weight", "edge_weight")
         .expect("rename_property should succeed");
 
     let v2 = table.schema().schema_version;
@@ -541,22 +588,26 @@ fn test_sequential_property_modifications() {
     assert_eq!(table.schema().schema_version, 1);
 
     // Add first property
-    table.add_property("strength".to_string(), DataType::Double, false)
+    table
+        .add_property("strength".to_string(), DataType::Double, false)
         .expect("add_property 1 should succeed");
     assert_eq!(table.schema().schema_version, 2);
 
     // Add second property
-    table.add_property("reliability".to_string(), DataType::Double, false)
+    table
+        .add_property("reliability".to_string(), DataType::Double, false)
         .expect("add_property 2 should succeed");
     assert_eq!(table.schema().schema_version, 3);
 
     // Rename property
-    table.rename_property("weight", "edge_weight")
+    table
+        .rename_property("weight", "edge_weight")
         .expect("rename_property should succeed");
     assert_eq!(table.schema().schema_version, 4);
 
     // Remove property
-    table.remove_property("reliability")
+    table
+        .remove_property("reliability")
         .expect("remove_property should succeed");
     assert_eq!(table.schema().schema_version, 5);
 }
@@ -579,11 +630,7 @@ fn test_version_history_add_property() -> StorageResult<()> {
     assert_eq!(initial_version, 1);
 
     // Add a property
-    table.add_property(
-        "weight".to_string(),
-        DataType::Float,
-        true,
-    )?;
+    table.add_property("weight".to_string(), DataType::Float, true)?;
 
     // Version should increment
     assert_eq!(table.schema.schema_version, 2);
@@ -598,7 +645,12 @@ fn test_version_history_add_property() -> StorageResult<()> {
 
     let change = &changes[0];
     match &change.details {
-        ChangeDetails::PropertyAdded { name, data_type, nullable, .. } => {
+        ChangeDetails::PropertyAdded {
+            name,
+            data_type,
+            nullable,
+            ..
+        } => {
             assert_eq!(name, "weight");
             assert_eq!(*data_type, DataType::Float);
             assert_eq!(*nullable, true);
@@ -616,7 +668,10 @@ fn test_version_history_remove_property() -> StorageResult<()> {
         label_name: "Likes".to_string(),
         src_label: 1,
         dst_label: 1,
-        properties: vec![StoragePropertyDef::new("weight".to_string(), DataType::Float)],
+        properties: vec![StoragePropertyDef::new(
+            "weight".to_string(),
+            DataType::Float,
+        )],
         oe_strategy: EdgeStrategy::Multiple,
         ie_strategy: EdgeStrategy::Multiple,
         schema_version: 1,
@@ -655,7 +710,10 @@ fn test_version_history_rename_property() -> StorageResult<()> {
         label_name: "Follows".to_string(),
         src_label: 1,
         dst_label: 1,
-        properties: vec![StoragePropertyDef::new("weight".to_string(), DataType::Float)],
+        properties: vec![StoragePropertyDef::new(
+            "weight".to_string(),
+            DataType::Float,
+        )],
         oe_strategy: EdgeStrategy::Multiple,
         ie_strategy: EdgeStrategy::Multiple,
         schema_version: 1,
@@ -703,18 +761,10 @@ fn test_version_history_multiple_changes() -> StorageResult<()> {
     let mut table = TimeTravelEdgeStore::with_config(schema, Default::default())?;
 
     // Make several changes
-    table.add_property(
-        "strength".to_string(),
-        DataType::Float,
-        true,
-    )?;
+    table.add_property("strength".to_string(), DataType::Float, true)?;
     assert_eq!(table.schema.schema_version, 2);
 
-    table.add_property(
-        "frequency".to_string(),
-        DataType::Int,
-        false,
-    )?;
+    table.add_property("frequency".to_string(), DataType::Int, false)?;
     assert_eq!(table.schema.schema_version, 3);
 
     table.rename_property("strength", "intensity")?;

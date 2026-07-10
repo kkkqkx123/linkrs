@@ -1,13 +1,13 @@
-use std::collections::HashMap;
-use std::sync::atomic::Ordering;
 use crate::core::types::{LabelId, Timestamp, VertexId};
 use crate::core::{StorageError, StorageResult};
 use crate::storage::edge::EdgeRecord;
 use crate::storage::engine::data_store::EdgeTableKey;
 use crate::storage::engine::{EdgeOperationParams, InsertEdgeParams};
+use std::collections::HashMap;
+use std::sync::atomic::Ordering;
 
-use super::GraphStorageContext;
 use super::helpers;
+use super::GraphStorageContext;
 
 struct EdgeLabelLookupCtx<'a> {
     vertex_tables: &'a HashMap<LabelId, crate::storage::vertex::VertexTable>,
@@ -131,11 +131,21 @@ impl GraphStorageContext {
 
         let vertex_tables = self.persistent.data_store.vertex_tables().read();
 
-        let src_internal =
-            helpers::resolve_internal_id(self, &vertex_tables, params.src_label, params.src_id, ts)?;
+        let src_internal = helpers::resolve_internal_id(
+            self,
+            &vertex_tables,
+            params.src_label,
+            params.src_id,
+            ts,
+        )?;
 
-        let dst_internal =
-            helpers::resolve_internal_id(self, &vertex_tables, params.dst_label, params.dst_id, ts)?;
+        let dst_internal = helpers::resolve_internal_id(
+            self,
+            &vertex_tables,
+            params.dst_label,
+            params.dst_id,
+            ts,
+        )?;
         let key = Self::resolve_edge_table_key(EdgeLabelLookupCtx {
             vertex_tables: &vertex_tables,
             src_id: &params.src_id,
@@ -158,17 +168,27 @@ impl GraphStorageContext {
 
         let vertex_tables = self.persistent.data_store.vertex_tables().read();
 
-        let src_internal = helpers::resolve_internal_id(self, &vertex_tables, params.src_label, params.src_id, ts)
-            .or_else(|| {
-                helpers::resolve_internal_id_any(&vertex_tables, params.src_label, params.src_id)
-            })
-            .ok_or(StorageError::vertex_not_found())?;
+        let src_internal =
+            helpers::resolve_internal_id(self, &vertex_tables, params.src_label, params.src_id, ts)
+                .or_else(|| {
+                    helpers::resolve_internal_id_any(
+                        &vertex_tables,
+                        params.src_label,
+                        params.src_id,
+                    )
+                })
+                .ok_or(StorageError::vertex_not_found())?;
 
-        let dst_internal = helpers::resolve_internal_id(self, &vertex_tables, params.dst_label, params.dst_id, ts)
-            .or_else(|| {
-                helpers::resolve_internal_id_any(&vertex_tables, params.dst_label, params.dst_id)
-            })
-            .ok_or(StorageError::vertex_not_found())?;
+        let dst_internal =
+            helpers::resolve_internal_id(self, &vertex_tables, params.dst_label, params.dst_id, ts)
+                .or_else(|| {
+                    helpers::resolve_internal_id_any(
+                        &vertex_tables,
+                        params.dst_label,
+                        params.dst_id,
+                    )
+                })
+                .ok_or(StorageError::vertex_not_found())?;
 
         let key = Self::resolve_edge_table_key(EdgeLabelLookupCtx {
             vertex_tables: &vertex_tables,
@@ -207,7 +227,8 @@ impl GraphStorageContext {
         }
 
         let vertex_tables = self.persistent.data_store.vertex_tables().read();
-        let src_internal = helpers::resolve_internal_id(self, &vertex_tables, src_label, src_id, ts)?;
+        let src_internal =
+            helpers::resolve_internal_id(self, &vertex_tables, src_label, src_id, ts)?;
         let actual_src = if src_label == 0 {
             helpers::resolve_internal_id_label(&vertex_tables, &src_id, ts).unwrap_or(src_label)
         } else {
@@ -239,7 +260,8 @@ impl GraphStorageContext {
         }
 
         let vertex_tables = self.persistent.data_store.vertex_tables().read();
-        let dst_internal = helpers::resolve_internal_id(self, &vertex_tables, dst_label, dst_id, ts)?;
+        let dst_internal =
+            helpers::resolve_internal_id(self, &vertex_tables, dst_label, dst_id, ts)?;
         let actual_dst = if dst_label == 0 {
             helpers::resolve_internal_id_label(&vertex_tables, &dst_id, ts).unwrap_or(dst_label)
         } else {

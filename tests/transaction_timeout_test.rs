@@ -8,10 +8,11 @@ fn test_transaction_timeout_enforced_on_execute() {
     let db = GraphDatabase::open_in_memory().expect("Failed to open database");
     let session = db.session().expect("Failed to create session");
 
-    let config = TransactionConfig::new()
-        .with_timeout(Duration::from_millis(100));
+    let config = TransactionConfig::new().with_timeout(Duration::from_millis(100));
 
-    let txn = session.begin_transaction_with_config(config).expect("Failed to begin transaction");
+    let txn = session
+        .begin_transaction_with_config(config)
+        .expect("Failed to begin transaction");
 
     std::thread::sleep(Duration::from_millis(150));
 
@@ -31,12 +32,14 @@ fn test_transaction_timeout_enforced_on_commit() {
     let db = GraphDatabase::open_in_memory().expect("Failed to open database");
     let session = db.session().expect("Failed to create session");
 
-    let config = TransactionConfig::new()
-        .with_timeout(Duration::from_millis(100));
+    let config = TransactionConfig::new().with_timeout(Duration::from_millis(100));
 
-    let txn = session.begin_transaction_with_config(config).expect("Failed to begin transaction");
+    let txn = session
+        .begin_transaction_with_config(config)
+        .expect("Failed to begin transaction");
 
-    txn.execute("CREATE TAG test(name string)").expect("Execute should succeed before timeout");
+    txn.execute("CREATE TAG test(name string)")
+        .expect("Execute should succeed before timeout");
 
     std::thread::sleep(Duration::from_millis(150));
 
@@ -56,13 +59,16 @@ fn test_transaction_no_timeout_executes_successfully() {
     let db = GraphDatabase::open_in_memory().expect("Failed to open database");
     let session = db.session().expect("Failed to create session");
 
-    let config = TransactionConfig::new()
-        .with_timeout(Duration::from_secs(60));
+    let config = TransactionConfig::new().with_timeout(Duration::from_secs(60));
 
-    let txn = session.begin_transaction_with_config(config).expect("Failed to begin transaction");
+    let txn = session
+        .begin_transaction_with_config(config)
+        .expect("Failed to begin transaction");
 
-    txn.execute("CREATE TAG test(name string)").expect("Execute should succeed");
-    txn.execute("INSERT VERTEX test(name) VALUES \"1\":(\"Alice\")").expect("Insert should succeed");
+    txn.execute("CREATE TAG test(name string)")
+        .expect("Execute should succeed");
+    txn.execute("INSERT VERTEX test(name) VALUES \"1\":(\"Alice\")")
+        .expect("Insert should succeed");
 
     txn.commit().expect("Commit should succeed");
 }
@@ -72,12 +78,14 @@ fn test_idle_timeout_enforced() {
     let db = GraphDatabase::open_in_memory().expect("Failed to open database");
     let session = db.session().expect("Failed to create session");
 
-    let config = TransactionConfig::new()
-        .with_idle_timeout(Duration::from_millis(100));
+    let config = TransactionConfig::new().with_idle_timeout(Duration::from_millis(100));
 
-    let txn = session.begin_transaction_with_config(config).expect("Failed to begin transaction");
+    let txn = session
+        .begin_transaction_with_config(config)
+        .expect("Failed to begin transaction");
 
-    txn.execute("CREATE TAG test(name string)").expect("First execute should succeed");
+    txn.execute("CREATE TAG test(name string)")
+        .expect("First execute should succeed");
 
     std::thread::sleep(Duration::from_millis(150));
 

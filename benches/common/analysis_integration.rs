@@ -5,7 +5,11 @@ use crate::analyzer::{AnalysisMetrics, BottleneckDetector};
 use std::fs;
 
 /// Save analysis metrics to JSON file
-pub fn save_analysis_metrics(metrics: &AnalysisMetrics, output_dir: &str, name: &str) -> std::io::Result<()> {
+pub fn save_analysis_metrics(
+    metrics: &AnalysisMetrics,
+    output_dir: &str,
+    name: &str,
+) -> std::io::Result<()> {
     // Create output directory if it doesn't exist
     fs::create_dir_all(output_dir)?;
 
@@ -35,19 +39,33 @@ pub fn print_analysis_metrics(metrics: &AnalysisMetrics) {
     println!("╠════════════════════════════════════════════════════════════╣");
     println!("║ Planning Phase                                             ║");
     println!("║   Planning Time: {:>47.2}ms ║", metrics.planning_time_ms);
-    println!("║   Plan Complexity: {:>44} nodes ║", metrics.plan_complexity);
+    println!(
+        "║   Plan Complexity: {:>44} nodes ║",
+        metrics.plan_complexity
+    );
     println!("╠════════════════════════════════════════════════════════════╣");
     println!("║ Execution Phase                                            ║");
-    println!("║   Execution Time: {:>46.2}ms ║", metrics.execution_time_ms);
+    println!(
+        "║   Execution Time: {:>46.2}ms ║",
+        metrics.execution_time_ms
+    );
     println!("║   Startup Time: {:>48.2}ms ║", metrics.startup_time_ms);
     println!("║   Total Rows: {:>50} ║", metrics.total_rows);
-    println!("║   Peak Memory: {:>47.2}MB ║",
-        metrics.peak_memory_bytes as f64 / (1024.0 * 1024.0));
+    println!(
+        "║   Peak Memory: {:>47.2}MB ║",
+        metrics.peak_memory_bytes as f64 / (1024.0 * 1024.0)
+    );
     println!("╠════════════════════════════════════════════════════════════╣");
     println!("║ Performance Metrics                                        ║");
     println!("║   Throughput: {:>48.0} rows/sec ║", metrics.throughput);
-    println!("║   Cache Hit Rate: {:>44.1}% ║", metrics.cache_hit_rate * 100.0);
-    println!("║   Performance Score: {:>40.1}/100 ║", metrics.calculate_score());
+    println!(
+        "║   Cache Hit Rate: {:>44.1}% ║",
+        metrics.cache_hit_rate * 100.0
+    );
+    println!(
+        "║   Performance Score: {:>40.1}/100 ║",
+        metrics.calculate_score()
+    );
     println!("╚════════════════════════════════════════════════════════════╝");
     println!();
 }
@@ -110,10 +128,7 @@ pub fn print_node_analysis_table(metrics: &AnalysisMetrics) {
 }
 
 /// Regression analysis compared to baseline
-pub fn print_regression_analysis(
-    baseline: &AnalysisMetrics,
-    current: &AnalysisMetrics,
-) {
+pub fn print_regression_analysis(baseline: &AnalysisMetrics, current: &AnalysisMetrics) {
     use crate::analyzer::ComparisonResult;
 
     let comparison = ComparisonResult::new(baseline.clone(), current.clone());
@@ -122,8 +137,14 @@ pub fn print_regression_analysis(
     println!("╔════════════════════════════════════════════════════════════╗");
     println!("║         BASELINE vs CURRENT COMPARISON                    ║");
     println!("╠════════════════════════════════════════════════════════════╣");
-    println!("║ Baseline Score:  {:>48.1}/100 ║", baseline.calculate_score());
-    println!("║ Current Score:   {:>48.1}/100 ║", current.calculate_score());
+    println!(
+        "║ Baseline Score:  {:>48.1}/100 ║",
+        baseline.calculate_score()
+    );
+    println!(
+        "║ Current Score:   {:>48.1}/100 ║",
+        current.calculate_score()
+    );
     println!("╠════════════════════════════════════════════════════════════╣");
 
     for (metric_name, deviation) in &comparison.deviations {
@@ -135,10 +156,7 @@ pub fn print_regression_analysis(
             "🔴"
         };
 
-        println!(
-            "║ {} {:<40} {:>12.1}% ║",
-            status, metric_name, deviation
-        );
+        println!("║ {} {:<40} {:>12.1}% ║", status, metric_name, deviation);
     }
 
     println!("╚════════════════════════════════════════════════════════════╝");
@@ -194,7 +212,7 @@ pub fn print_performance_grade(metrics: &AnalysisMetrics) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analyzer::{AnalysisMetrics};
+    use crate::analyzer::AnalysisMetrics;
 
     #[test]
     fn test_score_to_grade() {

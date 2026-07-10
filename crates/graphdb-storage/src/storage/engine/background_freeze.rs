@@ -133,7 +133,8 @@ impl FreezeDecision {
             0
         };
         let mem_pct = if self.memory_threshold_bytes > 0 {
-            (self.current_delta_memory_bytes as f64 / self.memory_threshold_bytes as f64 * 100.0) as u64
+            (self.current_delta_memory_bytes as f64 / self.memory_threshold_bytes as f64 * 100.0)
+                as u64
         } else {
             0
         };
@@ -173,7 +174,6 @@ pub struct BackgroundFreezeManager {
     stats: Arc<Mutex<FreezeStats>>,
 }
 
-
 impl BackgroundFreezeManager {
     /// Create a new freeze manager from FreezeConfig (uses configured strategy)
     pub fn from_config(config: FreezeConfig) -> Self {
@@ -191,8 +191,10 @@ impl BackgroundFreezeManager {
 
     /// Get detailed freeze decision
     pub fn get_freeze_decision_with_stats(&self, input: &FreezeDecisionInput) -> FreezeDecision {
-        let edge_exceeded = input.delta_edge_count >= self.decision_engine.config.delta_edge_threshold;
-        let memory_exceeded = input.delta_memory_bytes >= self.decision_engine.config.delta_memory_threshold_bytes;
+        let edge_exceeded =
+            input.delta_edge_count >= self.decision_engine.config.delta_edge_threshold;
+        let memory_exceeded =
+            input.delta_memory_bytes >= self.decision_engine.config.delta_memory_threshold_bytes;
 
         let freeze_reason = match (edge_exceeded, memory_exceeded) {
             (true, true) => FreezeReason::Both,
@@ -254,8 +256,8 @@ impl Default for BackgroundFreezeManager {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::config::FreezeStrategyType;
+    use super::*;
 
     #[test]
     fn test_freeze_decision_below_both_thresholds() {
@@ -447,7 +449,10 @@ mod tests {
 
         let retrieved_config = manager.get_config();
         assert_eq!(retrieved_config.delta_edge_threshold, 50_000);
-        assert_eq!(retrieved_config.delta_memory_threshold_bytes, 128 * 1024 * 1024);
+        assert_eq!(
+            retrieved_config.delta_memory_threshold_bytes,
+            128 * 1024 * 1024
+        );
     }
 
     #[test]
@@ -455,8 +460,7 @@ mod tests {
         let manager = BackgroundFreezeManager::default();
         let config = manager.get_config();
         assert_eq!(
-            config.delta_edge_threshold,
-            100_000,
+            config.delta_edge_threshold, 100_000,
             "Default edge threshold should be 100K edges"
         );
         assert_eq!(
@@ -483,7 +487,7 @@ mod tests {
         let stats_after = manager.get_stats();
         assert_eq!(stats_after.freeze_count, 1);
         assert_eq!(stats_after.total_frozen_edges, 50_000);
-        assert!(stats_after.last_freeze_duration_ms < 1000);  // Should be fast
+        assert!(stats_after.last_freeze_duration_ms < 1000); // Should be fast
     }
 
     #[test]
@@ -529,8 +533,8 @@ mod tests {
 
         let mut guard = FreezeGuard::new(manager.clone());
         guard.record_edges(50_000);
-        guard.finish();  // Manual finish
-        // Guard is still dropped after this
+        guard.finish(); // Manual finish
+                        // Guard is still dropped after this
 
         let stats = manager.get_stats();
         assert_eq!(stats.freeze_count, 1);

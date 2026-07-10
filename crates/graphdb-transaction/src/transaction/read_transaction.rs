@@ -4,8 +4,8 @@
 //! A read transaction sees a consistent snapshot of the database at the time
 //! the transaction was started.
 
-use super::wal::{LabelId, Timestamp, VertexId};
 use super::mvcc::{VersionManager, VersionManagerError};
+use super::wal::{LabelId, Timestamp, VertexId};
 
 /// Released timestamp sentinel value (0 means timestamp has been released)
 /// Note: distinct from core's RELEASED_TIMESTAMP (u32::MAX)

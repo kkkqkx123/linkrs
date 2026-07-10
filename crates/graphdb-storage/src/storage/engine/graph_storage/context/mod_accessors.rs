@@ -1,5 +1,5 @@
-use crate::core::types::{LabelId, TableId, Timestamp, TransactionContextInfo};
 use crate::core::stats::StatsManager;
+use crate::core::types::{LabelId, TableId, Timestamp, TransactionContextInfo};
 use std::sync::Arc;
 
 use super::GraphStorageContext;
@@ -115,7 +115,13 @@ impl GraphStorageContext {
 
     pub(crate) fn persistence(
         &self,
-    ) -> &Option<Arc<parking_lot::RwLock<crate::storage::engine::persistence_coordinator::PersistenceCoordinator>>> {
+    ) -> &Option<
+        Arc<
+            parking_lot::RwLock<
+                crate::storage::engine::persistence_coordinator::PersistenceCoordinator,
+            >,
+        >,
+    > {
         &self.persistent.persistence
     }
 
@@ -127,9 +133,7 @@ impl GraphStorageContext {
         self.persistent.layout.work_dir()
     }
 
-    pub(crate) fn storage_paths(
-        &self,
-    ) -> Option<crate::storage::engine::paths::StoragePaths> {
+    pub(crate) fn storage_paths(&self) -> Option<crate::storage::engine::paths::StoragePaths> {
         self.persistent.layout.storage_paths()
     }
 

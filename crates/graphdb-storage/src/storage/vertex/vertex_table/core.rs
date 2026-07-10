@@ -18,11 +18,14 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use super::super::{ColumnStore, IdIndexer, IdKey, LabelId, Timestamp, VertexId, VertexRecord, VertexSchema, VertexTimestamp};
-use crate::core::{StorageError, StorageResult, Value};
+use super::super::{
+    ColumnStore, IdIndexer, IdKey, LabelId, Timestamp, VertexId, VertexRecord, VertexSchema,
+    VertexTimestamp,
+};
 use crate::core::error::storage::StorageErrorKind;
-use crate::storage::schema::{LabelVersionHistory, SchemaObjectType};
+use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::mvcc::{MVCCTable, SnapshotHandle};
+use crate::storage::schema::{LabelVersionHistory, SchemaObjectType};
 
 #[derive(Debug, Clone)]
 pub struct VertexTableConfig {
@@ -57,7 +60,8 @@ pub struct VertexTable {
     pub(super) columns: ColumnStore,
     pub(super) timestamps: VertexTimestamp,
     pub(super) is_open: bool,
-    pub(super) deferred_encodings: std::collections::HashMap<String, crate::storage::encoding::EncodingType>,
+    pub(super) deferred_encodings:
+        std::collections::HashMap<String, crate::storage::encoding::EncodingType>,
     /// Cache for property name → index mapping to avoid O(n) schema lookups.
     /// Invalidated whenever schema changes.
     pub(super) property_index_cache: HashMap<String, usize>,
@@ -89,9 +93,11 @@ impl VertexTable {
             property_index_cache.insert(prop.name.clone(), idx);
         }
 
-        let version_history = Arc::new(Mutex::new(
-            LabelVersionHistory::new(label, label_name.clone(), SchemaObjectType::Vertex)
-        ));
+        let version_history = Arc::new(Mutex::new(LabelVersionHistory::new(
+            label,
+            label_name.clone(),
+            SchemaObjectType::Vertex,
+        )));
 
         Self {
             label,
@@ -143,7 +149,8 @@ impl VertexTable {
         let mut converted: Vec<(String, Value)> = Vec::with_capacity(properties.len());
         for (name, value) in properties {
             // Use cached index lookup instead of O(n) schema search
-            let prop_idx = self.property_index_cache
+            let prop_idx = self
+                .property_index_cache
                 .get(name)
                 .ok_or_else(|| StorageError::column_not_found(name.clone()))?;
             let prop_def = &self.schema.properties[*prop_idx];
@@ -222,7 +229,8 @@ impl VertexTable {
         }
 
         // Use cached index lookup
-        let prop_idx = self.property_index_cache
+        let prop_idx = self
+            .property_index_cache
             .get(col_name)
             .ok_or_else(|| StorageError::column_not_found(col_name.to_string()))?;
         let prop_def = &self.schema.properties[*prop_idx];
@@ -336,20 +344,19 @@ impl VertexTable {
         let mut result_ids = Vec::with_capacity(vertices.len());
         let mut inserted_external_ids = Vec::new();
         for (i, (external_id, properties)) in vertices.iter().enumerate() {
-            match self.insert_by_key(
-                IdKey::Text(external_id.clone()),
-                properties,
-                ts,
-            ) {
+            match self.insert_by_key(IdKey::Text(external_id.clone()), properties, ts) {
                 Ok(id) => {
                     result_ids.push(id);
                     inserted_external_ids.push(external_id.clone());
                 }
                 Err(e) => {
                     // Rollback: revert all previous inserts from both timestamps and id_indexer
-                    for (prev_id, prev_external_id) in result_ids.iter().zip(inserted_external_ids.iter()) {
+                    for (prev_id, prev_external_id) in
+                        result_ids.iter().zip(inserted_external_ids.iter())
+                    {
                         self.timestamps.remove(*prev_id, ts);
-                        self.id_indexer.remove(&IdKey::Text(prev_external_id.clone()));
+                        self.id_indexer
+                            .remove(&IdKey::Text(prev_external_id.clone()));
                     }
                     return Err(StorageError::invalid_operation(format!(
                         "Batch insert failed at index {}: {}",
@@ -364,11 +371,7 @@ impl VertexTable {
 
     /// Batch delete multiple vertices by external ID.
     /// Returns count of successfully deleted vertices.
-    pub fn batch_delete(
-        &mut self,
-        external_ids: &[&str],
-        ts: Timestamp,
-    ) -> StorageResult<usize> {
+    pub fn batch_delete(&mut self, external_ids: &[&str], ts: Timestamp) -> StorageResult<usize> {
         if !self.is_open {
             return Err(StorageError::storage_not_open());
         }
@@ -535,7 +538,8 @@ impl VertexTable {
 
         // Account for deferred_encodings HashMap (actual entries, not capacity)
         total += self.deferred_encodings.len()
-            * (std::mem::size_of::<String>() + std::mem::size_of::<crate::storage::encoding::EncodingType>());
+            * (std::mem::size_of::<String>()
+                + std::mem::size_of::<crate::storage::encoding::EncodingType>());
 
         total += std::mem::size_of::<Self>();
 
@@ -557,8 +561,7 @@ impl VertexTable {
         total += self.label_name.len();
 
         // Account for property_index_cache actual entries
-        total += self.property_index_cache.len()
-            * (24 + std::mem::size_of::<usize>()); // String overhead + usize
+        total += self.property_index_cache.len() * (24 + std::mem::size_of::<usize>()); // String overhead + usize
 
         total
     }
@@ -628,7 +631,9 @@ impl VertexTable {
     /// Returns a unique SnapshotHandle that must be used to unregister later.
     pub fn register_snapshot(&mut self, ts: Timestamp) -> StorageResult<SnapshotHandle> {
         *self.mvcc.active_snapshots.entry(ts).or_insert(0) += 1;
-        self.mvcc.min_active_snapshot_ts = self.mvcc.active_snapshots
+        self.mvcc.min_active_snapshot_ts = self
+            .mvcc
+            .active_snapshots
             .keys()
             .min()
             .copied()
@@ -651,7 +656,9 @@ impl VertexTable {
         }
 
         // Update min_active_snapshot_ts
-        self.mvcc.min_active_snapshot_ts = self.mvcc.active_snapshots
+        self.mvcc.min_active_snapshot_ts = self
+            .mvcc
+            .active_snapshots
             .keys()
             .min()
             .copied()
@@ -956,7 +963,11 @@ mod tests {
 
         let record1 = table.get_by_internal_id(ids[0], 100).unwrap();
         assert_eq!(
-            record1.properties.iter().find(|(n, _)| n == "name").map(|(_, v)| v),
+            record1
+                .properties
+                .iter()
+                .find(|(n, _)| n == "name")
+                .map(|(_, v)| v),
             Some(&Value::String("Alice".to_string()))
         );
     }
@@ -1009,7 +1020,11 @@ mod tests {
         let v1 = table.schema().schema_version;
         assert_eq!(v1, 1, "Initial version should be 1");
 
-        table.add_property(StoragePropertyDef::new("email".to_string(), DataType::String))
+        table
+            .add_property(StoragePropertyDef::new(
+                "email".to_string(),
+                DataType::String,
+            ))
             .expect("add_property should succeed");
 
         let v2 = table.schema().schema_version;
@@ -1020,12 +1035,16 @@ mod tests {
     fn test_remove_property_increments_version() {
         let mut schema = create_test_schema();
         // Add a removable property
-        schema.properties.push(StoragePropertyDef::new("email".to_string(), DataType::String));
+        schema.properties.push(StoragePropertyDef::new(
+            "email".to_string(),
+            DataType::String,
+        ));
         let mut table = VertexTable::new(0, "person".to_string(), schema);
 
         let v1 = table.schema().schema_version;
 
-        table.remove_property("email")
+        table
+            .remove_property("email")
             .expect("remove_property should succeed");
 
         let v2 = table.schema().schema_version;
@@ -1039,7 +1058,8 @@ mod tests {
 
         let v1 = table.schema().schema_version;
 
-        table.rename_property("name", "full_name")
+        table
+            .rename_property("name", "full_name")
             .expect("rename_property should succeed");
 
         let v2 = table.schema().schema_version;
@@ -1055,22 +1075,32 @@ mod tests {
         assert_eq!(table.schema().schema_version, 1);
 
         // Add first property
-        table.add_property(StoragePropertyDef::new("email".to_string(), DataType::String))
+        table
+            .add_property(StoragePropertyDef::new(
+                "email".to_string(),
+                DataType::String,
+            ))
             .expect("add_property 1 should succeed");
         assert_eq!(table.schema().schema_version, 2);
 
         // Add second property
-        table.add_property(StoragePropertyDef::new("phone".to_string(), DataType::String))
+        table
+            .add_property(StoragePropertyDef::new(
+                "phone".to_string(),
+                DataType::String,
+            ))
             .expect("add_property 2 should succeed");
         assert_eq!(table.schema().schema_version, 3);
 
         // Rename property
-        table.rename_property("email", "email_address")
+        table
+            .rename_property("email", "email_address")
             .expect("rename_property should succeed");
         assert_eq!(table.schema().schema_version, 4);
 
         // Remove property
-        table.remove_property("phone")
+        table
+            .remove_property("phone")
             .expect("remove_property should succeed");
         assert_eq!(table.schema().schema_version, 5);
     }
@@ -1083,7 +1113,11 @@ mod tests {
         let mut table = VertexTable::new(1, "User".to_string(), schema);
 
         // Add a property
-        table.add_property(StoragePropertyDef::new("email".to_string(), DataType::String))
+        table
+            .add_property(StoragePropertyDef::new(
+                "email".to_string(),
+                DataType::String,
+            ))
             .expect("add_property should succeed");
 
         // Check version history was updated
@@ -1108,12 +1142,16 @@ mod tests {
         use crate::storage::schema::ChangeDetails;
 
         let mut schema = create_test_schema();
-        schema.properties.push(StoragePropertyDef::new("email".to_string(), DataType::String));
+        schema.properties.push(StoragePropertyDef::new(
+            "email".to_string(),
+            DataType::String,
+        ));
 
         let mut table = VertexTable::new(1, "User".to_string(), schema);
 
         // Remove a property
-        table.remove_property("email")
+        table
+            .remove_property("email")
             .expect("remove_property should succeed");
 
         // Check version history was updated
@@ -1141,7 +1179,8 @@ mod tests {
         let mut table = VertexTable::new(1, "User".to_string(), schema);
 
         // Rename a property
-        table.rename_property("name", "full_name")
+        table
+            .rename_property("name", "full_name")
             .expect("rename_property should succeed");
 
         // Check version history was updated
@@ -1197,13 +1236,23 @@ mod tests {
 
         // Use compact_with_ts_collect to remove entries deleted before ts 300
         // This clears all deleted entries from id_indexer before compaction
-        let removed = table.compact_with_ts_collect(300).expect("compact_with_ts_collect should succeed");
+        let removed = table
+            .compact_with_ts_collect(300)
+            .expect("compact_with_ts_collect should succeed");
         assert_eq!(removed.len(), 5, "Should have removed 5 deleted entries");
 
         // After compact_with_ts_collect, table should be empty
         assert_eq!(table.scan(200).count(), 0);
-        assert_eq!(table.id_indexer.len(), 0, "id_indexer should be empty after removing all deleted entries");
-        assert_eq!(table.timestamps.size(), 0, "timestamps should be empty after removing all deleted entries");
+        assert_eq!(
+            table.id_indexer.len(),
+            0,
+            "id_indexer should be empty after removing all deleted entries"
+        );
+        assert_eq!(
+            table.timestamps.size(),
+            0,
+            "timestamps should be empty after removing all deleted entries"
+        );
     }
 
     /// Test: Multiple insert/delete/compact cycles
@@ -1223,7 +1272,10 @@ mod tests {
             let ts_compact = ts_delete + 50;
 
             eprintln!("=== Cycle {} ===", cycle);
-            eprintln!("Before insert: id_indexer.len() = {}", table.id_indexer.len());
+            eprintln!(
+                "Before insert: id_indexer.len() = {}",
+                table.id_indexer.len()
+            );
 
             // Insert 10 vertices
             for i in 0..10 {
@@ -1236,7 +1288,10 @@ mod tests {
                     .expect(&format!("insert cycle {} should succeed", cycle));
             }
 
-            eprintln!("After insert: id_indexer.len() = {}", table.id_indexer.len());
+            eprintln!(
+                "After insert: id_indexer.len() = {}",
+                table.id_indexer.len()
+            );
             let scan_count = table.scan(ts_insert as u32).count();
             eprintln!("After insert: scan({}) count = {}", ts_insert, scan_count);
 
@@ -1258,31 +1313,34 @@ mod tests {
             }
 
             assert_eq!(
-                scan_count,
-                expected_after_insert,
+                scan_count, expected_after_insert,
                 "Should have {} vertices after insert at cycle {}",
-                expected_after_insert,
-                cycle
+                expected_after_insert, cycle
             );
 
             // Delete every other vertex (50%)
             for i in 0..10 {
                 if i % 2 == 0 {
                     table
-                        .delete(
-                            &format!("v{}_{}", cycle, i),
-                            ts_delete as u32,
-                        )
+                        .delete(&format!("v{}_{}", cycle, i), ts_delete as u32)
                         .expect(&format!("delete cycle {} should succeed", cycle));
                 }
             }
 
-            eprintln!("After delete: id_indexer.len() = {}", table.id_indexer.len());
+            eprintln!(
+                "After delete: id_indexer.len() = {}",
+                table.id_indexer.len()
+            );
 
             // Compact and verify
-            table.compact_coordinated().expect(&format!("compact cycle {} should succeed", cycle));
+            table
+                .compact_coordinated()
+                .expect(&format!("compact cycle {} should succeed", cycle));
 
-            eprintln!("After compact: id_indexer.len() = {}", table.id_indexer.len());
+            eprintln!(
+                "After compact: id_indexer.len() = {}",
+                table.id_indexer.len()
+            );
 
             // At ts_compact: see vertices that were alive before deletion
             // Cycle 0: 10 inserted, 5 deleted (end_ts=50), so 5 still visible at ts_compact=100
@@ -1302,14 +1360,15 @@ mod tests {
             }
 
             let final_scan = table.scan(ts_compact as u32).count();
-            eprintln!("After compact: scan({}) count = {} (expected {})", ts_compact, final_scan, expected_count);
+            eprintln!(
+                "After compact: scan({}) count = {} (expected {})",
+                ts_compact, final_scan, expected_count
+            );
 
             assert_eq!(
-                final_scan,
-                expected_count,
+                final_scan, expected_count,
                 "Should have {} vertices after compact/delete in cycle {}",
-                expected_count,
-                cycle
+                expected_count, cycle
             );
         }
     }
@@ -1428,12 +1487,13 @@ mod tests {
         let mut table = VertexTable::new(0, "person".to_string(), schema);
 
         // Time 1: Insert vertex
-        table.insert(
-            "v1",
-            &[("name".to_string(), Value::String("Alice".to_string()))],
-            100,
-        )
-        .unwrap();
+        table
+            .insert(
+                "v1",
+                &[("name".to_string(), Value::String("Alice".to_string()))],
+                100,
+            )
+            .unwrap();
 
         // Time 2: Register snapshot at insert time
         let snap1 = table.register_snapshot(100).unwrap();
@@ -1441,7 +1501,8 @@ mod tests {
         assert_eq!(table.min_active_snapshot_ts(), 100);
 
         // Time 3: Modify vertex at later timestamp
-        table.update_property(0, "name", &Value::String("Alice Updated".to_string()), 200)
+        table
+            .update_property(0, "name", &Value::String("Alice Updated".to_string()), 200)
             .unwrap();
 
         // Time 4: Delete vertex at even later timestamp
@@ -1465,24 +1526,26 @@ mod tests {
         let mut table = VertexTable::new(0, "person".to_string(), schema);
 
         // Create vertices at different times
-        table.insert(
-            "v1",
-            &[("name".to_string(), Value::String("Alice".to_string()))],
-            100,
-        )
-        .unwrap();
+        table
+            .insert(
+                "v1",
+                &[("name".to_string(), Value::String("Alice".to_string()))],
+                100,
+            )
+            .unwrap();
 
         // Register first snapshot at ts=100
         let snap1 = table.register_snapshot(100).unwrap();
         assert_eq!(table.min_active_snapshot_ts(), 100);
 
         // Create another vertex
-        table.insert(
-            "v2",
-            &[("name".to_string(), Value::String("Bob".to_string()))],
-            150,
-        )
-        .unwrap();
+        table
+            .insert(
+                "v2",
+                &[("name".to_string(), Value::String("Bob".to_string()))],
+                150,
+            )
+            .unwrap();
 
         // Register second snapshot at ts=200
         let snap2 = table.register_snapshot(200).unwrap();
@@ -1518,12 +1581,13 @@ mod tests {
         let schema = create_test_schema();
         let mut table = VertexTable::new(0, "person".to_string(), schema);
 
-        table.insert(
-            "v1",
-            &[("name".to_string(), Value::String("Alice".to_string()))],
-            100,
-        )
-        .unwrap();
+        table
+            .insert(
+                "v1",
+                &[("name".to_string(), Value::String("Alice".to_string()))],
+                100,
+            )
+            .unwrap();
 
         // Register multiple snapshots at the same timestamp
         let snap1 = table.register_snapshot(100).unwrap();
@@ -1553,12 +1617,13 @@ mod tests {
         let schema = create_test_schema();
         let mut table = VertexTable::new(0, "person".to_string(), schema);
 
-        table.insert(
-            "v1",
-            &[("name".to_string(), Value::String("Alice".to_string()))],
-            100,
-        )
-        .unwrap();
+        table
+            .insert(
+                "v1",
+                &[("name".to_string(), Value::String("Alice".to_string()))],
+                100,
+            )
+            .unwrap();
 
         // GC should be a no-op for VertexTable (placeholder)
         let cleaned = table.gc(200).unwrap();
@@ -1575,12 +1640,13 @@ mod tests {
         let schema = create_test_schema();
         let mut table = VertexTable::new(0, "person".to_string(), schema);
 
-        table.insert(
-            "v1",
-            &[("name".to_string(), Value::String("Alice".to_string()))],
-            100,
-        )
-        .unwrap();
+        table
+            .insert(
+                "v1",
+                &[("name".to_string(), Value::String("Alice".to_string()))],
+                100,
+            )
+            .unwrap();
 
         // Test through trait interface
         let snap = <VertexTable as MVCCTable>::register_snapshot(&mut table, 100).unwrap();
@@ -1593,5 +1659,3 @@ mod tests {
         assert_eq!(gc_count, 0);
     }
 }
-
-

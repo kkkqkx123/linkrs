@@ -1328,7 +1328,9 @@ mod tests {
             VertexId::from_int64(1),
             vec![Tag::new(
                 "Person".to_string(),
-                vec![("name".to_string(), Value::String("Alice".to_string()))].into_iter().collect(),
+                vec![("name".to_string(), Value::String("Alice".to_string()))]
+                    .into_iter()
+                    .collect(),
             )],
         );
         storage.insert_vertex("test_space", alice).unwrap();
@@ -1385,8 +1387,10 @@ mod tests {
 
     #[test]
     fn test_background_freeze_manager_basics() {
-        use crate::storage::engine::background_freeze::{BackgroundFreezeManager};
-        use crate::storage::engine::config::{FreezeConfig, FreezeDecisionInput, FreezeStrategyType};
+        use crate::storage::engine::background_freeze::BackgroundFreezeManager;
+        use crate::storage::engine::config::{
+            FreezeConfig, FreezeDecisionInput, FreezeStrategyType,
+        };
 
         let config = FreezeConfig {
             strategy: FreezeStrategyType::Conservative,
@@ -1508,11 +1512,7 @@ mod tests {
 
         // Trigger freeze - should succeed
         let result = storage.trigger_background_freeze();
-        assert!(
-            result.is_ok(),
-            "Freeze should succeed: {:?}",
-            result.err()
-        );
+        assert!(result.is_ok(), "Freeze should succeed: {:?}", result.err());
     }
 
     #[test]
@@ -1552,7 +1552,11 @@ mod tests {
 
         // Before any snapshots, cleanup_threshold should be MAX
         let initial_threshold = snapshot_tracker.cleanup_threshold();
-        assert_eq!(initial_threshold, u32::MAX, "Initial cleanup_threshold should be u32::MAX");
+        assert_eq!(
+            initial_threshold,
+            u32::MAX,
+            "Initial cleanup_threshold should be u32::MAX"
+        );
 
         // Acquire a read timestamp (creates a snapshot)
         let read_ts = version_manager.acquire_read_timestamp();
@@ -1560,19 +1564,29 @@ mod tests {
 
         // Now cleanup_threshold should equal the read timestamp
         let threshold_with_active = snapshot_tracker.cleanup_threshold();
-        assert_eq!(threshold_with_active, read_ts,
-            "cleanup_threshold should equal active read timestamp");
+        assert_eq!(
+            threshold_with_active, read_ts,
+            "cleanup_threshold should equal active read timestamp"
+        );
 
         // Release the read timestamp
         version_manager.release_read_timestamp();
 
         // After releasing, cleanup_threshold should be MAX again
         let final_threshold = snapshot_tracker.cleanup_threshold();
-        assert_eq!(final_threshold, u32::MAX, "Final cleanup_threshold should be u32::MAX after releasing");
+        assert_eq!(
+            final_threshold,
+            u32::MAX,
+            "Final cleanup_threshold should be u32::MAX after releasing"
+        );
 
         // Verify compaction works (it uses cleanup_threshold internally)
         let result = storage.compact(&Default::default());
-        assert!(result.is_ok(), "Compaction should succeed with cleanup_threshold: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Compaction should succeed with cleanup_threshold: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -1604,7 +1618,7 @@ mod tests {
         // Release one
         version_manager.release_read_timestamp();
         assert_eq!(snapshot_tracker.ref_count(ts1), Some(2));
-        assert_eq!(snapshot_tracker.cleanup_threshold(), ts1);  // Still active
+        assert_eq!(snapshot_tracker.cleanup_threshold(), ts1); // Still active
 
         // Release another
         version_manager.release_read_timestamp();

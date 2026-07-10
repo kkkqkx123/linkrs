@@ -3,10 +3,10 @@
 //! Maintains a complete history of schema versions, including change logs
 //! for each label.
 
+use super::change::{ChangeLog, PropertyChange, SchemaObjectType};
+use crate::core::StorageResult;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::core::StorageResult;
-use super::change::{ChangeLog, PropertyChange, SchemaObjectType};
 
 /// Version history for a single label (vertex or edge type)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,11 +102,9 @@ impl SchemaVersionHistory {
         label_id: u32,
         label_name: String,
     ) -> &mut LabelVersionHistory {
-        self.vertex_histories
-            .entry(label_id)
-            .or_insert_with(|| {
-                LabelVersionHistory::new(label_id, label_name, SchemaObjectType::Vertex)
-            })
+        self.vertex_histories.entry(label_id).or_insert_with(|| {
+            LabelVersionHistory::new(label_id, label_name, SchemaObjectType::Vertex)
+        })
     }
 
     /// Get or create edge history
@@ -115,11 +113,9 @@ impl SchemaVersionHistory {
         label_id: u32,
         label_name: String,
     ) -> &mut LabelVersionHistory {
-        self.edge_histories
-            .entry(label_id)
-            .or_insert_with(|| {
-                LabelVersionHistory::new(label_id, label_name, SchemaObjectType::Edge)
-            })
+        self.edge_histories.entry(label_id).or_insert_with(|| {
+            LabelVersionHistory::new(label_id, label_name, SchemaObjectType::Edge)
+        })
     }
 
     /// Serialize to JSON
@@ -148,8 +144,7 @@ mod tests {
 
     #[test]
     fn test_label_version_history_creation() {
-        let history =
-            LabelVersionHistory::new(1, "User".to_string(), SchemaObjectType::Vertex);
+        let history = LabelVersionHistory::new(1, "User".to_string(), SchemaObjectType::Vertex);
         assert_eq!(history.label_id, 1);
         assert_eq!(history.label_name, "User");
         assert_eq!(history.latest_version(), 1);

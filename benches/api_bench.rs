@@ -41,7 +41,8 @@ fn bench_http_response_serialization(c: &mut Criterion) {
 
     group.bench_function("serialize_query_result_small", |b| {
         b.iter(|| {
-            let response = r#"{"status": "success", "data": [{"id": "v1", "properties": {"name": "test"}}]}"#;
+            let response =
+                r#"{"status": "success", "data": [{"id": "v1", "properties": {"name": "test"}}]}"#;
             black_box(response.to_string())
         });
     });
@@ -53,7 +54,10 @@ fn bench_http_response_serialization(c: &mut Criterion) {
                 if i > 0 {
                     response.push(',');
                 }
-                response.push_str(&format!(r#"{{"id": "v{}", "properties": {{"value": {}}}}}"#, i, i as f64));
+                response.push_str(&format!(
+                    r#"{{"id": "v{}", "properties": {{"value": {}}}}}"#,
+                    i, i as f64
+                ));
             }
             response.push_str("]}");
             black_box(response)

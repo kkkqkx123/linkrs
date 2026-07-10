@@ -3,13 +3,13 @@
 //! Handles flush (write) and load (read) operations with support for
 //! versioning, compression, and backward compatibility.
 
+use super::super::{CsrBase, CsrVariant};
 use super::segment::{CsrSegment, DeletionInfo};
-use super::super::{CsrVariant, CsrBase};
-use crate::core::types::{Timestamp, EdgeId};
+use crate::core::types::{EdgeId, Timestamp};
 use crate::core::{StorageError, StorageResult};
-use crate::storage::persistence::{read_header, section, write_header_to, HEADER_SIZE};
-use crate::storage::edge::PropertyTable;
 use crate::storage::edge::EdgeSchema;
+use crate::storage::edge::PropertyTable;
+use crate::storage::persistence::{read_header, section, write_header_to, HEADER_SIZE};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -45,8 +45,8 @@ pub fn flush_metadata(
     let is_open_flag: u8 = if is_open { 1 } else { 0 };
     file.write_all(&is_open_flag.to_le_bytes())?;
 
-    let schema_json = serde_json::to_string(schema)
-        .map_err(|e| StorageError::serialize_error(e.to_string()))?;
+    let schema_json =
+        serde_json::to_string(schema).map_err(|e| StorageError::serialize_error(e.to_string()))?;
     let schema_bytes = schema_json.as_bytes();
     file.write_all(&(schema_bytes.len() as u32).to_le_bytes())?;
     file.write_all(schema_bytes)?;
@@ -105,14 +105,10 @@ pub fn flush_csr(
 }
 
 /// Flush properties to file
-pub fn flush_properties(
-    properties: &PropertyTable,
-    path: &Path,
-) -> StorageResult<()> {
+pub fn flush_properties(properties: &PropertyTable, path: &Path) -> StorageResult<()> {
     let mut file = File::create(path)?;
-    write_header_to(&mut file, section::EDGE_PROPERTIES).map_err(|e| {
-        StorageError::io_error(format!("Failed to write properties header: {}", e))
-    })?;
+    write_header_to(&mut file, section::EDGE_PROPERTIES)
+        .map_err(|e| StorageError::io_error(format!("Failed to write properties header: {}", e)))?;
 
     let data = properties.dump();
     file.write_all(&(data.len() as u64).to_le_bytes())?;
@@ -125,7 +121,17 @@ pub fn flush_properties(
 #[allow(clippy::type_complexity)]
 pub fn load_metadata(
     cursor: &mut &[u8],
-) -> StorageResult<(u32, u32, u32, String, bool, EdgeSchema, EdgeId, HashMap<EdgeId, Timestamp>, Timestamp)> {
+) -> StorageResult<(
+    u32,
+    u32,
+    u32,
+    String,
+    bool,
+    EdgeSchema,
+    EdgeId,
+    HashMap<EdgeId, Timestamp>,
+    Timestamp,
+)> {
     let mut label_bytes = [0u8; 4];
     cursor.read_exact(&mut label_bytes)?;
     let label = u32::from_le_bytes(label_bytes);
@@ -184,7 +190,17 @@ pub fn load_metadata(
     cursor.read_exact(&mut min_snapshot_ts_bytes)?;
     let min_active_snapshot_ts = u32::from_le_bytes(min_snapshot_ts_bytes);
 
-    Ok((label, src_label, dst_label, label_name, is_open, schema, next_edge_id, tombstones, min_active_snapshot_ts))
+    Ok((
+        label,
+        src_label,
+        dst_label,
+        label_name,
+        is_open,
+        schema,
+        next_edge_id,
+        tombstones,
+        min_active_snapshot_ts,
+    ))
 }
 
 /// Load CSR and segments from file
@@ -251,12 +267,7 @@ pub fn load_csr(
         let mut segment_csr = super::super::Csr::new();
         segment_csr.load(&segment_data)?;
         let deletion_info = DeletionInfo::new(delete_ts_min, delete_ts_max);
-        let mut segment = CsrSegment::new(
-            segment_csr,
-            create_ts_min,
-            create_ts_max,
-            deletion_info,
-        );
+        let mut segment = CsrSegment::new(segment_csr, create_ts_min, create_ts_max, deletion_info);
 
         if !cursor.is_empty() {
             let mut mode_byte = [0u8; 1];
@@ -266,7 +277,7 @@ pub fn load_csr(
                 EDGE_ID_STORAGE_MODE_SEPARATE => {
                     if cursor.len() < 8 {
                         return Err(StorageError::deserialize_error(
-                            "truncated edge_id count in segment".to_string()
+                            "truncated edge_id count in segment".to_string(),
                         ));
                     }
                     let mut edge_count_bytes = [0u8; 8];
@@ -275,16 +286,18 @@ pub fn load_csr(
 
                     let csr_edge_count = segment.csr.edge_count() as usize;
                     if edge_count != csr_edge_count {
-                        return Err(StorageError::deserialize_error(
-                            format!("edge_ids count mismatch: stored={}, csr={}", edge_count, csr_edge_count)
-                        ));
+                        return Err(StorageError::deserialize_error(format!(
+                            "edge_ids count mismatch: stored={}, csr={}",
+                            edge_count, csr_edge_count
+                        )));
                     }
 
                     if cursor.len() < edge_count * 8 {
-                        return Err(StorageError::deserialize_error(
-                            format!("truncated edge_ids data: need {} bytes, have {}",
-                                edge_count * 8, cursor.len())
-                        ));
+                        return Err(StorageError::deserialize_error(format!(
+                            "truncated edge_ids data: need {} bytes, have {}",
+                            edge_count * 8,
+                            cursor.len()
+                        )));
                     }
 
                     let mut edge_ids = Vec::with_capacity(edge_count);
@@ -296,9 +309,10 @@ pub fn load_csr(
                     segment.edge_ids = Some(edge_ids);
                 }
                 _ => {
-                    return Err(StorageError::deserialize_error(
-                        format!("unknown edge_id storage mode: {}", mode_byte[0])
-                    ));
+                    return Err(StorageError::deserialize_error(format!(
+                        "unknown edge_id storage mode: {}",
+                        mode_byte[0]
+                    )));
                 }
             }
         }
@@ -310,9 +324,7 @@ pub fn load_csr(
 }
 
 /// Load properties from file
-pub fn load_properties(
-    path: &Path,
-) -> StorageResult<PropertyTable> {
+pub fn load_properties(path: &Path) -> StorageResult<PropertyTable> {
     let raw_data = crate::storage::compression::read_decompressed(path)?;
     let mut cursor = &raw_data[..];
     let mut header_buf = [0u8; HEADER_SIZE];
@@ -344,9 +356,9 @@ pub fn load_properties(
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
     use super::super::super::*;
     use crate::core::Value;
+    use std::fs;
 
     fn create_edge_table_with_props() -> super::super::super::EdgeTable {
         let schema = super::super::super::EdgeSchema {
@@ -360,7 +372,7 @@ mod tests {
             )],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
-        schema_version: 1,
+            schema_version: 1,
         };
         super::super::super::EdgeTable::new(schema).unwrap()
     }
@@ -374,7 +386,7 @@ mod tests {
             properties: vec![],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
-        schema_version: 1,
+            schema_version: 1,
         };
         super::super::super::EdgeTable::new(schema).unwrap()
     }
@@ -392,19 +404,30 @@ mod tests {
             )],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
-        schema_version: 1,
+            schema_version: 1,
         };
         let mut table = super::super::super::EdgeTable::new(schema).unwrap();
 
         let ts = 100u32;
-        table.insert_edge(1, 2, 0, &[("weight".to_string(), Value::Double(1.5))], ts).unwrap();
-        table.insert_edge(1, 3, 0, &[("weight".to_string(), Value::Double(2.5))], ts).unwrap();
-        table.insert_edge(2, 3, 0, &[("weight".to_string(), Value::Double(3.5))], ts).unwrap();
+        table
+            .insert_edge(1, 2, 0, &[("weight".to_string(), Value::Double(1.5))], ts)
+            .unwrap();
+        table
+            .insert_edge(1, 3, 0, &[("weight".to_string(), Value::Double(2.5))], ts)
+            .unwrap();
+        table
+            .insert_edge(2, 3, 0, &[("weight".to_string(), Value::Double(3.5))], ts)
+            .unwrap();
 
         let temp_dir = std::env::temp_dir().join("edge_table_test_flush_load");
         let _ = fs::remove_dir_all(&temp_dir);
 
-        table.flush(&temp_dir, crate::storage::compression::CompressionType::Zstd { level: 3 }).expect("flush should succeed");
+        table
+            .flush(
+                &temp_dir,
+                crate::storage::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
 
         let schema2 = super::super::super::EdgeSchema {
             label_id: 0,
@@ -417,7 +440,7 @@ mod tests {
             )],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
-        schema_version: 1,
+            schema_version: 1,
         };
         let mut loaded_table = super::super::super::EdgeTable::new(schema2).unwrap();
         loaded_table.load(&temp_dir).expect("load should succeed");
@@ -426,7 +449,9 @@ mod tests {
         assert_eq!(loaded_table.out_edges(2, ts).len(), 1);
         assert!(loaded_table.has_edge(1, 2, 0, ts));
 
-        let deleted = loaded_table.delete_edge(1, 3, 0, ts + 1).expect("delete_edge should work after load");
+        let deleted = loaded_table
+            .delete_edge(1, 3, 0, ts + 1)
+            .expect("delete_edge should work after load");
         assert!(deleted);
         assert!(!loaded_table.has_edge(1, 3, 0, ts + 1));
 
@@ -446,19 +471,28 @@ mod tests {
             )],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
-        schema_version: 1,
+            schema_version: 1,
         };
         let mut table = super::super::super::EdgeTable::new(schema).unwrap();
 
-        table.insert_edge(1, 2, 0, &[("weight".to_string(), Value::Double(1.5))], 100).unwrap();
-        table.insert_edge(1, 3, 0, &[("weight".to_string(), Value::Double(2.5))], 110).unwrap();
+        table
+            .insert_edge(1, 2, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+            .unwrap();
+        table
+            .insert_edge(1, 3, 0, &[("weight".to_string(), Value::Double(2.5))], 110)
+            .unwrap();
         table.freeze_csr_only(150);
         table.delete_edge(1, 2, 0, 200).unwrap();
 
         let temp_dir = std::env::temp_dir().join("edge_table_test_segments_tombstones");
         let _ = fs::remove_dir_all(&temp_dir);
 
-        table.flush(&temp_dir, crate::storage::compression::CompressionType::Zstd { level: 3 }).expect("flush should succeed");
+        table
+            .flush(
+                &temp_dir,
+                crate::storage::compression::CompressionType::Zstd { level: 3 },
+            )
+            .expect("flush should succeed");
 
         let schema2 = super::super::super::EdgeSchema {
             label_id: 0,
@@ -471,7 +505,7 @@ mod tests {
             )],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
-        schema_version: 1,
+            schema_version: 1,
         };
         let mut loaded_table = super::super::super::EdgeTable::new(schema2).unwrap();
         loaded_table.load(&temp_dir).expect("load should succeed");
@@ -490,7 +524,9 @@ mod tests {
         let mut table = create_edge_table();
 
         for i in 0..50 {
-            table.insert_edge(i % 10, 100 + i, 0, &[], 1000 + i as u32).unwrap();
+            table
+                .insert_edge(i % 10, 100 + i, 0, &[], 1000 + i as u32)
+                .unwrap();
         }
 
         table.freeze_csr_only(1100);

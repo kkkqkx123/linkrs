@@ -3,9 +3,9 @@
 //! This module provides the foundation for recording schema modifications,
 //! enabling version history tracking and compatibility analysis.
 
+use crate::core::{DataType, Value};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::core::{DataType, Value};
 
 /// Type identifier for change tracking - distinguishes between vertex and edge schema changes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,16 +26,10 @@ pub enum ChangeDetails {
     },
 
     /// Property removed: property_name
-    PropertyRemoved {
-        name: String,
-        data_type: DataType,
-    },
+    PropertyRemoved { name: String, data_type: DataType },
 
     /// Property renamed: (old_name, new_name)
-    PropertyRenamed {
-        old_name: String,
-        new_name: String,
-    },
+    PropertyRenamed { old_name: String, new_name: String },
 
     /// Property type modified: (property_name, old_type, new_type)
     PropertyTypeModified {
@@ -85,10 +79,7 @@ impl ChangeDetails {
             ChangeDetails::PropertyRemoved { name, .. } => {
                 format!("Removed property '{}'", name)
             }
-            ChangeDetails::PropertyRenamed {
-                old_name,
-                new_name,
-            } => {
+            ChangeDetails::PropertyRenamed { old_name, new_name } => {
                 format!("Renamed property '{}' to '{}'", old_name, new_name)
             }
             ChangeDetails::PropertyTypeModified {
@@ -190,11 +181,7 @@ pub struct ChangeLog {
 
 impl ChangeLog {
     /// Create a new change log
-    pub fn new(
-        object_type: SchemaObjectType,
-        label_id: u32,
-        label_name: String,
-    ) -> Self {
+    pub fn new(object_type: SchemaObjectType, label_id: u32, label_name: String) -> Self {
         Self {
             object_type,
             label_id,
@@ -205,10 +192,7 @@ impl ChangeLog {
 
     /// Add a change to the log
     pub fn add_change(&mut self, change: PropertyChange) {
-        self.changes
-            .entry(change.version)
-            .or_default()
-            .push(change);
+        self.changes.entry(change.version).or_default().push(change);
     }
 
     /// Get changes for a specific version

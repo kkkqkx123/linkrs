@@ -344,10 +344,14 @@ impl ColumnStorage for VariableWidthColumn {
             }
         } else if matches!(self.data_type, DataType::Json) {
             let s = String::from_utf8(bytes.to_vec()).ok()?;
-            crate::core::value::Json::parse(&s).ok().map(|j| Value::Json(Box::new(j)))
+            crate::core::value::Json::parse(&s)
+                .ok()
+                .map(|j| Value::Json(Box::new(j)))
         } else if matches!(self.data_type, DataType::JsonB) {
             let s = String::from_utf8(bytes.to_vec()).ok()?;
-            crate::core::value::JsonB::parse(&s).ok().map(|jb| Value::JsonB(Box::new(jb)))
+            crate::core::value::JsonB::parse(&s)
+                .ok()
+                .map(|jb| Value::JsonB(Box::new(jb)))
         } else {
             String::from_utf8(bytes.to_vec()).ok().map(Value::String)
         }
@@ -1714,9 +1718,13 @@ mod tests {
         let sizes = [255, 256, 257, 1000, 10000];
         for (idx, size) in sizes.iter().enumerate() {
             let value = format!("x-{}", "a".repeat(*size));
-            col.set(idx, Some(&Value::String(value.clone())))
-                .unwrap();
-            assert_eq!(col.get(idx), Some(Value::String(value)), "Failed at size {}", size);
+            col.set(idx, Some(&Value::String(value.clone()))).unwrap();
+            assert_eq!(
+                col.get(idx),
+                Some(Value::String(value)),
+                "Failed at size {}",
+                size
+            );
         }
     }
 
@@ -1743,12 +1751,8 @@ mod tests {
     #[test]
     fn test_column_integer_types_boundaries() {
         let mut col_small = Column::new("small".to_string(), 0, DataType::SmallInt, false);
-        col_small
-            .set(0, Some(&Value::SmallInt(i16::MAX)))
-            .unwrap();
-        col_small
-            .set(1, Some(&Value::SmallInt(i16::MIN)))
-            .unwrap();
+        col_small.set(0, Some(&Value::SmallInt(i16::MAX))).unwrap();
+        col_small.set(1, Some(&Value::SmallInt(i16::MIN))).unwrap();
         assert_eq!(col_small.get(0), Some(Value::SmallInt(i16::MAX)));
         assert_eq!(col_small.get(1), Some(Value::SmallInt(i16::MIN)));
 
@@ -1872,16 +1876,12 @@ mod tests {
 
         // Insert long strings
         for (i, s) in long_strings.iter().enumerate() {
-            col.set(i, Some(&Value::String(s.to_string())))
-                .unwrap();
+            col.set(i, Some(&Value::String(s.to_string()))).unwrap();
         }
 
         // Verify retrieval works correctly
         for (i, expected_str) in long_strings.iter().enumerate() {
-            assert_eq!(
-                col.get(i),
-                Some(Value::String(expected_str.to_string()))
-            );
+            assert_eq!(col.get(i), Some(Value::String(expected_str.to_string())));
         }
     }
 
@@ -1906,8 +1906,7 @@ mod tests {
         let mut col = Column::new("text".to_string(), 0, DataType::String, false);
 
         // Test empty string
-        col.set(0, Some(&Value::String("".to_string())))
-            .unwrap();
+        col.set(0, Some(&Value::String("".to_string()))).unwrap();
         col.set(1, Some(&Value::String("normal".to_string())))
             .unwrap();
 
@@ -1921,15 +1920,14 @@ mod tests {
         let mut col = Column::new("special".to_string(), 0, DataType::String, false);
 
         let special_strings = [
-            "\n\t\r",                    // Whitespace
-            "\\\"'",                      // Quotes and backslash
-            "你好世界🌍",                   // Unicode and emoji
-            "\0null",                     // Control character
+            "\n\t\r",     // Whitespace
+            "\\\"'",      // Quotes and backslash
+            "你好世界🌍", // Unicode and emoji
+            "\0null",     // Control character
         ];
 
         for (idx, s) in special_strings.iter().enumerate() {
-            col.set(idx, Some(&Value::String(s.to_string())))
-                .unwrap();
+            col.set(idx, Some(&Value::String(s.to_string()))).unwrap();
             assert_eq!(col.get(idx), Some(Value::String(s.to_string())));
         }
     }
@@ -1951,4 +1949,3 @@ mod tests {
         assert_eq!(col.get(3), Some(Value::Float(f32::MIN)));
     }
 }
-

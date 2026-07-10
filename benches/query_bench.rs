@@ -2,7 +2,7 @@
 //! Query engine performance benchmarks
 //! Tests: simple queries, path queries, aggregations
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::time::Duration;
 
 fn create_benchmark_group<'a>(
@@ -19,7 +19,10 @@ fn create_benchmark_group<'a>(
 /// Generate GQL for query benchmark setup
 fn generate_gql_for_query_bench(vertex_count: usize) -> String {
     let mut gql = String::new();
-    gql.push_str(&format!("CREATE SPACE IF NOT EXISTS bench_query{} (vid_type=STRING)\n", vertex_count));
+    gql.push_str(&format!(
+        "CREATE SPACE IF NOT EXISTS bench_query{} (vid_type=STRING)\n",
+        vertex_count
+    ));
     gql.push_str(&format!("USE bench_query{}\n\n", vertex_count));
 
     gql.push_str("CREATE TAG IF NOT EXISTS Node(\n");
@@ -35,7 +38,9 @@ fn generate_gql_for_query_bench(vertex_count: usize) -> String {
     for i in 0..vertex_count {
         gql.push_str(&format!(
             "INSERT VERTEX Node(name, value) VALUES \"n{}\":(\"node_{}\", {})\n",
-            i, i, i as f64 * 0.1
+            i,
+            i,
+            i as f64 * 0.1
         ));
     }
 
@@ -48,7 +53,9 @@ fn generate_gql_for_query_bench(vertex_count: usize) -> String {
             let j = (i + k) % vertex_count;
             gql.push_str(&format!(
                 "INSERT EDGE Link(weight) VALUES \"n{}\"->\"n{}\"({})\n",
-                i, j, 1.0 / k as f64
+                i,
+                j,
+                1.0 / k as f64
             ));
         }
     }
@@ -60,9 +67,7 @@ fn bench_simple_query_parse(c: &mut Criterion) {
     let mut group = create_benchmark_group(c, "query_parse");
 
     group.bench_function("parse_simple_vertex_query", |b| {
-        b.iter(|| {
-            black_box("FETCH PROP ON Node \"n1\"".to_string())
-        });
+        b.iter(|| black_box("FETCH PROP ON Node \"n1\"".to_string()));
     });
 
     group.bench_function("parse_simple_edge_query", |b| {
@@ -100,16 +105,13 @@ fn bench_path_traversal(c: &mut Criterion) {
     let mut group = create_benchmark_group(c, "path_traversal");
 
     for hop_count in &[2, 3, 5] {
-        group.bench_with_input(
-            BenchmarkId::from_parameter(hop_count),
-            hop_count,
-            |b, _| {
-                let query = format!("MATCH p=(v:Node)-[*1..{}]-(u:Node) WHERE id(v)=\"n1\" RETURN p", hop_count);
-                b.iter(|| {
-                    black_box(query.clone())
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter(hop_count), hop_count, |b, _| {
+            let query = format!(
+                "MATCH p=(v:Node)-[*1..{}]-(u:Node) WHERE id(v)=\"n1\" RETURN p",
+                hop_count
+            );
+            b.iter(|| black_box(query.clone()));
+        });
     }
 
     group.finish();
@@ -119,21 +121,15 @@ fn bench_aggregation_queries(c: &mut Criterion) {
     let mut group = create_benchmark_group(c, "aggregation");
 
     group.bench_function("count_vertices", |b| {
-        b.iter(|| {
-            black_box("MATCH (n:Node) RETURN COUNT(*) as count".to_string())
-        });
+        b.iter(|| black_box("MATCH (n:Node) RETURN COUNT(*) as count".to_string()));
     });
 
     group.bench_function("sum_property", |b| {
-        b.iter(|| {
-            black_box("MATCH (n:Node) RETURN SUM(n.value) as total".to_string())
-        });
+        b.iter(|| black_box("MATCH (n:Node) RETURN SUM(n.value) as total".to_string()));
     });
 
     group.bench_function("avg_property", |b| {
-        b.iter(|| {
-            black_box("MATCH (n:Node) RETURN AVG(n.value) as avg".to_string())
-        });
+        b.iter(|| black_box("MATCH (n:Node) RETURN AVG(n.value) as avg".to_string()));
     });
 
     group.finish();

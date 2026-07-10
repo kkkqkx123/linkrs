@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
-use crate::sync::types::{IndexOperation};
+use crate::sync::types::IndexOperation;
 
 /// Dead letter queue entry
 #[derive(Debug, Clone, Serialize, Deserialize)]

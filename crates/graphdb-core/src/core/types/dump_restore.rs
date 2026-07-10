@@ -97,7 +97,10 @@ impl RestoreStats {
         output.push_str(&format!("Spaces restored: {}\n", self.spaces_restored));
         output.push_str(&format!("Vertices restored: {}\n", self.vertices_restored));
         output.push_str(&format!("Edges restored: {}\n", self.edges_restored));
-        output.push_str(&format!("Duration:        {:.3} s\n", self.duration_ms as f64 / 1000.0));
+        output.push_str(&format!(
+            "Duration:        {:.3} s\n",
+            self.duration_ms as f64 / 1000.0
+        ));
         if !self.errors.is_empty() {
             output.push_str(&format!("Errors:          {}\n", self.errors.len()));
             for err in self.errors.iter().take(5) {

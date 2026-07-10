@@ -26,7 +26,7 @@ pub use builder::StreamingExecutorBuilder;
 pub use chunk::DataChunk;
 pub use engine::StreamingExecutionEngine;
 pub use executor::StreamingExecutor;
-pub use factory::{StreamingQueryExecutor, convert_chunks_to_dataset, chunks_to_execution_result};
+pub use factory::{chunks_to_execution_result, convert_chunks_to_dataset, StreamingQueryExecutor};
 pub use partition::PartitionView;
 pub use scheduler::{PipelineScheduler, SchedulerConfig, Task, TaskStatus};
 pub use worker::{BackpressureControl, TaskResult, WorkerPool};

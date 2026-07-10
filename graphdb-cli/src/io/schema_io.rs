@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use graphdb_core::core::types::import_export::{SchemaImportResult};
 use crate::session::manager::SessionManager;
+use graphdb_core::core::types::import_export::SchemaImportResult;
 
 #[derive(Debug, Clone)]
 pub struct SchemaIoConfig {
@@ -66,7 +66,11 @@ impl SchemaExporter {
         Self
     }
 
-    pub async fn export(&self, config: SchemaIoConfig, _session: &mut SessionManager) -> Result<()> {
+    pub async fn export(
+        &self,
+        config: SchemaIoConfig,
+        _session: &mut SessionManager,
+    ) -> Result<()> {
         let definition = SchemaDefinition {
             space_name: config.space_name.clone(),
             tags: Vec::new(),
@@ -96,7 +100,11 @@ impl SchemaImporter {
         Self
     }
 
-    pub async fn import(&self, path: &PathBuf, _session: &mut SessionManager) -> Result<SchemaImportResult> {
+    pub async fn import(
+        &self,
+        path: &PathBuf,
+        _session: &mut SessionManager,
+    ) -> Result<SchemaImportResult> {
         let content = fs::read_to_string(path)?;
         let _definition: SchemaDefinition = serde_json::from_str(&content)?;
 

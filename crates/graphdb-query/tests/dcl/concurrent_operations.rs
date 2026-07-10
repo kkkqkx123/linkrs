@@ -52,7 +52,10 @@ fn test_concurrent_create_same_user_idempotent() {
         let scenario_clone = Arc::clone(&scenario);
         let handle = thread::spawn(move || {
             let mut guard = scenario_clone.lock().unwrap();
-            update(&mut guard, "CREATE USER concurrent_user WITH PASSWORD 'password123'");
+            update(
+                &mut guard,
+                "CREATE USER concurrent_user WITH PASSWORD 'password123'",
+            );
         });
         handles.push(handle);
     }

@@ -9,10 +9,10 @@
 //!
 //! This reduces lookup overhead and memory fragmentation for large deletion sets.
 
-use std::collections::HashMap;
-use super::stats::TombstoneStats;
 use super::super::bloom_filter::EdgeDeletionBloomFilter;
-use crate::core::types::{Timestamp, EdgeId};
+use super::stats::TombstoneStats;
+use crate::core::types::{EdgeId, Timestamp};
+use std::collections::HashMap;
 
 const HOT_TOMBSTONE_GC_THRESHOLD: usize = 150_000;
 
@@ -63,15 +63,18 @@ impl MVCCManager {
     /// Uses hot-first lookup: checks hashtables first, then cold layer with binary search
     pub fn is_tombstoned(&self, edge_id: EdgeId, ts: Timestamp) -> bool {
         // Hot layer: fast path - O(1) average
-        let pending_deleted = self.pending_segment_deletions
+        let pending_deleted = self
+            .pending_segment_deletions
             .get(&edge_id)
             .is_some_and(|delete_ts| *delete_ts <= ts);
 
-        let segment_deleted = self.segment_tombstones
+        let segment_deleted = self
+            .segment_tombstones
             .get(&edge_id)
             .is_some_and(|delete_ts| *delete_ts <= ts);
 
-        let legacy_deleted = self.tombstones
+        let legacy_deleted = self
+            .tombstones
             .get(&edge_id)
             .is_some_and(|delete_ts| *delete_ts <= ts);
 
@@ -96,7 +99,10 @@ impl MVCCManager {
         if !self.cold_bloom_filter.might_contain(edge_id.0) {
             return false;
         }
-        match self.cold_tombstones.binary_search_by_key(&edge_id, |&(id, _)| id) {
+        match self
+            .cold_tombstones
+            .binary_search_by_key(&edge_id, |&(id, _)| id)
+        {
             Ok(idx) => self.cold_tombstones[idx].1 <= ts,
             Err(_) => false,
         }
@@ -114,14 +120,12 @@ impl MVCCManager {
         let before = self.tombstones.len() + self.cold_tombstones.len();
 
         // Clean hot layer
-        self.tombstones.retain(|_edge_id, delete_ts| {
-            *delete_ts >= min_active_snapshot_ts
-        });
+        self.tombstones
+            .retain(|_edge_id, delete_ts| *delete_ts >= min_active_snapshot_ts);
 
         // Clean cold layer
-        self.cold_tombstones.retain(|(_, delete_ts)| {
-            *delete_ts >= min_active_snapshot_ts
-        });
+        self.cold_tombstones
+            .retain(|(_, delete_ts)| *delete_ts >= min_active_snapshot_ts);
 
         self.min_active_snapshot_ts = min_active_snapshot_ts;
 
@@ -187,7 +191,8 @@ impl MVCCManager {
         };
 
         if should_gc {
-            let new_min_ts = self.active_snapshots
+            let new_min_ts = self
+                .active_snapshots
                 .keys()
                 .copied()
                 .min()
@@ -204,13 +209,15 @@ impl MVCCManager {
         let cold_count = self.cold_tombstones.len();
         let total_count = hot_count + cold_count;
 
-        let oldest = self.tombstones
+        let oldest = self
+            .tombstones
             .values()
             .chain(self.cold_tombstones.iter().map(|(_, ts)| ts))
             .copied()
             .min();
 
-        let newest = self.tombstones
+        let newest = self
+            .tombstones
             .values()
             .chain(self.cold_tombstones.iter().map(|(_, ts)| ts))
             .copied()
@@ -218,9 +225,9 @@ impl MVCCManager {
 
         TombstoneStats {
             count: total_count,
-            memory_bytes: TombstoneStats::estimate_memory(hot_count) +
-                (cold_count * std::mem::size_of::<(EdgeId, Timestamp)>()) +
-                self.cold_bloom_filter.memory_bytes(),
+            memory_bytes: TombstoneStats::estimate_memory(hot_count)
+                + (cold_count * std::mem::size_of::<(EdgeId, Timestamp)>())
+                + self.cold_bloom_filter.memory_bytes(),
             oldest_delete_ts: oldest,
             newest_delete_ts: newest,
         }
@@ -249,8 +256,8 @@ impl MVCCManager {
 mod tests {
     use super::super::super::*;
     use super::*;
-    use crate::core::Value;
     use crate::core::types::EdgeId;
+    use crate::core::Value;
 
     fn create_edge_table_with_props() -> EdgeTable {
         let schema = EdgeSchema {
@@ -264,7 +271,7 @@ mod tests {
             )],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
-        schema_version: 1,
+            schema_version: 1,
         };
         EdgeTable::new(schema).unwrap()
     }
@@ -317,7 +324,10 @@ mod tests {
         let mut table = create_edge_table_with_props();
 
         for i in 0..10 {
-            table.mvcc.tombstones.insert(EdgeId(i), 100 + (i as u32 * 10));
+            table
+                .mvcc
+                .tombstones
+                .insert(EdgeId(i), 100 + (i as u32 * 10));
         }
 
         assert_eq!(table.mvcc.tombstones.len(), 10);
@@ -335,7 +345,9 @@ mod tests {
     fn test_auto_gc_with_snapshot_lifecycle() {
         let mut table = create_edge_table_with_props();
 
-        table.insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100).unwrap();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
+            .unwrap();
 
         table.freeze_csr_only(125);
 
@@ -369,7 +381,15 @@ mod tests {
         let mut table = create_edge_table_with_props();
 
         for i in 0..5 {
-            table.insert_edge(0, 1, i as i64, &[("weight".to_string(), Value::Double(i as f64))], i as u32).unwrap();
+            table
+                .insert_edge(
+                    0,
+                    1,
+                    i as i64,
+                    &[("weight".to_string(), Value::Double(i as f64))],
+                    i as u32,
+                )
+                .unwrap();
         }
 
         table.freeze_csr_only(5);
@@ -398,7 +418,15 @@ mod tests {
         table.set_stats_manager(stats_manager.clone());
 
         for i in 0..5 {
-            table.insert_edge(0, 1, i as i64, &[("weight".to_string(), Value::Double(i as f64))], i as u32).unwrap();
+            table
+                .insert_edge(
+                    0,
+                    1,
+                    i as i64,
+                    &[("weight".to_string(), Value::Double(i as f64))],
+                    i as u32,
+                )
+                .unwrap();
         }
 
         table.freeze_csr_only(5);
@@ -418,10 +446,14 @@ mod tests {
             1,
         );
 
-        let tombstone_count = stats_manager.get_value(MetricType::TombstoneCount).unwrap_or(0);
+        let tombstone_count = stats_manager
+            .get_value(MetricType::TombstoneCount)
+            .unwrap_or(0);
         assert_eq!(tombstone_count, 3);
 
-        let tombstone_memory = stats_manager.get_value(MetricType::TombstoneMemoryBytes).unwrap_or(0);
+        let tombstone_memory = stats_manager
+            .get_value(MetricType::TombstoneMemoryBytes)
+            .unwrap_or(0);
         assert!(tombstone_memory > 0);
     }
 
@@ -445,7 +477,8 @@ mod tests {
 
         // Add 100 tombstones to cold layer, sorted by EdgeId
         for i in 0..100 {
-            mvcc.cold_tombstones.push((EdgeId(i as u64), 100 + i as u32));
+            mvcc.cold_tombstones
+                .push((EdgeId(i as u64), 100 + i as u32));
         }
         mvcc.cold_tombstones.sort_by_key(|k| k.0);
 
@@ -478,7 +511,10 @@ mod tests {
 
         // O(log n) should complete in microseconds for 10K queries over 100K items
         // This should be well under 100ms (typical desktop: ~10-30ms for optimized binary search)
-        println!("Cold layer lookup performance: 10K queries over 100K items in {:?}", elapsed);
+        println!(
+            "Cold layer lookup performance: 10K queries over 100K items in {:?}",
+            elapsed
+        );
         assert!(
             elapsed.as_millis() < 200,
             "Binary search too slow: {:?} (expected <200ms for 10K queries over 100K items)",
@@ -493,7 +529,8 @@ mod tests {
         // Fill hot layer to trigger promotion
         // Use timestamps well above GC threshold to avoid premature cleanup
         for i in 0..200_000 {
-            mvcc.tombstones.insert(EdgeId(i as u64), 10_000 + (i as u32 % 1000));
+            mvcc.tombstones
+                .insert(EdgeId(i as u64), 10_000 + (i as u32 % 1000));
         }
 
         assert!(mvcc.tombstones.len() > HOT_TOMBSTONE_GC_THRESHOLD);

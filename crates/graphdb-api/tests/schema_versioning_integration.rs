@@ -89,7 +89,10 @@ fn test_invalid_version_range_validation() {
         "error": "Invalid version range: from_version (100) must be <= to_version (50)"
     });
 
-    assert!(invalid_response["error"].as_str().unwrap().contains("Invalid version range"));
+    assert!(invalid_response["error"]
+        .as_str()
+        .unwrap()
+        .contains("Invalid version range"));
     println!("Version range validation test passed");
 }
 
@@ -103,7 +106,10 @@ fn test_valid_version_range() {
     });
 
     assert_eq!(valid_response["error"], "");
-    assert!(valid_response["from_version"].as_u64().unwrap() <= valid_response["to_version"].as_u64().unwrap());
+    assert!(
+        valid_response["from_version"].as_u64().unwrap()
+            <= valid_response["to_version"].as_u64().unwrap()
+    );
     println!("Valid version range test passed");
 }
 

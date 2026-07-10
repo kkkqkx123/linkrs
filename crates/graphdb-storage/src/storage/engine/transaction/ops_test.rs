@@ -4,7 +4,7 @@ mod tests {
 
     use crate::core::types::{LabelId, VertexId};
     use crate::core::Value;
-    use crate::storage::edge::{EdgeSchema, EdgeStrategy, EdgeStore};
+    use crate::storage::edge::{EdgeSchema, EdgeStore, EdgeStrategy};
     use crate::storage::engine::data_store::EdgeTableKey;
     use crate::storage::types::StoragePropertyDef;
     use crate::storage::vertex::{VertexSchema, VertexTable};
@@ -400,13 +400,8 @@ mod tests {
             dst_vid: 1,
             rank: 0,
         };
-        let result = TransactionOps::revert_delete_edge(
-            &mut edge_tables,
-            revert_params,
-            0i32,
-            0i32,
-            3,
-        );
+        let result =
+            TransactionOps::revert_delete_edge(&mut edge_tables, revert_params, 0i32, 0i32, 3);
         assert!(result.is_ok());
     }
 
@@ -561,10 +556,12 @@ mod tests {
         // Add a property to increment version (should go to 2)
         {
             let table = vertex_tables.get_mut(&0).unwrap();
-            table.add_property(StoragePropertyDef::new(
-                "email".to_string(),
-                crate::core::DataType::String,
-            )).unwrap();
+            table
+                .add_property(StoragePropertyDef::new(
+                    "email".to_string(),
+                    crate::core::DataType::String,
+                ))
+                .unwrap();
         }
 
         let table = vertex_tables.get(&0).unwrap();
@@ -598,7 +595,10 @@ mod tests {
 
         // Verify the schema was actually reverted (name changed back to email)
         assert!(table.schema().properties.iter().any(|p| p.name == "email"));
-        assert!(!table.schema().properties.iter().any(|p| p.name == "email_address"));
+        assert!(!table
+            .schema()
+            .properties
+            .iter()
+            .any(|p| p.name == "email_address"));
     }
-
 }

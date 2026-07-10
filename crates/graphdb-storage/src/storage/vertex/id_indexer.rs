@@ -284,8 +284,8 @@ impl IdManager {
 
     pub fn memory_usage(&self) -> usize {
         let keys_size = self.keys.capacity() * std::mem::size_of::<Option<IdKey>>();
-        let map_estimate = self.key_to_id.len()
-            * (std::mem::size_of::<IdKey>() + std::mem::size_of::<u32>());
+        let map_estimate =
+            self.key_to_id.len() * (std::mem::size_of::<IdKey>() + std::mem::size_of::<u32>());
         keys_size + map_estimate
     }
 
@@ -424,14 +424,8 @@ mod tests {
         );
         assert_eq!(indexer.get_index(&IdKey::Text("vertex3".to_string())), None);
 
-        assert_eq!(
-            indexer.get_key(0),
-            Some(IdKey::Text("vertex1".to_string()))
-        );
-        assert_eq!(
-            indexer.get_key(1),
-            Some(IdKey::Text("vertex2".to_string()))
-        );
+        assert_eq!(indexer.get_key(0), Some(IdKey::Text("vertex1".to_string())));
+        assert_eq!(indexer.get_key(1), Some(IdKey::Text("vertex2".to_string())));
     }
 
     #[test]
@@ -588,9 +582,6 @@ mod tests {
         indexer.remove(&IdKey::Text("v2".to_string()));
         assert_eq!(indexer.len(), 2);
 
-        assert_eq!(
-            indexer.get_index(&IdKey::Text("v2".to_string())),
-            None
-        );
+        assert_eq!(indexer.get_index(&IdKey::Text("v2".to_string())), None);
     }
 }

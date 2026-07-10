@@ -225,7 +225,10 @@ impl StoragePersistenceOps for MockStorage {
         Default::default()
     }
 
-    fn compact(&self, _config: &crate::core::types::CompactConfig) -> crate::core::StorageResult<()> {
+    fn compact(
+        &self,
+        _config: &crate::core::types::CompactConfig,
+    ) -> crate::core::StorageResult<()> {
         Ok(())
     }
 
@@ -284,7 +287,8 @@ impl UndoTarget for MockStorage {
         vertex: crate::core::types::VertexIdentifier,
         ts: crate::transaction::wal::Timestamp,
     ) -> crate::transaction::undo_log::UndoLogResult<()> {
-        self.graph.delete_vertex(vertex.label, &vertex.vid.to_string(), ts)
+        self.graph
+            .delete_vertex(vertex.label, &vertex.vid.to_string(), ts)
             .map_err(|e| crate::transaction::undo_log::UndoLogError::UndoFailed(e.to_string()))
     }
 
@@ -301,7 +305,8 @@ impl UndoTarget for MockStorage {
             dst_id: edge_id.dst_vid,
             rank: edge_id.rank,
         };
-        self.graph.delete_edge(&params, edge_ctx.timestamp)
+        self.graph
+            .delete_edge(&params, edge_ctx.timestamp)
             .map(|_| ())
             .map_err(|e| crate::transaction::undo_log::UndoLogError::UndoFailed(e.to_string()))
     }

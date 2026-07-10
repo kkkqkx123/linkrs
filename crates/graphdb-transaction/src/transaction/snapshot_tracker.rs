@@ -9,15 +9,15 @@
 //! instead of O(n) full scans. This is critical for high-concurrency scenarios
 //! with hundreds of concurrent reads.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use dashmap::DashMap;
 use parking_lot::Mutex;
 
-use crate::core::types::Timestamp;
-use crate::core::error::StorageError;
 use crate::core::error::storage::StorageErrorKind;
+use crate::core::error::StorageError;
+use crate::core::types::Timestamp;
 
 /// Tracks all active snapshots and their reference counts
 ///
@@ -70,7 +70,12 @@ impl SnapshotTracker {
         match self.snapshots.get(&ts) {
             Some(count) => {
                 let new_count = count.fetch_add(1, Ordering::SeqCst) + 1;
-                log::trace!("Snapshot {} ref count: {} -> {}", ts, new_count - 1, new_count);
+                log::trace!(
+                    "Snapshot {} ref count: {} -> {}",
+                    ts,
+                    new_count - 1,
+                    new_count
+                );
             }
             None => {
                 self.snapshots.insert(ts, AtomicU64::new(1));
@@ -97,7 +102,12 @@ impl SnapshotTracker {
         match self.snapshots.get(&ts) {
             Some(count) => {
                 let new_count = count.fetch_sub(1, Ordering::SeqCst) - 1;
-                log::trace!("Snapshot {} ref count: {} -> {}", ts, new_count + 1, new_count);
+                log::trace!(
+                    "Snapshot {} ref count: {} -> {}",
+                    ts,
+                    new_count + 1,
+                    new_count
+                );
 
                 if new_count == 0 {
                     drop(count); // Release the entry guard
@@ -113,12 +123,10 @@ impl SnapshotTracker {
                 }
                 Ok(())
             }
-            None => {
-                Err(StorageError::new(
-                    StorageErrorKind::InvalidInput,
-                    format!("Snapshot {} not found", ts),
-                ))
-            }
+            None => Err(StorageError::new(
+                StorageErrorKind::InvalidInput,
+                format!("Snapshot {} not found", ts),
+            )),
         }
     }
 
@@ -126,7 +134,7 @@ impl SnapshotTracker {
     pub fn min_active_snapshot(&self) -> Timestamp {
         let min = self.min_active.load(Ordering::Acquire);
         if min == u64::MAX {
-            u32::MAX  // No active snapshots
+            u32::MAX // No active snapshots
         } else {
             min as u32
         }
@@ -154,7 +162,9 @@ impl SnapshotTracker {
     /// Get the reference count for a specific snapshot (for testing)
     pub fn ref_count(&self, ts: Timestamp) -> Option<u64> {
         let ts = ts as u64;
-        self.snapshots.get(&ts).map(|count| count.load(Ordering::SeqCst))
+        self.snapshots
+            .get(&ts)
+            .map(|count| count.load(Ordering::SeqCst))
     }
 
     /// Get the total number of active snapshots (for testing)
@@ -306,9 +316,9 @@ mod tests {
 
     #[test]
     fn test_high_concurrency_stress() {
+        use std::sync::atomic::AtomicUsize;
         use std::sync::Arc;
         use std::thread;
-        use std::sync::atomic::AtomicUsize;
 
         let tracker = Arc::new(SnapshotTracker::new());
         let mut handles = vec![];

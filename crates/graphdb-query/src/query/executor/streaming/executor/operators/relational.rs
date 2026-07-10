@@ -3,13 +3,13 @@
 //! Includes: TopN, Dedup, Assign, Materialize, Remove, DataCollect, Unwind,
 //! Apply, PatternApply, RollUpApply, Minus, Window
 
+use super::super::helpers::comparison::compare_values;
+use super::super::{SortDirection, StreamingExecutor, ValueRowContext};
 use crate::core::error::QueryError;
 use crate::core::value::NullType;
 use crate::core::Value;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
-use super::super::{SortDirection, StreamingExecutor, ValueRowContext};
-use super::super::helpers::comparison::compare_values;
 
 // ============ TopN ============
 
@@ -20,7 +20,9 @@ pub fn open_topn(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
             *opened = true;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in open_topn".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_topn".to_string(),
+        )),
     }
 }
 
@@ -91,7 +93,9 @@ pub fn next_topn(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, 
                 Ok(None)
             }
         }
-        _ => Err(QueryError::execution("Type mismatch in next_topn".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_topn".to_string(),
+        )),
     }
 }
 
@@ -101,7 +105,9 @@ pub fn stop_topn(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
             input.stop()?;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in stop_topn".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_topn".to_string(),
+        )),
     }
 }
 
@@ -118,7 +124,9 @@ pub fn close_topn(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
             *result_iter = None;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in close_topn".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_topn".to_string(),
+        )),
     }
 }
 
@@ -131,7 +139,9 @@ pub fn open_dedup(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
             *opened = true;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in open_dedup".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_dedup".to_string(),
+        )),
     }
 }
 
@@ -162,7 +172,9 @@ pub fn next_dedup(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>,
             }
             Ok(None)
         }
-        _ => Err(QueryError::execution("Type mismatch in next_dedup".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_dedup".to_string(),
+        )),
     }
 }
 
@@ -172,22 +184,24 @@ pub fn stop_dedup(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
             input.stop()?;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in stop_dedup".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_dedup".to_string(),
+        )),
     }
 }
 
 pub fn close_dedup(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
         StreamingExecutor::Dedup {
-            input,
-            seen_rows,
-            ..
+            input, seen_rows, ..
         } => {
             input.close()?;
             seen_rows.clear();
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in close_dedup".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_dedup".to_string(),
+        )),
     }
 }
 
@@ -200,7 +214,9 @@ pub fn open_assign(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
             *opened = true;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in open_assign".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_assign".to_string(),
+        )),
     }
 }
 
@@ -235,7 +251,9 @@ pub fn next_assign(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
             }
             Ok(None)
         }
-        _ => Err(QueryError::execution("Type mismatch in next_assign".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_assign".to_string(),
+        )),
     }
 }
 
@@ -245,7 +263,9 @@ pub fn stop_assign(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
             input.stop()?;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in stop_assign".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_assign".to_string(),
+        )),
     }
 }
 
@@ -255,7 +275,9 @@ pub fn close_assign(executor: &mut StreamingExecutor) -> Result<(), QueryError> 
             input.close()?;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in close_assign".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_assign".to_string(),
+        )),
     }
 }
 
@@ -268,7 +290,9 @@ pub fn open_materialize(executor: &mut StreamingExecutor) -> Result<(), QueryErr
             *opened = true;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in open_materialize".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_materialize".to_string(),
+        )),
     }
 }
 
@@ -305,7 +329,9 @@ pub fn next_materialize(executor: &mut StreamingExecutor) -> Result<Option<DataC
                 Ok(None)
             }
         }
-        _ => Err(QueryError::execution("Type mismatch in next_materialize".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_materialize".to_string(),
+        )),
     }
 }
 
@@ -315,7 +341,9 @@ pub fn stop_materialize(executor: &mut StreamingExecutor) -> Result<(), QueryErr
             input.stop()?;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in stop_materialize".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_materialize".to_string(),
+        )),
     }
 }
 
@@ -332,7 +360,9 @@ pub fn close_materialize(executor: &mut StreamingExecutor) -> Result<(), QueryEr
             *result_iter = None;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in close_materialize".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_materialize".to_string(),
+        )),
     }
 }
 
@@ -345,7 +375,9 @@ pub fn open_remove(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
             *opened = true;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in open_remove".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_remove".to_string(),
+        )),
     }
 }
 
@@ -388,7 +420,9 @@ pub fn next_remove(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
             }
             Ok(None)
         }
-        _ => Err(QueryError::execution("Type mismatch in next_remove".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_remove".to_string(),
+        )),
     }
 }
 
@@ -398,7 +432,9 @@ pub fn stop_remove(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
             input.stop()?;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in stop_remove".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_remove".to_string(),
+        )),
     }
 }
 
@@ -408,7 +444,9 @@ pub fn close_remove(executor: &mut StreamingExecutor) -> Result<(), QueryError> 
             input.close()?;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in close_remove".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_remove".to_string(),
+        )),
     }
 }
 
@@ -421,7 +459,9 @@ pub fn open_datacollect(executor: &mut StreamingExecutor) -> Result<(), QueryErr
             *opened = true;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in open_datacollect".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_datacollect".to_string(),
+        )),
     }
 }
 
@@ -454,7 +494,9 @@ pub fn next_datacollect(executor: &mut StreamingExecutor) -> Result<Option<DataC
 
             Ok(None)
         }
-        _ => Err(QueryError::execution("Type mismatch in next_datacollect".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_datacollect".to_string(),
+        )),
     }
 }
 
@@ -464,22 +506,24 @@ pub fn stop_datacollect(executor: &mut StreamingExecutor) -> Result<(), QueryErr
             input.stop()?;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in stop_datacollect".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_datacollect".to_string(),
+        )),
     }
 }
 
 pub fn close_datacollect(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
         StreamingExecutor::DataCollect {
-            input,
-            all_rows,
-            ..
+            input, all_rows, ..
         } => {
             input.close()?;
             all_rows.clear();
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in close_datacollect".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_datacollect".to_string(),
+        )),
     }
 }
 
@@ -487,13 +531,20 @@ pub fn close_datacollect(executor: &mut StreamingExecutor) -> Result<(), QueryEr
 
 pub fn open_unwind(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::Unwind { input, opened, col_index, .. } => {
+        StreamingExecutor::Unwind {
+            input,
+            opened,
+            col_index,
+            ..
+        } => {
             input.open()?;
             *opened = true;
             *col_index = None;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in open_unwind".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_unwind".to_string(),
+        )),
     }
 }
 
@@ -543,7 +594,9 @@ pub fn next_unwind(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
                                 *current_unwind_index = 0;
                             } else {
                                 let elements = &list.values;
-                                while *current_unwind_index < elements.len() && result_rows.len() < CHUNK_SIZE {
+                                while *current_unwind_index < elements.len()
+                                    && result_rows.len() < CHUNK_SIZE
+                                {
                                     let mut new_row = row.clone();
                                     new_row[col_idx] = elements[*current_unwind_index].clone();
                                     result_rows.push(new_row);
@@ -578,18 +631,24 @@ pub fn next_unwind(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
                 Ok(Some(DataChunk::from_rows(result_rows)))
             }
         }
-        _ => Err(QueryError::execution("Type mismatch in next_unwind".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_unwind".to_string(),
+        )),
     }
 }
 
 pub fn stop_unwind(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::Unwind { input, col_index, .. } => {
+        StreamingExecutor::Unwind {
+            input, col_index, ..
+        } => {
             input.stop()?;
             *col_index = None;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in stop_unwind".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_unwind".to_string(),
+        )),
     }
 }
 
@@ -606,7 +665,9 @@ pub fn close_unwind(executor: &mut StreamingExecutor) -> Result<(), QueryError> 
             *col_index = None;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in close_unwind".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_unwind".to_string(),
+        )),
     }
 }
 
@@ -619,7 +680,9 @@ pub fn open_apply(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
             *opened = true;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in open_apply".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_apply".to_string(),
+        )),
     }
 }
 
@@ -636,13 +699,16 @@ pub fn next_apply(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>,
 
             if let Some(chunk) = input.next()? {
                 let col_names = chunk.col_names();
-                let mut result_rows = vec![];
+                let mut result_rows = Vec::new();
                 for row in chunk.rows {
                     let mut context = ValueRowContext::new(row.clone(), col_names.clone());
-                    // Evaluate expression for each row
                     match ExpressionEvaluator::evaluate(apply_expression, &mut context) {
-                        Ok(_val) => result_rows.push(row),
-                        Err(_) => {}, // Skip rows where expression fails
+                        Ok(val) => {
+                            let mut new_row = row.clone();
+                            new_row.push(val);
+                            result_rows.push(new_row);
+                        }
+                        Err(_) => {}
                     }
                 }
 
@@ -652,7 +718,9 @@ pub fn next_apply(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>,
             }
             Ok(None)
         }
-        _ => Err(QueryError::execution("Type mismatch in next_apply".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_apply".to_string(),
+        )),
     }
 }
 
@@ -662,7 +730,9 @@ pub fn stop_apply(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
             input.stop()?;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in stop_apply".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_apply".to_string(),
+        )),
     }
 }
 
@@ -672,7 +742,9 @@ pub fn close_apply(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
             input.close()?;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in close_apply".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_apply".to_string(),
+        )),
     }
 }
 
@@ -685,15 +757,19 @@ pub fn open_patternapply(executor: &mut StreamingExecutor) -> Result<(), QueryEr
             *opened = true;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in open_patternapply".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_patternapply".to_string(),
+        )),
     }
 }
 
-pub fn next_patternapply(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+pub fn next_patternapply(
+    executor: &mut StreamingExecutor,
+) -> Result<Option<DataChunk>, QueryError> {
     match executor {
         StreamingExecutor::PatternApply {
             input,
-            pattern: _pattern,
+            pattern,
             all_rows,
             result_iter,
             opened,
@@ -702,10 +778,22 @@ pub fn next_patternapply(executor: &mut StreamingExecutor) -> Result<Option<Data
                 return Err(QueryError::execution("PatternApply not opened".to_string()));
             }
 
-            // Placeholder implementation
             if result_iter.is_none() {
                 while let Some(chunk) = input.next()? {
-                    all_rows.extend(chunk.rows);
+                    let col_names = chunk.col_names();
+                    for row in chunk.rows {
+                        let mut ctx = ValueRowContext::new(row.clone(), col_names.clone());
+                        match ExpressionEvaluator::evaluate(pattern, &mut ctx) {
+                            Ok(val) => {
+                                let mut new_row = row.clone();
+                                new_row.push(val);
+                                all_rows.push(new_row);
+                            }
+                            Err(_) => {
+                                all_rows.push(row);
+                            }
+                        }
+                    }
                 }
                 *result_iter = Some(all_rows.drain(..).collect::<Vec<_>>().into_iter());
             }
@@ -718,7 +806,9 @@ pub fn next_patternapply(executor: &mut StreamingExecutor) -> Result<Option<Data
 
             Ok(None)
         }
-        _ => Err(QueryError::execution("Type mismatch in next_patternapply".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_patternapply".to_string(),
+        )),
     }
 }
 
@@ -728,7 +818,9 @@ pub fn stop_patternapply(executor: &mut StreamingExecutor) -> Result<(), QueryEr
             input.stop()?;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in stop_patternapply".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_patternapply".to_string(),
+        )),
     }
 }
 
@@ -745,7 +837,9 @@ pub fn close_patternapply(executor: &mut StreamingExecutor) -> Result<(), QueryE
             *result_iter = None;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in close_patternapply".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_patternapply".to_string(),
+        )),
     }
 }
 
@@ -758,7 +852,9 @@ pub fn open_rolluapply(executor: &mut StreamingExecutor) -> Result<(), QueryErro
             *opened = true;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in open_rolluapply".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_rolluapply".to_string(),
+        )),
     }
 }
 
@@ -766,7 +862,7 @@ pub fn next_rolluapply(executor: &mut StreamingExecutor) -> Result<Option<DataCh
     match executor {
         StreamingExecutor::RollUpApply {
             input,
-            rollup_expressions: _rollup_expressions,
+            rollup_expressions,
             all_rows,
             result_iter,
             opened,
@@ -775,10 +871,23 @@ pub fn next_rolluapply(executor: &mut StreamingExecutor) -> Result<Option<DataCh
                 return Err(QueryError::execution("RollUpApply not opened".to_string()));
             }
 
-            // Placeholder implementation
             if result_iter.is_none() {
+                let mut col_names: Vec<String> = Vec::new();
                 while let Some(chunk) = input.next()? {
-                    all_rows.extend(chunk.rows);
+                    if col_names.is_empty() {
+                        col_names = chunk.col_names();
+                    }
+                    for row in chunk.rows {
+                        let mut ctx = ValueRowContext::new(row.clone(), col_names.clone());
+                        let mut aggregated = row.clone();
+                        for expr in rollup_expressions.iter() {
+                            match ExpressionEvaluator::evaluate(expr, &mut ctx) {
+                                Ok(val) => aggregated.push(val),
+                                Err(_) => aggregated.push(Value::Null(crate::core::NullType::Null)),
+                            }
+                        }
+                        all_rows.push(aggregated);
+                    }
                 }
                 *result_iter = Some(all_rows.drain(..).collect::<Vec<_>>().into_iter());
             }
@@ -791,7 +900,9 @@ pub fn next_rolluapply(executor: &mut StreamingExecutor) -> Result<Option<DataCh
 
             Ok(None)
         }
-        _ => Err(QueryError::execution("Type mismatch in next_rolluapply".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_rolluapply".to_string(),
+        )),
     }
 }
 
@@ -801,7 +912,9 @@ pub fn stop_rolluapply(executor: &mut StreamingExecutor) -> Result<(), QueryErro
             input.stop()?;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in stop_rolluapply".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_rolluapply".to_string(),
+        )),
     }
 }
 
@@ -818,7 +931,9 @@ pub fn close_rolluapply(executor: &mut StreamingExecutor) -> Result<(), QueryErr
             *result_iter = None;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in close_rolluapply".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_rolluapply".to_string(),
+        )),
     }
 }
 
@@ -831,7 +946,9 @@ pub fn open_minus(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
             *opened = true;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in open_minus".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_minus".to_string(),
+        )),
     }
 }
 
@@ -877,7 +994,9 @@ pub fn next_minus(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>,
 
             Ok(None)
         }
-        _ => Err(QueryError::execution("Type mismatch in next_minus".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_minus".to_string(),
+        )),
     }
 }
 
@@ -887,22 +1006,24 @@ pub fn stop_minus(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
             left.stop()?;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in stop_minus".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_minus".to_string(),
+        )),
     }
 }
 
 pub fn close_minus(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
         StreamingExecutor::Minus {
-            left,
-            exclude_rows,
-            ..
+            left, exclude_rows, ..
         } => {
             left.close()?;
             exclude_rows.clear();
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in close_minus".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_minus".to_string(),
+        )),
     }
 }
 
@@ -915,7 +1036,9 @@ pub fn open_window(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
             *opened = true;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in open_window".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_window".to_string(),
+        )),
     }
 }
 
@@ -923,10 +1046,10 @@ pub fn next_window(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
     match executor {
         StreamingExecutor::Window {
             input,
-            window_exprs: _window_exprs,
-            partition_by_exprs: _partition_by_exprs,
-            order_by_exprs: _order_by_exprs,
-            order_by_directions: _order_by_directions,
+            window_exprs,
+            partition_by_exprs,
+            order_by_exprs,
+            order_by_directions,
             all_rows,
             result_iter,
             opened,
@@ -935,12 +1058,89 @@ pub fn next_window(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
                 return Err(QueryError::execution("Window not opened".to_string()));
             }
 
-            // Placeholder: collect all rows and emit in order
             if result_iter.is_none() {
+                let mut col_names: Vec<String> = Vec::new();
                 while let Some(chunk) = input.next()? {
+                    if col_names.is_empty() {
+                        col_names = chunk.col_names();
+                    }
                     all_rows.extend(chunk.rows);
                 }
-                *result_iter = Some(all_rows.drain(..).collect::<Vec<_>>().into_iter());
+
+                if !all_rows.is_empty() && col_names.is_empty() {
+                    col_names = (0..all_rows[0].len())
+                        .map(|i| format!("col_{}", i))
+                        .collect();
+                }
+
+                // Partition rows
+                let mut partitions: Vec<Vec<Vec<Value>>> = Vec::new();
+                if partition_by_exprs.is_empty() {
+                    partitions.push(all_rows.drain(..).collect());
+                } else {
+                    let mut partition_map: std::collections::HashMap<String, Vec<Vec<Value>>> =
+                        std::collections::HashMap::new();
+                    for row in all_rows.drain(..) {
+                        let mut ctx = ValueRowContext::new(row.clone(), col_names.clone());
+                        let mut key_parts = Vec::new();
+                        for expr in partition_by_exprs.iter() {
+                            match ExpressionEvaluator::evaluate(expr, &mut ctx) {
+                                Ok(val) => key_parts.push(format!("{:?}", val)),
+                                Err(_) => key_parts.push("null".to_string()),
+                            }
+                        }
+                        let key = key_parts.join("|");
+                        partition_map.entry(key).or_default().push(row);
+                    }
+                    partitions = partition_map.into_values().collect();
+                }
+
+                // Sort each partition by order_by_exprs
+                for partition in &mut partitions {
+                    if !order_by_exprs.is_empty() {
+                        partition.sort_by(|a, b| {
+                            for (idx, expr) in order_by_exprs.iter().enumerate() {
+                                let direction = order_by_directions
+                                    .get(idx)
+                                    .copied()
+                                    .unwrap_or(super::super::SortDirection::Ascending);
+                                let mut ctx_a = ValueRowContext::new(a.clone(), col_names.clone());
+                                let mut ctx_b = ValueRowContext::new(b.clone(), col_names.clone());
+                                let val_a = ExpressionEvaluator::evaluate(expr, &mut ctx_a)
+                                    .unwrap_or(Value::Null(crate::core::NullType::Null));
+                                let val_b = ExpressionEvaluator::evaluate(expr, &mut ctx_b)
+                                    .unwrap_or(Value::Null(crate::core::NullType::Null));
+                                let cmp = compare_values(&val_a, &val_b);
+                                let final_cmp = match direction {
+                                    super::super::SortDirection::Ascending => cmp,
+                                    super::super::SortDirection::Descending => cmp.reverse(),
+                                };
+                                if final_cmp != std::cmp::Ordering::Equal {
+                                    return final_cmp;
+                                }
+                            }
+                            std::cmp::Ordering::Equal
+                        });
+                    }
+                }
+
+                // Evaluate window expressions for each row
+                let mut out_rows = Vec::new();
+                for partition in &partitions {
+                    for row in partition {
+                        let mut ctx = ValueRowContext::new(row.clone(), col_names.clone());
+                        let mut new_row = row.clone();
+                        for expr in window_exprs.iter() {
+                            match ExpressionEvaluator::evaluate(expr, &mut ctx) {
+                                Ok(val) => new_row.push(val),
+                                Err(_) => new_row.push(Value::Null(crate::core::NullType::Null)),
+                            }
+                        }
+                        out_rows.push(new_row);
+                    }
+                }
+
+                *result_iter = Some(out_rows.into_iter());
             }
 
             if let Some(iter) = result_iter {
@@ -951,7 +1151,9 @@ pub fn next_window(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
 
             Ok(None)
         }
-        _ => Err(QueryError::execution("Type mismatch in next_window".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_window".to_string(),
+        )),
     }
 }
 
@@ -961,7 +1163,9 @@ pub fn stop_window(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
             input.stop()?;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in stop_window".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_window".to_string(),
+        )),
     }
 }
 
@@ -978,6 +1182,8 @@ pub fn close_window(executor: &mut StreamingExecutor) -> Result<(), QueryError> 
             *result_iter = None;
             Ok(())
         }
-        _ => Err(QueryError::execution("Type mismatch in close_window".to_string())),
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_window".to_string(),
+        )),
     }
 }

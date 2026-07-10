@@ -487,11 +487,15 @@ impl<
         let history = if req.is_edge {
             storage_read
                 .get_edge_version_history(&req.space, &req.label)
-                .map_err(|e| Status::internal(format!("Failed to get edge version history: {}", e)))?
+                .map_err(|e| {
+                    Status::internal(format!("Failed to get edge version history: {}", e))
+                })?
         } else {
             storage_read
                 .get_vertex_version_history(&req.space, &req.label)
-                .map_err(|e| Status::internal(format!("Failed to get vertex version history: {}", e)))?
+                .map_err(|e| {
+                    Status::internal(format!("Failed to get vertex version history: {}", e))
+                })?
         };
 
         let versions = history
@@ -500,7 +504,8 @@ impl<
                     .get_versions()
                     .iter()
                     .map(|&version| {
-                        let changes = h.change_log
+                        let changes = h
+                            .change_log
                             .get_version_changes(version)
                             .cloned()
                             .unwrap_or_default()
@@ -509,8 +514,12 @@ impl<
                                 change_type: format!("{:?}", change.details),
                                 details: {
                                     let mut details = std::collections::HashMap::new();
-                                    details.insert("description".to_string(), change.details.description());
-                                    details.insert("version".to_string(), change.version.to_string());
+                                    details.insert(
+                                        "description".to_string(),
+                                        change.details.description(),
+                                    );
+                                    details
+                                        .insert("version".to_string(), change.version.to_string());
                                     details
                                 },
                             })
@@ -540,12 +549,10 @@ impl<
 
         // Validate version range: from_version must be <= to_version
         if req.from_version > req.to_version {
-            return Err(Status::invalid_argument(
-                format!(
-                    "Invalid version range: from_version ({}) must be <= to_version ({})",
-                    req.from_version, req.to_version
-                )
-            ));
+            return Err(Status::invalid_argument(format!(
+                "Invalid version range: from_version ({}) must be <= to_version ({})",
+                req.from_version, req.to_version
+            )));
         }
 
         let storage = self.app_state.server.get_storage();
@@ -554,11 +561,15 @@ impl<
         let changes = if req.is_edge {
             storage_read
                 .get_edge_schema_changes(&req.space, &req.label, req.from_version, req.to_version)
-                .map_err(|e| Status::internal(format!("Failed to get edge schema changes: {}", e)))?
+                .map_err(|e| {
+                    Status::internal(format!("Failed to get edge schema changes: {}", e))
+                })?
         } else {
             storage_read
                 .get_vertex_schema_changes(&req.space, &req.label, req.from_version, req.to_version)
-                .map_err(|e| Status::internal(format!("Failed to get vertex schema changes: {}", e)))?
+                .map_err(|e| {
+                    Status::internal(format!("Failed to get vertex schema changes: {}", e))
+                })?
         };
 
         let proto_changes = changes
@@ -588,12 +599,10 @@ impl<
 
         // Validate version range: from_version must be <= to_version
         if req.from_version > req.to_version {
-            return Err(Status::invalid_argument(
-                format!(
-                    "Invalid version range: from_version ({}) must be <= to_version ({})",
-                    req.from_version, req.to_version
-                )
-            ));
+            return Err(Status::invalid_argument(format!(
+                "Invalid version range: from_version ({}) must be <= to_version ({})",
+                req.from_version, req.to_version
+            )));
         }
 
         let storage = self.app_state.server.get_storage();
@@ -601,12 +610,26 @@ impl<
 
         let changes = if req.is_edge {
             storage_read
-                .detect_edge_breaking_changes(&req.space, &req.label, req.from_version, req.to_version)
-                .map_err(|e| Status::internal(format!("Failed to detect edge breaking changes: {}", e)))?
+                .detect_edge_breaking_changes(
+                    &req.space,
+                    &req.label,
+                    req.from_version,
+                    req.to_version,
+                )
+                .map_err(|e| {
+                    Status::internal(format!("Failed to detect edge breaking changes: {}", e))
+                })?
         } else {
             storage_read
-                .detect_vertex_breaking_changes(&req.space, &req.label, req.from_version, req.to_version)
-                .map_err(|e| Status::internal(format!("Failed to detect vertex breaking changes: {}", e)))?
+                .detect_vertex_breaking_changes(
+                    &req.space,
+                    &req.label,
+                    req.from_version,
+                    req.to_version,
+                )
+                .map_err(|e| {
+                    Status::internal(format!("Failed to detect vertex breaking changes: {}", e))
+                })?
         };
 
         let has_breaking = !changes.is_empty();

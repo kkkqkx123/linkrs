@@ -9,8 +9,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 /// Type alias for a factory function that creates WAL writers
-pub type WalWriterFactoryFn =
-    Arc<dyn Fn(&str, u32) -> WalResult<Box<dyn WalWriter>> + Send + Sync>;
+pub type WalWriterFactoryFn = Arc<dyn Fn(&str, u32) -> WalResult<Box<dyn WalWriter>> + Send + Sync>;
 
 /// Global registry of WAL writer factory functions
 static WAL_WRITER_REGISTRY: Lazy<Arc<Mutex<HashMap<String, WalWriterFactoryFn>>>> =
@@ -55,9 +54,9 @@ impl WalWriterFactory {
     /// A Result containing a boxed WAL writer or an error
     pub fn create_wal_writer(wal_uri: &str, thread_id: u32) -> WalResult<Box<dyn WalWriter>> {
         let scheme = Self::get_scheme(wal_uri);
-        let registry = WAL_WRITER_REGISTRY.lock().map_err(|_| {
-            WalError::IoError("Failed to acquire writer registry lock".to_string())
-        })?;
+        let registry = WAL_WRITER_REGISTRY
+            .lock()
+            .map_err(|_| WalError::IoError("Failed to acquire writer registry lock".to_string()))?;
 
         if let Some(factory_fn) = registry.get(scheme.as_str()) {
             factory_fn(wal_uri, thread_id)
@@ -101,9 +100,9 @@ impl WalWriterFactory {
     /// )?;
     /// ```
     pub fn register_writer(scheme: String, factory: WalWriterFactoryFn) -> WalResult<()> {
-        let mut registry = WAL_WRITER_REGISTRY.lock().map_err(|_| {
-            WalError::IoError("Failed to acquire writer registry lock".to_string())
-        })?;
+        let mut registry = WAL_WRITER_REGISTRY
+            .lock()
+            .map_err(|_| WalError::IoError("Failed to acquire writer registry lock".to_string()))?;
 
         if registry.contains_key(&scheme) {
             return Err(WalError::IoError(format!(
@@ -132,18 +131,18 @@ impl WalWriterFactory {
         scheme: String,
         factory: WalWriterFactoryFn,
     ) -> WalResult<Option<WalWriterFactoryFn>> {
-        let mut registry = WAL_WRITER_REGISTRY.lock().map_err(|_| {
-            WalError::IoError("Failed to acquire writer registry lock".to_string())
-        })?;
+        let mut registry = WAL_WRITER_REGISTRY
+            .lock()
+            .map_err(|_| WalError::IoError("Failed to acquire writer registry lock".to_string()))?;
 
         Ok(registry.insert(scheme, factory))
     }
 
     /// List all registered WAL writer schemes
     pub fn list_schemes() -> WalResult<Vec<String>> {
-        let registry = WAL_WRITER_REGISTRY.lock().map_err(|_| {
-            WalError::IoError("Failed to acquire writer registry lock".to_string())
-        })?;
+        let registry = WAL_WRITER_REGISTRY
+            .lock()
+            .map_err(|_| WalError::IoError("Failed to acquire writer registry lock".to_string()))?;
 
         Ok(registry.keys().cloned().collect())
     }
@@ -184,18 +183,14 @@ mod tests {
     fn test_register_custom_writer() {
         let result = WalWriterFactory::register_writer(
             "test".to_string(),
-            Arc::new(|_uri: &str, _thread_id: u32| {
-                Ok(Box::new(DummyWalWriter::new()))
-            }),
+            Arc::new(|_uri: &str, _thread_id: u32| Ok(Box::new(DummyWalWriter::new()))),
         );
         assert!(result.is_ok());
 
         // Try to register again - should fail
         let result = WalWriterFactory::register_writer(
             "test".to_string(),
-            Arc::new(|_uri: &str, _thread_id: u32| {
-                Ok(Box::new(DummyWalWriter::new()))
-            }),
+            Arc::new(|_uri: &str, _thread_id: u32| Ok(Box::new(DummyWalWriter::new()))),
         );
         assert!(result.is_err());
     }

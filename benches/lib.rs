@@ -3,5 +3,5 @@
 pub mod analyzer;
 pub mod common;
 
-pub use analyzer::{AnalysisMetrics, PerformanceAnalyzer, BottleneckDetector};
-pub use common::{DataGenerator, BenchmarkContext, BenchmarkDataStats};
+pub use analyzer::{AnalysisMetrics, BottleneckDetector, PerformanceAnalyzer};
+pub use common::{BenchmarkContext, BenchmarkDataStats, DataGenerator};

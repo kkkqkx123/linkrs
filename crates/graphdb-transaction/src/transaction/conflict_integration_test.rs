@@ -4,11 +4,11 @@
 
 use std::time::Duration;
 
+use crate::core::types::VertexId;
 use crate::transaction::manager::TransactionManager;
 use crate::transaction::types::{
     DurabilityLevel, TransactionId, TransactionManagerConfig, TransactionOptions,
 };
-use crate::core::types::VertexId;
 use crate::transaction::WriteSetAnalyzer;
 
 fn create_test_manager() -> TransactionManager {
@@ -130,8 +130,8 @@ fn test_conflict_intensity_varying_overlaps() {
 /// Test 3.1.4: ConflictReport detailed analysis
 #[test]
 fn test_conflict_report_classification() {
-    use crate::transaction::types::WriteSet;
     use crate::core::types::EdgeIdentifier;
+    use crate::transaction::types::WriteSet;
 
     let vid1 = VertexId::from_int64(1);
     let vid2 = VertexId::from_int64(2);
@@ -189,7 +189,9 @@ fn test_readonly_transaction_no_conflict() {
         .begin_read_transaction(TransactionOptions::default())
         .expect("Failed to begin read txn");
 
-    let ctx_write = manager.get_context(txn_write).expect("Failed to get write ctx");
+    let ctx_write = manager
+        .get_context(txn_write)
+        .expect("Failed to get write ctx");
     ctx_write.record_vertex_write(VertexId::from_int64(1));
 
     // Read transaction should not cause conflict

@@ -82,10 +82,11 @@ pub fn next_hashjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                                 let mut context =
                                     ValueRowContext::new(combined_row, combined_col_names);
 
-                                let condition_satisfied = match ExpressionEvaluator::evaluate(condition, &mut context) {
-                                    Ok(Value::Bool(b)) => b,
-                                    _ => false,
-                                };
+                                let condition_satisfied =
+                                    match ExpressionEvaluator::evaluate(condition, &mut context) {
+                                        Ok(Value::Bool(b)) => b,
+                                        _ => false,
+                                    };
 
                                 if condition_satisfied {
                                     let mut joined_row = left_row.clone();
@@ -140,7 +141,13 @@ pub fn close_hashjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError
 }
 
 pub fn reset_hashjoin(executor: &mut StreamingExecutor) {
-    if let StreamingExecutor::HashJoin { build_side_hash, all_right_rows, left_consumed, .. } = executor {
+    if let StreamingExecutor::HashJoin {
+        build_side_hash,
+        all_right_rows,
+        left_consumed,
+        ..
+    } = executor
+    {
         build_side_hash.clear();
         all_right_rows.clear();
         *left_consumed = false;
@@ -166,7 +173,9 @@ pub fn open_nestedloopjoin(executor: &mut StreamingExecutor) -> Result<(), Query
     }
 }
 
-pub fn next_nestedloopjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+pub fn next_nestedloopjoin(
+    executor: &mut StreamingExecutor,
+) -> Result<Option<DataChunk>, QueryError> {
     match executor {
         StreamingExecutor::NestedLoopJoin {
             left,
@@ -319,7 +328,8 @@ pub fn next_innerjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChu
                             for i in 0..right_row.len() {
                                 combined_col_names.push(format!("right_{}", i));
                             }
-                            let mut context = ValueRowContext::new(combined_row, combined_col_names);
+                            let mut context =
+                                ValueRowContext::new(combined_row, combined_col_names);
                             match ExpressionEvaluator::evaluate(condition, &mut context) {
                                 Ok(Value::Bool(b)) => b,
                                 _ => false,
@@ -430,7 +440,8 @@ pub fn next_leftjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                             for i in 0..right_row.len() {
                                 combined_col_names.push(format!("right_{}", i));
                             }
-                            let mut context = ValueRowContext::new(combined_row, combined_col_names);
+                            let mut context =
+                                ValueRowContext::new(combined_row, combined_col_names);
                             match ExpressionEvaluator::evaluate(condition, &mut context) {
                                 Ok(Value::Bool(b)) => b,
                                 _ => false,
@@ -551,7 +562,8 @@ pub fn next_rightjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChu
                             for i in 0..left_row.len() {
                                 combined_col_names.push(format!("left_{}", i));
                             }
-                            let mut context = ValueRowContext::new(combined_row, combined_col_names);
+                            let mut context =
+                                ValueRowContext::new(combined_row, combined_col_names);
                             match ExpressionEvaluator::evaluate(condition, &mut context) {
                                 Ok(Value::Bool(b)) => b,
                                 _ => false,
@@ -641,7 +653,9 @@ pub fn open_fullouterjoin(executor: &mut StreamingExecutor) -> Result<(), QueryE
     }
 }
 
-pub fn next_fullouterjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+pub fn next_fullouterjoin(
+    executor: &mut StreamingExecutor,
+) -> Result<Option<DataChunk>, QueryError> {
     match executor {
         StreamingExecutor::FullOuterJoin {
             left,
@@ -936,7 +950,8 @@ pub fn next_semijoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                             for i in 0..right_row.len() {
                                 combined_col_names.push(format!("right_{}", i));
                             }
-                            let mut context = ValueRowContext::new(combined_row, combined_col_names);
+                            let mut context =
+                                ValueRowContext::new(combined_row, combined_col_names);
                             match ExpressionEvaluator::evaluate(condition, &mut context) {
                                 Ok(Value::Bool(b)) => b,
                                 _ => false,
@@ -1121,10 +1136,7 @@ mod tests {
     fn test_nestedloop_cartesian() {
         let left = Box::new(StreamingExecutor::ScanVertices {
             partition_id: 0,
-            buffer: vec![
-                vec![Value::Int(1)],
-                vec![Value::Int(2)],
-            ],
+            buffer: vec![vec![Value::Int(1)], vec![Value::Int(2)]],
             current_index: 0,
         });
 
@@ -1257,4 +1269,3 @@ mod tests {
         join.close().unwrap();
     }
 }
-

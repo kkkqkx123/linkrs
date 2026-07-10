@@ -35,16 +35,16 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read};
 
-use crate::core::{DataType, DateValue, StorageError, StorageResult, Value};
 use crate::core::types::Timestamp;
+use crate::core::{DataType, DateValue, StorageError, StorageResult, Value};
+use crate::storage::mvcc::{MVCCTable, SnapshotHandle, TieredTombstoneManager};
 use crate::storage::naming::NameIndexer;
 use crate::storage::persistence::{read_header, read_u32_le, section, write_header};
 use crate::storage::types::PropertyId;
-use crate::storage::mvcc::{MVCCTable, SnapshotHandle, TieredTombstoneManager};
 
 pub use super::property_schema::{
-    PropertySchema, PropertyRecord, PropertyCompactionStats,
-    prop_offset_to_index, prop_index_to_offset,
+    prop_index_to_offset, prop_offset_to_index, PropertyCompactionStats, PropertyRecord,
+    PropertySchema,
 };
 
 // Varint encoding for compact string lengths
@@ -61,9 +61,9 @@ fn decode_varint(cursor: &mut Cursor<&[u8]>) -> StorageResult<u32> {
     let mut shift = 0;
     loop {
         let mut b = [0u8; 1];
-        cursor.read_exact(&mut b).map_err(|_| {
-            StorageError::deserialize_error("failed to decode varint")
-        })?;
+        cursor
+            .read_exact(&mut b)
+            .map_err(|_| StorageError::deserialize_error("failed to decode varint"))?;
         result |= ((b[0] & 0x7F) as u32) << shift;
         if b[0] < 128 {
             break;
@@ -77,7 +77,7 @@ fn decode_varint(cursor: &mut Cursor<&[u8]>) -> StorageResult<u32> {
 pub struct PropertyTable {
     schema: Vec<PropertySchema>,
     name_indexer: NameIndexer,
-    records: Vec<Option<PropertyRecord>>,     // row_index → PropertyRecord with timestamps
+    records: Vec<Option<PropertyRecord>>, // row_index → PropertyRecord with timestamps
     row_count: usize,
     free_list: Vec<u32>,
 
@@ -194,7 +194,10 @@ impl PropertyTable {
         Ok(buffer)
     }
 
-    fn serialize_row_with_nulls(&self, values: &[(String, Option<Value>)]) -> StorageResult<Vec<u8>> {
+    fn serialize_row_with_nulls(
+        &self,
+        values: &[(String, Option<Value>)],
+    ) -> StorageResult<Vec<u8>> {
         let mut buffer = Vec::new();
 
         for schema in &self.schema {
@@ -209,7 +212,12 @@ impl PropertyTable {
         Ok(buffer)
     }
 
-    fn serialize_value(&self, buffer: &mut Vec<u8>, value: Option<&Value>, schema: &PropertySchema) -> StorageResult<()> {
+    fn serialize_value(
+        &self,
+        buffer: &mut Vec<u8>,
+        value: Option<&Value>,
+        schema: &PropertySchema,
+    ) -> StorageResult<()> {
         match value {
             None => {
                 buffer.push(0); // null marker
@@ -290,7 +298,11 @@ impl PropertyTable {
         Ok(result)
     }
 
-    fn deserialize_value(&self, cursor: &mut Cursor<&[u8]>, data_type: &DataType) -> StorageResult<Option<Value>> {
+    fn deserialize_value(
+        &self,
+        cursor: &mut Cursor<&[u8]>,
+        data_type: &DataType,
+    ) -> StorageResult<Option<Value>> {
         match data_type {
             DataType::Bool => {
                 let mut b = [0u8; 1];
@@ -326,7 +338,9 @@ impl PropertyTable {
                 let len = decode_varint(cursor)? as usize;
                 let mut str_buf = vec![0u8; len];
                 cursor.read_exact(&mut str_buf)?;
-                Ok(Some(Value::String(String::from_utf8_lossy(&str_buf).to_string())))
+                Ok(Some(Value::String(
+                    String::from_utf8_lossy(&str_buf).to_string(),
+                )))
             }
             DataType::Date => {
                 let mut buf = [0u8; 10];
@@ -342,7 +356,11 @@ impl PropertyTable {
         }
     }
 
-    pub fn insert(&mut self, values: &[(String, Value)], create_ts: Timestamp) -> StorageResult<u32> {
+    pub fn insert(
+        &mut self,
+        values: &[(String, Value)],
+        create_ts: Timestamp,
+    ) -> StorageResult<u32> {
         let record_data = self.serialize_row(values)?;
 
         let record = PropertyRecord::new(record_data.clone(), create_ts);
@@ -362,12 +380,18 @@ impl PropertyTable {
         Ok(offset)
     }
 
-    pub fn update(&mut self, offset: u32, values: &[(String, Value)], ts: Timestamp) -> StorageResult<u32> {
+    pub fn update(
+        &mut self,
+        offset: u32,
+        values: &[(String, Value)],
+        ts: Timestamp,
+    ) -> StorageResult<u32> {
         // Get current record data BEFORE marking as deleted
         let merged_values = self.get_for_update(offset, values)?;
 
         // Mark old record as deleted
-        let row_idx = prop_offset_to_index(offset).ok_or_else(|| StorageError::invalid_offset(offset))?;
+        let row_idx =
+            prop_offset_to_index(offset).ok_or_else(|| StorageError::invalid_offset(offset))?;
         if row_idx >= self.records.len() {
             return Err(StorageError::invalid_offset(offset));
         }
@@ -383,7 +407,11 @@ impl PropertyTable {
         self.insert(&merged_values, ts)
     }
 
-    fn get_for_update(&self, offset: u32, updates: &[(String, Value)]) -> StorageResult<Vec<(String, Value)>> {
+    fn get_for_update(
+        &self,
+        offset: u32,
+        updates: &[(String, Value)],
+    ) -> StorageResult<Vec<(String, Value)>> {
         let mut result = Vec::new();
 
         if let Some(current_props) = self.get(offset, None) {
@@ -408,7 +436,11 @@ impl PropertyTable {
         Ok(result)
     }
 
-    pub fn get(&self, offset: u32, query_ts: Option<Timestamp>) -> Option<Vec<(String, Option<Value>)>> {
+    pub fn get(
+        &self,
+        offset: u32,
+        query_ts: Option<Timestamp>,
+    ) -> Option<Vec<(String, Option<Value>)>> {
         let row_idx = prop_offset_to_index(offset)?;
         if row_idx >= self.records.len() {
             return None;
@@ -418,7 +450,7 @@ impl PropertyTable {
 
         // Check visibility based on create_ts and delete_ts
         let visible = match query_ts {
-            None => record.delete_ts.is_none(),  // Current version
+            None => record.delete_ts.is_none(),   // Current version
             Some(ts) => record.is_visible_at(ts), // Time-travel query
         };
 
@@ -431,20 +463,28 @@ impl PropertyTable {
 
     /// Serialize a single value into a byte buffer at a given offset.
     /// Used for direct byte manipulation in set_property.
-    fn serialize_value_at_offset(&self, buffer: &mut [u8], value: Option<&Value>, col_idx: usize) -> StorageResult<()> {
-        let byte_off = self.column_byte_offsets.get(col_idx).ok_or_else(|| {
-            StorageError::column_not_found(format!("col_idx={}", col_idx))
-        })?;
+    fn serialize_value_at_offset(
+        &self,
+        buffer: &mut [u8],
+        value: Option<&Value>,
+        col_idx: usize,
+    ) -> StorageResult<()> {
+        let byte_off = self
+            .column_byte_offsets
+            .get(col_idx)
+            .ok_or_else(|| StorageError::column_not_found(format!("col_idx={}", col_idx)))?;
 
         let dt = &self.schema[col_idx].data_type;
         let val_size = Self::data_type_byte_size(dt).ok_or_else(|| {
-            StorageError::not_supported("Variable-size types not supported for direct update".to_string())
+            StorageError::not_supported(
+                "Variable-size types not supported for direct update".to_string(),
+            )
         })?;
 
         match value {
             None => {
                 buffer[*byte_off] = 0; // null marker
-                // Zero out value bytes (safety, but not strictly required)
+                                       // Zero out value bytes (safety, but not strictly required)
                 for i in 0..val_size {
                     buffer[*byte_off + 1 + i] = 0;
                 }
@@ -484,9 +524,10 @@ impl PropertyTable {
                         }
                     }
                     _ => {
-                        return Err(StorageError::not_supported(
-                            format!("Unexpected fixed-size type: {:?}", dt)
-                        ));
+                        return Err(StorageError::not_supported(format!(
+                            "Unexpected fixed-size type: {:?}",
+                            dt
+                        )));
                     }
                 }
             }
@@ -501,7 +542,8 @@ impl PropertyTable {
         value: Option<Value>,
         ts: Timestamp,
     ) -> StorageResult<()> {
-        let row_idx = prop_offset_to_index(offset).ok_or_else(|| StorageError::invalid_offset(offset))?;
+        let row_idx =
+            prop_offset_to_index(offset).ok_or_else(|| StorageError::invalid_offset(offset))?;
         if row_idx >= self.records.len() {
             return Err(StorageError::invalid_offset(offset));
         }
@@ -511,7 +553,10 @@ impl PropertyTable {
         }
 
         // Fast path: for fixed-size schemas, do direct byte manipulation
-        let col_idx = self.schema.iter().position(|p| p.name == name)
+        let col_idx = self
+            .schema
+            .iter()
+            .position(|p| p.name == name)
             .ok_or_else(|| StorageError::column_not_found(name.to_string()))?;
 
         if self.is_schema_fixed_size() && col_idx < self.column_byte_offsets.len() {
@@ -589,7 +634,10 @@ impl PropertyTable {
     ) -> StorageResult<()> {
         let col_idx = prop_id.as_usize();
         if col_idx >= self.schema.len() {
-            return Err(StorageError::column_not_found(format!("prop_id={}", prop_id)));
+            return Err(StorageError::column_not_found(format!(
+                "prop_id={}",
+                prop_id
+            )));
         }
 
         // Direct path: bypass set_property's linear name lookup
@@ -610,9 +658,10 @@ impl PropertyTable {
 
     /// Mark a property record as deleted for MVCC tracking
     pub fn mark_deleted(&mut self, offset: u32, delete_ts: Timestamp) -> StorageResult<()> {
-        let row_idx = prop_offset_to_index(offset).ok_or_else(|| StorageError::invalid_offset(offset))?;
+        let row_idx =
+            prop_offset_to_index(offset).ok_or_else(|| StorageError::invalid_offset(offset))?;
         if row_idx >= self.records.len() {
-            return Ok(());  // Already deleted or doesn't exist
+            return Ok(()); // Already deleted or doesn't exist
         }
 
         if let Some(record) = &mut self.records[row_idx] {
@@ -621,10 +670,12 @@ impl PropertyTable {
                 self.tombstones_manager.add_tombstone(offset, delete_ts);
                 Ok(())
             } else {
-                Err(StorageError::invalid_operation("record already marked deleted"))
+                Err(StorageError::invalid_operation(
+                    "record already marked deleted",
+                ))
             }
         } else {
-            Ok(())  // Idempotent: already deleted
+            Ok(()) // Idempotent: already deleted
         }
     }
 
@@ -689,7 +740,7 @@ impl PropertyTable {
         result.extend_from_slice(&[0u8; 4]);
 
         // Version 1: Current development format with MVCC support
-        result.push(1);  // version
+        result.push(1); // version
 
         result.extend_from_slice(&(self.schema.len() as u32).to_le_bytes());
         for prop in &self.schema {
@@ -707,19 +758,19 @@ impl PropertyTable {
         for record_opt in &self.records {
             match record_opt {
                 Some(record) => {
-                    result.push(1);  // marker: has data
+                    result.push(1); // marker: has data
                     result.extend_from_slice(&record.create_ts.to_le_bytes());
                     if let Some(del_ts) = record.delete_ts {
-                        result.push(1);  // marker: has delete_ts
+                        result.push(1); // marker: has delete_ts
                         result.extend_from_slice(&del_ts.to_le_bytes());
                     } else {
-                        result.push(0);  // marker: no delete_ts
+                        result.push(0); // marker: no delete_ts
                     }
                     result.extend_from_slice(&(record.data.len() as u32).to_le_bytes());
                     result.extend_from_slice(&record.data);
                 }
                 None => {
-                    result.push(0);  // marker: deleted
+                    result.push(0); // marker: deleted
                 }
             }
         }
@@ -786,13 +837,14 @@ impl PropertyTable {
             offset += 1;
             v
         } else {
-            1  // Default to v1 if not specified
+            1 // Default to v1 if not specified
         };
 
         if version != 1 {
-            return Err(StorageError::deserialize_error(
-                format!("Unsupported PropertyTable version: expected 1, got {}", version)
-            ));
+            return Err(StorageError::deserialize_error(format!(
+                "Unsupported PropertyTable version: expected 1, got {}",
+                version
+            )));
         }
 
         let schema_len = read_u32_le(data, &mut offset)? as usize;
@@ -819,7 +871,8 @@ impl PropertyTable {
             let nullable = data[offset] == 1;
             offset += 1;
 
-            let prop_schema = PropertySchema::new(name.clone(), prop_id, data_type).nullable(nullable);
+            let prop_schema =
+                PropertySchema::new(name.clone(), prop_id, data_type).nullable(nullable);
             self.name_indexer.register(name.clone());
             self.schema.push(prop_schema);
         }
@@ -884,7 +937,8 @@ impl PropertyTable {
             if let Some(record) = record_opt {
                 if let Some(delete_ts) = record.delete_ts {
                     let prop_offset = prop_index_to_offset(idx);
-                    self.tombstones_manager.add_tombstone(prop_offset, delete_ts);
+                    self.tombstones_manager
+                        .add_tombstone(prop_offset, delete_ts);
                 }
             }
         }
@@ -1108,7 +1162,11 @@ impl PropertyTable {
 
     /// Fast path deserialization for fixed-size schemas
     /// Skips null checks and type dispatching for 2-3x speedup
-    pub fn get_fast(&self, offset: u32, query_ts: Option<Timestamp>) -> Option<Vec<(String, Option<Value>)>> {
+    pub fn get_fast(
+        &self,
+        offset: u32,
+        query_ts: Option<Timestamp>,
+    ) -> Option<Vec<(String, Option<Value>)>> {
         if !self.is_schema_fixed_size() {
             return self.get(offset, query_ts);
         }
@@ -1150,35 +1208,50 @@ impl PropertyTable {
                     if cursor.read_exact(&mut buf).is_err() {
                         return None;
                     }
-                    result.push((schema.name.clone(), Some(Value::SmallInt(i16::from_le_bytes(buf)))));
+                    result.push((
+                        schema.name.clone(),
+                        Some(Value::SmallInt(i16::from_le_bytes(buf))),
+                    ));
                 }
                 DataType::Int => {
                     let mut buf = [0u8; 4];
                     if cursor.read_exact(&mut buf).is_err() {
                         return None;
                     }
-                    result.push((schema.name.clone(), Some(Value::Int(i32::from_le_bytes(buf)))));
+                    result.push((
+                        schema.name.clone(),
+                        Some(Value::Int(i32::from_le_bytes(buf))),
+                    ));
                 }
                 DataType::BigInt => {
                     let mut buf = [0u8; 8];
                     if cursor.read_exact(&mut buf).is_err() {
                         return None;
                     }
-                    result.push((schema.name.clone(), Some(Value::BigInt(i64::from_le_bytes(buf)))));
+                    result.push((
+                        schema.name.clone(),
+                        Some(Value::BigInt(i64::from_le_bytes(buf))),
+                    ));
                 }
                 DataType::Float => {
                     let mut buf = [0u8; 4];
                     if cursor.read_exact(&mut buf).is_err() {
                         return None;
                     }
-                    result.push((schema.name.clone(), Some(Value::Float(f32::from_le_bytes(buf)))));
+                    result.push((
+                        schema.name.clone(),
+                        Some(Value::Float(f32::from_le_bytes(buf))),
+                    ));
                 }
                 DataType::Double => {
                     let mut buf = [0u8; 8];
                     if cursor.read_exact(&mut buf).is_err() {
                         return None;
                     }
-                    result.push((schema.name.clone(), Some(Value::Double(f64::from_le_bytes(buf)))));
+                    result.push((
+                        schema.name.clone(),
+                        Some(Value::Double(f64::from_le_bytes(buf))),
+                    ));
                 }
                 _ => {
                     // Should not reach here due to is_schema_fixed_size check
@@ -1193,13 +1266,18 @@ impl PropertyTable {
     /// Batch retrieval of properties, sorted by offset for cache locality
     /// Returns results in original order via the provided iterator
     #[allow(clippy::type_complexity)]
-    pub fn get_batch<'a, I>(&'a self, offsets: I, query_ts: Option<Timestamp>) -> Vec<Option<Vec<(String, Option<Value>)>>>
+    pub fn get_batch<'a, I>(
+        &'a self,
+        offsets: I,
+        query_ts: Option<Timestamp>,
+    ) -> Vec<Option<Vec<(String, Option<Value>)>>>
     where
         I: IntoIterator<Item = &'a u32>,
     {
         let offsets: Vec<_> = offsets.into_iter().collect();
         let mut indexed: Vec<_> = offsets
-            .iter().enumerate()
+            .iter()
+            .enumerate()
             .map(|(idx, offset)| (idx, **offset))
             .collect();
 
@@ -1214,7 +1292,10 @@ impl PropertyTable {
         // Retrieve in sorted order
         let sorted_results: Vec<_> = indexed
             .iter()
-            .map(|(_, offset)| self.get_fast(*offset, query_ts).or_else(|| self.get(*offset, query_ts)))
+            .map(|(_, offset)| {
+                self.get_fast(*offset, query_ts)
+                    .or_else(|| self.get(*offset, query_ts))
+            })
             .collect();
 
         // Restore original order

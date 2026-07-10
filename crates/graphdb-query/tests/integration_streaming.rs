@@ -11,12 +11,7 @@ use graphdb_query::query::executor::streaming::executor::StreamingExecutor;
 
 fn create_simple_scan(size: usize) -> StreamingExecutor {
     let buffer = (0..size)
-        .map(|i| {
-            vec![
-                Value::Int(i as i32),
-                Value::String(format!("item_{}", i)),
-            ]
-        })
+        .map(|i| vec![Value::Int(i as i32), Value::String(format!("item_{}", i))])
         .collect();
 
     StreamingExecutor::ScanVertices {
@@ -74,9 +69,7 @@ fn test_project_then_distinct_pipeline() {
 
     let project = StreamingExecutor::Project {
         input: Box::new(scan),
-        output_expressions: vec![
-            Expression::Literal(Value::Int(0)),
-        ],
+        output_expressions: vec![Expression::Literal(Value::Int(0))],
         opened: false,
     };
 
@@ -126,15 +119,9 @@ fn test_join_with_small_inputs() {
 #[test]
 fn test_union_then_limit_pipeline() {
     // Create: (ScanLeft Union ScanRight) -> Limit
-    let left = create_scan_with_data(vec![
-        vec![Value::Int(1)],
-        vec![Value::Int(2)],
-    ]);
+    let left = create_scan_with_data(vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
 
-    let right = create_scan_with_data(vec![
-        vec![Value::Int(2)],
-        vec![Value::Int(3)],
-    ]);
+    let right = create_scan_with_data(vec![vec![Value::Int(2)], vec![Value::Int(3)]]);
 
     let union = StreamingExecutor::Union {
         left: Box::new(left),
@@ -167,9 +154,7 @@ fn test_except_then_filter_pipeline() {
         vec![Value::Int(3), Value::String("c".to_string())],
     ]);
 
-    let right = create_scan_with_data(vec![
-        vec![Value::Int(2), Value::String("b".to_string())],
-    ]);
+    let right = create_scan_with_data(vec![vec![Value::Int(2), Value::String("b".to_string())]]);
 
     let except = StreamingExecutor::Except {
         left: Box::new(left),

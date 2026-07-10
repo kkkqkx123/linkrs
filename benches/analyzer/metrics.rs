@@ -139,18 +139,27 @@ impl AnalysisMetrics {
         report.push_str("=== Performance Analysis Report ===\n\n");
 
         report.push_str("Planning Phase:\n");
-        report.push_str(&format!("  Planning Time: {:.2}ms\n", self.planning_time_ms));
+        report.push_str(&format!(
+            "  Planning Time: {:.2}ms\n",
+            self.planning_time_ms
+        ));
         report.push_str(&format!("  Plan Nodes: {}\n\n", self.plan_complexity));
 
         report.push_str("Execution Phase:\n");
-        report.push_str(&format!("  Execution Time: {:.2}ms\n", self.execution_time_ms));
+        report.push_str(&format!(
+            "  Execution Time: {:.2}ms\n",
+            self.execution_time_ms
+        ));
         report.push_str(&format!("  Startup Time: {:.2}ms\n", self.startup_time_ms));
         report.push_str(&format!("  Total Rows: {}\n", self.total_rows));
         report.push_str(&format!(
             "  Peak Memory: {:.2}MB\n",
             self.peak_memory_bytes as f64 / (1024.0 * 1024.0)
         ));
-        report.push_str(&format!("  Throughput: {:.0} rows/sec\n\n", self.throughput));
+        report.push_str(&format!(
+            "  Throughput: {:.0} rows/sec\n\n",
+            self.throughput
+        ));
 
         report.push_str("Cache Analysis:\n");
         report.push_str(&format!(
@@ -172,7 +181,10 @@ impl AnalysisMetrics {
         }
 
         report.push('\n');
-        report.push_str(&format!("Overall Score: {:.1}/100\n", self.calculate_score()));
+        report.push_str(&format!(
+            "Overall Score: {:.1}/100\n",
+            self.calculate_score()
+        ));
 
         report
     }
@@ -186,8 +198,7 @@ impl ComparisonResult {
 
         // Compare planning time
         let planning_deviation = if baseline.planning_time_ms > 0.0 {
-            ((current.planning_time_ms - baseline.planning_time_ms)
-                / baseline.planning_time_ms)
+            ((current.planning_time_ms - baseline.planning_time_ms) / baseline.planning_time_ms)
                 * 100.0
         } else {
             0.0
@@ -214,8 +225,7 @@ impl ComparisonResult {
 
         // Compare execution time
         let execution_deviation = if baseline.execution_time_ms > 0.0 {
-            ((current.execution_time_ms - baseline.execution_time_ms)
-                / baseline.execution_time_ms)
+            ((current.execution_time_ms - baseline.execution_time_ms) / baseline.execution_time_ms)
                 * 100.0
         } else {
             0.0
@@ -242,8 +252,7 @@ impl ComparisonResult {
 
         // Compare memory usage
         let memory_deviation = if baseline.peak_memory_bytes > 0 {
-            ((current.peak_memory_bytes as i64 - baseline.peak_memory_bytes as i64)
-                as f64
+            ((current.peak_memory_bytes as i64 - baseline.peak_memory_bytes as i64) as f64
                 / baseline.peak_memory_bytes as f64)
                 * 100.0
         } else {

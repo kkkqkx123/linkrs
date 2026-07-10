@@ -425,7 +425,12 @@ fn extract_aggregate_functions_recursive(
         Expression::Property { object, .. } => {
             extract_aggregate_functions_recursive(object, functions);
         }
-        Expression::WindowFunction { args, over_partition_by, over_order_by, .. } => {
+        Expression::WindowFunction {
+            args,
+            over_partition_by,
+            over_order_by,
+            ..
+        } => {
             for arg in args {
                 extract_aggregate_functions_recursive(arg, functions);
             }

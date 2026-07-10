@@ -61,11 +61,20 @@ impl SpaceExportStats {
         output.push_str("Space Export Statistics\n");
         output.push_str("─────────────────────────────────────────────────────────────\n");
         output.push_str(&format!("Tags exported:     {}\n", self.tags_exported));
-        output.push_str(&format!("Edge types:        {}\n", self.edge_types_exported));
+        output.push_str(&format!(
+            "Edge types:        {}\n",
+            self.edge_types_exported
+        ));
         output.push_str(&format!("Total vertices:    {}\n", self.total_vertices));
         output.push_str(&format!("Total edges:       {}\n", self.total_edges));
-        output.push_str(&format!("Bytes written:     {}\n", format_bytes(self.bytes_written)));
-        output.push_str(&format!("Duration:          {:.3} s\n", self.duration_ms as f64 / 1000.0));
+        output.push_str(&format!(
+            "Bytes written:     {}\n",
+            format_bytes(self.bytes_written)
+        ));
+        output.push_str(&format!(
+            "Duration:          {:.3} s\n",
+            self.duration_ms as f64 / 1000.0
+        ));
         if !self.errors.is_empty() {
             output.push_str(&format!("Errors:            {}\n", self.errors.len()));
             for err in self.errors.iter().take(5) {

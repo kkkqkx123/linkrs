@@ -5,10 +5,10 @@
 //! them to immutable segments for better cache locality and query performance.
 
 use super::core::TimeTravelEdgeStore;
-use super::segment::{CsrSegment, DeletionInfo, SEPARATE_EDGE_ID_STORAGE_THRESHOLD};
 use super::merge;
+use super::segment::{CsrSegment, DeletionInfo, SEPARATE_EDGE_ID_STORAGE_THRESHOLD};
 use crate::core::types::{EdgeId, Timestamp};
-use crate::storage::edge::{CsrVariant, Csr, CsrBase};
+use crate::storage::edge::{Csr, CsrBase, CsrVariant};
 use std::collections::HashMap;
 
 impl TimeTravelEdgeStore {
@@ -42,7 +42,9 @@ impl TimeTravelEdgeStore {
         );
         let in_segments_after = self.in_segments.len();
 
-        self.mvcc.segment_tombstones.extend(self.mvcc.pending_segment_deletions.drain());
+        self.mvcc
+            .segment_tombstones
+            .extend(self.mvcc.pending_segment_deletions.drain());
 
         // Update indices incrementally for newly frozen segments
         // This is more efficient than full rebuild when only a few segments are added
@@ -71,7 +73,10 @@ impl TimeTravelEdgeStore {
         }
 
         // Rebuild sparse vertex indices and current snapshot after any segment mutation
-        if out_segments_after > out_segments_before || in_segments_after > in_segments_before || merged > 0 {
+        if out_segments_after > out_segments_before
+            || in_segments_after > in_segments_before
+            || merged > 0
+        {
             self.rebuild_sparse_vertex_indices();
             self.rebuild_current_snapshot();
         }
@@ -97,9 +102,7 @@ impl TimeTravelEdgeStore {
 
         if entries.is_empty() {
             delta.clear();
-            return merge::FreezeDeltaResult {
-                frozen_count: 0,
-            };
+            return merge::FreezeDeltaResult { frozen_count: 0 };
         }
 
         let max_vid = entries
@@ -151,12 +154,7 @@ impl TimeTravelEdgeStore {
         let frozen = entries.len();
 
         let deletion_info = DeletionInfo::with_count(delete_ts_min, delete_ts_max, deleted_count);
-        let mut segment = CsrSegment::new(
-            csr,
-            create_ts_min,
-            create_ts_max,
-            deletion_info,
-        );
+        let mut segment = CsrSegment::new(csr, create_ts_min, create_ts_max, deletion_info);
 
         if frozen >= SEPARATE_EDGE_ID_STORAGE_THRESHOLD {
             segment.edge_ids = Some(entries.iter().map(|(_, nbr)| nbr.edge_id).collect());
@@ -177,13 +175,15 @@ impl TimeTravelEdgeStore {
         for (idx, segment) in self.out_segments.iter().enumerate() {
             self.out_segment_index.push((segment.create_ts_min, idx));
         }
-        self.out_segment_index.sort_by_key(|k| std::cmp::Reverse(k.0));
+        self.out_segment_index
+            .sort_by_key(|k| std::cmp::Reverse(k.0));
 
         self.in_segment_index.clear();
         for (idx, segment) in self.in_segments.iter().enumerate() {
             self.in_segment_index.push((segment.create_ts_min, idx));
         }
-        self.in_segment_index.sort_by_key(|k| std::cmp::Reverse(k.0));
+        self.in_segment_index
+            .sort_by_key(|k| std::cmp::Reverse(k.0));
     }
 
     /// Append a single segment to the index incrementally (O(log n) instead of O(n)).
@@ -198,14 +198,13 @@ impl TimeTravelEdgeStore {
         let new_ts = self.out_segments[new_idx].create_ts_min;
 
         // Find insertion position using binary search (descending order)
-        let pos = self.out_segment_index.binary_search_by_key(
-            &std::cmp::Reverse(new_ts),
-            |k| std::cmp::Reverse(k.0),
-        );
+        let pos = self
+            .out_segment_index
+            .binary_search_by_key(&std::cmp::Reverse(new_ts), |k| std::cmp::Reverse(k.0));
 
         let insert_pos = match pos {
-            Ok(idx) => idx,      // Exact match - insert before
-            Err(idx) => idx,     // Not found - insert at err position
+            Ok(idx) => idx,  // Exact match - insert before
+            Err(idx) => idx, // Not found - insert at err position
         };
 
         self.out_segment_index.insert(insert_pos, (new_ts, new_idx));
@@ -227,14 +226,13 @@ impl TimeTravelEdgeStore {
         let new_ts = self.in_segments[new_idx].create_ts_min;
 
         // Find insertion position using binary search (descending order)
-        let pos = self.in_segment_index.binary_search_by_key(
-            &std::cmp::Reverse(new_ts),
-            |k| std::cmp::Reverse(k.0),
-        );
+        let pos = self
+            .in_segment_index
+            .binary_search_by_key(&std::cmp::Reverse(new_ts), |k| std::cmp::Reverse(k.0));
 
         let insert_pos = match pos {
-            Ok(idx) => idx,      // Exact match - insert before
-            Err(idx) => idx,     // Not found - insert at err position
+            Ok(idx) => idx,  // Exact match - insert before
+            Err(idx) => idx, // Not found - insert at err position
         };
 
         self.in_segment_index.insert(insert_pos, (new_ts, new_idx));
@@ -278,7 +276,10 @@ impl TimeTravelEdgeStore {
         // Emergency merge: if segment count exceeds hard limit, merge aggressively
         if self.config.max_segments_per_direction > 0 {
             if self.out_segments.len() > self.config.max_segments_per_direction {
-                let excess = self.out_segments.len().saturating_sub(self.config.merge_keep_newest);
+                let excess = self
+                    .out_segments
+                    .len()
+                    .saturating_sub(self.config.merge_keep_newest);
                 if excess > 1 {
                     let merge_indices: Vec<usize> = (0..excess).collect();
                     let merged = merge::merge_selected_segments_with_deletion_filter(
@@ -292,7 +293,10 @@ impl TimeTravelEdgeStore {
                 }
             }
             if self.in_segments.len() > self.config.max_segments_per_direction {
-                let excess = self.in_segments.len().saturating_sub(self.config.merge_keep_newest);
+                let excess = self
+                    .in_segments
+                    .len()
+                    .saturating_sub(self.config.merge_keep_newest);
                 if excess > 1 {
                     let merge_indices: Vec<usize> = (0..excess).collect();
                     let merged = merge::merge_selected_segments_with_deletion_filter(
@@ -309,8 +313,7 @@ impl TimeTravelEdgeStore {
                 if cfg!(debug_assertions) {
                     eprintln!(
                         "[EdgeTable] Emergency merged {} segments (exceeded max {} per direction)",
-                        total_merged,
-                        self.config.max_segments_per_direction
+                        total_merged, self.config.max_segments_per_direction
                     );
                 }
                 log::info!(
@@ -324,7 +327,9 @@ impl TimeTravelEdgeStore {
 
         // Check out-direction
         if self.out_segments.len() >= self.config.segment_merge_threshold {
-            let to_merge_count = self.out_segments.len()
+            let to_merge_count = self
+                .out_segments
+                .len()
                 .saturating_sub(self.config.merge_keep_newest);
             if to_merge_count > 1 {
                 let merge_indices: Vec<usize> = (0..to_merge_count).collect();
@@ -347,7 +352,9 @@ impl TimeTravelEdgeStore {
 
         // Check in-direction
         if self.in_segments.len() >= self.config.segment_merge_threshold {
-            let to_merge_count = self.in_segments.len()
+            let to_merge_count = self
+                .in_segments
+                .len()
                 .saturating_sub(self.config.merge_keep_newest);
             if to_merge_count > 1 {
                 let merge_indices: Vec<usize> = (0..to_merge_count).collect();

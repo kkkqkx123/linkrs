@@ -13,10 +13,10 @@ use super::cleaner::TransactionCleaner;
 use super::context::TransactionContext;
 use super::error::TransactionError;
 use super::monitor::TransactionMonitor;
+use super::mvcc::{VersionManager, VersionManagerConfig};
 use super::rollback::UndoLogRollback;
 use super::types::*;
 use super::undo_log::UndoTarget;
-use super::mvcc::{VersionManager, VersionManagerConfig};
 use crate::core::stats::StatsManager;
 use crate::sync::SyncManager;
 

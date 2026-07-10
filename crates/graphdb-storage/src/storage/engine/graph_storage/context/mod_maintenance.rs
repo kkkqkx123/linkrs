@@ -1,7 +1,7 @@
-use std::sync::atomic::Ordering;
-use crate::core::{StorageError, StorageResult};
 use crate::core::types::{CompactConfig, LabelId, Timestamp};
+use crate::core::{StorageError, StorageResult};
 use crate::storage::engine::data_store::EdgeTableKey;
+use std::sync::atomic::Ordering;
 
 use super::GraphStorageContext;
 
@@ -15,7 +15,11 @@ impl GraphStorageContext {
             return Err(StorageError::storage_not_open());
         }
 
-        let cleanup_ts = self.persistent.version_manager.snapshot_tracker().cleanup_threshold();
+        let cleanup_ts = self
+            .persistent
+            .version_manager
+            .snapshot_tracker()
+            .cleanup_threshold();
         log::info!(
             "Compact maintenance started: compact_ts={}, cleanup_threshold={}",
             ts,
@@ -68,7 +72,11 @@ impl GraphStorageContext {
             if config.enable_structure_compaction {
                 for &key in &edge_keys {
                     let table = edge_tables.get_mut(&key).expect("edge key must exist");
-                    let removed = table.compact_and_freeze(ts, config, crate::storage::edge::CompactionMode::Standard);
+                    let removed = table.compact_and_freeze(
+                        ts,
+                        config,
+                        crate::storage::edge::CompactionMode::Standard,
+                    );
                     total_edges_removed += removed;
                 }
 

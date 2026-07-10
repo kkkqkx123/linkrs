@@ -218,7 +218,10 @@ pub use self::metadata_version::{MetadataVersion, SchemaHistory, SchemaVersion};
 
 // Exporting types from split submodules
 pub use self::cluster::ClusterInfo;
-pub use self::compact::{CompactConfig, CompactError, CompactResult, CompactStats, CompactTarget, CompactionStrategy, AdaptiveCompactionConfig};
+pub use self::compact::{
+    AdaptiveCompactionConfig, CompactConfig, CompactError, CompactResult, CompactStats,
+    CompactTarget, CompactionStrategy,
+};
 pub use self::data_modification::{
     InsertEdgeInfo, InsertVertexInfo, UpdateInfo, UpdateOp, UpdateTarget,
 };

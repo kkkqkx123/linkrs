@@ -44,7 +44,12 @@ impl FragmentationStats {
     }
 
     /// Compute detailed fragmentation stats from edge counts.
-    pub fn with_zombie_info(total_capacity: usize, reachable_edges: usize, zombie_blocks: usize, wasted_capacity: usize) -> Self {
+    pub fn with_zombie_info(
+        total_capacity: usize,
+        reachable_edges: usize,
+        zombie_blocks: usize,
+        wasted_capacity: usize,
+    ) -> Self {
         Self {
             total_capacity,
             reachable_edges,

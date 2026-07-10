@@ -1,7 +1,7 @@
-use std::sync::atomic::Ordering;
 use crate::core::types::{LabelId, Timestamp, VertexId};
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::vertex::VertexRecord;
+use std::sync::atomic::Ordering;
 
 use super::GraphStorageContext;
 

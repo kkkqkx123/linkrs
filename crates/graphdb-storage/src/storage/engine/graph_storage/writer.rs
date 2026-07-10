@@ -5,14 +5,14 @@ use crate::core::types::{
     EdgeTypeInfo, InsertEdgeInfo, InsertVertexInfo, LabelId, Timestamp, UpdateInfo, UpdateOp,
     UpdateTarget, VertexId,
 };
-use crate::core::{Edge, EdgeDirection, StorageError, StorageResult, Value, Vertex};
-use crate::storage::engine::params::{EdgeOperationParams, InsertEdgeParams};
-use crate::storage::index::index_data_manager::VertexIndexOps;
-use crate::transaction::codec::value_to_bytes;
 use crate::core::wal::redo::{
     DeleteEdgeRedo, DeleteVertexRedo, InsertEdgeRedo, InsertVertexRedo, UpdateVertexPropRedo,
 };
 use crate::core::wal::types::WalOpType;
+use crate::core::{Edge, EdgeDirection, StorageError, StorageResult, Value, Vertex};
+use crate::storage::engine::params::{EdgeOperationParams, InsertEdgeParams};
+use crate::storage::index::index_data_manager::VertexIndexOps;
+use crate::transaction::codec::value_to_bytes;
 
 use super::context::GraphStorageContext;
 use super::ops::{edge_label_id, endpoint_label_id, tag_label_id};
@@ -584,12 +584,10 @@ pub(crate) fn delete_edge(
 /// Atomically replace an edge's properties: delete the old edge and insert the
 /// new one under a single write timestamp. If the insert fails, the old edge is
 /// restored from a pre-delete read, ensuring no data loss.
-pub(crate) fn update_edge(
-    ctx: &GraphStorageContext,
-    space: &str,
-    edge: Edge,
-) -> StorageResult<()> {
-    let space_info = ctx.schema_manager().get_space(space)?
+pub(crate) fn update_edge(ctx: &GraphStorageContext, space: &str, edge: Edge) -> StorageResult<()> {
+    let space_info = ctx
+        .schema_manager()
+        .get_space(space)?
         .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
 
     // Save edge identity for rollback
@@ -628,7 +626,14 @@ pub(crate) fn update_edge(
                 ranking,
                 props: current_props,
             };
-            let _ = insert_edge_at_timestamp(ctx, space, space_info.space_id, old_edge, ts, &mut Vec::new());
+            let _ = insert_edge_at_timestamp(
+                ctx,
+                space,
+                space_info.space_id,
+                old_edge,
+                ts,
+                &mut Vec::new(),
+            );
             ctx.version_manager().release_insert_timestamp(ts);
             Err(e)
         }

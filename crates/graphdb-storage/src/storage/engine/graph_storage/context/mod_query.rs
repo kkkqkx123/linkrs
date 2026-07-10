@@ -3,8 +3,16 @@ use crate::core::types::{LabelId, Timestamp};
 use super::GraphStorageContext;
 
 impl GraphStorageContext {
-    pub fn scan_vertices(&self, label: LabelId, ts: Timestamp) -> Option<Vec<crate::storage::vertex::VertexRecord>> {
-        if !self.persistent.is_open.load(std::sync::atomic::Ordering::Acquire) {
+    pub fn scan_vertices(
+        &self,
+        label: LabelId,
+        ts: Timestamp,
+    ) -> Option<Vec<crate::storage::vertex::VertexRecord>> {
+        if !self
+            .persistent
+            .is_open
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
             return None;
         }
         let vertex_tables = self.persistent.data_store.vertex_tables().read();
@@ -28,7 +36,11 @@ impl GraphStorageContext {
             .unwrap_or_default()
     }
 
-    pub fn scan_edges_by_label(&self, edge_label: LabelId, ts: Timestamp) -> Vec<crate::storage::edge::EdgeRecord> {
+    pub fn scan_edges_by_label(
+        &self,
+        edge_label: LabelId,
+        ts: Timestamp,
+    ) -> Vec<crate::storage::edge::EdgeRecord> {
         let edge_tables = self.persistent.data_store.edge_tables().read();
         let mut records = Vec::new();
 

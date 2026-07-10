@@ -7,9 +7,9 @@ mod common;
 
 use graphdb_storage::core::types::VertexId;
 use graphdb_storage::core::Value;
+use graphdb_storage::storage::{StorageReader, StorageWriter};
 use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
-use graphdb_storage::storage::{StorageReader, StorageWriter};
 
 /// Test: Multiple threads inserting different vertices concurrently
 #[test]
@@ -35,7 +35,11 @@ fn test_concurrent_vertex_insertion() {
                 } else {
                     format!("Person_{}", op)
                 };
-                let vertex = common::create_person_vertex(vid.as_int64().unwrap_or(op as i64 + 1000), &name, 20);
+                let vertex = common::create_person_vertex(
+                    vid.as_int64().unwrap_or(op as i64 + 1000),
+                    &name,
+                    20,
+                );
 
                 let mut st = storage.lock().unwrap();
                 st.insert_vertex("test_space", vertex)
@@ -52,7 +56,11 @@ fn test_concurrent_vertex_insertion() {
     // Verify all vertices were inserted
     let st = storage.lock().unwrap();
     let vertices = st.scan_vertices("test_space").unwrap();
-    assert_eq!(vertices.len(), 800, "Expected 800 vertices from 8 threads * 100 ops");
+    assert_eq!(
+        vertices.len(),
+        800,
+        "Expected 800 vertices from 8 threads * 100 ops"
+    );
 }
 
 /// Test: Multiple threads reading while another thread modifies
@@ -150,7 +158,10 @@ fn test_concurrent_edge_creation_same_target() {
     // Verify data consistency
     let st = storage.lock().unwrap();
     let all_vertices = st.scan_vertices("test_space").unwrap();
-    assert!(!all_vertices.is_empty(), "Should have vertices after concurrent operations");
+    assert!(
+        !all_vertices.is_empty(),
+        "Should have vertices after concurrent operations"
+    );
 }
 
 /// Test: Concurrent index lookup while data is being inserted
@@ -243,7 +254,10 @@ fn test_concurrent_vertex_updates_consistency() {
                     if let Some(v) = st.get_vertex("test_space", &vid).unwrap() {
                         // Verify data is consistent
                         assert!(!v.tags.is_empty(), "Vertex should have tags");
-                        assert!(v.properties.contains_key("name"), "Vertex should have name property");
+                        assert!(
+                            v.properties.contains_key("name"),
+                            "Vertex should have name property"
+                        );
                     }
                 }
             }

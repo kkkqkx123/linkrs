@@ -21,7 +21,9 @@ impl CompactionStrategy {
     pub fn compute_reserve_ratio(&self, edge_count: usize, total_capacity: usize) -> f32 {
         match self {
             CompactionStrategy::Fixed(ratio) => *ratio,
-            CompactionStrategy::Adaptive(config) => config.compute_ratio(edge_count, total_capacity),
+            CompactionStrategy::Adaptive(config) => {
+                config.compute_ratio(edge_count, total_capacity)
+            }
         }
     }
 }
@@ -104,10 +106,10 @@ impl CompactConfig {
             enable_structure_compaction,
             strategy,
             segment_merge_enabled: false,
-            segment_merge_threshold: 1000,         // Default: merge segments within 1000 timestamp units
+            segment_merge_threshold: 1000, // Default: merge segments within 1000 timestamp units
             segment_merge_size_threshold: 8388608, // Default: 8MB
             adaptive_merge_enabled: false,
-            tombstone_memory_threshold: 52428800,  // Default: 50MB
+            tombstone_memory_threshold: 52428800, // Default: 50MB
         }
     }
 
@@ -156,7 +158,8 @@ impl CompactConfig {
     /// If adaptive merge is enabled and tombstone memory exceeds threshold,
     /// returns 50% of the normal size threshold for more aggressive merging.
     pub fn compute_merge_size_threshold(&self, current_tombstone_memory: usize) -> usize {
-        if self.adaptive_merge_enabled && current_tombstone_memory > self.tombstone_memory_threshold {
+        if self.adaptive_merge_enabled && current_tombstone_memory > self.tombstone_memory_threshold
+        {
             self.segment_merge_size_threshold / 2
         } else {
             self.segment_merge_size_threshold
@@ -165,7 +168,8 @@ impl CompactConfig {
 
     /// Get the computed reserve ratio for current table state
     pub fn compute_reserve_ratio(&self, edge_count: usize, total_capacity: usize) -> f32 {
-        self.strategy.compute_reserve_ratio(edge_count, total_capacity)
+        self.strategy
+            .compute_reserve_ratio(edge_count, total_capacity)
     }
 }
 

@@ -206,22 +206,21 @@ impl VertexSchema {
 
     /// Validate that a property data type is allowed
     /// Rejects Empty and Null types which don't make sense as properties
-    fn validate_property_type(data_type: &crate::core::DataType, prop_name: &str) -> Result<(), String> {
+    fn validate_property_type(
+        data_type: &crate::core::DataType,
+        prop_name: &str,
+    ) -> Result<(), String> {
         use crate::core::DataType;
 
         match data_type {
-            DataType::Empty => {
-                Err(format!(
-                    "Property '{}' cannot have type Empty - properties must have valid types",
-                    prop_name
-                ))
-            }
-            DataType::Null => {
-                Err(format!(
-                    "Property '{}' cannot have type Null - use nullable=true instead",
-                    prop_name
-                ))
-            }
+            DataType::Empty => Err(format!(
+                "Property '{}' cannot have type Empty - properties must have valid types",
+                prop_name
+            )),
+            DataType::Null => Err(format!(
+                "Property '{}' cannot have type Null - use nullable=true instead",
+                prop_name
+            )),
             _ => Ok(()),
         }
     }

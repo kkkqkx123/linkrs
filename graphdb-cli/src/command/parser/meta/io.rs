@@ -166,78 +166,83 @@ pub fn parse_copy(arg: &str) -> Result<MetaCommand, String> {
         i += 1;
     }
 
-     Ok(MetaCommand::Copy {
-         direction,
-         target,
-         file_path,
-         streaming,
-         chunk_size,
-     })
- }
+    Ok(MetaCommand::Copy {
+        direction,
+        target,
+        file_path,
+        streaming,
+        chunk_size,
+    })
+}
 
- pub fn parse_dump(arg: &str) -> Result<MetaCommand, String> {
-     let parts: Vec<&str> = arg.split_whitespace().collect();
-     if parts.len() < 2 {
-         return Err("Usage: \\dump <database> <output_path> [--format binary|jsonl] [--no-compress]".to_string());
-     }
-     let database = parts[0].to_string();
-     let output_path = parts[1].to_string();
-     let mut format = "binary".to_string();
-     let mut compress = true;
-     let mut i = 2;
-     while i < parts.len() {
-         match parts[i] {
-             "--format" | "-f" => {
-                 i += 1;
-                 if i >= parts.len() {
-                     return Err("Missing value for --format".to_string());
-                 }
-                 format = parts[i].to_string();
-             }
-             "--no-compress" => {
-                 compress = false;
-             }
-             _ => {}
-         }
-         i += 1;
-     }
-     Ok(MetaCommand::Dump {
-         database,
-         output_path,
-         format,
-         compress,
-     })
- }
+pub fn parse_dump(arg: &str) -> Result<MetaCommand, String> {
+    let parts: Vec<&str> = arg.split_whitespace().collect();
+    if parts.len() < 2 {
+        return Err(
+            "Usage: \\dump <database> <output_path> [--format binary|jsonl] [--no-compress]"
+                .to_string(),
+        );
+    }
+    let database = parts[0].to_string();
+    let output_path = parts[1].to_string();
+    let mut format = "binary".to_string();
+    let mut compress = true;
+    let mut i = 2;
+    while i < parts.len() {
+        match parts[i] {
+            "--format" | "-f" => {
+                i += 1;
+                if i >= parts.len() {
+                    return Err("Missing value for --format".to_string());
+                }
+                format = parts[i].to_string();
+            }
+            "--no-compress" => {
+                compress = false;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    Ok(MetaCommand::Dump {
+        database,
+        output_path,
+        format,
+        compress,
+    })
+}
 
- pub fn parse_restore(arg: &str) -> Result<MetaCommand, String> {
-     let parts: Vec<&str> = arg.split_whitespace().collect();
-     if parts.len() < 2 {
-         return Err("Usage: \\restore <source_path> <database> [--overwrite] [--strict]".to_string());
-     }
-     let source_path = parts[0].to_string();
-     let database = parts[1].to_string();
-     let mut overwrite = false;
-     let mut strict = false;
-     let mut i = 2;
-     while i < parts.len() {
-         match parts[i] {
-             "--overwrite" => {
-                 overwrite = true;
-             }
-             "--strict" => {
-                 strict = true;
-             }
-             _ => {}
-         }
-         i += 1;
-     }
-     Ok(MetaCommand::Restore {
-         source_path,
-         database,
-         overwrite,
-         strict,
-     })
- }
+pub fn parse_restore(arg: &str) -> Result<MetaCommand, String> {
+    let parts: Vec<&str> = arg.split_whitespace().collect();
+    if parts.len() < 2 {
+        return Err(
+            "Usage: \\restore <source_path> <database> [--overwrite] [--strict]".to_string(),
+        );
+    }
+    let source_path = parts[0].to_string();
+    let database = parts[1].to_string();
+    let mut overwrite = false;
+    let mut strict = false;
+    let mut i = 2;
+    while i < parts.len() {
+        match parts[i] {
+            "--overwrite" => {
+                overwrite = true;
+            }
+            "--strict" => {
+                strict = true;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    Ok(MetaCommand::Restore {
+        source_path,
+        database,
+        overwrite,
+        strict,
+    })
+}
 
 pub fn parse_export_space(arg: &str) -> Result<MetaCommand, String> {
     let parts: Vec<&str> = arg.split_whitespace().collect();
@@ -328,6 +333,3 @@ pub fn parse_import_schema(arg: &str) -> Result<MetaCommand, String> {
         file_path: arg.to_string(),
     })
 }
-
-
-

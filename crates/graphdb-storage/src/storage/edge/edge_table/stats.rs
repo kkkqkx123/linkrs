@@ -140,12 +140,19 @@ impl MergeMetrics {
     /// Log merge metrics with reduction ratio
     pub fn log(&self) {
         let reduction = if self.segments_before > 0 {
-            ((self.segments_before - self.segments_after) as f64 / self.segments_before as f64) * 100.0
+            ((self.segments_before - self.segments_after) as f64 / self.segments_before as f64)
+                * 100.0
         } else {
             0.0
         };
-        log::info!("[MergeMetrics] segments: {} → {} (-{:.1}%), edges: {}, duration: {}ms",
-                   self.segments_before, self.segments_after, reduction, self.edges_merged, self.duration_ms);
+        log::info!(
+            "[MergeMetrics] segments: {} → {} (-{:.1}%), edges: {}, duration: {}ms",
+            self.segments_before,
+            self.segments_after,
+            reduction,
+            self.edges_merged,
+            self.duration_ms
+        );
     }
 }
 
@@ -162,11 +169,11 @@ pub struct MergeMetricsResult {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{EdgeSchema, EdgeStrategy, EdgeTable};
     use super::*;
-    use super::super::{EdgeTable, EdgeSchema, EdgeStrategy};
-    use crate::core::Value;
-    use crate::core::types::EdgeId;
     use crate::core::types::DataType;
+    use crate::core::types::EdgeId;
+    use crate::core::Value;
     use crate::storage::types::StoragePropertyDef;
 
     fn create_edge_table() -> EdgeTable {
@@ -178,7 +185,7 @@ mod tests {
             properties: vec![],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
-        schema_version: 1,
+            schema_version: 1,
         };
         EdgeTable::new(schema).unwrap()
     }
@@ -195,7 +202,7 @@ mod tests {
             )],
             oe_strategy: EdgeStrategy::Multiple,
             ie_strategy: EdgeStrategy::Multiple,
-        schema_version: 1,
+            schema_version: 1,
         };
         EdgeTable::new(schema).unwrap()
     }
@@ -224,9 +231,15 @@ mod tests {
     fn test_tombstone_stats_accuracy() {
         let mut table = create_edge_table_with_props();
 
-        table.insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 50).unwrap();
-        table.insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 100).unwrap();
-        table.insert_edge(0, 3, 0, &[("weight".to_string(), Value::Double(3.0))], 150).unwrap();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 50)
+            .unwrap();
+        table
+            .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 100)
+            .unwrap();
+        table
+            .insert_edge(0, 3, 0, &[("weight".to_string(), Value::Double(3.0))], 150)
+            .unwrap();
 
         table.freeze_csr_only(160);
 
@@ -246,7 +259,15 @@ mod tests {
         let mut table = create_edge_table_with_props();
 
         for i in 0..5 {
-            table.insert_edge(0, 1, i as i64, &[("weight".to_string(), Value::Double(i as f64))], 100 + i as u32).unwrap();
+            table
+                .insert_edge(
+                    0,
+                    1,
+                    i as i64,
+                    &[("weight".to_string(), Value::Double(i as f64))],
+                    100 + i as u32,
+                )
+                .unwrap();
         }
 
         let stats = table.deletion_stats();

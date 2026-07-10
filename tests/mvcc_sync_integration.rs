@@ -1,9 +1,9 @@
 //! Integration tests for MVCC and Sync modules
 
+use graphdb_core::core::types::storage_ids::Timestamp;
+use graphdb_storage::core::StorageResult;
 use graphdb_storage::storage::mvcc::{MVCCTable, SnapshotHandle, TieredTombstoneManager};
 use graphdb_storage::storage::sync::SnapshotGuard;
-use graphdb_storage::core::StorageResult;
-use graphdb_core::core::types::storage_ids::Timestamp;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -131,8 +131,7 @@ fn test_snapshot_guard_lifecycle() {
     let table = Arc::new(RwLock::new(MockMVCCTable::new()));
 
     {
-        let _guard = SnapshotGuard::new(table.clone(), 100)
-            .expect("failed to create guard");
+        let _guard = SnapshotGuard::new(table.clone(), 100).expect("failed to create guard");
 
         // Snapshot should be registered
         let count = table.read().unwrap().active_snapshot_count();
@@ -149,12 +148,9 @@ fn test_multiple_concurrent_snapshots() {
     let table = Arc::new(RwLock::new(MockMVCCTable::new()));
 
     {
-        let _guard1 = SnapshotGuard::new(table.clone(), 100)
-            .expect("failed to create guard 1");
-        let _guard2 = SnapshotGuard::new(table.clone(), 200)
-            .expect("failed to create guard 2");
-        let _guard3 = SnapshotGuard::new(table.clone(), 150)
-            .expect("failed to create guard 3");
+        let _guard1 = SnapshotGuard::new(table.clone(), 100).expect("failed to create guard 1");
+        let _guard2 = SnapshotGuard::new(table.clone(), 200).expect("failed to create guard 2");
+        let _guard3 = SnapshotGuard::new(table.clone(), 150).expect("failed to create guard 3");
 
         let count = table.read().unwrap().active_snapshot_count();
         assert_eq!(count, 3);
@@ -170,8 +166,7 @@ fn test_multiple_concurrent_snapshots() {
 #[test]
 fn test_snapshot_guard_query() {
     let table = Arc::new(RwLock::new(MockMVCCTable::new()));
-    let guard = SnapshotGuard::new(table.clone(), 100)
-        .expect("failed to create guard");
+    let guard = SnapshotGuard::new(table.clone(), 100).expect("failed to create guard");
 
     let result = guard.query(|t| t.active_snapshot_count());
     assert_eq!(result, 1);

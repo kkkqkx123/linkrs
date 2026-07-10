@@ -4,8 +4,8 @@
 //! Schema modifications invalidate the property index cache, which is rebuilt on-demand.
 
 use crate::core::StorageResult;
-use crate::storage::types::StoragePropertyDef;
 use crate::storage::schema::{ChangeDetails, PropertyChange, SchemaObjectType};
+use crate::storage::types::StoragePropertyDef;
 
 use super::core::VertexTable;
 
@@ -18,7 +18,8 @@ impl VertexTable {
     /// 3. Recording it in the version history
     fn record_schema_change(&mut self, details: ChangeDetails) -> StorageResult<()> {
         // Get the next version number from history
-        let mut history_guard = self.version_history
+        let mut history_guard = self
+            .version_history
             .lock()
             .map_err(|_| crate::core::StorageError::db_error("Failed to lock version_history"))?;
 
@@ -52,7 +53,9 @@ impl VertexTable {
         }
 
         if self.columns.get_column(&prop.name).is_some() {
-            return Err(crate::core::StorageError::column_already_exists(prop.name.clone()));
+            return Err(crate::core::StorageError::column_already_exists(
+                prop.name.clone(),
+            ));
         }
 
         // Add to columns first (potentially failing operation)
@@ -134,7 +137,9 @@ impl VertexTable {
             .iter()
             .any(|prop| prop.name == new_name)
         {
-            return Err(crate::core::StorageError::column_already_exists(new_name.to_string()));
+            return Err(crate::core::StorageError::column_already_exists(
+                new_name.to_string(),
+            ));
         }
 
         let index = self

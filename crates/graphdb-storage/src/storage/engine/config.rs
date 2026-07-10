@@ -2,9 +2,9 @@
 
 use std::time::Duration;
 
-use crate::storage::compression::CompressionType;
-use crate::core::StorageError;
 use crate::core::error::storage::StorageErrorKind;
+use crate::core::StorageError;
+use crate::storage::compression::CompressionType;
 
 /// Configuration for flush operations
 #[derive(Debug, Clone)]
@@ -57,10 +57,10 @@ impl Default for MergeConfig {
     fn default() -> Self {
         Self {
             enable_adaptive_merge: true,
-            max_segment_age: 1000,      // Merge segments older than 1000 timestamp units
-            deletion_threshold: 0.3,     // Prioritize segments with >30% deletions
-            max_segment_size_bytes: 8 * 1024 * 1024,  // 8MB per direction
-            enable_lsm_tiering: false,  // Disabled by default, can be enabled for long-running systems
+            max_segment_age: 1000, // Merge segments older than 1000 timestamp units
+            deletion_threshold: 0.3, // Prioritize segments with >30% deletions
+            max_segment_size_bytes: 8 * 1024 * 1024, // 8MB per direction
+            enable_lsm_tiering: false, // Disabled by default, can be enabled for long-running systems
         }
     }
 }
@@ -110,12 +110,12 @@ impl FreezeConfig {
         Self {
             strategy: FreezeStrategyType::Conservative,
             delta_edge_threshold: 50_000,
-            delta_memory_threshold_bytes: 128 * 1024 * 1024,  // 128MB
-            max_segment_age: u32::MAX,  // Never merge
+            delta_memory_threshold_bytes: 128 * 1024 * 1024, // 128MB
+            max_segment_age: u32::MAX,                       // Never merge
             deletion_threshold: 0.5,
-            adaptive_segment_threshold: 20,  // Low threshold for dev
-            adaptive_maximum_segments: 50,   // Force freeze if >50 segments
-            lsm_segment_pressure_threshold: 100,  // Low threshold for dev
+            adaptive_segment_threshold: 20, // Low threshold for dev
+            adaptive_maximum_segments: 50,  // Force freeze if >50 segments
+            lsm_segment_pressure_threshold: 100, // Low threshold for dev
         }
     }
 
@@ -129,11 +129,11 @@ impl FreezeConfig {
         Self {
             strategy: FreezeStrategyType::Adaptive,
             delta_edge_threshold: 100_000,
-            delta_memory_threshold_bytes: 256 * 1024 * 1024,  // 256MB
+            delta_memory_threshold_bytes: 256 * 1024 * 1024, // 256MB
             max_segment_age: 5000,
             deletion_threshold: 0.2,
-            adaptive_segment_threshold: 50,   // More reasonable for small systems
-            adaptive_maximum_segments: 150,   // Force freeze if >150 segments
+            adaptive_segment_threshold: 50, // More reasonable for small systems
+            adaptive_maximum_segments: 150, // Force freeze if >150 segments
             lsm_segment_pressure_threshold: 150,
         }
     }
@@ -148,12 +148,12 @@ impl FreezeConfig {
         Self {
             strategy: FreezeStrategyType::LSMTiered,
             delta_edge_threshold: 500_000,
-            delta_memory_threshold_bytes: 1_000_000_000,  // 1GB
+            delta_memory_threshold_bytes: 1_000_000_000, // 1GB
             max_segment_age: 1000,
             deletion_threshold: 0.3,
-            adaptive_segment_threshold: 100,  // Higher threshold for large systems
-            adaptive_maximum_segments: 300,   // Force freeze if >300 segments
-            lsm_segment_pressure_threshold: 200,  // LSM pressure at 200+ segments
+            adaptive_segment_threshold: 100, // Higher threshold for large systems
+            adaptive_maximum_segments: 300,  // Force freeze if >300 segments
+            lsm_segment_pressure_threshold: 200, // LSM pressure at 200+ segments
         }
     }
 
@@ -182,7 +182,10 @@ impl FreezeConfig {
         if !(0.0..=1.0).contains(&self.deletion_threshold) {
             return Err(StorageError::new(
                 StorageErrorKind::InvalidInput,
-                format!("deletion_threshold must be in [0.0, 1.0], got {}", self.deletion_threshold),
+                format!(
+                    "deletion_threshold must be in [0.0, 1.0], got {}",
+                    self.deletion_threshold
+                ),
             ));
         }
 
@@ -227,16 +230,13 @@ impl FreezeConfig {
             FreezeStrategyType::LSMTiered => {
                 // LSM tiering works with any age value
                 if self.max_segment_age < 500 {
-                    log::warn!(
-                        "LSM tiering with max_segment_age < 500 may cause excessive merges"
-                    );
+                    log::warn!("LSM tiering with max_segment_age < 500 may cause excessive merges");
                 }
             }
         }
 
         Ok(())
     }
-
 }
 
 impl Default for FreezeConfig {
@@ -262,10 +262,10 @@ impl LSMSegmentLevel {
     /// Get the size range for this level (min, max) in bytes
     pub fn size_range(&self) -> (usize, usize) {
         match self {
-            LSMSegmentLevel::L0 => (0, 1024 * 1024),           // 0-1MB
-            LSMSegmentLevel::L1 => (1024 * 1024, 8 * 1024 * 1024),  // 1-8MB
+            LSMSegmentLevel::L0 => (0, 1024 * 1024), // 0-1MB
+            LSMSegmentLevel::L1 => (1024 * 1024, 8 * 1024 * 1024), // 1-8MB
             LSMSegmentLevel::L2 => (8 * 1024 * 1024, 32 * 1024 * 1024), // 8-32MB
-            LSMSegmentLevel::L3Plus => (32 * 1024 * 1024, usize::MAX),  // 32MB+
+            LSMSegmentLevel::L3Plus => (32 * 1024 * 1024, usize::MAX), // 32MB+
         }
     }
 
@@ -283,18 +283,18 @@ impl LSMSegmentLevel {
     pub fn merge_target_size(&self) -> usize {
         match self {
             LSMSegmentLevel::L0 => 1024 * 1024,           // Target < 1MB
-            LSMSegmentLevel::L1 => 8 * 1024 * 1024,           // Target < 8MB
-            LSMSegmentLevel::L2 => 32 * 1024 * 1024,          // Target < 32MB
-            LSMSegmentLevel::L3Plus => 128 * 1024 * 1024,     // Target < 128MB
+            LSMSegmentLevel::L1 => 8 * 1024 * 1024,       // Target < 8MB
+            LSMSegmentLevel::L2 => 32 * 1024 * 1024,      // Target < 32MB
+            LSMSegmentLevel::L3Plus => 128 * 1024 * 1024, // Target < 128MB
         }
     }
 
     /// Get number of segments that should trigger cross-level merge
     pub fn merge_trigger_count(&self) -> usize {
         match self {
-            LSMSegmentLevel::L0 => 4,   // Merge when 4+ L0 segments
-            LSMSegmentLevel::L1 => 3,   // Merge when 3+ L1 segments
-            LSMSegmentLevel::L2 => 2,   // Merge when 2+ L2 segments
+            LSMSegmentLevel::L0 => 4,     // Merge when 4+ L0 segments
+            LSMSegmentLevel::L1 => 3,     // Merge when 3+ L1 segments
+            LSMSegmentLevel::L2 => 2,     // Merge when 2+ L2 segments
             LSMSegmentLevel::L3Plus => 2, // Merge when 2+ L3+ segments
         }
     }
@@ -329,7 +329,7 @@ impl PropertyGraphConfig {
         let _ = freeze.validate();
         Self {
             enable_cache: true,
-            cache_memory: 64 * 1024 * 1024,  // 64MB for dev
+            cache_memory: 64 * 1024 * 1024, // 64MB for dev
             flush_config: FlushConfig::default(),
             freeze: freeze.clone(),
             merge_config: MergeConfig {
@@ -509,7 +509,7 @@ mod tests {
         assert_eq!(config.strategy, FreezeStrategyType::Conservative);
         assert_eq!(config.delta_edge_threshold, 50_000);
         assert_eq!(config.delta_memory_threshold_bytes, 128 * 1024 * 1024);
-        assert!(config.max_segment_age > 1000);  // Never merge
+        assert!(config.max_segment_age > 1000); // Never merge
         assert_eq!(config.adaptive_segment_threshold, 20);
         assert_eq!(config.adaptive_maximum_segments, 50);
     }
@@ -602,9 +602,18 @@ mod tests {
     #[test]
     fn test_lsm_segment_level_for_size() {
         assert_eq!(LSMSegmentLevel::for_size(512 * 1024), LSMSegmentLevel::L0);
-        assert_eq!(LSMSegmentLevel::for_size(4 * 1024 * 1024), LSMSegmentLevel::L1);
-        assert_eq!(LSMSegmentLevel::for_size(16 * 1024 * 1024), LSMSegmentLevel::L2);
-        assert_eq!(LSMSegmentLevel::for_size(64 * 1024 * 1024), LSMSegmentLevel::L3Plus);
+        assert_eq!(
+            LSMSegmentLevel::for_size(4 * 1024 * 1024),
+            LSMSegmentLevel::L1
+        );
+        assert_eq!(
+            LSMSegmentLevel::for_size(16 * 1024 * 1024),
+            LSMSegmentLevel::L2
+        );
+        assert_eq!(
+            LSMSegmentLevel::for_size(64 * 1024 * 1024),
+            LSMSegmentLevel::L3Plus
+        );
     }
 
     #[test]
@@ -688,9 +697,9 @@ mod tests {
         let input = FreezeDecisionInput {
             delta_edge_count: 50_000,
             delta_memory_bytes: 200 * 1024 * 1024,
-            segment_count: 75,  // Between threshold (50) and maximum (150)
-            oldest_segment_age: 6000,  // > 5000
-            deletion_ratio: 0.25,      // > 0.2
+            segment_count: 75,        // Between threshold (50) and maximum (150)
+            oldest_segment_age: 6000, // > 5000
+            deletion_ratio: 0.25,     // > 0.2
         };
 
         assert!(engine.should_freeze(&input));
@@ -705,9 +714,9 @@ mod tests {
         let input = FreezeDecisionInput {
             delta_edge_count: 50_000,
             delta_memory_bytes: 200 * 1024 * 1024,
-            segment_count: 150,  // At maximum_segments threshold
-            oldest_segment_age: 100,   // Below threshold
-            deletion_ratio: 0.05,      // Below threshold
+            segment_count: 150,      // At maximum_segments threshold
+            oldest_segment_age: 100, // Below threshold
+            deletion_ratio: 0.05,    // Below threshold
         };
 
         assert!(engine.should_freeze(&input));
@@ -721,9 +730,9 @@ mod tests {
         let input = FreezeDecisionInput {
             delta_edge_count: 50_000,
             delta_memory_bytes: 200 * 1024 * 1024,
-            segment_count: 30,   // Below adaptive_segment_threshold (50)
-            oldest_segment_age: 6000,  // > 5000
-            deletion_ratio: 0.25,      // > 0.2
+            segment_count: 30,        // Below adaptive_segment_threshold (50)
+            oldest_segment_age: 6000, // > 5000
+            deletion_ratio: 0.25,     // > 0.2
         };
 
         // Should NOT freeze because segment count is below threshold
@@ -738,9 +747,9 @@ mod tests {
         let input = FreezeDecisionInput {
             delta_edge_count: 50_000,
             delta_memory_bytes: 200 * 1024 * 1024,
-            segment_count: 75,   // Below maximum_segments (150)
-            oldest_segment_age: 6000,  // > 5000
-            deletion_ratio: 0.15,      // < 0.2
+            segment_count: 75,        // Below maximum_segments (150)
+            oldest_segment_age: 6000, // > 5000
+            deletion_ratio: 0.15,     // < 0.2
         };
 
         assert!(!engine.should_freeze(&input));
@@ -754,7 +763,7 @@ mod tests {
         let input = FreezeDecisionInput {
             delta_edge_count: 200_000,
             delta_memory_bytes: 500 * 1024 * 1024,
-            segment_count: 250,  // > 200
+            segment_count: 250, // > 200
             oldest_segment_age: 500,
             deletion_ratio: 0.1,
         };
@@ -769,9 +778,9 @@ mod tests {
         let engine = FreezeDecisionEngine::new(FreezeStrategyType::LSMTiered, config);
 
         let input = FreezeDecisionInput {
-            delta_edge_count: 600_000,  // > 500_000
+            delta_edge_count: 600_000, // > 500_000
             delta_memory_bytes: 500 * 1024 * 1024,
-            segment_count: 150,  // < 200
+            segment_count: 150, // < 200
             oldest_segment_age: 500,
             deletion_ratio: 0.1,
         };
@@ -783,10 +792,12 @@ mod tests {
     fn test_freeze_decision_engine_strategy_names() {
         let config = FreezeConfig::development();
 
-        let engine_conservative = FreezeDecisionEngine::new(FreezeStrategyType::Conservative, config.clone());
+        let engine_conservative =
+            FreezeDecisionEngine::new(FreezeStrategyType::Conservative, config.clone());
         assert_eq!(engine_conservative.strategy_name(), "Conservative");
 
-        let engine_adaptive = FreezeDecisionEngine::new(FreezeStrategyType::Adaptive, config.clone());
+        let engine_adaptive =
+            FreezeDecisionEngine::new(FreezeStrategyType::Adaptive, config.clone());
         assert_eq!(engine_adaptive.strategy_name(), "Adaptive");
 
         let engine_lsm = FreezeDecisionEngine::new(FreezeStrategyType::LSMTiered, config);

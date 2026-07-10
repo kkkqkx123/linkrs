@@ -5,8 +5,8 @@ use crate::storage::types::StoragePropertyDef;
 
 /// Parameters for creating an edge type
 pub struct CreateEdgeTypeParams<'a> {
-    pub name: &'a str,  // Storage name (space_id:edge:user_name)
-    pub user_name: &'a str,  // User-visible name (e.g., KNOWS)
+    pub name: &'a str,      // Storage name (space_id:edge:user_name)
+    pub user_name: &'a str, // User-visible name (e.g., KNOWS)
     pub src_label: LabelId,
     pub dst_label: LabelId,
     pub properties: Vec<StoragePropertyDef>,

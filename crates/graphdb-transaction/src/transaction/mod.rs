@@ -50,11 +50,11 @@ pub mod update_transaction;
 pub mod wal;
 
 #[cfg(test)]
+pub mod conflict_integration_test;
+#[cfg(test)]
 pub mod context_test;
 #[cfg(test)]
 pub mod manager_test;
-#[cfg(test)]
-pub mod conflict_integration_test;
 
 pub use self::mvcc::{
     InsertTimestampGuard, ReadTimestampGuard, UpdateTimestampGuard, VersionManager,
@@ -66,7 +66,7 @@ pub use cleaner::TransactionCleaner;
 pub use compact_transaction::{
     CompactTransaction, CompactTransactionError, CompactTransactionResult,
 };
-pub use conflict::{have_write_conflict, WriteSetAnalyzer, ConflictReport};
+pub use conflict::{have_write_conflict, ConflictReport, WriteSetAnalyzer};
 pub use context::TransactionContext;
 pub use error::{TransactionError, TransactionErrorKind, TransactionResult};
 pub use insert_transaction::{

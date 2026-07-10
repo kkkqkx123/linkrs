@@ -25,14 +25,8 @@ impl WriteSetAnalyzer {
         }
 
         // Calculate intensity based on overlap size
-        let vertex_overlap = ws1
-            .vertices
-            .intersection(&ws2.vertices)
-            .count();
-        let edge_overlap = ws1
-            .edges
-            .intersection(&ws2.edges)
-            .count();
+        let vertex_overlap = ws1.vertices.intersection(&ws2.vertices).count();
+        let edge_overlap = ws1.edges.intersection(&ws2.edges).count();
 
         let total_entities = ws1.size() + ws2.size();
         if total_entities == 0 {

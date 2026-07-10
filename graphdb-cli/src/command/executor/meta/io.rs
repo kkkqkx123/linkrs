@@ -189,8 +189,7 @@ pub async fn execute_dump(
 
     let dump_dir = std::path::Path::new(&output_path);
     if !dump_dir.exists() {
-        std::fs::create_dir_all(dump_dir)
-            .map_err(|e| crate::utils::error::CliError::IoError(e))?;
+        std::fs::create_dir_all(dump_dir).map_err(|e| crate::utils::error::CliError::IoError(e))?;
     }
 
     let meta_path = dump_dir.join("metadata.json");
@@ -201,8 +200,11 @@ pub async fn execute_dump(
         "compression": if compress { "zstd" } else { "none" },
         "database": database,
     });
-    std::fs::write(&meta_path, serde_json::to_string_pretty(&meta_content).unwrap())
-        .map_err(|e| crate::utils::error::CliError::IoError(e))?;
+    std::fs::write(
+        &meta_path,
+        serde_json::to_string_pretty(&meta_content).unwrap(),
+    )
+    .map_err(|e| crate::utils::error::CliError::IoError(e))?;
 
     let total_vertices: u64 = 0;
     let total_edges: u64 = 0;
@@ -255,7 +257,10 @@ pub async fn execute_restore(
     }
 
     let elapsed = start.elapsed();
-    executor.write_output(&format!("Restore completed in {:.3}s", elapsed.as_secs_f64()))?;
+    executor.write_output(&format!(
+        "Restore completed in {:.3}s",
+        elapsed.as_secs_f64()
+    ))?;
 
     let stats = RestoreStats {
         spaces_restored: 0,
@@ -321,7 +326,7 @@ pub async fn execute_export_schema(
     format: String,
     session_mgr: &mut SessionManager,
 ) -> Result<bool> {
-    use crate::io::schema_io::{SchemaExportFormat, SchemaIoConfig, SchemaExporter};
+    use crate::io::schema_io::{SchemaExportFormat, SchemaExporter, SchemaIoConfig};
 
     let schema_format = match format.as_str() {
         "yaml" => SchemaExportFormat::Yaml,

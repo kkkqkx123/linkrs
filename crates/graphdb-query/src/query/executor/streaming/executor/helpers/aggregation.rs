@@ -157,7 +157,11 @@ mod tests {
 
     #[test]
     fn test_sum_numeric() {
-        let rows = vec![vec![Value::Int(1)], vec![Value::Int(2)], vec![Value::Int(3)]];
+        let rows = vec![
+            vec![Value::Int(1)],
+            vec![Value::Int(2)],
+            vec![Value::Int(3)],
+        ];
         let result = compute_aggregate(
             &AggregateFunction::Sum("id".to_string()),
             &rows,
@@ -168,7 +172,11 @@ mod tests {
 
     #[test]
     fn test_avg_calculation() {
-        let rows = vec![vec![Value::Int(2)], vec![Value::Int(4)], vec![Value::Int(6)]];
+        let rows = vec![
+            vec![Value::Int(2)],
+            vec![Value::Int(4)],
+            vec![Value::Int(6)],
+        ];
         let result = compute_aggregate(
             &AggregateFunction::Avg("id".to_string()),
             &rows,
@@ -179,7 +187,11 @@ mod tests {
 
     #[test]
     fn test_minmax_values() {
-        let rows = vec![vec![Value::Int(3)], vec![Value::Int(1)], vec![Value::Int(2)]];
+        let rows = vec![
+            vec![Value::Int(3)],
+            vec![Value::Int(1)],
+            vec![Value::Int(2)],
+        ];
 
         let min = compute_aggregate(
             &AggregateFunction::Min("id".to_string()),

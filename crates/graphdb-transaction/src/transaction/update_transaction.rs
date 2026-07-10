@@ -9,6 +9,7 @@ use std::collections::HashSet;
 
 use postcard::to_allocvec;
 
+use super::mvcc::{VersionManager, VersionManagerError};
 use super::read_transaction::RELEASED_TIMESTAMP;
 use super::rollback::RollbackHelper;
 use super::undo_log::{
@@ -16,14 +17,13 @@ use super::undo_log::{
     DeleteEdgePropUndo, DeleteVertexPropUndo, PropertyValue, RelatedEdgeInfo, UndoLogEntry,
     UndoLogError, UndoLogManager, UndoTarget,
 };
+use super::wal::writer::WalWriter;
+use super::wal::{ColumnId, LabelId, Timestamp, VertexId};
 use crate::core::wal::redo::{
     CreateEdgeTypeRedo, CreateVertexTypeRedo, DeleteEdgeRedo, DeleteVertexRedo, UpdateEdgePropRedo,
     UpdateVertexPropRedo,
 };
 use crate::core::wal::types::{WalHeader, WalOpType};
-use super::wal::writer::WalWriter;
-use super::wal::{ColumnId, LabelId, Timestamp, VertexId};
-use super::mvcc::{VersionManager, VersionManagerError};
 
 /// Result type for vertex deletion including related edge information
 type DeleteVertexResult = Vec<(LabelId, LabelId, LabelId, Vec<RelatedEdgeInfo>)>;

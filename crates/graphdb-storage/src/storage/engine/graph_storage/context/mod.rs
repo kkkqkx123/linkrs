@@ -5,12 +5,10 @@ use std::sync::Arc;
 use parking_lot::{Mutex, RwLock};
 
 use crate::core::metadata::{IndexManager, SchemaManager};
-use crate::transaction::VersionManager;
-use crate::core::types::{
-    LabelId, TableTracker, TableTrackerConfig, Timestamp,
-    TransactionContextInfo,
-};
 use crate::core::stats::StatsManager;
+use crate::core::types::{
+    LabelId, TableTracker, TableTrackerConfig, Timestamp, TransactionContextInfo,
+};
 use crate::core::UserStorage;
 use crate::storage::engine::background_freeze::BackgroundFreezeManager;
 use crate::storage::engine::cache_manager::CacheManager;
@@ -20,6 +18,7 @@ use crate::storage::engine::paths::StoragePaths;
 use crate::storage::engine::persistence_coordinator::PersistenceCoordinator;
 use crate::storage::index::{IndexDataManagerImpl, IndexGcConfig, IndexGcManager};
 use crate::storage::vertex::IdKey;
+use crate::transaction::VersionManager;
 
 type LastCompactedVertices = Arc<Mutex<Vec<(LabelId, Vec<IdKey>)>>>;
 type CoreComponents = (
@@ -249,10 +248,7 @@ impl GraphStorageRuntime {
         }
     }
 
-    fn with_background_freeze(
-        &self,
-        manager: Arc<BackgroundFreezeManager>,
-    ) -> Self {
+    fn with_background_freeze(&self, manager: Arc<BackgroundFreezeManager>) -> Self {
         Self {
             current_txn_context: self.current_txn_context.clone(),
             index_gc_manager: self.index_gc_manager.clone(),
@@ -299,17 +295,17 @@ pub struct GraphStorageContext {
 // Module organization: split into logical groups
 // ──────────────────────────────────────────────────────────────────────────────
 
-mod mod_init;
+pub(crate) mod helpers;
 mod mod_accessors;
+mod mod_cache_index;
+mod mod_edge_ops;
+mod mod_freeze;
+mod mod_init;
+mod mod_maintenance;
+mod mod_persistence;
+mod mod_query;
 mod mod_schema;
 mod mod_vertex_ops;
-mod mod_edge_ops;
-mod mod_query;
-mod mod_persistence;
-mod mod_maintenance;
-mod mod_cache_index;
-mod mod_freeze;
-pub(crate) mod helpers;
 
 // Re-export for backward compatibility and internal use
 pub use mod_cache_index::ExportedEdgeSnapshotRecord;

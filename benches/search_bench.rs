@@ -2,7 +2,7 @@
 //! Search layer performance benchmarks
 //! Tests: fulltext search and vector search
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::time::Duration;
 
 fn create_benchmark_group<'a>(
@@ -19,7 +19,10 @@ fn create_benchmark_group<'a>(
 /// Generate GQL for fulltext search benchmark
 fn generate_gql_for_fulltext_bench(document_count: usize) -> String {
     let mut gql = String::new();
-    gql.push_str(&format!("CREATE SPACE IF NOT EXISTS bench_ft{} (vid_type=STRING)\n", document_count));
+    gql.push_str(&format!(
+        "CREATE SPACE IF NOT EXISTS bench_ft{} (vid_type=STRING)\n",
+        document_count
+    ));
     gql.push_str(&format!("USE bench_ft{}\n\n", document_count));
 
     gql.push_str("CREATE TAG IF NOT EXISTS Document(\n");
@@ -28,7 +31,13 @@ fn generate_gql_for_fulltext_bench(document_count: usize) -> String {
     gql.push_str("    timestamp: INT\n");
     gql.push_str(")\n\n");
 
-    let keywords = ["performance", "database", "query", "optimization", "benchmark"];
+    let keywords = [
+        "performance",
+        "database",
+        "query",
+        "optimization",
+        "benchmark",
+    ];
 
     for i in 0..document_count {
         let keyword = keywords[i % keywords.len()];
@@ -51,7 +60,10 @@ fn generate_gql_for_fulltext_bench(document_count: usize) -> String {
 /// Generate GQL for vector search benchmark
 fn generate_gql_for_vector_bench(vector_count: usize, dimensions: usize) -> String {
     let mut gql = String::new();
-    gql.push_str(&format!("CREATE SPACE IF NOT EXISTS bench_vec{}_{} (vid_type=STRING)\n", vector_count, dimensions));
+    gql.push_str(&format!(
+        "CREATE SPACE IF NOT EXISTS bench_vec{}_{} (vid_type=STRING)\n",
+        vector_count, dimensions
+    ));
     gql.push_str(&format!("USE bench_vec{}_{}\n\n", vector_count, dimensions));
 
     gql.push_str("CREATE TAG IF NOT EXISTS Vector(\n");
@@ -81,16 +93,12 @@ fn bench_fulltext_index_build(c: &mut Criterion) {
         let gql = generate_gql_for_fulltext_bench(*doc_count);
         let doc_count_actual = gql.matches("INSERT VERTEX").count();
 
-        group.bench_with_input(
-            BenchmarkId::from_parameter(doc_count),
-            doc_count,
-            |b, _| {
-                b.iter(|| {
-                    // Simulate index building
-                    black_box(doc_count_actual)
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter(doc_count), doc_count, |b, _| {
+            b.iter(|| {
+                // Simulate index building
+                black_box(doc_count_actual)
+            });
+        });
     }
 
     group.finish();
@@ -108,7 +116,10 @@ fn bench_fulltext_search_queries(c: &mut Criterion) {
     for query in queries {
         group.bench_function(format!("search_{}", query.replace(" ", "_")), |b| {
             b.iter(|| {
-                black_box(format!("MATCH (d:Document) WHERE d.content CONTAINS \"{}\" RETURN d", query))
+                black_box(format!(
+                    "MATCH (d:Document) WHERE d.content CONTAINS \"{}\" RETURN d",
+                    query
+                ))
             });
         });
     }
@@ -120,16 +131,12 @@ fn bench_fulltext_search_scaling(c: &mut Criterion) {
     let mut group = create_benchmark_group(c, "fulltext_scaling");
 
     for doc_count in &[1000, 10000, 100000] {
-        group.bench_with_input(
-            BenchmarkId::from_parameter(doc_count),
-            doc_count,
-            |b, _| {
-                b.iter(|| {
-                    // Simulate searching across larger dataset
-                    black_box(doc_count / 10)
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter(doc_count), doc_count, |b, _| {
+            b.iter(|| {
+                // Simulate searching across larger dataset
+                black_box(doc_count / 10)
+            });
+        });
     }
 
     group.finish();
@@ -163,22 +170,18 @@ fn bench_vector_search_distance_calculation(c: &mut Criterion) {
     let dimensions = vec![128, 256, 512, 768];
 
     for dim in dimensions {
-        group.bench_with_input(
-            BenchmarkId::from_parameter(dim),
-            &dim,
-            |b, d| {
-                // Simulate distance calculation
-                b.iter(|| {
-                    let mut sum = 0.0;
-                    for i in 0..*d {
-                        let a = (i as f64) * 0.1;
-                        let b = ((i + 1) as f64) * 0.1;
-                        sum += (a - b).abs();
-                    }
-                    black_box(sum)
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter(dim), &dim, |b, d| {
+            // Simulate distance calculation
+            b.iter(|| {
+                let mut sum = 0.0;
+                for i in 0..*d {
+                    let a = (i as f64) * 0.1;
+                    let b = ((i + 1) as f64) * 0.1;
+                    sum += (a - b).abs();
+                }
+                black_box(sum)
+            });
+        });
     }
 
     group.finish();
@@ -193,9 +196,7 @@ fn bench_vector_search_topk(c: &mut Criterion) {
             &(*vec_count, *k),
             |b, _| {
                 // Simulate top-k search
-                b.iter(|| {
-                    black_box(vec_count / 10)
-                });
+                b.iter(|| black_box(vec_count / 10));
             },
         );
     }

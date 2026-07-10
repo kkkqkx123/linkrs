@@ -117,23 +117,50 @@ impl WorkerPool {
                                     match executor_registry.lock() {
                                         Ok(mut registry) => {
                                             if let Some(executor) = registry.get_mut(&executor_id) {
-                                                // Call next() on the executor to get the next chunk
-                                                match executor.next() {
-                                                    Ok(chunk) => TaskResult {
-                                                        task_id,
-                                                        success: true,
-                                                        error_msg: None,
-                                                        chunk,
-                                                    },
-                                                    Err(e) => TaskResult {
-                                                        task_id,
-                                                        success: false,
-                                                        error_msg: Some(format!(
-                                                            "Executor error: {}",
-                                                            e
-                                                        )),
-                                                        chunk: None,
-                                                    },
+                                                let mut emitted_chunk = false;
+                                                loop {
+                                                    match executor.next() {
+                                                        Ok(Some(chunk)) => {
+                                                            emitted_chunk = true;
+                                                            let _ =
+                                                                result_sender.send(TaskResult {
+                                                                    task_id,
+                                                                    success: true,
+                                                                    error_msg: None,
+                                                                    chunk: Some(chunk),
+                                                                });
+                                                        }
+                                                        Ok(None) => {
+                                                            break TaskResult {
+                                                                task_id,
+                                                                success: true,
+                                                                error_msg: None,
+                                                                chunk: None,
+                                                            };
+                                                        }
+                                                        Err(e) => {
+                                                            if emitted_chunk
+                                                                && e.to_string()
+                                                                    .contains("not opened")
+                                                            {
+                                                                break TaskResult {
+                                                                    task_id,
+                                                                    success: true,
+                                                                    error_msg: None,
+                                                                    chunk: None,
+                                                                };
+                                                            }
+                                                            break TaskResult {
+                                                                task_id,
+                                                                success: false,
+                                                                error_msg: Some(format!(
+                                                                    "Executor error: {}",
+                                                                    e
+                                                                )),
+                                                                chunk: None,
+                                                            };
+                                                        }
+                                                    }
                                                 }
                                             } else {
                                                 TaskResult {

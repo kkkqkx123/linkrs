@@ -20,10 +20,13 @@ fn test_insert_and_get() {
     table.add_property("since".to_string(), DataType::Int, true);
 
     let offset = table
-        .insert(&[
-            ("weight".to_string(), Value::Double(1.5)),
-            ("since".to_string(), Value::Int(2020)),
-        ], 100)
+        .insert(
+            &[
+                ("weight".to_string(), Value::Double(1.5)),
+                ("since".to_string(), Value::Int(2020)),
+            ],
+            100,
+        )
         .unwrap();
 
     let props = table.get(offset, None).unwrap();
@@ -95,17 +98,23 @@ fn test_dump_load_roundtrip() {
     table.add_property("since".to_string(), DataType::Int, true);
 
     let offset1 = table
-        .insert(&[
-            ("weight".to_string(), Value::Double(1.5)),
-            ("since".to_string(), Value::Int(2020)),
-        ], 100)
+        .insert(
+            &[
+                ("weight".to_string(), Value::Double(1.5)),
+                ("since".to_string(), Value::Int(2020)),
+            ],
+            100,
+        )
         .unwrap();
 
     let offset2 = table
-        .insert(&[
-            ("weight".to_string(), Value::Double(2.5)),
-            ("since".to_string(), Value::Int(2021)),
-        ], 100)
+        .insert(
+            &[
+                ("weight".to_string(), Value::Double(2.5)),
+                ("since".to_string(), Value::Int(2021)),
+            ],
+            100,
+        )
         .unwrap();
 
     let data = table.dump();
@@ -136,10 +145,13 @@ fn test_rename_and_remove_property() {
     table.add_property("since".to_string(), DataType::Int, true);
 
     let offset = table
-        .insert(&[
-            ("weight".to_string(), Value::Double(1.5)),
-            ("since".to_string(), Value::Int(2020)),
-        ], 100)
+        .insert(
+            &[
+                ("weight".to_string(), Value::Double(1.5)),
+                ("since".to_string(), Value::Int(2020)),
+            ],
+            100,
+        )
         .unwrap();
 
     table
@@ -175,10 +187,13 @@ fn test_property_table_update_single_property() {
     table.add_property("age".to_string(), DataType::Int, false);
 
     let offset = table
-        .insert(&[
-            ("name".to_string(), Value::String("Alice".to_string())),
-            ("age".to_string(), Value::Int(30)),
-        ], 100)
+        .insert(
+            &[
+                ("name".to_string(), Value::String("Alice".to_string())),
+                ("age".to_string(), Value::Int(30)),
+            ],
+            100,
+        )
         .unwrap();
 
     // Update only age property
@@ -241,7 +256,10 @@ fn test_property_table_update_to_null() {
     table.add_property("optional".to_string(), DataType::String, true);
 
     let offset = table
-        .insert(&[("optional".to_string(), Value::String("value".to_string()))], 100)
+        .insert(
+            &[("optional".to_string(), Value::String("value".to_string()))],
+            100,
+        )
         .unwrap();
 
     // Update to null

@@ -39,8 +39,8 @@ use crate::query::optimizer::execution_mode_optimizer::ExecutionModeOptimizer;
 use crate::query::optimizer::heuristic::PlanRewriter;
 use crate::query::optimizer::{
     AggregateStrategySelector, BatchPlanAnalyzer, CostCalculator, CostModelConfig, CteCacheManager,
-    SelectivityEstimator, SelectivityFeedbackManager,
-    SortEliminationOptimizer, StatisticsManager, SubqueryUnnestingOptimizer,
+    SelectivityEstimator, SelectivityFeedbackManager, SortEliminationOptimizer, StatisticsManager,
+    SubqueryUnnestingOptimizer,
 };
 use crate::query::planning::plan::ExecutionPlan;
 use crate::query::validator::context::ExpressionAnalysisContext;
@@ -389,8 +389,7 @@ impl OptimizerEngine {
                 TraversalDirectionOptimizer::new(self.cost_calculator.clone());
 
             // Create strategy chain with all registered cost-based strategies
-            let chain = StrategyChain::new()
-                .add_strategy(Box::new(traversal_direction_optimizer));
+            let chain = StrategyChain::new().add_strategy(Box::new(traversal_direction_optimizer));
 
             // Apply strategies to the plan root
             let optimized_root = chain
@@ -404,7 +403,10 @@ impl OptimizerEngine {
     }
 
     /// Apply execution mode selection (Phase 3)
-    fn apply_execution_mode_selection(&self, mut plan: ExecutionPlan) -> OptimizeResult<ExecutionPlan> {
+    fn apply_execution_mode_selection(
+        &self,
+        mut plan: ExecutionPlan,
+    ) -> OptimizeResult<ExecutionPlan> {
         if let Some(ref root) = plan.root {
             let (mode, reason) = self.execution_mode_optimizer.decide_execution_mode(root)?;
             plan.set_execution_mode(mode, &reason);

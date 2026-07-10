@@ -38,9 +38,7 @@ fn execute_vertex_plan(
     let mut errors = Vec::new();
     let mut completed_step_indices = plan.completed_steps.clone();
 
-    let vertices = storage
-        .scan_vertices_by_tag(&plan.target.space, &plan.target.label)
-        ?;
+    let vertices = storage.scan_vertices_by_tag(&plan.target.space, &plan.target.label)?;
 
     for &step_idx in remaining {
         let step = &plan.steps[step_idx];
@@ -53,9 +51,7 @@ fn execute_vertex_plan(
         for vertex in &vertices {
             match apply_step_to_vertex(vertex, &plan.target.label, step) {
                 Ok(Some(transformed)) => {
-                    storage
-                        .update_vertex(&plan.target.space, transformed)
-                        ?;
+                    storage.update_vertex(&plan.target.space, transformed)?;
                     migrated += 1;
                 }
                 Ok(None) => {}
@@ -90,9 +86,7 @@ fn execute_edge_plan(
     plan: &MigrationPlan,
     remaining: &[usize],
 ) -> Result<MigrationReport, MigrationError> {
-    let edges = storage
-        .scan_edges_by_type(&plan.target.space, &plan.target.label)
-        ?;
+    let edges = storage.scan_edges_by_type(&plan.target.space, &plan.target.label)?;
 
     let mut rows_migrated = 0u64;
     let mut errors = Vec::new();
@@ -111,9 +105,7 @@ fn execute_edge_plan(
                     let mut transformed = edge.clone();
                     transformed.props = new_props;
 
-                    storage
-                        .update_edge(&plan.target.space, transformed)
-                        ?;
+                    storage.update_edge(&plan.target.space, transformed)?;
 
                     rows_migrated += 1;
                 }
@@ -155,7 +147,9 @@ pub fn rollback_migration(
                     "Cannot rollback a dangerous migration (data loss)".to_string(),
                 ))
             } else {
-                Err(MigrationError::Plan("No rollback plan available".to_string()))
+                Err(MigrationError::Plan(
+                    "No rollback plan available".to_string(),
+                ))
             }
         }
     }
@@ -180,7 +174,11 @@ fn apply_step_to_vertex(
             };
             tag.properties.insert(new_name.clone(), value);
         }
-        MigrationStep::ConvertType { name, from_type: _, to_type } => {
+        MigrationStep::ConvertType {
+            name,
+            from_type: _,
+            to_type,
+        } => {
             let value = match tag.properties.get(name) {
                 Some(v) => v.clone(),
                 None => return Ok(None),
@@ -194,7 +192,10 @@ fn apply_step_to_vertex(
             }
             tag.properties.remove(name);
         }
-        MigrationStep::SetDefault { name, default_value } => {
+        MigrationStep::SetDefault {
+            name,
+            default_value,
+        } => {
             if tag.properties.contains_key(name) {
                 return Ok(None);
             }
@@ -213,10 +214,7 @@ fn apply_step_to_vertex(
     Ok(Some(v))
 }
 
-fn apply_step_to_edge(
-    edge: &Edge,
-    step: &MigrationStep,
-) -> Result<HashMap<String, Value>, String> {
+fn apply_step_to_edge(edge: &Edge, step: &MigrationStep) -> Result<HashMap<String, Value>, String> {
     match step {
         MigrationStep::RenameColumn { old_name, new_name } => {
             let value = match edge.props.get(old_name) {
@@ -228,7 +226,11 @@ fn apply_step_to_edge(
             props.insert(new_name.clone(), value);
             Ok(props)
         }
-        MigrationStep::ConvertType { name, from_type: _, to_type } => {
+        MigrationStep::ConvertType {
+            name,
+            from_type: _,
+            to_type,
+        } => {
             let value = match edge.props.get(name) {
                 Some(v) => v,
                 None => return Err(format!("Property '{}' not found on edge", name)),
@@ -243,7 +245,10 @@ fn apply_step_to_edge(
             props.remove(name);
             Ok(props)
         }
-        MigrationStep::SetDefault { name, default_value } => {
+        MigrationStep::SetDefault {
+            name,
+            default_value,
+        } => {
             if edge.props.contains_key(name) {
                 return Ok(edge.props.clone());
             }
