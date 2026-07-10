@@ -23,6 +23,7 @@ impl StartNode {
             id: -1,
             output_var: None,
             col_names: vec![],
+            column_types: vec![],
         }
     }
 }

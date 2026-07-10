@@ -24,6 +24,7 @@ impl MinusNode {
             deps: vec![input, minus_input],
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 
@@ -54,6 +55,7 @@ impl IntersectNode {
             deps: vec![input, intersect_input],
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 

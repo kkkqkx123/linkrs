@@ -26,6 +26,7 @@ impl SampleNode {
             count,
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 

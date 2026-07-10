@@ -27,7 +27,7 @@ pub use execution_context::ExecutionContext;
 pub use execution_result::{DBResult, ExecutionResult, IntoExecutionResult};
 pub use executor_base::{BaseExecutor, Executor, HasInput, HasStorage, StartExecutor};
 pub use executor_stats::ExecutorStats;
-pub use memory_budget::MemoryBudget;
+pub use memory_budget::{MemoryBudget, MemoryTracker};
 pub use result_processor::{BaseResultProcessor, ResultProcessor, ResultProcessorContext};
 
 pub use crate::core::types::EdgeDirection;

@@ -72,3 +72,66 @@ impl MemoryBudget {
             .sum()
     }
 }
+
+/// Per-operator memory tracker wrapping a shared `MemoryBudget`.
+///
+/// Each blocking operator should hold its own `MemoryTracker` and call
+/// `try_reserve` before buffering data. The tracker records per-operator
+/// peak memory so it can later be reported to the `ProfileCollector`.
+#[derive(Debug, Clone)]
+pub struct MemoryTracker {
+    budget: MemoryBudget,
+    peak_bytes: usize,
+    current_bytes: usize,
+}
+
+impl MemoryTracker {
+    /// Create a new tracker backed by `budget`.
+    pub fn new(budget: MemoryBudget) -> Self {
+        Self {
+            budget,
+            peak_bytes: 0,
+            current_bytes: 0,
+        }
+    }
+
+    /// Reserve `bytes` additional memory through the shared budget.
+    ///
+    /// Updates the per-operator peak tracker and returns an error when
+    /// the global budget is exceeded.
+    pub fn try_reserve(&mut self, bytes: usize) -> Result<(), QueryError> {
+        self.budget.try_reserve(bytes)?;
+        self.current_bytes += bytes;
+        self.peak_bytes = self.peak_bytes.max(self.current_bytes);
+        Ok(())
+    }
+
+    /// Release `bytes` from both the global budget and this tracker.
+    pub fn release(&mut self, bytes: usize) {
+        self.budget.release(bytes);
+        self.current_bytes = self.current_bytes.saturating_sub(bytes);
+    }
+
+    /// Peak memory observed by this tracker.
+    pub fn peak(&self) -> usize {
+        self.peak_bytes
+    }
+
+    /// Current tracked bytes.
+    pub fn current(&self) -> usize {
+        self.current_bytes
+    }
+
+    /// Convenience: reserve memory for a single row estimate.
+    pub fn try_reserve_row(&mut self, row: &[Value]) -> Result<(), QueryError> {
+        let mem = row.len() * std::mem::size_of::<Value>();
+        self.try_reserve(mem)
+    }
+
+    /// Convenience: reserve memory for many rows estimate.
+    pub fn try_reserve_rows(&mut self, rows: &[Vec<Value>]) -> Result<(), QueryError> {
+        let mem = MemoryBudget::estimate_rows_memory(rows);
+        self.try_reserve(mem)
+    }
+
+}

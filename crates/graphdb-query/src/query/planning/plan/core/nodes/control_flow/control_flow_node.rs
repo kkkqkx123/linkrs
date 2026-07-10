@@ -29,6 +29,7 @@ impl ArgumentNode {
             var: var.to_string(),
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -50,6 +51,7 @@ impl PassThroughNode {
             id,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 }
@@ -66,6 +68,7 @@ pub struct SelectNode {
         Option<Box<crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>>,
     output_var: Option<String>,
     col_names: Vec<String>,
+    column_types: Vec<crate::core::DataType>,
 }
 
 impl Clone for SelectNode {
@@ -78,6 +81,7 @@ impl Clone for SelectNode {
             else_branch: self.else_branch.clone(),
             output_var: self.output_var.clone(),
             col_names: self.col_names.clone(),
+            column_types: self.column_types.clone(),
         }
     }
 }
@@ -92,6 +96,7 @@ impl SelectNode {
             else_branch: None,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -302,6 +307,7 @@ pub struct LoopNode {
         Option<Box<crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>>,
     output_var: Option<String>,
     col_names: Vec<String>,
+    column_types: Vec<crate::core::DataType>,
 }
 
 impl Clone for LoopNode {
@@ -313,6 +319,7 @@ impl Clone for LoopNode {
             body: self.body.clone(),
             output_var: self.output_var.clone(),
             col_names: self.col_names.clone(),
+            column_types: self.column_types.clone(),
         }
     }
 }
@@ -326,6 +333,7 @@ impl LoopNode {
             body: None,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -529,6 +537,7 @@ pub struct BeginTransactionNode {
     read_only: bool,
     output_var: Option<String>,
     col_names: Vec<String>,
+    column_types: Vec<crate::core::DataType>,
 }
 
 impl BeginTransactionNode {
@@ -539,6 +548,7 @@ impl BeginTransactionNode {
             read_only: false,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -642,6 +652,7 @@ pub struct CommitNode {
     id: i64,
     output_var: Option<String>,
     col_names: Vec<String>,
+    column_types: Vec<crate::core::DataType>,
 }
 
 impl CommitNode {
@@ -650,6 +661,7 @@ impl CommitNode {
             id,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -736,6 +748,7 @@ pub struct RollbackNode {
     savepoint: Option<String>,
     output_var: Option<String>,
     col_names: Vec<String>,
+    column_types: Vec<crate::core::DataType>,
 }
 
 impl RollbackNode {
@@ -745,6 +758,7 @@ impl RollbackNode {
             savepoint: None,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 

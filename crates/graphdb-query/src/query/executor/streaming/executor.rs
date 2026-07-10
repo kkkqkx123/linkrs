@@ -20,9 +20,10 @@ use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::AggregateFunction;
 use crate::core::Value;
-use crate::query::executor::base::MemoryBudget;
+use crate::query::executor::base::MemoryTracker;
 #[cfg(feature = "fulltext-search")]
 use crate::search::manager::FulltextIndexManager;
+use crate::storage::cursor::{EdgeCursor, VertexCursor};
 use crate::storage::StorageClient;
 #[cfg(feature = "qdrant")]
 use crate::sync::VectorSyncCoordinator;
@@ -81,13 +82,16 @@ pub enum StreamingExecutor {
 
     /// Scan vertices from storage on first pull.
     ///
-    /// The storage API currently returns a Vec, so this variant is lazy at the
-    /// executor boundary but still depends on a materializing storage call.
+    /// Holds a live cursor and pulls batches on each `next()` call.
+    /// When the underlying storage provides a native lazy cursor this
+    /// translates to truly on-demand IO; currently uses the Vec-backed
+    /// cursor wrapper as a bridge.
     StorageScanVertices {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         limit: Option<usize>,
-        buffer: Option<Vec<Vec<Value>>>,
+        cursor: Option<Box<dyn VertexCursor>>,
+        buffer: Vec<Vec<Value>>,
         current_index: usize,
         col_names: Vec<String>,
         /// Plan node ID for debugging and tracking
@@ -107,11 +111,14 @@ pub enum StreamingExecutor {
     },
 
     /// Scan edges from storage on first pull.
+    ///
+    /// Holds a live cursor and pulls batches on each `next()` call.
     StorageScanEdges {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         limit: Option<usize>,
-        buffer: Option<Vec<Vec<Value>>>,
+        cursor: Option<Box<dyn EdgeCursor>>,
+        buffer: Vec<Vec<Value>>,
         current_index: usize,
         col_names: Vec<String>,
         /// Plan node ID for debugging and tracking
@@ -161,8 +168,8 @@ pub enum StreamingExecutor {
         /// Iterator for result chunks
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
         opened: bool,
-        /// Per-query memory budget for blocking buffering.
-        memory_budget: MemoryBudget,
+        /// Per-operator memory tracker.
+        memory_tracker: MemoryTracker,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
     },
@@ -177,8 +184,8 @@ pub enum StreamingExecutor {
         all_rows: Vec<Vec<Value>>,
         row_iter: Option<std::vec::IntoIter<Vec<Value>>>,
         opened: bool,
-        /// Per-query memory budget for blocking buffering.
-        memory_budget: MemoryBudget,
+        /// Per-operator memory tracker.
+        memory_tracker: MemoryTracker,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
     },
@@ -202,8 +209,8 @@ pub enum StreamingExecutor {
         all_right_rows: Vec<Vec<Value>>,
         left_consumed: bool,
         opened: bool,
-        /// Per-query memory budget for blocking buffering.
-        memory_budget: MemoryBudget,
+        /// Per-operator memory tracker.
+        memory_tracker: MemoryTracker,
         /// Column names from the right input (captured at build time).
         right_col_names: Vec<String>,
         /// Plan node ID for debugging and tracking
@@ -220,6 +227,8 @@ pub enum StreamingExecutor {
         /// Iterator for result chunks
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
         opened: bool,
+        /// Per-operator memory tracker.
+        memory_tracker: MemoryTracker,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
     },
@@ -232,6 +241,8 @@ pub enum StreamingExecutor {
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
         opened: bool,
+        /// Per-operator memory tracker.
+        memory_tracker: MemoryTracker,
     },
 
     /// NestedLoopJoin for theta-joins and non-equi joins
@@ -243,8 +254,8 @@ pub enum StreamingExecutor {
         build_side_tuples: Vec<Vec<Value>>,
         left_consumed: bool,
         opened: bool,
-        /// Per-query memory budget for blocking buffering.
-        memory_budget: MemoryBudget,
+        /// Per-operator memory tracker.
+        memory_tracker: MemoryTracker,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
     },
@@ -266,6 +277,8 @@ pub enum StreamingExecutor {
         /// Iterator for result chunks
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
         opened: bool,
+        /// Per-operator memory tracker.
+        memory_tracker: MemoryTracker,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
     },
@@ -277,6 +290,8 @@ pub enum StreamingExecutor {
         /// Already-seen rows to eliminate duplicates
         seen_rows: std::collections::HashSet<String>,
         left_consumed: bool,
+        /// Per-operator memory tracker.
+        memory_tracker: MemoryTracker,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
         opened: bool,
@@ -303,6 +318,7 @@ pub enum StreamingExecutor {
         left_buffered: bool,
         right_buffered: bool,
         opened: bool,
+        memory_tracker: MemoryTracker,
         plan_node_id: i64,
     },
 
@@ -314,6 +330,7 @@ pub enum StreamingExecutor {
         exclude_rows: std::collections::HashSet<String>,
         right_buffered: bool,
         opened: bool,
+        memory_tracker: MemoryTracker,
         plan_node_id: i64,
     },
 
@@ -390,6 +407,8 @@ pub enum StreamingExecutor {
         join_condition: Option<Expression>,
         build_side_tuples: Vec<Vec<Value>>,
         left_consumed: bool,
+        /// Per-operator memory tracker.
+        memory_tracker: MemoryTracker,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
         opened: bool,
@@ -400,6 +419,8 @@ pub enum StreamingExecutor {
         join_condition: Option<Expression>,
         build_side_tuples: Vec<Vec<Value>>,
         left_consumed: bool,
+        /// Per-operator memory tracker.
+        memory_tracker: MemoryTracker,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
         opened: bool,
@@ -410,6 +431,8 @@ pub enum StreamingExecutor {
         join_condition: Option<Expression>,
         build_side_tuples: Vec<Vec<Value>>,
         right_consumed: bool,
+        /// Per-operator memory tracker.
+        memory_tracker: MemoryTracker,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
         opened: bool,
@@ -423,6 +446,8 @@ pub enum StreamingExecutor {
         matched_right_indices: std::collections::HashSet<usize>,
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
         phase: FullOuterJoinPhase,
+        /// Per-operator memory tracker.
+        memory_tracker: MemoryTracker,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
         opened: bool,
@@ -434,6 +459,8 @@ pub enum StreamingExecutor {
         all_right_rows: Vec<Vec<Value>>,
         left_consumed: bool,
         right_consumed: bool,
+        /// Per-operator memory tracker.
+        memory_tracker: MemoryTracker,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
         opened: bool,
@@ -444,6 +471,8 @@ pub enum StreamingExecutor {
         join_condition: Option<Expression>,
         right_rows: Vec<Vec<Value>>,
         right_consumed: bool,
+        /// Per-operator memory tracker.
+        memory_tracker: MemoryTracker,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
         opened: bool,
@@ -835,6 +864,7 @@ pub enum StreamingExecutor {
         all_rows: Vec<Vec<Value>>,
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
         opened: bool,
+        memory_tracker: MemoryTracker,
     },
 
     Dedup {
@@ -855,6 +885,7 @@ pub enum StreamingExecutor {
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
         materialized: bool,
         opened: bool,
+        memory_tracker: MemoryTracker,
     },
 
     Remove {
@@ -868,6 +899,7 @@ pub enum StreamingExecutor {
         all_rows: Vec<Vec<Value>>,
         emitted: bool,
         opened: bool,
+        memory_tracker: MemoryTracker,
     },
 
     Unwind {
@@ -892,6 +924,7 @@ pub enum StreamingExecutor {
         all_rows: Vec<Vec<Value>>,
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
         opened: bool,
+        memory_tracker: MemoryTracker,
     },
 
     RollUpApply {
@@ -900,6 +933,7 @@ pub enum StreamingExecutor {
         all_rows: Vec<Vec<Value>>,
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
         opened: bool,
+        memory_tracker: MemoryTracker,
     },
 
     Minus {
@@ -908,6 +942,7 @@ pub enum StreamingExecutor {
         exclude_rows: std::collections::HashSet<String>,
         right_buffered: bool,
         opened: bool,
+        memory_tracker: MemoryTracker,
         plan_node_id: i64,
     },
 
@@ -920,6 +955,7 @@ pub enum StreamingExecutor {
         all_rows: Vec<Vec<Value>>,
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
         opened: bool,
+        memory_tracker: MemoryTracker,
     },
 
     // ============ Control Flow ============

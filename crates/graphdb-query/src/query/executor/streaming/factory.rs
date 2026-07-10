@@ -6,9 +6,13 @@
 //! This module also handles conversion of streaming execution results
 //! (Vec<DataChunk>) into the standard ExecutionResult format.
 
+use std::sync::Arc;
+
 use super::builder::StreamingExecutorBuilder;
 use super::chunk::DataChunk;
 use super::engine::StreamingExecutionEngine;
+use super::runtime::{ExecutionRuntime, QueryIdentity};
+use super::stream::ResultStream;
 use crate::core::error::QueryError;
 use crate::query::data_set::DataSet;
 use crate::query::executor::base::ExecutionContext;
@@ -22,6 +26,7 @@ use crate::query::planning::plan::PlanNodeEnum;
 pub struct StreamingQueryExecutor {
     engine: Option<StreamingExecutionEngine>,
     col_names: Option<Vec<String>>,
+    runtime: Option<Arc<ExecutionRuntime>>,
 }
 
 impl StreamingQueryExecutor {
@@ -30,6 +35,7 @@ impl StreamingQueryExecutor {
         Self {
             engine: None,
             col_names: None,
+            runtime: None,
         }
     }
 
@@ -51,7 +57,18 @@ impl StreamingQueryExecutor {
         let mut engine = StreamingExecutionEngine::new();
         engine.register_executor(0, executor);
 
+        let runtime = Arc::new(ExecutionRuntime::new(
+            QueryIdentity {
+                query_id: 0,
+                session_id: None,
+                space_name: context.space_name.clone(),
+            },
+            context.memory_budget.clone(),
+        ));
+        engine.set_runtime(runtime.clone());
+
         self.engine = Some(engine);
+        self.runtime = Some(runtime);
         Ok(())
     }
 
@@ -62,11 +79,36 @@ impl StreamingQueryExecutor {
     pub fn execute(&mut self) -> Result<ExecutionResult, QueryError> {
         let engine = self
             .engine
-            .as_mut()
+            .take()
             .ok_or_else(|| QueryError::execution("Streaming engine not initialized".to_string()))?;
 
-        let chunks = engine.execute()?;
-        chunks_to_execution_result(chunks, self.col_names.clone())
+        let stream = engine.into_stream()?;
+        let dataset = stream.collect()?;
+        Ok(ExecutionResult::DataSet(dataset))
+    }
+
+    /// Run execution through the existing materialised path (collect all chunks).
+    ///
+    /// Unlike `execute()` this does not require a runtime and returns `Vec<DataChunk>`
+    /// for callers that need chunk-level access.
+    pub fn execute_collect(&mut self) -> Result<Vec<DataChunk>, QueryError> {
+        let engine = self
+            .engine
+            .as_mut()
+            .ok_or_else(|| QueryError::execution("Streaming engine not initialized".to_string()))?;
+        engine.execute()
+    }
+
+    /// Return a [`ResultStream`] for chunk-at-a-time consumption.
+    ///
+    /// Consumes the internal engine.  After calling this the executor
+    /// can no longer be used.
+    pub fn into_stream(&mut self) -> Result<ResultStream, QueryError> {
+        let engine = self
+            .engine
+            .take()
+            .ok_or_else(|| QueryError::execution("Streaming engine not initialized".to_string()))?;
+        engine.into_stream()
     }
 
     /// Set optional column names for result formatting

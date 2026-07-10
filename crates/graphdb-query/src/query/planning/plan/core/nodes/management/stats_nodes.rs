@@ -19,6 +19,7 @@ impl ShowStatsNode {
             stats_type,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 

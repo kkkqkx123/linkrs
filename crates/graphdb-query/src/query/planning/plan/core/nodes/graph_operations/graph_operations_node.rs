@@ -30,6 +30,7 @@ impl UnionNode {
             distinct,
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 
@@ -70,6 +71,7 @@ impl UnwindNode {
             list_expression,
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 
@@ -101,6 +103,7 @@ impl DedupNode {
             deps: vec![input],
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 }
@@ -127,6 +130,7 @@ impl DataCollectNode {
             collect_kind: collect_kind.to_string(),
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 
@@ -157,6 +161,7 @@ impl AssignNode {
             assignments,
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 
@@ -181,6 +186,7 @@ pub struct RollUpApplyNode {
     collect_col: Option<String>,
     output_var: Option<String>,
     col_names: Vec<String>,
+    column_types: Vec<crate::core::DataType>,
 }
 
 impl RollUpApplyNode {
@@ -204,6 +210,7 @@ impl RollUpApplyNode {
             collect_col,
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 
@@ -301,6 +308,7 @@ impl RollUpApplyNode {
                 collect_col: self.collect_col.clone(),
                 output_var: self.output_var.clone(),
                 col_names: self.col_names.clone(),
+            column_types: self.column_types.clone(),
             },
         )
     }
@@ -488,6 +496,7 @@ pub struct PatternApplyNode {
     is_anti_predicate: bool,
     output_var: Option<String>,
     col_names: Vec<String>,
+    column_types: Vec<crate::core::DataType>,
 }
 
 impl PatternApplyNode {
@@ -511,6 +520,7 @@ impl PatternApplyNode {
             is_anti_predicate,
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 
@@ -608,6 +618,7 @@ impl PatternApplyNode {
                 is_anti_predicate: self.is_anti_predicate,
                 output_var: self.output_var.clone(),
                 col_names: self.col_names.clone(),
+            column_types: self.column_types.clone(),
             },
         )
     }
@@ -789,6 +800,7 @@ impl MaterializeNode {
             deps: vec![input],
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 }
@@ -868,6 +880,7 @@ pub struct RemoveNode {
     remove_items: Vec<(String, ContextualExpression)>,
     output_var: Option<String>,
     col_names: Vec<String>,
+    column_types: Vec<crate::core::DataType>,
 }
 
 impl RemoveNode {
@@ -884,6 +897,7 @@ impl RemoveNode {
             remove_items,
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 
@@ -1036,6 +1050,7 @@ pub struct ApplyNode {
     apply_kind: ApplyKind,
     output_var: Option<String>,
     col_names: Vec<String>,
+    column_types: Vec<crate::core::DataType>,
 }
 
 /// Kind of Apply operation
@@ -1074,6 +1089,7 @@ impl ApplyNode {
             apply_kind,
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 
@@ -1165,6 +1181,7 @@ impl ApplyNode {
             apply_kind: self.apply_kind,
             output_var: self.output_var.clone(),
             col_names: self.col_names.clone(),
+            column_types: self.column_types.clone(),
         })
     }
 }

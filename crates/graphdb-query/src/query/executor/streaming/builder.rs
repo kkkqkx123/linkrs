@@ -10,7 +10,7 @@ use crate::core::types::expr::Expression;
 use crate::core::types::operators::{AggregateFunction, BinaryOperator};
 use crate::core::Value;
 use crate::query::core::NodeType;
-use crate::query::executor::base::ExecutionContext;
+use crate::query::executor::base::{ExecutionContext, MemoryTracker};
 use crate::query::parser::ast::fulltext::FulltextQueryExpr;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
@@ -64,7 +64,8 @@ impl StreamingExecutorBuilder {
                     storage: context.storage.clone(),
                     space_name: context.space_name.clone().unwrap_or_default(),
                     limit,
-                    buffer: None,
+                    cursor: None,
+                    buffer: Vec::new(),
                     current_index: 0,
                     col_names,
                     plan_node_id: node.id(),
@@ -82,7 +83,8 @@ impl StreamingExecutorBuilder {
                     storage: context.storage.clone(),
                     space_name: context.space_name.clone().unwrap_or_default(),
                     limit,
-                    buffer: None,
+                    cursor: None,
+                    buffer: Vec::new(),
                     current_index: 0,
                     col_names,
                     plan_node_id: node.id(),
@@ -181,7 +183,7 @@ impl StreamingExecutorBuilder {
                     })
                     .collect();
 
-                let memory_budget = context.memory_budget.clone();
+                let memory_tracker = MemoryTracker::new(context.memory_budget.clone());
                 Ok(StreamingExecutor::Aggregate {
                     input: Box::new(input_executor),
                     group_by_expressions,
@@ -189,7 +191,7 @@ impl StreamingExecutorBuilder {
                     all_rows: vec![],
                     result_iter: None,
                     opened: false,
-                    memory_budget,
+                    memory_tracker,
                     plan_node_id: node.id(),
                 })
             }
@@ -207,7 +209,7 @@ impl StreamingExecutorBuilder {
                     right_plan.col_names(),
                 )?;
 
-                let memory_budget = context.memory_budget.clone();
+                let memory_tracker = MemoryTracker::new(context.memory_budget.clone());
                 Ok(StreamingExecutor::NestedLoopJoin {
                     left: Box::new(left_executor),
                     right: Box::new(right_executor),
@@ -215,7 +217,7 @@ impl StreamingExecutorBuilder {
                     build_side_tuples: vec![],
                     left_consumed: false,
                     opened: false,
-                    memory_budget,
+                    memory_tracker,
                     plan_node_id: node.id(),
                 })
             }
@@ -239,6 +241,7 @@ impl StreamingExecutorBuilder {
                     build_side_tuples: vec![],
                     left_consumed: false,
                     opened: false,
+                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
                     plan_node_id: node.id(),
                 })
             }
@@ -249,8 +252,7 @@ impl StreamingExecutorBuilder {
                 let left_executor = Self::from_plan_node(left_plan, context)?;
                 let right_executor = Self::from_plan_node(right_plan, context)?;
 
-                // Cross join has no condition
-                let memory_budget = context.memory_budget.clone();
+                let memory_tracker = MemoryTracker::new(context.memory_budget.clone());
                 Ok(StreamingExecutor::NestedLoopJoin {
                     left: Box::new(left_executor),
                     right: Box::new(right_executor),
@@ -258,7 +260,7 @@ impl StreamingExecutorBuilder {
                     build_side_tuples: vec![],
                     left_consumed: false,
                     opened: false,
-                    memory_budget,
+                    memory_tracker,
                     plan_node_id: node.id(),
                 })
             }
@@ -276,6 +278,7 @@ impl StreamingExecutorBuilder {
                     seen_rows: std::collections::HashSet::new(),
                     left_consumed: false,
                     opened: false,
+                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
                     plan_node_id: node.id(),
                 })
             }
@@ -294,6 +297,7 @@ impl StreamingExecutorBuilder {
                     left_buffered: false,
                     right_buffered: false,
                     opened: false,
+                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
                     plan_node_id: node.id(),
                 })
             }
@@ -310,6 +314,7 @@ impl StreamingExecutorBuilder {
                     exclude_rows: std::collections::HashSet::new(),
                     right_buffered: false,
                     opened: false,
+                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
                     plan_node_id: node.id(),
                 })
             }
@@ -327,7 +332,7 @@ impl StreamingExecutorBuilder {
                     let (sort_expressions, sort_directions) =
                         Self::sort_items_to_expressions(sort_items)?;
 
-                    let memory_budget = context.memory_budget.clone();
+                    let memory_tracker = MemoryTracker::new(context.memory_budget.clone());
                     Ok(StreamingExecutor::Sort {
                         input: Box::new(input_executor),
                         sort_expressions,
@@ -335,7 +340,7 @@ impl StreamingExecutorBuilder {
                         all_rows: vec![],
                         row_iter: None,
                         opened: false,
-                        memory_budget,
+                        memory_tracker,
                         plan_node_id: node.id(),
                     })
                 }
@@ -349,6 +354,7 @@ impl StreamingExecutorBuilder {
                     input: Box::new(input_executor),
                     seen_rows: std::collections::HashSet::new(),
                     opened: false,
+                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
                     plan_node_id: node.id(),
                 })
             }
@@ -938,6 +944,7 @@ impl StreamingExecutorBuilder {
                     all_rows: vec![],
                     result_iter: None,
                     opened: false,
+                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
                     plan_node_id: node.id(),
                 })
             }
@@ -1060,6 +1067,7 @@ impl StreamingExecutorBuilder {
                     all_rows: vec![],
                     result_iter: None,
                     opened: false,
+                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
                 })
             }
 
@@ -1081,6 +1089,7 @@ impl StreamingExecutorBuilder {
                     build_side_tuples: vec![],
                     right_consumed: false,
                     opened: false,
+                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
                     plan_node_id: node.id(),
                 })
             }
@@ -1106,6 +1115,7 @@ impl StreamingExecutorBuilder {
                     result_iter: None,
                     phase: super::executor::FullOuterJoinPhase::BuildingRight,
                     opened: false,
+                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
                     plan_node_id: node.id(),
                 })
             }
@@ -1128,6 +1138,7 @@ impl StreamingExecutorBuilder {
                     right_rows: vec![],
                     right_consumed: false,
                     opened: false,
+                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
                     plan_node_id: node.id(),
                 })
             }
@@ -1145,7 +1156,7 @@ impl StreamingExecutorBuilder {
                 )?;
                 let probe_keys = Self::join_keys_to_expressions(join_node.hash_keys())?;
                 let hash_keys = Self::join_keys_to_expressions(join_node.probe_keys())?;
-                let memory_budget = context.memory_budget.clone();
+                let memory_tracker = MemoryTracker::new(context.memory_budget.clone());
                 Ok(StreamingExecutor::HashJoin {
                     left: Box::new(left_executor),
                     right: Box::new(right_executor),
@@ -1156,7 +1167,7 @@ impl StreamingExecutorBuilder {
                     all_right_rows: vec![],
                     left_consumed: false,
                     opened: false,
-                    memory_budget,
+                    memory_tracker,
                     right_col_names: vec![],
                     plan_node_id: node.id(),
                 })
@@ -1180,6 +1191,7 @@ impl StreamingExecutorBuilder {
                     build_side_tuples: vec![],
                     left_consumed: false,
                     opened: false,
+                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
                     plan_node_id: node.id(),
                 })
             }
@@ -1322,6 +1334,7 @@ impl StreamingExecutorBuilder {
                     all_rows: vec![],
                     emitted: false,
                     opened: false,
+                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
                 })
             }
 
@@ -1350,6 +1363,7 @@ impl StreamingExecutorBuilder {
                     result_iter: None,
                     materialized: false,
                     opened: false,
+                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
                 })
             }
 
@@ -1394,6 +1408,7 @@ impl StreamingExecutorBuilder {
                     all_rows: vec![],
                     result_iter: None,
                     opened: false,
+                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
                 })
             }
 
@@ -1412,6 +1427,7 @@ impl StreamingExecutorBuilder {
                     all_rows: vec![],
                     result_iter: None,
                     opened: false,
+                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
                 })
             }
 

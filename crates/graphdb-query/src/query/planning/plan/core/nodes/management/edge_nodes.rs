@@ -20,6 +20,7 @@ impl CreateEdgeNode {
             info,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -51,6 +52,7 @@ impl AlterEdgeNode {
             info,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -84,6 +86,7 @@ impl DescEdgeNode {
             edge_name,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -115,6 +118,7 @@ impl DropEdgeNode {
             if_exists: false,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -151,6 +155,7 @@ impl ShowEdgesNode {
             space_name,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -176,6 +181,7 @@ impl ShowCreateEdgeNode {
             edge_name,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 

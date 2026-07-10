@@ -1,12 +1,21 @@
 //! Data source operators: ScanVertices, ScanEdges
+//!
+//! The `StorageScanVertices` / `StorageScanEdges` variants hold a live
+//! cursor and pull batches on each `next()` call.  This enables true
+//! streaming execution: downstream operators like `Limit` can terminate
+//! early without forcing a full scan.
 
 use crate::core::error::QueryError;
 use crate::core::Value;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::storage::cursor::{open_edge_scan, open_vertex_scan, EdgeCursor, VertexCursor};
+use crate::storage::cursor::{open_edge_scan, open_vertex_scan};
 
 const CHUNK_SIZE: usize = 1024;
+
+// ---------------------------------------------------------------------------
+// ScanVertices
+// ---------------------------------------------------------------------------
 
 /// Open ScanVertices operator
 pub fn open_scanvertices(_executor: &mut StreamingExecutor) -> Result<(), QueryError> {
@@ -18,6 +27,7 @@ pub fn next_scanvertices(
     executor: &mut StreamingExecutor,
 ) -> Result<Option<DataChunk>, QueryError> {
     match executor {
+        // Pre-buffered variant (used in tests / internal wrapping)
         StreamingExecutor::ScanVertices {
             current_index,
             buffer,
@@ -43,66 +53,51 @@ pub fn next_scanvertices(
                 Ok(Some(DataChunk::from_rows_with_col_names(chunk_rows, col)))
             }
         }
+        // Lazy cursor variant – pulls one batch at a time from storage
         StreamingExecutor::StorageScanVertices {
             storage,
             space_name,
             limit,
-            buffer,
-            current_index,
+            cursor,
+            buffer: _,
+            current_index: _,
             col_names,
             ..
         } => {
-            if buffer.is_none() {
-                let mut rows = if let Some(storage) = storage {
-                    let mut cursor = open_vertex_scan(storage, space_name)
-                        .map_err(|e| QueryError::execution(e.to_string()))?;
-                    let mut all = Vec::new();
-                    loop {
-                        let batch = cursor
-                            .next_batch(CHUNK_SIZE)
-                            .map_err(|e| QueryError::execution(e.to_string()))?;
-                        if batch.is_empty() {
-                            break;
-                        }
-                        all.extend(
-                            batch
-                                .into_iter()
-                                .map(|vertex| vec![Value::Vertex(Box::new(vertex))]),
-                        );
-                    }
-                    all
+            // Initialize cursor on first pull
+            if cursor.is_none() {
+                *cursor = if let Some(storage) = storage.as_ref() {
+                    Some(
+                        open_vertex_scan(storage, space_name, *limit)
+                            .map_err(|e| QueryError::execution(e.to_string()))?,
+                    )
                 } else {
-                    Vec::new()
+                    return Ok(None);
                 };
-
-                if let Some(limit) = *limit {
-                    rows.truncate(limit);
-                }
-
-                *buffer = Some(rows);
             }
 
-            let rows = buffer
-                .as_ref()
-                .ok_or_else(|| QueryError::execution("Storage scan buffer not initialized"))?;
-            if *current_index >= rows.len() {
+            // Pull one batch from the live cursor
+            let c = cursor.as_mut().unwrap();
+            let batch = c
+                .next_batch(CHUNK_SIZE)
+                .map_err(|e| QueryError::execution(e.to_string()))?;
+
+            if batch.is_empty() {
+                *cursor = None;
                 return Ok(None);
             }
 
-            let end = (*current_index + CHUNK_SIZE).min(rows.len());
-            let chunk_rows: Vec<Vec<Value>> = rows[*current_index..end].to_vec();
-            *current_index = end;
+            let chunk_rows: Vec<Vec<Value>> = batch
+                .into_iter()
+                .map(|vertex| vec![Value::Vertex(Box::new(vertex))])
+                .collect();
 
-            if chunk_rows.is_empty() {
-                Ok(None)
+            let col = if col_names.is_empty() {
+                None
             } else {
-                let col = if col_names.is_empty() {
-                    None
-                } else {
-                    Some(col_names.clone())
-                };
-                Ok(Some(DataChunk::from_rows_with_col_names(chunk_rows, col)))
-            }
+                Some(col_names.clone())
+            };
+            Ok(Some(DataChunk::from_rows_with_col_names(chunk_rows, col)))
         }
         _ => unreachable!(),
     }
@@ -113,19 +108,21 @@ pub fn stop_scanvertices(_executor: &mut StreamingExecutor) -> Result<(), QueryE
     Ok(())
 }
 
-/// Close ScanVertices operator
+/// Close ScanVertices operator – drops the cursor to release resources.
 pub fn close_scanvertices(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     if let StreamingExecutor::StorageScanVertices {
-        buffer,
-        current_index,
-        ..
+        cursor, current_index, ..
     } = executor
     {
-        *buffer = None;
+        *cursor = None;
         *current_index = 0;
     }
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// ScanEdges
+// ---------------------------------------------------------------------------
 
 /// Open ScanEdges operator
 pub fn open_scanedges(_executor: &mut StreamingExecutor) -> Result<(), QueryError> {
@@ -135,6 +132,7 @@ pub fn open_scanedges(_executor: &mut StreamingExecutor) -> Result<(), QueryErro
 /// Next chunk from ScanEdges
 pub fn next_scanedges(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
+        // Pre-buffered variant (used in tests / internal wrapping)
         StreamingExecutor::ScanEdges {
             current_index,
             buffer,
@@ -160,66 +158,51 @@ pub fn next_scanedges(executor: &mut StreamingExecutor) -> Result<Option<DataChu
                 Ok(Some(DataChunk::from_rows_with_col_names(chunk_rows, col)))
             }
         }
+        // Lazy cursor variant – pulls one batch at a time from storage
         StreamingExecutor::StorageScanEdges {
             storage,
             space_name,
             limit,
-            buffer,
-            current_index,
+            cursor,
+            buffer: _,
+            current_index: _,
             col_names,
             ..
         } => {
-            if buffer.is_none() {
-                let mut rows = if let Some(storage) = storage {
-                    let mut cursor = open_edge_scan(storage, space_name, None)
-                        .map_err(|e| QueryError::execution(e.to_string()))?;
-                    let mut all = Vec::new();
-                    loop {
-                        let batch = cursor
-                            .next_batch(CHUNK_SIZE)
-                            .map_err(|e| QueryError::execution(e.to_string()))?;
-                        if batch.is_empty() {
-                            break;
-                        }
-                        all.extend(
-                            batch
-                                .into_iter()
-                                .map(|edge| vec![Value::Edge(Box::new(edge))]),
-                        );
-                    }
-                    all
+            // Initialize cursor on first pull
+            if cursor.is_none() {
+                *cursor = if let Some(storage) = storage.as_ref() {
+                    Some(
+                        open_edge_scan(storage, space_name, None, *limit)
+                            .map_err(|e| QueryError::execution(e.to_string()))?,
+                    )
                 } else {
-                    Vec::new()
+                    return Ok(None);
                 };
-
-                if let Some(limit) = *limit {
-                    rows.truncate(limit);
-                }
-
-                *buffer = Some(rows);
             }
 
-            let rows = buffer
-                .as_ref()
-                .ok_or_else(|| QueryError::execution("Storage scan buffer not initialized"))?;
-            if *current_index >= rows.len() {
+            // Pull one batch from the live cursor
+            let c = cursor.as_mut().unwrap();
+            let batch = c
+                .next_batch(CHUNK_SIZE)
+                .map_err(|e| QueryError::execution(e.to_string()))?;
+
+            if batch.is_empty() {
+                *cursor = None;
                 return Ok(None);
             }
 
-            let end = (*current_index + CHUNK_SIZE).min(rows.len());
-            let chunk_rows: Vec<Vec<Value>> = rows[*current_index..end].to_vec();
-            *current_index = end;
+            let chunk_rows: Vec<Vec<Value>> = batch
+                .into_iter()
+                .map(|edge| vec![Value::Edge(Box::new(edge))])
+                .collect();
 
-            if chunk_rows.is_empty() {
-                Ok(None)
+            let col = if col_names.is_empty() {
+                None
             } else {
-                let col = if col_names.is_empty() {
-                    None
-                } else {
-                    Some(col_names.clone())
-                };
-                Ok(Some(DataChunk::from_rows_with_col_names(chunk_rows, col)))
-            }
+                Some(col_names.clone())
+            };
+            Ok(Some(DataChunk::from_rows_with_col_names(chunk_rows, col)))
         }
         _ => unreachable!(),
     }
@@ -230,19 +213,21 @@ pub fn stop_scanedges(_executor: &mut StreamingExecutor) -> Result<(), QueryErro
     Ok(())
 }
 
-/// Close ScanEdges operator
+/// Close ScanEdges operator – drops the cursor to release resources.
 pub fn close_scanedges(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     if let StreamingExecutor::StorageScanEdges {
-        buffer,
-        current_index,
-        ..
+        cursor, current_index, ..
     } = executor
     {
-        *buffer = None;
+        *cursor = None;
         *current_index = 0;
     }
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -262,7 +247,6 @@ mod tests {
 
     #[test]
     fn test_scan_vertices_chunking() {
-        // Test that chunks are 1024 rows max
         let buffer = create_test_buffer(2100);
         let mut executor = StreamingExecutor::ScanVertices {
             partition_id: 0,
@@ -274,22 +258,18 @@ mod tests {
 
         executor.open().unwrap();
 
-        // First chunk should be 1024
         let chunk1 = executor.next().unwrap();
         assert!(chunk1.is_some());
         assert_eq!(chunk1.unwrap().len(), 1024);
 
-        // Second chunk should be 1024
         let chunk2 = executor.next().unwrap();
         assert!(chunk2.is_some());
         assert_eq!(chunk2.unwrap().len(), 1024);
 
-        // Third chunk should be 52 (2100 - 1024 - 1024)
         let chunk3 = executor.next().unwrap();
         assert!(chunk3.is_some());
         assert_eq!(chunk3.unwrap().len(), 52);
 
-        // Fourth chunk should be None
         let chunk4 = executor.next().unwrap();
         assert!(chunk4.is_none());
 
@@ -314,7 +294,6 @@ mod tests {
 
     #[test]
     fn test_scan_small_buffer() {
-        // Test with buffer smaller than chunk size
         let buffer = create_test_buffer(500);
         let mut executor = StreamingExecutor::ScanVertices {
             partition_id: 0,
@@ -329,7 +308,6 @@ mod tests {
         assert!(chunk.is_some());
         assert_eq!(chunk.unwrap().len(), 500);
 
-        // Next should be None
         let chunk2 = executor.next().unwrap();
         assert!(chunk2.is_none());
 

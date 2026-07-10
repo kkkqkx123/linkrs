@@ -40,6 +40,7 @@ impl ExpandNode {
             filter_serializable: None,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -211,6 +212,7 @@ pub struct ExpandAllNode {
     include_empty_paths: bool,
     output_var: Option<String>,
     col_names: Vec<String>,
+    column_types: Vec<crate::core::DataType>,
     /// Input variable name for getting input from ExecutionContext
     input_var: Option<String>,
 }
@@ -237,6 +239,7 @@ impl Clone for ExpandAllNode {
             include_empty_paths: self.include_empty_paths,
             output_var: self.output_var.clone(),
             col_names: self.col_names.clone(),
+            column_types: self.column_types.clone(),
             input_var: self.input_var.clone(),
         }
     }
@@ -263,6 +266,7 @@ impl ExpandAllNode {
             include_empty_paths: true, // Default to true for backward compatibility
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
             input_var: None,
         }
     }
@@ -513,6 +517,7 @@ impl TraverseNode {
             first_step_filter_serializable: None,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -702,6 +707,7 @@ impl AppendVerticesNode {
             node_alias: None,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -865,6 +871,7 @@ impl BiExpandNode {
             meeting_point_var: None,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -950,6 +957,7 @@ impl BiTraverseNode {
             vertex_alias: None,
             output_var: Some(params.path_var),
             col_names: vec![],
+            column_types: vec![],
         }
     }
 

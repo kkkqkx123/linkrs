@@ -34,6 +34,7 @@ impl FilterNode {
             condition_serializable: None,
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 

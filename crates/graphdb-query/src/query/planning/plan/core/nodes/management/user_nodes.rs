@@ -26,6 +26,7 @@ impl CreateUserNode {
             if_not_exists: false,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -75,6 +76,7 @@ impl AlterUserNode {
             is_locked: None,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -117,6 +119,7 @@ impl DropUserNode {
             username,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
             if_exists: false,
         }
     }
@@ -150,6 +153,7 @@ impl ChangePasswordNode {
             password_info,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -177,6 +181,7 @@ impl GrantRoleNode {
             role,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -210,6 +215,7 @@ impl RevokeRoleNode {
             space_name,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -234,6 +240,7 @@ impl ShowUsersNode {
             id,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 }
@@ -253,6 +260,7 @@ impl ShowRolesNode {
             space_name,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -276,6 +284,7 @@ impl DescribeUserNode {
             username,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 

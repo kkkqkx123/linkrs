@@ -5,12 +5,14 @@
 
 use crate::core::Value;
 use crate::query::executor::expression::evaluator::traits::ExpressionContext;
+use crate::query::executor::streaming::slot::{SlotId, SlotLayout};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Row context for expression evaluation with Value types
 ///
 /// Provides expression evaluation context for Vec<Value> rows.
-/// No type conversion needed since data is already in Value format.
+/// Supports both name-based and slot-based variable access.
 pub struct ValueRowContext {
     /// Column values (as Values, no conversion needed)
     row: Vec<Value>,
@@ -18,6 +20,8 @@ pub struct ValueRowContext {
     col_name_index: HashMap<String, usize>,
     /// Extra variables for expression evaluation
     variables: HashMap<String, Value>,
+    /// Optional slot layout for fast slot-based access
+    layout: Option<Arc<SlotLayout>>,
 }
 
 impl ValueRowContext {
@@ -33,6 +37,24 @@ impl ValueRowContext {
             row,
             col_name_index,
             variables: HashMap::new(),
+            layout: None,
+        }
+    }
+
+    /// Create a new context from a row and slot layout (fast slot-based access)
+    pub fn new_with_layout(row: Vec<Value>, layout: Arc<SlotLayout>) -> Self {
+        let col_name_index: HashMap<String, usize> = layout
+            .slots
+            .iter()
+            .enumerate()
+            .map(|(i, info)| (info.name.clone(), i))
+            .collect();
+
+        Self {
+            row,
+            col_name_index,
+            variables: HashMap::new(),
+            layout: Some(layout),
         }
     }
 
@@ -43,6 +65,11 @@ impl ValueRowContext {
             .and_then(|&idx| self.row.get(idx))
             .cloned()
     }
+
+    /// Get a column value by slot ID (fast path)
+    fn get_value_by_slot(&self, slot: SlotId) -> Option<Value> {
+        self.row.get(slot).cloned()
+    }
 }
 
 impl ExpressionContext for ValueRowContext {
@@ -52,8 +79,19 @@ impl ExpressionContext for ValueRowContext {
             return Some(value.clone());
         }
 
-        // Then check column names (columns can be accessed as variables)
+        // Try slot-based access as fast path
+        if let Some(ref layout) = self.layout {
+            if let Some(slot_id) = layout.slot_id(name) {
+                return self.get_value_by_slot(slot_id);
+            }
+        }
+
+        // Fall back to name-based lookup
         self.get_value_by_name(name)
+    }
+
+    fn get_variable_by_slot(&self, slot: SlotId) -> Option<Value> {
+        self.get_value_by_slot(slot)
     }
 
     fn set_variable(&mut self, name: String, value: Value) {

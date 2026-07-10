@@ -2,6 +2,7 @@
 
 use crate::core::error::QueryError;
 use crate::core::Value;
+use crate::query::executor::base::MemoryTracker;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 
@@ -31,6 +32,7 @@ pub fn next_union(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>,
             right,
             seen_rows,
             left_consumed,
+            memory_tracker,
             ..
         } => {
             // Process left side first
@@ -40,6 +42,7 @@ pub fn next_union(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>,
                     for row in chunk.rows {
                         let row_str = format!("{:?}", row);
                         if !seen_rows.contains(&row_str) {
+                            memory_tracker.try_reserve(row_str.len())?;
                             seen_rows.insert(row_str);
                             result_rows.push(row);
                         }
@@ -204,10 +207,14 @@ pub fn next_intersect(executor: &mut StreamingExecutor) -> Result<Option<DataChu
             right_rows,
             left_buffered,
             right_buffered,
+            memory_tracker,
             ..
         } => {
             if !*left_buffered {
                 while let Some(chunk) = left.next()? {
+                    for row in &chunk.rows {
+                        memory_tracker.try_reserve_row(row)?;
+                    }
                     left_rows.extend(chunk.rows);
                 }
                 *left_buffered = true;
@@ -216,7 +223,9 @@ pub fn next_intersect(executor: &mut StreamingExecutor) -> Result<Option<DataChu
             if !*right_buffered {
                 while let Some(chunk) = right.next()? {
                     for row in chunk.rows {
-                        right_rows.insert(format!("{:?}", row));
+                        let row_str = format!("{:?}", row);
+                        memory_tracker.try_reserve(row_str.len())?;
+                        right_rows.insert(row_str);
                     }
                 }
                 *right_buffered = true;
@@ -293,13 +302,16 @@ pub fn next_except(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
             right,
             exclude_rows,
             right_buffered,
+            memory_tracker,
             ..
         } => {
             // Buffer right side for exclusion
             if !*right_buffered {
                 while let Some(chunk) = right.next()? {
                     for row in chunk.rows {
-                        exclude_rows.insert(format!("{:?}", row));
+                        let row_str = format!("{:?}", row);
+                        memory_tracker.try_reserve(row_str.len())?;
+                        exclude_rows.insert(row_str);
                     }
                 }
                 *right_buffered = true;
@@ -358,6 +370,7 @@ pub fn close_except(executor: &mut StreamingExecutor) -> Result<(), QueryError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::query::executor::base::MemoryBudget;
 
     // ====== Union Tests ======
 
@@ -391,6 +404,7 @@ mod tests {
             seen_rows: std::collections::HashSet::new(),
             left_consumed: false,
             opened: false,
+            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
         };
 
@@ -432,6 +446,7 @@ mod tests {
             seen_rows: std::collections::HashSet::new(),
             left_consumed: false,
             opened: false,
+            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
         };
 
@@ -472,6 +487,7 @@ mod tests {
             seen_rows: std::collections::HashSet::new(),
             left_consumed: false,
             opened: false,
+            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
         };
 
@@ -592,6 +608,7 @@ mod tests {
             left_buffered: false,
             right_buffered: false,
             opened: false,
+            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
         };
 
@@ -629,6 +646,7 @@ mod tests {
             left_buffered: false,
             right_buffered: false,
             opened: false,
+            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
         };
 
@@ -669,6 +687,7 @@ mod tests {
             exclude_rows: std::collections::HashSet::new(),
             right_buffered: false,
             opened: false,
+            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
         };
 
@@ -705,6 +724,7 @@ mod tests {
             exclude_rows: std::collections::HashSet::new(),
             right_buffered: false,
             opened: false,
+            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
         };
 
@@ -739,6 +759,7 @@ mod tests {
             exclude_rows: std::collections::HashSet::new(),
             right_buffered: false,
             opened: false,
+            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
         };
 

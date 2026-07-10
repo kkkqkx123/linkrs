@@ -204,6 +204,7 @@ macro_rules! define_plan_node {
             $($field: $type,)*
             output_var: Option<String>,
             col_names: Vec<String>,
+            column_types: Vec<$crate::core::DataType>,
         }
 
         impl Clone for $name {
@@ -214,6 +215,7 @@ macro_rules! define_plan_node {
                     $($field: self.$field.clone(),)*
                     output_var: self.output_var.clone(),
                     col_names: self.col_names.clone(),
+                    column_types: self.column_types.clone(),
                 }
             }
         }
@@ -241,6 +243,14 @@ macro_rules! define_plan_node {
 
             pub fn set_col_names(&mut self, names: Vec<String>) {
                 self.col_names = names;
+            }
+
+            pub fn column_types(&self) -> &[$crate::core::DataType] {
+                &self.column_types
+            }
+
+            pub fn set_column_types(&mut self, types: Vec<$crate::core::DataType>) {
+                self.column_types = types;
             }
 
             pub fn clone_plan_node(&self) -> $crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
@@ -309,12 +319,14 @@ macro_rules! define_plan_node {
 
                 let col_names_size = $crate::query::planning::plan::core::nodes::base::memory_estimation::estimate_vec_string_memory(&self.col_names());
 
+                let column_types_size = std::mem::size_of::<Vec<$crate::core::DataType>>() * self.column_types.capacity();
+
                 let output_var_size = std::mem::size_of::<Option<String>>() +
                     self.output_var.as_ref()
                         .map(|s| std::mem::size_of::<String>() + s.capacity())
                         .unwrap_or(0);
 
-                base + col_names_size + output_var_size
+                base + col_names_size + column_types_size + output_var_size
             }
         }
     };
@@ -335,6 +347,7 @@ macro_rules! define_plan_node {
             $($field: $type,)*
             output_var: Option<String>,
             col_names: Vec<String>,
+            column_types: Vec<$crate::core::DataType>,
         }
 
         impl Clone for $name {
@@ -345,6 +358,7 @@ macro_rules! define_plan_node {
                     $($field: self.$field.clone(),)*
                     output_var: self.output_var.clone(),
                     col_names: self.col_names.clone(),
+                    column_types: self.column_types.clone(),
                 }
             }
         }
@@ -372,6 +386,14 @@ macro_rules! define_plan_node {
 
             pub fn set_col_names(&mut self, names: Vec<String>) {
                 self.col_names = names;
+            }
+
+            pub fn column_types(&self) -> &[$crate::core::DataType] {
+                &self.column_types
+            }
+
+            pub fn set_column_types(&mut self, types: Vec<$crate::core::DataType>) {
+                self.column_types = types;
             }
 
             pub fn clone_plan_node(&self) -> $crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum {
@@ -442,12 +464,14 @@ macro_rules! define_plan_node {
                 let base = std::mem::size_of::<$name>();
                 let col_names_size = $crate::query::planning::plan::core::nodes::base::memory_estimation::estimate_vec_string_memory(&self.col_names());
 
+                let column_types_size = std::mem::size_of::<Vec<$crate::core::DataType>>() * self.column_types.capacity();
+
                 let output_var_size = std::mem::size_of::<Option<String>>() +
                     self.output_var.as_ref()
                         .map(|s| std::mem::size_of::<String>() + s.capacity())
                         .unwrap_or(0);
 
-                base + col_names_size + output_var_size
+                base + col_names_size + column_types_size + output_var_size
             }
         }
     };
@@ -469,6 +493,7 @@ macro_rules! define_plan_node {
             $($field: $type,)*
             output_var: Option<String>,
             col_names: Vec<String>,
+            column_types: Vec<$crate::core::DataType>,
         }
 
         impl Clone for $name {
@@ -480,6 +505,7 @@ macro_rules! define_plan_node {
                     $($field: self.$field.clone(),)*
                     output_var: self.output_var.clone(),
                     col_names: self.col_names.clone(),
+                    column_types: self.column_types.clone(),
                 }
             }
         }
@@ -507,6 +533,14 @@ macro_rules! define_plan_node {
 
             pub fn set_col_names(&mut self, names: Vec<String>) {
                 self.col_names = names;
+            }
+
+            pub fn column_types(&self) -> &[$crate::core::DataType] {
+                &self.column_types
+            }
+
+            pub fn set_column_types(&mut self, types: Vec<$crate::core::DataType>) {
+                self.column_types = types;
             }
 
             pub fn dependencies(&self) -> &[$crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum] {
@@ -606,6 +640,8 @@ macro_rules! define_plan_node {
 
                 let col_names_size = $crate::query::planning::plan::core::nodes::base::memory_estimation::estimate_vec_string_memory(&self.col_names());
 
+                let column_types_size = std::mem::size_of::<Vec<$crate::core::DataType>>() * self.column_types.capacity();
+
                 let output_var_size = std::mem::size_of::<Option<String>>() +
                     self.output_var.as_ref()
                         .map(|s| std::mem::size_of::<String>() + s.capacity())
@@ -615,7 +651,7 @@ macro_rules! define_plan_node {
 
                 let deps_size = std::mem::size_of::<Vec<$crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>>();
 
-                base + col_names_size + output_var_size + input_size + deps_size
+                base + col_names_size + column_types_size + output_var_size + input_size + deps_size
             }
         }
     };
@@ -647,6 +683,7 @@ macro_rules! define_join_node {
             $($field: $type,)*
             output_var: Option<String>,
             col_names: Vec<String>,
+            column_types: Vec<$crate::core::DataType>,
         }
 
         impl Clone for $name {
@@ -662,6 +699,7 @@ macro_rules! define_join_node {
                     $($field: self.$field.clone(),)*
                     output_var: self.output_var.clone(),
                     col_names: self.col_names.clone(),
+                    column_types: self.column_types.clone(),
                 }
             }
         }
@@ -689,6 +727,14 @@ macro_rules! define_join_node {
 
             pub fn set_col_names(&mut self, names: Vec<String>) {
                 self.col_names = names;
+            }
+
+            pub fn column_types(&self) -> &[$crate::core::DataType] {
+                &self.column_types
+            }
+
+            pub fn set_column_types(&mut self, types: Vec<$crate::core::DataType>) {
+                self.column_types = types;
             }
 
             pub fn dependencies(&self) -> &[$crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum] {
@@ -847,6 +893,8 @@ macro_rules! define_join_node {
 
                 let col_names_size = $crate::query::planning::plan::core::nodes::base::memory_estimation::estimate_vec_string_memory(&self.col_names());
 
+                let column_types_size = std::mem::size_of::<Vec<$crate::core::DataType>>() * self.column_types.capacity();
+
                 let output_var_size = std::mem::size_of::<Option<String>>() +
                     self.output_var.as_ref()
                         .map(|s| std::mem::size_of::<String>() + s.capacity())
@@ -856,7 +904,7 @@ macro_rules! define_join_node {
 
                 let deps_size = std::mem::size_of::<Vec<$crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>>();
 
-                base + col_names_size + output_var_size + left_right_size + deps_size
+                base + col_names_size + column_types_size + output_var_size + left_right_size + deps_size
             }
         }
     };
@@ -886,6 +934,7 @@ macro_rules! define_plan_node_with_deps {
             $($field: $type,)*
             output_var: Option<String>,
             col_names: Vec<String>,
+            column_types: Vec<$crate::core::DataType>,
         }
 
         impl Clone for $name {
@@ -898,6 +947,7 @@ macro_rules! define_plan_node_with_deps {
                     $($field: self.$field.clone(),)*
                     output_var: self.output_var.clone(),
                     col_names: self.col_names.clone(),
+                    column_types: self.column_types.clone(),
                 }
             }
         }
@@ -925,6 +975,14 @@ macro_rules! define_plan_node_with_deps {
 
             pub fn set_col_names(&mut self, names: Vec<String>) {
                 self.col_names = names;
+            }
+
+            pub fn column_types(&self) -> &[$crate::core::DataType] {
+                &self.column_types
+            }
+
+            pub fn set_column_types(&mut self, types: Vec<$crate::core::DataType>) {
+                self.column_types = types;
             }
 
             pub fn dependencies(&self) -> &[$crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum] {
@@ -999,6 +1057,8 @@ macro_rules! define_plan_node_with_deps {
 
                 let col_names_size = $crate::query::planning::plan::core::nodes::base::memory_estimation::estimate_vec_string_memory(&self.col_names());
 
+                let column_types_size = std::mem::size_of::<Vec<$crate::core::DataType>>() * self.column_types.capacity();
+
                 let output_var_size = std::mem::size_of::<Option<String>>() +
                     self.output_var.as_ref()
                         .map(|s| std::mem::size_of::<String>() + s.capacity())
@@ -1008,7 +1068,7 @@ macro_rules! define_plan_node_with_deps {
 
                 let deps_size = std::mem::size_of::<Vec<$crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>>();
 
-                base + col_names_size + output_var_size + input_size + deps_size
+                base + col_names_size + column_types_size + output_var_size + input_size + deps_size
             }
         }
     };
@@ -1039,6 +1099,7 @@ macro_rules! define_binary_input_node {
             $($field: $type,)*
             output_var: Option<String>,
             col_names: Vec<String>,
+            column_types: Vec<$crate::core::DataType>,
         }
 
         impl Clone for $name {
@@ -1052,6 +1113,7 @@ macro_rules! define_binary_input_node {
                     $($field: self.$field.clone(),)*
                     output_var: self.output_var.clone(),
                     col_names: self.col_names.clone(),
+                    column_types: self.column_types.clone(),
                 }
             }
         }
@@ -1079,6 +1141,14 @@ macro_rules! define_binary_input_node {
 
             pub fn set_col_names(&mut self, names: Vec<String>) {
                 self.col_names = names;
+            }
+
+            pub fn column_types(&self) -> &[$crate::core::DataType] {
+                &self.column_types
+            }
+
+            pub fn set_column_types(&mut self, types: Vec<$crate::core::DataType>) {
+                self.column_types = types;
             }
 
             pub fn dependencies(&self) -> &[$crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum] {
@@ -1191,6 +1261,8 @@ macro_rules! define_binary_input_node {
 
                 let col_names_size = $crate::query::planning::plan::core::nodes::base::memory_estimation::estimate_vec_string_memory(&self.col_names());
 
+                let column_types_size = std::mem::size_of::<Vec<$crate::core::DataType>>() * self.column_types.capacity();
+
                 let output_var_size = std::mem::size_of::<Option<String>>() +
                     self.output_var.as_ref()
                         .map(|s| std::mem::size_of::<String>() + s.capacity())
@@ -1200,7 +1272,7 @@ macro_rules! define_binary_input_node {
 
                 let deps_size = std::mem::size_of::<Vec<$crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>>();
 
-                base + col_names_size + output_var_size + left_right_size + deps_size
+                base + col_names_size + column_types_size + output_var_size + left_right_size + deps_size
             }
         }
     };

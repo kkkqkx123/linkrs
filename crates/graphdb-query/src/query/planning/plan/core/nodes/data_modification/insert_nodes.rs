@@ -22,6 +22,7 @@ impl InsertVerticesNode {
             info,
             output_var: None,
             col_names: vec!["inserted".to_string()],
+            column_types: vec![],
         }
     }
 
@@ -79,6 +80,7 @@ impl InsertEdgesNode {
             info,
             output_var: None,
             col_names: vec!["inserted".to_string()],
+            column_types: vec![],
         }
     }
 

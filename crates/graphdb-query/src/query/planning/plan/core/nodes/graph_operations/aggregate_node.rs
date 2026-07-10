@@ -42,6 +42,7 @@ impl AggregateNode {
             grouping_sets: Vec::new(),
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 
@@ -69,6 +70,7 @@ impl AggregateNode {
             grouping_sets: Vec::new(),
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 

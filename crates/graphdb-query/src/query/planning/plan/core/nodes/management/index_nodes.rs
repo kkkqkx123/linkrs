@@ -19,6 +19,7 @@ impl CreateTagIndexNode {
             info,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -52,6 +53,7 @@ impl DropTagIndexNode {
             index_name,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -81,6 +83,7 @@ impl DescTagIndexNode {
             index_name,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -108,6 +111,7 @@ impl ShowTagIndexesNode {
             space_name,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -131,6 +135,7 @@ impl CreateEdgeIndexNode {
             info,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -164,6 +169,7 @@ impl DropEdgeIndexNode {
             index_name,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -193,6 +199,7 @@ impl DescEdgeIndexNode {
             index_name,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -220,6 +227,7 @@ impl ShowEdgeIndexesNode {
             space_name,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -245,6 +253,7 @@ impl RebuildTagIndexNode {
             index_name,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -274,6 +283,7 @@ impl RebuildEdgeIndexNode {
             index_name,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -335,6 +345,7 @@ impl ShowCreateIndexNode {
             index_name,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -362,6 +373,7 @@ impl ShowIndexesNode {
             space_name,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 

@@ -38,6 +38,7 @@ impl WindowNode {
             window_functions,
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 

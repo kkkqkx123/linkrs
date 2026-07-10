@@ -10,6 +10,7 @@ use crate::core::Value;
 use crate::query::executor::expression::evaluation_context::graph_storage::GraphStorageRef;
 use crate::query::executor::expression::functions::OwnedFunctionRef;
 use crate::query::executor::expression::ExpressionError;
+use crate::query::executor::streaming::slot::SlotId;
 
 /// The "expression evaluation context trait"
 ///
@@ -20,6 +21,12 @@ use crate::query::executor::expression::ExpressionError;
 pub trait ExpressionContext {
     /// Obtain the value of the variable
     fn get_variable(&self, name: &str) -> Option<Value>;
+
+    /// Obtain the value of a variable by slot ID (fast path).
+    /// Default implementation falls back to name-based lookup.
+    fn get_variable_by_slot(&self, _slot: SlotId) -> Option<Value> {
+        None
+    }
 
     /// Setting variable values
     fn set_variable(&mut self, name: String, value: Value);

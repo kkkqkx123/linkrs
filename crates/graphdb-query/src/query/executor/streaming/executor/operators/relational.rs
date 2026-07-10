@@ -8,6 +8,7 @@ use super::super::{SortDirection, StreamingExecutor, ValueRowContext};
 use crate::core::error::QueryError;
 use crate::core::value::NullType;
 use crate::core::Value;
+use crate::query::executor::base::MemoryTracker;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
 
@@ -36,6 +37,7 @@ pub fn next_topn(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, 
             all_rows,
             result_iter,
             opened,
+            memory_tracker,
         } => {
             if !*opened {
                 return Err(QueryError::execution("TopN not opened".to_string()));
@@ -46,6 +48,9 @@ pub fn next_topn(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, 
                 while let Some(chunk) = input.next()? {
                     if col_names.is_empty() {
                         col_names = chunk.col_names();
+                    }
+                    for row in &chunk.rows {
+                        memory_tracker.try_reserve_row(row)?;
                     }
                     all_rows.extend(chunk.rows);
                 }
@@ -304,6 +309,7 @@ pub fn next_materialize(executor: &mut StreamingExecutor) -> Result<Option<DataC
             result_iter,
             materialized,
             opened,
+            memory_tracker,
         } => {
             if !*opened {
                 return Err(QueryError::execution("Materialize not opened".to_string()));
@@ -312,6 +318,9 @@ pub fn next_materialize(executor: &mut StreamingExecutor) -> Result<Option<DataC
             // Materialize all rows on first call
             if !*materialized {
                 while let Some(chunk) = input.next()? {
+                    for row in &chunk.rows {
+                        memory_tracker.try_reserve_row(row)?;
+                    }
                     materialized_rows.extend(chunk.rows);
                 }
                 *materialized = true;
@@ -472,6 +481,7 @@ pub fn next_datacollect(executor: &mut StreamingExecutor) -> Result<Option<DataC
             all_rows,
             emitted,
             opened,
+            memory_tracker,
         } => {
             if !*opened {
                 return Err(QueryError::execution("DataCollect not opened".to_string()));
@@ -483,6 +493,9 @@ pub fn next_datacollect(executor: &mut StreamingExecutor) -> Result<Option<DataC
 
             // Collect all rows and emit as single chunk
             while let Some(chunk) = input.next()? {
+                for row in &chunk.rows {
+                    memory_tracker.try_reserve_row(row)?;
+                }
                 all_rows.extend(chunk.rows);
             }
 
@@ -773,6 +786,7 @@ pub fn next_patternapply(
             all_rows,
             result_iter,
             opened,
+            memory_tracker,
         } => {
             if !*opened {
                 return Err(QueryError::execution("PatternApply not opened".to_string()));
@@ -780,6 +794,9 @@ pub fn next_patternapply(
 
             if result_iter.is_none() {
                 while let Some(chunk) = input.next()? {
+                    for row in &chunk.rows {
+                        memory_tracker.try_reserve_row(row)?;
+                    }
                     let col_names = chunk.col_names();
                     for row in chunk.rows {
                         let mut ctx = ValueRowContext::new(row.clone(), col_names.clone());
@@ -866,6 +883,7 @@ pub fn next_rolluapply(executor: &mut StreamingExecutor) -> Result<Option<DataCh
             all_rows,
             result_iter,
             opened,
+            memory_tracker,
         } => {
             if !*opened {
                 return Err(QueryError::execution("RollUpApply not opened".to_string()));
@@ -876,6 +894,9 @@ pub fn next_rolluapply(executor: &mut StreamingExecutor) -> Result<Option<DataCh
                 while let Some(chunk) = input.next()? {
                     if col_names.is_empty() {
                         col_names = chunk.col_names();
+                    }
+                    for row in &chunk.rows {
+                        memory_tracker.try_reserve_row(row)?;
                     }
                     for row in chunk.rows {
                         let mut ctx = ValueRowContext::new(row.clone(), col_names.clone());
@@ -960,6 +981,7 @@ pub fn next_minus(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>,
             exclude_rows,
             right_buffered,
             opened,
+            memory_tracker,
             ..
         } => {
             if !*opened {
@@ -971,7 +993,9 @@ pub fn next_minus(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>,
                 right.open()?;
                 while let Some(chunk) = right.next()? {
                     for row in chunk.rows {
-                        exclude_rows.insert(format!("{:?}", row));
+                        let row_str = format!("{:?}", row);
+                        memory_tracker.try_reserve(row_str.len())?;
+                        exclude_rows.insert(row_str);
                     }
                 }
                 right.close()?;
@@ -1054,6 +1078,7 @@ pub fn next_window(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
             all_rows,
             result_iter,
             opened,
+            memory_tracker,
         } => {
             if !*opened {
                 return Err(QueryError::execution("Window not opened".to_string()));
@@ -1064,6 +1089,9 @@ pub fn next_window(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
                 while let Some(chunk) = input.next()? {
                     if col_names.is_empty() {
                         col_names = chunk.col_names();
+                    }
+                    for row in &chunk.rows {
+                        memory_tracker.try_reserve_row(row)?;
                     }
                     all_rows.extend(chunk.rows);
                 }

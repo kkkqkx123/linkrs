@@ -38,6 +38,7 @@ impl MultiShortestPathNode {
             single_shortest: false,
             output_var: None,
             col_names: vec!["path".to_string()],
+            column_types: vec![],
         }
     }
 
@@ -118,6 +119,7 @@ impl BFSShortestNode {
             reverse: false,
             output_var: None,
             col_names: vec!["path".to_string()],
+            column_types: vec![],
         }
     }
 
@@ -214,6 +216,7 @@ impl AllPathsNode {
             end_vertex_ids: Vec::new(),
             output_var: None,
             col_names: vec!["path".to_string()],
+            column_types: vec![],
         }
     }
 
@@ -330,6 +333,7 @@ impl ShortestPathNode {
             end_vertex_ids: Vec::new(),
             output_var: None,
             col_names: vec!["path".to_string()],
+            column_types: vec![],
         }
     }
 

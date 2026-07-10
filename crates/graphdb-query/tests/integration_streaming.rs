@@ -5,7 +5,7 @@
 
 use graphdb_query::core::types::expr::Expression;
 use graphdb_query::core::Value;
-use graphdb_query::query::executor::base::MemoryBudget;
+use graphdb_query::query::executor::base::{MemoryBudget, MemoryTracker};
 use graphdb_query::query::executor::streaming::executor::StreamingExecutor;
 
 // ====== Test Helpers ======
@@ -117,7 +117,7 @@ fn test_join_with_small_inputs() {
         build_side_hash: std::collections::HashMap::new(),
         all_right_rows: Vec::new(),
         left_consumed: false,
-        memory_budget: MemoryBudget::default_budget(),
+        memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
         opened: false,
         right_col_names: vec![],
         plan_node_id: 0,

@@ -21,6 +21,7 @@ impl UpdateNode {
             info,
             output_var: None,
             col_names: vec!["updated".to_string()],
+            column_types: vec![],
         }
     }
 
@@ -44,6 +45,7 @@ impl UpdateVerticesNode {
             updates,
             output_var: None,
             col_names: vec!["updated".to_string()],
+            column_types: vec![],
         }
     }
 
@@ -67,6 +69,7 @@ impl UpdateEdgesNode {
             updates,
             output_var: None,
             col_names: vec!["updated".to_string()],
+            column_types: vec![],
         }
     }
 

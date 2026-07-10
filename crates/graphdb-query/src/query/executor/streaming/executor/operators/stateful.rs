@@ -3,7 +3,7 @@
 use crate::core::error::QueryError;
 use crate::core::value::NullType;
 use crate::core::Value;
-use crate::query::executor::base::MemoryBudget;
+use crate::query::executor::base::MemoryTracker;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::helpers::*;
@@ -33,7 +33,7 @@ pub fn next_aggregate(executor: &mut StreamingExecutor) -> Result<Option<DataChu
             aggregate_functions,
             all_rows,
             result_iter,
-            memory_budget,
+            memory_tracker,
             ..
         } => {
             // First time: collect all rows and build groups
@@ -45,8 +45,7 @@ pub fn next_aggregate(executor: &mut StreamingExecutor) -> Result<Option<DataChu
                         col_names = chunk.col_names();
                     }
                     for row in &chunk.rows {
-                        let row_mem = row.capacity() * std::mem::size_of::<Value>();
-                        memory_budget.try_reserve(row_mem)?;
+                        memory_tracker.try_reserve_row(row)?;
                     }
                     all_rows.extend(chunk.rows);
                 }
@@ -162,7 +161,7 @@ pub fn next_sort(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, 
             sort_directions,
             all_rows,
             row_iter,
-            memory_budget,
+            memory_tracker,
             ..
         } => {
             if row_iter.is_none() {
@@ -173,8 +172,7 @@ pub fn next_sort(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, 
                         col_names = chunk.col_names();
                     }
                     for row in &chunk.rows {
-                        let row_mem = row.capacity() * std::mem::size_of::<Value>();
-                        memory_budget.try_reserve(row_mem)?;
+                        memory_tracker.try_reserve_row(row)?;
                     }
                     all_rows.extend(chunk.rows);
                 }
@@ -273,14 +271,16 @@ pub fn next_groupby(executor: &mut StreamingExecutor) -> Result<Option<DataChunk
             group_by_expressions,
             all_rows,
             result_iter,
+            memory_tracker,
             ..
         } => {
             // Buffer all rows if not done yet
             if result_iter.is_none() {
                 while let Some(chunk) = input.next()? {
-                    for row in chunk.rows {
-                        all_rows.push(row);
+                    for row in &chunk.rows {
+                        memory_tracker.try_reserve_row(row)?;
                     }
+                    all_rows.extend(chunk.rows);
                 }
 
                 if all_rows.is_empty() {
@@ -381,6 +381,7 @@ pub fn next_windowfunction(
             order_by_directions,
             all_rows,
             result_iter,
+            memory_tracker,
             ..
         } => {
             if result_iter.is_none() {
@@ -388,6 +389,9 @@ pub fn next_windowfunction(
                 while let Some(chunk) = input.next()? {
                     if col_names.is_empty() {
                         col_names = chunk.col_names();
+                    }
+                    for row in &chunk.rows {
+                        memory_tracker.try_reserve_row(row)?;
                     }
                     all_rows.extend(chunk.rows);
                 }
@@ -627,6 +631,7 @@ mod tests {
     use crate::core::types::expr::Expression;
     use crate::core::types::operators::AggregateFunction;
     use crate::core::value::NullType;
+    use crate::query::executor::base::MemoryBudget;
     use crate::core::Value;
 
     fn create_test_buffer(size: usize) -> Vec<Vec<Value>> {
@@ -661,7 +666,7 @@ mod tests {
             )],
             all_rows: Vec::new(),
             result_iter: None,
-            memory_budget: MemoryBudget::default_budget(),
+            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             opened: false,
             plan_node_id: 0,
         };
@@ -694,7 +699,7 @@ mod tests {
             )],
             all_rows: Vec::new(),
             result_iter: None,
-            memory_budget: MemoryBudget::default_budget(),
+            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             opened: false,
             plan_node_id: 0,
         };
@@ -730,7 +735,7 @@ mod tests {
             sort_directions: vec![SortDirection::Ascending],
             all_rows: Vec::new(),
             row_iter: None,
-            memory_budget: MemoryBudget::default_budget(),
+            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             opened: false,
             plan_node_id: 0,
         };
@@ -759,7 +764,7 @@ mod tests {
             sort_directions: vec![],
             all_rows: Vec::new(),
             row_iter: None,
-            memory_budget: MemoryBudget::default_budget(),
+            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             opened: false,
             plan_node_id: 0,
         };
@@ -793,6 +798,7 @@ mod tests {
             all_rows: Vec::new(),
             result_iter: None,
             opened: false,
+            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
         };
 

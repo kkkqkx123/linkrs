@@ -86,6 +86,7 @@ impl SortNode {
             limit: None,
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 
@@ -131,6 +132,7 @@ impl LimitNode {
             count,
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 
@@ -171,6 +173,7 @@ impl TopNNode {
             limit,
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 

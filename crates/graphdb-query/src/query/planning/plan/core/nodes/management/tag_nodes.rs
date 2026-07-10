@@ -21,6 +21,7 @@ impl CreateTagNode {
             info,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -52,6 +53,7 @@ impl AlterTagNode {
             info,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -85,6 +87,7 @@ impl DescTagNode {
             tag_name,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -116,6 +119,7 @@ impl DropTagNode {
             if_exists: false,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -152,6 +156,7 @@ impl ShowTagsNode {
             space_name,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -244,6 +249,7 @@ impl ShowCreateTagNode {
             tag_name,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 

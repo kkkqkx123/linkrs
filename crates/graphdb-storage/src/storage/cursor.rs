@@ -27,7 +27,7 @@ use crate::storage::StorageClient;
 // ---------------------------------------------------------------------------
 
 /// A cursor that yields vertices in batches.
-pub trait VertexCursor: Send {
+pub trait VertexCursor: Send + std::fmt::Debug {
     /// Read the next batch of vertices (at most `batch_size` rows).
     ///
     /// Returns an empty `Vec` when the scan is exhausted.
@@ -35,7 +35,7 @@ pub trait VertexCursor: Send {
 }
 
 /// A cursor that yields edges in batches.
-pub trait EdgeCursor: Send {
+pub trait EdgeCursor: Send + std::fmt::Debug {
     /// Read the next batch of edges (at most `batch_size` rows).
     ///
     /// Returns an empty `Vec` when the scan is exhausted.
@@ -51,6 +51,7 @@ pub trait EdgeCursor: Send {
 /// This is the default implementation used when the storage backend does
 /// not yet provide a native lazy cursor.  It is semantically identical
 /// to calling [`StorageReader::scan_vertices`] upfront.
+#[derive(Debug)]
 pub struct VecVertexCursor {
     iter: std::vec::IntoIter<crate::core::Vertex>,
 }
@@ -70,6 +71,7 @@ impl VertexCursor for VecVertexCursor {
 }
 
 /// Edge cursor backed by a pre-materialized `Vec<Edge>`.
+#[derive(Debug)]
 pub struct VecEdgeCursor {
     iter: std::vec::IntoIter<crate::core::Edge>,
 }
@@ -96,29 +98,52 @@ impl EdgeCursor for VecEdgeCursor {
 ///
 /// Uses the default Vec-backed cursor unless the client provides a
 /// native cursor implementation.
+///
+/// When `limit` is `Some(n)`, at most `n` vertices are returned.
 pub fn open_vertex_scan(
     storage: &Arc<RwLock<dyn StorageClient>>,
     space: &str,
+    limit: Option<usize>,
 ) -> Result<Box<dyn VertexCursor>, StorageError> {
     let reader = storage.read();
-    let vertices = reader.scan_vertices(space)?;
+    let mut vertices = reader.scan_vertices(space)?;
+    if let Some(limit) = limit {
+        vertices.truncate(limit);
+    }
     Ok(Box::new(VecVertexCursor::new(vertices)))
+}
+
+/// Open a vertex scan cursor bound by a limit.
+///
+/// Convenience wrapper – delegates to [`open_vertex_scan`] with a limit.
+pub fn open_vertex_scan_with_limit(
+    storage: &Arc<RwLock<dyn StorageClient>>,
+    space: &str,
+    limit: usize,
+) -> Result<Box<dyn VertexCursor>, StorageError> {
+    open_vertex_scan(storage, space, Some(limit))
 }
 
 /// Open an edge scan cursor through a storage client.
 ///
 /// Uses the default Vec-backed cursor unless the client provides a
 /// native cursor implementation.
+///
+/// When `limit` is `Some(n)`, at most `n` edges are returned.
 pub fn open_edge_scan(
     storage: &Arc<RwLock<dyn StorageClient>>,
     space: &str,
     edge_type: Option<&str>,
+    limit: Option<usize>,
 ) -> Result<Box<dyn EdgeCursor>, StorageError> {
     let reader = storage.read();
-    let edges = if let Some(et) = edge_type {
+    let mut edges = if let Some(et) = edge_type {
         reader.scan_edges_by_type(space, et)?
     } else {
         reader.scan_all_edges(space)?
     };
+    if let Some(limit) = limit {
+        edges.truncate(limit);
+    }
     Ok(Box::new(VecEdgeCursor::new(edges)))
 }

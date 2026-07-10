@@ -1,11 +1,14 @@
 //! Binary operators: HashJoin, NestedLoopJoin
 
+use std::sync::Arc;
+
 use crate::core::error::QueryError;
 use crate::core::Value;
-use crate::query::executor::base::MemoryBudget;
+use crate::query::executor::base::MemoryTracker;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::{StreamingExecutor, ValueRowContext};
+use crate::query::executor::streaming::slot::{combine_layouts, SlotLayout};
 
 // ============ HashJoin ============
 
@@ -37,7 +40,7 @@ pub fn next_hashjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
             build_side_hash,
             all_right_rows,
             left_consumed,
-            memory_budget,
+            memory_tracker,
             right_col_names,
             ..
         } => {
@@ -48,8 +51,7 @@ pub fn next_hashjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                         captured_right_names = chunk.col_names();
                     }
                     for row in chunk.rows {
-                        let row_mem = row.capacity() * std::mem::size_of::<Value>();
-                        memory_budget.try_reserve(row_mem)?;
+                        memory_tracker.try_reserve_row(&row)?;
                         all_right_rows.push(row.clone());
                         if !hash_keys.is_empty() {
                             let names = if captured_right_names.is_empty() {
@@ -79,7 +81,27 @@ pub fn next_hashjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                         for right_row in all_right_rows.iter() {
                             let mut joined_row = left_row.clone();
                             joined_row.extend(right_row.clone());
-                            result_rows.push(joined_row);
+                            let combined_names =
+                                build_combined_names(&left_col_names, right_col_names, right_row.len());
+                            let mut ctx = ValueRowContext::new(joined_row.clone(), combined_names);
+                            let satisfied = if let Some(condition) = join_condition {
+                                match ExpressionEvaluator::evaluate(condition, &mut ctx) {
+                                    Ok(Value::Bool(b)) => b,
+                                    Ok(Value::Null(_)) => false,
+                                    Ok(_) => true,
+                                    Err(e) => {
+                                        return Err(QueryError::execution(format!(
+                                            "HashJoin condition evaluation failed: {}",
+                                            e
+                                        )));
+                                    }
+                                }
+                            } else {
+                                true
+                            };
+                            if satisfied {
+                                result_rows.push(joined_row);
+                            }
                         }
                     }
                 } else {
@@ -120,11 +142,18 @@ pub fn next_hashjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                 if result_rows.is_empty() {
                     Ok(None)
                 } else {
-                    let output_col_names = build_combined_names(&left_col_names, right_col_names, 0);
-                    Ok(Some(DataChunk::from_rows_with_col_names(
-                        result_rows,
-                        Some(output_col_names),
-                    )))
+                    let left_layout = left_chunk.get_or_create_layout();
+                    let right_layout = if right_col_names.is_empty() {
+                        Arc::new(SlotLayout::from_names(
+                            &all_right_rows.first().map(|r| {
+                                (0..r.len()).map(|i| format!("right_{}", i)).collect::<Vec<_>>()
+                            }).unwrap_or_default(),
+                        ))
+                    } else {
+                        Arc::new(SlotLayout::from_names(right_col_names))
+                    };
+                    let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
+                    Ok(Some(DataChunk::new_with_layout(result_rows, layout)))
                 }
             } else {
                 Ok(None)
@@ -245,15 +274,14 @@ pub fn next_nestedloopjoin(
             join_condition,
             build_side_tuples,
             left_consumed,
-            memory_budget,
+            memory_tracker,
             ..
         } => {
             if !*left_consumed {
                 // Build right side - collect all rows
                 while let Some(chunk) = right.next()? {
                     for row in chunk.rows {
-                        let row_mem = row.capacity() * std::mem::size_of::<Value>();
-                        memory_budget.try_reserve(row_mem)?;
+                        memory_tracker.try_reserve_row(&row)?;
                         build_side_tuples.push(row);
                     }
                 }
@@ -373,12 +401,14 @@ pub fn next_innerjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChu
             join_condition,
             build_side_tuples,
             left_consumed,
+            memory_tracker,
             ..
         } => {
             if !*left_consumed {
                 // Build right side
                 while let Some(chunk) = right.next()? {
                     for row in chunk.rows {
+                        memory_tracker.try_reserve_row(&row)?;
                         build_side_tuples.push(row);
                     }
                 }
@@ -485,11 +515,13 @@ pub fn next_leftjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
             join_condition,
             build_side_tuples,
             left_consumed,
+            memory_tracker,
             ..
         } => {
             if !*left_consumed {
                 while let Some(chunk) = right.next()? {
                     for row in chunk.rows {
+                        memory_tracker.try_reserve_row(&row)?;
                         build_side_tuples.push(row);
                     }
                 }
@@ -607,11 +639,13 @@ pub fn next_rightjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChu
             join_condition,
             build_side_tuples,
             right_consumed,
+            memory_tracker,
             ..
         } => {
             if !*right_consumed {
                 while let Some(chunk) = left.next()? {
                     for row in chunk.rows {
+                        memory_tracker.try_reserve_row(&row)?;
                         build_side_tuples.push(row);
                     }
                 }
@@ -736,6 +770,7 @@ pub fn next_fullouterjoin(
             matched_right_indices,
             result_iter,
             phase,
+            memory_tracker,
             ..
         } => {
             loop {
@@ -743,14 +778,16 @@ pub fn next_fullouterjoin(
                     crate::query::executor::streaming::executor::FullOuterJoinPhase::BuildingRight => {
                         // Collect all left and right rows
                         while let Some(chunk) = left.next()? {
-                            for row in chunk.rows {
-                                left_rows.push(row);
+                            for row in &chunk.rows {
+                                memory_tracker.try_reserve_row(row)?;
                             }
+                            left_rows.extend(chunk.rows);
                         }
                         while let Some(chunk) = right.next()? {
-                            for row in chunk.rows {
-                                right_rows.push(row);
+                            for row in &chunk.rows {
+                                memory_tracker.try_reserve_row(row)?;
                             }
+                            right_rows.extend(chunk.rows);
                         }
                         *phase = crate::query::executor::streaming::executor::FullOuterJoinPhase::ProbeLeft;
                     }
@@ -897,22 +934,25 @@ pub fn next_crossjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChu
             all_right_rows,
             left_consumed,
             right_consumed,
+            memory_tracker,
             ..
         } => {
             if !*left_consumed {
                 while let Some(chunk) = left.next()? {
-                    for row in chunk.rows {
-                        all_left_rows.push(row);
+                    for row in &chunk.rows {
+                        memory_tracker.try_reserve_row(row)?;
                     }
+                    all_left_rows.extend(chunk.rows);
                 }
                 *left_consumed = true;
             }
 
             if !*right_consumed {
                 while let Some(chunk) = right.next()? {
-                    for row in chunk.rows {
-                        all_right_rows.push(row);
+                    for row in &chunk.rows {
+                        memory_tracker.try_reserve_row(row)?;
                     }
+                    all_right_rows.extend(chunk.rows);
                 }
                 *right_consumed = true;
             }
@@ -996,11 +1036,13 @@ pub fn next_semijoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
             join_condition,
             right_rows,
             right_consumed,
+            memory_tracker,
             ..
         } => {
             if !*right_consumed {
                 while let Some(chunk) = right.next()? {
                     for row in chunk.rows {
+                        memory_tracker.try_reserve_row(&row)?;
                         right_rows.push(row);
                     }
                 }
@@ -1084,6 +1126,7 @@ mod tests {
     use super::*;
     use crate::core::types::expr::Expression;
     use crate::core::value::NullType;
+    use crate::query::executor::base::MemoryBudget;
 
     fn create_left_buffer() -> Vec<Vec<Value>> {
         vec![
@@ -1128,7 +1171,7 @@ mod tests {
             all_right_rows: Vec::new(),
             left_consumed: false,
             opened: false,
-            memory_budget: MemoryBudget::default_budget(),
+            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             right_col_names: vec![],
             plan_node_id: 0,
         };
@@ -1171,7 +1214,7 @@ mod tests {
             all_right_rows: Vec::new(),
             left_consumed: false,
             opened: false,
-            memory_budget: MemoryBudget::default_budget(),
+            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             right_col_names: vec![],
             plan_node_id: 0,
         };
@@ -1216,7 +1259,7 @@ mod tests {
             all_right_rows: Vec::new(),
             left_consumed: false,
             opened: false,
-            memory_budget: MemoryBudget::default_budget(),
+            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             right_col_names: vec![],
             plan_node_id: 0,
         };
@@ -1258,7 +1301,7 @@ mod tests {
             build_side_tuples: Vec::new(),
             left_consumed: false,
             opened: false,
-            memory_budget: MemoryBudget::default_budget(),
+            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
         };
 
@@ -1298,7 +1341,7 @@ mod tests {
             build_side_tuples: Vec::new(),
             left_consumed: false,
             opened: false,
-            memory_budget: MemoryBudget::default_budget(),
+            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
         };
 
@@ -1341,7 +1384,7 @@ mod tests {
             all_right_rows: Vec::new(),
             left_consumed: false,
             opened: false,
-            memory_budget: MemoryBudget::default_budget(),
+            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             right_col_names: vec![],
             plan_node_id: 0,
         };
@@ -1382,7 +1425,7 @@ mod tests {
             all_right_rows: Vec::new(),
             left_consumed: false,
             opened: false,
-            memory_budget: MemoryBudget::default_budget(),
+            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             right_col_names: vec![],
             plan_node_id: 0,
         };

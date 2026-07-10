@@ -3,6 +3,7 @@
 //! A DataChunk represents a fixed-size batch of rows processed in streaming mode.
 //! Typical size: 1024 rows (~4MB)
 
+use super::slot::{SlotLayout, SlotId};
 use crate::core::Value;
 use std::sync::Arc;
 
@@ -13,6 +14,9 @@ pub struct DataChunk {
     pub rows: Vec<Vec<Value>>,
     /// Schema information (column names and types)
     pub schema: Arc<Schema>,
+    /// Slot layout for slot-based value access.
+    /// Production paths should always set this.
+    pub layout: Option<Arc<SlotLayout>>,
 }
 
 /// Simple schema representation
@@ -43,9 +47,31 @@ impl Schema {
 }
 
 impl DataChunk {
-    /// Create a new DataChunk with rows and schema
+    /// Create a new DataChunk with rows, schema, and optional layout
     pub fn new(rows: Vec<Vec<Value>>, schema: Arc<Schema>) -> Self {
-        Self { rows, schema }
+        Self { rows, schema, layout: None }
+    }
+
+    /// Create a DataChunk with layout from Arc<SlotLayout>
+    pub fn new_with_layout(rows: Vec<Vec<Value>>, layout: Arc<SlotLayout>) -> Self {
+        let columns: Vec<ColumnInfo> = layout
+            .slots
+            .iter()
+            .map(|info| ColumnInfo {
+                name: info.name.clone(),
+                data_type: info
+                    .data_type
+                    .as_ref()
+                    .map(|dt| dt.to_string().to_lowercase())
+                    .unwrap_or_else(|| "unknown".to_string()),
+            })
+            .collect();
+        let schema = Arc::new(Schema::new(columns));
+        Self {
+            rows,
+            schema,
+            layout: Some(layout),
+        }
     }
 
     /// Create a DataChunk from rows, inferring schema and generating col_N names
@@ -108,7 +134,7 @@ impl DataChunk {
                 .collect();
             Arc::new(Schema::new(columns))
         };
-        Self { rows, schema }
+        Self { rows, schema, layout: None }
     }
 
     /// Number of rows in this chunk
@@ -144,6 +170,20 @@ impl DataChunk {
             .enumerate()
             .map(|(i, col)| (col.name.clone(), i))
             .collect()
+    }
+
+    /// Get the slot layout, or build and cache one from schema if missing.
+    pub fn get_or_create_layout(&self) -> Arc<SlotLayout> {
+        if let Some(ref layout) = self.layout {
+            return layout.clone();
+        }
+        Arc::new(SlotLayout::from_names(&self.col_names()))
+    }
+
+    /// Get value by slot ID (fast path using layout).
+    /// Returns None if row index out of bounds or no such slot.
+    pub fn get_by_slot(&self, row_idx: usize, slot: SlotId) -> Option<Value> {
+        self.rows.get(row_idx).and_then(|row| row.get(slot).cloned())
     }
 }
 

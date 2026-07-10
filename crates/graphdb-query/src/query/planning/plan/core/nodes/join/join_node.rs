@@ -50,6 +50,7 @@ impl InnerJoinNode {
             deps,
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 
@@ -104,6 +105,7 @@ impl LeftJoinNode {
             deps,
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 }
@@ -151,6 +153,7 @@ impl CrossJoinNode {
             deps,
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 }
@@ -199,6 +202,7 @@ impl HashInnerJoinNode {
             deps,
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 }
@@ -230,6 +234,7 @@ impl HashLeftJoinNode {
             deps,
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 }
@@ -275,6 +280,7 @@ impl FullOuterJoinNode {
             deps,
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 }
@@ -320,6 +326,7 @@ impl RightJoinNode {
             deps,
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 
@@ -380,6 +387,7 @@ impl SemiJoinNode {
             anti,
             output_var: None,
             col_names,
+            column_types: vec![],
         })
     }
 

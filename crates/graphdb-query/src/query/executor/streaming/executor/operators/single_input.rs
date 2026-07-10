@@ -1,11 +1,14 @@
 //! Single-input operators: Filter, Project, Limit, Distinct
 
+use std::sync::Arc;
+
 use crate::core::error::QueryError;
 use crate::core::value::NullType;
 use crate::core::Value;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::{StreamingExecutor, ValueRowContext};
+use crate::query::executor::streaming::slot::SlotLayout;
 
 // ============ Filter ============
 
@@ -28,6 +31,7 @@ pub fn next_filter(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
             match input.next()? {
                 Some(chunk) => {
                     let col_names = chunk.col_names();
+                    let layout = chunk.get_or_create_layout();
                     let mut filtered_rows = Vec::new();
                     for row in chunk.rows {
                         let mut context = ValueRowContext::new(row.clone(), col_names.clone());
@@ -55,9 +59,9 @@ pub fn next_filter(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
                     }
 
                     if !filtered_rows.is_empty() {
-                        return Ok(Some(DataChunk::from_rows_with_col_names(
+                        return Ok(Some(DataChunk::new_with_layout(
                             filtered_rows,
-                            Some(col_names),
+                            layout,
                         )));
                     }
                 }
@@ -110,11 +114,17 @@ pub fn next_project(executor: &mut StreamingExecutor) -> Result<Option<DataChunk
             ..
         } => {
             if let Some(chunk) = input.next()? {
-                let col_names = chunk.col_names();
+                let input_col_names = chunk.col_names();
+                let output_col_names_final: Vec<String> = if output_col_names.is_empty() {
+                    input_col_names.clone()
+                } else {
+                    output_col_names.clone()
+                };
+                let layout = Arc::new(SlotLayout::from_names(&output_col_names_final));
 
                 let mut projected_rows = Vec::new();
                 for row in chunk.rows {
-                    let mut context = ValueRowContext::new(row, col_names.clone());
+                    let mut context = ValueRowContext::new(row, input_col_names.clone());
                     let mut projected_row = Vec::new();
 
                     for expr in output_expressions.iter() {
@@ -134,14 +144,9 @@ pub fn next_project(executor: &mut StreamingExecutor) -> Result<Option<DataChunk
                     projected_rows.push(projected_row);
                 }
 
-                let col_names = if output_col_names.is_empty() {
-                    None
-                } else {
-                    Some(output_col_names.clone())
-                };
-                Ok(Some(DataChunk::from_rows_with_col_names(
+                Ok(Some(DataChunk::new_with_layout(
                     projected_rows,
-                    col_names,
+                    layout,
                 )))
             } else {
                 Ok(None)
@@ -253,6 +258,7 @@ pub fn next_distinct(executor: &mut StreamingExecutor) -> Result<Option<DataChun
         } => loop {
             match input.next()? {
                 Some(chunk) => {
+                    let layout = chunk.get_or_create_layout();
                     let mut result_rows = Vec::new();
                     for row in chunk.rows {
                         let row_str = format!("{:?}", row);
@@ -263,7 +269,7 @@ pub fn next_distinct(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                     }
 
                     if !result_rows.is_empty() {
-                        return Ok(Some(DataChunk::from_rows(result_rows)));
+                        return Ok(Some(DataChunk::new_with_layout(result_rows, layout)));
                     }
                 }
                 None => return Ok(None),
@@ -297,6 +303,7 @@ pub fn close_distinct(executor: &mut StreamingExecutor) -> Result<(), QueryError
 mod tests {
     use super::*;
     use crate::core::types::expr::Expression;
+    use crate::query::executor::base::{MemoryBudget, MemoryTracker};
 
     fn create_test_buffer(size: usize) -> Vec<Vec<Value>> {
         (0..size)
@@ -509,6 +516,7 @@ mod tests {
             input: scan,
             seen_rows: std::collections::HashSet::new(),
             opened: false,
+            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
         };
 
@@ -541,6 +549,7 @@ mod tests {
             input: scan,
             seen_rows: std::collections::HashSet::new(),
             opened: false,
+            memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
         };
 

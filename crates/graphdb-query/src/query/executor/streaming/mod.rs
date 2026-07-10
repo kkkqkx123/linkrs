@@ -7,6 +7,8 @@
 //! - DataChunk: Fixed-size batches of rows
 //! - StreamingExecutor: Enum-based pull operators
 //! - StreamingExecutionEngine: Orchestration layer
+//! - ExecutionRuntime: Per-query runtime (cancel, memory, profile, resources)
+//! - ResultStream: Streaming result handle
 
 pub mod base;
 pub mod builder;
@@ -15,6 +17,9 @@ pub mod engine;
 pub mod executor;
 pub mod factory;
 pub mod partition;
+pub mod runtime;
+pub mod slot;
+pub mod stream;
 
 pub use base::ExecutionMode;
 pub use builder::StreamingExecutorBuilder;
@@ -23,3 +28,6 @@ pub use engine::StreamingExecutionEngine;
 pub use executor::StreamingExecutor;
 pub use factory::{chunks_to_execution_result, convert_chunks_to_dataset, StreamingQueryExecutor};
 pub use partition::PartitionView;
+pub use runtime::{ExecutionRuntime, OperatorProfile, ProfileCollector, QueryIdentity, ResourceOwner};
+pub use slot::{combine_layouts, SlotId, SlotInfo, SlotLayout};
+pub use stream::ResultStream;

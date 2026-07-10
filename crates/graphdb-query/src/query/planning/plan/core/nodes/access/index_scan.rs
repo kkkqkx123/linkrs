@@ -178,6 +178,7 @@ impl IndexScanNode {
             order_by: Vec::new(),
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 

@@ -31,6 +31,7 @@ impl DeleteVerticesNode {
             info,
             output_var: None,
             col_names: vec!["deleted".to_string()],
+            column_types: vec![],
         }
     }
 
@@ -78,6 +79,7 @@ impl DeleteTagsNode {
             info,
             output_var: None,
             col_names: vec!["deleted".to_string()],
+            column_types: vec![],
         }
     }
 
@@ -124,6 +126,7 @@ impl DeleteIndexNode {
             info,
             output_var: None,
             col_names: vec!["deleted".to_string()],
+            column_types: vec![],
         }
     }
 
@@ -158,6 +161,7 @@ impl DeleteEdgesNode {
             info,
             output_var: None,
             col_names: vec!["deleted".to_string()],
+            column_types: vec![],
         }
     }
 
@@ -216,6 +220,7 @@ impl PipeDeleteVerticesNode {
             info,
             output_var: None,
             col_names: vec!["deleted".to_string()],
+            column_types: vec![],
         }
     }
 
@@ -264,6 +269,7 @@ impl PipeDeleteEdgesNode {
             info,
             output_var: None,
             col_names: vec!["deleted".to_string()],
+            column_types: vec![],
         }
     }
 

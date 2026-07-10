@@ -19,6 +19,7 @@ impl CreateSpaceNode {
             info,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -42,6 +43,7 @@ impl DropSpaceNode {
             space_name,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -65,6 +67,7 @@ impl DescSpaceNode {
             space_name,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -86,6 +89,7 @@ impl ShowSpacesNode {
             id,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 }
@@ -105,6 +109,7 @@ impl SwitchSpaceNode {
             space_name,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -130,6 +135,7 @@ impl AlterSpaceNode {
             options,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -157,6 +163,7 @@ impl ClearSpaceNode {
             space_name,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
@@ -186,6 +193,7 @@ impl ShowCreateSpaceNode {
             space_name,
             output_var: None,
             col_names: Vec::new(),
+            column_types: vec![],
         }
     }
 
