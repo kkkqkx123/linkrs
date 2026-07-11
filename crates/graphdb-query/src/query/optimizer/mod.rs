@@ -50,6 +50,7 @@ pub mod decision;
 pub mod engine;
 pub mod error;
 pub mod execution_mode_optimizer;
+pub mod partitioning;
 pub mod stats;
 
 // Optimization phases
@@ -61,6 +62,7 @@ pub use builder::OptimizerEngineBuilder;
 pub use engine::OptimizerEngine;
 pub use error::{CostError, CostResult, OptimizeError, OptimizeResult};
 pub use execution_mode_optimizer::ExecutionModeOptimizer;
+pub use partitioning::{PartitioningConfig, PartitioningDecision, PartitioningPlanner};
 
 pub use stats::{
     EdgeTypeStatistics, ExecutionFeedbackCollector, FeedbackDrivenSelectivity, OperatorFeedback,

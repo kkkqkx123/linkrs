@@ -1191,7 +1191,16 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             context.space_name = Some(space_name.clone());
         }
 
-        executor.from_plan_node(root_node, &context).map_err(|e| {
+        let build_result = if let Some(partition_spec) = plan.partition_spec() {
+            let physical_plan = crate::query::planning::plan::PartitionedPhysicalPlan::from_logical(
+                root_node.clone(),
+                partition_spec.clone(),
+            );
+            executor.from_partitioned_physical_plan(&physical_plan, &context)
+        } else {
+            executor.from_plan_node(root_node, &context)
+        };
+        build_result.map_err(|e| {
             DBError::from(QueryError::execution(format!(
                 "Failed to create streaming executor: {}",
                 e
@@ -1246,7 +1255,16 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             context.space_name = Some(space_name.clone());
         }
 
-        executor.from_plan_node(root_node, &context).map_err(|e| {
+        let build_result = if let Some(partition_spec) = plan.partition_spec() {
+            let physical_plan = crate::query::planning::plan::PartitionedPhysicalPlan::from_logical(
+                root_node.clone(),
+                partition_spec.clone(),
+            );
+            executor.from_partitioned_physical_plan(&physical_plan, &context)
+        } else {
+            executor.from_plan_node(root_node, &context)
+        };
+        build_result.map_err(|e| {
             DBError::from(QueryError::execution(format!(
                 "Failed to create streaming executor: {}",
                 e

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use parking_lot::Mutex;
 
@@ -172,6 +172,11 @@ impl StreamingQueryResult {
     pub fn runtime(&self) -> &ExecutionRuntime {
         &self.runtime
     }
+
+    /// Return a [`Weak`] reference to the execution runtime for KILL QUERY registration.
+    pub fn runtime_downgrade(&self) -> Weak<ExecutionRuntime> {
+        Arc::downgrade(&self.runtime)
+    }
 }
 
 #[cfg(test)]
@@ -180,9 +185,9 @@ mod tests {
     use crate::core::Value;
     use crate::query::executor::base::MemoryBudget;
     use crate::query::executor::streaming::engine::StreamingExecutionEngine;
-    use crate::query::executor::streaming::operators::source_operator::SourceOperator;
     use crate::query::executor::streaming::executor::StreamingExecutor;
     use crate::query::executor::streaming::operator_base::OperatorBase;
+    use crate::query::executor::streaming::operators::source_operator::SourceOperator;
     use crate::query::executor::streaming::runtime::QueryIdentity;
 
     fn create_test_stream(count: usize) -> StreamingQueryResult {
@@ -193,9 +198,7 @@ mod tests {
         ));
         engine.set_runtime(runtime.clone());
 
-        let buffer: Vec<Vec<Value>> = (0..count)
-            .map(|i| vec![Value::BigInt(i as i64)])
-            .collect();
+        let buffer: Vec<Vec<Value>> = (0..count).map(|i| vec![Value::BigInt(i as i64)]).collect();
 
         let scan = StreamingExecutor::Source(
             OperatorBase::new(0),
@@ -262,8 +265,7 @@ mod tests {
 
     #[test]
     fn test_from_execution_result_empty() {
-        let result =
-            StreamingQueryResult::from_execution_result(ExecutionResult::Empty);
+        let result = StreamingQueryResult::from_execution_result(ExecutionResult::Empty);
         assert!(result.next_chunk().unwrap().is_none());
     }
 

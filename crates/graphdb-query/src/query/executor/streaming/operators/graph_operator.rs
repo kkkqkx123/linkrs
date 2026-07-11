@@ -48,6 +48,7 @@ fn bidir_bfs_shortest_path(
     start_id: &VertexId,
     end_id: &VertexId,
     cfg: BidirBfsConfig,
+    cancel_token: Option<&AtomicBool>,
 ) -> Result<Vec<Path>, QueryError> {
     let mut result_paths = Vec::new();
 
@@ -71,6 +72,11 @@ fn bidir_bfs_shortest_path(
     let dir_in = EdgeDirection::In;
 
     while !left_queue.is_empty() && !right_queue.is_empty() {
+        if let Some(token) = cancel_token {
+            if token.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(QueryError::execution("Query cancelled".to_string()));
+            }
+        }
         if cfg.single_shortest && !result_paths.is_empty() {
             break;
         }
@@ -705,11 +711,8 @@ impl GraphOperator {
                                         if !edge_type_matches {
                                             continue;
                                         }
-                                        let neighbor_id = if e.src() == &vid {
-                                            *e.dst()
-                                        } else {
-                                            *e.src()
-                                        };
+                                        let neighbor_id =
+                                            if e.src() == &vid { *e.dst() } else { *e.src() };
                                         if let Ok(Some(vertex)) =
                                             reader.get_vertex(space_name, &neighbor_id)
                                         {
@@ -788,6 +791,7 @@ impl GraphOperator {
                                 local_visited.insert(vid);
 
                                 while let Some((current, depth)) = frontier.pop() {
+                                    base.ensure_not_cancelled()?;
                                     if depth >= *max_depth {
                                         continue;
                                     }
@@ -821,13 +825,10 @@ impl GraphOperator {
                                                 {
                                                     let mut out_row = row.clone();
                                                     out_row.push(Value::Vertex(Box::new(vertex)));
-                                                    out_row.push(Value::String(
-                                                        edge_types.join("/"),
-                                                    ));
+                                                    out_row
+                                                        .push(Value::String(edge_types.join("/")));
                                                     out_row.push(Value::String("both".to_string()));
-                                                    out_row.push(Value::BigInt(
-                                                        (depth + 1) as i64,
-                                                    ));
+                                                    out_row.push(Value::BigInt((depth + 1) as i64));
                                                     out_rows.push(out_row);
                                                 }
                                             }
@@ -904,15 +905,16 @@ impl GraphOperator {
                             if let (Ok(src_vid), Ok(dst_vid)) =
                                 (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
                             {
-                                let et_ref: Option<&[String]> =
-                                    if edge_types.is_empty()
-                                        || edge_types.contains(&"both".to_string())
-                                    {
-                                        None
-                                    } else {
-                                        Some(edge_types.as_slice())
-                                    };
+                                let et_ref: Option<&[String]> = if edge_types.is_empty()
+                                    || edge_types.contains(&"both".to_string())
+                                {
+                                    None
+                                } else {
+                                    Some(edge_types.as_slice())
+                                };
 
+                                let cancel_token =
+                                    base.runtime.as_ref().map(|rt| rt.cancel_token());
                                 let paths = bidir_bfs_shortest_path(
                                     &*reader,
                                     &src_vid,
@@ -924,6 +926,7 @@ impl GraphOperator {
                                         single_shortest: false,
                                         limit: 100,
                                     },
+                                    cancel_token.as_deref(),
                                 )?;
 
                                 for path in &paths {
@@ -988,15 +991,16 @@ impl GraphOperator {
                             if let (Ok(src_vid), Ok(dst_vid)) =
                                 (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
                             {
-                                let et_ref: Option<&[String]> =
-                                    if edge_types.is_empty()
-                                        || edge_types.contains(&"both".to_string())
-                                    {
-                                        None
-                                    } else {
-                                        Some(edge_types.as_slice())
-                                    };
+                                let et_ref: Option<&[String]> = if edge_types.is_empty()
+                                    || edge_types.contains(&"both".to_string())
+                                {
+                                    None
+                                } else {
+                                    Some(edge_types.as_slice())
+                                };
 
+                                let cancel_token =
+                                    base.runtime.as_ref().map(|rt| rt.cancel_token());
                                 let paths = bidir_bfs_shortest_path(
                                     &*reader,
                                     &src_vid,
@@ -1004,10 +1008,11 @@ impl GraphOperator {
                                     BidirBfsConfig {
                                         space_name,
                                         edge_type_filter: et_ref,
-                                        max_depth: 20,
-                                        single_shortest: true,
-                                        limit: 10,
+                                        max_depth: 10,
+                                        single_shortest: false,
+                                        limit: 100,
                                     },
+                                    cancel_token.as_deref(),
                                 )?;
 
                                 for path in &paths {
@@ -1072,15 +1077,16 @@ impl GraphOperator {
                             if let (Ok(src_vid), Ok(dst_vid)) =
                                 (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
                             {
-                                let et_ref: Option<&[String]> =
-                                    if edge_types.is_empty()
-                                        || edge_types.contains(&"both".to_string())
-                                    {
-                                        None
-                                    } else {
-                                        Some(edge_types.as_slice())
-                                    };
+                                let et_ref: Option<&[String]> = if edge_types.is_empty()
+                                    || edge_types.contains(&"both".to_string())
+                                {
+                                    None
+                                } else {
+                                    Some(edge_types.as_slice())
+                                };
 
+                                let cancel_token =
+                                    base.runtime.as_ref().map(|rt| rt.cancel_token());
                                 let paths = bidir_bfs_shortest_path(
                                     &*reader,
                                     &src_vid,
@@ -1092,6 +1098,7 @@ impl GraphOperator {
                                         single_shortest: false,
                                         limit: 100,
                                     },
+                                    cancel_token.as_deref(),
                                 )?;
 
                                 for path in &paths {
@@ -1162,16 +1169,17 @@ impl GraphOperator {
                                 .or_else(|| row.first().cloned())
                                 .unwrap_or(Value::Null(crate::core::NullType::Null));
                             if let Ok(src_vid) = VertexId::try_from(&src_val) {
-                                let et_ref: Option<&[String]> =
-                                    if edge_types.is_empty()
-                                        || edge_types.contains(&"both".to_string())
-                                    {
-                                        None
-                                    } else {
-                                        Some(edge_types.as_slice())
-                                    };
+                                let et_ref: Option<&[String]> = if edge_types.is_empty()
+                                    || edge_types.contains(&"both".to_string())
+                                {
+                                    None
+                                } else {
+                                    Some(edge_types.as_slice())
+                                };
 
                                 for dst_vid in &dst_vids {
+                                    let cancel_token =
+                                        base.runtime.as_ref().map(|rt| rt.cancel_token());
                                     let paths = bidir_bfs_shortest_path(
                                         &*reader,
                                         &src_vid,
@@ -1183,6 +1191,7 @@ impl GraphOperator {
                                             single_shortest: true,
                                             limit: 10,
                                         },
+                                        cancel_token.as_deref(),
                                     )?;
                                     for path in &paths {
                                         let mut out_row = row.clone();
@@ -1248,6 +1257,7 @@ impl GraphOperator {
                                 visited.insert(seed_vid);
 
                                 while let Some((current, current_step)) = frontier.pop() {
+                                    base.ensure_not_cancelled()?;
                                     if current_step >= *steps {
                                         continue;
                                     }

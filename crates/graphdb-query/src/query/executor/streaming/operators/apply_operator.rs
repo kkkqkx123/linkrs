@@ -54,13 +54,14 @@ impl ApplyOperator {
         _right: &mut StreamingExecutor,
     ) -> Result<Option<DataChunk>, QueryError> {
         match self {
-            Self::Apply { apply_expression, .. } => {
+            Self::Apply {
+                apply_expression, ..
+            } => {
                 if let Some(chunk) = left.advance()? {
                     let col_names = chunk.col_names();
                     let mut result_rows = Vec::new();
                     for row in chunk.rows {
-                        let mut context =
-                            ValueRowContext::new(row.clone(), col_names.clone());
+                        let mut context = ValueRowContext::new(row.clone(), col_names.clone());
                         if let Ok(val) =
                             ExpressionEvaluator::evaluate(apply_expression, &mut context)
                         {
@@ -99,8 +100,7 @@ impl ApplyOperator {
                         }
                         let col_names = chunk.col_names();
                         for row in chunk.rows {
-                            let mut ctx =
-                                ValueRowContext::new(row.clone(), col_names.clone());
+                            let mut ctx = ValueRowContext::new(row.clone(), col_names.clone());
                             match ExpressionEvaluator::evaluate(pattern, &mut ctx) {
                                 Ok(val) => {
                                     let mut new_row = row.clone();
@@ -154,21 +154,31 @@ impl ApplyOperator {
     ) -> Result<(), QueryError> {
         match self {
             Self::Apply { .. } => {
-                left.close()?;
-                right.close()?;
-                Ok(())
+                let left_err = left.close().err();
+                let right_err = right.close().err();
+                close_result(left_err, right_err)
             }
             Self::PatternApply {
                 all_rows,
                 result_iter,
+                memory_tracker,
                 ..
             } => {
-                left.close()?;
-                right.close()?;
+                memory_tracker.reset();
+                let left_err = left.close().err();
+                let right_err = right.close().err();
                 all_rows.clear();
                 *result_iter = None;
-                Ok(())
+                close_result(left_err, right_err)
             }
         }
+    }
+}
+
+fn close_result(left: Option<QueryError>, right: Option<QueryError>) -> Result<(), QueryError> {
+    match (left, right) {
+        (Some(e), _) => Err(e),
+        (_, Some(e)) => Err(e),
+        _ => Ok(()),
     }
 }

@@ -269,6 +269,42 @@ impl DdlOperator {
                             ))),
                         }
                     }
+                    "switch_space" | "use" => {
+                        let reader = get_reader(storage)?;
+                        let name = space_name.as_deref().unwrap_or("");
+                        match reader
+                            .get_space(name)
+                            .map_err(|e| QueryError::execution(e.to_string()))?
+                        {
+                            Some(info) => {
+                                let schema = Arc::new(Schema::new(vec![
+                                    ColumnInfo {
+                                        name: "space_name".to_string(),
+                                        data_type: "string".to_string(),
+                                    },
+                                    ColumnInfo {
+                                        name: "space_id".to_string(),
+                                        data_type: "bigint".to_string(),
+                                    },
+                                    ColumnInfo {
+                                        name: "vid_type".to_string(),
+                                        data_type: "string".to_string(),
+                                    },
+                                ]));
+                                Ok(Some(make_single_row(
+                                    schema,
+                                    vec![
+                                        Value::String(info.space_name),
+                                        Value::BigInt(info.space_id as i64),
+                                        Value::String(format!("{:?}", info.vid_type)),
+                                    ],
+                                )))
+                            }
+                            None => {
+                                Err(QueryError::execution(format!("Space not found: {}", name)))
+                            }
+                        }
+                    }
                     "show_spaces" | "show" => {
                         let reader = get_reader(storage)?;
                         let spaces = reader

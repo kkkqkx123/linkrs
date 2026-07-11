@@ -214,6 +214,7 @@ message Value {
 message QueryResultChunk {
   repeated Row rows = 1;
   bool is_last = 2;
+  repeated string column_names = 3;
 }
 
 message ExecutionMetadata {

@@ -35,7 +35,12 @@ pub use engine::StreamingExecutionEngine;
 pub use executor::StreamingExecutor;
 pub use factory::{chunks_to_execution_result, convert_chunks_to_dataset, StreamingQueryExecutor};
 pub use partition::PartitionView;
-pub use runtime::{ExecutionRuntime, OperatorProfile, ProfileCollector, QueryIdentity, ResourceOwner};
-pub use slot::{combine_layouts, combine_layouts_with_dedup, SlotId, SlotInfo, SlotLayout, SlotOrigin};
+pub use runtime::{
+    ExecutionRuntime, OperatorProfile, OperatorProfileKey, ProfileCollector, QueryIdentity,
+    ResourceOwner,
+};
+pub use slot::{
+    combine_layouts, combine_layouts_with_dedup, SlotId, SlotInfo, SlotLayout, SlotOrigin,
+};
 pub use stream::ResultStream;
 pub use stream_result::StreamingQueryResult;

@@ -39,23 +39,36 @@ impl MemoryBudget {
 
     /// Try to reserve `bytes` additional memory.
     ///
-    /// Returns `Ok(true)` if within budget, `Ok(false)` if
-    /// already over budget but does not error (caller decides
-    /// what to do), or an error if the budget would be exceeded.
+    /// Uses compare-and-swap so that the counter is only updated when the
+    /// new total does not exceed the budget.  On overflow or over-budget
+    /// the counter is left unchanged (no observable side-effect).
     ///
-    /// The error message includes the current usage, budget, and
-    /// request size so that callers can identify which operator
-    /// exceeded the budget.
+    /// Returns `Ok(true)` on success, `Err` when the budget would be exceeded
+    /// or the request causes integer overflow.
     pub fn try_reserve(&self, bytes: usize) -> Result<bool, QueryError> {
-        let prev = self.allocated.fetch_add(bytes, std::sync::atomic::Ordering::Relaxed);
-        let total = prev + bytes;
-        if total > self.max_bytes {
-            Err(QueryError::execution(format!(
-                "Memory budget exceeded: request {} bytes, total {} > budget {} bytes",
-                bytes, total, self.max_bytes
-            )))
-        } else {
-            Ok(true)
+        let mut prev = self.allocated.load(std::sync::atomic::Ordering::Relaxed);
+        loop {
+            let total = prev.checked_add(bytes).ok_or_else(|| {
+                QueryError::execution(format!(
+                    "Memory budget overflow: request {} bytes overflows usize",
+                    bytes,
+                ))
+            })?;
+            if total > self.max_bytes {
+                return Err(QueryError::execution(format!(
+                    "Memory budget exceeded: request {} bytes, total {} > budget {} bytes",
+                    bytes, total, self.max_bytes,
+                )));
+            }
+            match self.allocated.compare_exchange_weak(
+                prev,
+                total,
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+            ) {
+                Ok(_) => return Ok(true),
+                Err(current) => prev = current,
+            }
         }
     }
 
@@ -69,11 +82,14 @@ impl MemoryBudget {
         self.allocated.load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// Rough estimate of the memory used by a single row (Vec<Value> heap + Value deep data).
+    pub fn estimate_row_memory(row: &[Value]) -> usize {
+        row.iter().map(|v| v.estimated_size()).sum()
+    }
+
     /// Rough estimate of the memory used by a slice of rows.
     pub fn estimate_rows_memory(rows: &[Vec<Value>]) -> usize {
-        rows.iter()
-            .map(|row| row.capacity() * std::mem::size_of::<Value>())
-            .sum()
+        rows.iter().map(|row| Self::estimate_row_memory(row)).sum()
     }
 }
 
@@ -126,18 +142,26 @@ impl MemoryTracker {
         self.current_bytes
     }
 
-    /// Convenience: reserve memory for a single row estimate.
+    /// Convenience: reserve memory for a single row (includes Value deep heap data).
     pub fn try_reserve_row(&mut self, row: &[Value]) -> Result<(), QueryError> {
-        let mem = std::mem::size_of_val(row);
+        let mem = MemoryBudget::estimate_row_memory(row);
         self.try_reserve(mem)
     }
 
-    /// Convenience: reserve memory for many rows estimate.
+    /// Convenience: reserve memory for many rows.
     pub fn try_reserve_rows(&mut self, rows: &[Vec<Value>]) -> Result<(), QueryError> {
         let mem = MemoryBudget::estimate_rows_memory(rows);
         self.try_reserve(mem)
     }
 
+    /// Release all tracked bytes and reset the tracker to zero.
+    ///
+    /// Called by operator `close()` instead of re-estimating current state.
+    pub fn reset(&mut self) {
+        self.budget.release(self.current_bytes);
+        self.current_bytes = 0;
+        // peak_bytes intentionally preserved for profile reporting
+    }
 }
 
 /// Trait for operators that can spill intermediate data to disk.

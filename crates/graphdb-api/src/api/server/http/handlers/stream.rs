@@ -1,8 +1,4 @@
-//! Streaming Results HTTP Processor
-//!
-//! Uses [`StreamingQueryResult`] to pull result chunks incrementally,
-//! sending each row as an SSE event without pre-materialising the full
-//! result set.
+use std::sync::{Arc, Mutex};
 
 use axum::{
     extract::{Json, State},
@@ -22,11 +18,11 @@ use crate::storage::{
 pub struct StreamQueryRequest {
     pub query: String,
     pub session_id: i64,
-    #[serde(default = "default_batch_size")]
-    pub batch_size: usize,
+    #[serde(default = "default_buffer_capacity")]
+    pub event_buffer_capacity: usize,
 }
 
-fn default_batch_size() -> usize {
+fn default_buffer_capacity() -> usize {
     100
 }
 
@@ -62,10 +58,11 @@ pub async fn execute_stream<
     Sse<impl tokio_stream::Stream<Item = Result<Event, HttpError>> + Send + 'static>,
     HttpError,
 > {
-    let batch_size = request.batch_size.clamp(1, 1000);
+    let buffer_capacity = request.event_buffer_capacity.clamp(1, 1000);
     let server = state.server.clone();
 
-    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, HttpError>>(batch_size);
+    let (tx, rx) =
+        tokio::sync::mpsc::channel::<Result<Event, HttpError>>(buffer_capacity);
 
     tokio::spawn(async move {
         let start_time = std::time::Instant::now();
@@ -93,15 +90,28 @@ pub async fn execute_stream<
             }
         };
 
+        // Track column names from the first chunk.
+        let first_columns: Arc<Mutex<Option<Vec<String>>>> = Arc::new(Mutex::new(None));
+
         // Spawn a blocking task to pull chunks synchronously
         // and send rows through the channel.
         let tx_pull = tx.clone();
+        let stream_result_pull = stream_result.clone();
+        let first_columns_pull = first_columns.clone();
         let pull_handle = tokio::task::spawn_blocking(move || {
             let mut row_index: usize = 0;
             loop {
-                match stream_result.next_chunk() {
+                match stream_result_pull.next_chunk() {
                     Ok(Some(chunk)) => {
                         let columns = chunk.col_names();
+
+                        // Capture column names from the first chunk.
+                        let mut cols = first_columns_pull.lock().unwrap();
+                        if cols.is_none() {
+                            *cols = Some(columns.clone());
+                        }
+                        drop(cols);
+
                         for row in chunk.rows {
                             let obj: serde_json::Map<String, serde_json::Value> = row
                                 .into_iter()
@@ -123,36 +133,55 @@ pub async fn execute_stream<
                                     .blocking_send(Ok(Event::default().data(data)))
                                     .is_err()
                                 {
-                                    return row_index;
+                                    // Client disconnected — cancel the query.
+                                    stream_result_pull.cancel();
+                                    return Ok(row_index);
                                 }
                             }
                         }
                     }
-                    Ok(None) => return row_index,
-                    Err(_) => return row_index,
+                    Ok(None) => return Ok(row_index),
+                    Err(e) => return Err(e),
                 }
             }
         });
 
         // Wait for the pull task to finish.
-        let total_rows = pull_handle.await.unwrap_or_default();
+        match pull_handle.await {
+            Ok(Ok(total_rows)) => {
+                // Send metadata with column names.
+                let columns = first_columns.lock().unwrap().take().unwrap_or_default();
+                let metadata = StreamMetadata {
+                    rows_returned: total_rows,
+                    execution_time_ms: start_time.elapsed().as_millis() as u64,
+                    columns,
+                };
 
-        // Send metadata
-        let columns: Vec<String> = Vec::new(); // columns are not tracked across chunks in this simple version
-        let metadata = StreamMetadata {
-            rows_returned: total_rows,
-            execution_time_ms: start_time.elapsed().as_millis() as u64,
-            columns,
-        };
+                if let Ok(meta_str) = serde_json::to_string(&metadata) {
+                    let _ = tx
+                        .send(Ok(Event::default().event("metadata").data(meta_str)))
+                        .await;
+                }
 
-        if let Ok(meta_str) = serde_json::to_string(&metadata) {
-            let _ = tx
-                .send(Ok(Event::default().event("metadata").data(meta_str)))
-                .await;
+                // Send Completion Event
+                let _ = tx.send(Ok(Event::default().event("done").data("{}"))).await;
+            }
+            Ok(Err(e)) => {
+                // Execution error — send error, then done.
+                let error_msg = json!({
+                    "error": true,
+                    "message": e.to_string(),
+                    "code": "QUERY_ERROR"
+                });
+                let _ = tx
+                    .send(Ok(Event::default().event("error").data(error_msg.to_string())))
+                    .await;
+                let _ = tx.send(Ok(Event::default().event("done").data("{}"))).await;
+            }
+            Err(_) => {
+                // Task panicked or cancelled — channel will be dropped.
+            }
         }
-
-        // Send Completion Event
-        let _ = tx.send(Ok(Event::default().event("done").data("{}"))).await;
     });
 
     Ok(Sse::new(ReceiverStream::new(rx)).keep_alive(

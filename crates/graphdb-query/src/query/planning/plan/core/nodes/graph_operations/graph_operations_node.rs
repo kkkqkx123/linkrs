@@ -308,7 +308,7 @@ impl RollUpApplyNode {
                 collect_col: self.collect_col.clone(),
                 output_var: self.output_var.clone(),
                 col_names: self.col_names.clone(),
-            column_types: self.column_types.clone(),
+                column_types: self.column_types.clone(),
             },
         )
     }
@@ -618,7 +618,7 @@ impl PatternApplyNode {
                 is_anti_predicate: self.is_anti_predicate,
                 output_var: self.output_var.clone(),
                 col_names: self.col_names.clone(),
-            column_types: self.column_types.clone(),
+                column_types: self.column_types.clone(),
             },
         )
     }

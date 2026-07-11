@@ -37,6 +37,7 @@ use std::sync::Arc;
 
 use crate::query::optimizer::execution_mode_optimizer::ExecutionModeOptimizer;
 use crate::query::optimizer::heuristic::PlanRewriter;
+use crate::query::optimizer::partitioning::{PartitioningConfig, PartitioningPlanner};
 use crate::query::optimizer::{
     AggregateStrategySelector, BatchPlanAnalyzer, CostCalculator, CostModelConfig, CteCacheManager,
     SelectivityEstimator, SelectivityFeedbackManager, SortEliminationOptimizer, StatisticsManager,
@@ -77,6 +78,8 @@ pub struct OptimizerEngine {
     cost_config: CostModelConfig,
     /// Heuristic plan rewriter
     heuristic_rewriter: PlanRewriter,
+    /// Conservative selector for physical streaming partitions.
+    partitioning_planner: PartitioningPlanner,
     /// Enable heuristic optimization phase
     enable_heuristic: bool,
     /// Enable cost-based optimization phase
@@ -174,6 +177,7 @@ impl OptimizerEngine {
             execution_mode_optimizer,
             cost_config,
             heuristic_rewriter,
+            partitioning_planner: PartitioningPlanner::new(PartitioningConfig::default()),
             enable_heuristic: true,
             enable_cost_based: true,
             enable_execution_mode: true,
@@ -358,7 +362,35 @@ impl OptimizerEngine {
             log::debug!("Phase 3 completed successfully");
         }
 
+        current_plan = self.apply_partitioning_selection(current_plan);
+
         Ok(current_plan)
+    }
+
+    fn apply_partitioning_selection(&self, mut plan: ExecutionPlan) -> ExecutionPlan {
+        if plan.partition_spec().is_some() {
+            return plan;
+        }
+        let Some(root) = plan.root.as_ref() else {
+            return plan;
+        };
+        let decision = self.partitioning_planner.decide(root, &self.stats_manager);
+        if let Some(spec) = decision.partition_spec {
+            plan.set_partition_spec(spec);
+            plan.execution_mode_reason =
+                format!("{}; {}", plan.execution_mode_reason, decision.reason);
+        }
+        plan
+    }
+
+    /// Replace the conservative partitioning configuration. This is intended
+    /// for database setup, before the engine is shared by query pipelines.
+    pub fn set_partitioning_config(&mut self, config: PartitioningConfig) {
+        self.partitioning_planner = PartitioningPlanner::new(config);
+    }
+
+    pub fn partitioning_config(&self) -> &PartitioningConfig {
+        self.partitioning_planner.config()
     }
 
     /// Apply heuristic optimization rules

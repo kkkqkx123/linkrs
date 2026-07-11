@@ -2,7 +2,6 @@ use std::collections::HashSet;
 
 use crate::core::error::QueryError;
 use crate::core::Value;
-use crate::query::executor::base::MemoryBudget;
 use crate::query::executor::base::MemoryTracker;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
@@ -283,22 +282,33 @@ impl SetOperator {
                 ..
             } => {
                 if base.opened {
-                    let mem = seen_rows.len() * 256;
-                    memory_tracker.release(mem);
+                    memory_tracker.reset();
                     seen_rows.clear();
-                    left.close()?;
-                    right.close()?;
+                    let left_err = left.close().err();
+                    let right_err = right.close().err();
                     base.opened = false;
+                    match (left_err, right_err) {
+                        (Some(e), _) => Err(e),
+                        (_, Some(e)) => Err(e),
+                        _ => Ok(()),
+                    }
+                } else {
+                    Ok(())
                 }
-                Ok(())
             }
             Self::UnionAll { .. } => {
                 if base.opened {
-                    left.close()?;
-                    right.close()?;
+                    let left_err = left.close().err();
+                    let right_err = right.close().err();
                     base.opened = false;
+                    match (left_err, right_err) {
+                        (Some(e), _) => Err(e),
+                        (_, Some(e)) => Err(e),
+                        _ => Ok(()),
+                    }
+                } else {
+                    Ok(())
                 }
-                Ok(())
             }
             Self::Intersect {
                 left_rows,
@@ -307,16 +317,20 @@ impl SetOperator {
                 ..
             } => {
                 if base.opened {
-                    let mem_rows = MemoryBudget::estimate_rows_memory(left_rows);
-                    let mem_set = right_rows.len() * 256;
-                    memory_tracker.release(mem_rows + mem_set);
+                    memory_tracker.reset();
                     left_rows.clear();
                     right_rows.clear();
-                    left.close()?;
-                    right.close()?;
+                    let left_err = left.close().err();
+                    let right_err = right.close().err();
                     base.opened = false;
+                    match (left_err, right_err) {
+                        (Some(e), _) => Err(e),
+                        (_, Some(e)) => Err(e),
+                        _ => Ok(()),
+                    }
+                } else {
+                    Ok(())
                 }
-                Ok(())
             }
             Self::Except {
                 exclude_rows,
@@ -324,25 +338,33 @@ impl SetOperator {
                 ..
             } => {
                 if base.opened {
-                    let mem = exclude_rows.len() * 256;
-                    memory_tracker.release(mem);
+                    memory_tracker.reset();
                     exclude_rows.clear();
-                    left.close()?;
-                    right.close()?;
+                    let left_err = left.close().err();
+                    let right_err = right.close().err();
                     base.opened = false;
+                    match (left_err, right_err) {
+                        (Some(e), _) => Err(e),
+                        (_, Some(e)) => Err(e),
+                        _ => Ok(()),
+                    }
+                } else {
+                    Ok(())
                 }
-                Ok(())
             }
             Self::Minus {
                 exclude_rows,
                 memory_tracker,
                 ..
             } => {
-                let mem = exclude_rows.len() * 256;
-                memory_tracker.release(mem);
+                memory_tracker.reset();
                 exclude_rows.clear();
-                left.close()?;
-                Ok(())
+                let left_err = left.close().err();
+                base.opened = false;
+                match left_err {
+                    Some(e) => Err(e),
+                    None => Ok(()),
+                }
             }
         }
     }

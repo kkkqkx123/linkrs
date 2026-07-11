@@ -3,8 +3,7 @@
 //! Contains ExecutionMode and related configuration for the streaming executor.
 
 /// Execution mode selector
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ExecutionMode {
     /// Materialized execution (current system, push-based)
     #[default]
@@ -12,7 +11,6 @@ pub enum ExecutionMode {
     /// Streaming execution (new system, pull-based)
     Streaming,
 }
-
 
 impl ExecutionMode {
     pub fn is_materialized(&self) -> bool {

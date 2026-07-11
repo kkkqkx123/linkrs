@@ -19,6 +19,7 @@ pub struct ResultStream {
     runtime: Arc<ExecutionRuntime>,
     opened: bool,
     exhausted: bool,
+    closed: bool,
 }
 
 impl ResultStream {
@@ -27,15 +28,13 @@ impl ResultStream {
     /// The engine must have a root executor registered.  The stream
     /// takes ownership of the engine and calls `open()` on the first
     /// `next_chunk()` call (or immediately if `open_now` is true).
-    pub fn new(
-        engine: StreamingExecutionEngine,
-        runtime: Arc<ExecutionRuntime>,
-    ) -> Self {
+    pub fn new(engine: StreamingExecutionEngine, runtime: Arc<ExecutionRuntime>) -> Self {
         Self {
             engine: Some(engine),
             runtime,
             opened: false,
             exhausted: false,
+            closed: false,
         }
     }
 
@@ -43,7 +42,9 @@ impl ResultStream {
     fn ensure_opened(&mut self) -> Result<(), QueryError> {
         if !self.opened {
             if let Some(ref mut engine) = self.engine {
-                engine.open_root()?;
+                if let Err(error) = engine.open_root() {
+                    return self.return_execution_error(error);
+                }
             }
             self.opened = true;
         }
@@ -55,7 +56,9 @@ impl ResultStream {
     /// Returns `Ok(None)` when the stream is exhausted.
     /// The runtime's cancel token is checked on each call.
     pub fn next_chunk(&mut self) -> Result<Option<DataChunk>, QueryError> {
-        self.runtime.ensure_not_cancelled()?;
+        if let Err(error) = self.runtime.ensure_not_cancelled() {
+            return self.return_execution_error(error);
+        }
 
         if self.exhausted {
             return Ok(None);
@@ -64,12 +67,12 @@ impl ResultStream {
         self.ensure_opened()?;
 
         if let Some(ref mut engine) = self.engine {
-            match engine.next_chunk_from_root()? {
-                Some(chunk) => {
-                    let count = chunk.len() as u64;
-                    self.runtime.profile_add_rows(count);
-                    Ok(Some(chunk))
-                }
+            let next = match engine.next_chunk_from_root() {
+                Ok(next) => next,
+                Err(error) => return self.return_execution_error(error),
+            };
+            match next {
+                Some(chunk) => Ok(Some(chunk)),
                 None => {
                     self.exhausted = true;
                     self.close_inner()?;
@@ -83,7 +86,7 @@ impl ResultStream {
 
     /// Close the stream and release resources.
     pub fn close(&mut self) -> Result<(), QueryError> {
-        if self.exhausted {
+        if self.closed {
             return Ok(());
         }
         self.exhausted = true;
@@ -91,13 +94,33 @@ impl ResultStream {
     }
 
     fn close_inner(&mut self) -> Result<(), QueryError> {
+        if self.closed {
+            return Ok(());
+        }
         let result = if let Some(ref mut engine) = self.engine {
-            engine.close_root()
+            let stop_error = engine.stop_root().err();
+            let close_error = engine.close_root().err();
+            stop_error.or(close_error).map_or(Ok(()), Err)
         } else {
             Ok(())
         };
+        self.runtime.profile_end();
         self.runtime.release_resources();
+        self.closed = true;
         result
+    }
+
+    /// Preserve an execution error while guaranteeing immediate, idempotent
+    /// teardown. A cleanup failure is logged because the caller must receive
+    /// the original execution failure.
+    fn return_execution_error<T>(&mut self, error: QueryError) -> Result<T, QueryError> {
+        if let Err(close_error) = self.close_inner() {
+            log::warn!(
+                "Failed to clean up streaming result after execution error: {}",
+                close_error
+            );
+        }
+        Err(error)
     }
 
     /// Consume the stream and materialise all remaining chunks into a `DataSet`.
@@ -121,8 +144,55 @@ impl ResultStream {
 
 impl Drop for ResultStream {
     fn drop(&mut self) {
-        if !self.exhausted {
+        if !self.closed {
             let _ = self.close_inner();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use super::*;
+    use crate::core::Value;
+    use crate::query::executor::base::MemoryBudget;
+    use crate::query::executor::streaming::executor::StreamingExecutor;
+    use crate::query::executor::streaming::operator_base::OperatorBase;
+    use crate::query::executor::streaming::operators::source_operator::SourceOperator;
+    use crate::query::executor::streaming::runtime::QueryIdentity;
+
+    #[test]
+    fn cancellation_error_releases_resources_immediately() {
+        let runtime = Arc::new(ExecutionRuntime::new(
+            QueryIdentity::default(),
+            MemoryBudget::default_budget(),
+        ));
+        let released = Arc::new(AtomicBool::new(false));
+        let released_for_cleanup = released.clone();
+        runtime.on_cleanup(move || {
+            released_for_cleanup.store(true, Ordering::Relaxed);
+        });
+
+        let mut engine = StreamingExecutionEngine::new();
+        engine.register_executor(
+            0,
+            StreamingExecutor::Source(
+                OperatorBase::new(1),
+                SourceOperator::ScanVertices {
+                    partition_id: 0,
+                    buffer: vec![vec![Value::BigInt(1)]],
+                    current_index: 0,
+                    col_names: vec!["id".to_string()],
+                },
+            ),
+        );
+        engine.set_runtime(runtime.clone());
+        let mut stream = engine.into_stream().expect("create stream");
+
+        runtime.cancel();
+        assert!(stream.next_chunk().is_err());
+        assert!(released.load(Ordering::Relaxed));
+        assert!(stream.close().is_ok());
     }
 }

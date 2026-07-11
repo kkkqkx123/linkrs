@@ -20,11 +20,13 @@ pub enum UnaryOperator {
         output_col_names: Vec<String>,
     },
     Limit {
+        offset: u32,
         limit: u32,
+        skipped: u32,
         consumed: u32,
     },
     Dedup {
-        seen_rows: std::collections::HashSet<String>,
+        seen_rows: std::collections::HashSet<Vec<Value>>,
     },
     Assign {
         assignments: Vec<(String, Expression)>,
@@ -159,28 +161,45 @@ impl UnaryOperator {
                     Ok(None)
                 }
             }
-            Self::Limit { limit, consumed } => {
+            Self::Limit {
+                offset,
+                limit,
+                skipped,
+                consumed,
+            } => {
                 if *consumed >= *limit {
                     return Ok(None);
                 }
-                if let Some(mut chunk) = input.advance()? {
-                    let remaining = *limit - *consumed;
-                    if chunk.rows.len() > remaining as usize {
-                        chunk.rows.truncate(remaining as usize);
+
+                loop {
+                    let Some(mut chunk) = input.advance()? else {
+                        return Ok(None);
+                    };
+
+                    if *skipped < *offset {
+                        let remaining_offset = (*offset - *skipped) as usize;
+                        let rows_to_skip = remaining_offset.min(chunk.rows.len());
+                        chunk.rows.drain(..rows_to_skip);
+                        *skipped += rows_to_skip as u32;
+                    }
+
+                    if chunk.rows.is_empty() {
+                        continue;
+                    }
+
+                    let remaining_limit = (*limit - *consumed) as usize;
+                    if chunk.rows.len() > remaining_limit {
+                        chunk.rows.truncate(remaining_limit);
                     }
                     *consumed += chunk.rows.len() as u32;
-                    Ok(Some(chunk))
-                } else {
-                    Ok(None)
+                    return Ok(Some(chunk));
                 }
             }
             Self::Dedup { seen_rows } => {
                 while let Some(chunk) = input.advance()? {
                     let mut result_rows = vec![];
                     for row in chunk.rows {
-                        let row_str = format!("{:?}", row);
-                        if !seen_rows.contains(&row_str) {
-                            seen_rows.insert(row_str);
+                        if seen_rows.insert(row.clone()) {
                             result_rows.push(row);
                         }
                     }
@@ -200,7 +219,9 @@ impl UnaryOperator {
                             let mut context = ValueRowContext::new(row.clone(), col_names.clone());
                             match ExpressionEvaluator::evaluate(expr, &mut context) {
                                 Ok(val) => new_row.push(val),
-                                Err(_) => new_row.push(Value::Null(crate::core::value::NullType::Null)),
+                                Err(_) => {
+                                    new_row.push(Value::Null(crate::core::value::NullType::Null))
+                                }
                             }
                         }
                         result_rows.push(new_row);
@@ -288,9 +309,7 @@ impl UnaryOperator {
                         for (_prop_name, expr) in vertex_properties.iter() {
                             match ExpressionEvaluator::evaluate(expr, &mut ctx) {
                                 Ok(val) => new_row.push(val),
-                                Err(_) => {
-                                    new_row.push(Value::Null(crate::core::NullType::Null))
-                                }
+                                Err(_) => new_row.push(Value::Null(crate::core::NullType::Null)),
                             }
                         }
                         result_rows.push(new_row);

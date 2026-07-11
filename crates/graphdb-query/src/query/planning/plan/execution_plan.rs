@@ -1,11 +1,14 @@
 //! Structure definition of the execution plan
 //! Contains the ExecutionPlan and SubPlan structures.
 
+use std::ops::Range;
+use std::{error::Error, fmt};
+
+use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::query::planning::plan::PlanNodeEnum;
 
 /// Execution mode for a query plan
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ExecutionMode {
     /// Use traditional materialized execution (buffer all intermediate results)
     #[default]
@@ -23,6 +26,210 @@ impl ExecutionMode {
     }
 }
 
+/// Physical partition layout selected for a plan.
+///
+/// An absent layout means single-tree execution.  The planner must only set a
+/// layout after it has split the logical plan at a valid exchange boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartitionSpec {
+    ranges: Vec<Range<u32>>,
+}
+
+/// Validation error returned when a physical partition layout cannot be
+/// executed safely.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PartitionSpecError {
+    Empty,
+    EmptyRange { index: usize },
+    UnorderedOrOverlapping { index: usize },
+}
+
+impl fmt::Display for PartitionSpecError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => write!(
+                formatter,
+                "partition layout must contain at least one range"
+            ),
+            Self::EmptyRange { index } => {
+                write!(
+                    formatter,
+                    "partition range at index {index} must not be empty"
+                )
+            }
+            Self::UnorderedOrOverlapping { index } => write!(
+                formatter,
+                "partition range at index {index} must be ordered and non-overlapping"
+            ),
+        }
+    }
+}
+
+impl Error for PartitionSpecError {}
+
+impl PartitionSpec {
+    /// Create a validated physical partition layout.
+    ///
+    /// Ranges are ordered by start and may be disjoint, but they must not be
+    /// empty or overlap. Keeping this invariant at the plan boundary prevents
+    /// duplicated or missing rows once a scan is copied for each partition.
+    pub fn try_new(ranges: Vec<Range<u32>>) -> Result<Self, PartitionSpecError> {
+        if ranges.is_empty() {
+            return Err(PartitionSpecError::Empty);
+        }
+
+        let mut previous_end = None;
+        for (index, range) in ranges.iter().enumerate() {
+            if range.start >= range.end {
+                return Err(PartitionSpecError::EmptyRange { index });
+            }
+            if previous_end.is_some_and(|end| range.start < end) {
+                return Err(PartitionSpecError::UnorderedOrOverlapping { index });
+            }
+            previous_end = Some(range.end);
+        }
+
+        Ok(Self { ranges })
+    }
+
+    pub fn ranges(&self) -> &[Range<u32>] {
+        &self.ranges
+    }
+
+    pub fn partition_count(&self) -> usize {
+        self.ranges.len()
+    }
+}
+
+/// A physical decomposition of a logical plan at partition exchange
+/// boundaries. Logical nodes are retained verbatim; this type only describes
+/// where they run (local partition trees or one global tree).
+#[derive(Debug, Clone)]
+pub struct PartitionedPhysicalPlan {
+    partition_spec: PartitionSpec,
+    root: PartitionedPhysicalNode,
+}
+
+#[derive(Debug, Clone)]
+pub enum PartitionedPhysicalNode {
+    /// A subtree that can be copied once for each partition.
+    Local { logical_plan: PlanNodeEnum },
+    /// A single-input global operator consuming a partitioned child through
+    /// an explicit gather exchange.
+    GlobalUnary {
+        logical_plan: PlanNodeEnum,
+        input: Box<PartitionedPhysicalNode>,
+    },
+    /// A two-input global operator consuming gathered left and right inputs.
+    GlobalBinary {
+        logical_plan: PlanNodeEnum,
+        left: Box<PartitionedPhysicalNode>,
+        right: Box<PartitionedPhysicalNode>,
+    },
+}
+
+impl PartitionedPhysicalPlan {
+    /// Derive a conservative physical decomposition from a logical root and
+    /// an already validated layout. Unsupported nodes remain local candidates
+    /// and are rejected by the executor builder unless they prove
+    /// partition-local; callers can then fall back to a single tree.
+    pub fn from_logical(root: PlanNodeEnum, partition_spec: PartitionSpec) -> Self {
+        Self {
+            partition_spec,
+            root: Self::split_node(root),
+        }
+    }
+
+    pub fn partition_spec(&self) -> &PartitionSpec {
+        &self.partition_spec
+    }
+
+    pub fn root(&self) -> &PartitionedPhysicalNode {
+        &self.root
+    }
+
+    fn split_node(node: PlanNodeEnum) -> PartitionedPhysicalNode {
+        match node {
+            PlanNodeEnum::Sort(ref sort) => PartitionedPhysicalNode::GlobalUnary {
+                input: Box::new(Self::split_node(sort.input().clone())),
+                logical_plan: node,
+            },
+            PlanNodeEnum::Limit(ref limit) => PartitionedPhysicalNode::GlobalUnary {
+                input: Box::new(Self::split_node(limit.input().clone())),
+                logical_plan: node,
+            },
+            PlanNodeEnum::TopN(ref top_n) => PartitionedPhysicalNode::GlobalUnary {
+                input: Box::new(Self::split_node(top_n.input().clone())),
+                logical_plan: node,
+            },
+            PlanNodeEnum::Dedup(ref dedup) => PartitionedPhysicalNode::GlobalUnary {
+                input: Box::new(Self::split_node(dedup.input().clone())),
+                logical_plan: node,
+            },
+            PlanNodeEnum::Aggregate(ref aggregate) => PartitionedPhysicalNode::GlobalUnary {
+                input: Box::new(Self::split_node(aggregate.input().clone())),
+                logical_plan: node,
+            },
+            PlanNodeEnum::Window(ref window) => PartitionedPhysicalNode::GlobalUnary {
+                input: Box::new(Self::split_node(window.input().clone())),
+                logical_plan: node,
+            },
+            PlanNodeEnum::InnerJoin(ref join) => Self::global_binary(
+                node.clone(),
+                join.left_input().clone(),
+                join.right_input().clone(),
+            ),
+            PlanNodeEnum::LeftJoin(ref join) => Self::global_binary(
+                node.clone(),
+                join.left_input().clone(),
+                join.right_input().clone(),
+            ),
+            PlanNodeEnum::RightJoin(ref join) => Self::global_binary(
+                node.clone(),
+                join.left_input().clone(),
+                join.right_input().clone(),
+            ),
+            PlanNodeEnum::CrossJoin(ref join) => Self::global_binary(
+                node.clone(),
+                join.left_input().clone(),
+                join.right_input().clone(),
+            ),
+            PlanNodeEnum::HashInnerJoin(ref join) => Self::global_binary(
+                node.clone(),
+                join.left_input().clone(),
+                join.right_input().clone(),
+            ),
+            PlanNodeEnum::HashLeftJoin(ref join) => Self::global_binary(
+                node.clone(),
+                join.left_input().clone(),
+                join.right_input().clone(),
+            ),
+            PlanNodeEnum::FullOuterJoin(ref join) => Self::global_binary(
+                node.clone(),
+                join.left_input().clone(),
+                join.right_input().clone(),
+            ),
+            PlanNodeEnum::SemiJoin(ref join) => Self::global_binary(
+                node.clone(),
+                join.left_input().clone(),
+                join.right_input().clone(),
+            ),
+            logical_plan => PartitionedPhysicalNode::Local { logical_plan },
+        }
+    }
+
+    fn global_binary(
+        logical_plan: PlanNodeEnum,
+        left: PlanNodeEnum,
+        right: PlanNodeEnum,
+    ) -> PartitionedPhysicalNode {
+        PartitionedPhysicalNode::GlobalBinary {
+            logical_plan,
+            left: Box::new(Self::split_node(left)),
+            right: Box::new(Self::split_node(right)),
+        }
+    }
+}
 
 /// Execution plan structure
 /// Represents the complete executable plan, including the root node and the plan ID.
@@ -45,6 +252,10 @@ pub struct ExecutionPlan {
 
     /// Reason for execution mode selection (for debugging/logging)
     pub execution_mode_reason: String,
+
+    /// Optional physical partition layout. A layout is consumed only by a
+    /// partition-safe streaming plan; unsupported plans fail explicitly.
+    pub partition_spec: Option<PartitionSpec>,
 }
 
 impl ExecutionPlan {
@@ -57,6 +268,7 @@ impl ExecutionPlan {
             format: "default".to_string(),
             execution_mode: ExecutionMode::default(),
             execution_mode_reason: "default".to_string(),
+            partition_spec: None,
         }
     }
 
@@ -104,6 +316,20 @@ impl ExecutionPlan {
     /// Get the execution mode reason
     pub fn execution_mode_reason(&self) -> &str {
         &self.execution_mode_reason
+    }
+
+    /// Attach the physical partition layout chosen by the optimizer.
+    pub fn set_partition_spec(&mut self, partition_spec: PartitionSpec) {
+        self.partition_spec = Some(partition_spec);
+    }
+
+    /// Remove partitioning and execute the plan as a single tree.
+    pub fn clear_partition_spec(&mut self) {
+        self.partition_spec = None;
+    }
+
+    pub fn partition_spec(&self) -> Option<&PartitionSpec> {
+        self.partition_spec.as_ref()
     }
 
     /// Calculate the number of nodes in the plan.
@@ -206,5 +432,63 @@ impl SubPlan {
         let tail = other.tail.clone();
 
         SubPlan::new(root, tail)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn partition_spec_is_optional_and_round_trips() {
+        let mut plan = ExecutionPlan::new(None);
+        assert!(plan.partition_spec().is_none());
+
+        let spec = PartitionSpec::try_new(vec![0..10, 10..20])
+            .expect("non-overlapping ranges should be accepted");
+        plan.set_partition_spec(spec.clone());
+
+        let stored = plan.partition_spec().expect("partition spec");
+        assert_eq!(stored, &spec);
+        assert_eq!(stored.partition_count(), 2);
+
+        plan.clear_partition_spec();
+        assert!(plan.partition_spec().is_none());
+    }
+
+    #[test]
+    fn partition_spec_rejects_empty_and_overlapping_ranges() {
+        assert_eq!(
+            PartitionSpec::try_new(Vec::new()),
+            Err(PartitionSpecError::Empty)
+        );
+        assert_eq!(
+            PartitionSpec::try_new(vec![0..0]),
+            Err(PartitionSpecError::EmptyRange { index: 0 })
+        );
+        assert_eq!(
+            PartitionSpec::try_new(vec![0..10, 5..20]),
+            Err(PartitionSpecError::UnorderedOrOverlapping { index: 1 })
+        );
+    }
+
+    #[test]
+    fn physical_plan_keeps_global_limit_above_global_sort() {
+        use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
+        use crate::query::planning::plan::core::nodes::operation::sort_node::{
+            LimitNode, SortNode,
+        };
+
+        let start = PlanNodeEnum::Start(StartNode::new());
+        let sort = SortNode::new(start, Vec::new()).expect("sort plan should build");
+        let limit =
+            LimitNode::new(PlanNodeEnum::Sort(sort), 0, 10).expect("limit plan should build");
+        let spec = PartitionSpec::try_new(vec![0..10, 10..20]).expect("valid spec");
+        let physical = PartitionedPhysicalPlan::from_logical(PlanNodeEnum::Limit(limit), spec);
+
+        assert!(
+            matches!(physical.root(), PartitionedPhysicalNode::GlobalUnary { input, .. }
+            if matches!(input.as_ref(), PartitionedPhysicalNode::GlobalUnary { .. }))
+        );
     }
 }

@@ -6,15 +6,9 @@ use crate::query::executor::streaming::operator_base::OperatorBase;
 
 #[derive(Debug)]
 pub enum TxnOperator {
-    BeginTransaction {
-        transaction_id: Option<String>,
-    },
-    Commit {
-        transaction_id: Option<String>,
-    },
-    Rollback {
-        transaction_id: Option<String>,
-    },
+    BeginTransaction { transaction_id: Option<String> },
+    Commit { transaction_id: Option<String> },
+    Rollback { transaction_id: Option<String> },
 }
 
 impl TxnOperator {
@@ -24,9 +18,7 @@ impl TxnOperator {
         input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
         match self {
-            Self::BeginTransaction { .. }
-            | Self::Commit { .. }
-            | Self::Rollback { .. } => {
+            Self::BeginTransaction { .. } | Self::Commit { .. } | Self::Rollback { .. } => {
                 input.open()?;
                 _base.opened = true;
                 Ok(())
@@ -53,11 +45,9 @@ impl TxnOperator {
                     "committed".to_string(),
                 )]])))
             }
-            Self::Rollback { .. } => {
-                Ok(Some(DataChunk::from_rows(vec![vec![Value::String(
-                    "rolled back".to_string(),
-                )]])))
-            }
+            Self::Rollback { .. } => Ok(Some(DataChunk::from_rows(vec![vec![Value::String(
+                "rolled back".to_string(),
+            )]]))),
         }
     }
 
@@ -67,9 +57,9 @@ impl TxnOperator {
         input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
         match self {
-            Self::BeginTransaction { .. }
-            | Self::Commit { .. }
-            | Self::Rollback { .. } => input.stop(),
+            Self::BeginTransaction { .. } | Self::Commit { .. } | Self::Rollback { .. } => {
+                input.stop()
+            }
         }
     }
 
@@ -79,9 +69,7 @@ impl TxnOperator {
         input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
         match self {
-            Self::BeginTransaction { .. }
-            | Self::Commit { .. }
-            | Self::Rollback { .. } => {
+            Self::BeginTransaction { .. } | Self::Commit { .. } | Self::Rollback { .. } => {
                 if _base.opened {
                     input.close()?;
                     _base.opened = false;

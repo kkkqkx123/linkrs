@@ -1,12 +1,16 @@
-use crate::core::error::{QueryError, QueryResult};
+use std::collections::HashMap;
+use std::sync::{Arc, Weak};
+
 use log::{info, warn};
 use parking_lot::RwLock;
-use std::collections::HashMap;
-use std::sync::Arc;
+
+use crate::core::error::{QueryError, QueryResult};
+use graphdb_query::query::executor::streaming::runtime::ExecutionRuntime;
 
 #[derive(Debug)]
 pub struct QueryContext {
     contexts: Arc<RwLock<HashMap<u32, String>>>,
+    runtime_registry: Arc<parking_lot::RwLock<HashMap<u32, Weak<ExecutionRuntime>>>>,
 }
 
 impl Default for QueryContext {
@@ -19,12 +23,39 @@ impl QueryContext {
     pub fn new() -> Self {
         Self {
             contexts: Arc::new(RwLock::new(HashMap::new())),
+            runtime_registry: Arc::new(parking_lot::RwLock::new(HashMap::new())),
         }
     }
 
     pub fn add_query(&self, ep_id: u32, query_context: String, session_id: i64) {
         info!("Adding query {} to session {}", ep_id, session_id);
         self.contexts.write().insert(ep_id, query_context);
+    }
+
+    /// Register a streaming query with its execution runtime for KILL QUERY support.
+    pub fn register_streaming_query(
+        &self,
+        query_id: u32,
+        query_text: String,
+        runtime: Weak<ExecutionRuntime>,
+        session_id: i64,
+    ) {
+        info!(
+            "Registering streaming query {} in session {}",
+            query_id, session_id
+        );
+        self.contexts.write().insert(query_id, query_text);
+        self.runtime_registry.write().insert(query_id, runtime);
+    }
+
+    /// Unregister a streaming query's runtime (call on completion).
+    pub fn unregister_streaming_query(&self, query_id: u32, session_id: i64) {
+        info!(
+            "Unregistering streaming query {} from session {}",
+            query_id, session_id
+        );
+        self.contexts.write().remove(&query_id);
+        self.runtime_registry.write().remove(&query_id);
     }
 
     pub fn delete_query(&self, ep_id: u32, session_id: i64) {
@@ -41,6 +72,15 @@ impl QueryContext {
             "Marking query {} as killed in session {}",
             ep_id, session_id
         );
+
+        // Cancel the execution runtime if registered.
+        if let Some(weak) = self.runtime_registry.write().remove(&ep_id) {
+            if let Some(rt) = weak.upgrade() {
+                rt.cancel();
+                info!("Cancelled runtime for query {}", ep_id);
+            }
+        }
+
         self.contexts.write().remove(&ep_id);
     }
 
@@ -50,6 +90,14 @@ impl QueryContext {
             "Killing all {} queries in session {}",
             query_count, session_id
         );
+
+        // Cancel all registered runtimes.
+        for (_, weak) in self.runtime_registry.write().drain() {
+            if let Some(rt) = weak.upgrade() {
+                rt.cancel();
+            }
+        }
+
         self.contexts.write().clear();
     }
 

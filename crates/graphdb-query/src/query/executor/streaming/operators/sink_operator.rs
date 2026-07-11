@@ -104,10 +104,7 @@ fn make_modify_result(op: &str, count: u64) -> DataChunk {
     )
 }
 
-fn eval_expr(
-    expr: &Expression,
-    context: &mut ValueRowContext,
-) -> Result<Value, QueryError> {
+fn eval_expr(expr: &Expression, context: &mut ValueRowContext) -> Result<Value, QueryError> {
     ExpressionEvaluator::evaluate(expr, context).map_err(|e| QueryError::execution(e.to_string()))
 }
 
@@ -160,8 +157,7 @@ impl SinkOperator {
                         let col_names = chunk.col_names();
 
                         for row in &chunk.rows {
-                            let mut context =
-                                ValueRowContext::new(row.clone(), col_names.clone());
+                            let mut context = ValueRowContext::new(row.clone(), col_names.clone());
 
                             let vid = if let Some((_name, expr)) = vertex_properties.first() {
                                 let val = eval_expr(expr, &mut context)?;
@@ -185,8 +181,7 @@ impl SinkOperator {
                                 .map(|tag_name| Tag::new(tag_name.clone(), props.clone()))
                                 .collect();
 
-                            let vertex =
-                                Vertex::new_with_properties(vid, tag_list, props);
+                            let vertex = Vertex::new_with_properties(vid, tag_list, props);
                             StorageWriter::insert_vertex(&mut *writer, space_name, vertex)
                                 .map_err(|e| QueryError::execution(e.to_string()))?;
                             *rows_inserted += 1;
@@ -196,10 +191,7 @@ impl SinkOperator {
                     }
                     Ok(Some(chunk))
                 } else {
-                    Ok(Some(make_modify_result(
-                        "insert_vertices",
-                        *rows_inserted,
-                    )))
+                    Ok(Some(make_modify_result("insert_vertices", *rows_inserted)))
                 }
             }
 
@@ -214,9 +206,7 @@ impl SinkOperator {
                 ..
             } => {
                 if !base.opened {
-                    return Err(QueryError::execution(
-                        "InsertEdges not opened".to_string(),
-                    ));
+                    return Err(QueryError::execution("InsertEdges not opened".to_string()));
                 }
 
                 if let Some(chunk) = input.advance()? {
@@ -225,26 +215,23 @@ impl SinkOperator {
                         let col_names = chunk.col_names();
 
                         for row in &chunk.rows {
-                            let mut context =
-                                ValueRowContext::new(row.clone(), col_names.clone());
-                            let src_val = context.get_variable(src_col).unwrap_or(Value::Null(
-                                crate::core::NullType::Null,
-                            ));
-                            let dst_val = context.get_variable(dst_col).unwrap_or(Value::Null(
-                                crate::core::NullType::Null,
-                            ));
+                            let mut context = ValueRowContext::new(row.clone(), col_names.clone());
+                            let src_val = context
+                                .get_variable(src_col)
+                                .unwrap_or(Value::Null(crate::core::NullType::Null));
+                            let dst_val = context
+                                .get_variable(dst_col)
+                                .unwrap_or(Value::Null(crate::core::NullType::Null));
 
-                            if let (Ok(src), Ok(dst)) = (
-                                VertexId::try_from(&src_val),
-                                VertexId::try_from(&dst_val),
-                            ) {
+                            if let (Ok(src), Ok(dst)) =
+                                (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
+                            {
                                 let mut props = HashMap::new();
                                 for (prop_name, expr) in edge_properties.iter() {
                                     let val = eval_expr(expr, &mut context)?;
                                     props.insert(prop_name.clone(), val);
                                 }
-                                let edge =
-                                    Edge::new(src, dst, edge_type.clone(), 0, props);
+                                let edge = Edge::new(src, dst, edge_type.clone(), 0, props);
                                 StorageWriter::insert_edge(&mut *writer, space_name, edge)
                                     .map_err(|e| QueryError::execution(e.to_string()))?;
                                 *rows_inserted += 1;
@@ -255,10 +242,7 @@ impl SinkOperator {
                     }
                     Ok(Some(chunk))
                 } else {
-                    Ok(Some(make_modify_result(
-                        "insert_edges",
-                        *rows_inserted,
-                    )))
+                    Ok(Some(make_modify_result("insert_edges", *rows_inserted)))
                 }
             }
 
@@ -281,8 +265,7 @@ impl SinkOperator {
                         let col_names = chunk.col_names();
 
                         for row in &chunk.rows {
-                            let mut context =
-                                ValueRowContext::new(row.clone(), col_names.clone());
+                            let mut context = ValueRowContext::new(row.clone(), col_names.clone());
                             let vid_val = context
                                 .get_variable("vid")
                                 .or_else(|| row.first().cloned())
@@ -304,10 +287,7 @@ impl SinkOperator {
                     }
                     Ok(Some(chunk))
                 } else {
-                    Ok(Some(make_modify_result(
-                        "update_vertices",
-                        *rows_updated,
-                    )))
+                    Ok(Some(make_modify_result("update_vertices", *rows_updated)))
                 }
             }
 
@@ -322,9 +302,7 @@ impl SinkOperator {
                 ..
             } => {
                 if !base.opened {
-                    return Err(QueryError::execution(
-                        "UpdateEdges not opened".to_string(),
-                    ));
+                    return Err(QueryError::execution("UpdateEdges not opened".to_string()));
                 }
 
                 if let Some(chunk) = input.advance()? {
@@ -333,8 +311,7 @@ impl SinkOperator {
                         let col_names = chunk.col_names();
 
                         for row in &chunk.rows {
-                            let mut context =
-                                ValueRowContext::new(row.clone(), col_names.clone());
+                            let mut context = ValueRowContext::new(row.clone(), col_names.clone());
                             let src_val = context
                                 .get_variable(src_col)
                                 .or_else(|| row.first().cloned())
@@ -344,10 +321,9 @@ impl SinkOperator {
                                 .or_else(|| row.get(1).cloned())
                                 .unwrap_or(Value::Null(crate::core::NullType::Null));
 
-                            if let (Ok(src), Ok(dst)) = (
-                                VertexId::try_from(&src_val),
-                                VertexId::try_from(&dst_val),
-                            ) {
+                            if let (Ok(src), Ok(dst)) =
+                                (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
+                            {
                                 let mut props = HashMap::new();
                                 for (prop_name, expr) in updates.iter() {
                                     if let Ok(val) =
@@ -356,8 +332,7 @@ impl SinkOperator {
                                         props.insert(prop_name.clone(), val);
                                     }
                                 }
-                                let mut edge =
-                                    Edge::new_empty(src, dst, edge_type.clone(), 0);
+                                let mut edge = Edge::new_empty(src, dst, edge_type.clone(), 0);
                                 edge.props = props;
                                 StorageWriter::update_edge(&mut *writer, space_name, edge)
                                     .map_err(|e| QueryError::execution(e.to_string()))?;
@@ -369,10 +344,7 @@ impl SinkOperator {
                     }
                     Ok(Some(chunk))
                 } else {
-                    Ok(Some(make_modify_result(
-                        "update_edges",
-                        *rows_updated,
-                    )))
+                    Ok(Some(make_modify_result("update_edges", *rows_updated)))
                 }
             }
 
@@ -395,8 +367,7 @@ impl SinkOperator {
                         let col_names = chunk.col_names();
 
                         for row in &chunk.rows {
-                            let context =
-                                ValueRowContext::new(row.clone(), col_names.clone());
+                            let context = ValueRowContext::new(row.clone(), col_names.clone());
                             if let Some(vid_val) = context.get_variable(vertex_id_col) {
                                 if let Ok(vid) = VertexId::try_from(&vid_val) {
                                     StorageWriter::delete_vertex(&mut *writer, space_name, &vid)
@@ -410,10 +381,7 @@ impl SinkOperator {
                     }
                     Ok(Some(chunk))
                 } else {
-                    Ok(Some(make_modify_result(
-                        "delete_vertices",
-                        *rows_deleted,
-                    )))
+                    Ok(Some(make_modify_result("delete_vertices", *rows_deleted)))
                 }
             }
 
@@ -426,9 +394,7 @@ impl SinkOperator {
                 ..
             } => {
                 if !base.opened {
-                    return Err(QueryError::execution(
-                        "DeleteEdges not opened".to_string(),
-                    ));
+                    return Err(QueryError::execution("DeleteEdges not opened".to_string()));
                 }
 
                 if let Some(chunk) = input.advance()? {
@@ -437,20 +403,25 @@ impl SinkOperator {
                         let col_names = chunk.col_names();
 
                         for row in &chunk.rows {
-                            let context =
-                                ValueRowContext::new(row.clone(), col_names.clone());
-                            let src_val = context.get_variable(src_col).unwrap_or(Value::Null(
-                                crate::core::NullType::Null,
-                            ));
-                            let dst_val = context.get_variable(dst_col).unwrap_or(Value::Null(
-                                crate::core::NullType::Null,
-                            ));
-                            if let (Ok(src), Ok(dst)) = (
-                                VertexId::try_from(&src_val),
-                                VertexId::try_from(&dst_val),
-                            ) {
-                                StorageWriter::delete_edge(&mut *writer, space_name, &src, &dst, "", 0)
-                                    .map_err(|e| QueryError::execution(e.to_string()))?;
+                            let context = ValueRowContext::new(row.clone(), col_names.clone());
+                            let src_val = context
+                                .get_variable(src_col)
+                                .unwrap_or(Value::Null(crate::core::NullType::Null));
+                            let dst_val = context
+                                .get_variable(dst_col)
+                                .unwrap_or(Value::Null(crate::core::NullType::Null));
+                            if let (Ok(src), Ok(dst)) =
+                                (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
+                            {
+                                StorageWriter::delete_edge(
+                                    &mut *writer,
+                                    space_name,
+                                    &src,
+                                    &dst,
+                                    "",
+                                    0,
+                                )
+                                .map_err(|e| QueryError::execution(e.to_string()))?;
                                 *rows_deleted += 1;
                             }
                         }
@@ -459,10 +430,7 @@ impl SinkOperator {
                     }
                     Ok(Some(chunk))
                 } else {
-                    Ok(Some(make_modify_result(
-                        "delete_edges",
-                        *rows_deleted,
-                    )))
+                    Ok(Some(make_modify_result("delete_edges", *rows_deleted)))
                 }
             }
 
@@ -485,8 +453,7 @@ impl SinkOperator {
                         let col_names = chunk.col_names();
 
                         for row in &chunk.rows {
-                            let context =
-                                ValueRowContext::new(row.clone(), col_names.clone());
+                            let context = ValueRowContext::new(row.clone(), col_names.clone());
                             if let Some(vid_val) = context.get_variable(vertex_id_col) {
                                 if let Ok(vid) = VertexId::try_from(&vid_val) {
                                     StorageWriter::delete_vertex(&mut *writer, space_name, &vid)
@@ -527,20 +494,25 @@ impl SinkOperator {
                         let col_names = chunk.col_names();
 
                         for row in &chunk.rows {
-                            let context =
-                                ValueRowContext::new(row.clone(), col_names.clone());
-                            let src_val = context.get_variable(src_col).unwrap_or(Value::Null(
-                                crate::core::NullType::Null,
-                            ));
-                            let dst_val = context.get_variable(dst_col).unwrap_or(Value::Null(
-                                crate::core::NullType::Null,
-                            ));
-                            if let (Ok(src), Ok(dst)) = (
-                                VertexId::try_from(&src_val),
-                                VertexId::try_from(&dst_val),
-                            ) {
-                                StorageWriter::delete_edge(&mut *writer, space_name, &src, &dst, "", 0)
-                                    .map_err(|e| QueryError::execution(e.to_string()))?;
+                            let context = ValueRowContext::new(row.clone(), col_names.clone());
+                            let src_val = context
+                                .get_variable(src_col)
+                                .unwrap_or(Value::Null(crate::core::NullType::Null));
+                            let dst_val = context
+                                .get_variable(dst_col)
+                                .unwrap_or(Value::Null(crate::core::NullType::Null));
+                            if let (Ok(src), Ok(dst)) =
+                                (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
+                            {
+                                StorageWriter::delete_edge(
+                                    &mut *writer,
+                                    space_name,
+                                    &src,
+                                    &dst,
+                                    "",
+                                    0,
+                                )
+                                .map_err(|e| QueryError::execution(e.to_string()))?;
                                 *rows_deleted += 1;
                             }
                         }
@@ -549,10 +521,7 @@ impl SinkOperator {
                     }
                     Ok(Some(chunk))
                 } else {
-                    Ok(Some(make_modify_result(
-                        "pipe_delete_edges",
-                        *rows_deleted,
-                    )))
+                    Ok(Some(make_modify_result("pipe_delete_edges", *rows_deleted)))
                 }
             }
 
@@ -565,9 +534,7 @@ impl SinkOperator {
                 ..
             } => {
                 if !base.opened {
-                    return Err(QueryError::execution(
-                        "DeleteTags not opened".to_string(),
-                    ));
+                    return Err(QueryError::execution("DeleteTags not opened".to_string()));
                 }
 
                 if *rows_deleted > 0 {
@@ -579,8 +546,13 @@ impl SinkOperator {
                         let mut writer = storage_lock.write();
                         for vertex_id_val in ids {
                             if let Ok(vertex_id) = VertexId::try_from(vertex_id_val) {
-                                let count = StorageWriter::delete_tags(&mut *writer, space_name, &vertex_id, tag_names)
-                                    .map_err(|e| QueryError::execution(e.to_string()))?;
+                                let count = StorageWriter::delete_tags(
+                                    &mut *writer,
+                                    space_name,
+                                    &vertex_id,
+                                    tag_names,
+                                )
+                                .map_err(|e| QueryError::execution(e.to_string()))?;
                                 *rows_deleted += count as u64;
                             }
                         }

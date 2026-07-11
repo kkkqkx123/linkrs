@@ -1,20 +1,20 @@
 use std::ops::Range;
 
+use super::executor::FullOuterJoinPhase;
+use super::executor::OperatorBase;
+use super::executor::StreamingExecutor;
+use super::operators::apply_operator::ApplyOperator;
 use super::operators::blocking_operator::BlockingOperator;
 use super::operators::ddl_operator::DdlOperator;
 use super::operators::fulltext_operator::FulltextOperator;
 use super::operators::graph_operator::GraphOperator;
 use super::operators::join_operator::JoinOperator;
 use super::operators::set_operator::SetOperator;
-use super::operators::apply_operator::ApplyOperator;
 use super::operators::sink_operator::SinkOperator;
 use super::operators::source_operator::SourceOperator;
 use super::operators::txn_operator::TxnOperator;
 use super::operators::unary_operator::UnaryOperator;
 use super::operators::vector_operator::VectorOperator;
-use super::executor::FullOuterJoinPhase;
-use super::executor::OperatorBase;
-use super::executor::StreamingExecutor;
 use super::partition::PartitionView;
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
@@ -134,16 +134,20 @@ impl StreamingExecutorBuilder {
                 let input_plan = limit_node.input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
                 let count = limit_node.count();
-                if count < 0 {
-                    return Err(QueryError::execution(
-                        "Limit count must be non-negative".to_string(),
-                    ));
-                }
+                let offset = limit_node.offset();
+                let offset = u32::try_from(offset).map_err(|_| {
+                    QueryError::execution("Limit offset must fit in u32".to_string())
+                })?;
+                let count = u32::try_from(count).map_err(|_| {
+                    QueryError::execution("Limit count must fit in u32".to_string())
+                })?;
                 Ok(StreamingExecutor::Unary(
                     OperatorBase::new(node.id()),
                     Box::new(input_executor),
                     UnaryOperator::Limit {
-                        limit: count as u32,
+                        offset,
+                        limit: count,
+                        skipped: 0,
                         consumed: 0,
                     },
                 ))
@@ -185,6 +189,7 @@ impl StreamingExecutorBuilder {
                     BlockingOperator::Aggregate {
                         group_by_expressions,
                         aggregate_functions,
+                        output_col_names: agg_node.col_names().to_vec(),
                         memory_tracker,
                         state: None,
                     },
@@ -603,10 +608,8 @@ impl StreamingExecutorBuilder {
                 let mut vertex_properties =
                     vec![("vid".to_string(), Expression::Variable("vid".to_string()))];
                 for prop_name in &prop_names {
-                    vertex_properties.push((
-                        prop_name.clone(),
-                        Expression::Variable(prop_name.clone()),
-                    ));
+                    vertex_properties
+                        .push((prop_name.clone(), Expression::Variable(prop_name.clone())));
                 }
                 for (vid_expr, tag_values) in insert_node.values() {
                     let mut row = vec![Self::contextual_to_value(vid_expr)?];
@@ -619,7 +622,10 @@ impl StreamingExecutorBuilder {
                 }
                 Ok(StreamingExecutor::Sink(
                     OperatorBase::new(node.id()),
-                    Box::new(Self::build_simple_scan_with_col_names(rows, scan_col_names)?),
+                    Box::new(Self::build_simple_scan_with_col_names(
+                        rows,
+                        scan_col_names,
+                    )?),
                     SinkOperator::InsertVertices {
                         storage: context.storage.clone(),
                         space_name: insert_node.space_name().to_string(),
@@ -656,7 +662,10 @@ impl StreamingExecutorBuilder {
                     .collect();
                 Ok(StreamingExecutor::Sink(
                     OperatorBase::new(node.id()),
-                    Box::new(Self::build_simple_scan_with_col_names(rows, scan_col_names)?),
+                    Box::new(Self::build_simple_scan_with_col_names(
+                        rows,
+                        scan_col_names,
+                    )?),
                     SinkOperator::InsertEdges {
                         storage: context.storage.clone(),
                         space_name: insert_node.space_name().to_string(),
@@ -1081,9 +1090,7 @@ impl StreamingExecutorBuilder {
                 Ok(StreamingExecutor::Unary(
                     OperatorBase::new(node.id()),
                     Box::new(input_executor),
-                    UnaryOperator::Remove {
-                        columns_to_remove,
-                    },
+                    UnaryOperator::Remove { columns_to_remove },
                 ))
             }
 
@@ -1209,10 +1216,7 @@ impl StreamingExecutorBuilder {
                 Ok(StreamingExecutor::Unary(
                     OperatorBase::new(node.id()),
                     Box::new(input_executor),
-                    UnaryOperator::Sample {
-                        count,
-                        consumed: 0,
-                    },
+                    UnaryOperator::Sample { count, consumed: 0 },
                 ))
             }
 
@@ -1393,9 +1397,7 @@ impl StreamingExecutorBuilder {
                 Ok(StreamingExecutor::Unary(
                     OperatorBase::new(node.id()),
                     Box::new(input_executor),
-                    UnaryOperator::AppendVertices {
-                        vertex_properties,
-                    },
+                    UnaryOperator::AppendVertices { vertex_properties },
                 ))
             }
 
@@ -2070,6 +2072,7 @@ impl StreamingExecutorBuilder {
         partition_id: usize,
         partition_range: Option<Range<u32>>,
     ) -> Result<(), QueryError> {
+        executor.set_partition_id(partition_id);
         match executor {
             StreamingExecutor::Source(_, source) => {
                 Self::set_partition_on_source_op(source, partition_id, partition_range);
@@ -2090,6 +2093,11 @@ impl StreamingExecutorBuilder {
                 Self::set_partition_on_source(left, partition_id, partition_range.clone())?;
                 Self::set_partition_on_source(right, partition_id, partition_range)?;
             }
+            StreamingExecutor::Gather(_, children, _) => {
+                for child in children.iter_mut() {
+                    Self::set_partition_on_source(child, partition_id, partition_range.clone())?;
+                }
+            }
         }
         Ok(())
     }
@@ -2101,14 +2109,10 @@ impl StreamingExecutorBuilder {
         prange: Option<Range<u32>>,
     ) {
         match source {
-            SourceOperator::ScanVertices {
-                partition_id, ..
-            } => {
+            SourceOperator::ScanVertices { partition_id, .. } => {
                 *partition_id = pid;
             }
-            SourceOperator::ScanEdges {
-                partition_id, ..
-            } => {
+            SourceOperator::ScanEdges { partition_id, .. } => {
                 *partition_id = pid;
             }
             SourceOperator::StorageScanVertices {

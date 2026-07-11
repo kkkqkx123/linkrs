@@ -46,7 +46,10 @@ impl SlotLayout {
             .enumerate()
             .map(|(i, info)| (info.name.clone(), i))
             .collect();
-        Self { slots, name_to_slot }
+        Self {
+            slots,
+            name_to_slot,
+        }
     }
 
     pub fn from_names(names: &[String]) -> Self {
@@ -114,9 +117,10 @@ impl SlotLayout {
             return Some(id);
         }
         // Then try alias match
-        self.slots.iter().find(|s| {
-            s.alias.as_deref() == Some(name_or_alias)
-        }).map(|s| s.slot_id)
+        self.slots
+            .iter()
+            .find(|s| s.alias.as_deref() == Some(name_or_alias))
+            .map(|s| s.slot_id)
     }
 }
 

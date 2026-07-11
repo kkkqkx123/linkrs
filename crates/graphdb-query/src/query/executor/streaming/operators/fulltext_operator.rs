@@ -42,7 +42,6 @@ fn make_manage_result(action: &str, name: Option<&str>, status: &str) -> DataChu
     )
 }
 
-
 #[derive(Debug)]
 pub enum FulltextOperator {
     FulltextManage {

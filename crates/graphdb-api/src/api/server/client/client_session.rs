@@ -1,6 +1,8 @@
 use parking_lot::RwLock;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Instant;
+
+use graphdb_query::query::executor::streaming::runtime::ExecutionRuntime;
 
 use super::query_context::QueryContext;
 use super::role_context::RoleContext;
@@ -114,6 +116,23 @@ impl ClientSession {
     pub fn add_query(&self, ep_id: u32, query_context: String) {
         self.query_context
             .add_query(ep_id, query_context, self.id());
+    }
+
+    /// Register a streaming query with a weak runtime reference for KILL QUERY support.
+    pub fn register_streaming_query(
+        &self,
+        query_id: u32,
+        query_text: String,
+        runtime: Weak<ExecutionRuntime>,
+    ) {
+        self.query_context
+            .register_streaming_query(query_id, query_text, runtime, self.id());
+    }
+
+    /// Unregister a streaming query on completion.
+    pub fn unregister_streaming_query(&self, query_id: u32) {
+        self.query_context
+            .unregister_streaming_query(query_id, self.id());
     }
 
     pub fn delete_query(&self, ep_id: u32) {

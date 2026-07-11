@@ -4,7 +4,10 @@ pub mod explain;
 pub mod validation;
 
 pub use core::PlanNodeEnum;
-pub use execution_plan::{ExecutionMode, ExecutionPlan, SubPlan};
+pub use execution_plan::{
+    ExecutionMode, ExecutionPlan, PartitionSpec, PartitionSpecError, PartitionedPhysicalNode,
+    PartitionedPhysicalPlan, SubPlan,
+};
 
 pub use core::common::{EdgeProp, TagProp};
 pub use core::nodes::*;

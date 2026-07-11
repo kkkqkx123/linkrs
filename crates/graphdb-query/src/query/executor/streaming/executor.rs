@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use super::chunk::DataChunk;
-use super::runtime::ExecutionRuntime;
+use super::runtime::{ExecutionRuntime, OperatorProfile, OperatorProfileKey};
 use crate::core::error::QueryError;
 use crate::query::executor::base::{MemoryTracker, Spillable};
 
@@ -16,6 +16,7 @@ use super::operators::apply_operator::ApplyOperator;
 use super::operators::blocking_operator::BlockingOperator;
 use super::operators::ddl_operator::DdlOperator;
 use super::operators::fulltext_operator::FulltextOperator;
+use super::operators::gather_operator::GatherOperator;
 use super::operators::graph_operator::GraphOperator;
 use super::operators::join_operator::JoinOperator;
 use super::operators::set_operator::SetOperator;
@@ -24,7 +25,6 @@ use super::operators::source_operator::SourceOperator;
 use super::operators::txn_operator::TxnOperator;
 use super::operators::unary_operator::UnaryOperator;
 use super::operators::vector_operator::VectorOperator;
-
 
 /// Sort direction for ORDER BY clause
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,11 +41,14 @@ pub enum FullOuterJoinPhase {
     EmitUnmatchedRight,
 }
 
-/// StreamingExecutor: 10-variant dispatch enum over domain-specific operators.
+/// StreamingExecutor: 13-variant dispatch enum over domain-specific operators.
 ///
 /// Each variant holds an OperatorBase (shared fields), zero or more child
-/// executors (Box<StreamingExecutor>), and a domain-specific operator enum
-/// that implements the per-operator lifecycle logic.
+/// executors, and a domain-specific operator enum that implements the
+/// per-operator lifecycle logic.
+///
+/// Gather is special: it takes N children (Vec) and merges their output
+/// via Concatenate or MergeSort mode.
 #[derive(Debug)]
 pub enum StreamingExecutor {
     Source(OperatorBase, SourceOperator),
@@ -75,6 +78,7 @@ pub enum StreamingExecutor {
     Fulltext(OperatorBase, Box<StreamingExecutor>, FulltextOperator),
     Vector(OperatorBase, Box<StreamingExecutor>, VectorOperator),
     Txn(OperatorBase, Box<StreamingExecutor>, TxnOperator),
+    Gather(OperatorBase, Vec<StreamingExecutor>, GatherOperator),
 }
 
 impl StreamingExecutor {
@@ -91,6 +95,62 @@ impl StreamingExecutor {
         self.base().plan_node_id
     }
 
+    /// Return the unique profile key for this concrete operator instance.
+    pub fn profile_key(&self) -> OperatorProfileKey {
+        self.base().profile_key()
+    }
+
+    /// Recursively mark this executor tree as belonging to a local partition.
+    pub fn set_partition_id(&mut self, partition_id: usize) {
+        self.base_mut().partition_id = Some(partition_id);
+        self.base_mut().is_global = false;
+        for child in self.children_mut() {
+            child.set_partition_id(partition_id);
+        }
+    }
+
+    /// Recursively mark an executor tree as global. This is applied before a
+    /// gather node is attached, so the gather's local children retain their
+    /// own partition identifiers.
+    pub fn set_global(&mut self) {
+        self.base_mut().partition_id = None;
+        self.base_mut().is_global = true;
+        for child in self.children_mut() {
+            child.set_global();
+        }
+    }
+
+    /// Whether this tree may be executed independently for each partition and
+    /// concatenated without changing query semantics.
+    ///
+    /// Global operators are intentionally excluded. They require a dedicated
+    /// physical split (for example local sort plus merge sort), not a copied
+    /// copy of the original logical tree.
+    pub fn is_partition_local(&self) -> bool {
+        match self {
+            Self::Source(
+                _,
+                SourceOperator::ScanVertices { .. }
+                | SourceOperator::StorageScanVertices { .. }
+                | SourceOperator::ScanEdges { .. }
+                | SourceOperator::StorageScanEdges { .. },
+            ) => true,
+            Self::Unary(_, input, op) => {
+                matches!(
+                    op,
+                    UnaryOperator::Filter { .. }
+                        | UnaryOperator::Project { .. }
+                        | UnaryOperator::Assign { .. }
+                        | UnaryOperator::Remove { .. }
+                        | UnaryOperator::Unwind { .. }
+                        | UnaryOperator::AppendVertices { .. }
+                        | UnaryOperator::PassThrough
+                ) && input.is_partition_local()
+            }
+            _ => false,
+        }
+    }
+
     /// Access the runtime reference, if attached.
     pub fn get_runtime(&self) -> Option<&ExecutionRuntime> {
         self.base().runtime.as_deref()
@@ -101,9 +161,153 @@ impl StreamingExecutor {
         self.base().ensure_not_cancelled()
     }
 
-    /// Record profile timing for this operator.
+    /// Profile name for this operator variant.
+    pub fn operator_name(&self) -> &'static str {
+        use StreamingExecutor::*;
+        match self {
+            Source(_, op) => match op {
+                SourceOperator::ScanVertices { .. }
+                | SourceOperator::StorageScanVertices { .. } => "ScanVertices",
+                SourceOperator::ScanEdges { .. } | SourceOperator::StorageScanEdges { .. } => {
+                    "ScanEdges"
+                }
+                SourceOperator::GetVertices { .. } => "GetVertices",
+                SourceOperator::GetEdges { .. } => "GetEdges",
+                SourceOperator::GetNeighbors { .. } => "GetNeighbors",
+                SourceOperator::EdgeIndexScan { .. } => "EdgeIndexScan",
+                SourceOperator::IndexScan { .. } => "IndexScan",
+                SourceOperator::Argument => "Argument",
+                SourceOperator::GetProp { .. } => "GetProp",
+                SourceOperator::LookupIndex { .. } => "LookupIndex",
+                SourceOperator::Start => "Start",
+            },
+            Unary(_, _, op) => match op {
+                UnaryOperator::Filter { .. } => "Filter",
+                UnaryOperator::Project { .. } => "Project",
+                UnaryOperator::Limit { .. } => "Limit",
+                UnaryOperator::Dedup { .. } => "Dedup",
+                UnaryOperator::Assign { .. } => "Assign",
+                UnaryOperator::Remove { .. } => "Remove",
+                UnaryOperator::Unwind { .. } => "Unwind",
+                UnaryOperator::AppendVertices { .. } => "AppendVertices",
+                UnaryOperator::Sample { .. } => "Sample",
+                UnaryOperator::Loop { .. } => "Loop",
+                UnaryOperator::Select { .. } => "Select",
+                UnaryOperator::PassThrough => "PassThrough",
+            },
+            Txn(_, _, op) => match op {
+                TxnOperator::BeginTransaction { .. } => "BeginTransaction",
+                TxnOperator::Commit { .. } => "Commit",
+                TxnOperator::Rollback { .. } => "Rollback",
+            },
+            Join(_, _, _, op) => match op {
+                JoinOperator::HashJoin { .. } => "HashJoin",
+                JoinOperator::HashLeftJoin { .. } => "HashLeftJoin",
+                JoinOperator::NestedLoopJoin { .. } => "NestedLoopJoin",
+                JoinOperator::InnerJoin { .. } => "InnerJoin",
+                JoinOperator::LeftJoin { .. } => "LeftJoin",
+                JoinOperator::RightJoin { .. } => "RightJoin",
+                JoinOperator::FullOuterJoin { .. } => "FullOuterJoin",
+                JoinOperator::CrossJoin { .. } => "CrossJoin",
+                JoinOperator::SemiJoin { .. } => "SemiJoin",
+            },
+            Set(_, _, _, op) => match op {
+                SetOperator::Union { .. } => "Union",
+                SetOperator::UnionAll { .. } => "UnionAll",
+                SetOperator::Intersect { .. } => "Intersect",
+                SetOperator::Except { .. } => "Except",
+                SetOperator::Minus { .. } => "Minus",
+            },
+            Apply(_, _, _, op) => match op {
+                ApplyOperator::Apply { .. } => "Apply",
+                ApplyOperator::PatternApply { .. } => "PatternApply",
+            },
+            Blocking(_, _, op) => match op {
+                BlockingOperator::Sort { .. } => "Sort",
+                BlockingOperator::Aggregate { .. } => "Aggregate",
+                BlockingOperator::GroupBy { .. } => "GroupBy",
+                BlockingOperator::WindowFunction { .. } => "WindowFunction",
+                BlockingOperator::Window { .. } => "Window",
+                BlockingOperator::TopN { .. } => "TopN",
+                BlockingOperator::Distinct { .. } => "Distinct",
+                BlockingOperator::Materialize { .. } => "Materialize",
+                BlockingOperator::DataCollect { .. } => "DataCollect",
+                BlockingOperator::RollUpApply { .. } => "RollUpApply",
+            },
+            Graph(_, _, op) => match op {
+                GraphOperator::Expand { .. } => "Expand",
+                GraphOperator::ExpandAll { .. } => "ExpandAll",
+                GraphOperator::Traverse { .. } => "Traverse",
+                GraphOperator::TraverseAll { .. } => "TraverseAll",
+                GraphOperator::BiExpand { .. } => "BiExpand",
+                GraphOperator::BiTraverse { .. } => "BiTraverse",
+                GraphOperator::ShortestPath { .. } => "ShortestPath",
+                GraphOperator::BFSShortest { .. } => "BFSShortest",
+                GraphOperator::AllPaths { .. } => "AllPaths",
+                GraphOperator::MultiShortestPath { .. } => "MultiShortestPath",
+                GraphOperator::Subgraph { .. } => "Subgraph",
+            },
+            Sink(_, _, op) => match op {
+                SinkOperator::InsertVertices { .. } => "InsertVertices",
+                SinkOperator::InsertEdges { .. } => "InsertEdges",
+                SinkOperator::UpdateVertices { .. } => "UpdateVertices",
+                SinkOperator::UpdateEdges { .. } => "UpdateEdges",
+                SinkOperator::DeleteVertices { .. } => "DeleteVertices",
+                SinkOperator::DeleteEdges { .. } => "DeleteEdges",
+                SinkOperator::PipeDeleteVertices { .. } => "PipeDeleteVertices",
+                SinkOperator::PipeDeleteEdges { .. } => "PipeDeleteEdges",
+                SinkOperator::DeleteTags { .. } => "DeleteTags",
+            },
+            Ddl(_, _, op) => match op {
+                DdlOperator::SpaceManage { .. } => "SpaceManage",
+                DdlOperator::TagManage { .. } => "TagManage",
+                DdlOperator::EdgeManage { .. } => "EdgeManage",
+                DdlOperator::IndexManage { .. } => "IndexManage",
+                DdlOperator::UserManage { .. } => "UserManage",
+                DdlOperator::ShowStats { .. } => "ShowStats",
+                DdlOperator::Analyze { .. } => "Analyze",
+                DdlOperator::Migrate { .. } => "Migrate",
+            },
+            Fulltext(_, _, op) => match op {
+                FulltextOperator::FulltextManage { .. } => "FulltextManage",
+                FulltextOperator::FulltextSearch { .. } => "FulltextSearch",
+                FulltextOperator::FulltextLookup { .. } => "FulltextLookup",
+                FulltextOperator::MatchFulltext { .. } => "MatchFulltext",
+            },
+            Vector(_, _, op) => match op {
+                VectorOperator::VectorManage { .. } => "VectorManage",
+                VectorOperator::VectorSearch { .. } => "VectorSearch",
+                VectorOperator::VectorLookup { .. } => "VectorLookup",
+                VectorOperator::VectorMatch { .. } => "VectorMatch",
+            },
+            Gather(_, _, op) => match op {
+                GatherOperator::Concatenate { .. } => "Gather(Concatenate)",
+                GatherOperator::MergeSort { .. } => "Gather(MergeSort)",
+            },
+        }
+    }
+
+    /// Record profile timing for this operator, using the correct operator name.
     pub fn record_profile_timing(&self, phase: &str, elapsed_us: u64) {
-        self.base().record_profile_timing(phase, elapsed_us);
+        if let Some(rt) = &self.base().runtime {
+            let name = self.operator_name();
+            let mut profile = rt.profile().lock();
+            let entry = profile
+                .operators
+                .entry(self.profile_key())
+                .or_insert_with(|| OperatorProfile {
+                    node_id: self.plan_node_id(),
+                    partition_id: self.base().partition_id,
+                    name: name.to_string(),
+                    ..OperatorProfile::default()
+                });
+            match phase {
+                "open" => entry.open_time_us += elapsed_us,
+                "next" => entry.next_time_us += elapsed_us,
+                "close" => entry.close_time_us += elapsed_us,
+                _ => {}
+            }
+        }
     }
 
     /// Get peak memory from the memory_tracker, if this operator has one.
@@ -113,15 +317,20 @@ impl StreamingExecutor {
 
     /// Record output row count in profile for this operator.
     pub fn record_profile_rows(&self, count: u64) {
-        self.base().record_profile_rows(count);
+        if let Some(rt) = &self.base().runtime {
+            let mut profile = rt.profile().lock();
+            if let Some(entry) = profile.operators.get_mut(&self.profile_key()) {
+                entry.output_rows += count;
+            }
+        }
     }
 
     /// Record peak memory usage in profile for this operator.
     pub fn record_profile_peak_memory(&self, bytes: u64) {
         if let Some(rt) = &self.base().runtime {
-            let node_id = self.plan_node_id();
+            let key = self.profile_key();
             let mut profile = rt.profile().lock();
-            if let Some(entry) = profile.operators.get_mut(&node_id) {
+            if let Some(entry) = profile.operators.get_mut(&key) {
                 if bytes > entry.peak_memory_bytes {
                     entry.peak_memory_bytes = bytes;
                 }
@@ -142,14 +351,15 @@ impl StreamingExecutor {
         match self {
             Self::Source(base, _) => base,
             Self::Unary(base, _, _) => base,
-            Self::Join(base, _, _, _)
-            | Self::Set(base, _, _, _)
-            | Self::Apply(base, _, _, _) => base,
+            Self::Join(base, _, _, _) | Self::Set(base, _, _, _) | Self::Apply(base, _, _, _) => {
+                base
+            }
             Self::Blocking(base, _, _) => base,
             Self::Graph(base, _, _) => base,
             Self::Sink(base, _, _) => base,
             Self::Ddl(base, _, _) | Self::Fulltext(base, _, _) | Self::Vector(base, _, _) => base,
             Self::Txn(base, _, _) => base,
+            Self::Gather(base, _, _) => base,
         }
     }
 
@@ -158,14 +368,15 @@ impl StreamingExecutor {
         match self {
             Self::Source(base, _) => base,
             Self::Unary(base, _, _) => base,
-            Self::Join(base, _, _, _)
-            | Self::Set(base, _, _, _)
-            | Self::Apply(base, _, _, _) => base,
+            Self::Join(base, _, _, _) | Self::Set(base, _, _, _) | Self::Apply(base, _, _, _) => {
+                base
+            }
             Self::Blocking(base, _, _) => base,
             Self::Graph(base, _, _) => base,
             Self::Sink(base, _, _) => base,
             Self::Ddl(base, _, _) | Self::Fulltext(base, _, _) | Self::Vector(base, _, _) => base,
             Self::Txn(base, _, _) => base,
+            Self::Gather(base, _, _) => base,
         }
     }
 
@@ -181,9 +392,10 @@ impl StreamingExecutor {
             Self::Join(_, left, right, _)
             | Self::Set(_, left, right, _)
             | Self::Apply(_, left, right, _) => vec![left.as_mut(), right.as_mut()],
-            Self::Ddl(_, input, _)
-            | Self::Fulltext(_, input, _)
-            | Self::Vector(_, input, _) => vec![input.as_mut()],
+            Self::Ddl(_, input, _) | Self::Fulltext(_, input, _) | Self::Vector(_, input, _) => {
+                vec![input.as_mut()]
+            }
+            Self::Gather(_, children, _) => children.iter_mut().collect(),
         }
     }
 
@@ -198,9 +410,11 @@ impl StreamingExecutor {
             | Self::Apply(..)
             | Self::Ddl(..)
             | Self::Fulltext(..)
-            | Self::Vector(..) => None,
+            | Self::Vector(..)
+            | Self::Gather(..) => None,
             Self::Blocking(_, _, op) => Some(op.memory_tracker()),
             Self::Join(_, _, _, op) => Some(op.memory_tracker()),
+            Self::Set(_, _, _, SetOperator::UnionAll { .. }) => None,
             Self::Set(_, _, _, op) => Some(op.memory_tracker()),
         }
     }
@@ -234,10 +448,24 @@ impl StreamingExecutor {
             Self::Fulltext(base, input, op) => op.open(base, input),
             Self::Vector(base, input, op) => op.open(base, input),
             Self::Txn(base, input, op) => op.open(base, input),
+            Self::Gather(base, children, op) => op.open(base, children),
         };
         let elapsed = start.elapsed().as_micros() as u64;
         self.record_profile_timing("open", elapsed);
-        result
+        if let Err(error) = result {
+            // A parent may fail after one or more children have opened (for
+            // example, when the second side of a join fails to open).  The
+            // parent itself is not necessarily marked as opened yet, so a
+            // normal parent close would otherwise skip those children.
+            if let Err(close_error) = self.close_tree() {
+                log::warn!(
+                    "Failed to close streaming executor tree after open error: {}",
+                    close_error
+                );
+            }
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// Pull the next chunk.
@@ -257,6 +485,7 @@ impl StreamingExecutor {
             Self::Fulltext(base, input, op) => op.next(base, input),
             Self::Vector(base, input, op) => op.next(base, input),
             Self::Txn(base, input, op) => op.next(base, input),
+            Self::Gather(base, children, op) => op.next(base, children),
         };
         let elapsed = start.elapsed().as_micros() as u64;
         if let Ok(Some(ref chunk)) = result {
@@ -267,8 +496,10 @@ impl StreamingExecutor {
     }
 
     /// Stop the executor (signal no more input needed).
+    ///
+    /// Must be callable in any state (Open, Exhausted, Failed, Cancelled)
+    /// since the consumer may stop reading before exhaustion.
     pub fn stop(&mut self) -> Result<(), QueryError> {
-        self.ensure_not_cancelled()?;
         let start = Instant::now();
         let result = match self {
             Self::Source(base, op) => op.stop(base),
@@ -283,6 +514,7 @@ impl StreamingExecutor {
             Self::Fulltext(base, input, op) => op.stop(base, input),
             Self::Vector(base, input, op) => op.stop(base, input),
             Self::Txn(base, input, op) => op.stop(base, input),
+            Self::Gather(base, children, op) => op.stop(base, children),
         };
         let elapsed = start.elapsed().as_micros() as u64;
         self.record_profile_timing("stop", elapsed);
@@ -305,6 +537,7 @@ impl StreamingExecutor {
             Self::Fulltext(base, input, op) => op.close(base, input),
             Self::Vector(base, input, op) => op.close(base, input),
             Self::Txn(base, input, op) => op.close(base, input),
+            Self::Gather(base, children, op) => op.close(base, children),
         };
         let elapsed = start.elapsed().as_micros() as u64;
         self.record_profile_timing("close", elapsed);
@@ -312,10 +545,46 @@ impl StreamingExecutor {
         if peak > 0 {
             self.record_profile_peak_memory(peak);
         }
-        if let Some(rt) = self.get_runtime() {
-            rt.release_resources();
-        }
         result
+    }
+
+    /// Close every node in this executor tree, even when an ancestor never
+    /// reached its `opened` state.  This is the failure-cleanup counterpart to
+    /// `open()` and is deliberately post-order so a partially opened child is
+    /// released before its parent clears state.
+    ///
+    /// The first close error is returned after all nodes have been given a
+    /// chance to release their resources.
+    pub fn close_tree(&mut self) -> Result<(), QueryError> {
+        let mut first_error = None;
+        for child in self.children_mut() {
+            if let Err(error) = child.close_tree() {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+        if let Err(error) = self.close() {
+            if first_error.is_none() {
+                first_error = Some(error);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    /// Stop every node in this executor tree. Individual operator stop methods
+    /// may return after their first child error, so this wrapper continues with
+    /// every descendant before returning the first observed error.
+    pub fn stop_tree(&mut self) -> Result<(), QueryError> {
+        let mut first_error = self.stop().err();
+        for child in self.children_mut() {
+            if let Err(error) = child.stop_tree() {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+        first_error.map_or(Ok(()), Err)
     }
 }
 
@@ -385,7 +654,9 @@ mod tests {
             OperatorBase::new(0),
             scan,
             UnaryOperator::Limit {
+                offset: 0,
                 limit: 10,
+                skipped: 0,
                 consumed: 0,
             },
         );
@@ -397,6 +668,36 @@ mod tests {
         }
         executor.close().unwrap();
         assert_eq!(total, 10);
+    }
+
+    #[test]
+    fn test_limit_executor_honors_offset() {
+        let scan = Box::new(scan_executor(
+            (0..6).map(|value| vec![Value::BigInt(value)]).collect(),
+            vec!["id".to_string()],
+        ));
+        let mut executor = StreamingExecutor::Unary(
+            OperatorBase::new(0),
+            scan,
+            UnaryOperator::Limit {
+                offset: 2,
+                limit: 3,
+                skipped: 0,
+                consumed: 0,
+            },
+        );
+
+        executor.open().expect("limit should open");
+        let mut values = Vec::new();
+        while let Some(chunk) = executor.advance().expect("limit should advance") {
+            values.extend(chunk.rows.into_iter().filter_map(|row| match row.first() {
+                Some(Value::BigInt(value)) => Some(*value),
+                _ => None,
+            }));
+        }
+        executor.close().expect("limit should close");
+
+        assert_eq!(values, vec![2, 3, 4]);
     }
 
     #[test]
@@ -434,5 +735,46 @@ mod tests {
         assert_eq!(chunk.len(), 2);
         assert_eq!(chunk.num_columns(), 9);
         executor.close().unwrap();
+    }
+
+    #[test]
+    fn failed_open_closes_children_opened_before_the_failure() {
+        let left = StreamingExecutor::Source(
+            OperatorBase::new(1),
+            SourceOperator::ScanVertices {
+                partition_id: 0,
+                buffer: vec![vec![Value::BigInt(1)]],
+                current_index: 0,
+                col_names: vec!["id".to_string()],
+            },
+        );
+        let right = StreamingExecutor::Source(
+            OperatorBase::new(2),
+            SourceOperator::StorageScanVertices {
+                storage: None,
+                space_name: "test".to_string(),
+                limit: None,
+                partition_id: 0,
+                partition_range: None,
+                cursor: None,
+                buffer: vec![],
+                current_index: 0,
+                col_names: vec![],
+            },
+        );
+        let mut executor = StreamingExecutor::Set(
+            OperatorBase::new(3),
+            Box::new(left),
+            Box::new(right),
+            SetOperator::UnionAll {
+                left_consumed: false,
+            },
+        );
+
+        assert!(executor.open().is_err());
+        assert!(!executor.opened());
+        for child in executor.children_mut() {
+            assert!(!child.opened());
+        }
     }
 }

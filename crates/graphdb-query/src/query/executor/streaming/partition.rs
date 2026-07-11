@@ -5,6 +5,8 @@
 
 use std::ops::Range;
 
+use crate::core::error::QueryError;
+
 /// A view of data partitioned for parallel processing
 ///
 /// Partitions allow executor to process data independently,
@@ -20,29 +22,57 @@ pub struct PartitionView {
 }
 
 impl PartitionView {
-    /// Create a new partition view
-    pub fn new(partition_count: usize, partition_ranges: Vec<Range<u32>>) -> Self {
-        assert_eq!(
-            partition_count,
-            partition_ranges.len(),
-            "Partition count must match ranges"
-        );
+    /// Create a validated partition view.
+    pub fn try_new(
+        partition_count: usize,
+        partition_ranges: Vec<Range<u32>>,
+    ) -> Result<Self, QueryError> {
+        if partition_count == 0 || partition_count != partition_ranges.len() {
+            return Err(QueryError::execution(
+                "Partition count must match a non-empty range list".to_string(),
+            ));
+        }
+
+        let mut previous_end = None;
+        for (index, range) in partition_ranges.iter().enumerate() {
+            if range.start >= range.end {
+                return Err(QueryError::execution(format!(
+                    "Partition range at index {index} must not be empty"
+                )));
+            }
+            if previous_end.is_some_and(|end| range.start < end) {
+                return Err(QueryError::execution(format!(
+                    "Partition range at index {index} must be ordered and non-overlapping"
+                )));
+            }
+            previous_end = Some(range.end);
+        }
 
         let partition_ids = (0..partition_count).collect();
-        Self {
+        Ok(Self {
             partition_count,
             partition_ids,
             partition_ranges,
-        }
+        })
     }
 
     /// Create a single partition (no partitioning)
-    pub fn single(range: Range<u32>) -> Self {
-        Self::new(1, vec![range])
+    pub fn single(range: Range<u32>) -> Result<Self, QueryError> {
+        Self::try_new(1, vec![range])
     }
 
     /// Split a range into N partitions
-    pub fn from_range(range: Range<u32>, partition_count: usize) -> Self {
+    pub fn from_range(range: Range<u32>, partition_count: usize) -> Result<Self, QueryError> {
+        if partition_count == 0 {
+            return Err(QueryError::execution(
+                "Partition count must be greater than zero".to_string(),
+            ));
+        }
+        if range.start >= range.end {
+            return Err(QueryError::execution(
+                "Partition source range must not be empty".to_string(),
+            ));
+        }
         let total = range.end - range.start;
         let per_partition = total.div_ceil(partition_count as u32);
 
@@ -55,7 +85,7 @@ impl PartitionView {
             }
         }
 
-        Self::new(ranges.len(), ranges)
+        Self::try_new(ranges.len(), ranges)
     }
 
     /// Get the range for a specific partition
@@ -86,7 +116,7 @@ mod tests {
 
     #[test]
     fn test_single_partition() {
-        let view = PartitionView::single(0..1000);
+        let view = PartitionView::single(0..1000).expect("valid single partition");
         assert_eq!(view.partition_count, 1);
         assert_eq!(view.total_size(), 1000);
         assert_eq!(view.get_range(0), Some(0..1000));
@@ -94,7 +124,7 @@ mod tests {
 
     #[test]
     fn test_split_partitions() {
-        let view = PartitionView::from_range(0..1000, 4);
+        let view = PartitionView::from_range(0..1000, 4).expect("valid split");
         assert_eq!(view.partition_count, 4);
         assert_eq!(view.total_size(), 1000);
 
@@ -109,8 +139,18 @@ mod tests {
 
     #[test]
     fn test_uneven_split() {
-        let view = PartitionView::from_range(0..1001, 4);
+        let view = PartitionView::from_range(0..1001, 4).expect("valid uneven split");
         assert_eq!(view.partition_count, 4);
         assert_eq!(view.total_size(), 1001);
+    }
+
+    #[test]
+    fn rejects_invalid_partition_layout() {
+        let empty = PartitionView::try_new(0, Vec::new()).expect_err("empty layout must fail");
+        assert!(empty.to_string().contains("non-empty"));
+
+        let overlapping = PartitionView::try_new(2, vec![0..10, 5..20])
+            .expect_err("overlapping ranges must fail");
+        assert!(overlapping.to_string().contains("non-overlapping"));
     }
 }

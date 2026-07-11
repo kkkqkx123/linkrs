@@ -5,7 +5,6 @@ use std::sync::Arc;
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::Value;
-use crate::query::executor::base::MemoryBudget;
 use crate::query::executor::base::MemoryTracker;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
@@ -168,7 +167,7 @@ impl JoinOperator {
 
     pub fn next(
         &mut self,
-        _base: &mut OperatorBase,
+        base: &mut OperatorBase,
         left: &mut StreamingExecutor,
         right: &mut StreamingExecutor,
     ) -> Result<Option<DataChunk>, QueryError> {
@@ -186,11 +185,14 @@ impl JoinOperator {
             } => {
                 if !*left_consumed {
                     while let Some(chunk) = right.advance()? {
+                        base.ensure_not_cancelled()?;
                         let col_names = chunk.col_names();
+                        if right_col_names.is_empty() {
+                            *right_col_names = col_names.clone();
+                        }
                         for row in chunk.rows {
                             memory_tracker.try_reserve_row(&row)?;
-                            let hash_key =
-                                evaluate_join_key(&row, &col_names, hash_keys)?;
+                            let hash_key = evaluate_join_key(&row, &col_names, hash_keys)?;
                             build_side_hash
                                 .entry(hash_key)
                                 .or_default()
@@ -206,31 +208,28 @@ impl JoinOperator {
                     let mut result_rows = Vec::new();
 
                     for left_row in &left_chunk.rows {
-                        let probe_key =
-                            evaluate_join_key(left_row, &left_col_names, probe_keys)?;
+                        let probe_key = evaluate_join_key(left_row, &left_col_names, probe_keys)?;
                         let matching_right_rows = build_side_hash.get(&probe_key);
 
                         if let Some(right_rows) = matching_right_rows {
                             for right_row in right_rows {
-                                let condition_satisfied =
-                                    if let Some(condition) = join_condition {
-                                        let mut combined_row = left_row.clone();
-                                        combined_row.extend(right_row.clone());
-                                        let combined_names = build_combined_names(
-                                            &left_col_names,
-                                            right_col_names,
-                                            right_row.len(),
-                                        );
-                                        let mut context =
-                                            ValueRowContext::new(combined_row, combined_names);
-                                        match ExpressionEvaluator::evaluate(condition, &mut context)
-                                        {
-                                            Ok(Value::Bool(b)) => b,
-                                            _ => false,
-                                        }
-                                    } else {
-                                        true
-                                    };
+                                let condition_satisfied = if let Some(condition) = join_condition {
+                                    let mut combined_row = left_row.clone();
+                                    combined_row.extend(right_row.clone());
+                                    let combined_names = build_combined_names(
+                                        &left_col_names,
+                                        right_col_names,
+                                        right_row.len(),
+                                    );
+                                    let mut context =
+                                        ValueRowContext::new(combined_row, combined_names);
+                                    match ExpressionEvaluator::evaluate(condition, &mut context) {
+                                        Ok(Value::Bool(b)) => b,
+                                        _ => false,
+                                    }
+                                } else {
+                                    true
+                                };
 
                                 if condition_satisfied {
                                     let mut joined_row = left_row.clone();
@@ -245,16 +244,11 @@ impl JoinOperator {
                         Ok(None)
                     } else {
                         let left_layout = left_chunk.get_or_create_layout();
-                        let right_layout = Arc::new(SlotLayout::from_names(
-                            &build_combined_names(
-                                &[],
-                                right_col_names,
-                                all_right_rows
-                                    .first()
-                                    .map(|r| r.len())
-                                    .unwrap_or(0),
-                            ),
-                        ));
+                        let right_layout = Arc::new(SlotLayout::from_names(&build_combined_names(
+                            &[],
+                            right_col_names,
+                            all_right_rows.first().map(|r| r.len()).unwrap_or(0),
+                        )));
                         let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
                         Ok(Some(DataChunk::new_with_layout(result_rows, layout)))
                     }
@@ -276,11 +270,14 @@ impl JoinOperator {
             } => {
                 if !*left_consumed {
                     while let Some(chunk) = right.advance()? {
+                        base.ensure_not_cancelled()?;
                         let col_names = chunk.col_names();
+                        if right_col_names.is_empty() {
+                            *right_col_names = col_names.clone();
+                        }
                         for row in chunk.rows {
                             memory_tracker.try_reserve_row(&row)?;
-                            let hash_key =
-                                evaluate_join_key(&row, &col_names, hash_keys)?;
+                            let hash_key = evaluate_join_key(&row, &col_names, hash_keys)?;
                             build_side_hash
                                 .entry(hash_key)
                                 .or_default()
@@ -296,40 +293,37 @@ impl JoinOperator {
                     let mut result_rows = Vec::new();
 
                     for left_row in &left_chunk.rows {
-                        let probe_key =
-                            evaluate_join_key(left_row, &left_col_names, probe_keys)?;
+                        let probe_key = evaluate_join_key(left_row, &left_col_names, probe_keys)?;
                         let matching_right_rows = build_side_hash.get(&probe_key);
 
                         if let Some(right_rows) = matching_right_rows {
                             for right_row in right_rows {
-                                let condition_satisfied =
-                                    if let Some(condition) = join_condition {
-                                        let mut combined_row = left_row.clone();
-                                        combined_row.extend(right_row.clone());
-                                        let combined_names = build_combined_names(
-                                            &left_col_names,
-                                            right_col_names,
-                                            right_row.len(),
-                                        );
-                                        let mut context =
-                                            ValueRowContext::new(combined_row, combined_names);
-                                        match ExpressionEvaluator::evaluate(condition, &mut context)
-                                        {
-                                            Ok(value) => match value {
-                                                Value::Bool(b) => b,
-                                                Value::Null(_) => false,
-                                                _ => true,
-                                            },
-                                            Err(e) => {
-                                                return Err(QueryError::execution(format!(
-                                                    "HashLeftJoin condition evaluation failed: {}",
-                                                    e
-                                                )));
-                                            }
+                                let condition_satisfied = if let Some(condition) = join_condition {
+                                    let mut combined_row = left_row.clone();
+                                    combined_row.extend(right_row.clone());
+                                    let combined_names = build_combined_names(
+                                        &left_col_names,
+                                        right_col_names,
+                                        right_row.len(),
+                                    );
+                                    let mut context =
+                                        ValueRowContext::new(combined_row, combined_names);
+                                    match ExpressionEvaluator::evaluate(condition, &mut context) {
+                                        Ok(value) => match value {
+                                            Value::Bool(b) => b,
+                                            Value::Null(_) => false,
+                                            _ => true,
+                                        },
+                                        Err(e) => {
+                                            return Err(QueryError::execution(format!(
+                                                "HashLeftJoin condition evaluation failed: {}",
+                                                e
+                                            )));
                                         }
-                                    } else {
-                                        true
-                                    };
+                                    }
+                                } else {
+                                    true
+                                };
 
                                 if condition_satisfied {
                                     let mut joined_row = left_row.clone();
@@ -339,11 +333,8 @@ impl JoinOperator {
                             }
                         } else {
                             let mut unmatched_row = left_row.clone();
-                            for _ in
-                                0..all_right_rows.first().map(|r| r.len()).unwrap_or(0)
-                            {
-                                unmatched_row
-                                    .push(Value::Null(crate::core::value::NullType::Null));
+                            for _ in 0..all_right_rows.first().map(|r| r.len()).unwrap_or(0) {
+                                unmatched_row.push(Value::Null(crate::core::value::NullType::Null));
                             }
                             result_rows.push(unmatched_row);
                         }
@@ -386,6 +377,7 @@ impl JoinOperator {
                 if !*left_consumed {
                     let mut captured_right_names = Vec::new();
                     while let Some(chunk) = right.advance()? {
+                        base.ensure_not_cancelled()?;
                         if captured_right_names.is_empty() {
                             captured_right_names = chunk.col_names();
                         }
@@ -404,33 +396,32 @@ impl JoinOperator {
 
                     for left_row in &left_chunk.rows {
                         for right_row in build_side_tuples.iter() {
-                            let condition_satisfied =
-                                if let Some(condition) = join_condition {
-                                    let mut combined_row = left_row.clone();
-                                    combined_row.extend(right_row.clone());
-                                    let combined_names = build_combined_names(
-                                        &left_col_names,
-                                        right_col_names,
-                                        right_row.len(),
-                                    );
-                                    let mut context =
-                                        ValueRowContext::new(combined_row, combined_names);
-                                    match ExpressionEvaluator::evaluate(condition, &mut context) {
-                                        Ok(value) => match value {
-                                            Value::Bool(b) => b,
-                                            Value::Null(_) => false,
-                                            _ => true,
-                                        },
-                                        Err(e) => {
-                                            return Err(QueryError::execution(format!(
-                                                "NestedLoopJoin condition evaluation failed: {}",
-                                                e
-                                            )));
-                                        }
+                            let condition_satisfied = if let Some(condition) = join_condition {
+                                let mut combined_row = left_row.clone();
+                                combined_row.extend(right_row.clone());
+                                let combined_names = build_combined_names(
+                                    &left_col_names,
+                                    right_col_names,
+                                    right_row.len(),
+                                );
+                                let mut context =
+                                    ValueRowContext::new(combined_row, combined_names);
+                                match ExpressionEvaluator::evaluate(condition, &mut context) {
+                                    Ok(value) => match value {
+                                        Value::Bool(b) => b,
+                                        Value::Null(_) => false,
+                                        _ => true,
+                                    },
+                                    Err(e) => {
+                                        return Err(QueryError::execution(format!(
+                                            "NestedLoopJoin condition evaluation failed: {}",
+                                            e
+                                        )));
                                     }
-                                } else {
-                                    true
-                                };
+                                }
+                            } else {
+                                true
+                            };
 
                             if condition_satisfied {
                                 let mut joined_row = left_row.clone();
@@ -444,16 +435,11 @@ impl JoinOperator {
                         Ok(None)
                     } else {
                         let left_layout = left_chunk.get_or_create_layout();
-                        let right_layout = Arc::new(SlotLayout::from_names(
-                            &build_combined_names(
-                                &[],
-                                right_col_names,
-                                build_side_tuples
-                                    .first()
-                                    .map(|r| r.len())
-                                    .unwrap_or(0),
-                            ),
-                        ));
+                        let right_layout = Arc::new(SlotLayout::from_names(&build_combined_names(
+                            &[],
+                            right_col_names,
+                            build_side_tuples.first().map(|r| r.len()).unwrap_or(0),
+                        )));
                         let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
                         Ok(Some(DataChunk::new_with_layout(result_rows, layout)))
                     }
@@ -473,6 +459,7 @@ impl JoinOperator {
                 if !*left_consumed {
                     let mut captured_right_names = Vec::new();
                     while let Some(chunk) = right.advance()? {
+                        base.ensure_not_cancelled()?;
                         if captured_right_names.is_empty() {
                             captured_right_names = chunk.col_names();
                         }
@@ -491,24 +478,23 @@ impl JoinOperator {
 
                     for left_row in &left_chunk.rows {
                         for right_row in build_side_tuples.iter() {
-                            let condition_satisfied =
-                                if let Some(condition) = join_condition {
-                                    let mut combined_row = left_row.clone();
-                                    combined_row.extend(right_row.clone());
-                                    let combined_names = build_combined_names(
-                                        &left_col_names,
-                                        right_col_names,
-                                        right_row.len(),
-                                    );
-                                    let mut context =
-                                        ValueRowContext::new(combined_row, combined_names);
-                                    match ExpressionEvaluator::evaluate(condition, &mut context) {
-                                        Ok(Value::Bool(b)) => b,
-                                        _ => false,
-                                    }
-                                } else {
-                                    true
-                                };
+                            let condition_satisfied = if let Some(condition) = join_condition {
+                                let mut combined_row = left_row.clone();
+                                combined_row.extend(right_row.clone());
+                                let combined_names = build_combined_names(
+                                    &left_col_names,
+                                    right_col_names,
+                                    right_row.len(),
+                                );
+                                let mut context =
+                                    ValueRowContext::new(combined_row, combined_names);
+                                match ExpressionEvaluator::evaluate(condition, &mut context) {
+                                    Ok(Value::Bool(b)) => b,
+                                    _ => false,
+                                }
+                            } else {
+                                true
+                            };
 
                             if condition_satisfied {
                                 let mut joined_row = left_row.clone();
@@ -522,16 +508,11 @@ impl JoinOperator {
                         Ok(None)
                     } else {
                         let left_layout = left_chunk.get_or_create_layout();
-                        let right_layout = Arc::new(SlotLayout::from_names(
-                            &build_combined_names(
-                                &[],
-                                right_col_names,
-                                build_side_tuples
-                                    .first()
-                                    .map(|r| r.len())
-                                    .unwrap_or(0),
-                            ),
-                        ));
+                        let right_layout = Arc::new(SlotLayout::from_names(&build_combined_names(
+                            &[],
+                            right_col_names,
+                            build_side_tuples.first().map(|r| r.len()).unwrap_or(0),
+                        )));
                         let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
                         Ok(Some(DataChunk::new_with_layout(result_rows, layout)))
                     }
@@ -551,6 +532,7 @@ impl JoinOperator {
                 if !*left_consumed {
                     let mut captured_right_names = Vec::new();
                     while let Some(chunk) = right.advance()? {
+                        base.ensure_not_cancelled()?;
                         if captured_right_names.is_empty() {
                             captured_right_names = chunk.col_names();
                         }
@@ -570,24 +552,23 @@ impl JoinOperator {
                     for left_row in &left_chunk.rows {
                         let mut matched = false;
                         for right_row in build_side_tuples.iter() {
-                            let condition_satisfied =
-                                if let Some(condition) = join_condition {
-                                    let mut combined_row = left_row.clone();
-                                    combined_row.extend(right_row.clone());
-                                    let combined_names = build_combined_names(
-                                        &left_col_names,
-                                        right_col_names,
-                                        right_row.len(),
-                                    );
-                                    let mut context =
-                                        ValueRowContext::new(combined_row, combined_names);
-                                    match ExpressionEvaluator::evaluate(condition, &mut context) {
-                                        Ok(Value::Bool(b)) => b,
-                                        _ => false,
-                                    }
-                                } else {
-                                    true
-                                };
+                            let condition_satisfied = if let Some(condition) = join_condition {
+                                let mut combined_row = left_row.clone();
+                                combined_row.extend(right_row.clone());
+                                let combined_names = build_combined_names(
+                                    &left_col_names,
+                                    right_col_names,
+                                    right_row.len(),
+                                );
+                                let mut context =
+                                    ValueRowContext::new(combined_row, combined_names);
+                                match ExpressionEvaluator::evaluate(condition, &mut context) {
+                                    Ok(Value::Bool(b)) => b,
+                                    _ => false,
+                                }
+                            } else {
+                                true
+                            };
 
                             if condition_satisfied {
                                 matched = true;
@@ -599,13 +580,8 @@ impl JoinOperator {
 
                         if !matched {
                             let mut unmatched_row = left_row.clone();
-                            for _ in 0..build_side_tuples
-                                .first()
-                                .map(|r| r.len())
-                                .unwrap_or(0)
-                            {
-                                unmatched_row
-                                    .push(Value::Null(crate::core::value::NullType::Null));
+                            for _ in 0..build_side_tuples.first().map(|r| r.len()).unwrap_or(0) {
+                                unmatched_row.push(Value::Null(crate::core::value::NullType::Null));
                             }
                             result_rows.push(unmatched_row);
                         }
@@ -615,16 +591,11 @@ impl JoinOperator {
                         Ok(None)
                     } else {
                         let left_layout = left_chunk.get_or_create_layout();
-                        let right_layout = Arc::new(SlotLayout::from_names(
-                            &build_combined_names(
-                                &[],
-                                right_col_names,
-                                build_side_tuples
-                                    .first()
-                                    .map(|r| r.len())
-                                    .unwrap_or(0),
-                            ),
-                        ));
+                        let right_layout = Arc::new(SlotLayout::from_names(&build_combined_names(
+                            &[],
+                            right_col_names,
+                            build_side_tuples.first().map(|r| r.len()).unwrap_or(0),
+                        )));
                         let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
                         Ok(Some(DataChunk::new_with_layout(result_rows, layout)))
                     }
@@ -644,6 +615,7 @@ impl JoinOperator {
                 if !*right_consumed {
                     let mut captured_left_names = Vec::new();
                     while let Some(chunk) = left.advance()? {
+                        base.ensure_not_cancelled()?;
                         if captured_left_names.is_empty() {
                             captured_left_names = chunk.col_names();
                         }
@@ -663,24 +635,23 @@ impl JoinOperator {
                     for right_row in &right_chunk.rows {
                         let mut matched = false;
                         for left_row in build_side_tuples.iter() {
-                            let condition_satisfied =
-                                if let Some(condition) = join_condition {
-                                    let mut combined_row = left_row.clone();
-                                    combined_row.extend(right_row.clone());
-                                    let combined_names = build_combined_names(
-                                        right_col_names,
-                                        &right_cols,
-                                        left_row.len(),
-                                    );
-                                    let mut context =
-                                        ValueRowContext::new(combined_row, combined_names);
-                                    match ExpressionEvaluator::evaluate(condition, &mut context) {
-                                        Ok(Value::Bool(b)) => b,
-                                        _ => false,
-                                    }
-                                } else {
-                                    true
-                                };
+                            let condition_satisfied = if let Some(condition) = join_condition {
+                                let mut combined_row = left_row.clone();
+                                combined_row.extend(right_row.clone());
+                                let combined_names = build_combined_names(
+                                    right_col_names,
+                                    &right_cols,
+                                    left_row.len(),
+                                );
+                                let mut context =
+                                    ValueRowContext::new(combined_row, combined_names);
+                                match ExpressionEvaluator::evaluate(condition, &mut context) {
+                                    Ok(Value::Bool(b)) => b,
+                                    _ => false,
+                                }
+                            } else {
+                                true
+                            };
 
                             if condition_satisfied {
                                 matched = true;
@@ -692,13 +663,8 @@ impl JoinOperator {
 
                         if !matched {
                             let mut unmatched_row = Vec::new();
-                            for _ in 0..build_side_tuples
-                                .first()
-                                .map(|r| r.len())
-                                .unwrap_or(0)
-                            {
-                                unmatched_row
-                                    .push(Value::Null(crate::core::value::NullType::Null));
+                            for _ in 0..build_side_tuples.first().map(|r| r.len()).unwrap_or(0) {
+                                unmatched_row.push(Value::Null(crate::core::value::NullType::Null));
                             }
                             unmatched_row.extend(right_row.clone());
                             result_rows.push(unmatched_row);
@@ -708,20 +674,17 @@ impl JoinOperator {
                     if result_rows.is_empty() {
                         Ok(None)
                     } else {
-                        let left_layout =
-                            if let Some(first_left) = build_side_tuples.first() {
-                                Arc::new(SlotLayout::from_names(&build_combined_names(
-                                    right_col_names,
-                                    &[],
-                                    first_left.len(),
-                                )))
-                            } else {
-                                Arc::new(SlotLayout::from_names(&[]))
-                            };
-                        let right_layout =
-                            Arc::new(SlotLayout::from_names(&right_cols));
-                        let layout =
-                            Arc::new(combine_layouts(&left_layout, &right_layout));
+                        let left_layout = if let Some(first_left) = build_side_tuples.first() {
+                            Arc::new(SlotLayout::from_names(&build_combined_names(
+                                right_col_names,
+                                &[],
+                                first_left.len(),
+                            )))
+                        } else {
+                            Arc::new(SlotLayout::from_names(&[]))
+                        };
+                        let right_layout = Arc::new(SlotLayout::from_names(&right_cols));
+                        let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
                         Ok(Some(DataChunk::new_with_layout(result_rows, layout)))
                     }
                 } else {
@@ -744,12 +707,14 @@ impl JoinOperator {
                     FullOuterJoinPhase::BuildingRight => {
                         let mut captured_right_names = Vec::new();
                         while let Some(chunk) = left.advance()? {
+                            base.ensure_not_cancelled()?;
                             for row in &chunk.rows {
                                 memory_tracker.try_reserve_row(row)?;
                             }
                             left_rows.extend(chunk.rows);
                         }
                         while let Some(chunk) = right.advance()? {
+                            base.ensure_not_cancelled()?;
                             if captured_right_names.is_empty() {
                                 captured_right_names = chunk.col_names();
                             }
@@ -763,36 +728,32 @@ impl JoinOperator {
                     }
 
                     FullOuterJoinPhase::ProbeLeft => {
-                        let right_col_count =
-                            right_rows.first().map(|r| r.len()).unwrap_or(0);
+                        let right_col_count = right_rows.first().map(|r| r.len()).unwrap_or(0);
                         let mut all_results = Vec::new();
 
                         for left_row in left_rows.iter() {
+                            base.ensure_not_cancelled()?;
                             let mut matched = false;
                             for (right_idx, right_row) in right_rows.iter().enumerate() {
-                                let condition_satisfied =
-                                    if let Some(condition) = join_condition {
-                                        let left_col_names: Vec<String> = (0..left_row.len())
-                                            .map(|i| format!("col_{}", i))
-                                            .collect();
-                                        let mut combined_row = left_row.clone();
-                                        combined_row.extend(right_row.clone());
-                                        let combined_names = build_combined_names(
-                                            &left_col_names,
-                                            right_col_names,
-                                            right_row.len(),
-                                        );
-                                        let mut context =
-                                            ValueRowContext::new(combined_row, combined_names);
-                                        match ExpressionEvaluator::evaluate(
-                                            condition, &mut context,
-                                        ) {
-                                            Ok(Value::Bool(b)) => b,
-                                            _ => false,
-                                        }
-                                    } else {
-                                        true
-                                    };
+                                let condition_satisfied = if let Some(condition) = join_condition {
+                                    let left_col_names: Vec<String> =
+                                        (0..left_row.len()).map(|i| format!("col_{}", i)).collect();
+                                    let mut combined_row = left_row.clone();
+                                    combined_row.extend(right_row.clone());
+                                    let combined_names = build_combined_names(
+                                        &left_col_names,
+                                        right_col_names,
+                                        right_row.len(),
+                                    );
+                                    let mut context =
+                                        ValueRowContext::new(combined_row, combined_names);
+                                    match ExpressionEvaluator::evaluate(condition, &mut context) {
+                                        Ok(Value::Bool(b)) => b,
+                                        _ => false,
+                                    }
+                                } else {
+                                    true
+                                };
 
                                 if condition_satisfied {
                                     matched = true;
@@ -816,31 +777,19 @@ impl JoinOperator {
                         *phase = FullOuterJoinPhase::EmitUnmatchedRight;
                         if !all_results.is_empty() {
                             let left_layout = Arc::new(SlotLayout::from_names(
-                                &(0..left_rows
-                                    .first()
-                                    .map(|r| r.len())
-                                    .unwrap_or(0))
-                                .map(|i| format!("col_{}", i))
-                                .collect::<Vec<_>>(),
+                                &(0..left_rows.first().map(|r| r.len()).unwrap_or(0))
+                                    .map(|i| format!("col_{}", i))
+                                    .collect::<Vec<_>>(),
                             ));
                             let right_layout = Arc::new(SlotLayout::from_names(
-                                &build_combined_names(
-                                    &[],
-                                    right_col_names,
-                                    right_col_count,
-                                ),
+                                &build_combined_names(&[], right_col_names, right_col_count),
                             ));
-                            let layout =
-                                Arc::new(combine_layouts(&left_layout, &right_layout));
-                            let rows: Vec<Vec<Value>> =
-                                all_results.into_iter().collect();
+                            let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
+                            let rows: Vec<Vec<Value>> = all_results.into_iter().collect();
                             if !rows.is_empty() {
                                 *result_iter = Some(rows.into_iter());
                                 return Ok(Some(DataChunk::new_with_layout(
-                                    result_iter
-                                        .as_mut()
-                                        .unwrap()
-                                        .collect::<Vec<_>>(),
+                                    result_iter.as_mut().unwrap().collect::<Vec<_>>(),
                                     layout,
                                 )));
                             }
@@ -852,42 +801,29 @@ impl JoinOperator {
                             let rows: Vec<Vec<Value>> = iter.collect();
                             if !rows.is_empty() {
                                 let left_layout = Arc::new(SlotLayout::from_names(
-                                    &(0..left_rows
-                                        .first()
-                                        .map(|r| r.len())
-                                        .unwrap_or(0))
-                                    .map(|i| format!("col_{}", i))
-                                    .collect::<Vec<_>>(),
+                                    &(0..left_rows.first().map(|r| r.len()).unwrap_or(0))
+                                        .map(|i| format!("col_{}", i))
+                                        .collect::<Vec<_>>(),
                                 ));
-                                let right_layout = Arc::new(SlotLayout::from_names(
-                                    &build_combined_names(
+                                let right_layout =
+                                    Arc::new(SlotLayout::from_names(&build_combined_names(
                                         &[],
                                         right_col_names,
-                                        right_rows
-                                            .first()
-                                            .map(|r| r.len())
-                                            .unwrap_or(0),
-                                    ),
-                                ));
-                                let layout =
-                                    Arc::new(combine_layouts(&left_layout, &right_layout));
+                                        right_rows.first().map(|r| r.len()).unwrap_or(0),
+                                    )));
+                                let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
                                 return Ok(Some(DataChunk::new_with_layout(rows, layout)));
                             }
                             *result_iter = None;
                         }
 
-                        let left_col_count = left_rows
-                            .first()
-                            .map(|r| r.len())
-                            .unwrap_or(0);
+                        let left_col_count = left_rows.first().map(|r| r.len()).unwrap_or(0);
                         let mut unmatched = Vec::new();
                         for (right_idx, right_row) in right_rows.iter().enumerate() {
                             if !matched_right_indices.contains(&right_idx) {
                                 let mut row = Vec::new();
                                 for _ in 0..left_col_count {
-                                    row.push(Value::Null(
-                                        crate::core::value::NullType::Null,
-                                    ));
+                                    row.push(Value::Null(crate::core::value::NullType::Null));
                                 }
                                 row.extend(right_row.clone());
                                 unmatched.push(row);
@@ -902,18 +838,12 @@ impl JoinOperator {
                                 .map(|i| format!("col_{}", i))
                                 .collect::<Vec<_>>(),
                         ));
-                        let right_layout = Arc::new(SlotLayout::from_names(
-                            &build_combined_names(
-                                &[],
-                                right_col_names,
-                                right_rows
-                                    .first()
-                                    .map(|r| r.len())
-                                    .unwrap_or(0),
-                            ),
-                        ));
-                        let layout =
-                            Arc::new(combine_layouts(&left_layout, &right_layout));
+                        let right_layout = Arc::new(SlotLayout::from_names(&build_combined_names(
+                            &[],
+                            right_col_names,
+                            right_rows.first().map(|r| r.len()).unwrap_or(0),
+                        )));
+                        let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
                         return Ok(Some(DataChunk::new_with_layout(unmatched, layout)));
                     }
                 }
@@ -930,6 +860,7 @@ impl JoinOperator {
             } => {
                 if !*left_consumed {
                     while let Some(chunk) = left.advance()? {
+                        base.ensure_not_cancelled()?;
                         for row in &chunk.rows {
                             memory_tracker.try_reserve_row(row)?;
                         }
@@ -941,6 +872,7 @@ impl JoinOperator {
                 if !*right_consumed {
                     let mut captured_right_names = Vec::new();
                     while let Some(chunk) = right.advance()? {
+                        base.ensure_not_cancelled()?;
                         if captured_right_names.is_empty() {
                             captured_right_names = chunk.col_names();
                         }
@@ -959,6 +891,7 @@ impl JoinOperator {
 
                 let mut result_rows = Vec::new();
                 for left_row in all_left_rows.iter() {
+                    base.ensure_not_cancelled()?;
                     for right_row in all_right_rows.iter() {
                         let mut joined_row = left_row.clone();
                         joined_row.extend(right_row.clone());
@@ -970,23 +903,15 @@ impl JoinOperator {
                     Ok(None)
                 } else {
                     let left_layout = Arc::new(SlotLayout::from_names(
-                        &(0..all_left_rows
-                            .first()
-                            .map(|r| r.len())
-                            .unwrap_or(0))
-                        .map(|i| format!("col_{}", i))
-                        .collect::<Vec<_>>(),
+                        &(0..all_left_rows.first().map(|r| r.len()).unwrap_or(0))
+                            .map(|i| format!("col_{}", i))
+                            .collect::<Vec<_>>(),
                     ));
-                    let right_layout = Arc::new(SlotLayout::from_names(
-                        &build_combined_names(
-                            &[],
-                            right_col_names,
-                            all_right_rows
-                                .first()
-                                .map(|r| r.len())
-                                .unwrap_or(0),
-                        ),
-                    ));
+                    let right_layout = Arc::new(SlotLayout::from_names(&build_combined_names(
+                        &[],
+                        right_col_names,
+                        all_right_rows.first().map(|r| r.len()).unwrap_or(0),
+                    )));
                     let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
                     Ok(Some(DataChunk::new_with_layout(result_rows, layout)))
                 }
@@ -1001,6 +926,7 @@ impl JoinOperator {
             } => {
                 if !*right_consumed {
                     while let Some(chunk) = right.advance()? {
+                        base.ensure_not_cancelled()?;
                         for row in chunk.rows {
                             memory_tracker.try_reserve_row(&row)?;
                             right_rows.push(row);
@@ -1015,23 +941,22 @@ impl JoinOperator {
 
                     for left_row in &left_chunk.rows {
                         for right_row in right_rows.iter() {
-                            let condition_satisfied =
-                                if let Some(condition) = join_condition {
-                                    let mut combined_row = left_row.clone();
-                                    combined_row.extend(right_row.clone());
-                                    let mut combined_col_names = left_col_names.clone();
-                                    for i in 0..right_row.len() {
-                                        combined_col_names.push(format!("right_{}", i));
-                                    }
-                                    let mut context =
-                                        ValueRowContext::new(combined_row, combined_col_names);
-                                    match ExpressionEvaluator::evaluate(condition, &mut context) {
-                                        Ok(Value::Bool(b)) => b,
-                                        _ => false,
-                                    }
-                                } else {
-                                    true
-                                };
+                            let condition_satisfied = if let Some(condition) = join_condition {
+                                let mut combined_row = left_row.clone();
+                                combined_row.extend(right_row.clone());
+                                let mut combined_col_names = left_col_names.clone();
+                                for i in 0..right_row.len() {
+                                    combined_col_names.push(format!("right_{}", i));
+                                }
+                                let mut context =
+                                    ValueRowContext::new(combined_row, combined_col_names);
+                                match ExpressionEvaluator::evaluate(condition, &mut context) {
+                                    Ok(Value::Bool(b)) => b,
+                                    _ => false,
+                                }
+                            } else {
+                                true
+                            };
 
                             if condition_satisfied {
                                 result_rows.push(left_row.clone());
@@ -1089,15 +1014,20 @@ impl JoinOperator {
                 ..
             } => {
                 if base.opened {
-                    let mem = MemoryBudget::estimate_rows_memory(all_right_rows);
-                    memory_tracker.release(mem);
+                    memory_tracker.reset();
                     build_side_hash.clear();
                     all_right_rows.clear();
-                    left.close()?;
-                    right.close()?;
+                    let left_err = left.close().err();
+                    let right_err = right.close().err();
                     base.opened = false;
+                    match (left_err, right_err) {
+                        (Some(e), _) => Err(e),
+                        (_, Some(e)) => Err(e),
+                        _ => Ok(()),
+                    }
+                } else {
+                    Ok(())
                 }
-                Ok(())
             }
             Self::HashLeftJoin {
                 build_side_hash,
@@ -1106,15 +1036,20 @@ impl JoinOperator {
                 ..
             } => {
                 if base.opened {
-                    let mem = MemoryBudget::estimate_rows_memory(all_right_rows);
-                    memory_tracker.release(mem);
+                    memory_tracker.reset();
                     build_side_hash.clear();
                     all_right_rows.clear();
-                    left.close()?;
-                    right.close()?;
+                    let left_err = left.close().err();
+                    let right_err = right.close().err();
                     base.opened = false;
+                    match (left_err, right_err) {
+                        (Some(e), _) => Err(e),
+                        (_, Some(e)) => Err(e),
+                        _ => Ok(()),
+                    }
+                } else {
+                    Ok(())
                 }
-                Ok(())
             }
             Self::NestedLoopJoin {
                 build_side_tuples,
@@ -1122,14 +1057,19 @@ impl JoinOperator {
                 ..
             } => {
                 if base.opened {
-                    let mem = MemoryBudget::estimate_rows_memory(build_side_tuples);
-                    memory_tracker.release(mem);
+                    memory_tracker.reset();
                     build_side_tuples.clear();
-                    left.close()?;
-                    right.close()?;
+                    let left_err = left.close().err();
+                    let right_err = right.close().err();
                     base.opened = false;
+                    match (left_err, right_err) {
+                        (Some(e), _) => Err(e),
+                        (_, Some(e)) => Err(e),
+                        _ => Ok(()),
+                    }
+                } else {
+                    Ok(())
                 }
-                Ok(())
             }
             Self::InnerJoin {
                 build_side_tuples,
@@ -1137,14 +1077,19 @@ impl JoinOperator {
                 ..
             } => {
                 if base.opened {
-                    let mem = MemoryBudget::estimate_rows_memory(build_side_tuples);
-                    memory_tracker.release(mem);
+                    memory_tracker.reset();
                     build_side_tuples.clear();
-                    left.close()?;
-                    right.close()?;
+                    let left_err = left.close().err();
+                    let right_err = right.close().err();
                     base.opened = false;
+                    match (left_err, right_err) {
+                        (Some(e), _) => Err(e),
+                        (_, Some(e)) => Err(e),
+                        _ => Ok(()),
+                    }
+                } else {
+                    Ok(())
                 }
-                Ok(())
             }
             Self::LeftJoin {
                 build_side_tuples,
@@ -1152,14 +1097,19 @@ impl JoinOperator {
                 ..
             } => {
                 if base.opened {
-                    let mem = MemoryBudget::estimate_rows_memory(build_side_tuples);
-                    memory_tracker.release(mem);
+                    memory_tracker.reset();
                     build_side_tuples.clear();
-                    left.close()?;
-                    right.close()?;
+                    let left_err = left.close().err();
+                    let right_err = right.close().err();
                     base.opened = false;
+                    match (left_err, right_err) {
+                        (Some(e), _) => Err(e),
+                        (_, Some(e)) => Err(e),
+                        _ => Ok(()),
+                    }
+                } else {
+                    Ok(())
                 }
-                Ok(())
             }
             Self::RightJoin {
                 build_side_tuples,
@@ -1167,14 +1117,19 @@ impl JoinOperator {
                 ..
             } => {
                 if base.opened {
-                    let mem = MemoryBudget::estimate_rows_memory(build_side_tuples);
-                    memory_tracker.release(mem);
+                    memory_tracker.reset();
                     build_side_tuples.clear();
-                    left.close()?;
-                    right.close()?;
+                    let left_err = left.close().err();
+                    let right_err = right.close().err();
                     base.opened = false;
+                    match (left_err, right_err) {
+                        (Some(e), _) => Err(e),
+                        (_, Some(e)) => Err(e),
+                        _ => Ok(()),
+                    }
+                } else {
+                    Ok(())
                 }
-                Ok(())
             }
             Self::FullOuterJoin {
                 left_rows,
@@ -1183,16 +1138,20 @@ impl JoinOperator {
                 ..
             } => {
                 if base.opened {
-                    let mem_left = MemoryBudget::estimate_rows_memory(left_rows);
-                    let mem_right = MemoryBudget::estimate_rows_memory(right_rows);
-                    memory_tracker.release(mem_left + mem_right);
+                    memory_tracker.reset();
                     left_rows.clear();
                     right_rows.clear();
-                    left.close()?;
-                    right.close()?;
+                    let left_err = left.close().err();
+                    let right_err = right.close().err();
                     base.opened = false;
+                    match (left_err, right_err) {
+                        (Some(e), _) => Err(e),
+                        (_, Some(e)) => Err(e),
+                        _ => Ok(()),
+                    }
+                } else {
+                    Ok(())
                 }
-                Ok(())
             }
             Self::CrossJoin {
                 all_left_rows,
@@ -1201,16 +1160,20 @@ impl JoinOperator {
                 ..
             } => {
                 if base.opened {
-                    let mem_left = MemoryBudget::estimate_rows_memory(all_left_rows);
-                    let mem_right = MemoryBudget::estimate_rows_memory(all_right_rows);
-                    memory_tracker.release(mem_left + mem_right);
+                    memory_tracker.reset();
                     all_left_rows.clear();
                     all_right_rows.clear();
-                    left.close()?;
-                    right.close()?;
+                    let left_err = left.close().err();
+                    let right_err = right.close().err();
                     base.opened = false;
+                    match (left_err, right_err) {
+                        (Some(e), _) => Err(e),
+                        (_, Some(e)) => Err(e),
+                        _ => Ok(()),
+                    }
+                } else {
+                    Ok(())
                 }
-                Ok(())
             }
             Self::SemiJoin {
                 right_rows,
@@ -1218,14 +1181,19 @@ impl JoinOperator {
                 ..
             } => {
                 if base.opened {
-                    let mem = MemoryBudget::estimate_rows_memory(right_rows);
-                    memory_tracker.release(mem);
+                    memory_tracker.reset();
                     right_rows.clear();
-                    left.close()?;
-                    right.close()?;
+                    let left_err = left.close().err();
+                    let right_err = right.close().err();
                     base.opened = false;
+                    match (left_err, right_err) {
+                        (Some(e), _) => Err(e),
+                        (_, Some(e)) => Err(e),
+                        _ => Ok(()),
+                    }
+                } else {
+                    Ok(())
                 }
-                Ok(())
             }
         }
     }

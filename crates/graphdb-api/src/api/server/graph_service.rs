@@ -21,6 +21,8 @@ use crate::storage::{
 use crate::transaction::TransactionManager;
 use log::{info, warn};
 use parking_lot::RwLock;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
 #[cfg(feature = "qdrant")]
@@ -409,9 +411,17 @@ impl<
         };
 
         let mut query_api = self.query_api.write();
-        query_api
+        let result = query_api
             .execute_stream(stmt, query_request)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+
+        // Register the execution runtime for KILL QUERY support.
+        let mut hasher = DefaultHasher::new();
+        stmt.hash(&mut hasher);
+        let query_id = hasher.finish() as u32;
+        session.register_streaming_query(query_id, stmt.to_string(), result.runtime_downgrade());
+
+        Ok(result)
     }
 
     fn execute_query_with_permission(

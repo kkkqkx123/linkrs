@@ -4,6 +4,7 @@ pub mod apply_operator;
 pub mod blocking_operator;
 pub mod ddl_operator;
 pub mod fulltext_operator;
+pub mod gather_operator;
 pub mod graph_operator;
 pub mod join_operator;
 pub mod set_operator;

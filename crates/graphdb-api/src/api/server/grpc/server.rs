@@ -209,14 +209,29 @@ impl<
 
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<QueryResultChunk, Status>>(16);
 
+        // Track column names from the first chunk.
+        let schema: std::sync::Arc<std::sync::Mutex<Option<Vec<String>>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+
         tokio::spawn(async move {
+            let schema_pull = schema.clone();
+
             // Spawn blocking task to pull chunks synchronously.
             let tx_pull = tx.clone();
             let pull_handle = tokio::task::spawn_blocking(move || {
                 let mut _chunk_index = 0u64;
+                let mut seen_schema = false;
                 loop {
                     match stream_result.next_chunk() {
                         Ok(Some(chunk)) => {
+                            // Capture column names from the first chunk.
+                            if !seen_schema {
+                                if let Ok(mut cols) = schema_pull.lock() {
+                                    *cols = Some(chunk.col_names());
+                                }
+                                seen_schema = true;
+                            }
+
                             let proto_rows: Vec<super::proto::Row> = chunk
                                 .rows
                                 .into_iter()
@@ -229,15 +244,21 @@ impl<
                                 })
                                 .collect();
 
+                            let column_names = schema_pull
+                                .lock()
+                                .ok()
+                                .and_then(|c| c.clone())
+                                .unwrap_or_default();
+
                             let proto_chunk = super::proto::QueryResultChunk {
                                 rows: proto_rows,
                                 is_last: false,
+                                column_names,
                             };
 
-                            if tx_pull
-                                .blocking_send(Ok(proto_chunk))
-                                .is_err()
-                            {
+                            if tx_pull.blocking_send(Ok(proto_chunk)).is_err() {
+                                // Client disconnected — cancel the query.
+                                stream_result.cancel();
                                 return;
                             }
                             _chunk_index += 1;
@@ -247,6 +268,7 @@ impl<
                             let _ = tx_pull.blocking_send(Ok(super::proto::QueryResultChunk {
                                 rows: vec![],
                                 is_last: true,
+                                column_names: vec![],
                             }));
                             return;
                         }

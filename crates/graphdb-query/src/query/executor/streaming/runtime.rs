@@ -20,11 +20,11 @@ pub struct QueryIdentity {
 #[derive(Debug, Clone, Default)]
 pub struct OperatorProfile {
     pub node_id: i64,
+    pub partition_id: Option<usize>,
     pub name: String,
     pub open_time_us: u64,
     pub next_time_us: u64,
     pub close_time_us: u64,
-    pub input_rows: u64,
     pub output_rows: u64,
     pub peak_memory: u64,
     pub peak_memory_bytes: u64,
@@ -32,10 +32,29 @@ pub struct OperatorProfile {
     pub spill_count: u64,
 }
 
+/// Identifies an operator instance in a partitioned executor tree.
+///
+/// A plan node occurs once per local partition, so `node_id` alone is not a
+/// unique profile key. Global and gather operators use `None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct OperatorProfileKey {
+    pub node_id: i64,
+    pub partition_id: Option<usize>,
+}
+
+impl OperatorProfileKey {
+    pub const fn new(node_id: i64, partition_id: Option<usize>) -> Self {
+        Self {
+            node_id,
+            partition_id,
+        }
+    }
+}
+
 /// Collects execution profile data across all operators
 #[derive(Debug, Default)]
 pub struct ProfileCollector {
-    pub operators: HashMap<i64, OperatorProfile>,
+    pub operators: HashMap<OperatorProfileKey, OperatorProfile>,
     pub total_rows: u64,
     pub total_time_us: u64,
     pub start_time: Option<Instant>,
@@ -63,7 +82,36 @@ impl ProfileCollector {
     }
 
     pub fn record_operator_profile(&mut self, profile: OperatorProfile) {
-        self.operators.insert(profile.node_id, profile);
+        let key = OperatorProfileKey::new(profile.node_id, profile.partition_id);
+        self.operators.insert(key, profile);
+    }
+
+    /// Aggregate profiles from partition execution into this collector.
+    ///
+    /// For each operator node_id, sums timing/output_rows and takes the max
+    /// of peak_memory_bytes across partitions.
+    pub fn aggregate_partition_profiles(&mut self, partition_profiles: &[ProfileCollector]) {
+        for pp in partition_profiles {
+            for (key, op) in &pp.operators {
+                let entry = self
+                    .operators
+                    .entry(*key)
+                    .or_insert_with(|| OperatorProfile {
+                        node_id: key.node_id,
+                        partition_id: key.partition_id,
+                        name: op.name.clone(),
+                        ..OperatorProfile::default()
+                    });
+                entry.open_time_us += op.open_time_us;
+                entry.next_time_us += op.next_time_us;
+                entry.close_time_us += op.close_time_us;
+                entry.output_rows += op.output_rows;
+                entry.peak_memory_bytes = entry.peak_memory_bytes.max(op.peak_memory_bytes);
+                entry.spill_count += op.spill_count;
+                entry.spilled_bytes += op.spilled_bytes;
+            }
+            self.total_rows += pp.total_rows;
+        }
     }
 }
 
@@ -88,7 +136,9 @@ impl Default for ResourceOwner {
 
 impl ResourceOwner {
     pub fn new() -> Self {
-        Self { cleanup: Vec::new() }
+        Self {
+            cleanup: Vec::new(),
+        }
     }
 
     pub fn add(&mut self, cleanup: Box<dyn FnOnce() + Send>) {
@@ -265,6 +315,49 @@ mod tests {
         rt.profile_add_rows(10);
         rt.profile_add_rows(20);
         assert_eq!(rt.profile().lock().total_rows, 30);
+    }
+
+    #[test]
+    fn test_partition_profile_aggregation_preserves_partition_identity() {
+        let mut first = ProfileCollector::new();
+        first.record_operator_profile(OperatorProfile {
+            node_id: 7,
+            partition_id: Some(0),
+            name: "ScanVertices".to_string(),
+            output_rows: 2,
+            peak_memory_bytes: 10,
+            ..OperatorProfile::default()
+        });
+        let mut second = ProfileCollector::new();
+        second.record_operator_profile(OperatorProfile {
+            node_id: 7,
+            partition_id: Some(1),
+            name: "ScanVertices".to_string(),
+            output_rows: 3,
+            peak_memory_bytes: 20,
+            ..OperatorProfile::default()
+        });
+
+        let mut aggregate = ProfileCollector::new();
+        aggregate.aggregate_partition_profiles(&[first, second]);
+
+        assert_eq!(aggregate.operators.len(), 2);
+        assert_eq!(
+            aggregate
+                .operators
+                .get(&OperatorProfileKey::new(7, Some(0)))
+                .expect("partition zero profile")
+                .output_rows,
+            2
+        );
+        assert_eq!(
+            aggregate
+                .operators
+                .get(&OperatorProfileKey::new(7, Some(1)))
+                .expect("partition one profile")
+                .peak_memory_bytes,
+            20
+        );
     }
 
     #[test]

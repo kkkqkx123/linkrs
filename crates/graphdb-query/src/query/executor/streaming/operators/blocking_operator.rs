@@ -5,15 +5,14 @@ use crate::core::types::expr::Expression;
 use crate::core::types::operators::AggregateFunction;
 use crate::core::value::NullType;
 use crate::core::Value;
-use crate::query::executor::base::MemoryBudget;
 use crate::query::executor::base::MemoryTracker;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
-use crate::query::executor::streaming::helpers::compare_values;
-use crate::query::executor::streaming::helpers::compute_aggregate;
 use crate::query::executor::streaming::executor::SortDirection;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::executor::ValueRowContext;
+use crate::query::executor::streaming::helpers::compare_values;
+use crate::query::executor::streaming::helpers::compute_aggregate;
 use crate::query::executor::streaming::operator_base::OperatorBase;
 
 // ——— state structs ———
@@ -22,6 +21,7 @@ use crate::query::executor::streaming::operator_base::OperatorBase;
 pub struct SortState {
     pub all_rows: Vec<Vec<Value>>,
     pub row_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+    pub col_names: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -56,7 +56,8 @@ pub struct TopNState {
 
 #[derive(Debug)]
 pub struct DistinctState {
-    pub seen_rows: std::collections::HashSet<String>,
+    pub seen_rows: std::collections::HashSet<Vec<Value>>,
+    pub col_names: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -89,6 +90,7 @@ pub enum BlockingOperator {
     Aggregate {
         group_by_expressions: Vec<Expression>,
         aggregate_functions: Vec<(AggregateFunction, Expression)>,
+        output_col_names: Vec<String>,
         memory_tracker: MemoryTracker,
         state: Option<AggregateState>,
     },
@@ -162,34 +164,66 @@ impl BlockingOperator {
     ) -> Result<(), QueryError> {
         match self {
             Self::Sort { state, .. } => {
-                *state = Some(SortState { all_rows: vec![], row_iter: None });
+                *state = Some(SortState {
+                    all_rows: vec![],
+                    row_iter: None,
+                    col_names: vec![],
+                });
             }
             Self::Aggregate { state, .. } => {
-                *state = Some(AggregateState { all_rows: vec![], result_iter: None });
+                *state = Some(AggregateState {
+                    all_rows: vec![],
+                    result_iter: None,
+                });
             }
             Self::GroupBy { state, .. } => {
-                *state = Some(GroupByState { all_rows: vec![], result_iter: None });
+                *state = Some(GroupByState {
+                    all_rows: vec![],
+                    result_iter: None,
+                });
             }
             Self::WindowFunction { state, .. } => {
-                *state = Some(WindowFunctionState { all_rows: vec![], result_iter: None });
+                *state = Some(WindowFunctionState {
+                    all_rows: vec![],
+                    result_iter: None,
+                });
             }
             Self::Window { state, .. } => {
-                *state = Some(WindowState { all_rows: vec![], result_iter: None });
+                *state = Some(WindowState {
+                    all_rows: vec![],
+                    result_iter: None,
+                });
             }
             Self::TopN { state, .. } => {
-                *state = Some(TopNState { all_rows: vec![], result_iter: None });
+                *state = Some(TopNState {
+                    all_rows: vec![],
+                    result_iter: None,
+                });
             }
             Self::Distinct { state, .. } => {
-                *state = Some(DistinctState { seen_rows: std::collections::HashSet::new() });
+                *state = Some(DistinctState {
+                    seen_rows: std::collections::HashSet::new(),
+                    col_names: Vec::new(),
+                });
             }
             Self::Materialize { state, .. } => {
-                *state = Some(MaterializeState { materialized_rows: vec![], result_iter: None, materialized: false });
+                *state = Some(MaterializeState {
+                    materialized_rows: vec![],
+                    result_iter: None,
+                    materialized: false,
+                });
             }
             Self::DataCollect { state, .. } => {
-                *state = Some(DataCollectState { all_rows: vec![], emitted: false });
+                *state = Some(DataCollectState {
+                    all_rows: vec![],
+                    emitted: false,
+                });
             }
             Self::RollUpApply { state, .. } => {
-                *state = Some(RollUpApplyState { all_rows: vec![], result_iter: None });
+                *state = Some(RollUpApplyState {
+                    all_rows: vec![],
+                    result_iter: None,
+                });
             }
         }
         input.open()?;
@@ -212,10 +246,10 @@ impl BlockingOperator {
             } => {
                 let state = state.as_mut().unwrap();
                 if state.row_iter.is_none() {
-                    let mut col_names: Vec<String> = vec![];
                     while let Some(chunk) = input.advance()? {
-                        if col_names.is_empty() {
-                            col_names = chunk.col_names();
+                        base.ensure_not_cancelled()?;
+                        if state.col_names.is_empty() {
+                            state.col_names = chunk.col_names();
                         }
                         for row in &chunk.rows {
                             memory_tracker.try_reserve_row(row)?;
@@ -232,9 +266,9 @@ impl BlockingOperator {
                                     .unwrap_or(SortDirection::Ascending);
 
                                 let mut ctx_a =
-                                    ValueRowContext::new(a.clone(), col_names.clone());
+                                    ValueRowContext::new(a.clone(), state.col_names.clone());
                                 let mut ctx_b =
-                                    ValueRowContext::new(b.clone(), col_names.clone());
+                                    ValueRowContext::new(b.clone(), state.col_names.clone());
 
                                 let val_a = ExpressionEvaluator::evaluate(expr, &mut ctx_a)
                                     .unwrap_or(Value::Null(NullType::Null));
@@ -265,7 +299,10 @@ impl BlockingOperator {
                     if chunk_rows.is_empty() {
                         Ok(None)
                     } else {
-                        Ok(Some(DataChunk::from_rows(chunk_rows)))
+                        Ok(Some(DataChunk::from_rows_with_col_names(
+                            chunk_rows,
+                            Some(state.col_names.clone()),
+                        )))
                     }
                 } else {
                     Ok(None)
@@ -275,6 +312,7 @@ impl BlockingOperator {
             Self::Aggregate {
                 group_by_expressions,
                 aggregate_functions,
+                output_col_names,
                 memory_tracker,
                 state,
                 ..
@@ -283,6 +321,7 @@ impl BlockingOperator {
                 if state.result_iter.is_none() {
                     let mut col_names: Vec<String> = vec![];
                     while let Some(chunk) = input.advance()? {
+                        base.ensure_not_cancelled()?;
                         if col_names.is_empty() {
                             col_names = chunk.col_names();
                         }
@@ -343,7 +382,10 @@ impl BlockingOperator {
                     if chunk_rows.is_empty() {
                         Ok(None)
                     } else {
-                        Ok(Some(DataChunk::from_rows(chunk_rows)))
+                        Ok(Some(DataChunk::from_rows_with_col_names(
+                            chunk_rows,
+                            Some(output_col_names.clone()),
+                        )))
                     }
                 } else {
                     Ok(None)
@@ -359,6 +401,7 @@ impl BlockingOperator {
                 let state = state.as_mut().unwrap();
                 if state.result_iter.is_none() {
                     while let Some(chunk) = input.advance()? {
+                        base.ensure_not_cancelled()?;
                         for row in &chunk.rows {
                             memory_tracker.try_reserve_row(row)?;
                         }
@@ -377,8 +420,7 @@ impl BlockingOperator {
                     for row in state.all_rows.iter() {
                         let mut key_parts: Vec<String> = Vec::new();
                         for expr in group_by_expressions.iter() {
-                            let mut context =
-                                ValueRowContext::new(row.clone(), col_names.clone());
+                            let mut context = ValueRowContext::new(row.clone(), col_names.clone());
                             let key_val = ExpressionEvaluator::evaluate(expr, &mut context)
                                 .unwrap_or(Value::Null(NullType::Null));
                             key_parts.push(format!("{:?}", key_val));
@@ -416,6 +458,7 @@ impl BlockingOperator {
                 if state.result_iter.is_none() {
                     let mut col_names: Vec<String> = vec![];
                     while let Some(chunk) = input.advance()? {
+                        base.ensure_not_cancelled()?;
                         if col_names.is_empty() {
                             col_names = chunk.col_names();
                         }
@@ -441,9 +484,7 @@ impl BlockingOperator {
                                         ValueRowContext::new(row.clone(), col_names.clone());
                                     match ExpressionEvaluator::evaluate(expr, &mut ctx) {
                                         Ok(val) => partition_key.push(val),
-                                        Err(_) => {
-                                            partition_key.push(Value::Null(NullType::Null))
-                                        }
+                                        Err(_) => partition_key.push(Value::Null(NullType::Null)),
                                     }
                                 }
                             }
@@ -466,12 +507,10 @@ impl BlockingOperator {
                                             ValueRowContext::new(a.1.clone(), col_names.clone());
                                         let mut ctx_b =
                                             ValueRowContext::new(b.1.clone(), col_names.clone());
-                                        let val_a =
-                                            ExpressionEvaluator::evaluate(expr, &mut ctx_a)
-                                                .unwrap_or(Value::Null(NullType::Null));
-                                        let val_b =
-                                            ExpressionEvaluator::evaluate(expr, &mut ctx_b)
-                                                .unwrap_or(Value::Null(NullType::Null));
+                                        let val_a = ExpressionEvaluator::evaluate(expr, &mut ctx_a)
+                                            .unwrap_or(Value::Null(NullType::Null));
+                                        let val_b = ExpressionEvaluator::evaluate(expr, &mut ctx_b)
+                                            .unwrap_or(Value::Null(NullType::Null));
                                         let cmp = compare_values(&val_a, &val_b);
                                         let final_cmp = match direction {
                                             SortDirection::Ascending => cmp,
@@ -488,9 +527,8 @@ impl BlockingOperator {
                             for (row_idx, row) in partition_rows.iter() {
                                 let mut result_row = row.clone();
                                 for window_expr in window_exprs.iter() {
-                                    if let Expression::WindowFunction {
-                                        name, args, ..
-                                    } = window_expr
+                                    if let Expression::WindowFunction { name, args, .. } =
+                                        window_expr
                                     {
                                         let func_args: Vec<Value> = args
                                             .iter()
@@ -549,6 +587,7 @@ impl BlockingOperator {
                 if state.result_iter.is_none() {
                     let mut col_names: Vec<String> = vec![];
                     while let Some(chunk) = input.advance()? {
+                        base.ensure_not_cancelled()?;
                         if col_names.is_empty() {
                             col_names = chunk.col_names();
                         }
@@ -574,9 +613,7 @@ impl BlockingOperator {
                                         ValueRowContext::new(row.clone(), col_names.clone());
                                     match ExpressionEvaluator::evaluate(expr, &mut ctx) {
                                         Ok(val) => partition_key.push(val),
-                                        Err(_) => {
-                                            partition_key.push(Value::Null(NullType::Null))
-                                        }
+                                        Err(_) => partition_key.push(Value::Null(NullType::Null)),
                                     }
                                 }
                             }
@@ -599,12 +636,10 @@ impl BlockingOperator {
                                             ValueRowContext::new(a.1.clone(), col_names.clone());
                                         let mut ctx_b =
                                             ValueRowContext::new(b.1.clone(), col_names.clone());
-                                        let val_a =
-                                            ExpressionEvaluator::evaluate(expr, &mut ctx_a)
-                                                .unwrap_or(Value::Null(NullType::Null));
-                                        let val_b =
-                                            ExpressionEvaluator::evaluate(expr, &mut ctx_b)
-                                                .unwrap_or(Value::Null(NullType::Null));
+                                        let val_a = ExpressionEvaluator::evaluate(expr, &mut ctx_a)
+                                            .unwrap_or(Value::Null(NullType::Null));
+                                        let val_b = ExpressionEvaluator::evaluate(expr, &mut ctx_b)
+                                            .unwrap_or(Value::Null(NullType::Null));
                                         let cmp = compare_values(&val_a, &val_b);
                                         let final_cmp = match direction {
                                             SortDirection::Ascending => cmp,
@@ -621,9 +656,8 @@ impl BlockingOperator {
                             for (row_idx, row) in partition_rows.iter() {
                                 let mut result_row = row.clone();
                                 for window_expr in window_exprs.iter() {
-                                    if let Expression::WindowFunction {
-                                        name, args, ..
-                                    } = window_expr
+                                    if let Expression::WindowFunction { name, args, .. } =
+                                        window_expr
                                     {
                                         let func_args: Vec<Value> = args
                                             .iter()
@@ -687,6 +721,7 @@ impl BlockingOperator {
                     let limit = *n as usize;
 
                     while let Some(chunk) = input.advance()? {
+                        base.ensure_not_cancelled()?;
                         if col_names.is_empty() {
                             col_names = chunk.col_names();
                         }
@@ -760,28 +795,40 @@ impl BlockingOperator {
                 }
             }
 
-            Self::Distinct { state, .. } => {
+            Self::Distinct {
+                state,
+                memory_tracker,
+                ..
+            } => {
                 let state = state.as_mut().unwrap();
-                let mut all_rows = Vec::new();
-                while let Some(chunk) = input.advance()? {
-                    for row in chunk.rows {
-                        all_rows.push(row);
-                    }
-                }
-
                 let mut result_rows = Vec::new();
-                for row in all_rows {
-                    let row_str = format!("{:?}", row);
-                    if !state.seen_rows.contains(&row_str) {
-                        state.seen_rows.insert(row_str);
-                        result_rows.push(row);
+                while let Some(chunk) = input.advance()? {
+                    base.ensure_not_cancelled()?;
+                    if state.col_names.is_empty() {
+                        state.col_names = chunk.col_names();
+                    }
+                    for row in chunk.rows {
+                        if !state.seen_rows.contains(&row) {
+                            memory_tracker.try_reserve_row(&row)?;
+                            state.seen_rows.insert(row.clone());
+                            result_rows.push(row);
+                            if result_rows.len() == 1024 {
+                                return Ok(Some(DataChunk::from_rows_with_col_names(
+                                    result_rows,
+                                    Some(state.col_names.clone()),
+                                )));
+                            }
+                        }
                     }
                 }
 
                 if result_rows.is_empty() {
                     Ok(None)
                 } else {
-                    Ok(Some(DataChunk::from_rows(result_rows)))
+                    Ok(Some(DataChunk::from_rows_with_col_names(
+                        result_rows,
+                        Some(state.col_names.clone()),
+                    )))
                 }
             }
 
@@ -791,21 +838,21 @@ impl BlockingOperator {
                 ..
             } => {
                 if !base.opened {
-                    return Err(QueryError::execution(
-                        "Materialize not opened".to_string(),
-                    ));
+                    return Err(QueryError::execution("Materialize not opened".to_string()));
                 }
 
                 let state = state.as_mut().unwrap();
                 if !state.materialized {
                     while let Some(chunk) = input.advance()? {
+                        base.ensure_not_cancelled()?;
                         for row in &chunk.rows {
                             memory_tracker.try_reserve_row(row)?;
                         }
                         state.materialized_rows.extend(chunk.rows);
                     }
                     state.materialized = true;
-                    state.result_iter = Some(std::mem::take(&mut state.materialized_rows).into_iter());
+                    state.result_iter =
+                        Some(std::mem::take(&mut state.materialized_rows).into_iter());
                 }
 
                 if let Some(iter) = &mut state.result_iter {
@@ -825,9 +872,7 @@ impl BlockingOperator {
                 ..
             } => {
                 if !base.opened {
-                    return Err(QueryError::execution(
-                        "DataCollect not opened".to_string(),
-                    ));
+                    return Err(QueryError::execution("DataCollect not opened".to_string()));
                 }
 
                 let state = state.as_mut().unwrap();
@@ -836,6 +881,7 @@ impl BlockingOperator {
                 }
 
                 while let Some(chunk) = input.advance()? {
+                    base.ensure_not_cancelled()?;
                     for row in &chunk.rows {
                         memory_tracker.try_reserve_row(row)?;
                     }
@@ -858,15 +904,14 @@ impl BlockingOperator {
                 ..
             } => {
                 if !base.opened {
-                    return Err(QueryError::execution(
-                        "RollUpApply not opened".to_string(),
-                    ));
+                    return Err(QueryError::execution("RollUpApply not opened".to_string()));
                 }
 
                 let state = state.as_mut().unwrap();
                 if state.result_iter.is_none() {
                     let mut col_names: Vec<String> = Vec::new();
                     while let Some(chunk) = input.advance()? {
+                        base.ensure_not_cancelled()?;
                         if col_names.is_empty() {
                             col_names = chunk.col_names();
                         }
@@ -874,15 +919,12 @@ impl BlockingOperator {
                             memory_tracker.try_reserve_row(row)?;
                         }
                         for row in chunk.rows {
-                            let mut ctx =
-                                ValueRowContext::new(row.clone(), col_names.clone());
+                            let mut ctx = ValueRowContext::new(row.clone(), col_names.clone());
                             let mut aggregated = row.clone();
                             for expr in rollup_expressions.iter() {
                                 match ExpressionEvaluator::evaluate(expr, &mut ctx) {
                                     Ok(val) => aggregated.push(val),
-                                    Err(_) => {
-                                        aggregated.push(Value::Null(NullType::Null))
-                                    }
+                                    Err(_) => aggregated.push(Value::Null(NullType::Null)),
                                 }
                             }
                             state.all_rows.push(aggregated);
@@ -927,120 +969,130 @@ impl BlockingOperator {
         input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
         match self {
-            Self::Sort { state, memory_tracker, .. } => {
+            Self::Sort {
+                state,
+                memory_tracker,
+                ..
+            } => {
                 if base.opened {
-                    if let Some(s) = state {
-                        let mem = MemoryBudget::estimate_rows_memory(&s.all_rows);
-                        memory_tracker.release(mem);
-                    }
+                    memory_tracker.reset();
                     *state = None;
                     input.close()?;
                     base.opened = false;
                 }
                 Ok(())
             }
-            Self::Aggregate { state, memory_tracker, .. } => {
+            Self::Aggregate {
+                state,
+                memory_tracker,
+                ..
+            } => {
                 if base.opened {
-                    if let Some(s) = state {
-                        let mem = MemoryBudget::estimate_rows_memory(&s.all_rows);
-                        memory_tracker.release(mem);
-                    }
+                    memory_tracker.reset();
                     *state = None;
                     input.close()?;
                     base.opened = false;
                 }
                 Ok(())
             }
-            Self::GroupBy { state, memory_tracker, .. } => {
+            Self::GroupBy {
+                state,
+                memory_tracker,
+                ..
+            } => {
                 if base.opened {
-                    if let Some(s) = state {
-                        let mem = MemoryBudget::estimate_rows_memory(&s.all_rows);
-                        memory_tracker.release(mem);
-                    }
+                    memory_tracker.reset();
                     *state = None;
                     input.close()?;
                     base.opened = false;
                 }
                 Ok(())
             }
-            Self::WindowFunction { state, memory_tracker, .. } => {
+            Self::WindowFunction {
+                state,
+                memory_tracker,
+                ..
+            } => {
                 if base.opened {
-                    if let Some(s) = state {
-                        let mem = MemoryBudget::estimate_rows_memory(&s.all_rows);
-                        memory_tracker.release(mem);
-                    }
+                    memory_tracker.reset();
                     *state = None;
                     input.close()?;
                     base.opened = false;
                 }
                 Ok(())
             }
-            Self::Window { state, memory_tracker, .. } => {
+            Self::Window {
+                state,
+                memory_tracker,
+                ..
+            } => {
                 if base.opened {
-                    if let Some(s) = state {
-                        let mem = MemoryBudget::estimate_rows_memory(&s.all_rows);
-                        memory_tracker.release(mem);
-                    }
+                    memory_tracker.reset();
                     *state = None;
                     input.close()?;
                     base.opened = false;
                 }
                 Ok(())
             }
-            Self::TopN { state, memory_tracker, .. } => {
+            Self::TopN {
+                state,
+                memory_tracker,
+                ..
+            } => {
                 if base.opened {
-                    if let Some(s) = state {
-                        let mem = MemoryBudget::estimate_rows_memory(&s.all_rows);
-                        memory_tracker.release(mem);
-                    }
+                    memory_tracker.reset();
                     *state = None;
                     input.close()?;
                     base.opened = false;
                 }
                 Ok(())
             }
-            Self::RollUpApply { state, memory_tracker, .. } => {
+            Self::RollUpApply {
+                state,
+                memory_tracker,
+                ..
+            } => {
                 if base.opened {
-                    if let Some(s) = state {
-                        let mem = MemoryBudget::estimate_rows_memory(&s.all_rows);
-                        memory_tracker.release(mem);
-                    }
+                    memory_tracker.reset();
                     *state = None;
                     input.close()?;
                     base.opened = false;
                 }
                 Ok(())
             }
-            Self::Distinct { state, memory_tracker, .. } => {
+            Self::Distinct {
+                state,
+                memory_tracker,
+                ..
+            } => {
                 if base.opened {
-                    if let Some(s) = state {
-                        let mem = s.seen_rows.len() * 256;
-                        memory_tracker.release(mem);
-                    }
+                    memory_tracker.reset();
                     *state = None;
                     input.close()?;
                     base.opened = false;
                 }
                 Ok(())
             }
-            Self::Materialize { state, memory_tracker, .. } => {
+            Self::Materialize {
+                state,
+                memory_tracker,
+                ..
+            } => {
                 if base.opened {
-                    if let Some(s) = state {
-                        let mem = MemoryBudget::estimate_rows_memory(&s.materialized_rows);
-                        memory_tracker.release(mem);
-                    }
+                    memory_tracker.reset();
                     *state = None;
                     input.close()?;
                     base.opened = false;
                 }
                 Ok(())
             }
-            Self::DataCollect { state, memory_tracker, .. } => {
+            Self::DataCollect {
+                state,
+                memory_tracker,
+                ..
+            } => {
                 if base.opened {
-                    if let Some(s) = state {
-                        let mem = MemoryBudget::estimate_rows_memory(&s.all_rows);
-                        memory_tracker.release(mem);
-                    }
+                    memory_tracker.reset();
                     *state = None;
                     input.close()?;
                     base.opened = false;
@@ -1168,10 +1220,10 @@ fn compare_rows_for_topn(
         let mut ctx_a = ValueRowContext::new(a.to_vec(), col_names.to_vec());
         let mut ctx_b = ValueRowContext::new(b.to_vec(), col_names.to_vec());
 
-        let val_a = ExpressionEvaluator::evaluate(expr, &mut ctx_a)
-            .unwrap_or(Value::Null(NullType::Null));
-        let val_b = ExpressionEvaluator::evaluate(expr, &mut ctx_b)
-            .unwrap_or(Value::Null(NullType::Null));
+        let val_a =
+            ExpressionEvaluator::evaluate(expr, &mut ctx_a).unwrap_or(Value::Null(NullType::Null));
+        let val_b =
+            ExpressionEvaluator::evaluate(expr, &mut ctx_b).unwrap_or(Value::Null(NullType::Null));
 
         let cmp = compare_values(&val_a, &val_b);
 

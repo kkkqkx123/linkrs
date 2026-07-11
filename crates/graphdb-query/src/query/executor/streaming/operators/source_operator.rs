@@ -349,11 +349,19 @@ impl SourceOperator {
 
     pub fn close(&mut self, base: &mut OperatorBase) -> Result<(), QueryError> {
         match self {
-            Self::StorageScanVertices { cursor, current_index, .. } => {
+            Self::StorageScanVertices {
+                cursor,
+                current_index,
+                ..
+            } => {
                 *cursor = None;
                 *current_index = 0;
             }
-            Self::StorageScanEdges { cursor, current_index, .. } => {
+            Self::StorageScanEdges {
+                cursor,
+                current_index,
+                ..
+            } => {
                 *cursor = None;
                 *current_index = 0;
             }

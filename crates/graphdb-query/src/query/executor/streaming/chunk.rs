@@ -3,7 +3,7 @@
 //! A DataChunk represents a fixed-size batch of rows processed in streaming mode.
 //! Typical size: 1024 rows (~4MB)
 
-use super::slot::{SlotLayout, SlotId};
+use super::slot::{SlotId, SlotLayout};
 use crate::core::Value;
 use std::sync::Arc;
 
@@ -49,7 +49,11 @@ impl Schema {
 impl DataChunk {
     /// Create a new DataChunk with rows, schema, and optional layout
     pub fn new(rows: Vec<Vec<Value>>, schema: Arc<Schema>) -> Self {
-        Self { rows, schema, layout: None }
+        Self {
+            rows,
+            schema,
+            layout: None,
+        }
     }
 
     /// Create a DataChunk with layout from Arc<SlotLayout>
@@ -134,7 +138,11 @@ impl DataChunk {
                 .collect();
             Arc::new(Schema::new(columns))
         };
-        Self { rows, schema, layout: None }
+        Self {
+            rows,
+            schema,
+            layout: None,
+        }
     }
 
     /// Number of rows in this chunk
@@ -183,7 +191,9 @@ impl DataChunk {
     /// Get value by slot ID (fast path using layout).
     /// Returns None if row index out of bounds or no such slot.
     pub fn get_by_slot(&self, row_idx: usize, slot: SlotId) -> Option<Value> {
-        self.rows.get(row_idx).and_then(|row| row.get(slot).cloned())
+        self.rows
+            .get(row_idx)
+            .and_then(|row| row.get(slot).cloned())
     }
 }
 
