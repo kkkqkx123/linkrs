@@ -178,8 +178,10 @@ mod tests {
         let config = OutputConfig::default();
         assert!(config.validate().is_ok());
 
-        let mut config = OutputConfig::default();
-        config.mode = OutputMode::File;
+        let config = OutputConfig {
+            mode: OutputMode::File,
+            ..Default::default()
+        };
         assert!(config.validate().is_err());
 
         let config = OutputConfig::file("/tmp/test.log");

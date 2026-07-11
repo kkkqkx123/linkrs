@@ -321,6 +321,6 @@ mod tests {
 
         table.freeze_csr_only(105);
 
-        assert!(table.out_segments.len() > 0 || table.in_segments.len() > 0);
+        assert!(!table.out_segments.is_empty() || !table.in_segments.is_empty());
     }
 }

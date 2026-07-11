@@ -561,7 +561,7 @@ mod tests {
         }
 
         // Verify we can still use binary search after promotion
-        if mvcc.cold_tombstones.len() > 0 {
+        if !mvcc.cold_tombstones.is_empty() {
             let first_edge_id = mvcc.cold_tombstones[0].0;
             assert!(mvcc.is_tombstoned_cold(first_edge_id, u32::MAX));
         }

@@ -75,7 +75,7 @@ fn test_special_chars_username_safety() {
         let scenario = new_scenario();
         let result = scenario.exec_dcl(query);
         // Either succeeds or fails gracefully, but should not crash system
-        result;
+        drop(result);
     }
 }
 
@@ -308,6 +308,6 @@ fn test_special_sql_keywords_as_username() {
         let scenario = new_scenario();
         let result = scenario.exec_dcl(&query);
         // Should either succeed (treat as literal) or fail gracefully
-        result;
+        drop(result);
     }
 }

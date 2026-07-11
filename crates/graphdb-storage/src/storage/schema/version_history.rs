@@ -140,7 +140,6 @@ impl Default for SchemaVersionHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::DataType;
 
     #[test]
     fn test_label_version_history_creation() {

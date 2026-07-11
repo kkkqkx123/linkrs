@@ -415,9 +415,11 @@ fn test_write_backpressure_triggers_freeze() {
     use std::sync::Arc;
 
     let schema = create_test_schema();
-    let mut config = EdgeTableConfig::default();
-    // Set very small backpressure limit (1KB) to trigger easily with 10K edges
-    config.max_mutable_csr_bytes = 1024;
+    let config = EdgeTableConfig {
+        // Set very small backpressure limit (1KB) to trigger easily with 10K edges
+        max_mutable_csr_bytes: 1024,
+        ..Default::default()
+    };
 
     let mut table = EdgeTable::with_config(schema, config).unwrap();
 
@@ -469,15 +471,17 @@ fn test_write_backpressure_disabled() {
     use std::sync::Arc;
 
     let schema = create_test_schema();
-    let mut config = EdgeTableConfig::default();
-    // Disable backpressure
-    config.max_mutable_csr_bytes = 0;
+    let config = EdgeTableConfig {
+        // Disable backpressure
+        max_mutable_csr_bytes: 0,
+        ..Default::default()
+    };
 
     let mut table = EdgeTable::with_config(schema, config).unwrap();
     let stats = Arc::new(StatsManager::new());
     table.set_stats_manager(stats.clone());
 
-    let initial_segments = table.out_segments.len();
+    let _initial_segments = table.out_segments.len();
 
     // Insert many edges
     for src in 0..50 {
@@ -494,7 +498,7 @@ fn test_write_backpressure_disabled() {
 
     // Without backpressure, no freeze should be triggered during inserts
     // (unless it hits max_segments_per_direction limit)
-    let final_segments = table.out_segments.len();
+    let _final_segments = table.out_segments.len();
 
     // Verify no freeze was triggered from backpressure
     // (segments might exist from other freezes, but not from backpressure)
@@ -655,7 +659,7 @@ fn test_version_history_add_property() -> StorageResult<()> {
         } => {
             assert_eq!(name, "weight");
             assert_eq!(*data_type, DataType::Float);
-            assert_eq!(*nullable, true);
+            assert!(*nullable);
         }
         _ => panic!("Expected PropertyAdded change"),
     }

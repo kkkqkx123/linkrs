@@ -361,23 +361,6 @@ mod tests {
     use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
     use std::fs;
 
-    fn create_edge_table_with_props() -> TimeTravelEdgeStore {
-        let schema = EdgeSchema {
-            label_id: 0,
-            label_name: "knows".to_string(),
-            src_label: 0,
-            dst_label: 0,
-            properties: vec![crate::storage::types::StoragePropertyDef::new(
-                "weight".to_string(),
-                crate::core::types::DataType::Double,
-            )],
-            oe_strategy: EdgeStrategy::Multiple,
-            ie_strategy: EdgeStrategy::Multiple,
-            schema_version: 1,
-        };
-        TimeTravelEdgeStore::new(schema).unwrap()
-    }
-
     fn create_edge_table() -> TimeTravelEdgeStore {
         let schema = EdgeSchema {
             label_id: 0,
@@ -526,7 +509,7 @@ mod tests {
 
         for i in 0..50 {
             table
-                .insert_edge(i % 10, 100 + i, 0, &[], 1000 + i as u32)
+                .insert_edge(i % 10, 100 + i, 0, &[], 1000 + i)
                 .unwrap();
         }
 

@@ -89,7 +89,7 @@ mod tests {
     fn test_float_ordering() {
         let v1 = Value::Float(1.5);
         let v2 = Value::Float(2.5);
-        let v3 = Value::Double(3.14);
+        let v3 = Value::Double(std::f64::consts::PI);
         let v4 = Value::Double(2.71);
 
         assert_eq!(compare_values(&v1, &v2), Ordering::Less);

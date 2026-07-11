@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};
 
+use crate::core::types::VertexId;
 use super::error::TransactionError;
 use super::rollback::CombinedRollback;
 use super::types::*;
@@ -423,6 +424,11 @@ impl TransactionContext {
         if index < logs.len() {
             logs.truncate(index);
         }
+    }
+
+    /// Record a vertex write in the write set
+    pub fn record_vertex_write(&self, vid: VertexId) {
+        self.write_set.lock().record_vertex(vid);
     }
 
     /// Clear operation logs

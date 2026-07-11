@@ -828,12 +828,8 @@ impl core::TimeTravelEdgeStore {
 }
 
 #[cfg(test)]
-mod core_tests;
-
-#[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::core::types::{DataType, VertexId};
+    use crate::core::types::DataType;
     use crate::core::Value;
     use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
     use crate::storage::edge::EdgeSchema;

@@ -1461,7 +1461,7 @@ mod tests {
         let bob = VertexId::from_int64(2);
 
         let v1 = Vertex {
-            vid: alice.clone(),
+            vid: alice,
             id: 0,
             tags: vec![Tag::new(
                 "Person".to_string(),
@@ -1477,7 +1477,7 @@ mod tests {
         };
 
         let v2 = Vertex {
-            vid: bob.clone(),
+            vid: bob,
             id: 0,
             tags: vec![Tag::new(
                 "Person".to_string(),
@@ -1524,11 +1524,11 @@ mod tests {
 
         // Create vertices
         let alice = VertexId::from_int64(1);
-        let bob = VertexId::from_int64(2);
+        let _bob = VertexId::from_int64(2);
 
         // Insert vertices
         let v1 = Vertex {
-            vid: alice.clone(),
+            vid: alice,
             id: 0,
             tags: vec![Tag::new(
                 "Person".to_string(),

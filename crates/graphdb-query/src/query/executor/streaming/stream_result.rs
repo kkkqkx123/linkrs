@@ -272,6 +272,6 @@ mod tests {
         let result =
             StreamingQueryResult::from_execution_result(ExecutionResult::Error("oops".to_string()));
         let chunk = result.next_chunk().unwrap().unwrap();
-        assert!(chunk.len() > 0);
+        assert!(!chunk.is_empty());
     }
 }

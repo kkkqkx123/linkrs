@@ -157,7 +157,7 @@ mod tests {
     fn test_snapshot_guard_registers_snapshot() {
         let table = Arc::new(RwLock::new(MockMVCCTable::new()));
         {
-            let guard = SnapshotGuard::new(table.clone(), 100).expect("failed to create guard");
+            let _guard = SnapshotGuard::new(table.clone(), 100).expect("failed to create guard");
             let count = table.read().unwrap().active_snapshot_count();
             assert_eq!(count, 1);
         }

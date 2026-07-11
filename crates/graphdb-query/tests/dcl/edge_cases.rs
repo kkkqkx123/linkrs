@@ -22,7 +22,7 @@ fn test_username_max_length_boundary() {
     let scenario = new_scenario();
     let result = scenario.exec_dcl(&query);
     // Should either accept or reject gracefully
-    result;
+    drop(result);
 }
 
 #[test]
@@ -214,7 +214,7 @@ fn test_reserved_keyword_as_username() {
         let scenario = new_scenario();
         let result = scenario.exec_dcl(&query);
         // Should either accept (as literal) or reject gracefully
-        result;
+        drop(result);
     }
 }
 
@@ -224,7 +224,7 @@ fn test_reserved_keyword_as_space_name() {
     let scenario = new_scenario();
     let result = scenario.exec_dcl(query);
     // Should either accept or reject gracefully
-    result;
+    drop(result);
 }
 
 // ==================== Whitespace Handling ====================
@@ -234,7 +234,7 @@ fn test_leading_trailing_spaces_in_values() {
     // Exact behavior depends on parser, but should handle gracefully
     let scenario = new_scenario();
     let result = scenario.exec_dcl("CREATE USER \" user \" WITH PASSWORD 'pass'");
-    result;
+    drop(result);
 }
 
 #[test]

@@ -45,127 +45,6 @@ fn type_name(dt: &DataType) -> &'static str {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use graphdb_core::core::value::null::NullType;
-
-    #[test]
-    fn test_identity_conversion() {
-        assert_eq!(
-            convert_value(&Value::Int(42), &DataType::Int).unwrap(),
-            Value::Int(42)
-        );
-        assert_eq!(
-            convert_value(&Value::String("hello".into()), &DataType::String).unwrap(),
-            Value::String("hello".into())
-        );
-    }
-
-    #[test]
-    fn test_int_to_bigint() {
-        assert_eq!(
-            convert_value(&Value::Int(42), &DataType::BigInt).unwrap(),
-            Value::BigInt(42)
-        );
-    }
-
-    #[test]
-    fn test_smallint_to_int() {
-        assert_eq!(
-            convert_value(&Value::SmallInt(100), &DataType::Int).unwrap(),
-            Value::Int(100)
-        );
-    }
-
-    #[test]
-    fn test_int_to_smallint_ok() {
-        assert_eq!(
-            convert_value(&Value::Int(42), &DataType::SmallInt).unwrap(),
-            Value::SmallInt(42)
-        );
-    }
-
-    #[test]
-    fn test_int_to_smallint_overflow() {
-        let result = convert_value(&Value::Int(99999), &DataType::SmallInt);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_bigint_to_int_ok() {
-        assert_eq!(
-            convert_value(&Value::BigInt(42), &DataType::Int).unwrap(),
-            Value::Int(42)
-        );
-    }
-
-    #[test]
-    fn test_bigint_to_int_overflow() {
-        let result = convert_value(&Value::BigInt(9999999999i64), &DataType::Int);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_float_to_double() {
-        let result = convert_value(&Value::Float(3.14), &DataType::Double).unwrap();
-        match result {
-            Value::Double(d) => assert!((d - 3.14_f64).abs() < 1e-6),
-            _ => panic!("Expected Double"),
-        }
-    }
-
-    #[test]
-    fn test_string_to_int() {
-        assert_eq!(
-            convert_value(&Value::String("42".into()), &DataType::Int).unwrap(),
-            Value::Int(42)
-        );
-    }
-
-    #[test]
-    fn test_string_to_bool() {
-        assert_eq!(
-            convert_value(&Value::String("true".into()), &DataType::Bool).unwrap(),
-            Value::Bool(true)
-        );
-        assert_eq!(
-            convert_value(&Value::String("false".into()), &DataType::Bool).unwrap(),
-            Value::Bool(false)
-        );
-    }
-
-    #[test]
-    fn test_string_to_bool_invalid() {
-        let result = convert_value(&Value::String("maybe".into()), &DataType::Bool);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_null_conversion() {
-        let result = convert_value(&Value::Null(NullType::Null), &DataType::String).unwrap();
-        assert!(result.is_null());
-    }
-
-    #[test]
-    fn test_value_to_string() {
-        assert_eq!(
-            convert_value(&Value::Int(42), &DataType::String).unwrap(),
-            Value::String("42".into())
-        );
-        assert_eq!(
-            convert_value(&Value::Bool(true), &DataType::String).unwrap(),
-            Value::String("true".into())
-        );
-    }
-
-    #[test]
-    fn test_unsupported_conversion() {
-        let result = convert_value(&Value::Int(42), &DataType::Date);
-        assert!(result.is_err());
-    }
-}
-
 pub fn convert_value(value: &Value, target_type: &DataType) -> Result<Value, ConversionError> {
     if value.is_null() || value.is_empty() {
         return Ok(Value::Null(graphdb_core::core::value::null::NullType::Null));
@@ -306,5 +185,126 @@ pub fn is_compatible_type(from: &DataType, to: &DataType) -> bool {
         // Any type to String
         (_, DataType::String) => true,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use graphdb_core::core::value::null::NullType;
+
+    #[test]
+    fn test_identity_conversion() {
+        assert_eq!(
+            convert_value(&Value::Int(42), &DataType::Int).unwrap(),
+            Value::Int(42)
+        );
+        assert_eq!(
+            convert_value(&Value::String("hello".into()), &DataType::String).unwrap(),
+            Value::String("hello".into())
+        );
+    }
+
+    #[test]
+    fn test_int_to_bigint() {
+        assert_eq!(
+            convert_value(&Value::Int(42), &DataType::BigInt).unwrap(),
+            Value::BigInt(42)
+        );
+    }
+
+    #[test]
+    fn test_smallint_to_int() {
+        assert_eq!(
+            convert_value(&Value::SmallInt(100), &DataType::Int).unwrap(),
+            Value::Int(100)
+        );
+    }
+
+    #[test]
+    fn test_int_to_smallint_ok() {
+        assert_eq!(
+            convert_value(&Value::Int(42), &DataType::SmallInt).unwrap(),
+            Value::SmallInt(42)
+        );
+    }
+
+    #[test]
+    fn test_int_to_smallint_overflow() {
+        let result = convert_value(&Value::Int(99999), &DataType::SmallInt);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_bigint_to_int_ok() {
+        assert_eq!(
+            convert_value(&Value::BigInt(42), &DataType::Int).unwrap(),
+            Value::Int(42)
+        );
+    }
+
+    #[test]
+    fn test_bigint_to_int_overflow() {
+        let result = convert_value(&Value::BigInt(9999999999i64), &DataType::Int);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_float_to_double() {
+        let result = convert_value(&Value::Float(3.5), &DataType::Double).unwrap();
+        match result {
+            Value::Double(d) => assert!((d - 3.5_f64).abs() < 1e-6),
+            _ => panic!("Expected Double"),
+        }
+    }
+
+    #[test]
+    fn test_string_to_int() {
+        assert_eq!(
+            convert_value(&Value::String("42".into()), &DataType::Int).unwrap(),
+            Value::Int(42)
+        );
+    }
+
+    #[test]
+    fn test_string_to_bool() {
+        assert_eq!(
+            convert_value(&Value::String("true".into()), &DataType::Bool).unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            convert_value(&Value::String("false".into()), &DataType::Bool).unwrap(),
+            Value::Bool(false)
+        );
+    }
+
+    #[test]
+    fn test_string_to_bool_invalid() {
+        let result = convert_value(&Value::String("maybe".into()), &DataType::Bool);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_null_conversion() {
+        let result = convert_value(&Value::Null(NullType::Null), &DataType::String).unwrap();
+        assert!(result.is_null());
+    }
+
+    #[test]
+    fn test_value_to_string() {
+        assert_eq!(
+            convert_value(&Value::Int(42), &DataType::String).unwrap(),
+            Value::String("42".into())
+        );
+        assert_eq!(
+            convert_value(&Value::Bool(true), &DataType::String).unwrap(),
+            Value::String("true".into())
+        );
+    }
+
+    #[test]
+    fn test_unsupported_conversion() {
+        let result = convert_value(&Value::Int(42), &DataType::Date);
+        assert!(result.is_err());
     }
 }

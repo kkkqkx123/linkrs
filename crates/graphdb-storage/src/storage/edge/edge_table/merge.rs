@@ -455,8 +455,10 @@ mod tests {
 
     #[test]
     fn test_aggressive_merge_triggered_at_max_segments() {
-        let mut config = EdgeTableConfig::default();
-        config.max_segments_per_direction = 3;
+        let config = EdgeTableConfig {
+            max_segments_per_direction: 3,
+            ..Default::default()
+        };
         let max_segments = config.max_segments_per_direction;
         let schema = create_test_schema();
         let mut table = TimeTravelEdgeStore::with_config(schema, config).unwrap();
@@ -481,8 +483,10 @@ mod tests {
 
     #[test]
     fn test_aggressive_merge_preserves_correctness() {
-        let mut config = EdgeTableConfig::default();
-        config.max_segments_per_direction = 2;
+        let config = EdgeTableConfig {
+            max_segments_per_direction: 2,
+            ..Default::default()
+        };
         let schema = create_test_schema();
         let mut table = TimeTravelEdgeStore::with_config(schema, config).unwrap();
 
@@ -551,16 +555,16 @@ mod tests {
             let src = i % 5;
             let dst = (i / 5) + 5;
             table
-                .insert_edge(src, dst, 0, &[], 100 + (i as u32))
+                .insert_edge(src, dst, 0, &[], 100 + i)
                 .unwrap();
         }
-        table.freeze_csr_only(100 + edge_count as u32);
+        table.freeze_csr_only(100 + edge_count);
 
         for i in 0..10 {
             let src = (i + 10) % 5;
             let dst = 20 + i;
             table
-                .insert_edge(src, dst, 0, &[], 200 + (i as u32))
+                .insert_edge(src, dst, 0, &[], 200 + i)
                 .unwrap();
         }
         table.freeze_csr_only(210);
@@ -584,7 +588,7 @@ mod tests {
             let src = i % 20;
             let dst = 100 + (i / 20) * 20 + i % 20;
             table
-                .insert_edge(src, dst, 0, &[], 1000 + (i as u32))
+                .insert_edge(src, dst, 0, &[], 1000 + i)
                 .unwrap();
         }
         table.freeze_csr_only(1100);
@@ -593,7 +597,7 @@ mod tests {
             let src = (i + 5) % 20;
             let dst = 500 + i;
             table
-                .insert_edge(src, dst, 0, &[], 2000 + (i as u32))
+                .insert_edge(src, dst, 0, &[], 2000 + i)
                 .unwrap();
         }
         table.freeze_csr_only(2050);

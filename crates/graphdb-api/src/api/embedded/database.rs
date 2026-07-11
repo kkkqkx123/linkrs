@@ -436,11 +436,7 @@ impl GraphDatabase<MockStorage> {
         let storage = Arc::new(RwLock::new(storage));
 
         let txn_manager_config = TransactionManagerConfig::default();
-        let mut txn_manager = TransactionManager::new(txn_manager_config);
-        if let Some(ref sync) = sync_manager {
-            txn_manager = txn_manager.with_sync_manager(sync.clone());
-        }
-        let txn_manager = Arc::new(txn_manager);
+        let txn_manager = Arc::new(TransactionManager::new(txn_manager_config));
 
         let stats_manager = Arc::new(StatsManager::new());
         let query_api = Arc::new(RwLock::new(QueryApi::new(
@@ -448,6 +444,10 @@ impl GraphDatabase<MockStorage> {
             stats_manager.clone(),
         )));
         let schema_api = SchemaApi::new(storage.clone());
+
+        #[cfg(feature = "qdrant")]
+        let vector_runtime =
+            Arc::new(tokio::runtime::Runtime::new().expect("Failed to create tokio runtime"));
 
         let inner = Arc::new(GraphDatabaseInner {
             query_api,
@@ -457,6 +457,8 @@ impl GraphDatabase<MockStorage> {
             fulltext_manager: None,
             sync_manager: None,
             stats_manager,
+            #[cfg(feature = "qdrant")]
+            vector_runtime,
         });
 
         Ok(Self {

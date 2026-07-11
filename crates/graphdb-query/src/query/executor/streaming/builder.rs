@@ -881,6 +881,7 @@ impl StreamingExecutorBuilder {
                         storage: context.storage.clone(),
                         space_name: get_node.space_name().to_string(),
                         vertex_ids,
+                        rows: super::operators::source_operator::SourceRows::empty(),
                     },
                 ))
             }
@@ -894,6 +895,7 @@ impl StreamingExecutorBuilder {
                     src: Some(get_node.src().to_string()),
                     dst: Some(get_node.dst().to_string()),
                     rank: 0,
+                    rows: super::operators::source_operator::SourceRows::empty(),
                 },
             )),
 
@@ -903,6 +905,7 @@ impl StreamingExecutorBuilder {
                     storage: context.storage.clone(),
                     space_name: context.space_name.clone().unwrap_or_default(),
                     direction: get_node.direction().to_string(),
+                    rows: super::operators::source_operator::SourceRows::empty(),
                 },
             )),
 
@@ -1178,6 +1181,7 @@ impl StreamingExecutorBuilder {
                     storage: context.storage.clone(),
                     space_name: context.space_name.clone().unwrap_or_default(),
                     edge_type: Some(scan_node.edge_type().to_string()),
+                    rows: super::operators::source_operator::SourceRows::empty(),
                 },
             )),
 
@@ -1188,6 +1192,7 @@ impl StreamingExecutorBuilder {
                     space_name: context.space_name.clone().unwrap_or_default(),
                     index_name: Some(scan_node.index_name().to_string()),
                     index_value: None,
+                    rows: super::operators::source_operator::SourceRows::empty(),
                 },
             )),
 

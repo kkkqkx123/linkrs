@@ -2,12 +2,10 @@
 //!
 //! Tests the interaction between write set tracking, conflict detection, and MVCC
 
-use std::time::Duration;
-
 use crate::core::types::VertexId;
 use crate::transaction::manager::TransactionManager;
 use crate::transaction::types::{
-    DurabilityLevel, TransactionId, TransactionManagerConfig, TransactionOptions,
+    TransactionManagerConfig, TransactionOptions,
 };
 use crate::transaction::WriteSetAnalyzer;
 

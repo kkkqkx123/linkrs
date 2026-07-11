@@ -172,7 +172,6 @@ mod tests {
     use super::super::super::{EdgeSchema, EdgeStrategy};
     use super::*;
     use crate::core::types::DataType;
-    use crate::core::types::EdgeId;
     use crate::core::Value;
     use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
     use crate::storage::types::StoragePropertyDef;

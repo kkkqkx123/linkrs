@@ -742,7 +742,7 @@ mod tests {
                     vec![StoragePropertyDef::new("id".to_string(), data_type)],
                     "id",
                 )
-                .expect(&format!("Should accept {} as primary key type", type_name));
+                .unwrap_or_else(|_| panic!("Should accept {} as primary key type", type_name));
             assert_eq!(label_id, idx as u32);
         }
     }
@@ -861,7 +861,6 @@ mod tests {
                 "id",
             )
             .expect("All property names are valid");
-        assert!(label_id >= 0); // Just check it was created successfully
     }
 
     #[test]

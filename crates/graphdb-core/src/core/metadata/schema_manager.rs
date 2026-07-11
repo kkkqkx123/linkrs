@@ -839,6 +839,12 @@ impl SchemaManager {
     }
 }
 
+impl Default for SchemaManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -905,11 +911,5 @@ mod tests {
                 .edge_type_id,
             second_edge_id
         );
-    }
-}
-
-impl Default for SchemaManager {
-    fn default() -> Self {
-        Self::new()
     }
 }

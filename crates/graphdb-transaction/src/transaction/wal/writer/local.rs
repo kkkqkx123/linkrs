@@ -1057,7 +1057,7 @@ mod tests {
         let old_header = WalFileHeader::new(0, 0, Lsn::ZERO);
         let mut old_file = std::fs::File::create(&old_file_path).expect("Failed to create WAL");
         old_file
-            .write_all(old_header.as_bytes())
+            .write_all(&old_header.as_bytes())
             .expect("Failed to write WAL header");
         old_file
             .write_all(b"stale")

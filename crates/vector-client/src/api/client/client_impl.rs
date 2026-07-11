@@ -142,6 +142,6 @@ mod tests {
         let client = VectorClient::new(config).await.unwrap();
         let debug_str = format!("{:?}", client);
         assert!(debug_str.contains("VectorClient"));
-        assert!(client.health_check().await.unwrap().is_healthy == false);
+        assert!(!client.health_check().await.unwrap().is_healthy);
     }
 }
