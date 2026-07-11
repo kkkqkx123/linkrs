@@ -7,6 +7,9 @@ pub struct OperatorBase {
     pub plan_node_id: i64,
     pub runtime: Option<Arc<ExecutionRuntime>>,
     pub opened: bool,
+    /// Whether this operator produces global (merged) output.
+    /// Local operators process one partition at a time.
+    pub is_global: bool,
 }
 
 impl OperatorBase {
@@ -15,11 +18,17 @@ impl OperatorBase {
             plan_node_id,
             runtime: None,
             opened: false,
+            is_global: false,
         }
     }
 
     pub fn with_runtime(mut self, rt: Option<Arc<ExecutionRuntime>>) -> Self {
         self.runtime = rt;
+        self
+    }
+
+    pub fn with_global(mut self, is_global: bool) -> Self {
+        self.is_global = is_global;
         self
     }
 

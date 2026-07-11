@@ -1,3 +1,4 @@
+use std::ops::Range;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -53,6 +54,8 @@ pub enum SourceOperator {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         limit: Option<usize>,
+        partition_id: usize,
+        partition_range: Option<Range<u32>>,
         cursor: Option<Box<dyn VertexCursor>>,
         buffer: Vec<Vec<Value>>,
         current_index: usize,
@@ -69,6 +72,8 @@ pub enum SourceOperator {
         space_name: String,
         limit: Option<usize>,
         edge_type: Option<String>,
+        partition_id: usize,
+        partition_range: Option<Range<u32>>,
         cursor: Option<Box<dyn EdgeCursor>>,
         buffer: Vec<Vec<Value>>,
         current_index: usize,
@@ -155,6 +160,7 @@ impl SourceOperator {
                 storage,
                 space_name,
                 limit,
+                partition_range,
                 cursor,
                 col_names,
                 ..
@@ -183,8 +189,19 @@ impl SourceOperator {
                 }
                 let chunk_rows: Vec<Vec<Value>> = batch
                     .into_iter()
+                    .filter(|vertex| match partition_range {
+                        Some(ref range) => {
+                            let vid = vertex.id as u32;
+                            vid >= range.start && vid < range.end
+                        }
+                        None => true,
+                    })
                     .map(|vertex| vec![Value::Vertex(Box::new(vertex))])
                     .collect();
+                if chunk_rows.is_empty() {
+                    // Continue scanning — next batch may have matching rows
+                    return self.next(_base);
+                }
                 let col = if col_names.is_empty() {
                     None
                 } else {
@@ -220,6 +237,7 @@ impl SourceOperator {
                 space_name,
                 limit,
                 edge_type,
+                partition_range,
                 cursor,
                 col_names,
                 ..
@@ -249,8 +267,19 @@ impl SourceOperator {
                 }
                 let chunk_rows: Vec<Vec<Value>> = batch
                     .into_iter()
+                    .filter(|edge| match partition_range {
+                        Some(ref range) => {
+                            let src_str = edge.src.to_string();
+                            let src_id = src_str.parse::<u32>().unwrap_or(0);
+                            src_id >= range.start && src_id < range.end
+                        }
+                        None => true,
+                    })
                     .map(|edge| vec![Value::Edge(Box::new(edge))])
                     .collect();
+                if chunk_rows.is_empty() {
+                    return self.next(_base);
+                }
                 let col = if col_names.is_empty() {
                     None
                 } else {
