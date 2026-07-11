@@ -24,6 +24,7 @@ impl VertexTable {
             .map_err(|_| crate::core::StorageError::db_error("Failed to lock version_history"))?;
 
         let next_version = history_guard.latest_version() + 1;
+        self.schema.schema_version = next_version;
 
         let change = PropertyChange::new(
             next_version,

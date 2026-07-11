@@ -258,6 +258,7 @@ mod tests {
     use super::*;
     use crate::core::types::EdgeId;
     use crate::core::Value;
+    use crate::storage::edge::bloom_filter::EdgeDeletionBloomFilter;
     use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
 
     fn create_edge_table_with_props() -> TimeTravelEdgeStore {
@@ -483,6 +484,14 @@ mod tests {
         }
         mvcc.cold_tombstones.sort_by_key(|k| k.0);
 
+        // Rebuild bloom filter to match cold tombstones
+        mvcc.cold_bloom_filter.clear();
+        let new_capacity = (mvcc.cold_tombstones.len() * 2).max(10_000);
+        mvcc.cold_bloom_filter = EdgeDeletionBloomFilter::with_capacity(new_capacity);
+        for &(edge_id, _) in &mvcc.cold_tombstones {
+            mvcc.cold_bloom_filter.insert(edge_id.0);
+        }
+
         // Test binary search - all should be found
         for i in 0..100 {
             assert!(mvcc.is_tombstoned_cold(EdgeId(i as u64), u32::MAX));
@@ -568,6 +577,14 @@ mod tests {
 
         // Add to cold layer (pre-sorted)
         mvcc.cold_tombstones = vec![(EdgeId(10), 200), (EdgeId(20), 250)];
+
+        // Rebuild bloom filter to match cold tombstones
+        mvcc.cold_bloom_filter.clear();
+        mvcc.cold_bloom_filter =
+            EdgeDeletionBloomFilter::with_capacity(mvcc.cold_tombstones.len() * 2);
+        for &(edge_id, _) in &mvcc.cold_tombstones {
+            mvcc.cold_bloom_filter.insert(edge_id.0);
+        }
 
         // Test queries across both layers
         assert!(mvcc.is_tombstoned(EdgeId(1), u32::MAX)); // Hot layer

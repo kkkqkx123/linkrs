@@ -279,7 +279,8 @@ impl TimeTravelEdgeStore {
                 let excess = self
                     .out_segments
                     .len()
-                    .saturating_sub(self.config.merge_keep_newest);
+                    .saturating_sub(self.config.max_segments_per_direction)
+                    + 1;
                 if excess > 1 {
                     let merge_indices: Vec<usize> = (0..excess).collect();
                     let merged = merge::merge_selected_segments_with_deletion_filter(
@@ -296,7 +297,8 @@ impl TimeTravelEdgeStore {
                 let excess = self
                     .in_segments
                     .len()
-                    .saturating_sub(self.config.merge_keep_newest);
+                    .saturating_sub(self.config.max_segments_per_direction)
+                    + 1;
                 if excess > 1 {
                     let merge_indices: Vec<usize> = (0..excess).collect();
                     let merged = merge::merge_selected_segments_with_deletion_filter(

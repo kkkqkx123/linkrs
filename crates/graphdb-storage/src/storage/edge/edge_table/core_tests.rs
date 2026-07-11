@@ -416,8 +416,8 @@ fn test_write_backpressure_triggers_freeze() {
 
     let schema = create_test_schema();
     let mut config = EdgeTableConfig::default();
-    // Set very small backpressure limit (1MB) to trigger easily
-    config.max_mutable_csr_bytes = 1024 * 1024;
+    // Set very small backpressure limit (1KB) to trigger easily with 10K edges
+    config.max_mutable_csr_bytes = 1024;
 
     let mut table = EdgeTable::with_config(schema, config).unwrap();
 
