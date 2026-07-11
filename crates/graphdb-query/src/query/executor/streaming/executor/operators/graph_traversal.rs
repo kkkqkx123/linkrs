@@ -4,13 +4,21 @@ use std::sync::Arc;
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::types::storage_ids::VertexId;
-use crate::core::{Edge, EdgeDirection, NPath, Path, Value, Vertex};
+use crate::core::{Edge, EdgeDirection, NPath, Path, Value};
 use crate::query::executor::expression::evaluator::traits::ExpressionContext;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::executor::context::ValueRowContext;
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::query::executor::traversal::config::{TraversalConfig, VisitedPolicy};
+use crate::query::executor::traversal::config::TraversalConfig;
+
+struct BidirBfsConfig<'a> {
+    space_name: &'a str,
+    edge_type_filter: Option<&'a [String]>,
+    max_depth: usize,
+    single_shortest: bool,
+    limit: usize,
+}
 use crate::query::executor::traversal::graph_reader::TraversalGraphReader;
 use crate::query::executor::traversal::runtime::TraversalRuntime;
 use crate::storage::StorageClient;
@@ -37,13 +45,9 @@ fn row_passes_filter(row: &[Value], col_names: &[String], filter: &Option<Expres
 
 fn bidir_bfs_shortest_path(
     storage: &dyn StorageClient,
-    space_name: &str,
     start_id: &VertexId,
     end_id: &VertexId,
-    edge_type_filter: Option<&[String]>,
-    max_depth: usize,
-    single_shortest: bool,
-    limit: usize,
+    cfg: BidirBfsConfig,
 ) -> Result<Vec<Path>, QueryError> {
     let mut result_paths = Vec::new();
 
@@ -52,12 +56,12 @@ fn bidir_bfs_shortest_path(
     let mut left_queue: VecDeque<(VertexId, Arc<NPath>)> = VecDeque::new();
     let mut right_queue: VecDeque<(VertexId, Arc<NPath>)> = VecDeque::new();
 
-    if let Ok(Some(start_vertex)) = storage.get_vertex(space_name, start_id) {
+    if let Ok(Some(start_vertex)) = storage.get_vertex(cfg.space_name, start_id) {
         let np = Arc::new(NPath::new(Arc::new(start_vertex)));
         left_queue.push_back((*start_id, np.clone()));
         left_visited.insert(*start_id, np);
     }
-    if let Ok(Some(end_vertex)) = storage.get_vertex(space_name, end_id) {
+    if let Ok(Some(end_vertex)) = storage.get_vertex(cfg.space_name, end_id) {
         let np = Arc::new(NPath::new(Arc::new(end_vertex)));
         right_queue.push_back((*end_id, np.clone()));
         right_visited.insert(*end_id, np);
@@ -67,10 +71,10 @@ fn bidir_bfs_shortest_path(
     let dir_in = EdgeDirection::In;
 
     while !left_queue.is_empty() && !right_queue.is_empty() {
-        if single_shortest && !result_paths.is_empty() {
+        if cfg.single_shortest && !result_paths.is_empty() {
             break;
         }
-        if result_paths.len() >= limit {
+        if result_paths.len() >= cfg.limit {
             break;
         }
 
@@ -78,11 +82,11 @@ fn bidir_bfs_shortest_path(
         let mut left_next: Vec<(VertexId, Arc<NPath>)> = Vec::new();
         for _ in 0..left_level {
             if let Some((current_id, current_npath)) = left_queue.pop_front() {
-                if current_npath.len() >= max_depth {
+                if current_npath.len() >= cfg.max_depth {
                     continue;
                 }
-                if let Ok(edges) = storage.get_node_edges(space_name, &current_id, dir_out) {
-                    let filtered: Vec<&Edge> = if let Some(types) = edge_type_filter {
+                if let Ok(edges) = storage.get_node_edges(cfg.space_name, &current_id, dir_out) {
+                    let filtered: Vec<&Edge> = if let Some(types) = cfg.edge_type_filter {
                         edges
                             .iter()
                             .filter(|e| types.contains(&e.edge_type))
@@ -96,7 +100,7 @@ fn bidir_bfs_shortest_path(
                             continue;
                         }
                         if let Ok(Some(neighbor_vertex)) =
-                            storage.get_vertex(space_name, neighbor_id)
+                            storage.get_vertex(cfg.space_name, neighbor_id)
                         {
                             let new_npath = Arc::new(NPath::extend(
                                 current_npath.clone(),
@@ -114,10 +118,10 @@ fn bidir_bfs_shortest_path(
             left_queue.push_back((id, np));
         }
 
-        if single_shortest && !result_paths.is_empty() {
+        if cfg.single_shortest && !result_paths.is_empty() {
             break;
         }
-        if result_paths.len() >= limit {
+        if result_paths.len() >= cfg.limit {
             break;
         }
 
@@ -125,27 +129,27 @@ fn bidir_bfs_shortest_path(
         let mut right_next: Vec<(VertexId, Arc<NPath>)> = Vec::new();
         for _ in 0..right_level {
             if let Some((current_id, current_npath)) = right_queue.pop_front() {
-                if current_npath.len() >= max_depth {
+                if current_npath.len() >= cfg.max_depth {
                     continue;
                 }
 
                 if let Some(left_npath) = left_visited.get(&current_id) {
                     let total_len = left_npath.len() + current_npath.len();
-                    if total_len <= max_depth {
+                    if total_len <= cfg.max_depth {
                         let mut left_path = left_npath.to_path();
                         let mut right_path = current_npath.to_path();
                         right_path.reverse();
                         left_path.steps.extend(right_path.steps);
                         result_paths.push(left_path);
-                        if single_shortest || result_paths.len() >= limit {
+                        if cfg.single_shortest || result_paths.len() >= cfg.limit {
                             break;
                         }
                     }
                     continue;
                 }
 
-                if let Ok(edges) = storage.get_node_edges(space_name, &current_id, dir_in) {
-                    let filtered: Vec<&Edge> = if let Some(types) = edge_type_filter {
+                if let Ok(edges) = storage.get_node_edges(cfg.space_name, &current_id, dir_in) {
+                    let filtered: Vec<&Edge> = if let Some(types) = cfg.edge_type_filter {
                         edges
                             .iter()
                             .filter(|e| types.contains(&e.edge_type))
@@ -163,7 +167,7 @@ fn bidir_bfs_shortest_path(
                             continue;
                         }
                         if let Ok(Some(neighbor_vertex)) =
-                            storage.get_vertex(space_name, neighbor_id)
+                            storage.get_vertex(cfg.space_name, neighbor_id)
                         {
                             let new_npath = Arc::new(NPath::extend(
                                 current_npath.clone(),
@@ -180,13 +184,13 @@ fn bidir_bfs_shortest_path(
         for (id, np) in right_next.drain(..) {
             if let Some(left_npath) = left_visited.get(&id) {
                 let total_len = left_npath.len() + np.len();
-                if total_len <= max_depth {
+                if total_len <= cfg.max_depth {
                     let mut left_path = left_npath.to_path();
                     let mut right_path = np.to_path();
                     right_path.reverse();
                     left_path.steps.extend(right_path.steps);
                     result_paths.push(left_path);
-                    if single_shortest || result_paths.len() >= limit {
+                    if cfg.single_shortest || result_paths.len() >= cfg.limit {
                         break;
                     }
                 }
@@ -196,11 +200,11 @@ fn bidir_bfs_shortest_path(
         }
     }
 
-    if single_shortest && !result_paths.is_empty() {
+    if cfg.single_shortest && !result_paths.is_empty() {
         result_paths.sort_by_key(|a| a.steps.len());
         result_paths.truncate(1);
     }
-    result_paths.truncate(limit);
+    result_paths.truncate(cfg.limit);
     Ok(result_paths)
 }
 
@@ -229,7 +233,6 @@ fn expand_on_chunk(
 ) -> Result<Option<DataChunk>, QueryError> {
     let dir = direction_from_str(direction);
     let col_names = chunk.col_names();
-    let greader = TraversalGraphReader::new(reader);
 
     let mut out_rows = Vec::new();
     for row in &chunk.rows {
@@ -297,6 +300,7 @@ fn expand_on_chunk(
 }
 
 pub fn next_expand(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    executor.ensure_not_cancelled()?;
     match executor {
         StreamingExecutor::Expand {
             input,
@@ -312,7 +316,7 @@ pub fn next_expand(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
                 return Err(QueryError::execution("Expand not opened".to_string()));
             }
 
-            let chunk = input.next()?;
+            let chunk = input.advance()?;
             if let Some(chunk) = chunk {
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
@@ -421,7 +425,7 @@ pub fn next_expandall(executor: &mut StreamingExecutor) -> Result<Option<DataChu
                 return Err(QueryError::execution("ExpandAll not opened".to_string()));
             }
 
-            let chunk = input.next()?;
+            let chunk = input.advance()?;
             if let Some(chunk) = chunk {
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
@@ -512,15 +516,16 @@ pub fn open_traverse(executor: &mut StreamingExecutor) -> Result<(), QueryError>
 fn traverse_on_chunk(
     chunk: DataChunk,
     reader: &dyn StorageClient,
-    space_name: &str,
-    edge_type: &str,
-    direction: &str,
-    min_depth: u32,
-    max_depth: u32,
+    config: &TraversalConfig,
     visited: &mut HashSet<String>,
 ) -> Result<Option<DataChunk>, QueryError> {
-    let dir = direction_from_str(direction);
     let col_names = chunk.col_names();
+    let edge_type = config.edge_types.first().map(|s| s.as_str()).unwrap_or("");
+    let dir_str = match config.direction {
+        crate::core::EdgeDirection::Out => "out",
+        crate::core::EdgeDirection::In => "in",
+        crate::core::EdgeDirection::Both => "both",
+    };
 
     let mut out_rows = Vec::new();
     for row in &chunk.rows {
@@ -530,17 +535,10 @@ fn traverse_on_chunk(
             .or_else(|| row.first().cloned())
             .unwrap_or(Value::Null(crate::core::NullType::Null));
         if let Ok(vid) = VertexId::try_from(&vid_val) {
-            let config = TraversalConfig::traverse(
-                space_name.to_string(),
-                dir,
-                min_depth,
-                max_depth,
-                vec![edge_type.to_string()],
-            );
             let runtime_reader = TraversalGraphReader::new(reader);
-            let mut runtime = TraversalRuntime::new(runtime_reader, config);
+            let mut runtime = TraversalRuntime::new(runtime_reader, config.clone());
 
-            if let Ok(Some(vertex)) = reader.get_vertex(space_name, &vid) {
+            if let Ok(Some(vertex)) = reader.get_vertex(&config.space_name, &vid) {
                 runtime.seed_from_vertex(vertex);
             } else {
                 continue;
@@ -556,7 +554,7 @@ fn traverse_on_chunk(
                 let mut out_row = row.clone();
                 out_row.push(Value::Vertex(Box::new(event.vertex)));
                 out_row.push(Value::String(edge_type.to_string()));
-                out_row.push(Value::String(direction.to_string()));
+                out_row.push(Value::String(dir_str.to_string()));
                 out_row.push(Value::BigInt(event.depth as i64));
                 out_rows.push(out_row);
             }
@@ -595,6 +593,7 @@ fn traverse_on_chunk(
 }
 
 pub fn next_traverse(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    executor.ensure_not_cancelled()?;
     match executor {
         StreamingExecutor::Traverse {
             input,
@@ -612,20 +611,18 @@ pub fn next_traverse(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                 return Err(QueryError::execution("Traverse not opened".to_string()));
             }
 
-            let chunk = input.next()?;
+            let chunk = input.advance()?;
             if let Some(chunk) = chunk {
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
-                    traverse_on_chunk(
-                        chunk,
-                        &*reader,
-                        space_name,
-                        edge_type,
-                        direction,
+                    let tc = TraversalConfig::traverse(
+                        space_name.clone(),
+                        direction_from_str(direction),
                         *min_depth,
                         *max_depth,
-                        visited,
-                    )
+                        vec![edge_type.clone()],
+                    );
+                    traverse_on_chunk(chunk, &*reader, &tc, visited)
                 } else {
                     let mut new_cols: Vec<ColumnInfo> = chunk
                         .schema
@@ -714,7 +711,7 @@ pub fn open_traverseall(executor: &mut StreamingExecutor) -> Result<(), QueryErr
 
 pub fn next_traverseall(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
-        StreamingExecutor::TraverseAll { input, .. } => input.next(),
+        StreamingExecutor::TraverseAll { input, .. } => input.advance(),
         _ => Err(QueryError::execution(
             "Type mismatch in next_traverseall".to_string(),
         )),
@@ -781,7 +778,7 @@ pub fn next_appendvertices(
                     "AppendVertices not opened".to_string(),
                 ));
             }
-            if let Some(chunk) = input.next()? {
+            if let Some(chunk) = input.advance()? {
                 let col_names = chunk.col_names();
                 let mut result_rows = Vec::new();
                 for row in chunk.rows {
@@ -862,7 +859,7 @@ pub fn next_biexpand(executor: &mut StreamingExecutor) -> Result<Option<DataChun
             if !*opened {
                 return Err(QueryError::execution("BiExpand not opened".to_string()));
             }
-            if let Some(chunk) = input.next()? {
+            if let Some(chunk) = input.advance()? {
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
                     let dir = direction_from_str("both");
@@ -885,9 +882,9 @@ pub fn next_biexpand(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                                         continue;
                                     }
                                     let neighbor_id = if e.src() == &vid {
-                                        e.dst().clone()
+                                        *e.dst()
                                     } else {
-                                        e.src().clone()
+                                        *e.src()
                                     };
                                     if let Ok(Some(vertex)) =
                                         reader.get_vertex(space_name, &neighbor_id)
@@ -999,7 +996,7 @@ pub fn next_bitraverse(executor: &mut StreamingExecutor) -> Result<Option<DataCh
             if !*opened {
                 return Err(QueryError::execution("BiTraverse not opened".to_string()));
             }
-            let chunk = input.next()?;
+            let chunk = input.advance()?;
             if let Some(chunk) = chunk {
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
@@ -1032,9 +1029,9 @@ pub fn next_bitraverse(executor: &mut StreamingExecutor) -> Result<Option<DataCh
                                             continue;
                                         }
                                         let nid = if e.src() == &current {
-                                            e.dst().clone()
+                                            *e.dst()
                                         } else {
-                                            e.src().clone()
+                                            *e.src()
                                         };
                                         let nid_str = format!("{:?}", nid);
                                         if visited.contains(&nid_str)
@@ -1042,7 +1039,7 @@ pub fn next_bitraverse(executor: &mut StreamingExecutor) -> Result<Option<DataCh
                                         {
                                             continue;
                                         }
-                                        local_visited.insert(nid.clone());
+                                        local_visited.insert(nid);
                                         visited.insert(nid_str);
 
                                         if depth + 1 >= *min_depth {
@@ -1166,7 +1163,7 @@ pub fn next_shortestpath(
             if !*opened {
                 return Err(QueryError::execution("ShortestPath not opened".to_string()));
             }
-            let chunk = input.next()?;
+            let chunk = input.advance()?;
             if let Some(chunk) = chunk {
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
@@ -1193,10 +1190,11 @@ pub fn next_shortestpath(
                                 } else {
                                     Some(vec![edge_type.clone()])
                                 };
-                            let et_ref = et_filter.as_ref().map(|v| v.as_slice());
+                            let et_ref = et_filter.as_deref();
 
                             let paths = bidir_bfs_shortest_path(
-                                &*reader, space_name, &src_vid, &dst_vid, et_ref, 10, false, 100,
+                                &*reader, &src_vid, &dst_vid,
+                                BidirBfsConfig { space_name, edge_type_filter: et_ref, max_depth: 10, single_shortest: false, limit: 100 },
                             )?;
 
                             for path in &paths {
@@ -1282,6 +1280,7 @@ pub fn open_bfsshortest(executor: &mut StreamingExecutor) -> Result<(), QueryErr
 }
 
 pub fn next_bfsshortest(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    executor.ensure_not_cancelled()?;
     match executor {
         StreamingExecutor::BFSShortest {
             input,
@@ -1295,7 +1294,7 @@ pub fn next_bfsshortest(executor: &mut StreamingExecutor) -> Result<Option<DataC
             if !*opened {
                 return Err(QueryError::execution("BFSShortest not opened".to_string()));
             }
-            let chunk = input.next()?;
+            let chunk = input.advance()?;
             if let Some(chunk) = chunk {
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
@@ -1322,10 +1321,11 @@ pub fn next_bfsshortest(executor: &mut StreamingExecutor) -> Result<Option<DataC
                                 } else {
                                     Some(vec![edge_type.clone()])
                                 };
-                            let et_ref = et_filter.as_ref().map(|v| v.as_slice());
+                            let et_ref = et_filter.as_deref();
 
                             let paths = bidir_bfs_shortest_path(
-                                &*reader, space_name, &src_vid, &dst_vid, et_ref, 20, true, 10,
+                                &*reader, &src_vid, &dst_vid,
+                                BidirBfsConfig { space_name, edge_type_filter: et_ref, max_depth: 20, single_shortest: true, limit: 10 },
                             )?;
 
                             for path in &paths {
@@ -1411,6 +1411,7 @@ pub fn open_allpaths(executor: &mut StreamingExecutor) -> Result<(), QueryError>
 }
 
 pub fn next_allpaths(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    executor.ensure_not_cancelled()?;
     match executor {
         StreamingExecutor::AllPaths {
             input,
@@ -1424,7 +1425,7 @@ pub fn next_allpaths(executor: &mut StreamingExecutor) -> Result<Option<DataChun
             if !*opened {
                 return Err(QueryError::execution("AllPaths not opened".to_string()));
             }
-            let chunk = input.next()?;
+            let chunk = input.advance()?;
             if let Some(chunk) = chunk {
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
@@ -1451,10 +1452,11 @@ pub fn next_allpaths(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                                 } else {
                                     Some(vec![edge_type.clone()])
                                 };
-                            let et_ref = et_filter.as_ref().map(|v| v.as_slice());
+                            let et_ref = et_filter.as_deref();
 
                             let paths = bidir_bfs_shortest_path(
-                                &*reader, space_name, &src_vid, &dst_vid, et_ref, 10, false, 100,
+                                &*reader, &src_vid, &dst_vid,
+                                BidirBfsConfig { space_name, edge_type_filter: et_ref, max_depth: 10, single_shortest: false, limit: 100 },
                             )?;
 
                             for path in &paths {
@@ -1542,6 +1544,7 @@ pub fn open_multishortestpath(executor: &mut StreamingExecutor) -> Result<(), Qu
 pub fn next_multishortestpath(
     executor: &mut StreamingExecutor,
 ) -> Result<Option<DataChunk>, QueryError> {
+    executor.ensure_not_cancelled()?;
     use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 
     match executor {
@@ -1560,7 +1563,7 @@ pub fn next_multishortestpath(
                     "MultiShortestPath not opened".to_string(),
                 ));
             }
-            let chunk = input.next()?;
+            let chunk = input.advance()?;
             if let Some(chunk) = chunk {
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
@@ -1590,11 +1593,12 @@ pub fn next_multishortestpath(
                                 } else {
                                     Some(vec![edge_type.clone()])
                                 };
-                            let et_ref = et_filter.as_ref().map(|v| v.as_slice());
+                            let et_ref = et_filter.as_deref();
 
                             for dst_vid in &dst_vids {
                                 let paths = bidir_bfs_shortest_path(
-                                    &*reader, space_name, &src_vid, dst_vid, et_ref, 10, true, 10,
+                                    &*reader, &src_vid, dst_vid,
+                                    BidirBfsConfig { space_name, edge_type_filter: et_ref, max_depth: 10, single_shortest: true, limit: 10 },
                                 )?;
                                 for path in &paths {
                                     let mut out_row = row.clone();
@@ -1689,11 +1693,12 @@ pub fn next_subgraph(executor: &mut StreamingExecutor) -> Result<Option<DataChun
             direction,
             edge_types,
             opened,
+            ..
         } => {
             if !*opened {
                 return Err(QueryError::execution("Subgraph not opened".to_string()));
             }
-            let chunk = input.next()?;
+            let chunk = input.advance()?;
             if let Some(chunk) = chunk {
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
@@ -1728,13 +1733,13 @@ pub fn next_subgraph(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                                             continue;
                                         }
                                         let neighbor_id = match dir {
-                                            crate::core::EdgeDirection::Out => e.dst().clone(),
-                                            crate::core::EdgeDirection::In => e.src().clone(),
+                                            crate::core::EdgeDirection::Out => *e.dst(),
+                                            crate::core::EdgeDirection::In => *e.src(),
                                             crate::core::EdgeDirection::Both => {
                                                 if e.src() == &current {
-                                                    e.dst().clone()
+                                                    *e.dst()
                                                 } else {
-                                                    e.src().clone()
+                                                    *e.src()
                                                 }
                                             }
                                         };

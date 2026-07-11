@@ -12,6 +12,7 @@ use crate::core::stats::StatsManager;
 use crate::core::types::SpaceSummary;
 use crate::core::types::TransactionContextInfo;
 use crate::core::{DataType, MetricType, Permission};
+use crate::query::executor::streaming::StreamingQueryResult;
 use crate::query::executor::ExecutionResult;
 use crate::query::DataSet;
 use crate::storage::{
@@ -369,6 +370,48 @@ impl<
         }
 
         result
+    }
+
+    /// Execute a query and return a [`StreamingQueryResult`] for chunk-at-a-time consumption.
+    ///
+    /// Similar to [`execute`] but returns a streaming handle instead of a materialized result.
+    pub async fn execute_stream(
+        &self,
+        session_id: i64,
+        stmt: &str,
+    ) -> Result<StreamingQueryResult, String> {
+        let session = self
+            .session_manager
+            .find_session(session_id)
+            .ok_or_else(|| format!("Invalid session ID: {}", session_id))?;
+
+        // Handle transaction control statements
+        let trimmed_stmt = stmt.trim().to_uppercase();
+        if trimmed_stmt.starts_with("BEGIN")
+            || trimmed_stmt.starts_with("START TRANSACTION")
+            || trimmed_stmt.starts_with("COMMIT")
+            || trimmed_stmt.starts_with("ROLLBACK")
+            || trimmed_stmt.starts_with("SAVEPOINT")
+            || trimmed_stmt.starts_with("RELEASE SAVEPOINT")
+        {
+            return self
+                .execute(session_id, stmt)
+                .await
+                .map(StreamingQueryResult::from_execution_result);
+        }
+
+        let query_request = crate::api::core::QueryRequest {
+            space_id: session.space().map(|s| s.id),
+            space_name: session.space().map(|s| s.name),
+            auto_commit: session.is_auto_commit(),
+            transaction_id: session.current_transaction(),
+            parameters: None,
+        };
+
+        let mut query_api = self.query_api.write();
+        query_api
+            .execute_stream(stmt, query_request)
+            .map_err(|e| e.to_string())
     }
 
     fn execute_query_with_permission(

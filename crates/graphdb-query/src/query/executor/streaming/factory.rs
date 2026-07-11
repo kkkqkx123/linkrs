@@ -111,6 +111,11 @@ impl StreamingQueryExecutor {
         engine.into_stream()
     }
 
+    /// Return a reference to the execution runtime, if set.
+    pub fn runtime(&self) -> Option<&Arc<ExecutionRuntime>> {
+        self.runtime.as_ref()
+    }
+
     /// Set optional column names for result formatting
     pub fn set_col_names(&mut self, col_names: Vec<String>) {
         self.col_names = Some(col_names);

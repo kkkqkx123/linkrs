@@ -2,7 +2,7 @@
 
 use crate::core::error::QueryError;
 use crate::core::Value;
-use crate::query::executor::base::{MemoryBudget, MemoryTracker};
+use crate::query::executor::base::MemoryBudget;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 
@@ -37,7 +37,7 @@ pub fn next_union(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>,
         } => {
             // Process left side first
             if !*left_consumed {
-                if let Some(chunk) = left.next()? {
+                if let Some(chunk) = left.advance()? {
                     let mut result_rows = Vec::new();
                     for row in chunk.rows {
                         let row_str = format!("{:?}", row);
@@ -48,7 +48,7 @@ pub fn next_union(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>,
                         }
                     }
                     return if result_rows.is_empty() {
-                        executor.next()
+                        executor.advance()
                     } else {
                         Ok(Some(DataChunk::from_rows(result_rows)))
                     };
@@ -58,7 +58,7 @@ pub fn next_union(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>,
             }
 
             // Process right side
-            if let Some(chunk) = right.next()? {
+            if let Some(chunk) = right.advance()? {
                 let mut result_rows = Vec::new();
                 for row in chunk.rows {
                     let row_str = format!("{:?}", row);
@@ -68,7 +68,7 @@ pub fn next_union(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>,
                     }
                 }
                 if result_rows.is_empty() {
-                    executor.next()
+                    executor.advance()
                 } else {
                     Ok(Some(DataChunk::from_rows(result_rows)))
                 }
@@ -97,9 +97,12 @@ pub fn close_union(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
             right,
             opened,
             seen_rows,
+            memory_tracker,
             ..
         } => {
             if *opened {
+                let mem = seen_rows.len() * 256;
+                memory_tracker.release(mem);
                 seen_rows.clear();
                 left.close()?;
                 right.close()?;
@@ -139,14 +142,14 @@ pub fn next_unionall(executor: &mut StreamingExecutor) -> Result<Option<DataChun
             ..
         } => {
             if !*left_consumed {
-                if let Some(chunk) = left.next()? {
+                if let Some(chunk) = left.advance()? {
                     return Ok(Some(chunk));
                 } else {
                     *left_consumed = true;
                 }
             }
 
-            right.next()
+            right.advance()
         }
         _ => unreachable!(),
     }
@@ -213,7 +216,7 @@ pub fn next_intersect(executor: &mut StreamingExecutor) -> Result<Option<DataChu
             ..
         } => {
             if !*left_buffered {
-                while let Some(chunk) = left.next()? {
+                while let Some(chunk) = left.advance()? {
                     for row in &chunk.rows {
                         memory_tracker.try_reserve_row(row)?;
                     }
@@ -223,7 +226,7 @@ pub fn next_intersect(executor: &mut StreamingExecutor) -> Result<Option<DataChu
             }
 
             if !*right_buffered {
-                while let Some(chunk) = right.next()? {
+                while let Some(chunk) = right.advance()? {
                     for row in chunk.rows {
                         let row_str = format!("{:?}", row);
                         memory_tracker.try_reserve(row_str.len())?;
@@ -266,13 +269,16 @@ pub fn close_intersect(executor: &mut StreamingExecutor) -> Result<(), QueryErro
             right,
             opened,
             left_rows,
+            right_rows,
             memory_tracker,
             ..
         } => {
             if *opened {
-                let mem = MemoryBudget::estimate_rows_memory(left_rows);
-                memory_tracker.release(mem);
+                let mem_rows = MemoryBudget::estimate_rows_memory(left_rows);
+                let mem_set = right_rows.len() * 256;
+                memory_tracker.release(mem_rows + mem_set);
                 left_rows.clear();
+                right_rows.clear();
                 left.close()?;
                 right.close()?;
                 *opened = false;
@@ -314,7 +320,7 @@ pub fn next_except(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
         } => {
             // Buffer right side for exclusion
             if !*right_buffered {
-                while let Some(chunk) = right.next()? {
+                while let Some(chunk) = right.advance()? {
                     for row in chunk.rows {
                         let row_str = format!("{:?}", row);
                         memory_tracker.try_reserve(row_str.len())?;
@@ -325,7 +331,7 @@ pub fn next_except(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
             }
 
             // Process left side
-            if let Some(chunk) = left.next()? {
+            if let Some(chunk) = left.advance()? {
                 let result_rows: Vec<Vec<Value>> = chunk
                     .rows
                     .into_iter()
@@ -333,7 +339,7 @@ pub fn next_except(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
                     .collect();
 
                 if result_rows.is_empty() {
-                    executor.next()
+                    executor.advance()
                 } else {
                     Ok(Some(DataChunk::from_rows(result_rows)))
                 }
@@ -362,9 +368,12 @@ pub fn close_except(executor: &mut StreamingExecutor) -> Result<(), QueryError> 
             right,
             opened,
             exclude_rows,
+            memory_tracker,
             ..
         } => {
             if *opened {
+                let mem = exclude_rows.len() * 256;
+                memory_tracker.release(mem);
                 exclude_rows.clear();
                 left.close()?;
                 right.close()?;
@@ -379,7 +388,9 @@ pub fn close_except(executor: &mut StreamingExecutor) -> Result<(), QueryError> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::query::executor::base::MemoryBudget;
+use crate::query::executor::base::MemoryBudget;
+#[cfg(test)]
+use crate::query::executor::base::MemoryTracker;
 
     // ====== Union Tests ======
 
@@ -394,6 +405,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -405,6 +417,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut union = StreamingExecutor::Union {
@@ -415,17 +428,18 @@ mod tests {
             opened: false,
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
+            runtime: None,
         };
 
         union.open().unwrap();
-        let chunk = union.next().unwrap();
+        let chunk = union.advance().unwrap();
         assert!(chunk.is_some());
         // Union deduplicates: should have at most 3 distinct rows
         let mut total_rows = 0;
         let mut current = chunk;
         while let Some(c) = current {
             total_rows += c.len();
-            current = union.next().unwrap();
+            current = union.advance().unwrap();
         }
         assert_eq!(total_rows, 3);
         union.close().unwrap();
@@ -439,6 +453,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -447,6 +462,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut union = StreamingExecutor::Union {
@@ -457,16 +473,17 @@ mod tests {
             opened: false,
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
+            runtime: None,
         };
 
         union.open().unwrap();
-        let chunk = union.next().unwrap();
+        let chunk = union.advance().unwrap();
         assert!(chunk.is_some());
         let mut total = 0;
         let mut current = chunk;
         while let Some(c) = current {
             total += c.len();
-            current = union.next().unwrap();
+            current = union.advance().unwrap();
         }
         assert_eq!(total, 2);
         union.close().unwrap();
@@ -480,6 +497,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -488,6 +506,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut union = StreamingExecutor::Union {
@@ -498,10 +517,11 @@ mod tests {
             opened: false,
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
+            runtime: None,
         };
 
         union.open().unwrap();
-        let chunk = union.next().unwrap();
+        let chunk = union.advance().unwrap();
         assert!(chunk.is_some());
         union.close().unwrap();
     }
@@ -516,6 +536,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -524,6 +545,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut unionall = StreamingExecutor::UnionAll {
@@ -532,15 +554,16 @@ mod tests {
             left_consumed: false,
             opened: false,
             plan_node_id: 0,
+            runtime: None,
         };
 
         unionall.open().unwrap();
-        let chunk = unionall.next().unwrap();
+        let chunk = unionall.advance().unwrap();
         assert!(chunk.is_some());
         // UnionAll does NOT deduplicate: 2 from left + 2 from right = 4
         let chunk1 = chunk.unwrap();
         assert_eq!(chunk1.len(), 2); // First chunk from left
-        let chunk2 = unionall.next().unwrap();
+        let chunk2 = unionall.advance().unwrap();
         assert!(chunk2.is_some());
         assert_eq!(chunk2.unwrap().len(), 2); // Second chunk from right
         unionall.close().unwrap();
@@ -554,6 +577,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -562,6 +586,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut unionall = StreamingExecutor::UnionAll {
@@ -570,12 +595,13 @@ mod tests {
             left_consumed: false,
             opened: false,
             plan_node_id: 0,
+            runtime: None,
         };
 
         unionall.open().unwrap();
-        let chunk1 = unionall.next().unwrap();
+        let chunk1 = unionall.advance().unwrap();
         assert!(chunk1.is_some());
-        let chunk2 = unionall.next().unwrap();
+        let chunk2 = unionall.advance().unwrap();
         assert!(chunk2.is_some());
         // Both chunks exist, proving duplicates are preserved
         unionall.close().unwrap();
@@ -595,6 +621,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -607,6 +634,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut intersect = StreamingExecutor::Intersect {
@@ -619,10 +647,11 @@ mod tests {
             opened: false,
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
+            runtime: None,
         };
 
         intersect.open().unwrap();
-        let chunk = intersect.next().unwrap();
+        let chunk = intersect.advance().unwrap();
         assert!(chunk.is_some());
         // Intersection of {1,2,3} and {2,3,4} = {2,3}
         assert_eq!(chunk.unwrap().len(), 2);
@@ -637,6 +666,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -645,6 +675,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut intersect = StreamingExecutor::Intersect {
@@ -657,10 +688,11 @@ mod tests {
             opened: false,
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
+            runtime: None,
         };
 
         intersect.open().unwrap();
-        let result = intersect.next().unwrap();
+        let result = intersect.advance().unwrap();
         // With no common elements, should return None
         assert!(result.is_none());
         intersect.close().unwrap();
@@ -680,6 +712,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -688,6 +721,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut except = StreamingExecutor::Except {
@@ -698,10 +732,11 @@ mod tests {
             opened: false,
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
+            runtime: None,
         };
 
         except.open().unwrap();
-        let chunk = except.next().unwrap();
+        let chunk = except.advance().unwrap();
         assert!(chunk.is_some());
         // Should have 2 rows (1 and 3, excluding 2)
         let c = chunk.unwrap();
@@ -717,6 +752,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -725,6 +761,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut except = StreamingExecutor::Except {
@@ -735,10 +772,11 @@ mod tests {
             opened: false,
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
+            runtime: None,
         };
 
         except.open().unwrap();
-        let result = except.next().unwrap();
+        let result = except.advance().unwrap();
         // All rows are excluded, should return None
         assert!(result.is_none());
         except.close().unwrap();
@@ -752,6 +790,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -760,6 +799,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut except = StreamingExecutor::Except {
@@ -770,10 +810,11 @@ mod tests {
             opened: false,
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
+            runtime: None,
         };
 
         except.open().unwrap();
-        let chunk = except.next().unwrap();
+        let chunk = except.advance().unwrap();
         assert!(chunk.is_some());
         // No exclusions, should return all left rows
         assert_eq!(chunk.unwrap().len(), 2);

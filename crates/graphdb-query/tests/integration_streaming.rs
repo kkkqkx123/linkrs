@@ -21,6 +21,7 @@ fn create_simple_scan(size: usize) -> StreamingExecutor {
         current_index: 0,
         col_names: vec![],
         plan_node_id: 0,
+        runtime: None,
     }
 }
 
@@ -31,6 +32,7 @@ fn create_scan_with_data(data: Vec<Vec<Value>>) -> StreamingExecutor {
         current_index: 0,
         col_names: vec![],
         plan_node_id: 0,
+        runtime: None,
     }
 }
 
@@ -46,6 +48,7 @@ fn test_filter_then_limit_pipeline() {
         predicate: Expression::Literal(Value::Bool(true)),
         opened: false,
         plan_node_id: 0,
+        runtime: None,
     };
 
     let mut pipeline = StreamingExecutor::Limit {
@@ -54,6 +57,7 @@ fn test_filter_then_limit_pipeline() {
         consumed: 0,
         opened: false,
         plan_node_id: 0,
+        runtime: None,
     };
 
     pipeline.open().unwrap();
@@ -80,6 +84,7 @@ fn test_project_then_distinct_pipeline() {
         output_col_names: vec![],
         opened: false,
         plan_node_id: 0,
+        runtime: None,
     };
 
     let mut pipeline = StreamingExecutor::Distinct {
@@ -87,6 +92,8 @@ fn test_project_then_distinct_pipeline() {
         seen_rows: std::collections::HashSet::new(),
         opened: false,
         plan_node_id: 0,
+        memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+        runtime: None,
     };
 
     pipeline.open().unwrap();
@@ -121,6 +128,7 @@ fn test_join_with_small_inputs() {
         opened: false,
         right_col_names: vec![],
         plan_node_id: 0,
+        runtime: None,
     };
 
     join.open().unwrap();
@@ -145,6 +153,8 @@ fn test_union_then_limit_pipeline() {
         left_consumed: false,
         opened: false,
         plan_node_id: 0,
+        memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+        runtime: None,
     };
 
     let mut pipeline = StreamingExecutor::Limit {
@@ -153,6 +163,7 @@ fn test_union_then_limit_pipeline() {
         consumed: 0,
         opened: false,
         plan_node_id: 0,
+        runtime: None,
     };
 
     pipeline.open().unwrap();
@@ -180,6 +191,8 @@ fn test_except_then_filter_pipeline() {
         right_buffered: false,
         opened: false,
         plan_node_id: 0,
+        memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+        runtime: None,
     };
 
     let mut pipeline = StreamingExecutor::Filter {
@@ -187,6 +200,7 @@ fn test_except_then_filter_pipeline() {
         predicate: Expression::Literal(Value::Bool(true)),
         opened: false,
         plan_node_id: 0,
+        runtime: None,
     };
 
     pipeline.open().unwrap();

@@ -1,6 +1,5 @@
 use crate::core::DataType;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 pub type SlotId = usize;
 

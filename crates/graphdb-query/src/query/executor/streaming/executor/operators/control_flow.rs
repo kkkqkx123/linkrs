@@ -33,7 +33,7 @@ pub fn next_loop(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, 
             if !*opened {
                 return Err(QueryError::execution("Loop not opened".to_string()));
             }
-            if let Some(chunk) = input.next()? {
+            if let Some(chunk) = input.advance()? {
                 return Ok(Some(chunk));
             }
             Ok(None)
@@ -95,7 +95,7 @@ pub fn next_select(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
             if !*opened {
                 return Err(QueryError::execution("Select not opened".to_string()));
             }
-            if let Some(chunk) = input.next()? {
+            if let Some(chunk) = input.advance()? {
                 return Ok(Some(chunk));
             }
             Ok(None)
@@ -157,7 +157,7 @@ pub fn next_passthrough(executor: &mut StreamingExecutor) -> Result<Option<DataC
             if !*opened {
                 return Err(QueryError::execution("PassThrough not opened".to_string()));
             }
-            if let Some(chunk) = input.next()? {
+            if let Some(chunk) = input.advance()? {
                 return Ok(Some(chunk));
             }
             Ok(None)
@@ -291,7 +291,7 @@ pub fn next_commit(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
                 return Err(QueryError::execution("Commit not opened".to_string()));
             }
             *opened = false;
-            if let Some(chunk) = input.next()? {
+            if let Some(chunk) = input.advance()? {
                 return Ok(Some(chunk));
             }
             let schema = Arc::new(Schema::new(vec![ColumnInfo {

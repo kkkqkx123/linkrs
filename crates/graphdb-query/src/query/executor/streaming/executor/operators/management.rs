@@ -74,7 +74,7 @@ where
 
 fn get_reader(
     storage: &Option<Arc<RwLock<dyn StorageClient>>>,
-) -> Result<parking_lot::RwLockReadGuard<dyn StorageClient>, QueryError> {
+) -> Result<parking_lot::RwLockReadGuard<'_, dyn StorageClient>, QueryError> {
     storage
         .as_ref()
         .map(|s| s.read())
@@ -1330,6 +1330,11 @@ pub fn next_vector_manage(
             vector_coordinator,
             ..
         } => {
+            #[cfg(not(feature = "qdrant"))]
+            let _ = (&tag_name, &field_name, &space_id);
+            #[cfg(feature = "qdrant")]
+            let _ = (&storage, &space_name);
+
             if !*opened {
                 return Ok(None);
             }
@@ -1590,7 +1595,7 @@ pub fn next_migrate(executor: &mut StreamingExecutor) -> Result<Option<DataChunk
             storage,
             space_name,
             action,
-            migration_data,
+            migration_data: _migration_data,
             opened,
             ..
         } => {

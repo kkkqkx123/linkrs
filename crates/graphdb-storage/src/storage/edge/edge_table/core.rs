@@ -1182,44 +1182,7 @@ impl TimeTravelEdgeStore {
         }
     }
 
-    /// Update sparse vertex index incrementally after adding a new out-direction segment.
-    fn append_sparse_index_out(&mut self, new_seg_idx: usize) {
-        if new_seg_idx >= self.out_segments.len() {
-            return;
-        }
-        let seg = &self.out_segments[new_seg_idx];
-        for (src_vid, _) in seg.csr.iter() {
-            if let Some(vid) = src_vid.as_int64() {
-                self.sparse_vertex_index_out
-                    .entry(vid as u32)
-                    .or_default()
-                    .push(new_seg_idx);
-            }
-        }
-    }
-
-    /// Update sparse vertex index incrementally after adding a new in-direction segment.
-    fn append_sparse_index_in(&mut self, new_seg_idx: usize) {
-        if new_seg_idx >= self.in_segments.len() {
-            return;
-        }
-        let seg = &self.in_segments[new_seg_idx];
-        for (src_vid, _) in seg.csr.iter() {
-            if let Some(vid) = src_vid.as_int64() {
-                self.sparse_vertex_index_in
-                    .entry(vid as u32)
-                    .or_default()
-                    .push(new_seg_idx);
-            }
-        }
-    }
-
     // ── P0: Current snapshot methods ──
-
-    /// Invalidate current snapshots, forcing them to be rebuilt on next ts=MAX query.
-    pub fn invalidate_snapshot(&mut self) {
-        self.snapshot_dirty = true;
-    }
 
     /// Rebuild current snapshots from segments (eager rebuild).
     /// Called after freeze or merge operations when segments have changed.

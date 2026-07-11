@@ -6,6 +6,7 @@ use crate::api::core::error::{CoreError, CoreResult};
 use crate::api::core::types::{ExecutionMetadata, QueryRequest, QueryResult, Row};
 use crate::core::metadata::SchemaManager;
 use crate::core::StatsManager;
+use crate::query::executor::streaming::StreamingQueryResult;
 use crate::query::{OptimizerEngine, QueryPipelineManager};
 use crate::storage::StorageClient;
 use crate::sync::SyncManager;
@@ -201,6 +202,30 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         result.metadata.execution_time_ms = start_time.elapsed().as_millis() as u64;
 
         Ok(result)
+    }
+
+    /// Execute a query and return a [`StreamingQueryResult`] for chunk-at-a-time consumption.
+    ///
+    /// Unlike [`execute`] which materialises the full result set, this method
+    /// returns a thread-safe streaming handle that lets the caller pull chunks
+    /// one at a time.  Useful for SSE / gRPC streaming endpoints.
+    pub fn execute_stream(
+        &mut self,
+        query: &str,
+        ctx: QueryRequest,
+    ) -> CoreResult<StreamingQueryResult> {
+        let rctx = Arc::new(crate::query::QueryRequestContext::new(query.to_string()));
+
+        let space_info = ctx.space_id.map(|id| {
+            let space_name = ctx.space_name.clone().unwrap_or_default();
+            let mut space_info = crate::core::types::SpaceInfo::new(space_name);
+            space_info.space_id = id;
+            space_info
+        });
+
+        self.pipeline_manager
+            .execute_query_stream_with_request(query, rctx, space_info)
+            .map_err(|e| CoreError::QueryExecutionFailed(e.to_string()))
     }
 
     /// Execute a parameterized query

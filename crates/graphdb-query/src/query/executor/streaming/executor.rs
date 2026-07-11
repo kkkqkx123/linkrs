@@ -14,13 +14,16 @@
 
 use parking_lot::RwLock;
 use std::sync::Arc;
+use std::time::Instant;
 
 use super::chunk::DataChunk;
+use super::driver;
+use super::runtime::ExecutionRuntime;
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::AggregateFunction;
 use crate::core::Value;
-use crate::query::executor::base::MemoryTracker;
+use crate::query::executor::base::{MemoryTracker, Spillable};
 #[cfg(feature = "fulltext-search")]
 use crate::search::manager::FulltextIndexManager;
 use crate::storage::cursor::{EdgeCursor, VertexCursor};
@@ -78,6 +81,7 @@ pub enum StreamingExecutor {
         col_names: Vec<String>,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     /// Scan vertices from storage on first pull.
@@ -96,6 +100,7 @@ pub enum StreamingExecutor {
         col_names: Vec<String>,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     /// Scan edges from a partition
@@ -108,6 +113,7 @@ pub enum StreamingExecutor {
         col_names: Vec<String>,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     /// Scan edges from storage on first pull.
@@ -125,6 +131,7 @@ pub enum StreamingExecutor {
         col_names: Vec<String>,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     // ============ Single Input ============
@@ -135,6 +142,7 @@ pub enum StreamingExecutor {
         opened: bool,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     /// Project executor with expression-based column selection
@@ -145,6 +153,7 @@ pub enum StreamingExecutor {
         opened: bool,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     /// Limit executor
@@ -155,6 +164,7 @@ pub enum StreamingExecutor {
         opened: bool,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     // ============ Stateful ============
@@ -174,6 +184,7 @@ pub enum StreamingExecutor {
         memory_tracker: MemoryTracker,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     /// Sort executor with ORDER BY support
@@ -190,6 +201,7 @@ pub enum StreamingExecutor {
         memory_tracker: MemoryTracker,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     // ============ Binary Input ============
@@ -217,6 +229,7 @@ pub enum StreamingExecutor {
         right_col_names: Vec<String>,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     /// GroupBy executor for independent grouping before aggregation
@@ -233,6 +246,7 @@ pub enum StreamingExecutor {
         memory_tracker: MemoryTracker,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     /// Distinct executor to eliminate duplicate rows
@@ -245,6 +259,7 @@ pub enum StreamingExecutor {
         opened: bool,
         /// Per-operator memory tracker.
         memory_tracker: MemoryTracker,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     /// NestedLoopJoin for theta-joins and non-equi joins
@@ -260,6 +275,7 @@ pub enum StreamingExecutor {
         memory_tracker: MemoryTracker,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     /// WindowFunction executor for analytic functions
@@ -283,6 +299,7 @@ pub enum StreamingExecutor {
         memory_tracker: MemoryTracker,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     /// Set Union operation (combines all rows from left and right)
@@ -297,6 +314,7 @@ pub enum StreamingExecutor {
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
         opened: bool,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     /// Set UnionAll operation (combines all rows without deduplication)
@@ -307,6 +325,7 @@ pub enum StreamingExecutor {
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
         opened: bool,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     /// Set Intersect operation (returns rows present in both inputs)
@@ -322,6 +341,7 @@ pub enum StreamingExecutor {
         opened: bool,
         memory_tracker: MemoryTracker,
         plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     /// Set Except/Minus operation (returns rows from left not in right)
@@ -334,17 +354,22 @@ pub enum StreamingExecutor {
         opened: bool,
         memory_tracker: MemoryTracker,
         plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     // ============ Access Operations ============
     Start {
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
     GetVertices {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         vertex_ids: Option<Vec<Value>>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
     GetEdges {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
@@ -354,18 +379,24 @@ pub enum StreamingExecutor {
         dst: Option<String>,
         rank: i64,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
     GetNeighbors {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         direction: String,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
     EdgeIndexScan {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         edge_type: Option<String>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
     IndexScan {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
@@ -373,12 +404,21 @@ pub enum StreamingExecutor {
         index_name: Option<String>,
         index_value: Option<Value>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
     Argument {
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
     Sample {
+        input: Box<StreamingExecutor>,
+        count: u64,
+        consumed: u64,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     // ============ Property & Index Lookup ============
@@ -390,6 +430,8 @@ pub enum StreamingExecutor {
         edge_ids: Option<Vec<Value>>,
         prop_names: Vec<String>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     /// Lookup vertices by index key
@@ -400,6 +442,8 @@ pub enum StreamingExecutor {
         index_condition: Option<(String, Value)>,
         limit: Option<usize>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     // ============ Join Operations (stub) ============
@@ -414,6 +458,7 @@ pub enum StreamingExecutor {
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
         opened: bool,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
     LeftJoin {
         left: Box<StreamingExecutor>,
@@ -426,6 +471,7 @@ pub enum StreamingExecutor {
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
         opened: bool,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
     RightJoin {
         left: Box<StreamingExecutor>,
@@ -438,6 +484,7 @@ pub enum StreamingExecutor {
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
         opened: bool,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
     FullOuterJoin {
         left: Box<StreamingExecutor>,
@@ -453,6 +500,7 @@ pub enum StreamingExecutor {
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
         opened: bool,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
     CrossJoin {
         left: Box<StreamingExecutor>,
@@ -466,6 +514,7 @@ pub enum StreamingExecutor {
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
         opened: bool,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
     SemiJoin {
         left: Box<StreamingExecutor>,
@@ -478,6 +527,7 @@ pub enum StreamingExecutor {
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
         opened: bool,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     // ============ Graph Traversal Operations ============
@@ -489,6 +539,8 @@ pub enum StreamingExecutor {
         direction: String,
         filter_expr: Option<Expression>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     ExpandAll {
@@ -499,6 +551,8 @@ pub enum StreamingExecutor {
         direction: String,
         filter_expr: Option<Expression>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     Traverse {
@@ -512,6 +566,8 @@ pub enum StreamingExecutor {
         filter_expr: Option<Expression>,
         visited: std::collections::HashSet<String>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     TraverseAll {
@@ -525,12 +581,16 @@ pub enum StreamingExecutor {
         filter_expr: Option<Expression>,
         visited: std::collections::HashSet<String>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     AppendVertices {
         input: Box<StreamingExecutor>,
         vertex_properties: Vec<(String, Expression)>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     BiExpand {
@@ -539,6 +599,8 @@ pub enum StreamingExecutor {
         space_name: String,
         edge_type: String,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     BiTraverse {
@@ -550,6 +612,8 @@ pub enum StreamingExecutor {
         max_depth: u32,
         visited: std::collections::HashSet<String>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     ShortestPath {
@@ -560,6 +624,8 @@ pub enum StreamingExecutor {
         edge_type: String,
         direction: String,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     BFSShortest {
@@ -572,6 +638,8 @@ pub enum StreamingExecutor {
         frontier: Vec<Vec<Value>>,
         visited: std::collections::HashSet<String>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     AllPaths {
@@ -584,6 +652,8 @@ pub enum StreamingExecutor {
         all_paths: Vec<Vec<Value>>,
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     MultiShortestPath {
@@ -596,6 +666,8 @@ pub enum StreamingExecutor {
         all_paths: Vec<Vec<Value>>,
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     /// Subgraph extraction: find subgraph within N steps from seed vertices
@@ -607,6 +679,8 @@ pub enum StreamingExecutor {
         direction: String,
         edge_types: Vec<String>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     // ============ Data Modification ============
@@ -618,6 +692,8 @@ pub enum StreamingExecutor {
         tags: Vec<String>,
         rows_inserted: u64,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     InsertEdges {
@@ -630,6 +706,8 @@ pub enum StreamingExecutor {
         edge_properties: Vec<(String, Expression)>,
         rows_inserted: u64,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     UpdateVertices {
@@ -639,6 +717,8 @@ pub enum StreamingExecutor {
         updates: Vec<(String, Expression)>,
         rows_updated: u64,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     UpdateEdges {
@@ -651,6 +731,8 @@ pub enum StreamingExecutor {
         updates: Vec<(String, Expression)>,
         rows_updated: u64,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     DeleteVertices {
@@ -660,6 +742,8 @@ pub enum StreamingExecutor {
         vertex_id_col: String,
         rows_deleted: u64,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     DeleteEdges {
@@ -670,6 +754,8 @@ pub enum StreamingExecutor {
         dst_col: String,
         rows_deleted: u64,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     PipeDeleteVertices {
@@ -679,6 +765,8 @@ pub enum StreamingExecutor {
         vertex_id_col: String,
         rows_deleted: u64,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     PipeDeleteEdges {
@@ -689,6 +777,8 @@ pub enum StreamingExecutor {
         dst_col: String,
         rows_deleted: u64,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     DeleteTags {
@@ -699,6 +789,8 @@ pub enum StreamingExecutor {
         vertex_ids: Option<Vec<Value>>,
         rows_deleted: u64,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     // ============ Search Operations ============
@@ -714,6 +806,8 @@ pub enum StreamingExecutor {
         #[cfg(feature = "fulltext-search")]
         fulltext_manager: Option<Arc<FulltextIndexManager>>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     FulltextLookup {
@@ -728,6 +822,8 @@ pub enum StreamingExecutor {
         #[cfg(feature = "fulltext-search")]
         fulltext_manager: Option<Arc<FulltextIndexManager>>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     MatchFulltext {
@@ -741,6 +837,8 @@ pub enum StreamingExecutor {
         #[cfg(feature = "fulltext-search")]
         fulltext_manager: Option<Arc<FulltextIndexManager>>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     VectorSearch {
@@ -756,6 +854,8 @@ pub enum StreamingExecutor {
         #[cfg(feature = "qdrant")]
         vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     VectorLookup {
@@ -767,6 +867,8 @@ pub enum StreamingExecutor {
         #[cfg(feature = "qdrant")]
         vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     VectorMatch {
@@ -783,6 +885,8 @@ pub enum StreamingExecutor {
         #[cfg(feature = "qdrant")]
         vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
     SpaceManage {
         input: Box<StreamingExecutor>,
@@ -790,6 +894,8 @@ pub enum StreamingExecutor {
         action: String,
         space_name: Option<String>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     TagManage {
@@ -800,6 +906,8 @@ pub enum StreamingExecutor {
         tag_name: Option<String>,
         properties: Vec<crate::core::types::PropertyDef>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     EdgeManage {
@@ -810,6 +918,8 @@ pub enum StreamingExecutor {
         edge_type: Option<String>,
         properties: Vec<crate::core::types::PropertyDef>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     IndexManage {
@@ -819,6 +929,8 @@ pub enum StreamingExecutor {
         action: String,
         index_name: Option<String>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     UserManage {
@@ -827,6 +939,8 @@ pub enum StreamingExecutor {
         action: String,
         username: Option<String>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     FulltextManage {
@@ -841,6 +955,8 @@ pub enum StreamingExecutor {
         #[cfg(feature = "fulltext-search")]
         fulltext_manager: Option<Arc<FulltextIndexManager>>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     VectorManage {
@@ -855,6 +971,8 @@ pub enum StreamingExecutor {
         #[cfg(feature = "qdrant")]
         vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     // ============ Simple Relational Operations ============
@@ -867,18 +985,24 @@ pub enum StreamingExecutor {
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
         opened: bool,
         memory_tracker: MemoryTracker,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     Dedup {
         input: Box<StreamingExecutor>,
         seen_rows: std::collections::HashSet<String>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     Assign {
         input: Box<StreamingExecutor>,
         assignments: Vec<(String, Expression)>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     Materialize {
@@ -888,12 +1012,16 @@ pub enum StreamingExecutor {
         materialized: bool,
         opened: bool,
         memory_tracker: MemoryTracker,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     Remove {
         input: Box<StreamingExecutor>,
         columns_to_remove: Vec<String>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     DataCollect {
@@ -902,6 +1030,8 @@ pub enum StreamingExecutor {
         emitted: bool,
         opened: bool,
         memory_tracker: MemoryTracker,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     Unwind {
@@ -912,21 +1042,29 @@ pub enum StreamingExecutor {
         current_row_index: usize,
         current_unwind_index: usize,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     Apply {
         input: Box<StreamingExecutor>,
+        right: Box<StreamingExecutor>,
         apply_expression: Expression,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     PatternApply {
         input: Box<StreamingExecutor>,
+        right: Box<StreamingExecutor>,
         pattern: Expression,
         all_rows: Vec<Vec<Value>>,
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
         opened: bool,
         memory_tracker: MemoryTracker,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     RollUpApply {
@@ -936,6 +1074,8 @@ pub enum StreamingExecutor {
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
         opened: bool,
         memory_tracker: MemoryTracker,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     Minus {
@@ -946,6 +1086,7 @@ pub enum StreamingExecutor {
         opened: bool,
         memory_tracker: MemoryTracker,
         plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     Window {
@@ -958,6 +1099,8 @@ pub enum StreamingExecutor {
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
         opened: bool,
         memory_tracker: MemoryTracker,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     // ============ Control Flow ============
@@ -965,35 +1108,47 @@ pub enum StreamingExecutor {
         input: Box<StreamingExecutor>,
         condition: Option<String>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     Select {
         input: Box<StreamingExecutor>,
         selection_expr: Option<String>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     PassThrough {
         input: Box<StreamingExecutor>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     BeginTransaction {
         input: Box<StreamingExecutor>,
         transaction_id: Option<String>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     Commit {
         input: Box<StreamingExecutor>,
         transaction_id: Option<String>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     Rollback {
         input: Box<StreamingExecutor>,
         transaction_id: Option<String>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     // ============ Other (stub) ============
@@ -1002,6 +1157,8 @@ pub enum StreamingExecutor {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     // ============ Analysis & Migration ============
@@ -1012,6 +1169,8 @@ pub enum StreamingExecutor {
         analyze_target: String,
         target_name: Option<String>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 
     Migrate {
@@ -1021,13 +1180,413 @@ pub enum StreamingExecutor {
         action: String,
         migration_data: Option<String>,
         opened: bool,
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
     },
 }
 
 impl StreamingExecutor {
+    /// Recursively set the runtime on this operator and all children.
+    pub fn set_runtime(&mut self, rt: Option<Arc<ExecutionRuntime>>) {
+        use StreamingExecutor::*;
+        match self {
+            // Leaf operators (no children)
+            Start { ref mut runtime, .. }
+            | GetVertices { ref mut runtime, .. }
+            | GetEdges { ref mut runtime, .. }
+            | GetNeighbors { ref mut runtime, .. }
+            | EdgeIndexScan { ref mut runtime, .. }
+            | IndexScan { ref mut runtime, .. }
+            | Argument { ref mut runtime, .. }
+            | GetProp { ref mut runtime, .. }
+            | LookupIndex { ref mut runtime, .. }
+            | ScanVertices { ref mut runtime, .. }
+            | StorageScanVertices { ref mut runtime, .. }
+            | ScanEdges { ref mut runtime, .. }
+            | StorageScanEdges { ref mut runtime, .. } => *runtime = rt.clone(),
+
+            // Single-input: set self then recurse
+            Filter { ref mut runtime, input, .. } | Project { ref mut runtime, input, .. }
+            | Limit { ref mut runtime, input, .. } | Distinct { ref mut runtime, input, .. }
+            | Aggregate { ref mut runtime, input, .. } | Sort { ref mut runtime, input, .. }
+            | GroupBy { ref mut runtime, input, .. }
+            | WindowFunction { ref mut runtime, input, .. }
+            | TopN { ref mut runtime, input, .. } | Dedup { ref mut runtime, input, .. }
+            | Assign { ref mut runtime, input, .. }
+            | Materialize { ref mut runtime, input, .. }
+            | Remove { ref mut runtime, input, .. }
+            | DataCollect { ref mut runtime, input, .. }
+            | Unwind { ref mut runtime, input, .. }
+            | RollUpApply { ref mut runtime, input, .. }
+            | Window { ref mut runtime, input, .. }
+            | Loop { ref mut runtime, input, .. }
+            | Select { ref mut runtime, input, .. }
+            | PassThrough { ref mut runtime, input, .. }
+            | BeginTransaction { ref mut runtime, input, .. }
+            | Commit { ref mut runtime, input, .. }
+            | Rollback { ref mut runtime, input, .. }
+            | ShowStats { ref mut runtime, input, .. }
+            | Analyze { ref mut runtime, input, .. }
+            | Migrate { ref mut runtime, input, .. }
+            | Sample { ref mut runtime, input, .. }
+            | Expand { ref mut runtime, input, .. }
+            | ExpandAll { ref mut runtime, input, .. }
+            | Traverse { ref mut runtime, input, .. }
+            | TraverseAll { ref mut runtime, input, .. }
+            | AppendVertices { ref mut runtime, input, .. }
+            | BiExpand { ref mut runtime, input, .. }
+            | BiTraverse { ref mut runtime, input, .. }
+            | ShortestPath { ref mut runtime, input, .. }
+            | BFSShortest { ref mut runtime, input, .. }
+            | AllPaths { ref mut runtime, input, .. }
+            | MultiShortestPath { ref mut runtime, input, .. }
+            | Subgraph { ref mut runtime, input, .. }
+            | InsertVertices { ref mut runtime, input, .. }
+            | InsertEdges { ref mut runtime, input, .. }
+            | UpdateVertices { ref mut runtime, input, .. }
+            | UpdateEdges { ref mut runtime, input, .. }
+            | DeleteVertices { ref mut runtime, input, .. }
+            | DeleteEdges { ref mut runtime, input, .. }
+            | PipeDeleteVertices { ref mut runtime, input, .. }
+            | PipeDeleteEdges { ref mut runtime, input, .. }
+            | DeleteTags { ref mut runtime, input, .. }
+            | PatternApply { ref mut runtime, input, .. }
+            | FulltextSearch { ref mut runtime, input, .. }
+            | FulltextLookup { ref mut runtime, input, .. }
+            | MatchFulltext { ref mut runtime, input, .. }
+            | VectorSearch { ref mut runtime, input, .. }
+            | VectorLookup { ref mut runtime, input, .. }
+            | VectorMatch { ref mut runtime, input, .. }
+            | SpaceManage { ref mut runtime, input, .. }
+            | TagManage { ref mut runtime, input, .. }
+            | EdgeManage { ref mut runtime, input, .. }
+            | IndexManage { ref mut runtime, input, .. }
+            | UserManage { ref mut runtime, input, .. }
+            | FulltextManage { ref mut runtime, input, .. }
+            | VectorManage { ref mut runtime, input, .. } => {
+                *runtime = rt.clone();
+                input.set_runtime(rt.clone());
+            }
+
+            // Binary-input operators
+            HashJoin { ref mut runtime, left, right, .. }
+            | NestedLoopJoin { ref mut runtime, left, right, .. }
+            | InnerJoin { ref mut runtime, left, right, .. }
+            | LeftJoin { ref mut runtime, left, right, .. }
+            | RightJoin { ref mut runtime, left, right, .. }
+            | FullOuterJoin { ref mut runtime, left, right, .. }
+            | CrossJoin { ref mut runtime, left, right, .. }
+            | SemiJoin { ref mut runtime, left, right, .. }
+            | Union { ref mut runtime, left, right, .. }
+            | UnionAll { ref mut runtime, left, right, .. }
+            | Intersect { ref mut runtime, left, right, .. }
+            | Except { ref mut runtime, left, right, .. }
+            | Minus { ref mut runtime, left, right, .. }
+            | Apply { ref mut runtime, input: left, right, .. } => {
+                *runtime = rt.clone();
+                left.set_runtime(rt.clone());
+                right.set_runtime(rt.clone());
+            }
+        }
+    }
+
+    /// Return the plan node ID of this operator.
+    pub fn plan_node_id(&self) -> i64 {
+        use StreamingExecutor::*;
+        match self {
+            ScanVertices { plan_node_id, .. }
+            | StorageScanVertices { plan_node_id, .. }
+            | ScanEdges { plan_node_id, .. }
+            | StorageScanEdges { plan_node_id, .. }
+            | Filter { plan_node_id, .. }
+            | Project { plan_node_id, .. }
+            | Limit { plan_node_id, .. }
+            | Sort { plan_node_id, .. }
+            | Aggregate { plan_node_id, .. }
+            | HashJoin { plan_node_id, .. }
+            | InnerJoin { plan_node_id, .. }
+            | LeftJoin { plan_node_id, .. }
+            | RightJoin { plan_node_id, .. }
+            | FullOuterJoin { plan_node_id, .. }
+            | CrossJoin { plan_node_id, .. }
+            | SemiJoin { plan_node_id, .. }
+            | NestedLoopJoin { plan_node_id, .. }
+            | GroupBy { plan_node_id, .. }
+            | Distinct { plan_node_id, .. }
+            | WindowFunction { plan_node_id, .. }
+            | Union { plan_node_id, .. }
+            | UnionAll { plan_node_id, .. }
+            | Intersect { plan_node_id, .. }
+            | Except { plan_node_id, .. }
+            | Minus { plan_node_id, .. }
+            | Start { plan_node_id, .. }
+            | GetVertices { plan_node_id, .. }
+            | GetEdges { plan_node_id, .. }
+            | GetNeighbors { plan_node_id, .. }
+            | EdgeIndexScan { plan_node_id, .. }
+            | IndexScan { plan_node_id, .. }
+            | Argument { plan_node_id, .. }
+            | Sample { plan_node_id, .. }
+            | GetProp { plan_node_id, .. }
+            | LookupIndex { plan_node_id, .. }
+            | Expand { plan_node_id, .. }
+            | ExpandAll { plan_node_id, .. }
+            | Traverse { plan_node_id, .. }
+            | TraverseAll { plan_node_id, .. }
+            | AppendVertices { plan_node_id, .. }
+            | BiExpand { plan_node_id, .. }
+            | BiTraverse { plan_node_id, .. }
+            | ShortestPath { plan_node_id, .. }
+            | BFSShortest { plan_node_id, .. }
+            | AllPaths { plan_node_id, .. }
+            | MultiShortestPath { plan_node_id, .. }
+            | Subgraph { plan_node_id, .. }
+            | InsertVertices { plan_node_id, .. }
+            | InsertEdges { plan_node_id, .. }
+            | UpdateVertices { plan_node_id, .. }
+            | UpdateEdges { plan_node_id, .. }
+            | DeleteVertices { plan_node_id, .. }
+            | DeleteEdges { plan_node_id, .. }
+            | PipeDeleteVertices { plan_node_id, .. }
+            | PipeDeleteEdges { plan_node_id, .. }
+            | DeleteTags { plan_node_id, .. }
+            | TopN { plan_node_id, .. }
+            | Dedup { plan_node_id, .. }
+            | Assign { plan_node_id, .. }
+            | Materialize { plan_node_id, .. }
+            | Remove { plan_node_id, .. }
+            | DataCollect { plan_node_id, .. }
+            | Unwind { plan_node_id, .. }
+            | Apply { plan_node_id, .. }
+            | PatternApply { plan_node_id, .. }
+            | RollUpApply { plan_node_id, .. }
+            | Window { plan_node_id, .. }
+            | Loop { plan_node_id, .. }
+            | Select { plan_node_id, .. }
+            | PassThrough { plan_node_id, .. }
+            | BeginTransaction { plan_node_id, .. }
+            | Commit { plan_node_id, .. }
+            | Rollback { plan_node_id, .. }
+            | ShowStats { plan_node_id, .. }
+            | Analyze { plan_node_id, .. }
+            | Migrate { plan_node_id, .. }
+            | SpaceManage { plan_node_id, .. }
+            | TagManage { plan_node_id, .. }
+            | EdgeManage { plan_node_id, .. }
+            | IndexManage { plan_node_id, .. }
+            | UserManage { plan_node_id, .. }
+            | FulltextManage { plan_node_id, .. }
+            | VectorManage { plan_node_id, .. }
+            | FulltextSearch { plan_node_id, .. }
+            | FulltextLookup { plan_node_id, .. }
+            | MatchFulltext { plan_node_id, .. }
+            | VectorSearch { plan_node_id, .. }
+            | VectorLookup { plan_node_id, .. }
+            | VectorMatch { plan_node_id, .. } => *plan_node_id,
+        }
+    }
+
+    /// Access the runtime reference, if attached.
+    pub fn get_runtime(&self) -> Option<&ExecutionRuntime> {
+        use StreamingExecutor::*;
+        let rt = match self {
+            ScanVertices { runtime, .. }
+            | StorageScanVertices { runtime, .. }
+            | ScanEdges { runtime, .. }
+            | StorageScanEdges { runtime, .. }
+            | Filter { runtime, .. }
+            | Project { runtime, .. }
+            | Limit { runtime, .. }
+            | Sort { runtime, .. }
+            | Aggregate { runtime, .. }
+            | HashJoin { runtime, .. }
+            | InnerJoin { runtime, .. }
+            | LeftJoin { runtime, .. }
+            | RightJoin { runtime, .. }
+            | FullOuterJoin { runtime, .. }
+            | CrossJoin { runtime, .. }
+            | SemiJoin { runtime, .. }
+            | NestedLoopJoin { runtime, .. }
+            | GroupBy { runtime, .. }
+            | Distinct { runtime, .. }
+            | WindowFunction { runtime, .. }
+            | Union { runtime, .. }
+            | UnionAll { runtime, .. }
+            | Intersect { runtime, .. }
+            | Except { runtime, .. }
+            | Minus { runtime, .. }
+            | Start { runtime, .. }
+            | GetVertices { runtime, .. }
+            | GetEdges { runtime, .. }
+            | GetNeighbors { runtime, .. }
+            | EdgeIndexScan { runtime, .. }
+            | IndexScan { runtime, .. }
+            | Argument { runtime, .. }
+            | Sample { runtime, .. }
+            | GetProp { runtime, .. }
+            | LookupIndex { runtime, .. }
+            | Expand { runtime, .. }
+            | ExpandAll { runtime, .. }
+            | Traverse { runtime, .. }
+            | TraverseAll { runtime, .. }
+            | AppendVertices { runtime, .. }
+            | BiExpand { runtime, .. }
+            | BiTraverse { runtime, .. }
+            | ShortestPath { runtime, .. }
+            | BFSShortest { runtime, .. }
+            | AllPaths { runtime, .. }
+            | MultiShortestPath { runtime, .. }
+            | Subgraph { runtime, .. }
+            | InsertVertices { runtime, .. }
+            | InsertEdges { runtime, .. }
+            | UpdateVertices { runtime, .. }
+            | UpdateEdges { runtime, .. }
+            | DeleteVertices { runtime, .. }
+            | DeleteEdges { runtime, .. }
+            | PipeDeleteVertices { runtime, .. }
+            | PipeDeleteEdges { runtime, .. }
+            | DeleteTags { runtime, .. }
+            | TopN { runtime, .. }
+            | Dedup { runtime, .. }
+            | Assign { runtime, .. }
+            | Materialize { runtime, .. }
+            | Remove { runtime, .. }
+            | DataCollect { runtime, .. }
+            | Unwind { runtime, .. }
+            | Apply { runtime, .. }
+            | PatternApply { runtime, .. }
+            | RollUpApply { runtime, .. }
+            | Window { runtime, .. }
+            | Loop { runtime, .. }
+            | Select { runtime, .. }
+            | PassThrough { runtime, .. }
+            | BeginTransaction { runtime, .. }
+            | Commit { runtime, .. }
+            | Rollback { runtime, .. }
+            | ShowStats { runtime, .. }
+            | Analyze { runtime, .. }
+            | Migrate { runtime, .. }
+            | SpaceManage { runtime, .. }
+            | TagManage { runtime, .. }
+            | EdgeManage { runtime, .. }
+            | IndexManage { runtime, .. }
+            | UserManage { runtime, .. }
+            | FulltextManage { runtime, .. }
+            | VectorManage { runtime, .. }
+            | FulltextSearch { runtime, .. }
+            | FulltextLookup { runtime, .. }
+            | MatchFulltext { runtime, .. }
+            | VectorSearch { runtime, .. }
+            | VectorLookup { runtime, .. }
+            | VectorMatch { runtime, .. } => runtime,
+        };
+        rt.as_ref().map(|r| r.as_ref())
+    }
+
+    /// Check cancellation via the attached runtime.
+    pub fn ensure_not_cancelled(&self) -> Result<(), QueryError> {
+        if let Some(rt) = self.get_runtime() {
+            rt.ensure_not_cancelled()
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Record profile timing for this operator.
+    pub fn record_profile_timing(
+        &self,
+        phase: &str,
+        elapsed_us: u64,
+    ) {
+        if let Some(rt) = self.get_runtime() {
+            let node_id = self.plan_node_id();
+            let name = driver::extract_operator_name(self);
+            let mut profile = rt.profile().lock();
+            let entry = profile.operators.entry(node_id).or_insert_with(|| {
+                use super::runtime::OperatorProfile;
+                OperatorProfile { node_id, name, ..OperatorProfile::default() }
+            });
+            match phase {
+                "open" => entry.open_time_us += elapsed_us,
+                "next" => entry.next_time_us += elapsed_us,
+                "close" => entry.close_time_us += elapsed_us,
+                _ => {}
+            }
+        }
+    }
+
+    /// Get peak memory from the memory_tracker, if this operator has one.
+    pub fn peak_memory_bytes(&self) -> u64 {
+        let extract = |mt: &MemoryTracker| mt.peak() as u64;
+        match self {
+            Self::Distinct { memory_tracker, .. }
+            | Self::Aggregate { memory_tracker, .. }
+            | Self::Sort { memory_tracker, .. }
+            | Self::GroupBy { memory_tracker, .. }
+            | Self::WindowFunction { memory_tracker, .. }
+            | Self::HashJoin { memory_tracker, .. }
+            | Self::NestedLoopJoin { memory_tracker, .. }
+            | Self::InnerJoin { memory_tracker, .. }
+            | Self::LeftJoin { memory_tracker, .. }
+            | Self::RightJoin { memory_tracker, .. }
+            | Self::FullOuterJoin { memory_tracker, .. }
+            | Self::CrossJoin { memory_tracker, .. }
+            | Self::SemiJoin { memory_tracker, .. }
+            | Self::Union { memory_tracker, .. }
+            | Self::Intersect { memory_tracker, .. }
+            | Self::Except { memory_tracker, .. }
+            | Self::Minus { memory_tracker, .. }
+            | Self::TopN { memory_tracker, .. }
+            | Self::Materialize { memory_tracker, .. }
+            | Self::DataCollect { memory_tracker, .. }
+            | Self::Window { memory_tracker, .. }
+            | Self::RollUpApply { memory_tracker, .. }
+            | Self::PatternApply { memory_tracker, .. } => extract(memory_tracker),
+            _ => 0,
+        }
+    }
+
+    /// Record output row count in profile for this operator.
+    pub fn record_profile_rows(&self, count: u64) {
+        if let Some(rt) = self.get_runtime() {
+            let node_id = self.plan_node_id();
+            let mut profile = rt.profile().lock();
+            if let Some(entry) = profile.operators.get_mut(&node_id) {
+                entry.output_rows += count;
+            }
+            profile.add_rows(count);
+        }
+    }
+
+    /// Record peak memory usage in profile for this operator.
+    pub fn record_profile_peak_memory(&self, bytes: u64) {
+        if let Some(rt) = self.get_runtime() {
+            let node_id = self.plan_node_id();
+            let mut profile = rt.profile().lock();
+            let entry = profile.operators.get_mut(&node_id);
+            if let Some(entry) = entry {
+                if bytes > entry.peak_memory_bytes {
+                    entry.peak_memory_bytes = bytes;
+                }
+            }
+        }
+    }
+
+    /// Register a resource cleanup callback with the attached runtime.
+    pub fn register_resource<F>(&self, f: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        if let Some(rt) = self.get_runtime() {
+            rt.on_cleanup(f);
+        }
+    }
+
     /// Initialize the executor
     pub fn open(&mut self) -> Result<(), QueryError> {
-        match self {
+        self.ensure_not_cancelled()?;
+        let start = Instant::now();
+        let result = match self {
             // Access operations
             Self::Start { .. } => operators::access::open_start(self),
             Self::GetVertices { .. } => operators::access::open_getvertices(self),
@@ -1139,12 +1698,17 @@ impl StreamingExecutor {
             // Analysis & Migration
             Self::Analyze { .. } => operators::management::open_analyze(self),
             Self::Migrate { .. } => operators::management::open_migrate(self),
-        }
+        };
+        let elapsed = start.elapsed().as_micros() as u64;
+        self.record_profile_timing("open", elapsed);
+        result
     }
 
     /// Pull next chunk from the executor
-    pub fn next(&mut self) -> Result<Option<DataChunk>, QueryError> {
-        match self {
+    pub fn advance(&mut self) -> Result<Option<DataChunk>, QueryError> {
+        self.ensure_not_cancelled()?;
+        let start = Instant::now();
+        let result = match self {
             // Access operations
             Self::Start { .. } => operators::access::next_start(self),
             Self::GetVertices { .. } => operators::access::next_getvertices(self),
@@ -1256,12 +1820,20 @@ impl StreamingExecutor {
             // Analysis & Migration
             Self::Analyze { .. } => operators::management::next_analyze(self),
             Self::Migrate { .. } => operators::management::next_migrate(self),
+        };
+        let elapsed = start.elapsed().as_micros() as u64;
+        if let Ok(Some(ref chunk)) = result {
+            self.record_profile_rows(chunk.len() as u64);
         }
+        self.record_profile_timing("next", elapsed);
+        result
     }
 
     /// Stop the executor (signal no more input needed)
     pub fn stop(&mut self) -> Result<(), QueryError> {
-        match self {
+        self.ensure_not_cancelled()?;
+        let start = Instant::now();
+        let result = match self {
             // Access operations
             Self::Start { .. } => operators::access::stop_start(self),
             Self::GetVertices { .. } => operators::access::stop_getvertices(self),
@@ -1373,12 +1945,16 @@ impl StreamingExecutor {
             // Analysis & Migration
             Self::Analyze { .. } => operators::management::stop_analyze(self),
             Self::Migrate { .. } => operators::management::stop_migrate(self),
-        }
+        };
+        let elapsed = start.elapsed().as_micros() as u64;
+        self.record_profile_timing("stop", elapsed);
+        result
     }
 
     /// Close the executor (clean up resources)
     pub fn close(&mut self) -> Result<(), QueryError> {
-        match self {
+        let start = Instant::now();
+        let result = match self {
             // Access operations
             Self::Start { .. } => operators::access::close_start(self),
             Self::GetVertices { .. } => operators::access::close_getvertices(self),
@@ -1490,11 +2066,36 @@ impl StreamingExecutor {
             // Analysis & Migration
             Self::Analyze { .. } => operators::management::close_analyze(self),
             Self::Migrate { .. } => operators::management::close_migrate(self),
+        };
+        let elapsed = start.elapsed().as_micros() as u64;
+        self.record_profile_timing("close", elapsed);
+        let peak = self.peak_memory_bytes();
+        if peak > 0 {
+            self.record_profile_peak_memory(peak);
         }
+        if let Some(rt) = self.get_runtime() {
+            rt.release_resources();
+        }
+        result
+    }
+}
+
+// ============ Spillable implementation (reserved) ============
+
+impl Spillable for StreamingExecutor {
+    fn spill_to_disk(&mut self) -> Result<(), QueryError> {
+        Err(QueryError::execution(
+            "Disk spill not yet implemented".to_string(),
+        ))
+    }
+
+    fn spilled_size(&self) -> u64 {
+        0
     }
 }
 
 #[cfg(test)]
+#[allow(unused_imports)]
 mod tests {
     use super::*;
 
@@ -1521,10 +2122,11 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         };
 
         executor.open().unwrap();
-        let chunk = executor.next().unwrap();
+        let chunk = executor.advance().unwrap();
         assert!(chunk.is_some());
         let chunk = chunk.unwrap();
         assert_eq!(chunk.len(), 100);
@@ -1551,10 +2153,11 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         };
 
         executor.open().unwrap();
-        let chunk = executor.next().unwrap();
+        let chunk = executor.advance().unwrap();
         assert!(chunk.is_some());
         let chunk = chunk.unwrap();
         assert_eq!(chunk.len(), 50);
@@ -1570,6 +2173,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut limit = StreamingExecutor::Limit {
@@ -1578,11 +2182,12 @@ mod tests {
             consumed: 0,
             opened: false,
             plan_node_id: 0,
+            runtime: None,
         };
 
         limit.open().unwrap();
         let mut total = 0;
-        while let Some(chunk) = limit.next().unwrap() {
+        while let Some(chunk) = limit.advance().unwrap() {
             total += chunk.len();
         }
         limit.close().unwrap();
@@ -1624,10 +2229,11 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         };
 
         executor.open().unwrap();
-        let chunk = executor.next().unwrap();
+        let chunk = executor.advance().unwrap();
         assert!(chunk.is_some());
         let chunk = chunk.unwrap();
         assert_eq!(chunk.len(), 2);

@@ -267,13 +267,13 @@ pub fn next_getneighbors(
                 if let Ok(edges) = storage.get_node_edges(space_name, &v.vid, dir) {
                     for e in &edges {
                         let nid = match dir {
-                            crate::core::EdgeDirection::Out => e.dst().clone(),
-                            crate::core::EdgeDirection::In => e.src().clone(),
+                            crate::core::EdgeDirection::Out => *e.dst(),
+                            crate::core::EdgeDirection::In => *e.src(),
                             crate::core::EdgeDirection::Both => {
                                 if e.src() == &v.vid {
-                                    e.dst().clone()
+                                    *e.dst()
                                 } else {
-                                    e.src().clone()
+                                    *e.src()
                                 }
                             }
                         };
@@ -512,20 +512,78 @@ pub fn close_argument(_executor: &mut StreamingExecutor) -> Result<(), QueryErro
 
 // ============ Sample Operator ============
 
-pub fn open_sample(_executor: &mut StreamingExecutor) -> Result<(), QueryError> {
-    Ok(())
+pub fn open_sample(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::Sample { input, opened, .. } => {
+            input.open()?;
+            *opened = true;
+            Ok(())
+        }
+        _ => Err(QueryError::execution(
+            "Type mismatch in open_sample".to_string(),
+        )),
+    }
 }
 
-pub fn next_sample(_executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
-    Ok(None)
+pub fn next_sample(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    match executor {
+        StreamingExecutor::Sample {
+            input,
+            count,
+            consumed,
+            opened,
+            ..
+        } => {
+            if !*opened {
+                return Err(QueryError::execution("Sample not opened".to_string()));
+            }
+            if *consumed >= *count {
+                return Ok(None);
+            }
+            match input.advance()? {
+                Some(chunk) => {
+                    let remaining = (*count - *consumed) as usize;
+                    let col_names = chunk.col_names();
+                    let take_count = chunk.rows.len().min(remaining);
+                    let rows: Vec<Vec<Value>> = chunk.rows.into_iter().take(take_count).collect();
+                    *consumed += take_count as u64;
+                    if !rows.is_empty() {
+                        Ok(Some(DataChunk::from_rows_with_col_names(rows, Some(col_names))))
+                    } else {
+                        Ok(None)
+                    }
+                }
+                None => Ok(None),
+            }
+        }
+        _ => Err(QueryError::execution(
+            "Type mismatch in next_sample".to_string(),
+        )),
+    }
 }
 
-pub fn stop_sample(_executor: &mut StreamingExecutor) -> Result<(), QueryError> {
-    Ok(())
+pub fn stop_sample(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::Sample { input, .. } => {
+            input.stop()?;
+            Ok(())
+        }
+        _ => Err(QueryError::execution(
+            "Type mismatch in stop_sample".to_string(),
+        )),
+    }
 }
 
-pub fn close_sample(_executor: &mut StreamingExecutor) -> Result<(), QueryError> {
-    Ok(())
+pub fn close_sample(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::Sample { input, .. } => {
+            input.close()?;
+            Ok(())
+        }
+        _ => Err(QueryError::execution(
+            "Type mismatch in close_sample".to_string(),
+        )),
+    }
 }
 
 // ============ GetProp Operator ============
@@ -720,17 +778,25 @@ mod tests {
 
     #[test]
     fn test_start_operator() {
-        let mut executor = StreamingExecutor::Start { opened: false };
+        let mut executor = StreamingExecutor::Start {
+            opened: false,
+            plan_node_id: 0,
+            runtime: None,
+        };
         assert!(executor.open().is_ok());
-        assert!(executor.next().unwrap().is_none());
+        assert!(executor.advance().unwrap().is_none());
         assert!(executor.close().is_ok());
     }
 
     #[test]
     fn test_argument_operator() {
-        let mut executor = StreamingExecutor::Argument { opened: false };
+        let mut executor = StreamingExecutor::Argument {
+            opened: false,
+            plan_node_id: 0,
+            runtime: None,
+        };
         assert!(executor.open().is_ok());
-        assert!(executor.next().unwrap().is_none());
+        assert!(executor.advance().unwrap().is_none());
         assert!(executor.close().is_ok());
     }
 
@@ -741,9 +807,11 @@ mod tests {
             space_name: "default".to_string(),
             vertex_ids: None,
             opened: false,
+            plan_node_id: 0,
+            runtime: None,
         };
         assert!(executor.open().is_ok());
-        let result = executor.next();
+        let result = executor.advance();
         assert!(result.is_err());
     }
 }

@@ -5,8 +5,10 @@ use crate::query::planning::plan::PlanNodeEnum;
 
 /// Execution mode for a query plan
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum ExecutionMode {
     /// Use traditional materialized execution (buffer all intermediate results)
+    #[default]
     Materialized,
     /// Use streaming pull-based execution (process row-at-a-time, minimal buffering)
     Streaming,
@@ -21,11 +23,6 @@ impl ExecutionMode {
     }
 }
 
-impl Default for ExecutionMode {
-    fn default() -> Self {
-        ExecutionMode::Materialized
-    }
-}
 
 /// Execution plan structure
 /// Represents the complete executable plan, including the root node and the plan ID.

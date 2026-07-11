@@ -71,7 +71,7 @@ fn test_special_chars_username_safety() {
         ("user%name", "CREATE USER user%name WITH PASSWORD 'pass'"),
     ];
 
-    for (username, query) in scenarios {
+    for (_username, query) in scenarios {
         let scenario = new_scenario();
         let result = scenario.exec_dcl(query);
         // Either succeeds or fails gracefully, but should not crash system

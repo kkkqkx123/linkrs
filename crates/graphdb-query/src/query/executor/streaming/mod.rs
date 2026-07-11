@@ -21,6 +21,7 @@ pub mod partition;
 pub mod runtime;
 pub mod slot;
 pub mod stream;
+pub mod stream_result;
 
 pub use base::ExecutionMode;
 pub use builder::StreamingExecutorBuilder;
@@ -33,3 +34,4 @@ pub use partition::PartitionView;
 pub use runtime::{ExecutionRuntime, OperatorProfile, ProfileCollector, QueryIdentity, ResourceOwner};
 pub use slot::{combine_layouts, combine_layouts_with_dedup, SlotId, SlotInfo, SlotLayout, SlotOrigin};
 pub use stream::ResultStream;
+pub use stream_result::StreamingQueryResult;

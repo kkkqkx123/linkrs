@@ -6,9 +6,10 @@
 use super::super::helpers::comparison::compare_values;
 use super::super::{SortDirection, StreamingExecutor, ValueRowContext};
 use crate::core::error::QueryError;
+use crate::core::types::expr::Expression;
 use crate::core::value::NullType;
 use crate::core::Value;
-use crate::query::executor::base::{MemoryBudget, MemoryTracker};
+use crate::query::executor::base::MemoryBudget;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
 
@@ -27,7 +28,43 @@ pub fn open_topn(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     }
 }
 
+fn compare_rows_for_topn(
+    a: &[Value],
+    b: &[Value],
+    col_names: &[String],
+    sort_expressions: &[Expression],
+    sort_directions: &[SortDirection],
+) -> std::cmp::Ordering {
+    for (idx, expr) in sort_expressions.iter().enumerate() {
+        let direction = sort_directions
+            .get(idx)
+            .copied()
+            .unwrap_or(SortDirection::Ascending);
+
+        let mut ctx_a = ValueRowContext::new(a.to_vec(), col_names.to_vec());
+        let mut ctx_b = ValueRowContext::new(b.to_vec(), col_names.to_vec());
+
+        let val_a = ExpressionEvaluator::evaluate(expr, &mut ctx_a)
+            .unwrap_or(Value::Null(NullType::Null));
+        let val_b = ExpressionEvaluator::evaluate(expr, &mut ctx_b)
+            .unwrap_or(Value::Null(NullType::Null));
+
+        let cmp = compare_values(&val_a, &val_b);
+
+        let final_cmp = match direction {
+            SortDirection::Ascending => cmp,
+            SortDirection::Descending => cmp.reverse(),
+        };
+
+        if final_cmp != std::cmp::Ordering::Equal {
+            return final_cmp;
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
 pub fn next_topn(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    executor.ensure_not_cancelled()?;
     match executor {
         StreamingExecutor::TopN {
             input,
@@ -38,6 +75,7 @@ pub fn next_topn(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, 
             result_iter,
             opened,
             memory_tracker,
+            ..
         } => {
             if !*opened {
                 return Err(QueryError::execution("TopN not opened".to_string()));
@@ -45,47 +83,57 @@ pub fn next_topn(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, 
 
             if result_iter.is_none() {
                 let mut col_names: Vec<String> = vec![];
-                while let Some(chunk) = input.next()? {
+                let limit = *n as usize;
+
+                while let Some(chunk) = input.advance()? {
                     if col_names.is_empty() {
                         col_names = chunk.col_names();
                     }
-                    for row in &chunk.rows {
-                        memory_tracker.try_reserve_row(row)?;
-                    }
-                    all_rows.extend(chunk.rows);
-                }
-
-                all_rows.sort_by(|a, b| {
-                    for (idx, expr) in sort_expressions.iter().enumerate() {
-                        let direction = sort_directions
-                            .get(idx)
-                            .copied()
-                            .unwrap_or(SortDirection::Ascending);
-
-                        let mut ctx_a = ValueRowContext::new(a.clone(), col_names.clone());
-                        let mut ctx_b = ValueRowContext::new(b.clone(), col_names.clone());
-
-                        let val_a = ExpressionEvaluator::evaluate(expr, &mut ctx_a)
-                            .unwrap_or(Value::Null(NullType::Null));
-                        let val_b = ExpressionEvaluator::evaluate(expr, &mut ctx_b)
-                            .unwrap_or(Value::Null(NullType::Null));
-
-                        let cmp = compare_values(&val_a, &val_b);
-
-                        let final_cmp = match direction {
-                            SortDirection::Ascending => cmp,
-                            SortDirection::Descending => cmp.reverse(),
-                        };
-
-                        if final_cmp != std::cmp::Ordering::Equal {
-                            return final_cmp;
+                    for row in chunk.rows {
+                        memory_tracker.try_reserve_row(&row)?;
+                        if all_rows.len() < limit {
+                            all_rows.push(row);
+                        } else {
+                            if all_rows.len() == limit {
+                                all_rows.sort_by(|a, b| {
+                                    compare_rows_for_topn(
+                                        a, b, &col_names, sort_expressions, sort_directions,
+                                    )
+                                });
+                            }
+                            let cmp_last = compare_rows_for_topn(
+                                &row,
+                                all_rows.last().unwrap(),
+                                &col_names,
+                                sort_expressions,
+                                sort_directions,
+                            );
+                            if cmp_last == std::cmp::Ordering::Less {
+                                all_rows.pop();
+                                let pos = all_rows.binary_search_by(|existing| {
+                                    compare_rows_for_topn(
+                                        existing, &row, &col_names, sort_expressions, sort_directions,
+                                    )
+                                });
+                                let pos = match pos {
+                                    Ok(p) | Err(p) => p,
+                                };
+                                all_rows.insert(pos, row);
+                            }
                         }
                     }
-                    std::cmp::Ordering::Equal
-                });
+                }
 
-                all_rows.truncate(*n as usize);
-                *result_iter = Some(all_rows.drain(..).collect::<Vec<_>>().into_iter());
+                if all_rows.len() > 1 {
+                    all_rows.sort_by(|a, b| {
+                        compare_rows_for_topn(
+                            a, b, &col_names, sort_expressions, sort_directions,
+                        )
+                    });
+                }
+
+                all_rows.truncate(limit);
+                *result_iter = Some(std::mem::take(all_rows).into_iter());
             }
 
             if let Some(iter) = result_iter {
@@ -159,12 +207,13 @@ pub fn next_dedup(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>,
             input,
             seen_rows,
             opened,
+            ..
         } => {
             if !*opened {
                 return Err(QueryError::execution("Dedup not opened".to_string()));
             }
 
-            while let Some(chunk) = input.next()? {
+            while let Some(chunk) = input.advance()? {
                 let mut result_rows = vec![];
                 for row in chunk.rows {
                     let row_str = format!("{:?}", row);
@@ -234,12 +283,13 @@ pub fn next_assign(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
             input,
             assignments,
             opened,
+            ..
         } => {
             if !*opened {
                 return Err(QueryError::execution("Assign not opened".to_string()));
             }
 
-            if let Some(chunk) = input.next()? {
+            if let Some(chunk) = input.advance()? {
                 let col_names = chunk.col_names();
                 let mut result_rows = vec![];
                 for row in chunk.rows {
@@ -305,6 +355,7 @@ pub fn open_materialize(executor: &mut StreamingExecutor) -> Result<(), QueryErr
 }
 
 pub fn next_materialize(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    executor.ensure_not_cancelled()?;
     match executor {
         StreamingExecutor::Materialize {
             input,
@@ -313,6 +364,7 @@ pub fn next_materialize(executor: &mut StreamingExecutor) -> Result<Option<DataC
             materialized,
             opened,
             memory_tracker,
+            ..
         } => {
             if !*opened {
                 return Err(QueryError::execution("Materialize not opened".to_string()));
@@ -320,14 +372,14 @@ pub fn next_materialize(executor: &mut StreamingExecutor) -> Result<Option<DataC
 
             // Materialize all rows on first call
             if !*materialized {
-                while let Some(chunk) = input.next()? {
+                while let Some(chunk) = input.advance()? {
                     for row in &chunk.rows {
                         memory_tracker.try_reserve_row(row)?;
                     }
                     materialized_rows.extend(chunk.rows);
                 }
                 *materialized = true;
-                *result_iter = Some(materialized_rows.drain(..).collect::<Vec<_>>().into_iter());
+                *result_iter = Some(std::mem::take(materialized_rows).into_iter());
             }
 
             // Return cached rows
@@ -402,12 +454,13 @@ pub fn next_remove(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
             input,
             columns_to_remove,
             opened,
+            ..
         } => {
             if !*opened {
                 return Err(QueryError::execution("Remove not opened".to_string()));
             }
 
-            if let Some(chunk) = input.next()? {
+            if let Some(chunk) = input.advance()? {
                 let col_names = chunk.col_names();
                 // Filter out columns to remove by name
                 let mut new_col_names = vec![];
@@ -481,6 +534,7 @@ pub fn open_datacollect(executor: &mut StreamingExecutor) -> Result<(), QueryErr
 }
 
 pub fn next_datacollect(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    executor.ensure_not_cancelled()?;
     match executor {
         StreamingExecutor::DataCollect {
             input,
@@ -488,6 +542,7 @@ pub fn next_datacollect(executor: &mut StreamingExecutor) -> Result<Option<DataC
             emitted,
             opened,
             memory_tracker,
+            ..
         } => {
             if !*opened {
                 return Err(QueryError::execution("DataCollect not opened".to_string()));
@@ -498,7 +553,7 @@ pub fn next_datacollect(executor: &mut StreamingExecutor) -> Result<Option<DataC
             }
 
             // Collect all rows and emit as single chunk
-            while let Some(chunk) = input.next()? {
+            while let Some(chunk) = input.advance()? {
                 for row in &chunk.rows {
                     memory_tracker.try_reserve_row(row)?;
                 }
@@ -507,7 +562,7 @@ pub fn next_datacollect(executor: &mut StreamingExecutor) -> Result<Option<DataC
 
             if !all_rows.is_empty() {
                 *emitted = true;
-                let rows = all_rows.drain(..).collect::<Vec<_>>();
+                let rows = std::mem::take(all_rows);
                 return Ok(Some(DataChunk::from_rows(rows)));
             }
 
@@ -582,6 +637,7 @@ pub fn next_unwind(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
             current_row_index,
             current_unwind_index,
             opened,
+            ..
         } => {
             if !*opened {
                 return Err(QueryError::execution("Unwind not opened".to_string()));
@@ -589,7 +645,7 @@ pub fn next_unwind(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
 
             // Collect all rows on first call
             if all_rows.is_empty() {
-                while let Some(chunk) = input.next()? {
+                while let Some(chunk) = input.advance()? {
                     if col_index.is_none() && !chunk.rows.is_empty() {
                         // Compute column index from schema
                         let names = chunk.col_names();
@@ -699,8 +755,9 @@ pub fn close_unwind(executor: &mut StreamingExecutor) -> Result<(), QueryError> 
 
 pub fn open_apply(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::Apply { input, opened, .. } => {
+        StreamingExecutor::Apply { input, right, opened, .. } => {
             input.open()?;
+            right.open()?;
             *opened = true;
             Ok(())
         }
@@ -716,28 +773,31 @@ pub fn next_apply(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>,
             input,
             apply_expression,
             opened,
+            ..
         } => {
             if !*opened {
                 return Err(QueryError::execution("Apply not opened".to_string()));
             }
 
-            if let Some(chunk) = input.next()? {
+            if let Some(chunk) = input.advance()? {
                 let col_names = chunk.col_names();
                 let mut result_rows = Vec::new();
                 for row in chunk.rows {
                     let mut context = ValueRowContext::new(row.clone(), col_names.clone());
-                    match ExpressionEvaluator::evaluate(apply_expression, &mut context) {
-                        Ok(val) => {
-                            let mut new_row = row.clone();
-                            new_row.push(val);
-                            result_rows.push(new_row);
-                        }
-                        Err(_) => {}
+                    if let Ok(val) = ExpressionEvaluator::evaluate(apply_expression, &mut context) {
+                        let mut new_row = row.clone();
+                        new_row.push(val);
+                        result_rows.push(new_row);
                     }
                 }
 
                 if !result_rows.is_empty() {
-                    return Ok(Some(DataChunk::from_rows(result_rows)));
+                    let result_col_names = {
+                        let mut names = col_names.clone();
+                        names.push("apply_result".to_string());
+                        names
+                    };
+                    return Ok(Some(DataChunk::from_rows_with_col_names(result_rows, Some(result_col_names))));
                 }
             }
             Ok(None)
@@ -750,8 +810,9 @@ pub fn next_apply(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>,
 
 pub fn stop_apply(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::Apply { input, .. } => {
+        StreamingExecutor::Apply { input, right, .. } => {
             input.stop()?;
+            right.stop()?;
             Ok(())
         }
         _ => Err(QueryError::execution(
@@ -762,8 +823,9 @@ pub fn stop_apply(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
 
 pub fn close_apply(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::Apply { input, .. } => {
+        StreamingExecutor::Apply { input, right, .. } => {
             input.close()?;
+            right.close()?;
             Ok(())
         }
         _ => Err(QueryError::execution(
@@ -776,8 +838,9 @@ pub fn close_apply(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
 
 pub fn open_patternapply(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::PatternApply { input, opened, .. } => {
+        StreamingExecutor::PatternApply { input, right, opened, .. } => {
             input.open()?;
+            right.open()?;
             *opened = true;
             Ok(())
         }
@@ -798,13 +861,14 @@ pub fn next_patternapply(
             result_iter,
             opened,
             memory_tracker,
+            ..
         } => {
             if !*opened {
                 return Err(QueryError::execution("PatternApply not opened".to_string()));
             }
 
             if result_iter.is_none() {
-                while let Some(chunk) = input.next()? {
+                while let Some(chunk) = input.advance()? {
                     for row in &chunk.rows {
                         memory_tracker.try_reserve_row(row)?;
                     }
@@ -823,12 +887,13 @@ pub fn next_patternapply(
                         }
                     }
                 }
-                *result_iter = Some(all_rows.drain(..).collect::<Vec<_>>().into_iter());
+                *result_iter = Some(std::mem::take(all_rows).into_iter());
             }
 
             if let Some(iter) = result_iter {
                 if let Some(row) = iter.next() {
-                    return Ok(Some(DataChunk::from_rows(vec![row])));
+                    let col_names = vec!["pattern_result".to_string()];
+                    return Ok(Some(DataChunk::from_rows_with_col_names(vec![row], Some(col_names))));
                 }
             }
 
@@ -842,8 +907,9 @@ pub fn next_patternapply(
 
 pub fn stop_patternapply(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::PatternApply { input, .. } => {
+        StreamingExecutor::PatternApply { input, right, .. } => {
             input.stop()?;
+            right.stop()?;
             Ok(())
         }
         _ => Err(QueryError::execution(
@@ -856,11 +922,13 @@ pub fn close_patternapply(executor: &mut StreamingExecutor) -> Result<(), QueryE
     match executor {
         StreamingExecutor::PatternApply {
             input,
+            right,
             all_rows,
             result_iter,
             ..
         } => {
             input.close()?;
+            right.close()?;
             all_rows.clear();
             *result_iter = None;
             Ok(())
@@ -895,6 +963,7 @@ pub fn next_rolluapply(executor: &mut StreamingExecutor) -> Result<Option<DataCh
             result_iter,
             opened,
             memory_tracker,
+            ..
         } => {
             if !*opened {
                 return Err(QueryError::execution("RollUpApply not opened".to_string()));
@@ -902,7 +971,7 @@ pub fn next_rolluapply(executor: &mut StreamingExecutor) -> Result<Option<DataCh
 
             if result_iter.is_none() {
                 let mut col_names: Vec<String> = Vec::new();
-                while let Some(chunk) = input.next()? {
+                while let Some(chunk) = input.advance()? {
                     if col_names.is_empty() {
                         col_names = chunk.col_names();
                     }
@@ -921,7 +990,7 @@ pub fn next_rolluapply(executor: &mut StreamingExecutor) -> Result<Option<DataCh
                         all_rows.push(aggregated);
                     }
                 }
-                *result_iter = Some(all_rows.drain(..).collect::<Vec<_>>().into_iter());
+                *result_iter = Some(std::mem::take(all_rows).into_iter());
             }
 
             if let Some(iter) = result_iter {
@@ -1002,7 +1071,7 @@ pub fn next_minus(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>,
             // Buffer right side on first call
             if !*right_buffered {
                 right.open()?;
-                while let Some(chunk) = right.next()? {
+                while let Some(chunk) = right.advance()? {
                     for row in chunk.rows {
                         let row_str = format!("{:?}", row);
                         memory_tracker.try_reserve(row_str.len())?;
@@ -1014,7 +1083,7 @@ pub fn next_minus(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>,
             }
 
             // Return left rows not in right
-            while let Some(chunk) = left.next()? {
+            while let Some(chunk) = left.advance()? {
                 let mut result_rows = vec![];
                 for row in chunk.rows {
                     let row_str = format!("{:?}", row);
@@ -1095,6 +1164,7 @@ pub fn next_window(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
             result_iter,
             opened,
             memory_tracker,
+            ..
         } => {
             if !*opened {
                 return Err(QueryError::execution("Window not opened".to_string()));
@@ -1102,7 +1172,7 @@ pub fn next_window(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
 
             if result_iter.is_none() {
                 let mut col_names: Vec<String> = Vec::new();
-                while let Some(chunk) = input.next()? {
+                while let Some(chunk) = input.advance()? {
                     if col_names.is_empty() {
                         col_names = chunk.col_names();
                     }
@@ -1121,7 +1191,7 @@ pub fn next_window(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
                 // Partition rows
                 let mut partitions: Vec<Vec<Vec<Value>>> = Vec::new();
                 if partition_by_exprs.is_empty() {
-                    partitions.push(all_rows.drain(..).collect());
+                    partitions.push(std::mem::take(all_rows));
                 } else {
                     let mut partition_map: std::collections::HashMap<String, Vec<Vec<Value>>> =
                         std::collections::HashMap::new();

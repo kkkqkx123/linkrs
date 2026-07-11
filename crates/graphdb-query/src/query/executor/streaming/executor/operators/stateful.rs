@@ -3,7 +3,7 @@
 use crate::core::error::QueryError;
 use crate::core::value::NullType;
 use crate::core::Value;
-use crate::query::executor::base::{MemoryBudget, MemoryTracker};
+use crate::query::executor::base::MemoryBudget;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::helpers::*;
@@ -26,6 +26,7 @@ pub fn open_aggregate(executor: &mut StreamingExecutor) -> Result<(), QueryError
 }
 
 pub fn next_aggregate(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    executor.ensure_not_cancelled()?;
     match executor {
         StreamingExecutor::Aggregate {
             input,
@@ -40,7 +41,7 @@ pub fn next_aggregate(executor: &mut StreamingExecutor) -> Result<Option<DataChu
             if result_iter.is_none() {
                 // Collect all input rows and get column names from first chunk
                 let mut col_names: Vec<String> = vec![];
-                while let Some(chunk) = input.next()? {
+                while let Some(chunk) = input.advance()? {
                     if col_names.is_empty() {
                         col_names = chunk.col_names();
                     }
@@ -71,7 +72,7 @@ pub fn next_aggregate(executor: &mut StreamingExecutor) -> Result<Option<DataChu
 
                     group_map
                         .entry(group_key)
-                        .or_insert_with(Vec::new)
+                        .or_default()
                         .push(row);
                 }
 
@@ -163,6 +164,7 @@ pub fn open_sort(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
 }
 
 pub fn next_sort(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    executor.ensure_not_cancelled()?;
     match executor {
         StreamingExecutor::Sort {
             input,
@@ -176,7 +178,7 @@ pub fn next_sort(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, 
             if row_iter.is_none() {
                 // Collect all rows and get column names from first chunk
                 let mut col_names: Vec<String> = vec![];
-                while let Some(chunk) = input.next()? {
+                while let Some(chunk) = input.advance()? {
                     if col_names.is_empty() {
                         col_names = chunk.col_names();
                     }
@@ -221,7 +223,7 @@ pub fn next_sort(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, 
                     });
                 }
 
-                let all_rows_copy = all_rows.drain(..).collect::<Vec<_>>();
+                let all_rows_copy = std::mem::take(all_rows);
                 *row_iter = Some(all_rows_copy.into_iter());
             }
 
@@ -283,6 +285,7 @@ pub fn open_groupby(executor: &mut StreamingExecutor) -> Result<(), QueryError> 
 }
 
 pub fn next_groupby(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    executor.ensure_not_cancelled()?;
     match executor {
         StreamingExecutor::GroupBy {
             input,
@@ -294,7 +297,7 @@ pub fn next_groupby(executor: &mut StreamingExecutor) -> Result<Option<DataChunk
         } => {
             // Buffer all rows if not done yet
             if result_iter.is_none() {
-                while let Some(chunk) = input.next()? {
+                while let Some(chunk) = input.advance()? {
                     for row in &chunk.rows {
                         memory_tracker.try_reserve_row(row)?;
                     }
@@ -325,7 +328,7 @@ pub fn next_groupby(executor: &mut StreamingExecutor) -> Result<Option<DataChunk
                         key_parts.push(format!("{:?}", key_val));
                     }
                     let key = key_parts.join("|");
-                    groups.entry(key).or_insert_with(Vec::new).push(row.clone());
+                    groups.entry(key).or_default().push(row.clone());
                 }
 
                 // Return all rows from all groups (preserving all data)
@@ -382,7 +385,6 @@ pub fn close_groupby(executor: &mut StreamingExecutor) -> Result<(), QueryError>
 // ============ WindowFunction ============
 
 use crate::core::types::expr::Expression;
-use crate::query::executor::streaming::executor::helpers::*;
 use std::collections::BTreeMap;
 
 pub fn open_windowfunction(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
@@ -399,6 +401,7 @@ pub fn open_windowfunction(executor: &mut StreamingExecutor) -> Result<(), Query
 pub fn next_windowfunction(
     executor: &mut StreamingExecutor,
 ) -> Result<Option<DataChunk>, QueryError> {
+    executor.ensure_not_cancelled()?;
     match executor {
         StreamingExecutor::WindowFunction {
             input,
@@ -413,7 +416,7 @@ pub fn next_windowfunction(
         } => {
             if result_iter.is_none() {
                 let mut col_names: Vec<String> = vec![];
-                while let Some(chunk) = input.next()? {
+                while let Some(chunk) = input.advance()? {
                     if col_names.is_empty() {
                         col_names = chunk.col_names();
                     }
@@ -444,7 +447,7 @@ pub fn next_windowfunction(
                         }
                         partitions
                             .entry(partition_key)
-                            .or_insert_with(Vec::new)
+                            .or_default()
                             .push((idx, row.clone()));
                     }
 
@@ -591,13 +594,11 @@ fn compute_window_function(
         }
         "first_value" => partition_rows
             .first()
-            .map(|(_, r)| r.first().cloned())
-            .flatten()
+            .and_then(|(_, r)| r.first().cloned())
             .unwrap_or(Value::Null(NullType::Null)),
         "last_value" => partition_rows
             .last()
-            .map(|(_, r)| r.first().cloned())
-            .flatten()
+            .and_then(|(_, r)| r.first().cloned())
             .unwrap_or(Value::Null(NullType::Null)),
         "nth_value" => {
             let n = if !args.is_empty() {
@@ -667,7 +668,9 @@ mod tests {
     use crate::core::types::expr::Expression;
     use crate::core::types::operators::AggregateFunction;
     use crate::core::value::NullType;
-    use crate::query::executor::base::MemoryBudget;
+use crate::query::executor::base::MemoryBudget;
+#[cfg(test)]
+use crate::query::executor::base::MemoryTracker;
     use crate::core::Value;
 
     fn create_test_buffer(size: usize) -> Vec<Vec<Value>> {
@@ -691,6 +694,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut aggregate = StreamingExecutor::Aggregate {
@@ -705,10 +709,11 @@ mod tests {
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             opened: false,
             plan_node_id: 0,
+            runtime: None,
         };
 
         aggregate.open().unwrap();
-        let chunk = aggregate.next().unwrap();
+        let chunk = aggregate.advance().unwrap();
         assert!(chunk.is_some());
         // Should have at least one group
         assert!(chunk.unwrap().len() > 0);
@@ -724,6 +729,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut aggregate = StreamingExecutor::Aggregate {
@@ -738,10 +744,11 @@ mod tests {
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             opened: false,
             plan_node_id: 0,
+            runtime: None,
         };
 
         aggregate.open().unwrap();
-        let chunk = aggregate.next().unwrap();
+        let chunk = aggregate.advance().unwrap();
         assert!(chunk.is_some());
         let chunk = chunk.unwrap();
         // Without GROUP BY, should return 1 result row with count = 10
@@ -763,6 +770,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut sort = StreamingExecutor::Sort {
@@ -774,10 +782,11 @@ mod tests {
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             opened: false,
             plan_node_id: 0,
+            runtime: None,
         };
 
         sort.open().unwrap();
-        let chunk = sort.next().unwrap();
+        let chunk = sort.advance().unwrap();
         assert!(chunk.is_some());
         let chunk = chunk.unwrap();
         assert_eq!(chunk.len(), 3);
@@ -792,6 +801,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut sort = StreamingExecutor::Sort {
@@ -803,10 +813,11 @@ mod tests {
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             opened: false,
             plan_node_id: 0,
+            runtime: None,
         };
 
         sort.open().unwrap();
-        let chunk = sort.next().unwrap();
+        let chunk = sort.advance().unwrap();
         assert!(chunk.is_none());
         sort.close().unwrap();
     }
@@ -826,6 +837,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut groupby = StreamingExecutor::GroupBy {
@@ -836,10 +848,11 @@ mod tests {
             opened: false,
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
+            runtime: None,
         };
 
         groupby.open().unwrap();
-        let chunk = groupby.next().unwrap();
+        let chunk = groupby.advance().unwrap();
         assert!(chunk.is_some());
         let chunk = chunk.unwrap();
         // Should have 2 groups (for values 1 and 2)

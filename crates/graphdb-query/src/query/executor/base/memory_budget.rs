@@ -42,13 +42,17 @@ impl MemoryBudget {
     /// Returns `Ok(true)` if within budget, `Ok(false)` if
     /// already over budget but does not error (caller decides
     /// what to do), or an error if the budget would be exceeded.
+    ///
+    /// The error message includes the current usage, budget, and
+    /// request size so that callers can identify which operator
+    /// exceeded the budget.
     pub fn try_reserve(&self, bytes: usize) -> Result<bool, QueryError> {
         let prev = self.allocated.fetch_add(bytes, std::sync::atomic::Ordering::Relaxed);
         let total = prev + bytes;
         if total > self.max_bytes {
             Err(QueryError::execution(format!(
-                "Memory budget exceeded: {} > {} bytes",
-                total, self.max_bytes
+                "Memory budget exceeded: request {} bytes, total {} > budget {} bytes",
+                bytes, total, self.max_bytes
             )))
         } else {
             Ok(true)
@@ -124,7 +128,7 @@ impl MemoryTracker {
 
     /// Convenience: reserve memory for a single row estimate.
     pub fn try_reserve_row(&mut self, row: &[Value]) -> Result<(), QueryError> {
-        let mem = row.len() * std::mem::size_of::<Value>();
+        let mem = std::mem::size_of_val(row);
         self.try_reserve(mem)
     }
 
@@ -134,4 +138,21 @@ impl MemoryTracker {
         self.try_reserve(mem)
     }
 
+}
+
+/// Trait for operators that can spill intermediate data to disk.
+///
+/// Each blocking operator that may exceed the memory budget should implement
+/// this trait. The initial implementation may return `Err(QueryError::execution("spill not implemented"))`.
+pub trait Spillable {
+    /// Spill in-memory data to disk to free memory.
+    fn spill_to_disk(&mut self) -> Result<(), QueryError>;
+
+    /// Number of bytes currently spilled to disk.
+    fn spilled_size(&self) -> u64;
+
+    /// Whether this operator has spilled data to disk.
+    fn has_spilled(&self) -> bool {
+        self.spilled_size() > 0
+    }
 }

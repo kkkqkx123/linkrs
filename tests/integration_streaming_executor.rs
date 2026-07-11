@@ -6,7 +6,7 @@
 use graphdb::core::error::QueryError;
 use graphdb::core::types::expr::Expression;
 use graphdb::core::Value;
-use graphdb::query::executor::base::MemoryBudget;
+use graphdb::query::executor::base::{MemoryBudget, MemoryTracker};
 use graphdb::query::executor::streaming::executor::SortDirection;
 use graphdb::query::executor::streaming::StreamingExecutor;
 
@@ -24,6 +24,7 @@ fn create_scan_executor(rows: usize) -> StreamingExecutor {
         current_index: 0,
         col_names: vec![],
         plan_node_id: 0,
+        runtime: None,
     }
 }
 
@@ -66,6 +67,7 @@ fn test_scan_edges_lifecycle() {
         current_index: 0,
         col_names: vec![],
         plan_node_id: 0,
+        runtime: None,
     };
 
     assert!(verify_executor_lifecycle(&mut executor).is_ok());
@@ -82,6 +84,7 @@ fn test_filter_in_chain() {
         predicate: Expression::Literal(Value::Bool(true)),
         opened: false,
         plan_node_id: 0,
+        runtime: None,
     };
 
     // Verify open → next → close chain works
@@ -101,6 +104,7 @@ fn test_project_in_chain() {
         output_col_names: vec![],
         opened: false,
         plan_node_id: 0,
+        runtime: None,
     };
 
     project.open().unwrap();
@@ -127,6 +131,7 @@ fn test_limit_in_chain() {
         consumed: 0,
         opened: false,
         plan_node_id: 0,
+        runtime: None,
     };
 
     limit.open().unwrap();
@@ -157,6 +162,7 @@ fn test_distinct_in_chain() {
         current_index: 0,
         col_names: vec![],
         plan_node_id: 0,
+        runtime: None,
     });
 
     let mut distinct = StreamingExecutor::Distinct {
@@ -164,6 +170,8 @@ fn test_distinct_in_chain() {
         seen_rows: std::collections::HashSet::new(),
         opened: false,
         plan_node_id: 0,
+        memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+        runtime: None,
     };
 
     distinct.open().unwrap();
@@ -183,6 +191,7 @@ fn test_pipeline_scan_filter() {
         predicate: Expression::Literal(Value::Bool(true)),
         opened: false,
         plan_node_id: 0,
+        runtime: None,
     };
 
     // Verify entire chain can execute
@@ -205,6 +214,7 @@ fn test_pipeline_scan_project() {
         output_col_names: vec![],
         opened: false,
         plan_node_id: 0,
+        runtime: None,
     };
 
     pipeline.open().unwrap();
@@ -223,6 +233,7 @@ fn test_pipeline_scan_limit() {
         consumed: 0,
         opened: false,
         plan_node_id: 0,
+        runtime: None,
     };
 
     pipeline.open().unwrap();
@@ -243,6 +254,7 @@ fn test_pipeline_scan_filter_project() {
         predicate: Expression::Literal(Value::Bool(true)),
         opened: false,
         plan_node_id: 0,
+        runtime: None,
     });
 
     let mut pipeline = StreamingExecutor::Project {
@@ -251,6 +263,7 @@ fn test_pipeline_scan_filter_project() {
         output_col_names: vec![],
         opened: false,
         plan_node_id: 0,
+        runtime: None,
     };
 
     pipeline.open().unwrap();
@@ -271,6 +284,7 @@ fn test_pipeline_scan_filter_limit() {
         predicate: Expression::Literal(Value::Bool(true)),
         opened: false,
         plan_node_id: 0,
+        runtime: None,
     });
 
     let mut pipeline = StreamingExecutor::Limit {
@@ -279,6 +293,7 @@ fn test_pipeline_scan_filter_limit() {
         consumed: 0,
         opened: false,
         plan_node_id: 0,
+        runtime: None,
     };
 
     pipeline.open().unwrap();
@@ -310,6 +325,7 @@ fn test_sort_in_chain() {
         current_index: 0,
         col_names: vec![],
         plan_node_id: 0,
+        runtime: None,
     });
 
     let mut sort = StreamingExecutor::Sort {
@@ -318,9 +334,10 @@ fn test_sort_in_chain() {
         sort_directions: vec![SortDirection::Ascending],
         all_rows: vec![],
         row_iter: None,
-        memory_budget: MemoryBudget::default_budget(),
+        memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
         opened: false,
         plan_node_id: 0,
+        runtime: None,
     };
 
     sort.open().unwrap();
@@ -346,6 +363,7 @@ fn test_aggregate_in_chain() {
         current_index: 0,
         col_names: vec![],
         plan_node_id: 0,
+        runtime: None,
     });
 
     let mut agg = StreamingExecutor::Aggregate {
@@ -357,9 +375,10 @@ fn test_aggregate_in_chain() {
         )],
         all_rows: vec![],
         result_iter: None,
-        memory_budget: MemoryBudget::default_budget(),
+        memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
         opened: false,
         plan_node_id: 0,
+        runtime: None,
     };
 
     agg.open().unwrap();
@@ -382,6 +401,7 @@ fn test_hash_join_in_chain() {
         current_index: 0,
         col_names: vec![],
         plan_node_id: 0,
+        runtime: None,
     });
 
     let right = Box::new(StreamingExecutor::ScanVertices {
@@ -390,6 +410,7 @@ fn test_hash_join_in_chain() {
         current_index: 0,
         col_names: vec![],
         plan_node_id: 0,
+        runtime: None,
     });
 
     let mut join = StreamingExecutor::HashJoin {
@@ -401,10 +422,11 @@ fn test_hash_join_in_chain() {
         build_side_hash: std::collections::HashMap::new(),
         all_right_rows: vec![],
         left_consumed: false,
-        memory_budget: MemoryBudget::default_budget(),
+        memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
         opened: false,
         right_col_names: vec![],
         plan_node_id: 0,
+        runtime: None,
     };
 
     join.open().unwrap();
@@ -424,6 +446,7 @@ fn test_nested_loop_join_in_chain() {
         current_index: 0,
         col_names: vec![],
         plan_node_id: 0,
+        runtime: None,
     });
 
     let right = Box::new(StreamingExecutor::ScanVertices {
@@ -432,6 +455,7 @@ fn test_nested_loop_join_in_chain() {
         current_index: 0,
         col_names: vec![],
         plan_node_id: 0,
+        runtime: None,
     });
 
     let mut join = StreamingExecutor::NestedLoopJoin {
@@ -440,9 +464,10 @@ fn test_nested_loop_join_in_chain() {
         join_condition: None,
         build_side_tuples: vec![],
         left_consumed: false,
-        memory_budget: MemoryBudget::default_budget(),
+        memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
         opened: false,
         plan_node_id: 0,
+        runtime: None,
     };
 
     join.open().unwrap();
@@ -464,6 +489,7 @@ fn test_union_in_chain() {
         current_index: 0,
         col_names: vec![],
         plan_node_id: 0,
+        runtime: None,
     });
 
     let right = Box::new(StreamingExecutor::ScanVertices {
@@ -472,6 +498,7 @@ fn test_union_in_chain() {
         current_index: 0,
         col_names: vec![],
         plan_node_id: 0,
+        runtime: None,
     });
 
     let mut union = StreamingExecutor::Union {
@@ -481,6 +508,8 @@ fn test_union_in_chain() {
         left_consumed: false,
         opened: false,
         plan_node_id: 0,
+        memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+        runtime: None,
     };
 
     union.open().unwrap();
@@ -501,6 +530,7 @@ fn test_intersect_in_chain() {
         current_index: 0,
         col_names: vec![],
         plan_node_id: 0,
+        runtime: None,
     });
 
     let right = Box::new(StreamingExecutor::ScanVertices {
@@ -509,6 +539,7 @@ fn test_intersect_in_chain() {
         current_index: 0,
         col_names: vec![],
         plan_node_id: 0,
+        runtime: None,
     });
 
     let mut intersect = StreamingExecutor::Intersect {
@@ -520,6 +551,8 @@ fn test_intersect_in_chain() {
         right_buffered: false,
         opened: false,
         plan_node_id: 0,
+        memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+        runtime: None,
     };
 
     intersect.open().unwrap();
@@ -539,6 +572,7 @@ fn test_except_in_chain() {
         current_index: 0,
         col_names: vec![],
         plan_node_id: 0,
+        runtime: None,
     });
 
     let right = Box::new(StreamingExecutor::ScanVertices {
@@ -547,6 +581,7 @@ fn test_except_in_chain() {
         current_index: 0,
         col_names: vec![],
         plan_node_id: 0,
+        runtime: None,
     });
 
     let mut except = StreamingExecutor::Except {
@@ -556,6 +591,8 @@ fn test_except_in_chain() {
         right_buffered: false,
         opened: false,
         plan_node_id: 0,
+        memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+        runtime: None,
     };
 
     except.open().unwrap();
@@ -575,6 +612,7 @@ fn test_complex_pipeline_4step() {
         predicate: Expression::Literal(Value::Bool(true)),
         opened: false,
         plan_node_id: 0,
+        runtime: None,
     });
     let project = Box::new(StreamingExecutor::Project {
         input: filter,
@@ -582,6 +620,7 @@ fn test_complex_pipeline_4step() {
         output_col_names: vec![],
         opened: false,
         plan_node_id: 0,
+        runtime: None,
     });
     let mut limit = StreamingExecutor::Limit {
         input: project,
@@ -589,6 +628,7 @@ fn test_complex_pipeline_4step() {
         consumed: 0,
         opened: false,
         plan_node_id: 0,
+        runtime: None,
     };
 
     limit.open().unwrap();
@@ -606,6 +646,7 @@ fn test_union_of_filtered_scans() {
         predicate: Expression::Literal(Value::Bool(true)),
         opened: false,
         plan_node_id: 0,
+        runtime: None,
     });
 
     let right_scan = Box::new(create_scan_executor(10));
@@ -614,6 +655,7 @@ fn test_union_of_filtered_scans() {
         predicate: Expression::Literal(Value::Bool(true)),
         opened: false,
         plan_node_id: 0,
+        runtime: None,
     });
 
     let mut union = StreamingExecutor::Union {
@@ -623,6 +665,8 @@ fn test_union_of_filtered_scans() {
         left_consumed: false,
         opened: false,
         plan_node_id: 0,
+        memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+        runtime: None,
     };
 
     union.open().unwrap();
@@ -645,6 +689,7 @@ fn test_filter_with_empty_input() {
         current_index: 0,
         col_names: vec![],
         plan_node_id: 0,
+        runtime: None,
     });
 
     let mut filter = StreamingExecutor::Filter {
@@ -652,6 +697,7 @@ fn test_filter_with_empty_input() {
         predicate: Expression::Literal(Value::Bool(true)),
         opened: false,
         plan_node_id: 0,
+        runtime: None,
     };
 
     filter.open().unwrap();
@@ -670,6 +716,7 @@ fn test_limit_zero() {
         consumed: 0,
         opened: false,
         plan_node_id: 0,
+        runtime: None,
     };
 
     limit.open().unwrap();
@@ -693,6 +740,7 @@ fn test_distinct_all_same() {
         current_index: 0,
         col_names: vec![],
         plan_node_id: 0,
+        runtime: None,
     });
 
     let mut distinct = StreamingExecutor::Distinct {
@@ -700,6 +748,8 @@ fn test_distinct_all_same() {
         seen_rows: std::collections::HashSet::new(),
         opened: false,
         plan_node_id: 0,
+        memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+        runtime: None,
     };
 
     distinct.open().unwrap();

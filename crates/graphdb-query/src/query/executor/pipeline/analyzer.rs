@@ -311,6 +311,12 @@ impl PipelineAnalyzer {
             | PlanNodeEnum::FulltextSearch(_)
             | PlanNodeEnum::FulltextLookup(_)
             | PlanNodeEnum::MatchFulltext(_) => vec![],
+            #[cfg(feature = "qdrant")]
+            PlanNodeEnum::VectorSearch(_) => vec![],
+            #[cfg(feature = "qdrant")]
+            PlanNodeEnum::VectorLookup(_) => vec![],
+            #[cfg(feature = "qdrant")]
+            PlanNodeEnum::VectorMatch(_) => vec![],
         }
     }
 

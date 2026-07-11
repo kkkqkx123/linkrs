@@ -20,13 +20,8 @@ pub fn vertex_to_row(vertex: &Vertex) -> Vec<Value> {
     }
 
     // Add first 3 properties (simplified)
-    let mut prop_count = 0;
-    for (_key, value) in &vertex.properties {
-        if prop_count >= 3 {
-            break;
-        }
+    for value in vertex.properties.values().take(3) {
         row.push(value.clone());
-        prop_count += 1;
     }
 
     // Ensure we have at least 5 columns for compatibility
@@ -47,13 +42,8 @@ pub fn edge_to_row(edge: &Edge) -> Vec<Value> {
     ];
 
     // Add first 2 properties (simplified)
-    let mut prop_count = 0;
-    for (_key, value) in &edge.props {
-        if prop_count >= 2 {
-            break;
-        }
+    for value in edge.props.values().take(2) {
         row.push(value.clone());
-        prop_count += 1;
     }
 
     // Ensure we have at least 5 columns for compatibility

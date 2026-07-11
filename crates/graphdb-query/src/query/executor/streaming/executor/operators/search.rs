@@ -7,6 +7,7 @@
 use super::super::super::chunk::DataChunk;
 use super::super::StreamingExecutor;
 use crate::core::error::QueryError;
+#[cfg(any(feature = "fulltext-search", feature = "qdrant"))]
 use crate::core::Value;
 
 // ============ FulltextSearch ============
@@ -39,6 +40,9 @@ pub fn next_fulltext_search(
             fulltext_manager,
             ..
         } => {
+            #[cfg(not(feature = "fulltext-search"))]
+            let _ = (&search_query, &space_id, &tag_name, &field_name);
+
             if !*opened {
                 return Err(QueryError::execution(
                     "FulltextSearch not opened".to_string(),
@@ -69,7 +73,7 @@ pub fn next_fulltext_search(
             }
 
             // Fallback: if no fulltext manager, try to delegate to input
-            if let Some(chunk) = input.next()? {
+            if let Some(chunk) = input.advance()? {
                 return Ok(Some(chunk));
             }
             Ok(None)
@@ -140,6 +144,9 @@ pub fn next_fulltext_lookup(
             fulltext_manager,
             ..
         } => {
+            #[cfg(not(feature = "fulltext-search"))]
+            let _ = (&search_query, &space_id, &tag_name, &field_name);
+
             if !*opened {
                 return Err(QueryError::execution(
                     "FulltextLookup not opened".to_string(),
@@ -169,7 +176,7 @@ pub fn next_fulltext_lookup(
                 }
             }
 
-            if let Some(chunk) = input.next()? {
+            if let Some(chunk) = input.advance()? {
                 return Ok(Some(chunk));
             }
             Ok(None)
@@ -242,6 +249,9 @@ pub fn next_match_fulltext(
             fulltext_manager,
             ..
         } => {
+            #[cfg(not(feature = "fulltext-search"))]
+            let _ = (&match_expr, &tag_name, &field_name);
+
             if !*opened {
                 return Err(QueryError::execution(
                     "MatchFulltext not opened".to_string(),
@@ -271,7 +281,7 @@ pub fn next_match_fulltext(
             }
 
             // Fallback: pass-through input
-            if let Some(chunk) = input.next()? {
+            if let Some(chunk) = input.advance()? {
                 *opened = false;
                 return Ok(Some(chunk));
             }
@@ -345,6 +355,9 @@ pub fn next_vector_search(
             vector_coordinator,
             ..
         } => {
+            #[cfg(not(feature = "qdrant"))]
+            let _ = (&space_id, &tag_name, &field_name, &query_vector, &top_k);
+
             if !*opened {
                 return Err(QueryError::execution("VectorSearch not opened".to_string()));
             }
@@ -380,7 +393,7 @@ pub fn next_vector_search(
                 }
             }
 
-            if let Some(chunk) = input.next()? {
+            if let Some(chunk) = input.advance()? {
                 *opened = false;
                 return Ok(Some(chunk));
             }
@@ -446,7 +459,7 @@ pub fn next_vector_lookup(
             if !*opened {
                 return Err(QueryError::execution("VectorLookup not opened".to_string()));
             }
-            if let Some(chunk) = input.next()? {
+            if let Some(chunk) = input.advance()? {
                 return Ok(Some(chunk));
             }
             Ok(None)
@@ -518,6 +531,9 @@ pub fn next_vector_match(
             vector_coordinator,
             ..
         } => {
+            #[cfg(not(feature = "qdrant"))]
+            let _ = (&space_id, &tag_name, &field_name, &query_vector, &threshold);
+
             if !*opened {
                 return Err(QueryError::execution("VectorMatch not opened".to_string()));
             }
@@ -553,7 +569,7 @@ pub fn next_vector_match(
                 }
             }
 
-            if let Some(chunk) = input.next()? {
+            if let Some(chunk) = input.advance()? {
                 *opened = false;
                 return Ok(Some(chunk));
             }

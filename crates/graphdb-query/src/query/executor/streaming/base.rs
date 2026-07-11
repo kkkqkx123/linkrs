@@ -4,18 +4,15 @@
 
 /// Execution mode selector
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum ExecutionMode {
     /// Materialized execution (current system, push-based)
+    #[default]
     Materialized,
     /// Streaming execution (new system, pull-based)
     Streaming,
 }
 
-impl Default for ExecutionMode {
-    fn default() -> Self {
-        ExecutionMode::Materialized
-    }
-}
 
 impl ExecutionMode {
     pub fn is_materialized(&self) -> bool {

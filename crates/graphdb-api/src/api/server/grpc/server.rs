@@ -8,6 +8,7 @@ use tonic::{transport::Server, Request, Response, Status};
 
 use crate::api::server::http::AppState;
 use crate::config::Config;
+use crate::query::executor::streaming::StreamingQueryResult;
 use crate::storage::{
     StorageClient, StorageSchemaContextOps, StorageSyncContextOps, StorageTransactionContextOps,
 };
@@ -193,10 +194,78 @@ impl<
 
     async fn execute_query_stream(
         &self,
-        _request: Request<ExecuteQueryRequest>,
+        request: Request<ExecuteQueryRequest>,
     ) -> Result<Response<Self::ExecuteQueryStreamStream>, Status> {
-        // TODO: Implement streaming query execution
-        unimplemented!("Streaming query not yet implemented")
+        let inner = request.into_inner();
+        let session_id: i64 = inner.session_id.parse().unwrap_or(0);
+        let query = inner.query;
+
+        let graph_service = self.app_state.server.get_graph_service();
+
+        let stream_result = graph_service
+            .execute_stream(session_id, &query)
+            .await
+            .map_err(|e| Status::internal(e))?;
+
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<QueryResultChunk, Status>>(16);
+
+        tokio::spawn(async move {
+            // Spawn blocking task to pull chunks synchronously.
+            let tx_pull = tx.clone();
+            let pull_handle = tokio::task::spawn_blocking(move || {
+                let mut chunk_index = 0u64;
+                loop {
+                    match stream_result.next_chunk() {
+                        Ok(Some(chunk)) => {
+                            let proto_rows: Vec<super::proto::Row> = chunk
+                                .rows
+                                .into_iter()
+                                .map(|row| {
+                                    let values: Vec<super::proto::Value> = row
+                                        .into_iter()
+                                        .map(value_to_proto_value)
+                                        .collect();
+                                    super::proto::Row { values }
+                                })
+                                .collect();
+
+                            let proto_chunk = super::proto::QueryResultChunk {
+                                rows: proto_rows,
+                                is_last: false,
+                            };
+
+                            if tx_pull
+                                .blocking_send(Ok(proto_chunk))
+                                .is_err()
+                            {
+                                return;
+                            }
+                            chunk_index += 1;
+                        }
+                        Ok(None) => {
+                            // Send final empty chunk with is_last=true
+                            let _ = tx_pull.blocking_send(Ok(super::proto::QueryResultChunk {
+                                rows: vec![],
+                                is_last: true,
+                            }));
+                            return;
+                        }
+                        Err(e) => {
+                            let _ = tx_pull
+                                .blocking_send(Err(Status::internal(e.to_string())));
+                            return;
+                        }
+                    }
+                }
+            });
+
+            let _ = pull_handle.await;
+        });
+
+        let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+        Ok(Response::new(
+            Box::pin(stream) as Self::ExecuteQueryStreamStream
+        ))
     }
 
     async fn begin_transaction(
@@ -726,6 +795,34 @@ pub async fn run_server_with_grpc_service<
         .await?;
 
     Ok(())
+}
+
+/// Convert a core [`Value`] to a protobuf [`super::proto::Value`].
+fn value_to_proto_value(value: crate::core::Value) -> super::proto::Value {
+    use super::proto::value::Value as ProtoValue;
+    use super::proto::Value as ProtoValueMsg;
+
+    let proto_val = match value {
+        crate::core::Value::Empty | crate::core::Value::Null(_) => ProtoValue::NullValue(0),
+        crate::core::Value::Bool(b) => ProtoValue::BoolValue(b),
+        crate::core::Value::SmallInt(i) => ProtoValue::IntValue(i as i64),
+        crate::core::Value::Int(i) => ProtoValue::IntValue(i as i64),
+        crate::core::Value::BigInt(i) => ProtoValue::IntValue(i),
+        crate::core::Value::Float(f) => ProtoValue::FloatValue(f),
+        crate::core::Value::Double(d) => ProtoValue::DoubleValue(d),
+        crate::core::Value::Decimal128(d) => ProtoValue::StringValue(d.to_string()),
+        crate::core::Value::String(s) => ProtoValue::StringValue(s),
+        crate::core::Value::FixedString { data, .. } => ProtoValue::StringValue(data),
+        crate::core::Value::Date(d) => ProtoValue::StringValue(d.to_string()),
+        crate::core::Value::Time(t) => ProtoValue::StringValue(t.to_string()),
+        crate::core::Value::DateTime(dt) => ProtoValue::StringValue(dt.to_string()),
+        crate::core::Value::Blob(b) => ProtoValue::BytesValue(b),
+        other => ProtoValue::StringValue(format!("{:?}", other)),
+    };
+
+    ProtoValueMsg {
+        value: Some(proto_val),
+    }
 }
 
 #[cfg(test)]

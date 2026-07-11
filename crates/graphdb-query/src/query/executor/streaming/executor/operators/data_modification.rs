@@ -9,7 +9,7 @@ use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::executor::context::ValueRowContext;
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::storage::{StorageClient, StorageWriter};
+use crate::storage::StorageWriter;
 
 fn make_modify_result(op: &str, count: u64) -> DataChunk {
     let schema = Arc::new(Schema::new(vec![
@@ -73,7 +73,7 @@ pub fn next_insertvertices(
                 ));
             }
 
-            if let Some(chunk) = input.next()? {
+            if let Some(chunk) = input.advance()? {
                 if let Some(storage_lock) = storage {
                     let mut writer = storage_lock.write();
                     let col_names = chunk.col_names();
@@ -186,7 +186,7 @@ pub fn next_insertedges(executor: &mut StreamingExecutor) -> Result<Option<DataC
                 return Err(QueryError::execution("InsertEdges not opened".to_string()));
             }
 
-            if let Some(chunk) = input.next()? {
+            if let Some(chunk) = input.advance()? {
                 if let Some(storage_lock) = storage {
                     let mut writer = storage_lock.write();
                     let col_names = chunk.col_names();
@@ -293,7 +293,7 @@ pub fn next_updatevertices(
                 ));
             }
 
-            if let Some(chunk) = input.next()? {
+            if let Some(chunk) = input.advance()? {
                 if let Some(storage_lock) = storage {
                     let mut writer = storage_lock.write();
                     let col_names = chunk.col_names();
@@ -394,7 +394,7 @@ pub fn next_updateedges(executor: &mut StreamingExecutor) -> Result<Option<DataC
                 return Err(QueryError::execution("UpdateEdges not opened".to_string()));
             }
 
-            if let Some(chunk) = input.next()? {
+            if let Some(chunk) = input.advance()? {
                 if let Some(storage_lock) = storage {
                     let mut writer = storage_lock.write();
                     let col_names = chunk.col_names();
@@ -505,13 +505,13 @@ pub fn next_deletevertices(
                 ));
             }
 
-            if let Some(chunk) = input.next()? {
+            if let Some(chunk) = input.advance()? {
                 if let Some(storage_lock) = storage {
                     let mut writer = storage_lock.write();
                     let col_names = chunk.col_names();
 
                     for row in &chunk.rows {
-                        let mut context = ValueRowContext::new(row.clone(), col_names.clone());
+                        let context = ValueRowContext::new(row.clone(), col_names.clone());
                         if let Some(vid_val) = context.get_variable(vertex_id_col) {
                             if let Ok(vid) = VertexId::try_from(&vid_val) {
                                 StorageWriter::delete_vertex(&mut *writer, space_name, &vid)
@@ -596,13 +596,13 @@ pub fn next_deleteedges(executor: &mut StreamingExecutor) -> Result<Option<DataC
                 return Err(QueryError::execution("DeleteEdges not opened".to_string()));
             }
 
-            if let Some(chunk) = input.next()? {
+            if let Some(chunk) = input.advance()? {
                 if let Some(storage_lock) = storage {
                     let mut writer = storage_lock.write();
                     let col_names = chunk.col_names();
 
                     for row in &chunk.rows {
-                        let mut context = ValueRowContext::new(row.clone(), col_names.clone());
+                        let context = ValueRowContext::new(row.clone(), col_names.clone());
                         let src_val = context
                             .get_variable(src_col)
                             .unwrap_or(crate::core::Value::Null(crate::core::NullType::Null));
@@ -697,13 +697,13 @@ pub fn next_pipedeletevertices(
                 ));
             }
 
-            if let Some(chunk) = input.next()? {
+            if let Some(chunk) = input.advance()? {
                 if let Some(storage_lock) = storage {
                     let mut writer = storage_lock.write();
                     let col_names = chunk.col_names();
 
                     for row in &chunk.rows {
-                        let mut context = ValueRowContext::new(row.clone(), col_names.clone());
+                        let context = ValueRowContext::new(row.clone(), col_names.clone());
                         if let Some(vid_val) = context.get_variable(vertex_id_col) {
                             if let Ok(vid) = VertexId::try_from(&vid_val) {
                                 StorageWriter::delete_vertex(&mut *writer, space_name, &vid)
@@ -789,13 +789,13 @@ pub fn next_pipedeleteedges(
                 ));
             }
 
-            if let Some(chunk) = input.next()? {
+            if let Some(chunk) = input.advance()? {
                 if let Some(storage_lock) = storage {
                     let mut writer = storage_lock.write();
                     let col_names = chunk.col_names();
 
                     for row in &chunk.rows {
-                        let mut context = ValueRowContext::new(row.clone(), col_names.clone());
+                        let context = ValueRowContext::new(row.clone(), col_names.clone());
                         let src_val = context
                             .get_variable(src_col)
                             .unwrap_or(crate::core::Value::Null(crate::core::NullType::Null));

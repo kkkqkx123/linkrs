@@ -31,7 +31,7 @@ use crate::core::{
 };
 use crate::query::executor::base::{BaseExecutor, ExecutionResult, Executor};
 use crate::query::executor::explain::{ExplainExecutor, ExplainMode, ProfileExecutor};
-use crate::query::executor::streaming::StreamingQueryExecutor;
+use crate::query::executor::streaming::{StreamingQueryExecutor, StreamingQueryResult};
 use crate::query::metadata::MetadataContext;
 use crate::query::optimizer::OptimizerEngine;
 use crate::query::parser::ast::stmt::{ExplainStmt, ProfileStmt};
@@ -321,6 +321,46 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
 
     ///
     /// This method allows the API layer to pass the complete session information to the query layer.
+    /// Execute a query and return a [`StreamingQueryResult`] for chunk-at-a-time consumption.
+    ///
+    /// This is the streaming equivalent of [`execute_query_with_request`].
+    /// Parse → validate → plan → optimize → execute_plan_to_stream.
+    pub fn execute_query_stream_with_request(
+        &mut self,
+        query_text: &str,
+        rctx: Arc<crate::query::QueryRequestContext>,
+        space_info: Option<crate::core::types::SpaceInfo>,
+    ) -> DBResult<StreamingQueryResult> {
+        let mut query_context = QueryContext::new(rctx);
+        if let Some(ref space) = space_info {
+            query_context.set_space_info(space.clone());
+        }
+        let query_context = Arc::new(query_context);
+
+        let parser_result = self.parse_into_context(query_text)?;
+        let validation_info =
+            self.validate_query_with_context(parser_result.ast.clone(), query_context.clone())?;
+        let validated = ValidatedStatement::new(parser_result.ast.clone(), validation_info);
+
+        // Route EXPLAIN/PROFILE to materialized path
+        match validated.ast.stmt() {
+            crate::query::parser::ast::Stmt::Explain(explain_stmt) => {
+                let result = self.execute_explain(explain_stmt, query_context)?;
+                // Wrap materialized result into a one-chunk stream
+                return Ok(StreamingQueryResult::from_execution_result(result));
+            }
+            crate::query::parser::ast::Stmt::Profile(profile_stmt) => {
+                let result = self.execute_profile(profile_stmt, query_context)?;
+                return Ok(StreamingQueryResult::from_execution_result(result));
+            }
+            _ => {}
+        }
+
+        let execution_plan = self.generate_execution_plan(query_context.clone(), &validated)?;
+        let optimized_plan = self.optimize_execution_plan(execution_plan)?;
+        self.execute_plan_to_stream(query_context, optimized_plan)
+    }
+
     pub fn execute_query_with_request(
         &mut self,
         query_text: &str,
@@ -1164,6 +1204,69 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
                 e
             )))
         })
+    }
+
+    /// Execute a plan and return a [`StreamingQueryResult`] for chunk-at-a-time consumption.
+    ///
+    /// Unlike [`execute_plan`] which materialises everything into an `ExecutionResult`,
+    /// this method returns a thread-safe streaming handle that lets the caller pull
+    /// chunks one at a time.  Useful for SSE / gRPC streaming endpoints.
+    pub fn execute_plan_to_stream(
+        &mut self,
+        query_context: Arc<QueryContext>,
+        plan: crate::query::planning::plan::ExecutionPlan,
+    ) -> DBResult<StreamingQueryResult> {
+        let exec_mode = plan.execution_mode;
+        log::debug!(
+            "Executing with StreamingExecutor (stream), mode: {} (reason: {})",
+            exec_mode.as_str(),
+            plan.execution_mode_reason
+        );
+
+        let root_node = plan.root.as_ref().ok_or_else(|| {
+            DBError::from(QueryError::execution("Empty execution plan".to_string()))
+        })?;
+
+        let mut executor = StreamingQueryExecutor::new();
+
+        let mut context = crate::query::executor::base::ExecutionContext::default();
+        if let Some(ref storage) = self.storage {
+            let dyn_storage: Arc<RwLock<dyn StorageClient>> = storage.clone();
+            context.storage = Some(dyn_storage);
+        }
+        #[cfg(feature = "fulltext-search")]
+        {
+            context.fulltext_manager = self.fulltext_manager.clone();
+        }
+        #[cfg(feature = "qdrant")]
+        {
+            context.vector_coordinator = self.vector_coordinator.clone();
+        }
+        if let Some(ref space_name) = query_context.space_name() {
+            context.space_name = Some(space_name.clone());
+        }
+
+        executor.from_plan_node(root_node, &context).map_err(|e| {
+            DBError::from(QueryError::execution(format!(
+                "Failed to create streaming executor: {}",
+                e
+            )))
+        })?;
+
+        let runtime = executor.runtime().cloned().ok_or_else(|| {
+            DBError::from(QueryError::execution(
+                "No execution runtime available".to_string(),
+            ))
+        })?;
+
+        let stream = executor.into_stream().map_err(|e| {
+            DBError::from(QueryError::execution(format!(
+                "Failed to create result stream: {}",
+                e
+            )))
+        })?;
+
+        Ok(StreamingQueryResult::new(stream, runtime))
     }
 
     /// Execute EXPLAIN statement

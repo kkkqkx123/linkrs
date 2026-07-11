@@ -278,23 +278,24 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         };
 
         executor.open().unwrap();
 
-        let chunk1 = executor.next().unwrap();
+        let chunk1 = executor.advance().unwrap();
         assert!(chunk1.is_some());
         assert_eq!(chunk1.unwrap().len(), 1024);
 
-        let chunk2 = executor.next().unwrap();
+        let chunk2 = executor.advance().unwrap();
         assert!(chunk2.is_some());
         assert_eq!(chunk2.unwrap().len(), 1024);
 
-        let chunk3 = executor.next().unwrap();
+        let chunk3 = executor.advance().unwrap();
         assert!(chunk3.is_some());
         assert_eq!(chunk3.unwrap().len(), 52);
 
-        let chunk4 = executor.next().unwrap();
+        let chunk4 = executor.advance().unwrap();
         assert!(chunk4.is_none());
 
         executor.close().unwrap();
@@ -308,10 +309,11 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         };
 
         executor.open().unwrap();
-        let chunk = executor.next().unwrap();
+        let chunk = executor.advance().unwrap();
         assert!(chunk.is_none());
         executor.close().unwrap();
     }
@@ -325,14 +327,15 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         };
 
         executor.open().unwrap();
-        let chunk = executor.next().unwrap();
+        let chunk = executor.advance().unwrap();
         assert!(chunk.is_some());
         assert_eq!(chunk.unwrap().len(), 500);
 
-        let chunk2 = executor.next().unwrap();
+        let chunk2 = executor.advance().unwrap();
         assert!(chunk2.is_none());
 
         executor.close().unwrap();

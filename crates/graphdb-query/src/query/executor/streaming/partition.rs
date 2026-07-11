@@ -44,7 +44,7 @@ impl PartitionView {
     /// Split a range into N partitions
     pub fn from_range(range: Range<u32>, partition_count: usize) -> Self {
         let total = range.end - range.start;
-        let per_partition = (total + partition_count as u32 - 1) / partition_count as u32;
+        let per_partition = total.div_ceil(partition_count as u32);
 
         let mut ranges = Vec::new();
         for i in 0..partition_count {

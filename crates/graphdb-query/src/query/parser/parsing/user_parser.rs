@@ -386,7 +386,6 @@ impl Default for UserParser {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::query::parser::Parser;
 
     #[test]

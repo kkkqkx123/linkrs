@@ -1,4 +1,8 @@
 //! Streaming Results HTTP Processor
+//!
+//! Uses [`StreamingQueryResult`] to pull result chunks incrementally,
+//! sending each row as an SSE event without pre-materialising the full
+//! result set.
 
 use axum::{
     extract::{Json, State},
@@ -9,7 +13,6 @@ use serde_json::json;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::api::server::http::{error::HttpError, state::AppState};
-use crate::query::executor::ExecutionResult;
 use crate::storage::{
     StorageClient, StorageSchemaContextOps, StorageSyncContextOps, StorageTransactionContextOps,
 };
@@ -67,14 +70,13 @@ pub async fn execute_stream<
     tokio::spawn(async move {
         let start_time = std::time::Instant::now();
         let graph_service = server.get_graph_service();
-        let request = request.clone();
 
-        // perform a search
-        let exec_result = match graph_service
-            .execute(request.session_id, &request.query)
+        // Get a streaming result handle (chunk-at-a-time).
+        let stream_result = match graph_service
+            .execute_stream(request.session_id, &request.query)
             .await
         {
-            Ok(result) => result,
+            Ok(stream) => stream,
             Err(e) => {
                 let error_msg = json!({
                     "error": true,
@@ -91,28 +93,55 @@ pub async fn execute_stream<
             }
         };
 
-        // Convert execution results to streaming data
-        let (rows, columns) = execution_result_to_stream_data(exec_result);
-        let total_rows = rows.len();
+        // Spawn a blocking task to pull chunks synchronously
+        // and send rows through the channel.
+        let tx_pull = tx.clone();
+        let pull_handle = tokio::task::spawn_blocking(move || {
+            let mut row_index: usize = 0;
+            loop {
+                match stream_result.next_chunk() {
+                    Ok(Some(chunk)) => {
+                        let columns = chunk.col_names();
+                        for row in chunk.rows {
+                            let obj: serde_json::Map<String, serde_json::Value> = row
+                                .into_iter()
+                                .enumerate()
+                                .map(|(i, v)| {
+                                    let col_name =
+                                        columns.get(i).cloned().unwrap_or_default();
+                                    (col_name, value_to_json(v))
+                                })
+                                .collect();
+                            let item = StreamDataItem {
+                                row: serde_json::Value::Object(obj),
+                                index: row_index,
+                            };
+                            row_index += 1;
 
-        // Send data in batches
-        for (index, row) in rows.into_iter().enumerate() {
-            let item = StreamDataItem { row, index };
-
-            if let Ok(data) = serde_json::to_string(&item) {
-                if tx.send(Ok(Event::default().data(data))).await.is_err() {
-                    // Client Disconnect
-                    return;
+                            if let Ok(data) = serde_json::to_string(&item) {
+                                if tx_pull
+                                    .blocking_send(Ok(Event::default().data(data)))
+                                    .is_err()
+                                {
+                                    return row_index;
+                                }
+                            }
+                        }
+                    }
+                    Ok(None) => return row_index,
+                    Err(_) => return row_index,
                 }
             }
+        });
 
-            // Sleep briefly after each batch to avoid blocking
-            if (index + 1) % batch_size == 0 {
-                tokio::task::yield_now().await;
-            }
-        }
+        // Wait for the pull task to finish.
+        let total_rows = match pull_handle.await {
+            Ok(count) => count,
+            Err(_) => 0,
+        };
 
         // Send metadata
+        let columns: Vec<String> = Vec::new(); // columns are not tracked across chunks in this simple version
         let metadata = StreamMetadata {
             rows_returned: total_rows,
             execution_time_ms: start_time.elapsed().as_millis() as u64,
@@ -134,37 +163,6 @@ pub async fn execute_stream<
             .interval(std::time::Duration::from_secs(10))
             .text("keepalive"),
     ))
-}
-
-/// Converting ExecutionResult to Streaming Data
-fn execution_result_to_stream_data(
-    result: ExecutionResult,
-) -> (Vec<serde_json::Value>, Vec<String>) {
-    match result {
-        ExecutionResult::DataSet(dataset) => {
-            let columns = dataset.col_names.clone();
-            let rows: Vec<serde_json::Value> = dataset
-                .rows
-                .into_iter()
-                .map(|row| {
-                    let obj: serde_json::Map<String, serde_json::Value> = row
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, v)| {
-                            let col_name = columns.get(i).cloned().unwrap_or_default();
-                            (col_name, value_to_json(v))
-                        })
-                        .collect();
-                    serde_json::Value::Object(obj)
-                })
-                .collect();
-            (rows, columns)
-        }
-        ExecutionResult::Empty | ExecutionResult::Success | ExecutionResult::SpaceSwitched(_) => {
-            (vec![], vec![])
-        }
-        ExecutionResult::Error(msg) => (vec![json!({"error": msg})], vec!["error".to_string()]),
-    }
 }
 
 /// Convert Core Value to serde_json::Value
@@ -207,7 +205,6 @@ fn value_to_json(value: crate::core::Value) -> serde_json::Value {
         }
         crate::core::Value::Geography(g) => serde_json::json!(g),
         crate::core::Value::Vector(v) => {
-            // Convert vector to JSON array of f64 values
             let arr = v
                 .to_dense()
                 .iter()
@@ -219,13 +216,9 @@ fn value_to_json(value: crate::core::Value) -> serde_json::Value {
         }
         crate::core::Value::DataSet(ds) => serde_json::json!(ds),
         crate::core::Value::Json(j) => {
-            // Parse JSON text and convert to serde_json::Value
             serde_json::from_str(j.as_str()).unwrap_or(serde_json::Value::Null)
         }
-        crate::core::Value::JsonB(j) => {
-            // JSONB is already parsed, convert back to serde_json::Value
-            j.as_value().clone()
-        }
+        crate::core::Value::JsonB(j) => j.as_value().clone(),
         crate::core::Value::Uuid(u) => serde_json::Value::String(u.to_hyphenated_string()),
         crate::core::Value::Interval(i) => serde_json::Value::String(i.to_postgresql()),
     }

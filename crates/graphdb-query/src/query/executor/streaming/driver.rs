@@ -1,17 +1,12 @@
 //! ExecutorDriver: wraps operator open/next/close with runtime context.
 //!
-//! In the enum-based executor the operator `open/next/close` signatures
-//! do not (yet) carry an `ExecutionRuntime` parameter.  `ExecutorDriver`
-//! bridges that gap by providing uniform cancel-checking, profiling, and
-//! resource-tracking around each operator call.
+//! Phase 3: operator dispatch in executor.rs now handles cancel-checking,
+//! profiling, and resource tracking directly via the injected runtime.
+//! ExecutorDriver is retained as a thin compatibility layer for engine.rs
+//! but its per-call wrapping is redundant when the runtime is attached.
 //!
-//! Future phase: once all operators accept runtime, this driver becomes
-//! a thin delegation layer (or is inlined into the engine).
-//!
-//! Phase 1 contract:
-//! - cancel check before each operator method call
-//! - profile instrumentation (open/next/close time, input/output rows, peak memory)
-//! - resource cleanup via runtime on close
+//! Future: remove ExecutorDriver entirely once all paths go through
+//! the operator dispatch in executor.rs.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -23,9 +18,9 @@ use crate::core::error::QueryError;
 
 /// Driver that wraps operator lifecycle with runtime context.
 ///
-/// Every call to `open`/`next`/`close` on an operator is routed through
-/// the driver, which adds cancel checking, profiling, and resource
-/// management.
+/// Phase 3: operator dispatch in executor.rs carries its own cancel
+/// checking + profiling.  The driver is retained for engine.rs paths
+/// that have not yet migrated.
 #[derive(Debug)]
 pub struct ExecutorDriver {
     runtime: Arc<ExecutionRuntime>,
@@ -57,7 +52,7 @@ impl ExecutorDriver {
     ) -> Result<Option<DataChunk>, QueryError> {
         self.runtime.ensure_not_cancelled()?;
         let start = Instant::now();
-        let result = executor.next()?;
+        let result = executor.advance()?;
         let elapsed = start.elapsed().as_micros() as u64;
         if let Some(ref chunk) = result {
             let count = chunk.len() as u64;
@@ -83,7 +78,7 @@ impl ExecutorDriver {
     // ── Profile helpers ──
 
     fn record_timing(&self, executor: &StreamingExecutor, phase: &str, elapsed_us: u64) {
-        let node_id = extract_plan_node_id(executor);
+        let node_id = executor.plan_node_id();
         let name = extract_operator_name(executor);
         let mut profile = self.runtime.profile().lock();
         let entry = profile.operators.entry(node_id).or_insert_with(|| OperatorProfile {
@@ -100,7 +95,7 @@ impl ExecutorDriver {
     }
 
     fn record_row_count(&self, executor: &StreamingExecutor, count: u64, is_output: bool) {
-        let node_id = extract_plan_node_id(executor);
+        let node_id = executor.plan_node_id();
         let mut profile = self.runtime.profile().lock();
         if let Some(entry) = profile.operators.get_mut(&node_id) {
             if is_output {
@@ -113,7 +108,7 @@ impl ExecutorDriver {
 
     /// Record peak memory for an operator from a MemoryTracker.
     pub fn record_peak_memory(&self, executor: &StreamingExecutor, peak_bytes: u64) {
-        let node_id = extract_plan_node_id(executor);
+        let node_id = executor.plan_node_id();
         let mut profile = self.runtime.profile().lock();
         if let Some(entry) = profile.operators.get_mut(&node_id) {
             entry.peak_memory = entry.peak_memory.max(peak_bytes);
@@ -121,49 +116,13 @@ impl ExecutorDriver {
     }
 
     /// Convenience: check cancel inside a long-running operator loop.
-    /// Returns an error if the query has been cancelled.
     pub fn check_cancel(&self) -> Result<(), QueryError> {
         self.runtime.ensure_not_cancelled()
     }
 }
 
-fn extract_plan_node_id(executor: &StreamingExecutor) -> i64 {
-    use StreamingExecutor::*;
-    match executor {
-        ScanVertices { plan_node_id, .. } => *plan_node_id,
-        StorageScanVertices { plan_node_id, .. } => *plan_node_id,
-        ScanEdges { plan_node_id, .. } => *plan_node_id,
-        StorageScanEdges { plan_node_id, .. } => *plan_node_id,
-        Filter { plan_node_id, .. } => *plan_node_id,
-        Project { plan_node_id, .. } => *plan_node_id,
-        Limit { plan_node_id, .. } => *plan_node_id,
-        Sort { plan_node_id, .. } => *plan_node_id,
-        Aggregate { plan_node_id, .. } => *plan_node_id,
-        HashJoin { plan_node_id, .. } => *plan_node_id,
-        InnerJoin { plan_node_id, .. } => *plan_node_id,
-        LeftJoin { plan_node_id, .. } => *plan_node_id,
-        RightJoin { plan_node_id, .. } => *plan_node_id,
-        FullOuterJoin { plan_node_id, .. } => *plan_node_id,
-        CrossJoin { plan_node_id, .. } => *plan_node_id,
-        SemiJoin { plan_node_id, .. } => *plan_node_id,
-        Union { plan_node_id, .. } => *plan_node_id,
-        Intersect { plan_node_id, .. } => *plan_node_id,
-        Except { plan_node_id, .. } => *plan_node_id,
-        Minus { plan_node_id, .. } => *plan_node_id,
-        // Feature-gated search variants (return 0 as fallback)
-        #[cfg(feature = "fulltext-search")]
-        FulltextSearch { .. }
-        | FulltextLookup { .. }
-        | MatchFulltext { .. } => 0,
-        #[cfg(feature = "qdrant")]
-        VectorSearch { .. }
-        | VectorLookup { .. }
-        | VectorMatch { .. } => 0,
-        _ => 0,
-    }
-}
-
-fn extract_operator_name(executor: &StreamingExecutor) -> String {
+/// Extract operator name for all variants.
+pub fn extract_operator_name(executor: &StreamingExecutor) -> String {
     use StreamingExecutor::*;
     match executor {
         ScanVertices { .. } | StorageScanVertices { .. } => "ScanVertices".to_string(),
@@ -195,6 +154,63 @@ fn extract_operator_name(executor: &StreamingExecutor) -> String {
         AllPaths { .. } => "AllPaths".to_string(),
         MultiShortestPath { .. } => "MultiShortestPath".to_string(),
         Subgraph { .. } => "Subgraph".to_string(),
-        _ => "Unknown".to_string(),
+        Start { .. } => "Start".to_string(),
+        GetVertices { .. } => "GetVertices".to_string(),
+        GetEdges { .. } => "GetEdges".to_string(),
+        GetNeighbors { .. } => "GetNeighbors".to_string(),
+        EdgeIndexScan { .. } => "EdgeIndexScan".to_string(),
+        IndexScan { .. } => "IndexScan".to_string(),
+        Argument { .. } => "Argument".to_string(),
+        Sample { .. } => "Sample".to_string(),
+        GetProp { .. } => "GetProp".to_string(),
+        LookupIndex { .. } => "LookupIndex".to_string(),
+        Dedup { .. } => "Dedup".to_string(),
+        TopN { .. } => "TopN".to_string(),
+        Assign { .. } => "Assign".to_string(),
+        Materialize { .. } => "Materialize".to_string(),
+        Remove { .. } => "Remove".to_string(),
+        DataCollect { .. } => "DataCollect".to_string(),
+        Unwind { .. } => "Unwind".to_string(),
+        Apply { .. } => "Apply".to_string(),
+        PatternApply { .. } => "PatternApply".to_string(),
+        RollUpApply { .. } => "RollUpApply".to_string(),
+        Window { .. } => "Window".to_string(),
+        GroupBy { .. } => "GroupBy".to_string(),
+        Distinct { .. } => "Distinct".to_string(),
+        WindowFunction { .. } => "WindowFunction".to_string(),
+        AppendVertices { .. } => "AppendVertices".to_string(),
+        BiExpand { .. } => "BiExpand".to_string(),
+        BiTraverse { .. } => "BiTraverse".to_string(),
+        InsertVertices { .. } => "InsertVertices".to_string(),
+        InsertEdges { .. } => "InsertEdges".to_string(),
+        UpdateVertices { .. } => "UpdateVertices".to_string(),
+        UpdateEdges { .. } => "UpdateEdges".to_string(),
+        DeleteVertices { .. } => "DeleteVertices".to_string(),
+        DeleteEdges { .. } => "DeleteEdges".to_string(),
+        PipeDeleteVertices { .. } => "PipeDeleteVertices".to_string(),
+        PipeDeleteEdges { .. } => "PipeDeleteEdges".to_string(),
+        DeleteTags { .. } => "DeleteTags".to_string(),
+        FulltextSearch { .. } => "FulltextSearch".to_string(),
+        FulltextLookup { .. } => "FulltextLookup".to_string(),
+        MatchFulltext { .. } => "MatchFulltext".to_string(),
+        VectorSearch { .. } => "VectorSearch".to_string(),
+        VectorLookup { .. } => "VectorLookup".to_string(),
+        VectorMatch { .. } => "VectorMatch".to_string(),
+        SpaceManage { .. } => "SpaceManage".to_string(),
+        TagManage { .. } => "TagManage".to_string(),
+        EdgeManage { .. } => "EdgeManage".to_string(),
+        IndexManage { .. } => "IndexManage".to_string(),
+        UserManage { .. } => "UserManage".to_string(),
+        FulltextManage { .. } => "FulltextManage".to_string(),
+        VectorManage { .. } => "VectorManage".to_string(),
+        Loop { .. } => "Loop".to_string(),
+        Select { .. } => "Select".to_string(),
+        PassThrough { .. } => "PassThrough".to_string(),
+        BeginTransaction { .. } => "BeginTransaction".to_string(),
+        Commit { .. } => "Commit".to_string(),
+        Rollback { .. } => "Rollback".to_string(),
+        ShowStats { .. } => "ShowStats".to_string(),
+        Analyze { .. } => "Analyze".to_string(),
+        Migrate { .. } => "Migrate".to_string(),
     }
 }

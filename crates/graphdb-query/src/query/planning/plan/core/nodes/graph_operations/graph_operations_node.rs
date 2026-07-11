@@ -880,7 +880,6 @@ pub struct RemoveNode {
     remove_items: Vec<(String, ContextualExpression)>,
     output_var: Option<String>,
     col_names: Vec<String>,
-    column_types: Vec<crate::core::DataType>,
 }
 
 impl RemoveNode {
@@ -897,7 +896,6 @@ impl RemoveNode {
             remove_items,
             output_var: None,
             col_names,
-            column_types: vec![],
         })
     }
 

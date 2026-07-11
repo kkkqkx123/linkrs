@@ -21,7 +21,7 @@ pub fn compute_aggregate(
             if let Some(idx) = col_names.iter().position(|c| c == field) {
                 let count = rows
                     .iter()
-                    .filter(|row| row.get(idx).map_or(false, |v| !matches!(v, Value::Null(_))))
+                    .filter(|row| row.get(idx).is_some_and(|v| !matches!(v, Value::Null(_))))
                     .count();
                 Value::BigInt(count as i64)
             } else {

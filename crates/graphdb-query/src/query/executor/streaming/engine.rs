@@ -47,7 +47,11 @@ impl StreamingExecutionEngine {
     }
 
     /// Attach an execution runtime (for cancellation, profiling, memory tracking).
+    /// Also propagates the runtime recursively into all operators.
     pub fn set_runtime(&mut self, runtime: Arc<ExecutionRuntime>) {
+        if let Some(ref mut executor) = self.root_executor {
+            executor.set_runtime(Some(runtime.clone()));
+        }
         self.runtime = Some(runtime);
     }
 
@@ -81,7 +85,7 @@ impl StreamingExecutionEngine {
             let d = ExecutorDriver::new(rt.clone());
             d.next(executor)
         } else {
-            executor.next()
+            executor.advance()
         }
     }
 
@@ -129,7 +133,7 @@ impl StreamingExecutionEngine {
             d.close(executor)?;
         } else {
             executor.open()?;
-            while let Some(chunk) = executor.next()? {
+            while let Some(chunk) = executor.advance()? {
                 output_chunks.push(chunk);
             }
             executor.close()?;
@@ -238,6 +242,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         };
         engine.register_executor(0, scan);
 
@@ -261,6 +266,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         };
         engine.register_executor(0, scan);
 
@@ -285,6 +291,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         };
         engine.register_executor(0, scan);
 
@@ -308,6 +315,7 @@ mod tests {
             current_index: 0,
             col_names: vec!["id".to_string(), "name".to_string()],
             plan_node_id: 0,
+            runtime: None,
         };
         engine.register_executor(0, scan);
 
@@ -328,6 +336,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         };
         engine.register_executor(0, scan);
 
@@ -350,6 +359,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         };
 
         let limit = StreamingExecutor::Limit {
@@ -358,6 +368,7 @@ mod tests {
             consumed: 0,
             opened: false,
             plan_node_id: 0,
+            runtime: None,
         };
 
         engine.register_executor(0, limit);

@@ -27,6 +27,9 @@ pub struct OperatorProfile {
     pub input_rows: u64,
     pub output_rows: u64,
     pub peak_memory: u64,
+    pub peak_memory_bytes: u64,
+    pub spilled_bytes: u64,
+    pub spill_count: u64,
 }
 
 /// Collects execution profile data across all operators
@@ -157,7 +160,7 @@ impl ExecutionRuntime {
     /// Check whether the query has been cancelled.
     pub fn is_cancelled(&self) -> bool {
         self.cancel_token.load(Ordering::Relaxed)
-            || self.deadline.map_or(false, |d| Instant::now() >= d)
+            || self.deadline.is_some_and(|d| Instant::now() >= d)
     }
 
     /// Return an error if the query has been cancelled.

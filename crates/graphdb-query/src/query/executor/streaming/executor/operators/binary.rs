@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::core::error::QueryError;
 use crate::core::Value;
-use crate::query::executor::base::{MemoryBudget, MemoryTracker};
+use crate::query::executor::base::MemoryBudget;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::{StreamingExecutor, ValueRowContext};
@@ -30,6 +30,7 @@ pub fn open_hashjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError>
 }
 
 pub fn next_hashjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    executor.ensure_not_cancelled()?;
     match executor {
         StreamingExecutor::HashJoin {
             left,
@@ -46,7 +47,7 @@ pub fn next_hashjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
         } => {
             if !*left_consumed {
                 let mut captured_right_names = Vec::new();
-                while let Some(chunk) = right.next()? {
+                while let Some(chunk) = right.advance()? {
                     if captured_right_names.is_empty() {
                         captured_right_names = chunk.col_names();
                     }
@@ -72,7 +73,7 @@ pub fn next_hashjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                 return Ok(None);
             }
 
-            if let Some(left_chunk) = left.next()? {
+            if let Some(left_chunk) = left.advance()? {
                 let left_col_names = left_chunk.col_names();
                 let mut result_rows = Vec::new();
 
@@ -274,6 +275,7 @@ pub fn open_nestedloopjoin(executor: &mut StreamingExecutor) -> Result<(), Query
 pub fn next_nestedloopjoin(
     executor: &mut StreamingExecutor,
 ) -> Result<Option<DataChunk>, QueryError> {
+    executor.ensure_not_cancelled()?;
     match executor {
         StreamingExecutor::NestedLoopJoin {
             left,
@@ -286,7 +288,7 @@ pub fn next_nestedloopjoin(
         } => {
             if !*left_consumed {
                 // Build right side - collect all rows
-                while let Some(chunk) = right.next()? {
+                while let Some(chunk) = right.advance()? {
                     for row in chunk.rows {
                         memory_tracker.try_reserve_row(&row)?;
                         build_side_tuples.push(row);
@@ -295,7 +297,7 @@ pub fn next_nestedloopjoin(
                 *left_consumed = true;
             }
 
-            if let Some(left_chunk) = left.next()? {
+            if let Some(left_chunk) = left.advance()? {
                 let left_col_names = left_chunk.col_names();
                 let mut result_rows = Vec::new();
 
@@ -406,6 +408,7 @@ pub fn open_innerjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError
 }
 
 pub fn next_innerjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    executor.ensure_not_cancelled()?;
     match executor {
         StreamingExecutor::InnerJoin {
             left,
@@ -418,7 +421,7 @@ pub fn next_innerjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChu
         } => {
             if !*left_consumed {
                 // Build right side
-                while let Some(chunk) = right.next()? {
+                while let Some(chunk) = right.advance()? {
                     for row in chunk.rows {
                         memory_tracker.try_reserve_row(&row)?;
                         build_side_tuples.push(row);
@@ -427,7 +430,7 @@ pub fn next_innerjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChu
                 *left_consumed = true;
             }
 
-            if let Some(left_chunk) = left.next()? {
+            if let Some(left_chunk) = left.advance()? {
                 let left_col_names = left_chunk.col_names();
                 let mut result_rows = Vec::new();
 
@@ -525,6 +528,7 @@ pub fn open_leftjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError>
 }
 
 pub fn next_leftjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    executor.ensure_not_cancelled()?;
     match executor {
         StreamingExecutor::LeftJoin {
             left,
@@ -536,7 +540,7 @@ pub fn next_leftjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
             ..
         } => {
             if !*left_consumed {
-                while let Some(chunk) = right.next()? {
+                while let Some(chunk) = right.advance()? {
                     for row in chunk.rows {
                         memory_tracker.try_reserve_row(&row)?;
                         build_side_tuples.push(row);
@@ -545,7 +549,7 @@ pub fn next_leftjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                 *left_consumed = true;
             }
 
-            if let Some(left_chunk) = left.next()? {
+            if let Some(left_chunk) = left.advance()? {
                 let left_col_names = left_chunk.col_names();
                 let mut result_rows = Vec::new();
 
@@ -580,7 +584,7 @@ pub fn next_leftjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                     // If no match, emit left row with NULLs for right columns
                     if !matched {
                         let mut unmatched_row = left_row.clone();
-                        for _ in 0..build_side_tuples.get(0).map(|r| r.len()).unwrap_or(0) {
+                        for _ in 0..build_side_tuples.first().map(|r| r.len()).unwrap_or(0) {
                             unmatched_row.push(Value::Null(crate::core::value::NullType::Null));
                         }
                         result_rows.push(unmatched_row);
@@ -654,6 +658,7 @@ pub fn open_rightjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError
 }
 
 pub fn next_rightjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    executor.ensure_not_cancelled()?;
     match executor {
         StreamingExecutor::RightJoin {
             left,
@@ -665,7 +670,7 @@ pub fn next_rightjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChu
             ..
         } => {
             if !*right_consumed {
-                while let Some(chunk) = left.next()? {
+                while let Some(chunk) = left.advance()? {
                     for row in chunk.rows {
                         memory_tracker.try_reserve_row(&row)?;
                         build_side_tuples.push(row);
@@ -674,7 +679,7 @@ pub fn next_rightjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChu
                 *right_consumed = true;
             }
 
-            if let Some(right_chunk) = right.next()? {
+            if let Some(right_chunk) = right.advance()? {
                 let right_col_names = right_chunk.col_names();
                 let mut result_rows = Vec::new();
 
@@ -708,7 +713,7 @@ pub fn next_rightjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChu
 
                     if !matched {
                         let mut unmatched_row = Vec::new();
-                        for _ in 0..build_side_tuples.get(0).map(|r| r.len()).unwrap_or(0) {
+                        for _ in 0..build_side_tuples.first().map(|r| r.len()).unwrap_or(0) {
                             unmatched_row.push(Value::Null(crate::core::value::NullType::Null));
                         }
                         unmatched_row.extend(right_row.clone());
@@ -787,6 +792,7 @@ pub fn open_fullouterjoin(executor: &mut StreamingExecutor) -> Result<(), QueryE
 pub fn next_fullouterjoin(
     executor: &mut StreamingExecutor,
 ) -> Result<Option<DataChunk>, QueryError> {
+    executor.ensure_not_cancelled()?;
     match executor {
         StreamingExecutor::FullOuterJoin {
             left,
@@ -804,13 +810,13 @@ pub fn next_fullouterjoin(
                 match phase {
                     crate::query::executor::streaming::executor::FullOuterJoinPhase::BuildingRight => {
                         // Collect all left and right rows
-                        while let Some(chunk) = left.next()? {
+                        while let Some(chunk) = left.advance()? {
                             for row in &chunk.rows {
                                 memory_tracker.try_reserve_row(row)?;
                             }
                             left_rows.extend(chunk.rows);
                         }
-                        while let Some(chunk) = right.next()? {
+                        while let Some(chunk) = right.advance()? {
                             for row in &chunk.rows {
                                 memory_tracker.try_reserve_row(row)?;
                             }
@@ -820,7 +826,7 @@ pub fn next_fullouterjoin(
                     }
 
                     crate::query::executor::streaming::executor::FullOuterJoinPhase::ProbeLeft => {
-                        let right_col_count = right_rows.get(0).map(|r| r.len()).unwrap_or(0);
+                        let right_col_count = right_rows.first().map(|r| r.len()).unwrap_or(0);
                         let mut all_results = Vec::new();
 
                         for left_row in left_rows.iter() {
@@ -879,7 +885,7 @@ pub fn next_fullouterjoin(
                         }
 
                         // Emit unmatched right rows
-                        let left_col_count = left_rows.get(0).map(|r| r.len()).unwrap_or(0);
+                        let left_col_count = left_rows.first().map(|r| r.len()).unwrap_or(0);
                         let mut unmatched = Vec::new();
                         for (right_idx, right_row) in right_rows.iter().enumerate() {
                             if !matched_right_indices.contains(&right_idx) {
@@ -961,6 +967,7 @@ pub fn open_crossjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError
 }
 
 pub fn next_crossjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    executor.ensure_not_cancelled()?;
     match executor {
         StreamingExecutor::CrossJoin {
             left,
@@ -973,7 +980,7 @@ pub fn next_crossjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChu
             ..
         } => {
             if !*left_consumed {
-                while let Some(chunk) = left.next()? {
+                while let Some(chunk) = left.advance()? {
                     for row in &chunk.rows {
                         memory_tracker.try_reserve_row(row)?;
                     }
@@ -983,7 +990,7 @@ pub fn next_crossjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChu
             }
 
             if !*right_consumed {
-                while let Some(chunk) = right.next()? {
+                while let Some(chunk) = right.advance()? {
                     for row in &chunk.rows {
                         memory_tracker.try_reserve_row(row)?;
                     }
@@ -1072,6 +1079,7 @@ pub fn open_semijoin(executor: &mut StreamingExecutor) -> Result<(), QueryError>
 }
 
 pub fn next_semijoin(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    executor.ensure_not_cancelled()?;
     match executor {
         StreamingExecutor::SemiJoin {
             left,
@@ -1083,7 +1091,7 @@ pub fn next_semijoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
             ..
         } => {
             if !*right_consumed {
-                while let Some(chunk) = right.next()? {
+                while let Some(chunk) = right.advance()? {
                     for row in chunk.rows {
                         memory_tracker.try_reserve_row(&row)?;
                         right_rows.push(row);
@@ -1092,7 +1100,7 @@ pub fn next_semijoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                 *right_consumed = true;
             }
 
-            if let Some(left_chunk) = left.next()? {
+            if let Some(left_chunk) = left.advance()? {
                 let left_col_names = left_chunk.col_names();
                 let mut result_rows = Vec::new();
 
@@ -1174,7 +1182,9 @@ mod tests {
     use super::*;
     use crate::core::types::expr::Expression;
     use crate::core::value::NullType;
-    use crate::query::executor::base::MemoryBudget;
+use crate::query::executor::base::MemoryBudget;
+#[cfg(test)]
+use crate::query::executor::base::MemoryTracker;
 
     fn create_left_buffer() -> Vec<Vec<Value>> {
         vec![
@@ -1199,6 +1209,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -1207,6 +1218,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut join = StreamingExecutor::HashJoin {
@@ -1222,10 +1234,11 @@ mod tests {
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             right_col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         };
 
         join.open().unwrap();
-        let chunk = join.next().unwrap();
+        let chunk = join.advance().unwrap();
         assert!(chunk.is_some());
         // Cartesian product: 2 left rows × 3 right rows = 6 result rows
         assert_eq!(chunk.unwrap().len(), 6);
@@ -1240,6 +1253,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -1248,6 +1262,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let join_condition = Some(Expression::Literal(Value::Bool(false)));
@@ -1265,10 +1280,11 @@ mod tests {
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             right_col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         };
 
         join.open().unwrap();
-        let chunk = join.next().unwrap();
+        let chunk = join.advance().unwrap();
         assert!(chunk.is_none());
         join.close().unwrap();
     }
@@ -1284,6 +1300,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -1295,6 +1312,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut join = StreamingExecutor::HashJoin {
@@ -1310,10 +1328,11 @@ mod tests {
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             right_col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         };
 
         join.open().unwrap();
-        let chunk = join.next().unwrap();
+        let chunk = join.advance().unwrap();
         assert!(chunk.is_some());
         // Cartesian product: 2 left rows × 2 right rows = 4 result rows
         assert_eq!(chunk.unwrap().len(), 4);
@@ -1328,6 +1347,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -1340,6 +1360,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut join = StreamingExecutor::NestedLoopJoin {
@@ -1351,10 +1372,11 @@ mod tests {
             opened: false,
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
+            runtime: None,
         };
 
         join.open().unwrap();
-        let chunk = join.next().unwrap();
+        let chunk = join.advance().unwrap();
         assert!(chunk.is_some());
         // Cartesian product: 2 × 3 = 6 rows
         assert_eq!(chunk.unwrap().len(), 6);
@@ -1369,6 +1391,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -1377,6 +1400,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         // Condition: always true
@@ -1391,10 +1415,11 @@ mod tests {
             opened: false,
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
+            runtime: None,
         };
 
         join.open().unwrap();
-        let chunk = join.next().unwrap();
+        let chunk = join.advance().unwrap();
         assert!(chunk.is_some());
         // 2 × 2 = 4 rows
         assert_eq!(chunk.unwrap().len(), 4);
@@ -1412,6 +1437,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -1420,6 +1446,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut join = StreamingExecutor::HashJoin {
@@ -1435,10 +1462,11 @@ mod tests {
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             right_col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         };
 
         join.open().unwrap();
-        let chunk = join.next().unwrap();
+        let chunk = join.advance().unwrap();
         assert!(chunk.is_some());
         // Cartesian product: 2 left rows × 1 right row = 2 result rows
         assert_eq!(chunk.unwrap().len(), 2);
@@ -1453,6 +1481,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let right = Box::new(StreamingExecutor::ScanVertices {
@@ -1461,6 +1490,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut join = StreamingExecutor::HashJoin {
@@ -1476,10 +1506,11 @@ mod tests {
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             right_col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         };
 
         join.open().unwrap();
-        let chunk = join.next().unwrap();
+        let chunk = join.advance().unwrap();
         assert!(chunk.is_some());
         let chunk = chunk.unwrap();
         // Result row should have 4 columns (2 from left + 2 from right)

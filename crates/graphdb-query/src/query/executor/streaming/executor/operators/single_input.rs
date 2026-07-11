@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use crate::core::error::QueryError;
-use crate::core::value::NullType;
 use crate::core::Value;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
@@ -28,7 +27,7 @@ pub fn next_filter(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
         StreamingExecutor::Filter {
             input, predicate, ..
         } => loop {
-            match input.next()? {
+            match input.advance()? {
                 Some(chunk) => {
                     let col_names = chunk.col_names();
                     let layout = chunk.get_or_create_layout();
@@ -113,7 +112,7 @@ pub fn next_project(executor: &mut StreamingExecutor) -> Result<Option<DataChunk
             output_col_names,
             ..
         } => {
-            if let Some(chunk) = input.next()? {
+            if let Some(chunk) = input.advance()? {
                 let input_col_names = chunk.col_names();
                 let output_col_names_final: Vec<String> = if output_col_names.is_empty() {
                     input_col_names.clone()
@@ -201,7 +200,7 @@ pub fn next_limit(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>,
                 return Ok(None);
             }
 
-            if let Some(mut chunk) = input.next()? {
+            if let Some(mut chunk) = input.advance()? {
                 let remaining = *limit - *consumed;
 
                 if chunk.rows.len() > remaining as usize {
@@ -254,15 +253,16 @@ pub fn open_distinct(executor: &mut StreamingExecutor) -> Result<(), QueryError>
 pub fn next_distinct(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     match executor {
         StreamingExecutor::Distinct {
-            input, seen_rows, ..
+            input, seen_rows, memory_tracker, ..
         } => loop {
-            match input.next()? {
+            match input.advance()? {
                 Some(chunk) => {
                     let layout = chunk.get_or_create_layout();
                     let mut result_rows = Vec::new();
                     for row in chunk.rows {
                         let row_str = format!("{:?}", row);
                         if !seen_rows.contains(&row_str) {
+                            memory_tracker.try_reserve(row_str.len())?;
                             seen_rows.insert(row_str);
                             result_rows.push(row);
                         }
@@ -288,8 +288,13 @@ pub fn stop_distinct(executor: &mut StreamingExecutor) -> Result<(), QueryError>
 
 pub fn close_distinct(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
     match executor {
-        StreamingExecutor::Distinct { input, opened, .. } => {
+        StreamingExecutor::Distinct {
+            input, opened, seen_rows, memory_tracker, ..
+        } => {
             if *opened {
+                let mem = seen_rows.len() * 256;
+                memory_tracker.release(mem);
+                seen_rows.clear();
                 input.close()?;
                 *opened = false;
             }
@@ -303,6 +308,7 @@ pub fn close_distinct(executor: &mut StreamingExecutor) -> Result<(), QueryError
 mod tests {
     use super::*;
     use crate::core::types::expr::Expression;
+    use crate::core::value::NullType;
     use crate::query::executor::base::{MemoryBudget, MemoryTracker};
 
     fn create_test_buffer(size: usize) -> Vec<Vec<Value>> {
@@ -320,6 +326,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut filter = StreamingExecutor::Filter {
@@ -327,10 +334,11 @@ mod tests {
             predicate: Expression::Literal(Value::Bool(true)),
             opened: false,
             plan_node_id: 0,
+            runtime: None,
         };
 
         filter.open().unwrap();
-        let chunk = filter.next().unwrap();
+        let chunk = filter.advance().unwrap();
         assert!(chunk.is_some());
         // All rows should pass (predicate is always true)
         assert_eq!(chunk.unwrap().len(), 10);
@@ -346,6 +354,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut filter = StreamingExecutor::Filter {
@@ -353,10 +362,11 @@ mod tests {
             predicate: Expression::Literal(Value::Bool(false)),
             opened: false,
             plan_node_id: 0,
+            runtime: None,
         };
 
         filter.open().unwrap();
-        let chunk = filter.next().unwrap();
+        let chunk = filter.advance().unwrap();
         // All rows filtered out (predicate is always false)
         assert!(chunk.is_none());
         filter.close().unwrap();
@@ -383,6 +393,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         // Project to reorder columns (swap first two)
@@ -395,10 +406,11 @@ mod tests {
             output_col_names: vec![],
             opened: false,
             plan_node_id: 0,
+            runtime: None,
         };
 
         project.open().unwrap();
-        let chunk = project.next().unwrap();
+        let chunk = project.advance().unwrap();
         assert!(chunk.is_some());
         let chunk = chunk.unwrap();
         assert_eq!(chunk.len(), 2);
@@ -416,6 +428,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut project = StreamingExecutor::Project {
@@ -424,10 +437,11 @@ mod tests {
             output_col_names: vec![],
             opened: false,
             plan_node_id: 0,
+            runtime: None,
         };
 
         project.open().unwrap();
-        let chunk = project.next().unwrap();
+        let chunk = project.advance().unwrap();
         assert!(chunk.is_some());
         let chunk = chunk.unwrap();
         assert_eq!(chunk.len(), 1);
@@ -444,6 +458,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut limit = StreamingExecutor::Limit {
@@ -452,15 +467,16 @@ mod tests {
             consumed: 0,
             opened: false,
             plan_node_id: 0,
+            runtime: None,
         };
 
         limit.open().unwrap();
-        let chunk = limit.next().unwrap();
+        let chunk = limit.advance().unwrap();
         assert!(chunk.is_some());
         assert_eq!(chunk.unwrap().len(), 10);
 
         // Next chunk should be None (limit reached)
-        let chunk2 = limit.next().unwrap();
+        let chunk2 = limit.advance().unwrap();
         assert!(chunk2.is_none());
         limit.close().unwrap();
     }
@@ -474,6 +490,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         // Limit larger than buffer size
@@ -483,15 +500,16 @@ mod tests {
             consumed: 0,
             opened: false,
             plan_node_id: 0,
+            runtime: None,
         };
 
         limit.open().unwrap();
-        let chunk = limit.next().unwrap();
+        let chunk = limit.advance().unwrap();
         assert!(chunk.is_some());
         // Should return all 50 rows
         assert_eq!(chunk.unwrap().len(), 50);
 
-        let chunk2 = limit.next().unwrap();
+        let chunk2 = limit.advance().unwrap();
         assert!(chunk2.is_none());
         limit.close().unwrap();
     }
@@ -510,6 +528,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut distinct = StreamingExecutor::Distinct {
@@ -518,10 +537,11 @@ mod tests {
             opened: false,
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
+            runtime: None,
         };
 
         distinct.open().unwrap();
-        let chunk = distinct.next().unwrap();
+        let chunk = distinct.advance().unwrap();
         assert!(chunk.is_some());
         // Should deduplicate: 2 distinct rows
         let chunk = chunk.unwrap();
@@ -543,6 +563,7 @@ mod tests {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         });
 
         let mut distinct = StreamingExecutor::Distinct {
@@ -551,10 +572,11 @@ mod tests {
             opened: false,
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             plan_node_id: 0,
+            runtime: None,
         };
 
         distinct.open().unwrap();
-        let chunk = distinct.next().unwrap();
+        let chunk = distinct.advance().unwrap();
         assert!(chunk.is_some());
         distinct.close().unwrap();
     }

@@ -161,6 +161,7 @@ impl PipelineRunner {
             current_index: 0,
             col_names: vec![],
             plan_node_id: 0,
+            runtime: None,
         };
 
         Ok(scan)
