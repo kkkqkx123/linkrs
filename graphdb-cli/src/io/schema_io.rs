@@ -19,16 +19,11 @@ pub struct SchemaIoConfig {
     pub format: SchemaExportFormat,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SchemaExportFormat {
+    #[default]
     Json,
     Yaml,
-}
-
-impl Default for SchemaExportFormat {
-    fn default() -> Self {
-        Self::Json
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

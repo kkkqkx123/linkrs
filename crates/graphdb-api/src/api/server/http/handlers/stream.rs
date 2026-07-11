@@ -135,10 +135,7 @@ pub async fn execute_stream<
         });
 
         // Wait for the pull task to finish.
-        let total_rows = match pull_handle.await {
-            Ok(count) => count,
-            Err(_) => 0,
-        };
+        let total_rows = pull_handle.await.unwrap_or_default();
 
         // Send metadata
         let columns: Vec<String> = Vec::new(); // columns are not tracked across chunks in this simple version

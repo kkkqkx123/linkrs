@@ -202,29 +202,25 @@ impl PipelineRunner {
     /// Walk the executor tree and replace the first leaf executor with the given one.
     fn replace_leaf_executor(executor: &mut StreamingExecutor, replacement: StreamingExecutor) {
         match executor {
-            StreamingExecutor::Filter { input, .. }
-            | StreamingExecutor::Project { input, .. }
-            | StreamingExecutor::Limit { input, .. }
-            | StreamingExecutor::Sort { input, .. }
-            | StreamingExecutor::Aggregate { input, .. }
-            | StreamingExecutor::Distinct { input, .. }
-            | StreamingExecutor::Dedup { input, .. }
-            | StreamingExecutor::Materialize { input, .. }
-            | StreamingExecutor::DataCollect { input, .. }
-            | StreamingExecutor::Unwind { input, .. }
-            | StreamingExecutor::Assign { input, .. }
-            | StreamingExecutor::Remove { input, .. }
-            | StreamingExecutor::TopN { input, .. }
-            | StreamingExecutor::Sample { input, .. }
-            | StreamingExecutor::Traverse { input, .. }
-            | StreamingExecutor::Expand { input, .. }
-            | StreamingExecutor::ExpandAll { input, .. }
-            | StreamingExecutor::TraverseAll { input, .. }
-            | StreamingExecutor::AppendVertices { input, .. } => {
+            // Operators with a single child: recurse
+            StreamingExecutor::Unary(_, input, _)
+            | StreamingExecutor::Blocking(_, input, _)
+            | StreamingExecutor::Graph(_, input, _)
+            | StreamingExecutor::Sink(_, input, _)
+            | StreamingExecutor::Ddl(_, input, _)
+            | StreamingExecutor::Fulltext(_, input, _)
+            | StreamingExecutor::Vector(_, input, _)
+            | StreamingExecutor::Txn(_, input, _) => {
                 Self::replace_leaf_executor(input, replacement);
             }
-            // Leaf executors: replace
-            _ => {
+            // Join/Set/Apply: replace leaves in left child only (first leaf found)
+            StreamingExecutor::Join(_, left, _, _)
+            | StreamingExecutor::Set(_, left, _, _)
+            | StreamingExecutor::Apply(_, left, _, _) => {
+                Self::replace_leaf_executor(left, replacement);
+            }
+            // Leaf executors (Source has no children): replace
+            StreamingExecutor::Source(..) => {
                 *executor = replacement;
             }
         }

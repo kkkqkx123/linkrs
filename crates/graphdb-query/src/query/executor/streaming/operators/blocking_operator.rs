@@ -1,0 +1,1188 @@
+use std::collections::{BTreeMap, HashMap};
+
+use crate::core::error::QueryError;
+use crate::core::types::expr::Expression;
+use crate::core::types::operators::AggregateFunction;
+use crate::core::value::NullType;
+use crate::core::Value;
+use crate::query::executor::base::MemoryBudget;
+use crate::query::executor::base::MemoryTracker;
+use crate::query::executor::expression::evaluator::ExpressionEvaluator;
+use crate::query::executor::streaming::chunk::DataChunk;
+use crate::query::executor::streaming::helpers::compare_values;
+use crate::query::executor::streaming::helpers::compute_aggregate;
+use crate::query::executor::streaming::executor::SortDirection;
+use crate::query::executor::streaming::executor::StreamingExecutor;
+use crate::query::executor::streaming::executor::ValueRowContext;
+use crate::query::executor::streaming::operator_base::OperatorBase;
+
+// ——— state structs ———
+
+#[derive(Debug)]
+pub struct SortState {
+    pub all_rows: Vec<Vec<Value>>,
+    pub row_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+}
+
+#[derive(Debug)]
+pub struct AggregateState {
+    pub all_rows: Vec<Vec<Value>>,
+    pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+}
+
+#[derive(Debug)]
+pub struct GroupByState {
+    pub all_rows: Vec<Vec<Value>>,
+    pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+}
+
+#[derive(Debug)]
+pub struct WindowFunctionState {
+    pub all_rows: Vec<Vec<Value>>,
+    pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+}
+
+#[derive(Debug)]
+pub struct WindowState {
+    pub all_rows: Vec<Vec<Value>>,
+    pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+}
+
+#[derive(Debug)]
+pub struct TopNState {
+    pub all_rows: Vec<Vec<Value>>,
+    pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+}
+
+#[derive(Debug)]
+pub struct DistinctState {
+    pub seen_rows: std::collections::HashSet<String>,
+}
+
+#[derive(Debug)]
+pub struct MaterializeState {
+    pub materialized_rows: Vec<Vec<Value>>,
+    pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+    pub materialized: bool,
+}
+
+#[derive(Debug)]
+pub struct DataCollectState {
+    pub all_rows: Vec<Vec<Value>>,
+    pub emitted: bool,
+}
+
+#[derive(Debug)]
+pub struct RollUpApplyState {
+    pub all_rows: Vec<Vec<Value>>,
+    pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+}
+
+#[derive(Debug)]
+pub enum BlockingOperator {
+    Sort {
+        sort_expressions: Vec<Expression>,
+        sort_directions: Vec<SortDirection>,
+        memory_tracker: MemoryTracker,
+        state: Option<SortState>,
+    },
+    Aggregate {
+        group_by_expressions: Vec<Expression>,
+        aggregate_functions: Vec<(AggregateFunction, Expression)>,
+        memory_tracker: MemoryTracker,
+        state: Option<AggregateState>,
+    },
+    GroupBy {
+        group_by_expressions: Vec<Expression>,
+        memory_tracker: MemoryTracker,
+        state: Option<GroupByState>,
+    },
+    WindowFunction {
+        window_exprs: Vec<Expression>,
+        partition_by_exprs: Vec<Expression>,
+        order_by_exprs: Vec<Expression>,
+        order_by_directions: Vec<SortDirection>,
+        memory_tracker: MemoryTracker,
+        state: Option<WindowFunctionState>,
+    },
+    Window {
+        window_exprs: Vec<Expression>,
+        partition_by_exprs: Vec<Expression>,
+        order_by_exprs: Vec<Expression>,
+        order_by_directions: Vec<SortDirection>,
+        memory_tracker: MemoryTracker,
+        state: Option<WindowState>,
+    },
+    TopN {
+        n: u32,
+        sort_expressions: Vec<Expression>,
+        sort_directions: Vec<SortDirection>,
+        memory_tracker: MemoryTracker,
+        state: Option<TopNState>,
+    },
+    Distinct {
+        memory_tracker: MemoryTracker,
+        state: Option<DistinctState>,
+    },
+    Materialize {
+        memory_tracker: MemoryTracker,
+        state: Option<MaterializeState>,
+    },
+    DataCollect {
+        memory_tracker: MemoryTracker,
+        state: Option<DataCollectState>,
+    },
+    RollUpApply {
+        rollup_expressions: Vec<Expression>,
+        memory_tracker: MemoryTracker,
+        state: Option<RollUpApplyState>,
+    },
+}
+
+impl BlockingOperator {
+    pub fn memory_tracker(&self) -> &MemoryTracker {
+        match self {
+            Self::Sort { memory_tracker, .. }
+            | Self::Aggregate { memory_tracker, .. }
+            | Self::GroupBy { memory_tracker, .. }
+            | Self::WindowFunction { memory_tracker, .. }
+            | Self::Window { memory_tracker, .. }
+            | Self::TopN { memory_tracker, .. }
+            | Self::Distinct { memory_tracker, .. }
+            | Self::Materialize { memory_tracker, .. }
+            | Self::DataCollect { memory_tracker, .. }
+            | Self::RollUpApply { memory_tracker, .. } => memory_tracker,
+        }
+    }
+
+    pub fn open(
+        &mut self,
+        base: &mut OperatorBase,
+        input: &mut StreamingExecutor,
+    ) -> Result<(), QueryError> {
+        match self {
+            Self::Sort { state, .. } => {
+                *state = Some(SortState { all_rows: vec![], row_iter: None });
+            }
+            Self::Aggregate { state, .. } => {
+                *state = Some(AggregateState { all_rows: vec![], result_iter: None });
+            }
+            Self::GroupBy { state, .. } => {
+                *state = Some(GroupByState { all_rows: vec![], result_iter: None });
+            }
+            Self::WindowFunction { state, .. } => {
+                *state = Some(WindowFunctionState { all_rows: vec![], result_iter: None });
+            }
+            Self::Window { state, .. } => {
+                *state = Some(WindowState { all_rows: vec![], result_iter: None });
+            }
+            Self::TopN { state, .. } => {
+                *state = Some(TopNState { all_rows: vec![], result_iter: None });
+            }
+            Self::Distinct { state, .. } => {
+                *state = Some(DistinctState { seen_rows: std::collections::HashSet::new() });
+            }
+            Self::Materialize { state, .. } => {
+                *state = Some(MaterializeState { materialized_rows: vec![], result_iter: None, materialized: false });
+            }
+            Self::DataCollect { state, .. } => {
+                *state = Some(DataCollectState { all_rows: vec![], emitted: false });
+            }
+            Self::RollUpApply { state, .. } => {
+                *state = Some(RollUpApplyState { all_rows: vec![], result_iter: None });
+            }
+        }
+        input.open()?;
+        base.opened = true;
+        Ok(())
+    }
+
+    pub fn next(
+        &mut self,
+        base: &mut OperatorBase,
+        input: &mut StreamingExecutor,
+    ) -> Result<Option<DataChunk>, QueryError> {
+        match self {
+            Self::Sort {
+                sort_expressions,
+                sort_directions,
+                memory_tracker,
+                state,
+                ..
+            } => {
+                let state = state.as_mut().unwrap();
+                if state.row_iter.is_none() {
+                    let mut col_names: Vec<String> = vec![];
+                    while let Some(chunk) = input.advance()? {
+                        if col_names.is_empty() {
+                            col_names = chunk.col_names();
+                        }
+                        for row in &chunk.rows {
+                            memory_tracker.try_reserve_row(row)?;
+                        }
+                        state.all_rows.extend(chunk.rows);
+                    }
+
+                    if !sort_expressions.is_empty() {
+                        state.all_rows.sort_by(|a, b| {
+                            for (idx, expr) in sort_expressions.iter().enumerate() {
+                                let direction = sort_directions
+                                    .get(idx)
+                                    .copied()
+                                    .unwrap_or(SortDirection::Ascending);
+
+                                let mut ctx_a =
+                                    ValueRowContext::new(a.clone(), col_names.clone());
+                                let mut ctx_b =
+                                    ValueRowContext::new(b.clone(), col_names.clone());
+
+                                let val_a = ExpressionEvaluator::evaluate(expr, &mut ctx_a)
+                                    .unwrap_or(Value::Null(NullType::Null));
+                                let val_b = ExpressionEvaluator::evaluate(expr, &mut ctx_b)
+                                    .unwrap_or(Value::Null(NullType::Null));
+
+                                let cmp = compare_values(&val_a, &val_b);
+
+                                let final_cmp = match direction {
+                                    SortDirection::Ascending => cmp,
+                                    SortDirection::Descending => cmp.reverse(),
+                                };
+
+                                if final_cmp != std::cmp::Ordering::Equal {
+                                    return final_cmp;
+                                }
+                            }
+                            std::cmp::Ordering::Equal
+                        });
+                    }
+
+                    let all_rows_copy = std::mem::take(&mut state.all_rows);
+                    state.row_iter = Some(all_rows_copy.into_iter());
+                }
+
+                if let Some(iter) = &mut state.row_iter {
+                    let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(1024).collect();
+                    if chunk_rows.is_empty() {
+                        Ok(None)
+                    } else {
+                        Ok(Some(DataChunk::from_rows(chunk_rows)))
+                    }
+                } else {
+                    Ok(None)
+                }
+            }
+
+            Self::Aggregate {
+                group_by_expressions,
+                aggregate_functions,
+                memory_tracker,
+                state,
+                ..
+            } => {
+                let state = state.as_mut().unwrap();
+                if state.result_iter.is_none() {
+                    let mut col_names: Vec<String> = vec![];
+                    while let Some(chunk) = input.advance()? {
+                        if col_names.is_empty() {
+                            col_names = chunk.col_names();
+                        }
+                        for row in &chunk.rows {
+                            memory_tracker.try_reserve_row(row)?;
+                        }
+                        state.all_rows.extend(chunk.rows);
+                    }
+
+                    let mut group_map: HashMap<Vec<Value>, Vec<Vec<Value>>> = HashMap::new();
+
+                    for row in state.all_rows.iter().cloned() {
+                        let mut group_key = Vec::new();
+                        if group_by_expressions.is_empty() {
+                            group_key.push(Value::Null(NullType::Null));
+                        } else {
+                            for expr in group_by_expressions.iter() {
+                                let mut context =
+                                    ValueRowContext::new(row.clone(), col_names.clone());
+                                match ExpressionEvaluator::evaluate(expr, &mut context) {
+                                    Ok(value) => group_key.push(value),
+                                    Err(_) => group_key.push(Value::Null(NullType::Null)),
+                                }
+                            }
+                        }
+
+                        group_map.entry(group_key).or_default().push(row);
+                    }
+
+                    let mut result_rows = Vec::new();
+                    for (_group_key, group_rows) in group_map {
+                        let mut result_row = Vec::new();
+
+                        for expr in group_by_expressions.iter() {
+                            if let Some(first_row) = group_rows.first() {
+                                let mut context =
+                                    ValueRowContext::new(first_row.clone(), col_names.clone());
+                                match ExpressionEvaluator::evaluate(expr, &mut context) {
+                                    Ok(value) => result_row.push(value),
+                                    Err(_) => result_row.push(Value::Null(NullType::Null)),
+                                }
+                            }
+                        }
+
+                        for (agg_func, _expr) in aggregate_functions.iter() {
+                            let agg_value = compute_aggregate(agg_func, &group_rows, &col_names);
+                            result_row.push(agg_value);
+                        }
+
+                        result_rows.push(result_row);
+                    }
+
+                    state.result_iter = Some(result_rows.into_iter());
+                }
+
+                if let Some(iter) = &mut state.result_iter {
+                    let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(1024).collect();
+                    if chunk_rows.is_empty() {
+                        Ok(None)
+                    } else {
+                        Ok(Some(DataChunk::from_rows(chunk_rows)))
+                    }
+                } else {
+                    Ok(None)
+                }
+            }
+
+            Self::GroupBy {
+                group_by_expressions,
+                memory_tracker,
+                state,
+                ..
+            } => {
+                let state = state.as_mut().unwrap();
+                if state.result_iter.is_none() {
+                    while let Some(chunk) = input.advance()? {
+                        for row in &chunk.rows {
+                            memory_tracker.try_reserve_row(row)?;
+                        }
+                        state.all_rows.extend(chunk.rows);
+                    }
+
+                    if state.all_rows.is_empty() {
+                        return Ok(None);
+                    }
+
+                    let col_names = (0..state.all_rows[0].len())
+                        .map(|i| format!("col_{}", i))
+                        .collect::<Vec<_>>();
+
+                    let mut groups: HashMap<String, Vec<Vec<Value>>> = HashMap::new();
+                    for row in state.all_rows.iter() {
+                        let mut key_parts: Vec<String> = Vec::new();
+                        for expr in group_by_expressions.iter() {
+                            let mut context =
+                                ValueRowContext::new(row.clone(), col_names.clone());
+                            let key_val = ExpressionEvaluator::evaluate(expr, &mut context)
+                                .unwrap_or(Value::Null(NullType::Null));
+                            key_parts.push(format!("{:?}", key_val));
+                        }
+                        let key = key_parts.join("|");
+                        groups.entry(key).or_default().push(row.clone());
+                    }
+
+                    let result_rows: Vec<Vec<Value>> = groups.into_values().flatten().collect();
+                    state.result_iter = Some(result_rows.into_iter());
+                }
+
+                if let Some(iter) = &mut state.result_iter {
+                    let result_rows: Vec<Vec<Value>> = iter.take(1024).collect();
+                    if result_rows.is_empty() {
+                        Ok(None)
+                    } else {
+                        Ok(Some(DataChunk::from_rows(result_rows)))
+                    }
+                } else {
+                    Ok(None)
+                }
+            }
+
+            Self::WindowFunction {
+                window_exprs,
+                partition_by_exprs,
+                order_by_exprs,
+                order_by_directions,
+                memory_tracker,
+                state,
+                ..
+            } => {
+                let state = state.as_mut().unwrap();
+                if state.result_iter.is_none() {
+                    let mut col_names: Vec<String> = vec![];
+                    while let Some(chunk) = input.advance()? {
+                        if col_names.is_empty() {
+                            col_names = chunk.col_names();
+                        }
+                        for row in &chunk.rows {
+                            memory_tracker.try_reserve_row(row)?;
+                        }
+                        state.all_rows.extend(chunk.rows);
+                    }
+
+                    if state.all_rows.is_empty() {
+                        state.result_iter = Some(vec![].into_iter());
+                    } else {
+                        let mut partitions: BTreeMap<Vec<Value>, Vec<(usize, Vec<Value>)>> =
+                            BTreeMap::new();
+
+                        for (idx, row) in state.all_rows.iter().enumerate() {
+                            let mut partition_key = Vec::new();
+                            if partition_by_exprs.is_empty() {
+                                partition_key.push(Value::Null(NullType::Null));
+                            } else {
+                                for expr in partition_by_exprs.iter() {
+                                    let mut ctx =
+                                        ValueRowContext::new(row.clone(), col_names.clone());
+                                    match ExpressionEvaluator::evaluate(expr, &mut ctx) {
+                                        Ok(val) => partition_key.push(val),
+                                        Err(_) => {
+                                            partition_key.push(Value::Null(NullType::Null))
+                                        }
+                                    }
+                                }
+                            }
+                            partitions
+                                .entry(partition_key)
+                                .or_default()
+                                .push((idx, row.clone()));
+                        }
+
+                        let mut result_rows = Vec::new();
+                        for (_key, mut partition_rows) in partitions {
+                            if !order_by_exprs.is_empty() {
+                                partition_rows.sort_by(|a, b| {
+                                    for (idx, expr) in order_by_exprs.iter().enumerate() {
+                                        let direction = order_by_directions
+                                            .get(idx)
+                                            .copied()
+                                            .unwrap_or(SortDirection::Ascending);
+                                        let mut ctx_a =
+                                            ValueRowContext::new(a.1.clone(), col_names.clone());
+                                        let mut ctx_b =
+                                            ValueRowContext::new(b.1.clone(), col_names.clone());
+                                        let val_a =
+                                            ExpressionEvaluator::evaluate(expr, &mut ctx_a)
+                                                .unwrap_or(Value::Null(NullType::Null));
+                                        let val_b =
+                                            ExpressionEvaluator::evaluate(expr, &mut ctx_b)
+                                                .unwrap_or(Value::Null(NullType::Null));
+                                        let cmp = compare_values(&val_a, &val_b);
+                                        let final_cmp = match direction {
+                                            SortDirection::Ascending => cmp,
+                                            SortDirection::Descending => cmp.reverse(),
+                                        };
+                                        if final_cmp != std::cmp::Ordering::Equal {
+                                            return final_cmp;
+                                        }
+                                    }
+                                    std::cmp::Ordering::Equal
+                                });
+                            }
+
+                            for (row_idx, row) in partition_rows.iter() {
+                                let mut result_row = row.clone();
+                                for window_expr in window_exprs.iter() {
+                                    if let Expression::WindowFunction {
+                                        name, args, ..
+                                    } = window_expr
+                                    {
+                                        let func_args: Vec<Value> = args
+                                            .iter()
+                                            .map(|arg| {
+                                                let mut ctx = ValueRowContext::new(
+                                                    row.clone(),
+                                                    col_names.clone(),
+                                                );
+                                                ExpressionEvaluator::evaluate(arg, &mut ctx)
+                                                    .unwrap_or(Value::Null(NullType::Null))
+                                            })
+                                            .collect();
+
+                                        let window_result = compute_window_function(
+                                            name,
+                                            &func_args,
+                                            &partition_rows,
+                                            partition_rows
+                                                .iter()
+                                                .position(|(i, _)| i == row_idx)
+                                                .unwrap_or(0),
+                                        );
+                                        result_row.push(window_result);
+                                    }
+                                }
+                                result_rows.push(result_row);
+                            }
+                        }
+
+                        state.result_iter = Some(result_rows.into_iter());
+                    }
+                }
+
+                if let Some(iter) = &mut state.result_iter {
+                    let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(1024).collect();
+                    if chunk_rows.is_empty() {
+                        Ok(None)
+                    } else {
+                        Ok(Some(DataChunk::from_rows(chunk_rows)))
+                    }
+                } else {
+                    Ok(None)
+                }
+            }
+
+            Self::Window {
+                window_exprs,
+                partition_by_exprs,
+                order_by_exprs,
+                order_by_directions,
+                memory_tracker,
+                state,
+                ..
+            } => {
+                let state = state.as_mut().unwrap();
+                if state.result_iter.is_none() {
+                    let mut col_names: Vec<String> = vec![];
+                    while let Some(chunk) = input.advance()? {
+                        if col_names.is_empty() {
+                            col_names = chunk.col_names();
+                        }
+                        for row in &chunk.rows {
+                            memory_tracker.try_reserve_row(row)?;
+                        }
+                        state.all_rows.extend(chunk.rows);
+                    }
+
+                    if state.all_rows.is_empty() {
+                        state.result_iter = Some(vec![].into_iter());
+                    } else {
+                        let mut partitions: BTreeMap<Vec<Value>, Vec<(usize, Vec<Value>)>> =
+                            BTreeMap::new();
+
+                        for (idx, row) in state.all_rows.iter().enumerate() {
+                            let mut partition_key = Vec::new();
+                            if partition_by_exprs.is_empty() {
+                                partition_key.push(Value::Null(NullType::Null));
+                            } else {
+                                for expr in partition_by_exprs.iter() {
+                                    let mut ctx =
+                                        ValueRowContext::new(row.clone(), col_names.clone());
+                                    match ExpressionEvaluator::evaluate(expr, &mut ctx) {
+                                        Ok(val) => partition_key.push(val),
+                                        Err(_) => {
+                                            partition_key.push(Value::Null(NullType::Null))
+                                        }
+                                    }
+                                }
+                            }
+                            partitions
+                                .entry(partition_key)
+                                .or_default()
+                                .push((idx, row.clone()));
+                        }
+
+                        let mut result_rows = Vec::new();
+                        for (_key, mut partition_rows) in partitions {
+                            if !order_by_exprs.is_empty() {
+                                partition_rows.sort_by(|a, b| {
+                                    for (idx, expr) in order_by_exprs.iter().enumerate() {
+                                        let direction = order_by_directions
+                                            .get(idx)
+                                            .copied()
+                                            .unwrap_or(SortDirection::Ascending);
+                                        let mut ctx_a =
+                                            ValueRowContext::new(a.1.clone(), col_names.clone());
+                                        let mut ctx_b =
+                                            ValueRowContext::new(b.1.clone(), col_names.clone());
+                                        let val_a =
+                                            ExpressionEvaluator::evaluate(expr, &mut ctx_a)
+                                                .unwrap_or(Value::Null(NullType::Null));
+                                        let val_b =
+                                            ExpressionEvaluator::evaluate(expr, &mut ctx_b)
+                                                .unwrap_or(Value::Null(NullType::Null));
+                                        let cmp = compare_values(&val_a, &val_b);
+                                        let final_cmp = match direction {
+                                            SortDirection::Ascending => cmp,
+                                            SortDirection::Descending => cmp.reverse(),
+                                        };
+                                        if final_cmp != std::cmp::Ordering::Equal {
+                                            return final_cmp;
+                                        }
+                                    }
+                                    std::cmp::Ordering::Equal
+                                });
+                            }
+
+                            for (row_idx, row) in partition_rows.iter() {
+                                let mut result_row = row.clone();
+                                for window_expr in window_exprs.iter() {
+                                    if let Expression::WindowFunction {
+                                        name, args, ..
+                                    } = window_expr
+                                    {
+                                        let func_args: Vec<Value> = args
+                                            .iter()
+                                            .map(|arg| {
+                                                let mut ctx = ValueRowContext::new(
+                                                    row.clone(),
+                                                    col_names.clone(),
+                                                );
+                                                ExpressionEvaluator::evaluate(arg, &mut ctx)
+                                                    .unwrap_or(Value::Null(NullType::Null))
+                                            })
+                                            .collect();
+
+                                        let window_result = compute_window_function(
+                                            name,
+                                            &func_args,
+                                            &partition_rows,
+                                            partition_rows
+                                                .iter()
+                                                .position(|(i, _)| i == row_idx)
+                                                .unwrap_or(0),
+                                        );
+                                        result_row.push(window_result);
+                                    }
+                                }
+                                result_rows.push(result_row);
+                            }
+                        }
+
+                        state.result_iter = Some(result_rows.into_iter());
+                    }
+                }
+
+                if let Some(iter) = &mut state.result_iter {
+                    let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(1024).collect();
+                    if chunk_rows.is_empty() {
+                        Ok(None)
+                    } else {
+                        Ok(Some(DataChunk::from_rows(chunk_rows)))
+                    }
+                } else {
+                    Ok(None)
+                }
+            }
+
+            Self::TopN {
+                n,
+                sort_expressions,
+                sort_directions,
+                memory_tracker,
+                state,
+                ..
+            } => {
+                if !base.opened {
+                    return Err(QueryError::execution("TopN not opened".to_string()));
+                }
+
+                let state = state.as_mut().unwrap();
+                if state.result_iter.is_none() {
+                    let mut col_names: Vec<String> = vec![];
+                    let limit = *n as usize;
+
+                    while let Some(chunk) = input.advance()? {
+                        if col_names.is_empty() {
+                            col_names = chunk.col_names();
+                        }
+                        for row in chunk.rows {
+                            memory_tracker.try_reserve_row(&row)?;
+                            if state.all_rows.len() < limit {
+                                state.all_rows.push(row);
+                            } else {
+                                if state.all_rows.len() == limit {
+                                    state.all_rows.sort_by(|a, b| {
+                                        compare_rows_for_topn(
+                                            a,
+                                            b,
+                                            &col_names,
+                                            sort_expressions,
+                                            sort_directions,
+                                        )
+                                    });
+                                }
+                                let cmp_last = compare_rows_for_topn(
+                                    &row,
+                                    state.all_rows.last().unwrap(),
+                                    &col_names,
+                                    sort_expressions,
+                                    sort_directions,
+                                );
+                                if cmp_last == std::cmp::Ordering::Less {
+                                    state.all_rows.pop();
+                                    let pos = state.all_rows.binary_search_by(|existing| {
+                                        compare_rows_for_topn(
+                                            existing,
+                                            &row,
+                                            &col_names,
+                                            sort_expressions,
+                                            sort_directions,
+                                        )
+                                    });
+                                    let pos = match pos {
+                                        Ok(p) | Err(p) => p,
+                                    };
+                                    state.all_rows.insert(pos, row);
+                                }
+                            }
+                        }
+                    }
+
+                    if state.all_rows.len() > 1 {
+                        state.all_rows.sort_by(|a, b| {
+                            compare_rows_for_topn(
+                                a,
+                                b,
+                                &col_names,
+                                sort_expressions,
+                                sort_directions,
+                            )
+                        });
+                    }
+
+                    state.all_rows.truncate(limit);
+                    state.result_iter = Some(std::mem::take(&mut state.all_rows).into_iter());
+                }
+
+                if let Some(iter) = &mut state.result_iter {
+                    if let Some(row) = iter.next() {
+                        Ok(Some(DataChunk::from_rows(vec![row])))
+                    } else {
+                        Ok(None)
+                    }
+                } else {
+                    Ok(None)
+                }
+            }
+
+            Self::Distinct { state, .. } => {
+                let state = state.as_mut().unwrap();
+                let mut all_rows = Vec::new();
+                while let Some(chunk) = input.advance()? {
+                    for row in chunk.rows {
+                        all_rows.push(row);
+                    }
+                }
+
+                let mut result_rows = Vec::new();
+                for row in all_rows {
+                    let row_str = format!("{:?}", row);
+                    if !state.seen_rows.contains(&row_str) {
+                        state.seen_rows.insert(row_str);
+                        result_rows.push(row);
+                    }
+                }
+
+                if result_rows.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(DataChunk::from_rows(result_rows)))
+                }
+            }
+
+            Self::Materialize {
+                memory_tracker,
+                state,
+                ..
+            } => {
+                if !base.opened {
+                    return Err(QueryError::execution(
+                        "Materialize not opened".to_string(),
+                    ));
+                }
+
+                let state = state.as_mut().unwrap();
+                if !state.materialized {
+                    while let Some(chunk) = input.advance()? {
+                        for row in &chunk.rows {
+                            memory_tracker.try_reserve_row(row)?;
+                        }
+                        state.materialized_rows.extend(chunk.rows);
+                    }
+                    state.materialized = true;
+                    state.result_iter = Some(std::mem::take(&mut state.materialized_rows).into_iter());
+                }
+
+                if let Some(iter) = &mut state.result_iter {
+                    if let Some(row) = iter.next() {
+                        Ok(Some(DataChunk::from_rows(vec![row])))
+                    } else {
+                        Ok(None)
+                    }
+                } else {
+                    Ok(None)
+                }
+            }
+
+            Self::DataCollect {
+                memory_tracker,
+                state,
+                ..
+            } => {
+                if !base.opened {
+                    return Err(QueryError::execution(
+                        "DataCollect not opened".to_string(),
+                    ));
+                }
+
+                let state = state.as_mut().unwrap();
+                if state.emitted {
+                    return Ok(None);
+                }
+
+                while let Some(chunk) = input.advance()? {
+                    for row in &chunk.rows {
+                        memory_tracker.try_reserve_row(row)?;
+                    }
+                    state.all_rows.extend(chunk.rows);
+                }
+
+                if !state.all_rows.is_empty() {
+                    state.emitted = true;
+                    let rows = std::mem::take(&mut state.all_rows);
+                    return Ok(Some(DataChunk::from_rows(rows)));
+                }
+
+                Ok(None)
+            }
+
+            Self::RollUpApply {
+                rollup_expressions,
+                memory_tracker,
+                state,
+                ..
+            } => {
+                if !base.opened {
+                    return Err(QueryError::execution(
+                        "RollUpApply not opened".to_string(),
+                    ));
+                }
+
+                let state = state.as_mut().unwrap();
+                if state.result_iter.is_none() {
+                    let mut col_names: Vec<String> = Vec::new();
+                    while let Some(chunk) = input.advance()? {
+                        if col_names.is_empty() {
+                            col_names = chunk.col_names();
+                        }
+                        for row in &chunk.rows {
+                            memory_tracker.try_reserve_row(row)?;
+                        }
+                        for row in chunk.rows {
+                            let mut ctx =
+                                ValueRowContext::new(row.clone(), col_names.clone());
+                            let mut aggregated = row.clone();
+                            for expr in rollup_expressions.iter() {
+                                match ExpressionEvaluator::evaluate(expr, &mut ctx) {
+                                    Ok(val) => aggregated.push(val),
+                                    Err(_) => {
+                                        aggregated.push(Value::Null(NullType::Null))
+                                    }
+                                }
+                            }
+                            state.all_rows.push(aggregated);
+                        }
+                    }
+                    state.result_iter = Some(std::mem::take(&mut state.all_rows).into_iter());
+                }
+
+                if let Some(iter) = &mut state.result_iter {
+                    if let Some(row) = iter.next() {
+                        return Ok(Some(DataChunk::from_rows(vec![row])));
+                    }
+                }
+
+                Ok(None)
+            }
+        }
+    }
+
+    pub fn stop(
+        &mut self,
+        _base: &mut OperatorBase,
+        input: &mut StreamingExecutor,
+    ) -> Result<(), QueryError> {
+        match self {
+            Self::Sort { .. }
+            | Self::Aggregate { .. }
+            | Self::GroupBy { .. }
+            | Self::WindowFunction { .. }
+            | Self::Window { .. }
+            | Self::TopN { .. }
+            | Self::Distinct { .. }
+            | Self::Materialize { .. }
+            | Self::DataCollect { .. }
+            | Self::RollUpApply { .. } => input.stop(),
+        }
+    }
+
+    pub fn close(
+        &mut self,
+        base: &mut OperatorBase,
+        input: &mut StreamingExecutor,
+    ) -> Result<(), QueryError> {
+        match self {
+            Self::Sort { state, memory_tracker, .. } => {
+                if base.opened {
+                    if let Some(s) = state {
+                        let mem = MemoryBudget::estimate_rows_memory(&s.all_rows);
+                        memory_tracker.release(mem);
+                    }
+                    *state = None;
+                    input.close()?;
+                    base.opened = false;
+                }
+                Ok(())
+            }
+            Self::Aggregate { state, memory_tracker, .. } => {
+                if base.opened {
+                    if let Some(s) = state {
+                        let mem = MemoryBudget::estimate_rows_memory(&s.all_rows);
+                        memory_tracker.release(mem);
+                    }
+                    *state = None;
+                    input.close()?;
+                    base.opened = false;
+                }
+                Ok(())
+            }
+            Self::GroupBy { state, memory_tracker, .. } => {
+                if base.opened {
+                    if let Some(s) = state {
+                        let mem = MemoryBudget::estimate_rows_memory(&s.all_rows);
+                        memory_tracker.release(mem);
+                    }
+                    *state = None;
+                    input.close()?;
+                    base.opened = false;
+                }
+                Ok(())
+            }
+            Self::WindowFunction { state, memory_tracker, .. } => {
+                if base.opened {
+                    if let Some(s) = state {
+                        let mem = MemoryBudget::estimate_rows_memory(&s.all_rows);
+                        memory_tracker.release(mem);
+                    }
+                    *state = None;
+                    input.close()?;
+                    base.opened = false;
+                }
+                Ok(())
+            }
+            Self::Window { state, memory_tracker, .. } => {
+                if base.opened {
+                    if let Some(s) = state {
+                        let mem = MemoryBudget::estimate_rows_memory(&s.all_rows);
+                        memory_tracker.release(mem);
+                    }
+                    *state = None;
+                    input.close()?;
+                    base.opened = false;
+                }
+                Ok(())
+            }
+            Self::TopN { state, memory_tracker, .. } => {
+                if base.opened {
+                    if let Some(s) = state {
+                        let mem = MemoryBudget::estimate_rows_memory(&s.all_rows);
+                        memory_tracker.release(mem);
+                    }
+                    *state = None;
+                    input.close()?;
+                    base.opened = false;
+                }
+                Ok(())
+            }
+            Self::RollUpApply { state, memory_tracker, .. } => {
+                if base.opened {
+                    if let Some(s) = state {
+                        let mem = MemoryBudget::estimate_rows_memory(&s.all_rows);
+                        memory_tracker.release(mem);
+                    }
+                    *state = None;
+                    input.close()?;
+                    base.opened = false;
+                }
+                Ok(())
+            }
+            Self::Distinct { state, memory_tracker, .. } => {
+                if base.opened {
+                    if let Some(s) = state {
+                        let mem = s.seen_rows.len() * 256;
+                        memory_tracker.release(mem);
+                    }
+                    *state = None;
+                    input.close()?;
+                    base.opened = false;
+                }
+                Ok(())
+            }
+            Self::Materialize { state, memory_tracker, .. } => {
+                if base.opened {
+                    if let Some(s) = state {
+                        let mem = MemoryBudget::estimate_rows_memory(&s.materialized_rows);
+                        memory_tracker.release(mem);
+                    }
+                    *state = None;
+                    input.close()?;
+                    base.opened = false;
+                }
+                Ok(())
+            }
+            Self::DataCollect { state, memory_tracker, .. } => {
+                if base.opened {
+                    if let Some(s) = state {
+                        let mem = MemoryBudget::estimate_rows_memory(&s.all_rows);
+                        memory_tracker.release(mem);
+                    }
+                    *state = None;
+                    input.close()?;
+                    base.opened = false;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+fn compute_window_function(
+    name: &str,
+    args: &[Value],
+    partition_rows: &[(usize, Vec<Value>)],
+    current_pos: usize,
+) -> Value {
+    let value_to_i64 = |val: &Value| -> i64 {
+        match val {
+            Value::Int(i) => *i as i64,
+            Value::BigInt(i) => *i,
+            _ => 1,
+        }
+    };
+
+    match name {
+        "row_number" => Value::BigInt((current_pos + 1) as i64),
+        "rank" => Value::BigInt((current_pos + 1) as i64),
+        "dense_rank" => Value::BigInt((current_pos + 1) as i64),
+        "lead" => {
+            let offset = if !args.is_empty() {
+                value_to_i64(&args[0]) as usize
+            } else {
+                1
+            };
+            let default_val = if args.len() > 1 {
+                args[1].clone()
+            } else {
+                Value::Null(NullType::Null)
+            };
+            if current_pos + offset < partition_rows.len() {
+                partition_rows[current_pos + offset]
+                    .1
+                    .first()
+                    .cloned()
+                    .unwrap_or(default_val)
+            } else {
+                default_val
+            }
+        }
+        "lag" => {
+            let offset = if !args.is_empty() {
+                value_to_i64(&args[0]) as usize
+            } else {
+                1
+            };
+            let default_val = if args.len() > 1 {
+                args[1].clone()
+            } else {
+                Value::Null(NullType::Null)
+            };
+            if current_pos >= offset {
+                partition_rows[current_pos - offset]
+                    .1
+                    .first()
+                    .cloned()
+                    .unwrap_or(default_val)
+            } else {
+                default_val
+            }
+        }
+        "first_value" => partition_rows
+            .first()
+            .and_then(|(_, r)| r.first().cloned())
+            .unwrap_or(Value::Null(NullType::Null)),
+        "last_value" => partition_rows
+            .last()
+            .and_then(|(_, r)| r.first().cloned())
+            .unwrap_or(Value::Null(NullType::Null)),
+        "nth_value" => {
+            let n = if !args.is_empty() {
+                value_to_i64(&args[0]) as usize
+            } else {
+                1
+            };
+            if n > 0 && n <= partition_rows.len() {
+                partition_rows[n - 1]
+                    .1
+                    .first()
+                    .cloned()
+                    .unwrap_or(Value::Null(NullType::Null))
+            } else {
+                Value::Null(NullType::Null)
+            }
+        }
+        "ntile" => {
+            let n = if !args.is_empty() {
+                value_to_i64(&args[0])
+            } else {
+                1
+            };
+            if n > 0 {
+                let bucket_size = (partition_rows.len() as i64 + n - 1) / n;
+                Value::BigInt((current_pos as i64 / bucket_size) + 1)
+            } else {
+                Value::Null(NullType::Null)
+            }
+        }
+        _ => Value::Null(NullType::Null),
+    }
+}
+
+fn compare_rows_for_topn(
+    a: &[Value],
+    b: &[Value],
+    col_names: &[String],
+    sort_expressions: &[Expression],
+    sort_directions: &[SortDirection],
+) -> std::cmp::Ordering {
+    for (idx, expr) in sort_expressions.iter().enumerate() {
+        let direction = sort_directions
+            .get(idx)
+            .copied()
+            .unwrap_or(SortDirection::Ascending);
+
+        let mut ctx_a = ValueRowContext::new(a.to_vec(), col_names.to_vec());
+        let mut ctx_b = ValueRowContext::new(b.to_vec(), col_names.to_vec());
+
+        let val_a = ExpressionEvaluator::evaluate(expr, &mut ctx_a)
+            .unwrap_or(Value::Null(NullType::Null));
+        let val_b = ExpressionEvaluator::evaluate(expr, &mut ctx_b)
+            .unwrap_or(Value::Null(NullType::Null));
+
+        let cmp = compare_values(&val_a, &val_b);
+
+        let final_cmp = match direction {
+            SortDirection::Ascending => cmp,
+            SortDirection::Descending => cmp.reverse(),
+        };
+
+        if final_cmp != std::cmp::Ordering::Equal {
+            return final_cmp;
+        }
+    }
+    std::cmp::Ordering::Equal
+}

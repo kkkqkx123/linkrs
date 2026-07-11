@@ -189,7 +189,7 @@ pub async fn execute_dump(
 
     let dump_dir = std::path::Path::new(&output_path);
     if !dump_dir.exists() {
-        std::fs::create_dir_all(dump_dir).map_err(|e| crate::utils::error::CliError::IoError(e))?;
+        std::fs::create_dir_all(dump_dir).map_err(crate::utils::error::CliError::IoError)?;
     }
 
     let meta_path = dump_dir.join("metadata.json");
@@ -204,7 +204,7 @@ pub async fn execute_dump(
         &meta_path,
         serde_json::to_string_pretty(&meta_content).unwrap(),
     )
-    .map_err(|e| crate::utils::error::CliError::IoError(e))?;
+    .map_err(crate::utils::error::CliError::IoError)?;
 
     let total_vertices: u64 = 0;
     let total_edges: u64 = 0;

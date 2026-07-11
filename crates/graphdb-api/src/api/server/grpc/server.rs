@@ -8,7 +8,7 @@ use tonic::{transport::Server, Request, Response, Status};
 
 use crate::api::server::http::AppState;
 use crate::config::Config;
-use crate::query::executor::streaming::StreamingQueryResult;
+
 use crate::storage::{
     StorageClient, StorageSchemaContextOps, StorageSyncContextOps, StorageTransactionContextOps,
 };
@@ -197,7 +197,7 @@ impl<
         request: Request<ExecuteQueryRequest>,
     ) -> Result<Response<Self::ExecuteQueryStreamStream>, Status> {
         let inner = request.into_inner();
-        let session_id: i64 = inner.session_id.parse().unwrap_or(0);
+        let session_id: i64 = inner.session_id.unwrap_or_default().parse().unwrap_or(0);
         let query = inner.query;
 
         let graph_service = self.app_state.server.get_graph_service();
@@ -205,7 +205,7 @@ impl<
         let stream_result = graph_service
             .execute_stream(session_id, &query)
             .await
-            .map_err(|e| Status::internal(e))?;
+            .map_err(Status::internal)?;
 
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<QueryResultChunk, Status>>(16);
 
@@ -213,7 +213,7 @@ impl<
             // Spawn blocking task to pull chunks synchronously.
             let tx_pull = tx.clone();
             let pull_handle = tokio::task::spawn_blocking(move || {
-                let mut chunk_index = 0u64;
+                let mut _chunk_index = 0u64;
                 loop {
                     match stream_result.next_chunk() {
                         Ok(Some(chunk)) => {
@@ -240,7 +240,7 @@ impl<
                             {
                                 return;
                             }
-                            chunk_index += 1;
+                            _chunk_index += 1;
                         }
                         Ok(None) => {
                             // Send final empty chunk with is_last=true
@@ -803,12 +803,12 @@ fn value_to_proto_value(value: crate::core::Value) -> super::proto::Value {
     use super::proto::Value as ProtoValueMsg;
 
     let proto_val = match value {
-        crate::core::Value::Empty | crate::core::Value::Null(_) => ProtoValue::NullValue(0),
+        crate::core::Value::Empty | crate::core::Value::Null(_) => ProtoValue::StringValue(String::new()),
         crate::core::Value::Bool(b) => ProtoValue::BoolValue(b),
         crate::core::Value::SmallInt(i) => ProtoValue::IntValue(i as i64),
         crate::core::Value::Int(i) => ProtoValue::IntValue(i as i64),
         crate::core::Value::BigInt(i) => ProtoValue::IntValue(i),
-        crate::core::Value::Float(f) => ProtoValue::FloatValue(f),
+        crate::core::Value::Float(f) => ProtoValue::FloatValue(f as f64),
         crate::core::Value::Double(d) => ProtoValue::DoubleValue(d),
         crate::core::Value::Decimal128(d) => ProtoValue::StringValue(d.to_string()),
         crate::core::Value::String(s) => ProtoValue::StringValue(s),

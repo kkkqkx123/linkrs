@@ -172,32 +172,9 @@ impl StreamingExecutionEngine {
     }
 }
 
-/// Extract peak memory from a root executor by inspecting its MemoryTracker,
-/// if it is a blocking operator variant.
+/// Extract peak memory from a root executor.
 fn extract_peak_memory(executor: &StreamingExecutor) -> u64 {
-    use StreamingExecutor::*;
-    match executor {
-        Sort { memory_tracker, .. } => memory_tracker.peak() as u64,
-        Aggregate { memory_tracker, .. } => memory_tracker.peak() as u64,
-        HashJoin { memory_tracker, .. } => memory_tracker.peak() as u64,
-        NestedLoopJoin { memory_tracker, .. } => memory_tracker.peak() as u64,
-        InnerJoin { memory_tracker, .. } => memory_tracker.peak() as u64,
-        LeftJoin { memory_tracker, .. } => memory_tracker.peak() as u64,
-        RightJoin { memory_tracker, .. } => memory_tracker.peak() as u64,
-        FullOuterJoin { memory_tracker, .. } => memory_tracker.peak() as u64,
-        CrossJoin { memory_tracker, .. } => memory_tracker.peak() as u64,
-        SemiJoin { memory_tracker, .. } => memory_tracker.peak() as u64,
-        GroupBy { memory_tracker, .. } => memory_tracker.peak() as u64,
-        Distinct { memory_tracker, .. } => memory_tracker.peak() as u64,
-        WindowFunction { memory_tracker, .. } => memory_tracker.peak() as u64,
-        Union { memory_tracker, .. } => memory_tracker.peak() as u64,
-        Intersect { memory_tracker, .. } => memory_tracker.peak() as u64,
-        Except { memory_tracker, .. } => memory_tracker.peak() as u64,
-        Minus { memory_tracker, .. } => memory_tracker.peak() as u64,
-        TopN { memory_tracker, .. } => memory_tracker.peak() as u64,
-        Materialize { memory_tracker, .. } => memory_tracker.peak() as u64,
-        _ => 0,
-    }
+    executor.peak_memory_bytes()
 }
 
 impl Default for StreamingExecutionEngine {
@@ -209,7 +186,9 @@ impl Default for StreamingExecutionEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::runtime::ExecutionRuntime;
+    use super::super::operators::source_operator::SourceOperator;
+    use super::super::operators::unary_operator::UnaryOperator;
+    use super::super::operator_base::OperatorBase;
     use crate::core::Value;
 
     fn create_test_buffer(count: usize) -> Vec<Vec<Value>> {
@@ -221,6 +200,18 @@ mod tests {
                 ]
             })
             .collect()
+    }
+
+    fn scan_executor(rows: Vec<Vec<Value>>, col_names: Vec<String>) -> StreamingExecutor {
+        StreamingExecutor::Source(
+            OperatorBase::new(0),
+            SourceOperator::ScanVertices {
+                partition_id: 0,
+                buffer: rows,
+                current_index: 0,
+                col_names,
+            },
+        )
     }
 
     #[test]
@@ -236,14 +227,7 @@ mod tests {
         engine.set_runtime(runtime);
 
         let buffer = create_test_buffer(50);
-        let scan = StreamingExecutor::ScanVertices {
-            partition_id: 0,
-            buffer,
-            current_index: 0,
-            col_names: vec![],
-            plan_node_id: 0,
-            runtime: None,
-        };
+        let scan = scan_executor(buffer, vec![]);
         engine.register_executor(0, scan);
 
         let result = engine.execute();
@@ -260,14 +244,7 @@ mod tests {
         engine.set_runtime(runtime);
 
         let buffer = create_test_buffer(10);
-        let scan = StreamingExecutor::ScanVertices {
-            partition_id: 0,
-            buffer,
-            current_index: 0,
-            col_names: vec![],
-            plan_node_id: 0,
-            runtime: None,
-        };
+        let scan = scan_executor(buffer, vec![]);
         engine.register_executor(0, scan);
 
         let mut stream = engine.into_stream().unwrap();
@@ -285,14 +262,7 @@ mod tests {
         engine.set_runtime(runtime.clone());
 
         let buffer = create_test_buffer(100);
-        let scan = StreamingExecutor::ScanVertices {
-            partition_id: 0,
-            buffer,
-            current_index: 0,
-            col_names: vec![],
-            plan_node_id: 0,
-            runtime: None,
-        };
+        let scan = scan_executor(buffer, vec![]);
         engine.register_executor(0, scan);
 
         // Cancel before execution
@@ -309,14 +279,7 @@ mod tests {
         engine.set_runtime(runtime);
 
         let buffer = create_test_buffer(25);
-        let scan = StreamingExecutor::ScanVertices {
-            partition_id: 0,
-            buffer,
-            current_index: 0,
-            col_names: vec!["id".to_string(), "name".to_string()],
-            plan_node_id: 0,
-            runtime: None,
-        };
+        let scan = scan_executor(buffer, vec!["id".to_string(), "name".to_string()]);
         engine.register_executor(0, scan);
 
         let stream = engine.into_stream().unwrap();
@@ -330,14 +293,7 @@ mod tests {
         let mut engine = StreamingExecutionEngine::new();
 
         let buffer = create_test_buffer(100);
-        let scan = StreamingExecutor::ScanVertices {
-            partition_id: 0,
-            buffer,
-            current_index: 0,
-            col_names: vec![],
-            plan_node_id: 0,
-            runtime: None,
-        };
+        let scan = scan_executor(buffer, vec![]);
         engine.register_executor(0, scan);
 
         let result = engine.execute();
@@ -353,23 +309,16 @@ mod tests {
         let mut engine = StreamingExecutionEngine::new();
 
         let buffer = create_test_buffer(100);
-        let scan = StreamingExecutor::ScanVertices {
-            partition_id: 0,
-            buffer,
-            current_index: 0,
-            col_names: vec![],
-            plan_node_id: 0,
-            runtime: None,
-        };
+        let scan = Box::new(scan_executor(buffer, vec![]));
 
-        let limit = StreamingExecutor::Limit {
-            input: Box::new(scan),
-            limit: 10,
-            consumed: 0,
-            opened: false,
-            plan_node_id: 0,
-            runtime: None,
-        };
+        let limit = StreamingExecutor::Unary(
+            OperatorBase::new(0),
+            scan,
+            UnaryOperator::Limit {
+                limit: 10,
+                consumed: 0,
+            },
+        );
 
         engine.register_executor(0, limit);
 

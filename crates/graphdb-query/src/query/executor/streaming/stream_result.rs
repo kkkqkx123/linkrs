@@ -177,11 +177,13 @@ impl StreamingQueryResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::Value;
     use crate::query::executor::base::MemoryBudget;
     use crate::query::executor::streaming::engine::StreamingExecutionEngine;
+    use crate::query::executor::streaming::operators::source_operator::SourceOperator;
     use crate::query::executor::streaming::executor::StreamingExecutor;
+    use crate::query::executor::streaming::operator_base::OperatorBase;
     use crate::query::executor::streaming::runtime::QueryIdentity;
-    use crate::core::Value;
 
     fn create_test_stream(count: usize) -> StreamingQueryResult {
         let mut engine = StreamingExecutionEngine::new();
@@ -195,14 +197,15 @@ mod tests {
             .map(|i| vec![Value::BigInt(i as i64)])
             .collect();
 
-        let scan = StreamingExecutor::ScanVertices {
-            partition_id: 0,
-            buffer,
-            current_index: 0,
-            col_names: vec!["id".to_string()],
-            plan_node_id: 0,
-            runtime: None,
-        };
+        let scan = StreamingExecutor::Source(
+            OperatorBase::new(0),
+            SourceOperator::ScanVertices {
+                partition_id: 0,
+                buffer,
+                current_index: 0,
+                col_names: vec!["id".to_string()],
+            },
+        );
         engine.register_executor(0, scan);
         let stream = engine.into_stream().unwrap();
         StreamingQueryResult::new(stream, runtime)

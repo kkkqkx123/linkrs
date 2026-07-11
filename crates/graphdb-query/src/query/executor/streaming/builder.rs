@@ -1,13 +1,21 @@
-//! Builder for StreamingExecutor from ExecutionPlan
-//!
-//! This module provides utilities to construct streaming executors
-//! from the execution plan. Supports automatic conversion of plan nodes
-//! to streaming executor operators.
-
+use super::operators::blocking_operator::BlockingOperator;
+use super::operators::ddl_operator::DdlOperator;
+use super::operators::fulltext_operator::FulltextOperator;
+use super::operators::graph_operator::GraphOperator;
+use super::operators::join_operator::JoinOperator;
+use super::operators::set_operator::SetOperator;
+use super::operators::apply_operator::ApplyOperator;
+use super::operators::sink_operator::SinkOperator;
+use super::operators::source_operator::SourceOperator;
+use super::operators::txn_operator::TxnOperator;
+use super::operators::unary_operator::UnaryOperator;
+use super::operators::vector_operator::VectorOperator;
+use super::executor::FullOuterJoinPhase;
+use super::executor::OperatorBase;
 use super::executor::StreamingExecutor;
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
-use crate::core::types::operators::{AggregateFunction, BinaryOperator};
+use crate::core::types::operators::{AggregateFunction, BinaryOperator as BinOp};
 use crate::core::Value;
 use crate::query::core::NodeType;
 use crate::query::executor::base::{ExecutionContext, MemoryTracker};
@@ -21,67 +29,50 @@ use crate::query::planning::plan::core::nodes::management::manage_node_enums::{
     UserManageNode, VectorManageNode,
 };
 
-/// Builder for constructing StreamingExecutor instances
 pub struct StreamingExecutorBuilder;
 
 impl StreamingExecutorBuilder {
-    /// Create a simple scan executor for testing/basic use
     pub fn build_simple_scan(rows: Vec<Vec<Value>>) -> Result<StreamingExecutor, QueryError> {
         Self::build_simple_scan_with_col_names(rows, vec![])
     }
 
-    /// Create a simple scan with explicit column names (avoids col_N inference)
     pub fn build_simple_scan_with_col_names(
         rows: Vec<Vec<Value>>,
         col_names: Vec<String>,
     ) -> Result<StreamingExecutor, QueryError> {
-        if rows.is_empty() {
-            return Ok(StreamingExecutor::ScanVertices {
+        Ok(StreamingExecutor::Source(
+            OperatorBase::new(0),
+            SourceOperator::ScanVertices {
                 partition_id: 0,
-                buffer: vec![],
+                buffer: rows,
                 current_index: 0,
                 col_names,
-                plan_node_id: 0,
-                runtime: None,
-            });
-        }
-
-        Ok(StreamingExecutor::ScanVertices {
-            partition_id: 0,
-            buffer: rows,
-            current_index: 0,
-            col_names,
-            plan_node_id: 0,
-            runtime: None,
-        })
+            },
+        ))
     }
 
-    /// Convert a single plan node to a streaming executor
-    /// Supports: ScanVertices, ScanEdges, Filter, Project, Limit, Aggregate, and Join operations
     pub fn from_plan_node(
         node: &PlanNodeEnum,
         context: &ExecutionContext,
     ) -> Result<StreamingExecutor, QueryError> {
         match node {
-            // ======== Scan Operations ========
             PlanNodeEnum::ScanVertices(scan_node) => {
                 let limit = scan_node
                     .limit()
                     .and_then(|value| (value >= 0).then_some(value as usize));
                 let col_names = scan_node.col_names().to_vec();
-                let executor = StreamingExecutor::StorageScanVertices {
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    limit,
-                    cursor: None,
-                    buffer: Vec::new(),
-                    current_index: 0,
-                    col_names,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                };
-
-                Ok(executor)
+                Ok(StreamingExecutor::Source(
+                    OperatorBase::new(node.id()),
+                    SourceOperator::StorageScanVertices {
+                        storage: context.storage.clone(),
+                        space_name: context.space_name.clone().unwrap_or_default(),
+                        limit,
+                        cursor: None,
+                        buffer: Vec::new(),
+                        current_index: 0,
+                        col_names,
+                    },
+                ))
             }
 
             PlanNodeEnum::ScanEdges(scan_node) => {
@@ -89,96 +80,77 @@ impl StreamingExecutorBuilder {
                     .limit()
                     .and_then(|value| (value >= 0).then_some(value as usize));
                 let col_names = scan_node.col_names().to_vec();
-                // Phase 3: extract optional edge_type from the plan node.
                 let edge_type = scan_node.edge_type().map(|s| s.to_string());
-                let executor = StreamingExecutor::StorageScanEdges {
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    limit,
-                    edge_type,
-                    cursor: None,
-                    buffer: Vec::new(),
-                    current_index: 0,
-                    col_names,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                };
-
-                Ok(executor)
+                Ok(StreamingExecutor::Source(
+                    OperatorBase::new(node.id()),
+                    SourceOperator::StorageScanEdges {
+                        storage: context.storage.clone(),
+                        space_name: context.space_name.clone().unwrap_or_default(),
+                        limit,
+                        edge_type,
+                        cursor: None,
+                        buffer: Vec::new(),
+                        current_index: 0,
+                        col_names,
+                    },
+                ))
             }
 
-            // ======== Filter Operation ========
             PlanNodeEnum::Filter(filter_node) => {
                 let input_plan = filter_node.input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
-
                 let condition = filter_node.condition();
                 let predicate = Self::contextual_to_expression(condition)?;
-
-                Ok(StreamingExecutor::Filter {
-                    input: Box::new(input_executor),
-                    predicate,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Unary(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    UnaryOperator::Filter { predicate },
+                ))
             }
 
-            // ======== Project Operation ========
             PlanNodeEnum::Project(project_node) => {
                 let input_plan = project_node.input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
-
                 let columns = project_node.columns();
                 let output_expressions = Self::yield_columns_to_expressions(columns)?;
-
-                Ok(StreamingExecutor::Project {
-                    input: Box::new(input_executor),
-                    output_expressions,
-                    output_col_names: project_node.col_names().to_vec(),
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Unary(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    UnaryOperator::Project {
+                        output_expressions,
+                        output_col_names: project_node.col_names().to_vec(),
+                    },
+                ))
             }
 
-            // ======== Limit Operation ========
             PlanNodeEnum::Limit(limit_node) => {
                 let input_plan = limit_node.input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
-
                 let count = limit_node.count();
                 if count < 0 {
                     return Err(QueryError::execution(
                         "Limit count must be non-negative".to_string(),
                     ));
                 }
-
-                Ok(StreamingExecutor::Limit {
-                    input: Box::new(input_executor),
-                    limit: count as u32,
-                    consumed: 0,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Unary(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    UnaryOperator::Limit {
+                        limit: count as u32,
+                        consumed: 0,
+                    },
+                ))
             }
 
-            // ======== Aggregate Operation ========
             PlanNodeEnum::Aggregate(agg_node) => {
                 let input_plan = agg_node.input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
-
                 let group_keys = agg_node.group_keys();
-                // Convert group keys to expressions (as variable references)
                 let group_by_expressions: Vec<Expression> = group_keys
                     .iter()
                     .map(|key| Expression::Variable(key.clone()))
                     .collect();
-
                 let agg_functions = agg_node.aggregation_functions();
-
-                // Pair each aggregation function with an expression
                 let aggregate_functions: Vec<(AggregateFunction, Expression)> = agg_functions
                     .iter()
                     .map(|func| {
@@ -199,47 +171,42 @@ impl StreamingExecutorBuilder {
                         (func.clone(), expr)
                     })
                     .collect();
-
                 let memory_tracker = MemoryTracker::new(context.memory_budget.clone());
-                Ok(StreamingExecutor::Aggregate {
-                    input: Box::new(input_executor),
-                    group_by_expressions,
-                    aggregate_functions,
-                    all_rows: vec![],
-                    result_iter: None,
-                    opened: false,
-                    memory_tracker,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Blocking(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    BlockingOperator::Aggregate {
+                        group_by_expressions,
+                        aggregate_functions,
+                        memory_tracker,
+                        state: None,
+                    },
+                ))
             }
 
-            // ======== Join Operations ========
             PlanNodeEnum::InnerJoin(join_node) => {
                 let left_plan = join_node.left_input();
                 let right_plan = join_node.right_input();
                 let left_executor = Self::from_plan_node(left_plan, context)?;
                 let right_executor = Self::from_plan_node(right_plan, context)?;
-
                 let condition = Self::join_keys_to_condition(
                     join_node.hash_keys(),
                     join_node.probe_keys(),
                     right_plan.col_names(),
                 )?;
-
                 let memory_tracker = MemoryTracker::new(context.memory_budget.clone());
-                Ok(StreamingExecutor::InnerJoin {
-                    left: Box::new(left_executor),
-                    right: Box::new(right_executor),
-                    join_condition: condition,
-                    build_side_tuples: vec![],
-                    left_consumed: false,
-                    opened: false,
-                    memory_tracker,
-                    right_col_names: vec![],
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Join(
+                    OperatorBase::new(node.id()),
+                    Box::new(left_executor),
+                    Box::new(right_executor),
+                    JoinOperator::InnerJoin {
+                        join_condition: condition,
+                        build_side_tuples: vec![],
+                        left_consumed: false,
+                        memory_tracker,
+                        right_col_names: vec![],
+                    },
+                ))
             }
 
             PlanNodeEnum::LeftJoin(join_node) => {
@@ -247,25 +214,23 @@ impl StreamingExecutorBuilder {
                 let right_plan = join_node.right_input();
                 let left_executor = Self::from_plan_node(left_plan, context)?;
                 let right_executor = Self::from_plan_node(right_plan, context)?;
-
                 let condition = Self::join_keys_to_condition(
                     join_node.hash_keys(),
                     join_node.probe_keys(),
                     right_plan.col_names(),
                 )?;
-
-                Ok(StreamingExecutor::LeftJoin {
-                    left: Box::new(left_executor),
-                    right: Box::new(right_executor),
-                    join_condition: condition,
-                    build_side_tuples: vec![],
-                    left_consumed: false,
-                    opened: false,
-                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
-                    right_col_names: vec![],
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Join(
+                    OperatorBase::new(node.id()),
+                    Box::new(left_executor),
+                    Box::new(right_executor),
+                    JoinOperator::LeftJoin {
+                        join_condition: condition,
+                        build_side_tuples: vec![],
+                        left_consumed: false,
+                        memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
+                        right_col_names: vec![],
+                    },
+                ))
             }
 
             PlanNodeEnum::CrossJoin(join_node) => {
@@ -273,40 +238,37 @@ impl StreamingExecutorBuilder {
                 let right_plan = join_node.right_input();
                 let left_executor = Self::from_plan_node(left_plan, context)?;
                 let right_executor = Self::from_plan_node(right_plan, context)?;
-
                 let memory_tracker = MemoryTracker::new(context.memory_budget.clone());
-                Ok(StreamingExecutor::CrossJoin {
-                    left: Box::new(left_executor),
-                    right: Box::new(right_executor),
-                    all_left_rows: vec![],
-                    all_right_rows: vec![],
-                    left_consumed: false,
-                    right_consumed: false,
-                    opened: false,
-                    memory_tracker,
-                    right_col_names: vec![],
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Join(
+                    OperatorBase::new(node.id()),
+                    Box::new(left_executor),
+                    Box::new(right_executor),
+                    JoinOperator::CrossJoin {
+                        all_left_rows: vec![],
+                        all_right_rows: vec![],
+                        left_consumed: false,
+                        right_consumed: false,
+                        memory_tracker,
+                        right_col_names: vec![],
+                    },
+                ))
             }
 
-            // ======== Set Operations ========
             PlanNodeEnum::Union(set_node) => {
                 let left_plan = set_node.input();
                 let right_plan = set_node.union_input();
                 let left_executor = Self::from_plan_node(left_plan, context)?;
                 let right_executor = Self::from_plan_node(right_plan, context)?;
-
-                Ok(StreamingExecutor::Union {
-                    left: Box::new(left_executor),
-                    right: Box::new(right_executor),
-                    seen_rows: std::collections::HashSet::new(),
-                    left_consumed: false,
-                    opened: false,
-                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Set(
+                    OperatorBase::new(node.id()),
+                    Box::new(left_executor),
+                    Box::new(right_executor),
+                    SetOperator::Union {
+                        seen_rows: std::collections::HashSet::new(),
+                        left_consumed: false,
+                        memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
+                    },
+                ))
             }
 
             PlanNodeEnum::Intersect(set_node) => {
@@ -314,19 +276,18 @@ impl StreamingExecutorBuilder {
                 let right_plan = set_node.intersect_input();
                 let left_executor = Self::from_plan_node(left_plan, context)?;
                 let right_executor = Self::from_plan_node(right_plan, context)?;
-
-                Ok(StreamingExecutor::Intersect {
-                    left: Box::new(left_executor),
-                    right: Box::new(right_executor),
-                    left_rows: Vec::new(),
-                    right_rows: std::collections::HashSet::new(),
-                    left_buffered: false,
-                    right_buffered: false,
-                    opened: false,
-                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Set(
+                    OperatorBase::new(node.id()),
+                    Box::new(left_executor),
+                    Box::new(right_executor),
+                    SetOperator::Intersect {
+                        left_rows: Vec::new(),
+                        right_rows: std::collections::HashSet::new(),
+                        left_buffered: false,
+                        right_buffered: false,
+                        memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
+                    },
+                ))
             }
 
             PlanNodeEnum::Minus(set_node) => {
@@ -334,137 +295,144 @@ impl StreamingExecutorBuilder {
                 let right_plan = set_node.minus_input();
                 let left_executor = Self::from_plan_node(left_plan, context)?;
                 let right_executor = Self::from_plan_node(right_plan, context)?;
-
-                Ok(StreamingExecutor::Except {
-                    left: Box::new(left_executor),
-                    right: Box::new(right_executor),
-                    exclude_rows: std::collections::HashSet::new(),
-                    right_buffered: false,
-                    opened: false,
-                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Set(
+                    OperatorBase::new(node.id()),
+                    Box::new(left_executor),
+                    Box::new(right_executor),
+                    SetOperator::Except {
+                        exclude_rows: std::collections::HashSet::new(),
+                        right_buffered: false,
+                        memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
+                    },
+                ))
             }
 
-            // ======== Other Operations (partially supported) ========
             PlanNodeEnum::Sort(sort_node) => {
                 let input_plan = sort_node.input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
-
                 let sort_items = sort_node.sort_items();
                 if sort_items.is_empty() {
-                    // No sort items: pass through
-                    Ok(input_executor)
-                } else {
-                    let (sort_expressions, sort_directions) =
-                        Self::sort_items_to_expressions(sort_items)?;
-
-                    let memory_tracker = MemoryTracker::new(context.memory_budget.clone());
-                    Ok(StreamingExecutor::Sort {
-                        input: Box::new(input_executor),
+                    return Ok(input_executor);
+                }
+                let (sort_expressions, sort_directions) =
+                    Self::sort_items_to_expressions(sort_items)?;
+                let memory_tracker = MemoryTracker::new(context.memory_budget.clone());
+                Ok(StreamingExecutor::Blocking(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    BlockingOperator::Sort {
                         sort_expressions,
                         sort_directions,
-                        all_rows: vec![],
-                        row_iter: None,
-                        opened: false,
                         memory_tracker,
-                        plan_node_id: node.id(),
-                        runtime: None,
-                    })
-                }
+                        state: None,
+                    },
+                ))
             }
 
             PlanNodeEnum::Dedup(dedup_node) => {
                 let input_plan = dedup_node.input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
-
-                Ok(StreamingExecutor::Distinct {
-                    input: Box::new(input_executor),
-                    seen_rows: std::collections::HashSet::new(),
-                    opened: false,
-                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                let memory_tracker = MemoryTracker::new(context.memory_budget.clone());
+                Ok(StreamingExecutor::Blocking(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    BlockingOperator::Distinct {
+                        memory_tracker,
+                        state: None,
+                    },
+                ))
             }
 
-            // ======== Management/DDL Operations ========
             PlanNodeEnum::SpaceManage(manage_node) => {
                 let action = manage_node.node_type_id().to_string();
                 let space_name = Self::extract_space_manage_name(manage_node);
-                Ok(StreamingExecutor::SpaceManage {
-                    input: Box::new(StreamingExecutor::Start { opened: false, plan_node_id: 0, runtime: None }),
-                    storage: context.storage.clone(),
-                    action,
-                    space_name,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Ddl(
+                    OperatorBase::new(node.id()),
+                    Box::new(StreamingExecutor::Source(
+                        OperatorBase::new(0),
+                        SourceOperator::Start,
+                    )),
+                    DdlOperator::SpaceManage {
+                        storage: context.storage.clone(),
+                        action,
+                        space_name,
+                    },
+                ))
             }
 
             PlanNodeEnum::TagManage(manage_node) => {
                 let action = manage_node.node_type_id().to_string();
                 let tag_name = Self::extract_tag_manage_name(manage_node);
                 let properties = Self::extract_tag_manage_properties(manage_node);
-                Ok(StreamingExecutor::TagManage {
-                    input: Box::new(StreamingExecutor::Start { opened: false, plan_node_id: 0, runtime: None }),
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    action,
-                    tag_name,
-                    properties,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Ddl(
+                    OperatorBase::new(node.id()),
+                    Box::new(StreamingExecutor::Source(
+                        OperatorBase::new(0),
+                        SourceOperator::Start,
+                    )),
+                    DdlOperator::TagManage {
+                        storage: context.storage.clone(),
+                        space_name: context.space_name.clone().unwrap_or_default(),
+                        action,
+                        tag_name,
+                        properties,
+                    },
+                ))
             }
 
             PlanNodeEnum::EdgeManage(manage_node) => {
                 let action = manage_node.node_type_id().to_string();
                 let edge_type = Self::extract_edge_manage_name(manage_node);
                 let properties = Self::extract_edge_manage_properties(manage_node);
-                Ok(StreamingExecutor::EdgeManage {
-                    input: Box::new(StreamingExecutor::Start { opened: false, plan_node_id: 0, runtime: None }),
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    action,
-                    edge_type,
-                    properties,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Ddl(
+                    OperatorBase::new(node.id()),
+                    Box::new(StreamingExecutor::Source(
+                        OperatorBase::new(0),
+                        SourceOperator::Start,
+                    )),
+                    DdlOperator::EdgeManage {
+                        storage: context.storage.clone(),
+                        space_name: context.space_name.clone().unwrap_or_default(),
+                        action,
+                        edge_type,
+                        properties,
+                    },
+                ))
             }
 
             PlanNodeEnum::IndexManage(manage_node) => {
                 let action = manage_node.node_type_id().to_string();
                 let index_name = Self::extract_index_manage_name(manage_node);
-                Ok(StreamingExecutor::IndexManage {
-                    input: Box::new(StreamingExecutor::Start { opened: false, plan_node_id: 0, runtime: None }),
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    action,
-                    index_name,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Ddl(
+                    OperatorBase::new(node.id()),
+                    Box::new(StreamingExecutor::Source(
+                        OperatorBase::new(0),
+                        SourceOperator::Start,
+                    )),
+                    DdlOperator::IndexManage {
+                        storage: context.storage.clone(),
+                        space_name: context.space_name.clone().unwrap_or_default(),
+                        action,
+                        index_name,
+                    },
+                ))
             }
 
             PlanNodeEnum::UserManage(manage_node) => {
                 let action = manage_node.node_type_id().to_string();
                 let username = Self::extract_user_manage_name(manage_node);
-                Ok(StreamingExecutor::UserManage {
-                    input: Box::new(StreamingExecutor::Start { opened: false, plan_node_id: 0, runtime: None }),
-                    storage: context.storage.clone(),
-                    action,
-                    username,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Ddl(
+                    OperatorBase::new(node.id()),
+                    Box::new(StreamingExecutor::Source(
+                        OperatorBase::new(0),
+                        SourceOperator::Start,
+                    )),
+                    DdlOperator::UserManage {
+                        storage: context.storage.clone(),
+                        action,
+                        username,
+                    },
+                ))
             }
 
             PlanNodeEnum::FulltextManage(manage_node) => {
@@ -486,21 +454,24 @@ impl StreamingExecutorBuilder {
                 };
                 #[cfg(feature = "fulltext-search")]
                 let fulltext_manager = context.fulltext_manager.clone();
-                Ok(StreamingExecutor::FulltextManage {
-                    input: Box::new(StreamingExecutor::Start { opened: false, plan_node_id: 0, runtime: None }),
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    space_id: space_id.unwrap_or(0),
-                    action,
-                    index_name,
-                    tag_name,
-                    field_name,
-                    #[cfg(feature = "fulltext-search")]
-                    fulltext_manager,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Fulltext(
+                    OperatorBase::new(node.id()),
+                    Box::new(StreamingExecutor::Source(
+                        OperatorBase::new(0),
+                        SourceOperator::Start,
+                    )),
+                    FulltextOperator::FulltextManage {
+                        storage: context.storage.clone(),
+                        space_name: context.space_name.clone().unwrap_or_default(),
+                        space_id: space_id.unwrap_or(0),
+                        action,
+                        index_name,
+                        tag_name,
+                        field_name,
+                        #[cfg(feature = "fulltext-search")]
+                        fulltext_manager,
+                    },
+                ))
             }
 
             PlanNodeEnum::VectorManage(manage_node) => {
@@ -515,48 +486,48 @@ impl StreamingExecutorBuilder {
                     ),
                     _ => (None, None, None),
                 };
-                Ok(StreamingExecutor::VectorManage {
-                    input: Box::new(StreamingExecutor::Start { opened: false, plan_node_id: 0, runtime: None }),
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    space_id: space_id.unwrap_or(0),
-                    action,
-                    index_name,
-                    tag_name,
-                    field_name,
-                    #[cfg(feature = "qdrant")]
-                    vector_coordinator: context.vector_coordinator.clone(),
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Vector(
+                    OperatorBase::new(node.id()),
+                    Box::new(StreamingExecutor::Source(
+                        OperatorBase::new(0),
+                        SourceOperator::Start,
+                    )),
+                    VectorOperator::VectorManage {
+                        storage: context.storage.clone(),
+                        space_name: context.space_name.clone().unwrap_or_default(),
+                        space_id: space_id.unwrap_or(0),
+                        action,
+                        index_name,
+                        tag_name,
+                        field_name,
+                        #[cfg(feature = "qdrant")]
+                        vector_coordinator: context.vector_coordinator.clone(),
+                    },
+                ))
             }
 
-            // ======== Graph Traversal Operations ========
             PlanNodeEnum::Expand(expand_node) => {
                 let input_plan = expand_node
                     .inputs()
                     .first()
                     .ok_or_else(|| QueryError::execution("Expand requires an input".to_string()))?;
                 let input_executor = Self::from_plan_node(input_plan, context)?;
-
                 let edge_types = expand_node.edge_types().to_vec();
                 let direction = expand_node.direction();
-
-                Ok(StreamingExecutor::Expand {
-                    input: Box::new(input_executor),
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    edge_types,
-                    direction,
-                    filter_expr: expand_node
-                        .filter()
-                        .map(Self::contextual_to_expression)
-                        .transpose()?,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Graph(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    GraphOperator::Expand {
+                        storage: context.storage.clone(),
+                        space_name: context.space_name.clone().unwrap_or_default(),
+                        edge_types,
+                        direction,
+                        filter_expr: expand_node
+                            .filter()
+                            .map(Self::contextual_to_expression)
+                            .transpose()?,
+                    },
+                ))
             }
 
             PlanNodeEnum::ExpandAll(expand_all_node) => {
@@ -564,60 +535,55 @@ impl StreamingExecutorBuilder {
                     QueryError::execution("ExpandAll requires an input".to_string())
                 })?;
                 let input_executor = Self::from_plan_node(input_plan, context)?;
-
                 let edge_types = expand_all_node.edge_types().to_vec();
                 let direction = match expand_all_node.direction().to_lowercase().as_str() {
                     "out" | "outgoing" => crate::core::EdgeDirection::Out,
                     "in" | "incoming" => crate::core::EdgeDirection::In,
                     _ => crate::core::EdgeDirection::Both,
                 };
-
-                Ok(StreamingExecutor::ExpandAll {
-                    input: Box::new(input_executor),
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    edge_types,
-                    direction,
-                    filter_expr: expand_all_node
-                        .filter()
-                        .map(Self::contextual_to_expression)
-                        .transpose()?,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Graph(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    GraphOperator::ExpandAll {
+                        storage: context.storage.clone(),
+                        space_name: context.space_name.clone().unwrap_or_default(),
+                        edge_types,
+                        direction,
+                        filter_expr: expand_all_node
+                            .filter()
+                            .map(Self::contextual_to_expression)
+                            .transpose()?,
+                    },
+                ))
             }
 
             PlanNodeEnum::Traverse(traverse_node) => {
                 let input_plan = traverse_node.input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
-
                 let edge_types = traverse_node.edge_types().to_vec();
                 let direction = traverse_node.direction();
                 let min_depth = traverse_node.min_steps();
                 let max_depth = traverse_node.max_steps();
-
-                Ok(StreamingExecutor::Traverse {
-                    input: Box::new(input_executor),
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    edge_types,
-                    direction,
-                    min_depth,
-                    max_depth,
-                    filter_expr: traverse_node
-                        .e_filter()
-                        .or_else(|| traverse_node.v_filter())
-                        .map(Self::contextual_to_expression)
-                        .transpose()?,
-                    visited: std::collections::HashSet::new(),
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Graph(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    GraphOperator::Traverse {
+                        storage: context.storage.clone(),
+                        space_name: context.space_name.clone().unwrap_or_default(),
+                        edge_types,
+                        direction,
+                        min_depth,
+                        max_depth,
+                        filter_expr: traverse_node
+                            .e_filter()
+                            .or_else(|| traverse_node.v_filter())
+                            .map(Self::contextual_to_expression)
+                            .transpose()?,
+                        visited: std::collections::HashSet::new(),
+                    },
+                ))
             }
 
-            // ======== Data Modification Operations ========
             PlanNodeEnum::InsertVertices(insert_node) => {
                 let mut rows = Vec::new();
                 let prop_names: Vec<String> = insert_node
@@ -644,23 +610,24 @@ impl StreamingExecutorBuilder {
                     }
                     rows.push(row);
                 }
-                Ok(StreamingExecutor::InsertVertices {
-                    input: Box::new(Self::build_simple_scan_with_col_names(rows, scan_col_names)?),
-                    storage: context.storage.clone(),
-                    space_name: insert_node.space_name().to_string(),
-                    vertex_properties,
-                    tags: insert_node.tag_names(),
-                    rows_inserted: 0,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Sink(
+                    OperatorBase::new(node.id()),
+                    Box::new(Self::build_simple_scan_with_col_names(rows, scan_col_names)?),
+                    SinkOperator::InsertVertices {
+                        storage: context.storage.clone(),
+                        space_name: insert_node.space_name().to_string(),
+                        vertex_properties,
+                        tags: insert_node.tag_names(),
+                        rows_inserted: 0,
+                    },
+                ))
             }
 
             PlanNodeEnum::InsertEdges(insert_node) => {
                 let mut rows = Vec::new();
                 let prop_names = insert_node.prop_names();
-                let mut scan_col_names = vec!["src".to_string(), "dst".to_string(), "rank".to_string()];
+                let mut scan_col_names =
+                    vec!["src".to_string(), "dst".to_string(), "rank".to_string()];
                 scan_col_names.extend(prop_names.iter().cloned());
                 for (src, dst, rank, props) in insert_node.edges() {
                     let mut row = vec![
@@ -678,23 +645,21 @@ impl StreamingExecutorBuilder {
                 }
                 let edge_properties = prop_names
                     .iter()
-                    .map(|prop| {
-                        (prop.clone(), Expression::Variable(prop.clone()))
-                    })
+                    .map(|prop| (prop.clone(), Expression::Variable(prop.clone())))
                     .collect();
-                Ok(StreamingExecutor::InsertEdges {
-                    input: Box::new(Self::build_simple_scan_with_col_names(rows, scan_col_names)?),
-                    storage: context.storage.clone(),
-                    space_name: insert_node.space_name().to_string(),
-                    src_col: "src".to_string(),
-                    dst_col: "dst".to_string(),
-                    edge_type: insert_node.edge_name().to_string(),
-                    edge_properties,
-                    rows_inserted: 0,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Sink(
+                    OperatorBase::new(node.id()),
+                    Box::new(Self::build_simple_scan_with_col_names(rows, scan_col_names)?),
+                    SinkOperator::InsertEdges {
+                        storage: context.storage.clone(),
+                        space_name: insert_node.space_name().to_string(),
+                        src_col: "src".to_string(),
+                        dst_col: "dst".to_string(),
+                        edge_type: insert_node.edge_name().to_string(),
+                        edge_properties,
+                        rows_inserted: 0,
+                    },
+                ))
             }
 
             PlanNodeEnum::UpdateVertices(update_node) => {
@@ -706,16 +671,16 @@ impl StreamingExecutorBuilder {
                         updates.push((name.clone(), Self::contextual_to_expression(expr)?));
                     }
                 }
-                Ok(StreamingExecutor::UpdateVertices {
-                    input: Box::new(Self::build_simple_scan(rows)?),
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    updates,
-                    rows_updated: 0,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Sink(
+                    OperatorBase::new(node.id()),
+                    Box::new(Self::build_simple_scan(rows)?),
+                    SinkOperator::UpdateVertices {
+                        storage: context.storage.clone(),
+                        space_name: context.space_name.clone().unwrap_or_default(),
+                        updates,
+                        rows_updated: 0,
+                    },
+                ))
             }
 
             PlanNodeEnum::Update(update_node) => {
@@ -725,38 +690,31 @@ impl StreamingExecutorBuilder {
                         let updates: Vec<(String, Expression)> = vinfo
                             .properties
                             .iter()
-                            .filter_map(|(k, v)| {
-                                v.get_expression()
-                                    .map(|e| (k.clone(), e))
-                            })
+                            .filter_map(|(k, v)| v.get_expression().map(|e| (k.clone(), e)))
                             .collect();
-                        let row = vec![
-                            vinfo.vertex_id
-                                .constant_value()
-                                .unwrap_or(Value::Null(crate::core::NullType::Null)),
-                        ];
-                        Ok(StreamingExecutor::UpdateVertices {
-                            input: Box::new(Self::build_simple_scan_with_col_names(
+                        let row = vec![vinfo
+                            .vertex_id
+                            .constant_value()
+                            .unwrap_or(Value::Null(crate::core::NullType::Null))];
+                        Ok(StreamingExecutor::Sink(
+                            OperatorBase::new(node.id()),
+                            Box::new(Self::build_simple_scan_with_col_names(
                                 vec![row],
                                 vec!["vid".to_string()],
                             )?),
-                            storage: context.storage.clone(),
-                            space_name: vinfo.space_name.clone(),
-                            updates,
-                            rows_updated: 0,
-                            opened: false,
-                            plan_node_id: node.id(),
-                            runtime: None,
-                        })
+                            SinkOperator::UpdateVertices {
+                                storage: context.storage.clone(),
+                                space_name: vinfo.space_name.clone(),
+                                updates,
+                                rows_updated: 0,
+                            },
+                        ))
                     }
                     UpdateTargetType::Edge(einfo) => {
                         let updates: Vec<(String, Expression)> = einfo
                             .properties
                             .iter()
-                            .filter_map(|(k, v)| {
-                                v.get_expression()
-                                    .map(|e| (k.clone(), e))
-                            })
+                            .filter_map(|(k, v)| v.get_expression().map(|e| (k.clone(), e)))
                             .collect();
                         let src_val = einfo
                             .src
@@ -766,22 +724,22 @@ impl StreamingExecutorBuilder {
                             .dst
                             .constant_value()
                             .unwrap_or(Value::Null(crate::core::NullType::Null));
-                        Ok(StreamingExecutor::UpdateEdges {
-                            input: Box::new(Self::build_simple_scan_with_col_names(
+                        Ok(StreamingExecutor::Sink(
+                            OperatorBase::new(node.id()),
+                            Box::new(Self::build_simple_scan_with_col_names(
                                 vec![vec![src_val, dst_val]],
                                 vec!["src".to_string(), "dst".to_string()],
                             )?),
-                            storage: context.storage.clone(),
-                            space_name: einfo.space_name.clone(),
-                            src_col: "src".to_string(),
-                            dst_col: "dst".to_string(),
-                            edge_type: einfo.edge_type.clone().unwrap_or_default(),
-                            updates,
-                            rows_updated: 0,
-                            opened: false,
-                            plan_node_id: node.id(),
-                            runtime: None,
-                        })
+                            SinkOperator::UpdateEdges {
+                                storage: context.storage.clone(),
+                                space_name: einfo.space_name.clone(),
+                                src_col: "src".to_string(),
+                                dst_col: "dst".to_string(),
+                                edge_type: einfo.edge_type.clone().unwrap_or_default(),
+                                updates,
+                                rows_updated: 0,
+                            },
+                        ))
                     }
                 }
             }
@@ -811,19 +769,22 @@ impl StreamingExecutorBuilder {
                     .first()
                     .and_then(|u| u.edge_type.clone())
                     .unwrap_or_default();
-                Ok(StreamingExecutor::UpdateEdges {
-                    input: Box::new(StreamingExecutor::Start { opened: false, plan_node_id: 0, runtime: None }),
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    src_col,
-                    dst_col,
-                    edge_type,
-                    updates,
-                    rows_updated: 0,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Sink(
+                    OperatorBase::new(node.id()),
+                    Box::new(StreamingExecutor::Source(
+                        OperatorBase::new(0),
+                        SourceOperator::Start,
+                    )),
+                    SinkOperator::UpdateEdges {
+                        storage: context.storage.clone(),
+                        space_name: context.space_name.clone().unwrap_or_default(),
+                        src_col,
+                        dst_col,
+                        edge_type,
+                        updates,
+                        rows_updated: 0,
+                    },
+                ))
             }
 
             PlanNodeEnum::DeleteVertices(delete_node) => {
@@ -832,16 +793,19 @@ impl StreamingExecutorBuilder {
                     .iter()
                     .map(|id| Self::contextual_to_value(id).map(|value| vec![value]))
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(StreamingExecutor::DeleteVertices {
-                    input: Box::new(Self::build_simple_scan_with_col_names(rows, vec!["vid".to_string()])?),
-                    storage: context.storage.clone(),
-                    space_name: delete_node.space_name().to_string(),
-                    vertex_id_col: "vid".to_string(),
-                    rows_deleted: 0,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Sink(
+                    OperatorBase::new(node.id()),
+                    Box::new(Self::build_simple_scan_with_col_names(
+                        rows,
+                        vec!["vid".to_string()],
+                    )?),
+                    SinkOperator::DeleteVertices {
+                        storage: context.storage.clone(),
+                        space_name: delete_node.space_name().to_string(),
+                        vertex_id_col: "vid".to_string(),
+                        rows_deleted: 0,
+                    },
+                ))
             }
 
             PlanNodeEnum::DeleteEdges(delete_node) => {
@@ -855,193 +819,207 @@ impl StreamingExecutorBuilder {
                         ])
                     })
                     .collect::<Result<Vec<_>, QueryError>>()?;
-                Ok(StreamingExecutor::DeleteEdges {
-                    input: Box::new(Self::build_simple_scan_with_col_names(rows, vec!["src".to_string(), "dst".to_string()])?),
-                    storage: context.storage.clone(),
-                    space_name: delete_node.space_name().to_string(),
-                    src_col: "src".to_string(),
-                    dst_col: "dst".to_string(),
-                    rows_deleted: 0,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Sink(
+                    OperatorBase::new(node.id()),
+                    Box::new(Self::build_simple_scan_with_col_names(
+                        rows,
+                        vec!["src".to_string(), "dst".to_string()],
+                    )?),
+                    SinkOperator::DeleteEdges {
+                        storage: context.storage.clone(),
+                        space_name: delete_node.space_name().to_string(),
+                        src_col: "src".to_string(),
+                        dst_col: "dst".to_string(),
+                        rows_deleted: 0,
+                    },
+                ))
             }
 
             PlanNodeEnum::PipeDeleteVertices(delete_node) => {
                 let input_plan = delete_node.input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
-                Ok(StreamingExecutor::PipeDeleteVertices {
-                    input: Box::new(input_executor),
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    vertex_id_col: "vid".to_string(),
-                    rows_deleted: 0,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Sink(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    SinkOperator::PipeDeleteVertices {
+                        storage: context.storage.clone(),
+                        space_name: context.space_name.clone().unwrap_or_default(),
+                        vertex_id_col: "vid".to_string(),
+                        rows_deleted: 0,
+                    },
+                ))
             }
 
             PlanNodeEnum::PipeDeleteEdges(delete_node) => {
                 let input_plan = delete_node.input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
-                Ok(StreamingExecutor::PipeDeleteEdges {
-                    input: Box::new(input_executor),
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    src_col: "src".to_string(),
-                    dst_col: "dst".to_string(),
-                    rows_deleted: 0,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Sink(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    SinkOperator::PipeDeleteEdges {
+                        storage: context.storage.clone(),
+                        space_name: context.space_name.clone().unwrap_or_default(),
+                        src_col: "src".to_string(),
+                        dst_col: "dst".to_string(),
+                        rows_deleted: 0,
+                    },
+                ))
             }
 
-            // ======== Data Access Operations ========
             PlanNodeEnum::GetVertices(get_node) => {
                 let vertex_ids = get_node.src_ref().constant_value().map(|v| vec![v]);
-                Ok(StreamingExecutor::GetVertices {
-                    storage: context.storage.clone(),
-                    space_name: get_node.space_name().to_string(),
-                    vertex_ids,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Source(
+                    OperatorBase::new(node.id()),
+                    SourceOperator::GetVertices {
+                        storage: context.storage.clone(),
+                        space_name: get_node.space_name().to_string(),
+                        vertex_ids,
+                    },
+                ))
             }
 
-            PlanNodeEnum::GetEdges(get_node) => Ok(StreamingExecutor::GetEdges {
-                storage: context.storage.clone(),
-                space_name: context.space_name.clone().unwrap_or_default(),
-                edge_type: Some(get_node.edge_type().to_string()),
-                src: Some(get_node.src().to_string()),
-                dst: Some(get_node.dst().to_string()),
-                rank: 0,
-                opened: false,
-                plan_node_id: node.id(),
-                runtime: None,
-            }),
+            PlanNodeEnum::GetEdges(get_node) => Ok(StreamingExecutor::Source(
+                OperatorBase::new(node.id()),
+                SourceOperator::GetEdges {
+                    storage: context.storage.clone(),
+                    space_name: context.space_name.clone().unwrap_or_default(),
+                    edge_type: Some(get_node.edge_type().to_string()),
+                    src: Some(get_node.src().to_string()),
+                    dst: Some(get_node.dst().to_string()),
+                    rank: 0,
+                },
+            )),
 
-            PlanNodeEnum::GetNeighbors(get_node) => Ok(StreamingExecutor::GetNeighbors {
-                storage: context.storage.clone(),
-                space_name: context.space_name.clone().unwrap_or_default(),
-                direction: get_node.direction().to_string(),
-                opened: false,
-                plan_node_id: node.id(),
-                runtime: None,
-            }),
+            PlanNodeEnum::GetNeighbors(get_node) => Ok(StreamingExecutor::Source(
+                OperatorBase::new(node.id()),
+                SourceOperator::GetNeighbors {
+                    storage: context.storage.clone(),
+                    space_name: context.space_name.clone().unwrap_or_default(),
+                    direction: get_node.direction().to_string(),
+                },
+            )),
 
-            // ======== Search Operations ========
             PlanNodeEnum::FulltextSearch(search_node) => {
                 let query_str = Self::fulltext_query_to_string(&search_node.query);
                 let space_id = context.current_space_id().unwrap_or(0);
                 #[cfg(feature = "fulltext-search")]
                 let fulltext_manager = context.fulltext_manager.clone();
-                Ok(StreamingExecutor::FulltextSearch {
-                    input: Box::new(StreamingExecutor::Start { opened: false, plan_node_id: 0, runtime: None }),
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    space_id,
-                    index_name: search_node.index_name.clone(),
-                    search_query: query_str,
-                    tag_name: search_node.tag_name.clone(),
-                    field_name: search_node.field_name.clone(),
-                    #[cfg(feature = "fulltext-search")]
-                    fulltext_manager,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Fulltext(
+                    OperatorBase::new(node.id()),
+                    Box::new(StreamingExecutor::Source(
+                        OperatorBase::new(0),
+                        SourceOperator::Start,
+                    )),
+                    FulltextOperator::FulltextSearch {
+                        storage: context.storage.clone(),
+                        space_name: context.space_name.clone().unwrap_or_default(),
+                        space_id,
+                        index_name: search_node.index_name.clone(),
+                        search_query: query_str,
+                        tag_name: search_node.tag_name.clone(),
+                        field_name: search_node.field_name.clone(),
+                        #[cfg(feature = "fulltext-search")]
+                        fulltext_manager,
+                    },
+                ))
             }
 
             PlanNodeEnum::FulltextLookup(lookup_node) => {
                 let space_id = context.current_space_id().unwrap_or(0);
                 #[cfg(feature = "fulltext-search")]
                 let fulltext_manager = context.fulltext_manager.clone();
-                Ok(StreamingExecutor::FulltextLookup {
-                    input: Box::new(StreamingExecutor::Start { opened: false, plan_node_id: 0, runtime: None }),
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    space_id,
-                    index_name: lookup_node.index_name.clone(),
-                    search_query: lookup_node.query.clone(),
-                    tag_name: lookup_node.tag_name.clone(),
-                    field_name: lookup_node.field_name.clone(),
-                    #[cfg(feature = "fulltext-search")]
-                    fulltext_manager,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Fulltext(
+                    OperatorBase::new(node.id()),
+                    Box::new(StreamingExecutor::Source(
+                        OperatorBase::new(0),
+                        SourceOperator::Start,
+                    )),
+                    FulltextOperator::FulltextLookup {
+                        storage: context.storage.clone(),
+                        space_name: context.space_name.clone().unwrap_or_default(),
+                        space_id,
+                        index_name: lookup_node.index_name.clone(),
+                        search_query: lookup_node.query.clone(),
+                        tag_name: lookup_node.tag_name.clone(),
+                        field_name: lookup_node.field_name.clone(),
+                        #[cfg(feature = "fulltext-search")]
+                        fulltext_manager,
+                    },
+                ))
             }
 
             PlanNodeEnum::MatchFulltext(match_node) => {
                 let condition_str = Self::fulltext_match_to_string(&match_node.fulltext_condition);
                 #[cfg(feature = "fulltext-search")]
                 let fulltext_manager = context.fulltext_manager.clone();
-                Ok(StreamingExecutor::MatchFulltext {
-                    input: Box::new(StreamingExecutor::Start { opened: false, plan_node_id: 0, runtime: None }),
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    match_expr: Expression::Literal(Value::String(condition_str)),
-                    match_field: Some(match_node.field_name.clone()),
-                    tag_name: match_node.tag_name.clone(),
-                    field_name: match_node.field_name.clone(),
-                    #[cfg(feature = "fulltext-search")]
-                    fulltext_manager,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Fulltext(
+                    OperatorBase::new(node.id()),
+                    Box::new(StreamingExecutor::Source(
+                        OperatorBase::new(0),
+                        SourceOperator::Start,
+                    )),
+                    FulltextOperator::MatchFulltext {
+                        storage: context.storage.clone(),
+                        space_name: context.space_name.clone().unwrap_or_default(),
+                        match_expr: Expression::Literal(Value::String(condition_str)),
+                        match_field: Some(match_node.field_name.clone()),
+                        tag_name: match_node.tag_name.clone(),
+                        field_name: match_node.field_name.clone(),
+                        #[cfg(feature = "fulltext-search")]
+                        fulltext_manager,
+                    },
+                ))
             }
 
             #[cfg(feature = "qdrant")]
             PlanNodeEnum::VectorSearch(search_node) => {
                 let query_vec = Self::vector_query_to_vec(&search_node.query);
-                Ok(StreamingExecutor::VectorSearch {
-                    input: Box::new(StreamingExecutor::Start { opened: false, plan_node_id: 0, runtime: None }),
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    space_id: search_node.space_id,
-                    index_name: search_node.index_name.clone(),
-                    query_vector: query_vec,
-                    top_k: search_node.limit as u32,
-                    tag_name: search_node.tag_name.clone(),
-                    field_name: search_node.field_name.clone(),
-                    vector_coordinator: context.vector_coordinator.clone(),
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Vector(
+                    OperatorBase::new(node.id()),
+                    Box::new(StreamingExecutor::Source(
+                        OperatorBase::new(0),
+                        SourceOperator::Start,
+                    )),
+                    VectorOperator::VectorSearch {
+                        storage: context.storage.clone(),
+                        space_name: context.space_name.clone().unwrap_or_default(),
+                        space_id: search_node.space_id,
+                        index_name: search_node.index_name.clone(),
+                        query_vector: query_vec,
+                        top_k: search_node.limit as u32,
+                        tag_name: search_node.tag_name.clone(),
+                        field_name: search_node.field_name.clone(),
+                        vector_coordinator: context.vector_coordinator.clone(),
+                    },
+                ))
             }
 
             #[cfg(feature = "qdrant")]
-            PlanNodeEnum::VectorLookup(lookup_node) => Ok(StreamingExecutor::VectorLookup {
-                input: Box::new(StreamingExecutor::Start { opened: false, plan_node_id: 0, runtime: None }),
-                storage: context.storage.clone(),
-                space_name: context.space_name.clone().unwrap_or_default(),
-                index_name: lookup_node.index_name.clone(),
-                lookup_key: Expression::Literal(Value::String(
-                    lookup_node.query.query_data.clone(),
+            PlanNodeEnum::VectorLookup(lookup_node) => Ok(StreamingExecutor::Vector(
+                OperatorBase::new(node.id()),
+                Box::new(StreamingExecutor::Source(
+                    OperatorBase::new(0),
+                    SourceOperator::Start,
                 )),
-                vector_coordinator: context.vector_coordinator.clone(),
-                opened: false,
-                plan_node_id: node.id(),
-                runtime: None,
-            }),
+                VectorOperator::VectorLookup {
+                    storage: context.storage.clone(),
+                    space_name: context.space_name.clone().unwrap_or_default(),
+                    index_name: lookup_node.index_name.clone(),
+                    lookup_key: Expression::Literal(Value::String(
+                        lookup_node.query.query_data.clone(),
+                    )),
+                    vector_coordinator: context.vector_coordinator.clone(),
+                },
+            )),
 
             PlanNodeEnum::Window(window_node) => {
                 let input_plan = window_node.input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
                 let window_functions = window_node.window_functions();
-
                 let mut window_exprs = Vec::new();
                 let mut partition_by_exprs = Vec::new();
                 let mut order_by_exprs = Vec::new();
                 let mut order_by_directions = Vec::new();
-
                 for wf in window_functions {
                     let window_expr = Expression::WindowFunction {
                         name: wf.name.clone(),
@@ -1051,7 +1029,6 @@ impl StreamingExecutorBuilder {
                         over_order_desc: wf.order_desc.clone(),
                     };
                     window_exprs.push(window_expr);
-
                     if partition_by_exprs.is_empty() {
                         partition_by_exprs = wf.partition_by.clone();
                     }
@@ -1070,20 +1047,19 @@ impl StreamingExecutorBuilder {
                             .collect();
                     }
                 }
-
-                Ok(StreamingExecutor::WindowFunction {
-                    input: Box::new(input_executor),
-                    window_exprs,
-                    partition_by_exprs,
-                    order_by_exprs,
-                    order_by_directions,
-                    all_rows: vec![],
-                    result_iter: None,
-                    opened: false,
-                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                let memory_tracker = MemoryTracker::new(context.memory_budget.clone());
+                Ok(StreamingExecutor::Blocking(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    BlockingOperator::WindowFunction {
+                        window_exprs,
+                        partition_by_exprs,
+                        order_by_exprs,
+                        order_by_directions,
+                        memory_tracker,
+                        state: None,
+                    },
+                ))
             }
 
             PlanNodeEnum::Remove(remove_node) => {
@@ -1092,14 +1068,13 @@ impl StreamingExecutorBuilder {
                 let remove_items = remove_node.remove_items();
                 let columns_to_remove: Vec<String> =
                     remove_items.iter().map(|(col, _)| col.clone()).collect();
-
-                Ok(StreamingExecutor::Remove {
-                    input: Box::new(input_executor),
-                    columns_to_remove,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Unary(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    UnaryOperator::Remove {
+                        columns_to_remove,
+                    },
+                ))
             }
 
             PlanNodeEnum::DeleteTags(delete_tags_node) => {
@@ -1118,83 +1093,97 @@ impl StreamingExecutorBuilder {
                         })
                     })
                     .collect();
-
-                Ok(StreamingExecutor::DeleteTags {
-                    input: Box::new(StreamingExecutor::Start { opened: false, plan_node_id: 0, runtime: None }),
-                    storage: context.storage.clone(),
-                    space_name,
-                    tag_names,
-                    vertex_ids: Some(vertex_ids),
-                    rows_deleted: 0,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Sink(
+                    OperatorBase::new(node.id()),
+                    Box::new(StreamingExecutor::Source(
+                        OperatorBase::new(0),
+                        SourceOperator::Start,
+                    )),
+                    SinkOperator::DeleteTags {
+                        storage: context.storage.clone(),
+                        space_name,
+                        tag_names,
+                        vertex_ids: Some(vertex_ids),
+                        rows_deleted: 0,
+                    },
+                ))
             }
 
             #[cfg(feature = "qdrant")]
             PlanNodeEnum::VectorMatch(match_node) => {
                 let query_vec = Self::vector_query_to_vec(&match_node.query);
-                Ok(StreamingExecutor::VectorMatch {
-                    input: Box::new(StreamingExecutor::Start { opened: false, plan_node_id: 0, runtime: None }),
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    pattern: match_node.pattern.clone(),
-                    field: match_node.field.clone(),
-                    query_vector: query_vec,
-                    threshold: match_node.threshold,
-                    tag_name: match_node.tag_name.clone(),
-                    field_name: match_node.field_name.clone(),
-                    space_id: match_node.space_id,
-                    vector_coordinator: context.vector_coordinator.clone(),
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Vector(
+                    OperatorBase::new(node.id()),
+                    Box::new(StreamingExecutor::Source(
+                        OperatorBase::new(0),
+                        SourceOperator::Start,
+                    )),
+                    VectorOperator::VectorMatch {
+                        storage: context.storage.clone(),
+                        space_name: context.space_name.clone().unwrap_or_default(),
+                        pattern: match_node.pattern.clone(),
+                        field: match_node.field.clone(),
+                        query_vector: query_vec,
+                        threshold: match_node.threshold,
+                        tag_name: match_node.tag_name.clone(),
+                        field_name: match_node.field_name.clone(),
+                        space_id: match_node.space_id,
+                        vector_coordinator: context.vector_coordinator.clone(),
+                    },
+                ))
             }
 
-            PlanNodeEnum::Commit(_) => Ok(StreamingExecutor::Commit {
-                input: Box::new(StreamingExecutor::Start { opened: false, plan_node_id: 0, runtime: None }),
-                transaction_id: None,
-                opened: false,
-                plan_node_id: node.id(),
-                runtime: None,
-            }),
+            PlanNodeEnum::Commit(_) => Ok(StreamingExecutor::Txn(
+                OperatorBase::new(node.id()),
+                Box::new(StreamingExecutor::Source(
+                    OperatorBase::new(0),
+                    SourceOperator::Start,
+                )),
+                TxnOperator::Commit {
+                    transaction_id: None,
+                },
+            )),
 
-            PlanNodeEnum::Rollback(_) => Ok(StreamingExecutor::Rollback {
-                input: Box::new(StreamingExecutor::Start { opened: false, plan_node_id: 0, runtime: None }),
-                transaction_id: None,
-                opened: false,
-                plan_node_id: node.id(),
-                runtime: None,
-            }),
+            PlanNodeEnum::Rollback(_) => Ok(StreamingExecutor::Txn(
+                OperatorBase::new(node.id()),
+                Box::new(StreamingExecutor::Source(
+                    OperatorBase::new(0),
+                    SourceOperator::Start,
+                )),
+                TxnOperator::Rollback {
+                    transaction_id: None,
+                },
+            )),
 
-            // ======== Start / Argument (leaf nodes) ========
-            PlanNodeEnum::Start(_) => Ok(StreamingExecutor::Start { opened: false, plan_node_id: node.id(), runtime: None }),
+            PlanNodeEnum::Start(_) => Ok(StreamingExecutor::Source(
+                OperatorBase::new(node.id()),
+                SourceOperator::Start,
+            )),
 
-            PlanNodeEnum::Argument(_) => Ok(StreamingExecutor::Argument { opened: false, plan_node_id: node.id(), runtime: None }),
+            PlanNodeEnum::Argument(_) => Ok(StreamingExecutor::Source(
+                OperatorBase::new(node.id()),
+                SourceOperator::Argument,
+            )),
 
-            // ======== Index & EdgeIndex Scan ========
-            PlanNodeEnum::EdgeIndexScan(scan_node) => Ok(StreamingExecutor::EdgeIndexScan {
-                storage: context.storage.clone(),
-                space_name: context.space_name.clone().unwrap_or_default(),
-                edge_type: Some(scan_node.edge_type().to_string()),
-                opened: false,
-                plan_node_id: node.id(),
-                runtime: None,
-            }),
+            PlanNodeEnum::EdgeIndexScan(scan_node) => Ok(StreamingExecutor::Source(
+                OperatorBase::new(node.id()),
+                SourceOperator::EdgeIndexScan {
+                    storage: context.storage.clone(),
+                    space_name: context.space_name.clone().unwrap_or_default(),
+                    edge_type: Some(scan_node.edge_type().to_string()),
+                },
+            )),
 
-            PlanNodeEnum::IndexScan(scan_node) => Ok(StreamingExecutor::IndexScan {
-                storage: context.storage.clone(),
-                space_name: context.space_name.clone().unwrap_or_default(),
-                index_name: Some(scan_node.index_name().to_string()),
-                index_value: None,
-                opened: false,
-                plan_node_id: node.id(),
-                runtime: None,
-            }),
+            PlanNodeEnum::IndexScan(scan_node) => Ok(StreamingExecutor::Source(
+                OperatorBase::new(node.id()),
+                SourceOperator::IndexScan {
+                    storage: context.storage.clone(),
+                    space_name: context.space_name.clone().unwrap_or_default(),
+                    index_name: Some(scan_node.index_name().to_string()),
+                    index_value: None,
+                },
+            )),
 
-            // ======== Sample ========
             PlanNodeEnum::Sample(sample_node) => {
                 let input_plan = sample_node.input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
@@ -1205,38 +1194,36 @@ impl StreamingExecutorBuilder {
                         "Sample count must be positive".to_string(),
                     ));
                 };
-                Ok(StreamingExecutor::Sample {
-                    input: Box::new(input_executor),
-                    count,
-                    consumed: 0,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Unary(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    UnaryOperator::Sample {
+                        count,
+                        consumed: 0,
+                    },
+                ))
             }
 
-            // ======== TopN ========
             PlanNodeEnum::TopN(topn_node) => {
                 let input_plan = topn_node.input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
                 let sort_items = topn_node.sort_items();
                 let (sort_expressions, sort_directions) =
                     Self::sort_items_to_expressions(sort_items)?;
-                Ok(StreamingExecutor::TopN {
-                    input: Box::new(input_executor),
-                    n: topn_node.limit() as u32,
-                    sort_expressions,
-                    sort_directions,
-                    all_rows: vec![],
-                    result_iter: None,
-                    opened: false,
-                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                let memory_tracker = MemoryTracker::new(context.memory_budget.clone());
+                Ok(StreamingExecutor::Blocking(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    BlockingOperator::TopN {
+                        n: topn_node.limit() as u32,
+                        sort_expressions,
+                        sort_directions,
+                        memory_tracker,
+                        state: None,
+                    },
+                ))
             }
 
-            // ======== RightJoin ========
             PlanNodeEnum::RightJoin(join_node) => {
                 let left_plan = join_node.left_input();
                 let right_plan = join_node.right_input();
@@ -1247,21 +1234,20 @@ impl StreamingExecutorBuilder {
                     join_node.probe_keys(),
                     right_plan.col_names(),
                 )?;
-                Ok(StreamingExecutor::RightJoin {
-                    left: Box::new(left_executor),
-                    right: Box::new(right_executor),
-                    join_condition: condition,
-                    build_side_tuples: vec![],
-                    right_consumed: false,
-                    opened: false,
-                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
-                    right_col_names: vec![],
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Join(
+                    OperatorBase::new(node.id()),
+                    Box::new(left_executor),
+                    Box::new(right_executor),
+                    JoinOperator::RightJoin {
+                        join_condition: condition,
+                        build_side_tuples: vec![],
+                        right_consumed: false,
+                        memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
+                        right_col_names: vec![],
+                    },
+                ))
             }
 
-            // ======== FullOuterJoin ========
             PlanNodeEnum::FullOuterJoin(join_node) => {
                 let left_plan = join_node.left_input();
                 let right_plan = join_node.right_input();
@@ -1272,24 +1258,23 @@ impl StreamingExecutorBuilder {
                     join_node.probe_keys(),
                     right_plan.col_names(),
                 )?;
-                Ok(StreamingExecutor::FullOuterJoin {
-                    left: Box::new(left_executor),
-                    right: Box::new(right_executor),
-                    join_condition: condition,
-                    left_rows: vec![],
-                    right_rows: vec![],
-                    matched_right_indices: std::collections::HashSet::new(),
-                    result_iter: None,
-                    phase: super::executor::FullOuterJoinPhase::BuildingRight,
-                    opened: false,
-                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
-                    right_col_names: vec![],
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Join(
+                    OperatorBase::new(node.id()),
+                    Box::new(left_executor),
+                    Box::new(right_executor),
+                    JoinOperator::FullOuterJoin {
+                        join_condition: condition,
+                        left_rows: vec![],
+                        right_rows: vec![],
+                        matched_right_indices: std::collections::HashSet::new(),
+                        result_iter: None,
+                        phase: FullOuterJoinPhase::BuildingRight,
+                        memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
+                        right_col_names: vec![],
+                    },
+                ))
             }
 
-            // ======== SemiJoin ========
             PlanNodeEnum::SemiJoin(join_node) => {
                 let left_plan = join_node.left_input();
                 let right_plan = join_node.right_input();
@@ -1300,21 +1285,20 @@ impl StreamingExecutorBuilder {
                     join_node.probe_keys(),
                     right_plan.col_names(),
                 )?;
-                Ok(StreamingExecutor::SemiJoin {
-                    left: Box::new(left_executor),
-                    right: Box::new(right_executor),
-                    join_condition: condition,
-                    right_rows: vec![],
-                    right_consumed: false,
-                    opened: false,
-                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
-                    right_col_names: vec![],
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Join(
+                    OperatorBase::new(node.id()),
+                    Box::new(left_executor),
+                    Box::new(right_executor),
+                    JoinOperator::SemiJoin {
+                        join_condition: condition,
+                        right_rows: vec![],
+                        right_consumed: false,
+                        memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
+                        right_col_names: vec![],
+                    },
+                ))
             }
 
-            // ======== HashInnerJoin (maps to HashJoin) ========
             PlanNodeEnum::HashInnerJoin(join_node) => {
                 let left_plan = join_node.left_input();
                 let right_plan = join_node.right_input();
@@ -1328,24 +1312,23 @@ impl StreamingExecutorBuilder {
                 let probe_keys = Self::join_keys_to_expressions(join_node.hash_keys())?;
                 let hash_keys = Self::join_keys_to_expressions(join_node.probe_keys())?;
                 let memory_tracker = MemoryTracker::new(context.memory_budget.clone());
-                Ok(StreamingExecutor::HashJoin {
-                    left: Box::new(left_executor),
-                    right: Box::new(right_executor),
-                    join_condition: condition,
-                    hash_keys,
-                    probe_keys,
-                    build_side_hash: std::collections::HashMap::new(),
-                    all_right_rows: vec![],
-                    left_consumed: false,
-                    opened: false,
-                    memory_tracker,
-                    right_col_names: vec![],
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Join(
+                    OperatorBase::new(node.id()),
+                    Box::new(left_executor),
+                    Box::new(right_executor),
+                    JoinOperator::HashJoin {
+                        join_condition: condition,
+                        hash_keys,
+                        probe_keys,
+                        build_side_hash: std::collections::HashMap::new(),
+                        all_right_rows: vec![],
+                        left_consumed: false,
+                        memory_tracker,
+                        right_col_names: vec![],
+                    },
+                ))
             }
 
-            // ======== HashLeftJoin (maps to HashLeftJoin) ========
             PlanNodeEnum::HashLeftJoin(join_node) => {
                 let left_plan = join_node.left_input();
                 let right_plan = join_node.right_input();
@@ -1359,24 +1342,23 @@ impl StreamingExecutorBuilder {
                 let probe_keys = Self::join_keys_to_expressions(join_node.hash_keys())?;
                 let hash_keys = Self::join_keys_to_expressions(join_node.probe_keys())?;
                 let memory_tracker = MemoryTracker::new(context.memory_budget.clone());
-                Ok(StreamingExecutor::HashLeftJoin {
-                    left: Box::new(left_executor),
-                    right: Box::new(right_executor),
-                    join_condition: condition,
-                    hash_keys,
-                    probe_keys,
-                    build_side_hash: std::collections::HashMap::new(),
-                    all_right_rows: vec![],
-                    left_consumed: false,
-                    opened: false,
-                    memory_tracker,
-                    right_col_names: vec![],
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Join(
+                    OperatorBase::new(node.id()),
+                    Box::new(left_executor),
+                    Box::new(right_executor),
+                    JoinOperator::HashLeftJoin {
+                        join_condition: condition,
+                        hash_keys,
+                        probe_keys,
+                        build_side_hash: std::collections::HashMap::new(),
+                        all_right_rows: vec![],
+                        left_consumed: false,
+                        memory_tracker,
+                        right_col_names: vec![],
+                    },
+                ))
             }
 
-            // ======== AppendVertices ========
             PlanNodeEnum::AppendVertices(node) => {
                 let input_plan = node.inputs().first().ok_or_else(|| {
                     QueryError::execution("AppendVertices requires an input".to_string())
@@ -1396,16 +1378,15 @@ impl StreamingExecutorBuilder {
                         })
                     })
                     .collect();
-                Ok(StreamingExecutor::AppendVertices {
-                    input: Box::new(input_executor),
-                    vertex_properties,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Unary(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    UnaryOperator::AppendVertices {
+                        vertex_properties,
+                    },
+                ))
             }
 
-            // ======== BiExpand ========
             PlanNodeEnum::BiExpand(node) => {
                 let left_plan = node.left_input();
                 let right_plan = node.right_input();
@@ -1413,170 +1394,169 @@ impl StreamingExecutorBuilder {
                 let _right_executor = Self::from_plan_node(right_plan, context)?;
                 let edge_types = node.edge_types().to_vec();
                 let direction = node.left_direction();
-                Ok(StreamingExecutor::BiExpand {
-                    input: Box::new(left_executor),
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    edge_types,
-                    direction,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Graph(
+                    OperatorBase::new(node.id()),
+                    Box::new(left_executor),
+                    GraphOperator::BiExpand {
+                        storage: context.storage.clone(),
+                        space_name: context.space_name.clone().unwrap_or_default(),
+                        edge_types,
+                        direction,
+                    },
+                ))
             }
 
-            // ======== BiTraverse ========
             PlanNodeEnum::BiTraverse(node) => {
                 let input_plan = node.left_input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
                 let edge_types = node.edge_types().to_vec();
                 let direction = node.left_direction();
-                Ok(StreamingExecutor::BiTraverse {
-                    input: Box::new(input_executor),
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    edge_types,
-                    direction,
-                    min_depth: node.min_hops() as u32,
-                    max_depth: node.max_hops() as u32,
-                    visited: std::collections::HashSet::new(),
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Graph(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    GraphOperator::BiTraverse {
+                        storage: context.storage.clone(),
+                        space_name: context.space_name.clone().unwrap_or_default(),
+                        edge_types,
+                        direction,
+                        min_depth: node.min_hops() as u32,
+                        max_depth: node.max_hops() as u32,
+                        visited: std::collections::HashSet::new(),
+                    },
+                ))
             }
 
-            // ======== ShortestPath ========
             PlanNodeEnum::ShortestPath(node) => {
                 let input_plan = node.left_input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
                 let edge_types = node.edge_types().to_vec();
-                let target = node.end_vertex_ids().first().cloned().map(Expression::Literal);
-                Ok(StreamingExecutor::ShortestPath {
-                    input: Box::new(input_executor),
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    target_vertex: target,
-                    edge_types,
-                    direction: crate::core::EdgeDirection::Both,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                let target = node
+                    .end_vertex_ids()
+                    .first()
+                    .cloned()
+                    .map(Expression::Literal);
+                Ok(StreamingExecutor::Graph(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    GraphOperator::ShortestPath {
+                        storage: context.storage.clone(),
+                        space_name: context.space_name.clone().unwrap_or_default(),
+                        target_vertex: target,
+                        edge_types,
+                        direction: crate::core::EdgeDirection::Both,
+                    },
+                ))
             }
 
-            // ======== BFSShortest ========
             PlanNodeEnum::BFSShortest(node) => {
                 let input_plan = node.left_input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
                 let edge_types = node.edge_types().to_vec();
-                let direction = if node.reverse() { crate::core::EdgeDirection::In } else { crate::core::EdgeDirection::Both };
-                Ok(StreamingExecutor::BFSShortest {
-                    input: Box::new(input_executor),
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    target_vertex: None,
-                    edge_types,
-                    direction,
-                    frontier: vec![],
-                    visited: std::collections::HashSet::new(),
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                let direction = if node.reverse() {
+                    crate::core::EdgeDirection::In
+                } else {
+                    crate::core::EdgeDirection::Both
+                };
+                Ok(StreamingExecutor::Graph(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    GraphOperator::BFSShortest {
+                        storage: context.storage.clone(),
+                        space_name: context.space_name.clone().unwrap_or_default(),
+                        target_vertex: None,
+                        edge_types,
+                        direction,
+                        frontier: vec![],
+                        visited: std::collections::HashSet::new(),
+                    },
+                ))
             }
 
-            // ======== AllPaths ========
             PlanNodeEnum::AllPaths(node) => {
                 let input_plan = node.left_input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
                 let edge_types = node.edge_types().to_vec();
-                let target = node.end_vertex_ids().first().map(|id| {
-                    Expression::Literal(Value::String(id.to_string()))
-                });
-                Ok(StreamingExecutor::AllPaths {
-                    input: Box::new(input_executor),
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    target_vertex: target,
-                    edge_types,
-                    direction: crate::core::EdgeDirection::Both,
-                    all_paths: vec![],
-                    result_iter: None,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                let target = node
+                    .end_vertex_ids()
+                    .first()
+                    .map(|id| Expression::Literal(Value::String(id.to_string())));
+                Ok(StreamingExecutor::Graph(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    GraphOperator::AllPaths {
+                        storage: context.storage.clone(),
+                        space_name: context.space_name.clone().unwrap_or_default(),
+                        target_vertex: target,
+                        edge_types,
+                        direction: crate::core::EdgeDirection::Both,
+                        all_paths: vec![],
+                        result_iter: None,
+                    },
+                ))
             }
 
-            // ======== MultiShortestPath ========
             PlanNodeEnum::MultiShortestPath(node) => {
                 let input_plan = node.left_input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
-                Ok(StreamingExecutor::MultiShortestPath {
-                    input: Box::new(input_executor),
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
-                    target_vertices: vec![],
-                    edge_types: vec![],
-                    direction: crate::core::EdgeDirection::Both,
-                    all_paths: vec![],
-                    result_iter: None,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Graph(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    GraphOperator::MultiShortestPath {
+                        storage: context.storage.clone(),
+                        space_name: context.space_name.clone().unwrap_or_default(),
+                        target_vertices: vec![],
+                        edge_types: vec![],
+                        direction: crate::core::EdgeDirection::Both,
+                        all_paths: vec![],
+                        result_iter: None,
+                    },
+                ))
             }
 
-            // ======== DataCollect ========
             PlanNodeEnum::DataCollect(node) => {
                 let input_plan = node.input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
-                Ok(StreamingExecutor::DataCollect {
-                    input: Box::new(input_executor),
-                    all_rows: vec![],
-                    emitted: false,
-                    opened: false,
-                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                let memory_tracker = MemoryTracker::new(context.memory_budget.clone());
+                Ok(StreamingExecutor::Blocking(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    BlockingOperator::DataCollect {
+                        memory_tracker,
+                        state: None,
+                    },
+                ))
             }
 
-            // ======== Unwind ========
             PlanNodeEnum::Unwind(node) => {
                 let input_plan = node.input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
-                Ok(StreamingExecutor::Unwind {
-                    input: Box::new(input_executor),
-                    unwind_column: node.alias().to_string(),
-                    col_index: None,
-                    all_rows: vec![],
-                    current_row_index: 0,
-                    current_unwind_index: 0,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Unary(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    UnaryOperator::Unwind {
+                        unwind_column: node.alias().to_string(),
+                        col_index: None,
+                        all_rows: vec![],
+                        current_row_index: 0,
+                        current_unwind_index: 0,
+                    },
+                ))
             }
 
-            // ======== Materialize ========
             PlanNodeEnum::Materialize(node) => {
                 let input_plan = node.input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
-                Ok(StreamingExecutor::Materialize {
-                    input: Box::new(input_executor),
-                    materialized_rows: vec![],
-                    result_iter: None,
-                    materialized: false,
-                    opened: false,
-                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                let memory_tracker = MemoryTracker::new(context.memory_budget.clone());
+                Ok(StreamingExecutor::Blocking(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    BlockingOperator::Materialize {
+                        memory_tracker,
+                        state: None,
+                    },
+                ))
             }
 
-            // ======== Assign ========
             PlanNodeEnum::Assign(node) => {
                 let input_plan = node.input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
@@ -1585,16 +1565,13 @@ impl StreamingExecutorBuilder {
                     .iter()
                     .filter_map(|(name, expr)| expr.get_expression().map(|e| (name.clone(), e)))
                     .collect();
-                Ok(StreamingExecutor::Assign {
-                    input: Box::new(input_executor),
-                    assignments,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Unary(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    UnaryOperator::Assign { assignments },
+                ))
             }
 
-            // ======== Apply ========
             PlanNodeEnum::Apply(node) => {
                 let left_plan = node.left_input();
                 let right_plan = node.right_input();
@@ -1607,17 +1584,18 @@ impl StreamingExecutorBuilder {
                     crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::ApplyKind::Single => "single",
                     crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::ApplyKind::All => "all",
                 };
-                Ok(StreamingExecutor::Apply {
-                    input: Box::new(left_executor),
-                    right: Box::new(right_executor),
-                    apply_expression: Expression::Literal(Value::String(kind_label.to_string())),
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Apply(
+                    OperatorBase::new(node.id()),
+                    Box::new(left_executor),
+                    Box::new(right_executor),
+                    ApplyOperator::Apply {
+                        apply_expression: Expression::Literal(Value::String(
+                            kind_label.to_string(),
+                        )),
+                    },
+                ))
             }
 
-            // ======== PatternApply ========
             PlanNodeEnum::PatternApply(node) => {
                 let input_plan = node.left_input();
                 let right_plan = node.right_input();
@@ -1635,20 +1613,20 @@ impl StreamingExecutorBuilder {
                 } else {
                     Expression::Literal(Value::String("correlated".to_string()))
                 };
-                Ok(StreamingExecutor::PatternApply {
-                    input: Box::new(input_executor),
-                    right: Box::new(right_executor),
-                    pattern: pattern_expr,
-                    all_rows: vec![],
-                    result_iter: None,
-                    opened: false,
-                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                let memory_tracker = MemoryTracker::new(context.memory_budget.clone());
+                Ok(StreamingExecutor::Apply(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    Box::new(right_executor),
+                    ApplyOperator::PatternApply {
+                        pattern: pattern_expr,
+                        all_rows: vec![],
+                        result_iter: None,
+                        memory_tracker,
+                    },
+                ))
             }
 
-            // ======== RollUpApply ========
             PlanNodeEnum::RollUpApply(node) => {
                 let input_plan = node.left_input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
@@ -1657,97 +1635,101 @@ impl StreamingExecutorBuilder {
                     .iter()
                     .map(|c| Expression::Variable(c.clone()))
                     .collect();
-                Ok(StreamingExecutor::RollUpApply {
-                    input: Box::new(input_executor),
-                    rollup_expressions,
-                    all_rows: vec![],
-                    result_iter: None,
-                    opened: false,
-                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                let memory_tracker = MemoryTracker::new(context.memory_budget.clone());
+                Ok(StreamingExecutor::Blocking(
+                    OperatorBase::new(node.id()),
+                    Box::new(input_executor),
+                    BlockingOperator::RollUpApply {
+                        rollup_expressions,
+                        memory_tracker,
+                        state: None,
+                    },
+                ))
             }
 
-            // ======== Loop ========
             PlanNodeEnum::Loop(node) => {
                 let body_executor = if let Some(body) = node.body() {
                     Self::from_plan_node(body, context)?
                 } else {
-                    StreamingExecutor::Start { opened: false, plan_node_id: 0, runtime: None }
+                    StreamingExecutor::Source(OperatorBase::new(0), SourceOperator::Start)
                 };
-                Ok(StreamingExecutor::Loop {
-                    input: Box::new(body_executor),
-                    condition: Some(format!("{:?}", node.condition())),
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Unary(
+                    OperatorBase::new(node.id()),
+                    Box::new(body_executor),
+                    UnaryOperator::Loop {
+                        condition: Some(format!("{:?}", node.condition())),
+                    },
+                ))
             }
 
-            // ======== PassThrough ========
-            PlanNodeEnum::PassThrough(_) => Ok(StreamingExecutor::PassThrough {
-                input: Box::new(StreamingExecutor::Start { opened: false, plan_node_id: 0, runtime: None }),
-                opened: false,
-                plan_node_id: node.id(),
-                runtime: None,
-            }),
+            PlanNodeEnum::PassThrough(_) => Ok(StreamingExecutor::Unary(
+                OperatorBase::new(node.id()),
+                Box::new(StreamingExecutor::Source(
+                    OperatorBase::new(0),
+                    SourceOperator::Start,
+                )),
+                UnaryOperator::PassThrough,
+            )),
 
-            // ======== Select ========
             PlanNodeEnum::Select(node) => {
                 let branch_executor = if let Some(if_branch) = node.if_branch() {
                     Self::from_plan_node(if_branch, context)?
                 } else if let Some(else_branch) = node.else_branch() {
                     Self::from_plan_node(else_branch, context)?
                 } else {
-                    StreamingExecutor::Start { opened: false, plan_node_id: 0, runtime: None }
+                    StreamingExecutor::Source(OperatorBase::new(0), SourceOperator::Start)
                 };
-                Ok(StreamingExecutor::Select {
-                    input: Box::new(branch_executor),
-                    selection_expr: None,
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Unary(
+                    OperatorBase::new(node.id()),
+                    Box::new(branch_executor),
+                    UnaryOperator::Select {
+                        selection_expr: None,
+                    },
+                ))
             }
 
-            // ======== BeginTransaction ========
-            PlanNodeEnum::BeginTransaction(_) => Ok(StreamingExecutor::BeginTransaction {
-                input: Box::new(StreamingExecutor::Start { opened: false, plan_node_id: 0, runtime: None }),
-                transaction_id: None,
-                opened: false,
-                plan_node_id: node.id(),
-                runtime: None,
-            }),
+            PlanNodeEnum::BeginTransaction(_) => Ok(StreamingExecutor::Txn(
+                OperatorBase::new(node.id()),
+                Box::new(StreamingExecutor::Source(
+                    OperatorBase::new(0),
+                    SourceOperator::Start,
+                )),
+                TxnOperator::BeginTransaction {
+                    transaction_id: None,
+                },
+            )),
 
-            // ======== ShowStats ========
-            PlanNodeEnum::ShowStats(_) => Ok(StreamingExecutor::ShowStats {
-                input: Box::new(StreamingExecutor::Start { opened: false, plan_node_id: 0, runtime: None }),
-                storage: context.storage.clone(),
-                space_name: context.space_name.clone().unwrap_or_default(),
-                opened: false,
-                plan_node_id: node.id(),
-                runtime: None,
-            }),
+            PlanNodeEnum::ShowStats(_) => Ok(StreamingExecutor::Ddl(
+                OperatorBase::new(node.id()),
+                Box::new(StreamingExecutor::Source(
+                    OperatorBase::new(0),
+                    SourceOperator::Start,
+                )),
+                DdlOperator::ShowStats {
+                    storage: context.storage.clone(),
+                    space_name: context.space_name.clone().unwrap_or_default(),
+                },
+            )),
 
-            // ======== DeleteIndex (map to IndexManage for backward compat) ========
             PlanNodeEnum::DeleteIndex(node) => {
                 let info = node.info();
-                Ok(StreamingExecutor::IndexManage {
-                    input: Box::new(StreamingExecutor::Start { opened: false, plan_node_id: 0, runtime: None }),
-                    storage: context.storage.clone(),
-                    space_name: info.space_name.clone(),
-                    action: "drop_tag_index".to_string(),
-                    index_name: Some(info.index_name.clone()),
-                    opened: false,
-                    plan_node_id: node.id(),
-                    runtime: None,
-                })
+                Ok(StreamingExecutor::Ddl(
+                    OperatorBase::new(node.id()),
+                    Box::new(StreamingExecutor::Source(
+                        OperatorBase::new(0),
+                        SourceOperator::Start,
+                    )),
+                    DdlOperator::IndexManage {
+                        storage: context.storage.clone(),
+                        space_name: info.space_name.clone(),
+                        action: "drop_tag_index".to_string(),
+                        index_name: Some(info.index_name.clone()),
+                    },
+                ))
             }
         }
     }
 
-    /// Helper: extract space name from SpaceManageNode
     fn extract_space_manage_name(node: &SpaceManageNode) -> Option<String> {
         use crate::query::planning::plan::core::nodes::management::manage_node_enums::SpaceManageNode::*;
         match node {
@@ -1762,7 +1744,6 @@ impl StreamingExecutorBuilder {
         }
     }
 
-    /// Helper: extract tag name from TagManageNode
     fn extract_tag_manage_name(node: &TagManageNode) -> Option<String> {
         use crate::query::planning::plan::core::nodes::management::manage_node_enums::TagManageNode::*;
         match node {
@@ -1775,7 +1756,6 @@ impl StreamingExecutorBuilder {
         }
     }
 
-    /// Helper: extract properties from TagManageNode (only for Create variant)
     fn extract_tag_manage_properties(node: &TagManageNode) -> Vec<crate::core::types::PropertyDef> {
         use crate::query::planning::plan::core::nodes::management::manage_node_enums::TagManageNode::*;
         match node {
@@ -1784,7 +1764,6 @@ impl StreamingExecutorBuilder {
         }
     }
 
-    /// Helper: extract properties from EdgeManageNode (only for Create variant)
     fn extract_edge_manage_properties(
         node: &EdgeManageNode,
     ) -> Vec<crate::core::types::PropertyDef> {
@@ -1795,7 +1774,6 @@ impl StreamingExecutorBuilder {
         }
     }
 
-    /// Helper: extract edge type name from EdgeManageNode
     fn extract_edge_manage_name(node: &EdgeManageNode) -> Option<String> {
         use crate::query::planning::plan::core::nodes::management::manage_node_enums::EdgeManageNode::*;
         match node {
@@ -1808,7 +1786,6 @@ impl StreamingExecutorBuilder {
         }
     }
 
-    /// Helper: extract index name from IndexManageNode
     fn extract_index_manage_name(node: &IndexManageNode) -> Option<String> {
         use crate::query::planning::plan::core::nodes::management::manage_node_enums::IndexManageNode::*;
         match node {
@@ -1827,7 +1804,6 @@ impl StreamingExecutorBuilder {
         }
     }
 
-    /// Helper: extract username from UserManageNode
     fn extract_user_manage_name(node: &UserManageNode) -> Option<String> {
         use crate::query::planning::plan::core::nodes::management::manage_node_enums::UserManageNode::*;
         match node {
@@ -1843,7 +1819,6 @@ impl StreamingExecutorBuilder {
         }
     }
 
-    /// Helper: extract index name from FulltextManageNode
     fn extract_fulltext_manage_name(node: &FulltextManageNode) -> Option<String> {
         use crate::query::planning::plan::core::nodes::management::manage_node_enums::FulltextManageNode::*;
         match node {
@@ -1855,7 +1830,6 @@ impl StreamingExecutorBuilder {
         }
     }
 
-    /// Helper: extract index name from VectorManageNode
     fn extract_vector_manage_name(node: &VectorManageNode) -> Option<String> {
         use crate::query::planning::plan::core::nodes::management::manage_node_enums::VectorManageNode::*;
         match node {
@@ -1864,7 +1838,6 @@ impl StreamingExecutorBuilder {
         }
     }
 
-    /// Convert FulltextQueryExpr to a simple query string
     fn fulltext_query_to_string(expr: &FulltextQueryExpr) -> String {
         match expr {
             FulltextQueryExpr::Simple(text) => text.clone(),
@@ -1920,20 +1893,17 @@ impl StreamingExecutorBuilder {
         }
     }
 
-    /// Convert FulltextMatchCondition to a simple string
     fn fulltext_match_to_string(
         condition: &crate::query::parser::ast::fulltext::FulltextMatchCondition,
     ) -> String {
         format!("{}:{}", condition.field, condition.query)
     }
 
-    /// Convert VectorQueryExpr to Vec<f32>
     #[cfg(feature = "qdrant")]
     fn vector_query_to_vec(expr: &crate::query::parser::ast::vector::VectorQueryExpr) -> Vec<f32> {
         serde_json::from_str(&expr.query_data).unwrap_or_default()
     }
 
-    /// Recursively convert a plan DAG to a streaming executor
     pub fn from_plan(
         plan: &PlanNodeEnum,
         context: &ExecutionContext,
@@ -1941,11 +1911,9 @@ impl StreamingExecutorBuilder {
         Self::from_plan_node(plan, context)
     }
 
-    /// Helper: Convert ContextualExpression to Expression
     fn contextual_to_expression(
         expr: &crate::core::types::expr::ContextualExpression,
     ) -> Result<Expression, QueryError> {
-        // Extract the underlying expression from ContextualExpression
         expr.get_expression().ok_or_else(|| {
             QueryError::execution("Failed to get expression from ContextualExpression".to_string())
         })
@@ -1957,7 +1925,6 @@ impl StreamingExecutorBuilder {
         if let Some(value) = expr.constant_value() {
             return Ok(value);
         }
-
         match Self::contextual_to_expression(expr)? {
             Expression::Literal(value) => Ok(value),
             other => Err(QueryError::execution(format!(
@@ -1982,7 +1949,6 @@ impl StreamingExecutorBuilder {
                 probe_keys.len()
             )));
         }
-
         let mut condition = None;
         for (hash_key, probe_key) in hash_keys.iter().zip(probe_keys.iter()) {
             let left = Self::contextual_to_expression(hash_key)?;
@@ -1992,19 +1958,18 @@ impl StreamingExecutorBuilder {
             );
             let equality = Expression::Binary {
                 left: Box::new(left),
-                op: BinaryOperator::Equal,
+                op: BinOp::Equal,
                 right: Box::new(right),
             };
             condition = Some(match condition {
                 Some(existing) => Expression::Binary {
                     left: Box::new(existing),
-                    op: BinaryOperator::And,
+                    op: BinOp::And,
                     right: Box::new(equality),
                 },
                 None => equality,
             });
         }
-
         Ok(condition)
     }
 
@@ -2036,26 +2001,20 @@ impl StreamingExecutorBuilder {
         }
     }
 
-    /// Helper: Convert YieldColumn to Expressions
     fn yield_columns_to_expressions(
         columns: &[crate::core::YieldColumn],
     ) -> Result<Vec<Expression>, QueryError> {
         columns
             .iter()
-            .map(|col| {
-                // YieldColumn has an expression field of type ContextualExpression
-                Self::contextual_to_expression(&col.expression)
-            })
+            .map(|col| Self::contextual_to_expression(&col.expression))
             .collect()
     }
 
-    /// Helper: Convert SortItem to (Expression, SortDirection) pairs
     fn sort_items_to_expressions(
         items: &[crate::query::planning::plan::core::nodes::operation::sort_node::SortItem],
     ) -> Result<(Vec<Expression>, Vec<super::executor::SortDirection>), QueryError> {
         let mut expressions = Vec::new();
         let mut directions = Vec::new();
-
         for item in items {
             expressions.push(item.expression.clone());
             let direction = match item.direction {
@@ -2068,7 +2027,6 @@ impl StreamingExecutorBuilder {
             };
             directions.push(direction);
         }
-
         Ok((expressions, directions))
     }
 }
@@ -2085,7 +2043,7 @@ mod tests {
         ];
         let executor = StreamingExecutorBuilder::build_simple_scan(rows.clone()).unwrap();
         match executor {
-            StreamingExecutor::ScanVertices { buffer, .. } => {
+            StreamingExecutor::Source(_, SourceOperator::ScanVertices { buffer, .. }) => {
                 assert_eq!(buffer.len(), 2);
             }
             _ => panic!("Expected ScanVertices"),
@@ -2097,7 +2055,7 @@ mod tests {
         let rows: Vec<Vec<Value>> = vec![];
         let executor = StreamingExecutorBuilder::build_simple_scan(rows).unwrap();
         match executor {
-            StreamingExecutor::ScanVertices { buffer, .. } => {
+            StreamingExecutor::Source(_, SourceOperator::ScanVertices { buffer, .. }) => {
                 assert!(buffer.is_empty());
             }
             _ => panic!("Expected ScanVertices"),

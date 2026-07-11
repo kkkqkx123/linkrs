@@ -13,10 +13,14 @@
 pub mod base;
 pub mod builder;
 pub mod chunk;
+pub mod context;
 pub mod driver;
 pub mod engine;
 pub mod executor;
 pub mod factory;
+pub mod helpers;
+pub mod operator_base;
+pub mod operators;
 pub mod partition;
 pub mod runtime;
 pub mod slot;
