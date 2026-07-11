@@ -228,7 +228,7 @@ impl StreamingExecutorBuilder {
                 )?;
 
                 let memory_tracker = MemoryTracker::new(context.memory_budget.clone());
-                Ok(StreamingExecutor::NestedLoopJoin {
+                Ok(StreamingExecutor::InnerJoin {
                     left: Box::new(left_executor),
                     right: Box::new(right_executor),
                     join_condition: condition,
@@ -236,6 +236,7 @@ impl StreamingExecutorBuilder {
                     left_consumed: false,
                     opened: false,
                     memory_tracker,
+                    right_col_names: vec![],
                     plan_node_id: node.id(),
                     runtime: None,
                 })
@@ -261,6 +262,7 @@ impl StreamingExecutorBuilder {
                     left_consumed: false,
                     opened: false,
                     memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
+                    right_col_names: vec![],
                     plan_node_id: node.id(),
                     runtime: None,
                 })
@@ -273,14 +275,16 @@ impl StreamingExecutorBuilder {
                 let right_executor = Self::from_plan_node(right_plan, context)?;
 
                 let memory_tracker = MemoryTracker::new(context.memory_budget.clone());
-                Ok(StreamingExecutor::NestedLoopJoin {
+                Ok(StreamingExecutor::CrossJoin {
                     left: Box::new(left_executor),
                     right: Box::new(right_executor),
-                    join_condition: None,
-                    build_side_tuples: vec![],
+                    all_left_rows: vec![],
+                    all_right_rows: vec![],
                     left_consumed: false,
+                    right_consumed: false,
                     opened: false,
                     memory_tracker,
+                    right_col_names: vec![],
                     plan_node_id: node.id(),
                     runtime: None,
                 })
@@ -536,18 +540,14 @@ impl StreamingExecutorBuilder {
                     .ok_or_else(|| QueryError::execution("Expand requires an input".to_string()))?;
                 let input_executor = Self::from_plan_node(input_plan, context)?;
 
-                let edge_type = expand_node
-                    .edge_types()
-                    .first()
-                    .cloned()
-                    .unwrap_or_default();
-                let direction = format!("{:?}", expand_node.direction());
+                let edge_types = expand_node.edge_types().to_vec();
+                let direction = expand_node.direction();
 
                 Ok(StreamingExecutor::Expand {
                     input: Box::new(input_executor),
                     storage: context.storage.clone(),
                     space_name: context.space_name.clone().unwrap_or_default(),
-                    edge_type,
+                    edge_types,
                     direction,
                     filter_expr: expand_node
                         .filter()
@@ -565,18 +565,18 @@ impl StreamingExecutorBuilder {
                 })?;
                 let input_executor = Self::from_plan_node(input_plan, context)?;
 
-                let edge_type = expand_all_node
-                    .edge_types()
-                    .first()
-                    .cloned()
-                    .unwrap_or_default();
-                let direction = expand_all_node.direction().to_string();
+                let edge_types = expand_all_node.edge_types().to_vec();
+                let direction = match expand_all_node.direction().to_lowercase().as_str() {
+                    "out" | "outgoing" => crate::core::EdgeDirection::Out,
+                    "in" | "incoming" => crate::core::EdgeDirection::In,
+                    _ => crate::core::EdgeDirection::Both,
+                };
 
                 Ok(StreamingExecutor::ExpandAll {
                     input: Box::new(input_executor),
                     storage: context.storage.clone(),
                     space_name: context.space_name.clone().unwrap_or_default(),
-                    edge_type,
+                    edge_types,
                     direction,
                     filter_expr: expand_all_node
                         .filter()
@@ -592,12 +592,8 @@ impl StreamingExecutorBuilder {
                 let input_plan = traverse_node.input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
 
-                let edge_type = traverse_node
-                    .edge_types()
-                    .first()
-                    .cloned()
-                    .unwrap_or_default();
-                let direction = format!("{:?}", traverse_node.direction());
+                let edge_types = traverse_node.edge_types().to_vec();
+                let direction = traverse_node.direction();
                 let min_depth = traverse_node.min_steps();
                 let max_depth = traverse_node.max_steps();
 
@@ -605,7 +601,7 @@ impl StreamingExecutorBuilder {
                     input: Box::new(input_executor),
                     storage: context.storage.clone(),
                     space_name: context.space_name.clone().unwrap_or_default(),
-                    edge_type,
+                    edge_types,
                     direction,
                     min_depth,
                     max_depth,
@@ -1259,6 +1255,7 @@ impl StreamingExecutorBuilder {
                     right_consumed: false,
                     opened: false,
                     memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
+                    right_col_names: vec![],
                     plan_node_id: node.id(),
                     runtime: None,
                 })
@@ -1286,6 +1283,7 @@ impl StreamingExecutorBuilder {
                     phase: super::executor::FullOuterJoinPhase::BuildingRight,
                     opened: false,
                     memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
+                    right_col_names: vec![],
                     plan_node_id: node.id(),
                     runtime: None,
                 })
@@ -1310,6 +1308,7 @@ impl StreamingExecutorBuilder {
                     right_consumed: false,
                     opened: false,
                     memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
+                    right_col_names: vec![],
                     plan_node_id: node.id(),
                     runtime: None,
                 })
@@ -1346,7 +1345,7 @@ impl StreamingExecutorBuilder {
                 })
             }
 
-            // ======== HashLeftJoin (maps to LeftJoin) ========
+            // ======== HashLeftJoin (maps to HashLeftJoin) ========
             PlanNodeEnum::HashLeftJoin(join_node) => {
                 let left_plan = join_node.left_input();
                 let right_plan = join_node.right_input();
@@ -1357,14 +1356,21 @@ impl StreamingExecutorBuilder {
                     join_node.probe_keys(),
                     right_plan.col_names(),
                 )?;
-                Ok(StreamingExecutor::LeftJoin {
+                let probe_keys = Self::join_keys_to_expressions(join_node.hash_keys())?;
+                let hash_keys = Self::join_keys_to_expressions(join_node.probe_keys())?;
+                let memory_tracker = MemoryTracker::new(context.memory_budget.clone());
+                Ok(StreamingExecutor::HashLeftJoin {
                     left: Box::new(left_executor),
                     right: Box::new(right_executor),
                     join_condition: condition,
-                    build_side_tuples: vec![],
+                    hash_keys,
+                    probe_keys,
+                    build_side_hash: std::collections::HashMap::new(),
+                    all_right_rows: vec![],
                     left_consumed: false,
                     opened: false,
-                    memory_tracker: MemoryTracker::new(context.memory_budget.clone()),
+                    memory_tracker,
+                    right_col_names: vec![],
                     plan_node_id: node.id(),
                     runtime: None,
                 })
@@ -1405,12 +1411,14 @@ impl StreamingExecutorBuilder {
                 let right_plan = node.right_input();
                 let left_executor = Self::from_plan_node(left_plan, context)?;
                 let _right_executor = Self::from_plan_node(right_plan, context)?;
-                let edge_type = node.edge_types().first().cloned().unwrap_or_default();
+                let edge_types = node.edge_types().to_vec();
+                let direction = node.left_direction();
                 Ok(StreamingExecutor::BiExpand {
                     input: Box::new(left_executor),
                     storage: context.storage.clone(),
                     space_name: context.space_name.clone().unwrap_or_default(),
-                    edge_type,
+                    edge_types,
+                    direction,
                     opened: false,
                     plan_node_id: node.id(),
                     runtime: None,
@@ -1421,12 +1429,14 @@ impl StreamingExecutorBuilder {
             PlanNodeEnum::BiTraverse(node) => {
                 let input_plan = node.left_input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
-                let edge_type = node.edge_types().first().cloned().unwrap_or_default();
+                let edge_types = node.edge_types().to_vec();
+                let direction = node.left_direction();
                 Ok(StreamingExecutor::BiTraverse {
                     input: Box::new(input_executor),
                     storage: context.storage.clone(),
                     space_name: context.space_name.clone().unwrap_or_default(),
-                    edge_type,
+                    edge_types,
+                    direction,
                     min_depth: node.min_hops() as u32,
                     max_depth: node.max_hops() as u32,
                     visited: std::collections::HashSet::new(),
@@ -1440,15 +1450,15 @@ impl StreamingExecutorBuilder {
             PlanNodeEnum::ShortestPath(node) => {
                 let input_plan = node.left_input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
-                let edge_type = node.edge_types().first().cloned().unwrap_or_default();
+                let edge_types = node.edge_types().to_vec();
                 let target = node.end_vertex_ids().first().cloned().map(Expression::Literal);
                 Ok(StreamingExecutor::ShortestPath {
                     input: Box::new(input_executor),
                     storage: context.storage.clone(),
                     space_name: context.space_name.clone().unwrap_or_default(),
                     target_vertex: target,
-                    edge_type,
-                    direction: "both".to_string(),
+                    edge_types,
+                    direction: crate::core::EdgeDirection::Both,
                     opened: false,
                     plan_node_id: node.id(),
                     runtime: None,
@@ -1459,14 +1469,15 @@ impl StreamingExecutorBuilder {
             PlanNodeEnum::BFSShortest(node) => {
                 let input_plan = node.left_input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
-                let edge_type = node.edge_types().first().cloned().unwrap_or_default();
+                let edge_types = node.edge_types().to_vec();
+                let direction = if node.reverse() { crate::core::EdgeDirection::In } else { crate::core::EdgeDirection::Both };
                 Ok(StreamingExecutor::BFSShortest {
                     input: Box::new(input_executor),
                     storage: context.storage.clone(),
                     space_name: context.space_name.clone().unwrap_or_default(),
                     target_vertex: None,
-                    edge_type,
-                    direction: if node.reverse() { "in".to_string() } else { "both".to_string() },
+                    edge_types,
+                    direction,
                     frontier: vec![],
                     visited: std::collections::HashSet::new(),
                     opened: false,
@@ -1479,7 +1490,7 @@ impl StreamingExecutorBuilder {
             PlanNodeEnum::AllPaths(node) => {
                 let input_plan = node.left_input();
                 let input_executor = Self::from_plan_node(input_plan, context)?;
-                let edge_type = node.edge_types().first().cloned().unwrap_or_default();
+                let edge_types = node.edge_types().to_vec();
                 let target = node.end_vertex_ids().first().map(|id| {
                     Expression::Literal(Value::String(id.to_string()))
                 });
@@ -1488,8 +1499,8 @@ impl StreamingExecutorBuilder {
                     storage: context.storage.clone(),
                     space_name: context.space_name.clone().unwrap_or_default(),
                     target_vertex: target,
-                    edge_type,
-                    direction: "both".to_string(),
+                    edge_types,
+                    direction: crate::core::EdgeDirection::Both,
                     all_paths: vec![],
                     result_iter: None,
                     opened: false,
@@ -1507,8 +1518,8 @@ impl StreamingExecutorBuilder {
                     storage: context.storage.clone(),
                     space_name: context.space_name.clone().unwrap_or_default(),
                     target_vertices: vec![],
-                    edge_type: String::new(),
-                    direction: "both".to_string(),
+                    edge_types: vec![],
+                    direction: crate::core::EdgeDirection::Both,
                     all_paths: vec![],
                     result_iter: None,
                     opened: false,

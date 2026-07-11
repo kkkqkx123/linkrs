@@ -10,11 +10,13 @@ use super::graph::PipelineGraph;
 use crate::core::error::QueryError;
 use crate::core::Value;
 use crate::query::executor::base::ExecutionContext;
+use crate::query::executor::streaming::builder::StreamingExecutorBuilder;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::engine::StreamingExecutionEngine;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::runtime::{ExecutionRuntime, QueryIdentity};
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
+use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 
 /// Single-threaded runner for pipeline graphs.
 ///
@@ -129,42 +131,103 @@ impl PipelineRunner {
 
     /// Build executor with upstream materialized data replacing original inputs.
     ///
-    /// In Phase 6a this replaces upstream plan nodes with in-memory scans
-    /// using the materialized output from previously-executed pipelines.
-    /// This enables separate pipeline execution at breaker boundaries.
+    /// Replaces upstream plan nodes with in-memory scans using the
+    /// materialized output from previously-executed pipelines.  This
+    /// enables correct per-pipeline execution at breaker boundaries.
     fn build_executor_with_materialized_inputs(
         node: &PlanNodeEnum,
         upstream_ids: &[usize],
         outputs: &[Option<Vec<DataChunk>>],
         context: &ExecutionContext,
     ) -> Result<StreamingExecutor, QueryError> {
-        // Phase 6a: collect materialized rows from upstream outputs
+        // Collect materialized rows from upstream outputs
         let mut upstream_rows: Vec<Vec<Value>> = Vec::new();
+        let mut upstream_col_names: Vec<String> = Vec::new();
         for &up_id in upstream_ids {
             if let Some(Some(chunks)) = outputs.get(up_id) {
                 for chunk in chunks {
+                    if upstream_col_names.is_empty() {
+                        upstream_col_names = chunk.col_names();
+                    }
                     upstream_rows.extend(chunk.rows.clone());
                 }
             }
         }
 
         if upstream_rows.is_empty() {
-            // No materialized upstream data: build from original plan node
             return Self::build_executor(node, context);
         }
 
-        // Build a scan executor from the materialized data and wrap the
-        // given node around it by replacing the original leaf input.
-        let scan = StreamingExecutor::ScanVertices {
-            partition_id: 0,
-            buffer: upstream_rows,
-            current_index: 0,
-            col_names: vec![],
-            plan_node_id: 0,
-            runtime: None,
-        };
+        // If the node has a single input, replace that input with a scan
+        // of the materialized data.  Otherwise fall back to just the scan.
+        if Self::try_get_single_input(node).is_some() {
+            let input_executor = StreamingExecutorBuilder::build_simple_scan_with_col_names(
+                upstream_rows,
+                upstream_col_names,
+            )?;
+            // Build the full executor, then replace leaf with materialized scan
+            let mut executor = StreamingExecutorBuilder::from_plan_node(node, context)?;
+            Self::replace_leaf_executor(&mut executor, input_executor);
+            Ok(executor)
+        } else {
+            // Fallback: just return the materialized data as a scan
+            StreamingExecutorBuilder::build_simple_scan_with_col_names(
+                upstream_rows,
+                upstream_col_names,
+            )
+        }
+    }
 
-        Ok(scan)
+    /// Try to get the single input of a plan node, if it has exactly one.
+    fn try_get_single_input(node: &PlanNodeEnum) -> Option<&PlanNodeEnum> {
+        match node {
+            PlanNodeEnum::Filter(n) => Some(n.input()),
+            PlanNodeEnum::Project(n) => Some(n.input()),
+            PlanNodeEnum::Limit(n) => Some(n.input()),
+            PlanNodeEnum::Sort(n) => Some(n.input()),
+            PlanNodeEnum::TopN(n) => Some(n.input()),
+            PlanNodeEnum::Sample(n) => Some(n.input()),
+            PlanNodeEnum::Aggregate(n) => Some(n.input()),
+            PlanNodeEnum::Dedup(n) => Some(n.input()),
+            PlanNodeEnum::Window(n) => Some(n.input()),
+            PlanNodeEnum::Traverse(n) => Some(n.input()),
+            PlanNodeEnum::Materialize(n) => n.dependencies().first(),
+            PlanNodeEnum::DataCollect(n) => n.dependencies().first(),
+            PlanNodeEnum::Unwind(n) => n.dependencies().first(),
+            PlanNodeEnum::Assign(n) => n.dependencies().first(),
+            _ => None,
+        }
+    }
+
+    /// Walk the executor tree and replace the first leaf executor with the given one.
+    fn replace_leaf_executor(executor: &mut StreamingExecutor, replacement: StreamingExecutor) {
+        match executor {
+            StreamingExecutor::Filter { input, .. }
+            | StreamingExecutor::Project { input, .. }
+            | StreamingExecutor::Limit { input, .. }
+            | StreamingExecutor::Sort { input, .. }
+            | StreamingExecutor::Aggregate { input, .. }
+            | StreamingExecutor::Distinct { input, .. }
+            | StreamingExecutor::Dedup { input, .. }
+            | StreamingExecutor::Materialize { input, .. }
+            | StreamingExecutor::DataCollect { input, .. }
+            | StreamingExecutor::Unwind { input, .. }
+            | StreamingExecutor::Assign { input, .. }
+            | StreamingExecutor::Remove { input, .. }
+            | StreamingExecutor::TopN { input, .. }
+            | StreamingExecutor::Sample { input, .. }
+            | StreamingExecutor::Traverse { input, .. }
+            | StreamingExecutor::Expand { input, .. }
+            | StreamingExecutor::ExpandAll { input, .. }
+            | StreamingExecutor::TraverseAll { input, .. }
+            | StreamingExecutor::AppendVertices { input, .. } => {
+                Self::replace_leaf_executor(input, replacement);
+            }
+            // Leaf executors: replace
+            _ => {
+                *executor = replacement;
+            }
+        }
     }
 
     /// Generate explain output for this pipeline graph

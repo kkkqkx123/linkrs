@@ -23,14 +23,6 @@ use crate::query::executor::traversal::graph_reader::TraversalGraphReader;
 use crate::query::executor::traversal::runtime::TraversalRuntime;
 use crate::storage::StorageClient;
 
-fn direction_from_str(dir: &str) -> crate::core::EdgeDirection {
-    match dir.to_lowercase().as_str() {
-        "out" | "outgoing" => crate::core::EdgeDirection::Out,
-        "in" | "incoming" => crate::core::EdgeDirection::In,
-        _ => crate::core::EdgeDirection::Both,
-    }
-}
-
 fn row_passes_filter(row: &[Value], col_names: &[String], filter: &Option<Expression>) -> bool {
     let Some(expr) = filter else {
         return true;
@@ -227,11 +219,11 @@ fn expand_on_chunk(
     chunk: DataChunk,
     reader: &dyn StorageClient,
     space_name: &str,
-    edge_type: &str,
-    direction: &str,
+    edge_types: &[String],
+    direction: EdgeDirection,
     filter_expr: &Option<Expression>,
+    cancel_token: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<Option<DataChunk>, QueryError> {
-    let dir = direction_from_str(direction);
     let col_names = chunk.col_names();
 
     let mut out_rows = Vec::new();
@@ -245,10 +237,13 @@ fn expand_on_chunk(
         if let Ok(vid) = VertexId::try_from(&vid_val) {
             let config = TraversalConfig::expand(
                 space_name.to_string(),
-                dir,
+                direction,
             );
             let runtime_reader = TraversalGraphReader::new(reader);
             let mut runtime = TraversalRuntime::new(runtime_reader, config);
+            if let Some(token) = cancel_token.clone() {
+                runtime.set_cancel_token(token);
+            }
 
             if let Ok(Some(vertex)) = reader.get_vertex(space_name, &vid) {
                 runtime.seed_from_vertex(vertex);
@@ -259,8 +254,8 @@ fn expand_on_chunk(
             while let Some(event) = runtime.next_event() {
                 let mut out_row = row.clone();
                 out_row.push(Value::Vertex(Box::new(event.vertex)));
-                out_row.push(Value::String(edge_type.to_string()));
-                out_row.push(Value::String(direction.to_string()));
+                out_row.push(Value::String(edge_types.join("/")));
+                out_row.push(Value::String(format!("{:?}", direction).to_lowercase()));
                 let mut out_col_names = col_names.clone();
                 out_col_names.push("_expand_vertex".to_string());
                 out_col_names.push("_expand_edge_type".to_string());
@@ -301,12 +296,13 @@ fn expand_on_chunk(
 
 pub fn next_expand(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     executor.ensure_not_cancelled()?;
+    let cancel_token = executor.get_runtime().map(|rt| rt.cancel_token());
     match executor {
         StreamingExecutor::Expand {
             input,
             storage,
             space_name,
-            edge_type,
+            edge_types,
             direction,
             filter_expr,
             opened,
@@ -321,7 +317,7 @@ pub fn next_expand(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
                     expand_on_chunk(
-                        chunk, &*reader, space_name, edge_type, direction, filter_expr,
+                        chunk, &*reader, space_name, edge_types.as_slice(), *direction, filter_expr, cancel_token,
                     )
                 } else {
                     let mut new_cols: Vec<ColumnInfo> = chunk
@@ -344,8 +340,8 @@ pub fn next_expand(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>
                     let schema = Arc::new(Schema::new(new_cols));
                     let mut rows = chunk.rows;
                     for row in rows.iter_mut() {
-                        row.push(Value::String(edge_type.clone()));
-                        row.push(Value::String(direction.clone()));
+                        row.push(Value::String(edge_types.join("/")));
+                        row.push(Value::String(format!("{:?}", direction).to_lowercase()));
                     }
                     let out_col_names = schema
                         .columns
@@ -411,12 +407,13 @@ pub fn open_expandall(executor: &mut StreamingExecutor) -> Result<(), QueryError
 }
 
 pub fn next_expandall(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
+    let cancel_token = executor.get_runtime().map(|rt| rt.cancel_token());
     match executor {
         StreamingExecutor::ExpandAll {
             input,
             storage,
             space_name,
-            edge_type,
+            edge_types,
             direction,
             opened,
             ..
@@ -430,7 +427,7 @@ pub fn next_expandall(executor: &mut StreamingExecutor) -> Result<Option<DataChu
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
                     expand_on_chunk(
-                        chunk, &*reader, space_name, edge_type, direction, &None,
+                        chunk, &*reader, space_name, edge_types.as_slice(), *direction, &None, cancel_token,
                     )
                 } else {
                     let mut new_cols: Vec<ColumnInfo> = chunk
@@ -453,8 +450,8 @@ pub fn next_expandall(executor: &mut StreamingExecutor) -> Result<Option<DataChu
                     let schema = Arc::new(Schema::new(new_cols));
                     let mut rows = chunk.rows;
                     for row in rows.iter_mut() {
-                        row.push(Value::String(edge_type.clone()));
-                        row.push(Value::String(direction.clone()));
+                        row.push(Value::String(edge_types.join("/")));
+                        row.push(Value::String(format!("{:?}", direction).to_lowercase()));
                     }
                     Ok(Some(DataChunk::new(rows, schema)))
                 }
@@ -518,6 +515,7 @@ fn traverse_on_chunk(
     reader: &dyn StorageClient,
     config: &TraversalConfig,
     visited: &mut HashSet<String>,
+    cancel_token: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<Option<DataChunk>, QueryError> {
     let col_names = chunk.col_names();
     let edge_type = config.edge_types.first().map(|s| s.as_str()).unwrap_or("");
@@ -537,6 +535,9 @@ fn traverse_on_chunk(
         if let Ok(vid) = VertexId::try_from(&vid_val) {
             let runtime_reader = TraversalGraphReader::new(reader);
             let mut runtime = TraversalRuntime::new(runtime_reader, config.clone());
+            if let Some(token) = cancel_token.clone() {
+                runtime.set_cancel_token(token);
+            }
 
             if let Ok(Some(vertex)) = reader.get_vertex(&config.space_name, &vid) {
                 runtime.seed_from_vertex(vertex);
@@ -594,12 +595,13 @@ fn traverse_on_chunk(
 
 pub fn next_traverse(executor: &mut StreamingExecutor) -> Result<Option<DataChunk>, QueryError> {
     executor.ensure_not_cancelled()?;
+    let cancel_token = executor.get_runtime().map(|rt| rt.cancel_token());
     match executor {
         StreamingExecutor::Traverse {
             input,
             storage,
             space_name,
-            edge_type,
+            edge_types,
             direction,
             min_depth,
             max_depth,
@@ -617,12 +619,12 @@ pub fn next_traverse(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                     let reader = storage_lock.read();
                     let tc = TraversalConfig::traverse(
                         space_name.clone(),
-                        direction_from_str(direction),
+                        *direction,
                         *min_depth,
                         *max_depth,
-                        vec![edge_type.clone()],
+                        edge_types.clone(),
                     );
-                    traverse_on_chunk(chunk, &*reader, &tc, visited)
+                    traverse_on_chunk(chunk, &*reader, &tc, visited, cancel_token)
                 } else {
                     let mut new_cols: Vec<ColumnInfo> = chunk
                         .schema
@@ -648,8 +650,8 @@ pub fn next_traverse(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                     let schema = Arc::new(Schema::new(new_cols));
                     let mut rows = chunk.rows;
                     for row in rows.iter_mut() {
-                        row.push(Value::String(edge_type.clone()));
-                        row.push(Value::String(direction.clone()));
+                        row.push(Value::String(edge_types.join("/")));
+                        row.push(Value::String(format!("{:?}", direction).to_lowercase()));
                         row.push(Value::BigInt(1));
                     }
                     Ok(Some(DataChunk::new(rows, schema)))
@@ -852,7 +854,7 @@ pub fn next_biexpand(executor: &mut StreamingExecutor) -> Result<Option<DataChun
             input,
             storage,
             space_name,
-            edge_type,
+            edge_types,
             opened,
             ..
         } => {
@@ -862,7 +864,7 @@ pub fn next_biexpand(executor: &mut StreamingExecutor) -> Result<Option<DataChun
             if let Some(chunk) = input.advance()? {
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
-                    let dir = direction_from_str("both");
+                    let dir = EdgeDirection::Both;
                     let col_names = chunk.col_names();
 
                     let mut out_rows = Vec::new();
@@ -875,9 +877,9 @@ pub fn next_biexpand(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                         if let Ok(vid) = VertexId::try_from(&vid_val) {
                             if let Ok(edges) = reader.get_node_edges(space_name, &vid, dir) {
                                 for e in &edges {
-                                    let edge_type_matches = edge_type.is_empty()
-                                        || *edge_type == "both"
-                                        || e.edge_type == *edge_type;
+                                    let edge_type_matches = edge_types.is_empty()
+                                        || edge_types.contains(&"both".to_string())
+                                        || edge_types.contains(&e.edge_type);
                                     if !edge_type_matches {
                                         continue;
                                     }
@@ -986,7 +988,7 @@ pub fn next_bitraverse(executor: &mut StreamingExecutor) -> Result<Option<DataCh
             input,
             storage,
             space_name,
-            edge_type,
+            edge_types,
             min_depth,
             max_depth,
             visited,
@@ -1000,7 +1002,7 @@ pub fn next_bitraverse(executor: &mut StreamingExecutor) -> Result<Option<DataCh
             if let Some(chunk) = chunk {
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
-                    let dir = direction_from_str("both");
+                    let dir = EdgeDirection::Both;
                     let col_names = chunk.col_names();
 
                     let mut out_rows = Vec::new();
@@ -1022,9 +1024,9 @@ pub fn next_bitraverse(executor: &mut StreamingExecutor) -> Result<Option<DataCh
                                 if let Ok(edges) = reader.get_node_edges(space_name, &current, dir)
                                 {
                                     for e in &edges {
-                                        let edge_type_matches = edge_type.is_empty()
-                                            || *edge_type == "both"
-                                            || e.edge_type == *edge_type;
+                                        let edge_type_matches = edge_types.is_empty()
+                                            || edge_types.contains(&"both".to_string())
+                                            || edge_types.contains(&e.edge_type);
                                         if !edge_type_matches {
                                             continue;
                                         }
@@ -1048,7 +1050,7 @@ pub fn next_bitraverse(executor: &mut StreamingExecutor) -> Result<Option<DataCh
                                             {
                                                 let mut out_row = row.clone();
                                                 out_row.push(Value::Vertex(Box::new(vertex)));
-                                                out_row.push(Value::String(edge_type.clone()));
+                                                out_row.push(Value::String(edge_types.join("/")));
                                                 out_row.push(Value::String("both".to_string()));
                                                 out_row.push(Value::BigInt((depth + 1) as i64));
                                                 out_rows.push(out_row);
@@ -1155,7 +1157,7 @@ pub fn next_shortestpath(
             input,
             storage,
             space_name,
-            edge_type,
+            edge_types,
             direction: _direction,
             opened,
             ..
@@ -1184,13 +1186,12 @@ pub fn next_shortestpath(
                         if let (Ok(src_vid), Ok(dst_vid)) =
                             (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
                         {
-                            let et_filter: Option<Vec<String>> =
-                                if edge_type.is_empty() || edge_type == "both" {
+                            let et_ref: Option<&[String]> =
+                                if edge_types.is_empty() || edge_types.contains(&"both".to_string()) {
                                     None
                                 } else {
-                                    Some(vec![edge_type.clone()])
+                                    Some(edge_types.as_slice())
                                 };
-                            let et_ref = et_filter.as_deref();
 
                             let paths = bidir_bfs_shortest_path(
                                 &*reader, &src_vid, &dst_vid,
@@ -1286,7 +1287,7 @@ pub fn next_bfsshortest(executor: &mut StreamingExecutor) -> Result<Option<DataC
             input,
             storage,
             space_name,
-            edge_type,
+            edge_types,
             direction: _direction,
             opened,
             ..
@@ -1315,13 +1316,12 @@ pub fn next_bfsshortest(executor: &mut StreamingExecutor) -> Result<Option<DataC
                         if let (Ok(src_vid), Ok(dst_vid)) =
                             (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
                         {
-                            let et_filter: Option<Vec<String>> =
-                                if edge_type.is_empty() || edge_type == "both" {
+                            let et_ref: Option<&[String]> =
+                                if edge_types.is_empty() || edge_types.contains(&"both".to_string()) {
                                     None
                                 } else {
-                                    Some(vec![edge_type.clone()])
+                                    Some(edge_types.as_slice())
                                 };
-                            let et_ref = et_filter.as_deref();
 
                             let paths = bidir_bfs_shortest_path(
                                 &*reader, &src_vid, &dst_vid,
@@ -1417,7 +1417,7 @@ pub fn next_allpaths(executor: &mut StreamingExecutor) -> Result<Option<DataChun
             input,
             storage,
             space_name,
-            edge_type,
+            edge_types,
             direction: _direction,
             opened,
             ..
@@ -1446,13 +1446,12 @@ pub fn next_allpaths(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                         if let (Ok(src_vid), Ok(dst_vid)) =
                             (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
                         {
-                            let et_filter: Option<Vec<String>> =
-                                if edge_type.is_empty() || edge_type == "both" {
+                            let et_ref: Option<&[String]> =
+                                if edge_types.is_empty() || edge_types.contains(&"both".to_string()) {
                                     None
                                 } else {
-                                    Some(vec![edge_type.clone()])
+                                    Some(edge_types.as_slice())
                                 };
-                            let et_ref = et_filter.as_deref();
 
                             let paths = bidir_bfs_shortest_path(
                                 &*reader, &src_vid, &dst_vid,
@@ -1553,7 +1552,7 @@ pub fn next_multishortestpath(
             storage,
             space_name,
             target_vertices,
-            edge_type,
+            edge_types,
             direction: _direction,
             opened,
             ..
@@ -1587,13 +1586,12 @@ pub fn next_multishortestpath(
                             .or_else(|| row.first().cloned())
                             .unwrap_or(Value::Null(crate::core::NullType::Null));
                         if let Ok(src_vid) = VertexId::try_from(&src_val) {
-                            let et_filter: Option<Vec<String>> =
-                                if edge_type.is_empty() || edge_type == "both" {
+                            let et_ref: Option<&[String]> =
+                                if edge_types.is_empty() || edge_types.contains(&"both".to_string()) {
                                     None
                                 } else {
-                                    Some(vec![edge_type.clone()])
+                                    Some(edge_types.as_slice())
                                 };
-                            let et_ref = et_filter.as_deref();
 
                             for dst_vid in &dst_vids {
                                 let paths = bidir_bfs_shortest_path(
@@ -1702,7 +1700,6 @@ pub fn next_subgraph(executor: &mut StreamingExecutor) -> Result<Option<DataChun
             if let Some(chunk) = chunk {
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
-                    let dir = direction_from_str(direction);
                     let col_names = chunk.col_names();
 
                     let mut out_rows = Vec::new();
@@ -1723,7 +1720,7 @@ pub fn next_subgraph(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                                 if current_step >= *steps {
                                     continue;
                                 }
-                                if let Ok(edges) = reader.get_node_edges(space_name, &current, dir)
+                                if let Ok(edges) = reader.get_node_edges(space_name, &current, *direction)
                                 {
                                     let et_set: HashSet<String> =
                                         edge_types.iter().cloned().collect();
@@ -1732,7 +1729,7 @@ pub fn next_subgraph(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                                         {
                                             continue;
                                         }
-                                        let neighbor_id = match dir {
+                                        let neighbor_id = match direction {
                                             crate::core::EdgeDirection::Out => *e.dst(),
                                             crate::core::EdgeDirection::In => *e.src(),
                                             crate::core::EdgeDirection::Both => {

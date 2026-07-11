@@ -216,6 +216,222 @@ pub fn reset_hashjoin(executor: &mut StreamingExecutor) {
     }
 }
 
+// ============ HashLeftJoin ============
+
+pub fn open_hashleftjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::HashLeftJoin {
+            left,
+            right,
+            opened,
+            ..
+        } => {
+            left.open()?;
+            right.open()?;
+            *opened = true;
+            Ok(())
+        }
+        _ => unreachable!(),
+    }
+}
+
+pub fn next_hashleftjoin(
+    executor: &mut StreamingExecutor,
+) -> Result<Option<DataChunk>, QueryError> {
+    executor.ensure_not_cancelled()?;
+    match executor {
+        StreamingExecutor::HashLeftJoin {
+            left,
+            right,
+            join_condition,
+            hash_keys,
+            probe_keys,
+            build_side_hash,
+            all_right_rows,
+            left_consumed,
+            memory_tracker,
+            right_col_names,
+            ..
+        } => {
+            if !*left_consumed {
+                let mut captured_right_names = Vec::new();
+                while let Some(chunk) = right.advance()? {
+                    if captured_right_names.is_empty() {
+                        captured_right_names = chunk.col_names();
+                    }
+                    for row in chunk.rows {
+                        memory_tracker.try_reserve_row(&row)?;
+                        all_right_rows.push(row.clone());
+                        if !hash_keys.is_empty() {
+                            let names = if captured_right_names.is_empty() {
+                                &(0..row.len()).map(|i| format!("right_{}", i)).collect()
+                            } else {
+                                &captured_right_names
+                            };
+                            let key = evaluate_join_key(&row, names, hash_keys)?;
+                            build_side_hash.entry(key).or_default().push(row);
+                        }
+                    }
+                }
+                *right_col_names = captured_right_names;
+                *left_consumed = true;
+            }
+
+            if let Some(left_chunk) = left.advance()? {
+                let left_col_names = left_chunk.col_names();
+                let mut result_rows = Vec::new();
+
+                if hash_keys.is_empty() && probe_keys.is_empty() {
+                    for left_row in &left_chunk.rows {
+                        if all_right_rows.is_empty() {
+                            // No right rows: emit left row with NULLs
+                            let mut unmatched_row = left_row.clone();
+                            let right_width = 0;
+                            for _ in 0..right_width {
+                                unmatched_row.push(Value::Null(crate::core::value::NullType::Null));
+                            }
+                            result_rows.push(unmatched_row);
+                            continue;
+                        }
+                        let mut matched = false;
+                        for right_row in all_right_rows.iter() {
+                            let mut joined_row = left_row.clone();
+                            joined_row.extend(right_row.clone());
+                            let combined_names =
+                                build_combined_names(&left_col_names, right_col_names, right_row.len());
+                            let mut ctx = ValueRowContext::new(joined_row.clone(), combined_names);
+                            let satisfied = if let Some(condition) = join_condition {
+                                match ExpressionEvaluator::evaluate(condition, &mut ctx) {
+                                    Ok(Value::Bool(b)) => b,
+                                    Ok(Value::Null(_)) => false,
+                                    Ok(_) => true,
+                                    Err(e) => {
+                                        return Err(QueryError::execution(format!(
+                                            "HashLeftJoin condition evaluation failed: {}",
+                                            e
+                                        )));
+                                    }
+                                }
+                            } else {
+                                true
+                            };
+                            if satisfied {
+                                matched = true;
+                                result_rows.push(joined_row);
+                            }
+                        }
+                        if !matched {
+                            let mut unmatched_row = left_row.clone();
+                            let right_width = all_right_rows.first().map(|r| r.len()).unwrap_or(0);
+                            for _ in 0..right_width {
+                                unmatched_row.push(Value::Null(crate::core::value::NullType::Null));
+                            }
+                            result_rows.push(unmatched_row);
+                        }
+                    }
+                } else {
+                    for left_row in &left_chunk.rows {
+                        let probe_key = evaluate_join_key(left_row, &left_col_names, probe_keys)?;
+                        if let Some(matching_rows) = build_side_hash.get(&probe_key) {
+                            for right_row in matching_rows {
+                                let combined = left_row.clone();
+                                let combined_names = build_combined_names(&left_col_names, right_col_names, right_row.len());
+                                let mut ctx = ValueRowContext::new(combined, combined_names);
+
+                                let satisfied = if let Some(condition) = join_condition {
+                                    match ExpressionEvaluator::evaluate(condition, &mut ctx) {
+                                        Ok(Value::Bool(b)) => b,
+                                        Ok(Value::Null(_)) => false,
+                                        Ok(_) => true,
+                                        Err(e) => {
+                                            return Err(QueryError::execution(format!(
+                                                "HashLeftJoin condition evaluation failed: {}",
+                                                e
+                                            )));
+                                        }
+                                    }
+                                } else {
+                                    true
+                                };
+
+                                if satisfied {
+                                    let mut joined_row = left_row.clone();
+                                    joined_row.extend(right_row.clone());
+                                    result_rows.push(joined_row);
+                                }
+                            }
+                        } else {
+                            // No match in hash table: emit left row with NULLs
+                            let mut unmatched_row = left_row.clone();
+                            let right_width = all_right_rows.first().map(|r| r.len()).unwrap_or(0);
+                            for _ in 0..right_width {
+                                unmatched_row.push(Value::Null(crate::core::value::NullType::Null));
+                            }
+                            result_rows.push(unmatched_row);
+                        }
+                    }
+                }
+
+                if result_rows.is_empty() {
+                    Ok(None)
+                } else {
+                    let left_layout = left_chunk.get_or_create_layout();
+                    let right_layout = if right_col_names.is_empty() {
+                        Arc::new(SlotLayout::from_names(
+                            &all_right_rows.first().map(|r| {
+                                (0..r.len()).map(|i| format!("right_{}", i)).collect::<Vec<_>>()
+                            }).unwrap_or_default(),
+                        ))
+                    } else {
+                        Arc::new(SlotLayout::from_names(right_col_names))
+                    };
+                    let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
+                    Ok(Some(DataChunk::new_with_layout(result_rows, layout)))
+                }
+            } else {
+                Ok(None)
+            }
+        }
+        _ => unreachable!(),
+    }
+}
+
+pub fn stop_hashleftjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::HashLeftJoin { left, right, .. } => {
+            left.stop()?;
+            right.stop()
+        }
+        _ => unreachable!(),
+    }
+}
+
+pub fn close_hashleftjoin(executor: &mut StreamingExecutor) -> Result<(), QueryError> {
+    match executor {
+        StreamingExecutor::HashLeftJoin {
+            left,
+            right,
+            opened,
+            build_side_hash,
+            all_right_rows,
+            memory_tracker,
+            ..
+        } => {
+            if *opened {
+                let mem = MemoryBudget::estimate_rows_memory(all_right_rows);
+                memory_tracker.release(mem);
+                build_side_hash.clear();
+                all_right_rows.clear();
+                left.close()?;
+                right.close()?;
+                *opened = false;
+            }
+            Ok(())
+        }
+        _ => unreachable!(),
+    }
+}
+
 /// Build combined column names from left and right inputs.
 /// Falls back to `right_N` when right column names are unavailable.
 fn build_combined_names(
@@ -284,16 +500,21 @@ pub fn next_nestedloopjoin(
             build_side_tuples,
             left_consumed,
             memory_tracker,
+            right_col_names,
             ..
         } => {
             if !*left_consumed {
-                // Build right side - collect all rows
+                let mut captured_right_names = Vec::new();
                 while let Some(chunk) = right.advance()? {
+                    if captured_right_names.is_empty() {
+                        captured_right_names = chunk.col_names();
+                    }
                     for row in chunk.rows {
                         memory_tracker.try_reserve_row(&row)?;
                         build_side_tuples.push(row);
                     }
                 }
+                *right_col_names = captured_right_names;
                 *left_consumed = true;
             }
 
@@ -303,18 +524,12 @@ pub fn next_nestedloopjoin(
 
                 for left_row in &left_chunk.rows {
                     for right_row in build_side_tuples.iter() {
-                        // Always evaluate condition for nested loop join
                         let condition_satisfied = if let Some(condition) = join_condition {
                             let mut combined_row = left_row.clone();
                             combined_row.extend(right_row.clone());
-
-                            let mut combined_col_names = left_col_names.clone();
-                            for i in 0..right_row.len() {
-                                combined_col_names.push(format!("right_{}", i));
-                            }
-
+                            let combined_names = build_combined_names(&left_col_names, right_col_names, right_row.len());
                             let mut context =
-                                ValueRowContext::new(combined_row, combined_col_names);
+                                ValueRowContext::new(combined_row, combined_names);
                             match ExpressionEvaluator::evaluate(condition, &mut context) {
                                 Ok(value) => match value {
                                     Value::Bool(b) => b,
@@ -329,7 +544,6 @@ pub fn next_nestedloopjoin(
                                 }
                             }
                         } else {
-                            // Cartesian product
                             true
                         };
 
@@ -344,7 +558,12 @@ pub fn next_nestedloopjoin(
                 if result_rows.is_empty() {
                     Ok(None)
                 } else {
-                    Ok(Some(DataChunk::from_rows(result_rows)))
+                    let left_layout = left_chunk.get_or_create_layout();
+                    let right_layout = Arc::new(SlotLayout::from_names(
+                        &build_combined_names(&[], right_col_names, build_side_tuples.first().map(|r| r.len()).unwrap_or(0)),
+                    ));
+                    let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
+                    Ok(Some(DataChunk::new_with_layout(result_rows, layout)))
                 }
             } else {
                 Ok(None)
@@ -417,16 +636,21 @@ pub fn next_innerjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChu
             build_side_tuples,
             left_consumed,
             memory_tracker,
+            right_col_names,
             ..
         } => {
             if !*left_consumed {
-                // Build right side
+                let mut captured_right_names = Vec::new();
                 while let Some(chunk) = right.advance()? {
+                    if captured_right_names.is_empty() {
+                        captured_right_names = chunk.col_names();
+                    }
                     for row in chunk.rows {
                         memory_tracker.try_reserve_row(&row)?;
                         build_side_tuples.push(row);
                     }
                 }
+                *right_col_names = captured_right_names;
                 *left_consumed = true;
             }
 
@@ -439,12 +663,9 @@ pub fn next_innerjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChu
                         let condition_satisfied = if let Some(condition) = join_condition {
                             let mut combined_row = left_row.clone();
                             combined_row.extend(right_row.clone());
-                            let mut combined_col_names = left_col_names.clone();
-                            for i in 0..right_row.len() {
-                                combined_col_names.push(format!("right_{}", i));
-                            }
+                            let combined_names = build_combined_names(&left_col_names, right_col_names, right_row.len());
                             let mut context =
-                                ValueRowContext::new(combined_row, combined_col_names);
+                                ValueRowContext::new(combined_row, combined_names);
                             match ExpressionEvaluator::evaluate(condition, &mut context) {
                                 Ok(Value::Bool(b)) => b,
                                 _ => false,
@@ -464,7 +685,12 @@ pub fn next_innerjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChu
                 if result_rows.is_empty() {
                     Ok(None)
                 } else {
-                    Ok(Some(DataChunk::from_rows(result_rows)))
+                    let left_layout = left_chunk.get_or_create_layout();
+                    let right_layout = Arc::new(SlotLayout::from_names(
+                        &build_combined_names(&[], right_col_names, build_side_tuples.first().map(|r| r.len()).unwrap_or(0)),
+                    ));
+                    let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
+                    Ok(Some(DataChunk::new_with_layout(result_rows, layout)))
                 }
             } else {
                 Ok(None)
@@ -537,15 +763,21 @@ pub fn next_leftjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
             build_side_tuples,
             left_consumed,
             memory_tracker,
+            right_col_names,
             ..
         } => {
             if !*left_consumed {
+                let mut captured_right_names = Vec::new();
                 while let Some(chunk) = right.advance()? {
+                    if captured_right_names.is_empty() {
+                        captured_right_names = chunk.col_names();
+                    }
                     for row in chunk.rows {
                         memory_tracker.try_reserve_row(&row)?;
                         build_side_tuples.push(row);
                     }
                 }
+                *right_col_names = captured_right_names;
                 *left_consumed = true;
             }
 
@@ -559,12 +791,9 @@ pub fn next_leftjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                         let condition_satisfied = if let Some(condition) = join_condition {
                             let mut combined_row = left_row.clone();
                             combined_row.extend(right_row.clone());
-                            let mut combined_col_names = left_col_names.clone();
-                            for i in 0..right_row.len() {
-                                combined_col_names.push(format!("right_{}", i));
-                            }
+                            let combined_names = build_combined_names(&left_col_names, right_col_names, right_row.len());
                             let mut context =
-                                ValueRowContext::new(combined_row, combined_col_names);
+                                ValueRowContext::new(combined_row, combined_names);
                             match ExpressionEvaluator::evaluate(condition, &mut context) {
                                 Ok(Value::Bool(b)) => b,
                                 _ => false,
@@ -581,7 +810,6 @@ pub fn next_leftjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                         }
                     }
 
-                    // If no match, emit left row with NULLs for right columns
                     if !matched {
                         let mut unmatched_row = left_row.clone();
                         for _ in 0..build_side_tuples.first().map(|r| r.len()).unwrap_or(0) {
@@ -594,7 +822,12 @@ pub fn next_leftjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                 if result_rows.is_empty() {
                     Ok(None)
                 } else {
-                    Ok(Some(DataChunk::from_rows(result_rows)))
+                    let left_layout = left_chunk.get_or_create_layout();
+                    let right_layout = Arc::new(SlotLayout::from_names(
+                        &build_combined_names(&[], right_col_names, build_side_tuples.first().map(|r| r.len()).unwrap_or(0)),
+                    ));
+                    let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
+                    Ok(Some(DataChunk::new_with_layout(result_rows, layout)))
                 }
             } else {
                 Ok(None)
@@ -667,20 +900,26 @@ pub fn next_rightjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChu
             build_side_tuples,
             right_consumed,
             memory_tracker,
+            right_col_names,
             ..
         } => {
             if !*right_consumed {
+                let mut captured_left_names = Vec::new();
                 while let Some(chunk) = left.advance()? {
+                    if captured_left_names.is_empty() {
+                        captured_left_names = chunk.col_names();
+                    }
                     for row in chunk.rows {
                         memory_tracker.try_reserve_row(&row)?;
                         build_side_tuples.push(row);
                     }
                 }
+                *right_col_names = captured_left_names;
                 *right_consumed = true;
             }
 
             if let Some(right_chunk) = right.advance()? {
-                let right_col_names = right_chunk.col_names();
+                let right_cols = right_chunk.col_names();
                 let mut result_rows = Vec::new();
 
                 for right_row in &right_chunk.rows {
@@ -689,12 +928,9 @@ pub fn next_rightjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChu
                         let condition_satisfied = if let Some(condition) = join_condition {
                             let mut combined_row = left_row.clone();
                             combined_row.extend(right_row.clone());
-                            let mut combined_col_names = right_col_names.clone();
-                            for i in 0..left_row.len() {
-                                combined_col_names.push(format!("left_{}", i));
-                            }
+                            let combined_names = build_combined_names(right_col_names, &right_cols, left_row.len());
                             let mut context =
-                                ValueRowContext::new(combined_row, combined_col_names);
+                                ValueRowContext::new(combined_row, combined_names);
                             match ExpressionEvaluator::evaluate(condition, &mut context) {
                                 Ok(Value::Bool(b)) => b,
                                 _ => false,
@@ -724,7 +960,16 @@ pub fn next_rightjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChu
                 if result_rows.is_empty() {
                     Ok(None)
                 } else {
-                    Ok(Some(DataChunk::from_rows(result_rows)))
+                    let left_layout = if let Some(first_left) = build_side_tuples.first() {
+                        Arc::new(SlotLayout::from_names(
+                            &build_combined_names(right_col_names, &[], first_left.len()),
+                        ))
+                    } else {
+                        Arc::new(SlotLayout::from_names(&[]))
+                    };
+                    let right_layout = Arc::new(SlotLayout::from_names(&right_cols));
+                    let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
+                    Ok(Some(DataChunk::new_with_layout(result_rows, layout)))
                 }
             } else {
                 Ok(None)
@@ -804,12 +1049,13 @@ pub fn next_fullouterjoin(
             result_iter,
             phase,
             memory_tracker,
+            right_col_names,
             ..
         } => {
             loop {
                 match phase {
                     crate::query::executor::streaming::executor::FullOuterJoinPhase::BuildingRight => {
-                        // Collect all left and right rows
+                        let mut captured_right_names = Vec::new();
                         while let Some(chunk) = left.advance()? {
                             for row in &chunk.rows {
                                 memory_tracker.try_reserve_row(row)?;
@@ -817,11 +1063,15 @@ pub fn next_fullouterjoin(
                             left_rows.extend(chunk.rows);
                         }
                         while let Some(chunk) = right.advance()? {
+                            if captured_right_names.is_empty() {
+                                captured_right_names = chunk.col_names();
+                            }
                             for row in &chunk.rows {
                                 memory_tracker.try_reserve_row(row)?;
                             }
                             right_rows.extend(chunk.rows);
                         }
+                        *right_col_names = captured_right_names;
                         *phase = crate::query::executor::streaming::executor::FullOuterJoinPhase::ProbeLeft;
                     }
 
@@ -836,11 +1086,8 @@ pub fn next_fullouterjoin(
                                     let left_col_names: Vec<String> = (0..left_row.len()).map(|i| format!("col_{}", i)).collect();
                                     let mut combined_row = left_row.clone();
                                     combined_row.extend(right_row.clone());
-                                    let mut combined_col_names = left_col_names.clone();
-                                    for i in 0..right_row.len() {
-                                        combined_col_names.push(format!("right_{}", i));
-                                    }
-                                    let mut context = ValueRowContext::new(combined_row, combined_col_names);
+                                    let combined_names = build_combined_names(&left_col_names, right_col_names, right_row.len());
+                                    let mut context = ValueRowContext::new(combined_row, combined_names);
                                     match ExpressionEvaluator::evaluate(condition, &mut context) {
                                         Ok(Value::Bool(b)) => b,
                                         _ => false,
@@ -869,22 +1116,41 @@ pub fn next_fullouterjoin(
 
                         *phase = crate::query::executor::streaming::executor::FullOuterJoinPhase::EmitUnmatchedRight;
                         if !all_results.is_empty() {
-                            *result_iter = Some(all_results.into_iter());
+                            let left_layout = Arc::new(SlotLayout::from_names(
+                                &(0..left_rows.first().map(|r| r.len()).unwrap_or(0)).map(|i| format!("col_{}", i)).collect::<Vec<_>>(),
+                            ));
+                            let right_layout = Arc::new(SlotLayout::from_names(
+                                &build_combined_names(&[], right_col_names, right_col_count),
+                            ));
+                            let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
+                            let rows: Vec<Vec<Value>> = all_results.into_iter().collect();
+                            if !rows.is_empty() {
+                                *result_iter = Some(rows.into_iter());
+                                return Ok(Some(DataChunk::new_with_layout(
+                                    result_iter.as_mut().unwrap().collect::<Vec<_>>(),
+                                    layout,
+                                )));
+                            }
                         }
                         continue;
                     }
 
                     crate::query::executor::streaming::executor::FullOuterJoinPhase::EmitUnmatchedRight => {
-                        // Drain buffered matched+unmatched-left results first
                         if let Some(iter) = result_iter {
                             let rows: Vec<Vec<Value>> = iter.collect();
                             if !rows.is_empty() {
-                                return Ok(Some(DataChunk::from_rows(rows)));
+                                let left_layout = Arc::new(SlotLayout::from_names(
+                                    &(0..left_rows.first().map(|r| r.len()).unwrap_or(0)).map(|i| format!("col_{}", i)).collect::<Vec<_>>(),
+                                ));
+                                let right_layout = Arc::new(SlotLayout::from_names(
+                                    &build_combined_names(&[], right_col_names, right_rows.first().map(|r| r.len()).unwrap_or(0)),
+                                ));
+                                let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
+                                return Ok(Some(DataChunk::new_with_layout(rows, layout)));
                             }
                             *result_iter = None;
                         }
 
-                        // Emit unmatched right rows
                         let left_col_count = left_rows.first().map(|r| r.len()).unwrap_or(0);
                         let mut unmatched = Vec::new();
                         for (right_idx, right_row) in right_rows.iter().enumerate() {
@@ -901,7 +1167,14 @@ pub fn next_fullouterjoin(
                         if unmatched.is_empty() {
                             return Ok(None);
                         }
-                        return Ok(Some(DataChunk::from_rows(unmatched)));
+                        let left_layout = Arc::new(SlotLayout::from_names(
+                            &(0..left_col_count).map(|i| format!("col_{}", i)).collect::<Vec<_>>(),
+                        ));
+                        let right_layout = Arc::new(SlotLayout::from_names(
+                            &build_combined_names(&[], right_col_names, right_rows.first().map(|r| r.len()).unwrap_or(0)),
+                        ));
+                        let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
+                        return Ok(Some(DataChunk::new_with_layout(unmatched, layout)));
                     }
                 }
             }
@@ -977,6 +1250,7 @@ pub fn next_crossjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChu
             left_consumed,
             right_consumed,
             memory_tracker,
+            right_col_names,
             ..
         } => {
             if !*left_consumed {
@@ -990,12 +1264,17 @@ pub fn next_crossjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChu
             }
 
             if !*right_consumed {
+                let mut captured_right_names = Vec::new();
                 while let Some(chunk) = right.advance()? {
+                    if captured_right_names.is_empty() {
+                        captured_right_names = chunk.col_names();
+                    }
                     for row in &chunk.rows {
                         memory_tracker.try_reserve_row(row)?;
                     }
                     all_right_rows.extend(chunk.rows);
                 }
+                *right_col_names = captured_right_names;
                 *right_consumed = true;
             }
 
@@ -1015,7 +1294,14 @@ pub fn next_crossjoin(executor: &mut StreamingExecutor) -> Result<Option<DataChu
             if result_rows.is_empty() {
                 Ok(None)
             } else {
-                Ok(Some(DataChunk::from_rows(result_rows)))
+                let left_layout = Arc::new(SlotLayout::from_names(
+                    &(0..all_left_rows.first().map(|r| r.len()).unwrap_or(0)).map(|i| format!("col_{}", i)).collect::<Vec<_>>(),
+                ));
+                let right_layout = Arc::new(SlotLayout::from_names(
+                    &build_combined_names(&[], right_col_names, all_right_rows.first().map(|r| r.len()).unwrap_or(0)),
+                ));
+                let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
+                Ok(Some(DataChunk::new_with_layout(result_rows, layout)))
             }
         }
         _ => unreachable!(),
@@ -1125,7 +1411,7 @@ pub fn next_semijoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
 
                         if condition_satisfied {
                             result_rows.push(left_row.clone());
-                            break; // SemiJoin only returns one copy of left row
+                            break;
                         }
                     }
                 }
@@ -1133,7 +1419,8 @@ pub fn next_semijoin(executor: &mut StreamingExecutor) -> Result<Option<DataChun
                 if result_rows.is_empty() {
                     Ok(None)
                 } else {
-                    Ok(Some(DataChunk::from_rows(result_rows)))
+                    let left_layout = left_chunk.get_or_create_layout();
+                    Ok(Some(DataChunk::new_with_layout(result_rows, left_layout)))
                 }
             } else {
                 Ok(None)
@@ -1371,6 +1658,7 @@ use crate::query::executor::base::MemoryTracker;
             left_consumed: false,
             opened: false,
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+            right_col_names: vec![],
             plan_node_id: 0,
             runtime: None,
         };
@@ -1414,6 +1702,7 @@ use crate::query::executor::base::MemoryTracker;
             left_consumed: false,
             opened: false,
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+            right_col_names: vec![],
             plan_node_id: 0,
             runtime: None,
         };

@@ -133,6 +133,7 @@ pub fn extract_operator_name(executor: &StreamingExecutor) -> String {
         Sort { .. } => "Sort".to_string(),
         Aggregate { .. } => "Aggregate".to_string(),
         HashJoin { .. } => "HashJoin".to_string(),
+        HashLeftJoin { .. } => "HashLeftJoin".to_string(),
         InnerJoin { .. } => "InnerJoin".to_string(),
         LeftJoin { .. } => "LeftJoin".to_string(),
         RightJoin { .. } => "RightJoin".to_string(),

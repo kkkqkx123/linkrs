@@ -22,6 +22,7 @@ use super::runtime::ExecutionRuntime;
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::AggregateFunction;
+use crate::core::EdgeDirection;
 use crate::core::Value;
 use crate::query::executor::base::{MemoryTracker, Spillable};
 #[cfg(feature = "fulltext-search")]
@@ -232,6 +233,33 @@ pub enum StreamingExecutor {
         runtime: Option<Arc<ExecutionRuntime>>,
     },
 
+    /// HashLeftJoin executor with hash-based left outer join semantics.
+    /// Builds a HashMap on the right side for O(1) probe lookup.
+    /// Emits left rows with NULL right columns when no match is found.
+    HashLeftJoin {
+        left: Box<StreamingExecutor>,
+        right: Box<StreamingExecutor>,
+        /// Join condition expression (None means Cartesian product)
+        join_condition: Option<Expression>,
+        /// Expressions evaluated on right rows to build the hash key.
+        hash_keys: Vec<Expression>,
+        /// Expressions evaluated on left rows to probe the hash table.
+        probe_keys: Vec<Expression>,
+        /// Hash table: join key values -> matching right rows
+        build_side_hash: std::collections::HashMap<Vec<Value>, Vec<Vec<Value>>>,
+        /// All right rows (for Cartesian product fallback)
+        all_right_rows: Vec<Vec<Value>>,
+        left_consumed: bool,
+        opened: bool,
+        /// Per-operator memory tracker.
+        memory_tracker: MemoryTracker,
+        /// Column names from the right input (captured at build time).
+        right_col_names: Vec<String>,
+        /// Plan node ID for debugging and tracking
+        plan_node_id: i64,
+        runtime: Option<Arc<ExecutionRuntime>>,
+    },
+
     /// GroupBy executor for independent grouping before aggregation
     GroupBy {
         input: Box<StreamingExecutor>,
@@ -273,6 +301,8 @@ pub enum StreamingExecutor {
         opened: bool,
         /// Per-operator memory tracker.
         memory_tracker: MemoryTracker,
+        /// Column names from the right input (captured at build time).
+        right_col_names: Vec<String>,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
         runtime: Option<Arc<ExecutionRuntime>>,
@@ -455,6 +485,8 @@ pub enum StreamingExecutor {
         left_consumed: bool,
         /// Per-operator memory tracker.
         memory_tracker: MemoryTracker,
+        /// Column names from the right input (captured at build time).
+        right_col_names: Vec<String>,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
         opened: bool,
@@ -468,6 +500,8 @@ pub enum StreamingExecutor {
         left_consumed: bool,
         /// Per-operator memory tracker.
         memory_tracker: MemoryTracker,
+        /// Column names from the right input (captured at build time).
+        right_col_names: Vec<String>,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
         opened: bool,
@@ -481,6 +515,8 @@ pub enum StreamingExecutor {
         right_consumed: bool,
         /// Per-operator memory tracker.
         memory_tracker: MemoryTracker,
+        /// Column names from the right input (captured at build time).
+        right_col_names: Vec<String>,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
         opened: bool,
@@ -497,6 +533,8 @@ pub enum StreamingExecutor {
         phase: FullOuterJoinPhase,
         /// Per-operator memory tracker.
         memory_tracker: MemoryTracker,
+        /// Column names from the right input (captured at build time).
+        right_col_names: Vec<String>,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
         opened: bool,
@@ -511,6 +549,8 @@ pub enum StreamingExecutor {
         right_consumed: bool,
         /// Per-operator memory tracker.
         memory_tracker: MemoryTracker,
+        /// Column names from the right input (captured at build time).
+        right_col_names: Vec<String>,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
         opened: bool,
@@ -524,6 +564,8 @@ pub enum StreamingExecutor {
         right_consumed: bool,
         /// Per-operator memory tracker.
         memory_tracker: MemoryTracker,
+        /// Column names from the right input (captured at build time).
+        right_col_names: Vec<String>,
         /// Plan node ID for debugging and tracking
         plan_node_id: i64,
         opened: bool,
@@ -535,8 +577,8 @@ pub enum StreamingExecutor {
         input: Box<StreamingExecutor>,
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
-        edge_type: String,
-        direction: String,
+        edge_types: Vec<String>,
+        direction: EdgeDirection,
         filter_expr: Option<Expression>,
         opened: bool,
         plan_node_id: i64,
@@ -547,8 +589,8 @@ pub enum StreamingExecutor {
         input: Box<StreamingExecutor>,
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
-        edge_type: String,
-        direction: String,
+        edge_types: Vec<String>,
+        direction: EdgeDirection,
         filter_expr: Option<Expression>,
         opened: bool,
         plan_node_id: i64,
@@ -559,8 +601,8 @@ pub enum StreamingExecutor {
         input: Box<StreamingExecutor>,
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
-        edge_type: String,
-        direction: String,
+        edge_types: Vec<String>,
+        direction: EdgeDirection,
         min_depth: u32,
         max_depth: u32,
         filter_expr: Option<Expression>,
@@ -574,8 +616,8 @@ pub enum StreamingExecutor {
         input: Box<StreamingExecutor>,
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
-        edge_type: String,
-        direction: String,
+        edge_types: Vec<String>,
+        direction: EdgeDirection,
         min_depth: u32,
         max_depth: u32,
         filter_expr: Option<Expression>,
@@ -597,7 +639,8 @@ pub enum StreamingExecutor {
         input: Box<StreamingExecutor>,
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
-        edge_type: String,
+        edge_types: Vec<String>,
+        direction: EdgeDirection,
         opened: bool,
         plan_node_id: i64,
         runtime: Option<Arc<ExecutionRuntime>>,
@@ -607,7 +650,8 @@ pub enum StreamingExecutor {
         input: Box<StreamingExecutor>,
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
-        edge_type: String,
+        edge_types: Vec<String>,
+        direction: EdgeDirection,
         min_depth: u32,
         max_depth: u32,
         visited: std::collections::HashSet<String>,
@@ -621,8 +665,8 @@ pub enum StreamingExecutor {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         target_vertex: Option<Expression>,
-        edge_type: String,
-        direction: String,
+        edge_types: Vec<String>,
+        direction: EdgeDirection,
         opened: bool,
         plan_node_id: i64,
         runtime: Option<Arc<ExecutionRuntime>>,
@@ -633,8 +677,8 @@ pub enum StreamingExecutor {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         target_vertex: Option<Expression>,
-        edge_type: String,
-        direction: String,
+        edge_types: Vec<String>,
+        direction: EdgeDirection,
         frontier: Vec<Vec<Value>>,
         visited: std::collections::HashSet<String>,
         opened: bool,
@@ -647,8 +691,8 @@ pub enum StreamingExecutor {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         target_vertex: Option<Expression>,
-        edge_type: String,
-        direction: String,
+        edge_types: Vec<String>,
+        direction: EdgeDirection,
         all_paths: Vec<Vec<Value>>,
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
         opened: bool,
@@ -661,8 +705,8 @@ pub enum StreamingExecutor {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         target_vertices: Vec<Expression>,
-        edge_type: String,
-        direction: String,
+        edge_types: Vec<String>,
+        direction: EdgeDirection,
         all_paths: Vec<Vec<Value>>,
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
         opened: bool,
@@ -676,7 +720,7 @@ pub enum StreamingExecutor {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         steps: u32,
-        direction: String,
+        direction: EdgeDirection,
         edge_types: Vec<String>,
         opened: bool,
         plan_node_id: i64,
@@ -1270,6 +1314,7 @@ impl StreamingExecutor {
 
             // Binary-input operators
             HashJoin { ref mut runtime, left, right, .. }
+            | HashLeftJoin { ref mut runtime, left, right, .. }
             | NestedLoopJoin { ref mut runtime, left, right, .. }
             | InnerJoin { ref mut runtime, left, right, .. }
             | LeftJoin { ref mut runtime, left, right, .. }
@@ -1304,6 +1349,7 @@ impl StreamingExecutor {
             | Sort { plan_node_id, .. }
             | Aggregate { plan_node_id, .. }
             | HashJoin { plan_node_id, .. }
+            | HashLeftJoin { plan_node_id, .. }
             | InnerJoin { plan_node_id, .. }
             | LeftJoin { plan_node_id, .. }
             | RightJoin { plan_node_id, .. }
@@ -1400,6 +1446,7 @@ impl StreamingExecutor {
             | Sort { runtime, .. }
             | Aggregate { runtime, .. }
             | HashJoin { runtime, .. }
+            | HashLeftJoin { runtime, .. }
             | InnerJoin { runtime, .. }
             | LeftJoin { runtime, .. }
             | RightJoin { runtime, .. }
@@ -1525,6 +1572,7 @@ impl StreamingExecutor {
             | Self::GroupBy { memory_tracker, .. }
             | Self::WindowFunction { memory_tracker, .. }
             | Self::HashJoin { memory_tracker, .. }
+            | Self::HashLeftJoin { memory_tracker, .. }
             | Self::NestedLoopJoin { memory_tracker, .. }
             | Self::InnerJoin { memory_tracker, .. }
             | Self::LeftJoin { memory_tracker, .. }
@@ -1618,6 +1666,7 @@ impl StreamingExecutor {
             Self::WindowFunction { .. } => operators::stateful::open_windowfunction(self),
             // Binary operations
             Self::HashJoin { .. } => operators::binary::open_hashjoin(self),
+            Self::HashLeftJoin { .. } => operators::binary::open_hashleftjoin(self),
             Self::NestedLoopJoin { .. } => operators::binary::open_nestedloopjoin(self),
             Self::InnerJoin { .. } => operators::binary::open_innerjoin(self),
             Self::LeftJoin { .. } => operators::binary::open_leftjoin(self),
@@ -1740,6 +1789,7 @@ impl StreamingExecutor {
             Self::WindowFunction { .. } => operators::stateful::next_windowfunction(self),
             // Binary operations
             Self::HashJoin { .. } => operators::binary::next_hashjoin(self),
+            Self::HashLeftJoin { .. } => operators::binary::next_hashleftjoin(self),
             Self::NestedLoopJoin { .. } => operators::binary::next_nestedloopjoin(self),
             Self::InnerJoin { .. } => operators::binary::next_innerjoin(self),
             Self::LeftJoin { .. } => operators::binary::next_leftjoin(self),
@@ -1865,6 +1915,7 @@ impl StreamingExecutor {
             Self::WindowFunction { .. } => operators::stateful::stop_windowfunction(self),
             // Binary operations
             Self::HashJoin { .. } => operators::binary::stop_hashjoin(self),
+            Self::HashLeftJoin { .. } => operators::binary::stop_hashleftjoin(self),
             Self::NestedLoopJoin { .. } => operators::binary::stop_nestedloopjoin(self),
             Self::InnerJoin { .. } => operators::binary::stop_innerjoin(self),
             Self::LeftJoin { .. } => operators::binary::stop_leftjoin(self),
@@ -1986,6 +2037,7 @@ impl StreamingExecutor {
             Self::WindowFunction { .. } => operators::stateful::close_windowfunction(self),
             // Binary operations
             Self::HashJoin { .. } => operators::binary::close_hashjoin(self),
+            Self::HashLeftJoin { .. } => operators::binary::close_hashleftjoin(self),
             Self::NestedLoopJoin { .. } => operators::binary::close_nestedloopjoin(self),
             Self::InnerJoin { .. } => operators::binary::close_innerjoin(self),
             Self::LeftJoin { .. } => operators::binary::close_leftjoin(self),
