@@ -319,29 +319,40 @@ fn send_chunk(
             PartitionMessage::Chunk(buffered) => buffered.bytes,
             PartitionMessage::Finished => 0,
         };
-        // Account before publishing the message. The receiver may run as soon
-        // as `try_send` succeeds, so accounting afterwards would allow it to
-        // decrement before this producer increments.
-        reserve_queue_metrics(
-            queued_chunks,
-            queued_chunks_peak,
-            queued_bytes,
-            queued_bytes_peak,
-            bytes,
-        );
+        // Increment before publishing to prevent underflow: the receiver may
+        // run as soon as `try_send` succeeds, so counting afterwards would
+        // allow the receiver to decrement before this producer increments.
+        let pre_count = queued_chunks.fetch_add(1, Ordering::Relaxed);
+        let pre_bytes = queued_bytes.fetch_add(bytes, Ordering::Relaxed);
         match sender.try_send(message) {
             Ok(()) => {
+                // Only record peak after a successful send, so transient
+                // retries on a full channel don't inflate the peak.
+                update_peak_value(queued_chunks_peak, pre_count + 1);
+                update_peak_value(queued_bytes_peak, pre_bytes + bytes);
                 return Ok(());
             }
             Err(TrySendError::Full(returned)) => {
-                release_queue_metrics(queued_chunks, queued_bytes, bytes);
+                queued_chunks.fetch_sub(1, Ordering::Relaxed);
+                queued_bytes.fetch_sub(bytes, Ordering::Relaxed);
                 message = returned;
                 thread::sleep(CHANNEL_WAIT);
             }
             Err(TrySendError::Disconnected(_)) => {
-                release_queue_metrics(queued_chunks, queued_bytes, bytes);
+                queued_chunks.fetch_sub(1, Ordering::Relaxed);
+                queued_bytes.fetch_sub(bytes, Ordering::Relaxed);
                 return Ok(());
             }
+        }
+    }
+}
+
+fn update_peak_value(peak: &AtomicUsize, candidate: usize) {
+    let mut prev = peak.load(Ordering::Relaxed);
+    while candidate > prev {
+        match peak.compare_exchange_weak(prev, candidate, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return,
+            Err(actual) => prev = actual,
         }
     }
 }
@@ -367,38 +378,7 @@ fn send_message(
     }
 }
 
-fn update_peak(current: &AtomicUsize, peak: &AtomicUsize, amount: usize) {
-    let now = current
-        .fetch_add(amount, Ordering::Relaxed)
-        .saturating_add(amount);
-    let mut previous_peak = peak.load(Ordering::Relaxed);
-    while now > previous_peak {
-        match peak.compare_exchange_weak(previous_peak, now, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => return,
-            Err(actual) => previous_peak = actual,
-        }
-    }
-}
-
-/// Reserve queue metrics before a channel send attempt. The reservation also
-/// covers a chunk waiting to enter a full channel, which is still retained by
-/// the query and therefore belongs in the bounded-buffer profile.
-fn reserve_queue_metrics(
-    queued_chunks: &AtomicUsize,
-    queued_chunks_peak: &AtomicUsize,
-    queued_bytes: &AtomicUsize,
-    queued_bytes_peak: &AtomicUsize,
-    bytes: usize,
-) {
-    update_peak(queued_chunks, queued_chunks_peak, 1);
-    update_peak(queued_bytes, queued_bytes_peak, bytes);
-}
-
-fn release_queue_metrics(
-    queued_chunks: &AtomicUsize,
-    queued_bytes: &AtomicUsize,
-    bytes: usize,
-) {
+fn release_queue_metrics(queued_chunks: &AtomicUsize, queued_bytes: &AtomicUsize, bytes: usize) {
     queued_chunks.fetch_sub(1, Ordering::Relaxed);
     queued_bytes.fetch_sub(bytes, Ordering::Relaxed);
 }

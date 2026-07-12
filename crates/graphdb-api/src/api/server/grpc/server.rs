@@ -21,7 +21,7 @@ use super::proto::*;
 
 // Type alias for the streaming response
 type ExecuteQueryStreamStream = std::pin::Pin<
-    Box<dyn tokio_stream::Stream<Item = Result<QueryResultChunk, Status>> + Send + 'static>,
+    Box<dyn tokio_stream::Stream<Item = Result<StreamResponse, Status>> + Send + 'static>,
 >;
 
 /// GraphDB gRPC service implementation
@@ -207,30 +207,58 @@ impl<
             .await
             .map_err(Status::internal)?;
 
-        let (tx, rx) = tokio::sync::mpsc::channel::<Result<QueryResultChunk, Status>>(16);
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<StreamResponse, Status>>(16);
 
-        // Track column names from the first chunk.
-        let schema: std::sync::Arc<std::sync::Mutex<Option<Vec<String>>>> =
-            std::sync::Arc::new(std::sync::Mutex::new(None));
+        // If column names are already known (from fallback), send schema immediately.
+        let schema_sent: std::sync::Arc<std::sync::atomic::AtomicBool> =
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        if let Some(cols) = stream_result.column_names() {
+            let msg = super::proto::StreamResponse {
+                payload: Some(super::proto::stream_response::Payload::Schema(
+                    super::proto::SchemaMessage {
+                        column_names: cols,
+                    },
+                )),
+            };
+            if tx.blocking_send(Ok(msg)).is_err() {
+                return Ok(Response::new(
+                    Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))
+                        as Self::ExecuteQueryStreamStream,
+                ));
+            }
+            schema_sent.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        let schema_sent_clone = schema_sent.clone();
 
         tokio::spawn(async move {
-            let schema_pull = schema.clone();
-
-            // Spawn blocking task to pull chunks synchronously.
             let tx_pull = tx.clone();
+
             let pull_handle = tokio::task::spawn_blocking(move || {
-                let mut _chunk_index = 0u64;
-                let mut seen_schema = false;
                 loop {
                     match stream_result.next_chunk() {
                         Ok(Some(chunk)) => {
-                            // Capture column names from the first chunk.
-                            if !seen_schema {
-                                if let Ok(mut cols) = schema_pull.lock() {
-                                    *cols = Some(chunk.col_names());
+                            // Send schema from first chunk if not already sent.
+                            if !schema_sent_clone.load(std::sync::atomic::Ordering::Relaxed) {
+                                let cols = chunk.col_names();
+                                let schema_msg = super::proto::StreamResponse {
+                                    payload: Some(
+                                        super::proto::stream_response::Payload::Schema(
+                                            super::proto::SchemaMessage {
+                                                column_names: cols,
+                                            },
+                                        ),
+                                    ),
+                                };
+                                if tx_pull.blocking_send(Ok(schema_msg)).is_err() {
+                                    stream_result.cancel();
+                                    return;
                                 }
-                                seen_schema = true;
+                                schema_sent_clone.store(true, std::sync::atomic::Ordering::Relaxed);
                             }
+
+                            let column_names = chunk.col_names();
 
                             let proto_rows: Vec<super::proto::Row> = chunk
                                 .rows
@@ -244,16 +272,14 @@ impl<
                                 })
                                 .collect();
 
-                            let column_names = schema_pull
-                                .lock()
-                                .ok()
-                                .and_then(|c| c.clone())
-                                .unwrap_or_default();
-
-                            let proto_chunk = super::proto::QueryResultChunk {
-                                rows: proto_rows,
-                                is_last: false,
-                                column_names,
+                            let proto_chunk = super::proto::StreamResponse {
+                                payload: Some(super::proto::stream_response::Payload::Data(
+                                    super::proto::QueryResultChunk {
+                                        rows: proto_rows,
+                                        is_last: false,
+                                        column_names,
+                                    },
+                                )),
                             };
 
                             if tx_pull.blocking_send(Ok(proto_chunk)).is_err() {
@@ -261,14 +287,17 @@ impl<
                                 stream_result.cancel();
                                 return;
                             }
-                            _chunk_index += 1;
                         }
                         Ok(None) => {
-                            // Send final empty chunk with is_last=true
-                            let _ = tx_pull.blocking_send(Ok(super::proto::QueryResultChunk {
-                                rows: vec![],
-                                is_last: true,
-                                column_names: vec![],
+                            // Send final empty data message with is_last=true
+                            let _ = tx_pull.blocking_send(Ok(super::proto::StreamResponse {
+                                payload: Some(super::proto::stream_response::Payload::Data(
+                                    super::proto::QueryResultChunk {
+                                        rows: vec![],
+                                        is_last: true,
+                                        column_names: vec![],
+                                    },
+                                )),
                             }));
                             return;
                         }

@@ -44,12 +44,17 @@ impl MemoryEstimatable for Value {
             }
             Value::Map(map) => {
                 base_size
+                    + map.capacity() * (8 + std::mem::size_of::<String>() + std::mem::size_of::<Value>())
                     + map
                         .iter()
                         .map(|(k, v)| k.capacity() + v.estimate_memory())
                         .sum::<usize>()
             }
-            Value::Set(set) => base_size + set.iter().map(|v| v.estimate_memory()).sum::<usize>(),
+            Value::Set(set) => {
+                base_size
+                    + set.capacity() * (8 + std::mem::size_of::<Value>())
+                    + set.iter().map(|v| v.estimate_memory()).sum::<usize>()
+            }
 
             // Geography type
             Value::Geography(g) => base_size + std::mem::size_of_val(g),

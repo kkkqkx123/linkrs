@@ -5,10 +5,11 @@
 
 use super::slot::{SlotId, SlotLayout};
 use crate::core::Value;
+use crate::query::executor::base::MemoryReservation;
 use std::sync::Arc;
 
 /// A chunk of rows processed in streaming execution
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DataChunk {
     /// Row data with Value types
     pub rows: Vec<Vec<Value>>,
@@ -17,6 +18,20 @@ pub struct DataChunk {
     /// Slot layout for slot-based value access.
     /// Production paths should always set this.
     pub layout: Option<Arc<SlotLayout>>,
+    /// Memory reservation for this chunk's data.
+    /// Dropping the chunk releases the reserved bytes.
+    pub memory_reservation: Option<MemoryReservation>,
+}
+
+impl Clone for DataChunk {
+    fn clone(&self) -> Self {
+        Self {
+            rows: self.rows.clone(),
+            schema: self.schema.clone(),
+            layout: self.layout.clone(),
+            memory_reservation: None,
+        }
+    }
 }
 
 /// Simple schema representation
@@ -53,7 +68,21 @@ impl DataChunk {
             rows,
             schema,
             layout: None,
+            memory_reservation: None,
         }
+    }
+
+    /// Attach a memory reservation to this chunk.
+    /// The reserved bytes are released when the chunk is dropped.
+    pub fn with_memory_reservation(mut self, reservation: MemoryReservation) -> Self {
+        self.memory_reservation = Some(reservation);
+        self
+    }
+
+    /// Consume the memory reservation, leaving `None` in its place.
+    /// The caller becomes responsible for releasing the reserved memory.
+    pub fn take_memory_reservation(&mut self) -> Option<MemoryReservation> {
+        self.memory_reservation.take()
     }
 
     /// Create a DataChunk with layout from Arc<SlotLayout>
@@ -75,6 +104,7 @@ impl DataChunk {
             rows,
             schema,
             layout: Some(layout),
+            memory_reservation: None,
         }
     }
 
@@ -142,6 +172,7 @@ impl DataChunk {
             rows,
             schema,
             layout: None,
+            memory_reservation: None,
         }
     }
 

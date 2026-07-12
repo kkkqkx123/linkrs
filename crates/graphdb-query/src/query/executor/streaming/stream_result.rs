@@ -42,7 +42,10 @@ impl Drop for StreamingQueryResult {
 
 enum StreamState {
     /// Active streaming from an executor pipeline.
-    Streaming(ResultStream),
+    /// The `Option<Vec<String>>` caches column names once the first chunk is
+    /// received, so that callers can inspect the schema even after the stream
+    /// is exhausted (provided at least one chunk was produced).
+    Streaming(ResultStream, Option<Vec<String>>),
     /// Pre-materialized result (EXPLAIN/PROFILE/SpaceSwitched).
     Materialized {
         rows: Vec<Vec<crate::core::Value>>,
@@ -57,7 +60,7 @@ impl StreamingQueryResult {
     /// Wrap a [`ResultStream`] into a thread-safe handle.
     pub fn new(stream: ResultStream, runtime: Arc<ExecutionRuntime>) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(StreamState::Streaming(stream))),
+            inner: Arc::new(Mutex::new(StreamState::Streaming(stream, None))),
             runtime,
             on_drop: Arc::new(Mutex::new(None)),
             dropped: Arc::new(AtomicBool::new(false)),
@@ -135,7 +138,15 @@ impl StreamingQueryResult {
     pub fn next_chunk(&self) -> Result<Option<DataChunk>, QueryError> {
         let mut guard = self.inner.lock();
         match &mut *guard {
-            StreamState::Streaming(ref mut stream) => stream.next_chunk(),
+            StreamState::Streaming(ref mut stream, ref mut cached) => {
+                let result = stream.next_chunk()?;
+                if let Some(ref chunk) = result {
+                    if cached.is_none() {
+                        *cached = Some(chunk.col_names());
+                    }
+                }
+                Ok(result)
+            }
             StreamState::Materialized {
                 rows,
                 col_names,
@@ -175,7 +186,7 @@ impl StreamingQueryResult {
     pub fn close(&self) -> Result<(), QueryError> {
         let mut guard = self.inner.lock();
         match &mut *guard {
-            StreamState::Streaming(ref mut stream) => stream.close(),
+            StreamState::Streaming(ref mut stream, _) => stream.close(),
             _ => {
                 *guard = StreamState::Exhausted;
                 Ok(())
@@ -199,6 +210,20 @@ impl StreamingQueryResult {
         Ok(DataSet::from_rows(all_rows, names))
     }
 
+    /// Return column names if known.
+    ///
+    /// For materialized results, column names are available immediately.
+    /// For streaming results, they are available after the first chunk is
+    /// pulled (or `None` if no chunk was ever produced).
+    pub fn column_names(&self) -> Option<Vec<String>> {
+        let guard = self.inner.lock();
+        match &*guard {
+            StreamState::Streaming(_, cached) => cached.clone(),
+            StreamState::Materialized { col_names, .. } => Some(col_names.clone()),
+            StreamState::Exhausted => None,
+        }
+    }
+
     /// Access the underlying execution runtime (for profiling, cancel, etc.)
     pub fn runtime(&self) -> &ExecutionRuntime {
         &self.runtime
@@ -215,6 +240,21 @@ impl StreamingQueryResult {
     /// when the stream ends (via either completion, error, or client disconnect).
     pub fn set_on_drop(&self, f: Box<dyn FnOnce() + Send>) {
         *self.on_drop.lock() = Some(f);
+    }
+
+    /// Set fallback column names that are available even before the first
+    /// chunk is pulled (or when the result set is empty).
+    ///
+    /// Only takes effect when no chunk has been received yet (i.e. the
+    /// cached column names are `None`).  Once a chunk arrives its column
+    /// names take precedence and the fallback is ignored.
+    pub fn set_fallback_column_names(&self, names: Vec<String>) {
+        let mut guard = self.inner.lock();
+        if let StreamState::Streaming(_, ref mut cached) = &mut *guard {
+            if cached.is_none() {
+                *cached = Some(names);
+            }
+        }
     }
 }
 

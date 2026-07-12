@@ -751,12 +751,10 @@ mod tests {
             GatherOperator::MergeSort { parallel, .. } => parallel,
             _ => unreachable!(),
         };
-        assert!(
-            state
-                .fallback_reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("one worker per partition"))
-        );
+        assert!(state
+            .fallback_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("one worker per partition")));
 
         op.close(&mut base, children)
             .expect("serial fallback should close children");

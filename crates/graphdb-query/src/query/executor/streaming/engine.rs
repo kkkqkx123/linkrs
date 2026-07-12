@@ -10,7 +10,6 @@
 use std::sync::Arc;
 
 use super::chunk::DataChunk;
-use super::driver::ExecutorDriver;
 use super::executor::{SortDirection, StreamingExecutor};
 use super::operator_base::OperatorBase;
 use super::operators::blocking_operator::BlockingOperator;
@@ -35,9 +34,8 @@ const RIGHT_GATHER_NODE_ID: i64 = i64::MIN + 3;
 /// all other trees retain the serial pull path.
 ///
 /// An optional [`ExecutionRuntime`] can be attached to enable cancellation,
-/// memory tracking, and profiling.  When present operator calls are routed
-/// through [`ExecutorDriver`] which adds uniform cancel checking and
-/// profile instrumentation.
+/// memory tracking, and profiling.  Cancel checking and profile recording
+/// are built into [`StreamingExecutor`] dispatch in `executor.rs`.
 pub struct StreamingExecutionEngine {
     root_executor: Option<Box<StreamingExecutor>>,
     /// Partition executors for partitioned execution (one per partition).
@@ -389,13 +387,7 @@ impl StreamingExecutionEngine {
             .root_executor
             .as_mut()
             .ok_or_else(|| QueryError::execution("No executor registered".to_string()))?;
-        // Clone runtime before borrowing executor to satisfy borrow checker.
-        if let Some(ref rt) = self.runtime {
-            let d = ExecutorDriver::new(rt.clone());
-            d.open(executor)
-        } else {
-            executor.open()
-        }
+        executor.open()
     }
 
     /// Pull the next chunk from the root executor (used by [`ResultStream`]).
@@ -404,12 +396,7 @@ impl StreamingExecutionEngine {
             .root_executor
             .as_mut()
             .ok_or_else(|| QueryError::execution("No executor registered".to_string()))?;
-        if let Some(ref rt) = self.runtime {
-            let d = ExecutorDriver::new(rt.clone());
-            d.next(executor)
-        } else {
-            executor.advance()
-        }
+        executor.advance()
     }
 
     /// Stop the root executor (signal upstream to stop producing).
@@ -448,9 +435,8 @@ impl StreamingExecutionEngine {
 
     /// Execute the streaming query via direct single-thread pull
     ///
-    /// When a runtime has been attached all operator calls are routed
-    /// through [`ExecutorDriver`] which provides cancel checking and
-    /// profile instrumentation on every `open`/`next`/`close`.
+    /// Cancel checking and profile instrumentation are built into
+    /// [`StreamingExecutor`] dispatch (`open`/`advance`/`close`).
     ///
     /// If partition executors are registered, each partition is executed
     /// sequentially and the results are concatenated in partition order.
@@ -485,17 +471,14 @@ impl StreamingExecutionEngine {
 
         // Extract peak memory only on success.
         if result.is_ok() {
-            if let Some(ref rt) = self.runtime {
-                for executor in self
-                    .partition_executors
-                    .iter()
-                    .chain(self.root_executor.iter().map(|e| e.as_ref()))
-                {
-                    let peak = extract_peak_memory(executor);
-                    if peak > 0 {
-                        let d = ExecutorDriver::new(rt.clone());
-                        d.record_peak_memory(executor, peak);
-                    }
+            for executor in self
+                .partition_executors
+                .iter()
+                .chain(self.root_executor.iter().map(|e| e.as_ref()))
+            {
+                let peak = extract_peak_memory(executor);
+                if peak > 0 {
+                    executor.record_profile_peak_memory(peak);
                 }
             }
         }
@@ -522,34 +505,17 @@ impl StreamingExecutionEngine {
     fn execute_partitions(&mut self) -> Result<Vec<DataChunk>, QueryError> {
         let mut all_chunks = Vec::new();
         for executor in &mut self.partition_executors {
-            if let Some(ref rt) = self.runtime {
-                let d = ExecutorDriver::new(rt.clone());
-                d.open(executor)?;
-                let loop_result = (|| -> Result<(), QueryError> {
-                    while let Some(chunk) = d.next(executor)? {
-                        all_chunks.push(chunk);
-                    }
-                    Ok(())
-                })();
-                // Even if advance failed, try to close.
-                let close_err = executor.close_tree().err();
-                loop_result?;
-                if let Some(e) = close_err {
-                    return Err(e);
+            executor.open()?;
+            let loop_result = (|| -> Result<(), QueryError> {
+                while let Some(chunk) = executor.advance()? {
+                    all_chunks.push(chunk);
                 }
-            } else {
-                executor.open()?;
-                let loop_result = (|| -> Result<(), QueryError> {
-                    while let Some(chunk) = executor.advance()? {
-                        all_chunks.push(chunk);
-                    }
-                    Ok(())
-                })();
-                let close_err = executor.close_tree().err();
-                loop_result?;
-                if let Some(e) = close_err {
-                    return Err(e);
-                }
+                Ok(())
+            })();
+            let close_err = executor.close_tree().err();
+            loop_result?;
+            if let Some(e) = close_err {
+                return Err(e);
             }
         }
         Ok(all_chunks)
@@ -564,33 +530,17 @@ impl StreamingExecutionEngine {
             .as_mut()
             .ok_or_else(|| QueryError::execution("No executor registered".to_string()))?;
 
-        if let Some(ref rt) = self.runtime {
-            let d = ExecutorDriver::new(rt.clone());
-            d.open(executor)?;
-            let loop_result = (|| -> Result<(), QueryError> {
-                while let Some(chunk) = d.next(executor)? {
-                    output_chunks.push(chunk);
-                }
-                Ok(())
-            })();
-            let close_err = executor.close_tree().err();
-            loop_result?;
-            if let Some(e) = close_err {
-                return Err(e);
+        executor.open()?;
+        let loop_result = (|| -> Result<(), QueryError> {
+            while let Some(chunk) = executor.advance()? {
+                output_chunks.push(chunk);
             }
-        } else {
-            executor.open()?;
-            let loop_result = (|| -> Result<(), QueryError> {
-                while let Some(chunk) = executor.advance()? {
-                    output_chunks.push(chunk);
-                }
-                Ok(())
-            })();
-            let close_err = executor.close_tree().err();
-            loop_result?;
-            if let Some(e) = close_err {
-                return Err(e);
-            }
+            Ok(())
+        })();
+        let close_err = executor.close_tree().err();
+        loop_result?;
+        if let Some(e) = close_err {
+            return Err(e);
         }
 
         Ok(output_chunks)

@@ -9,7 +9,7 @@ use super::operators::graph_operator::GraphOperator;
 use super::operators::join_operator::JoinOperator;
 use super::operators::set_operator::SetOperator;
 use super::operators::sink_operator::SinkOperator;
-use super::operators::source_operator::SourceOperator;
+use super::operators::source_operator::{NeighborScanState, SourceOperator};
 use super::operators::txn_operator::TxnOperator;
 use super::operators::unary_operator::UnaryOperator;
 use super::operators::vector_operator::VectorOperator;
@@ -888,7 +888,7 @@ impl StreamingExecutorBuilder {
                         storage: context.storage.clone(),
                         space_name: get_node.space_name().to_string(),
                         vertex_ids,
-                        rows: super::operators::source_operator::SourceRows::empty(),
+                        position: 0,
                     },
                 ))
             }
@@ -902,7 +902,7 @@ impl StreamingExecutorBuilder {
                     src: Some(get_node.src().to_string()),
                     dst: Some(get_node.dst().to_string()),
                     rank: 0,
-                    rows: super::operators::source_operator::SourceRows::empty(),
+                    cursor: None,
                 },
             )),
 
@@ -912,7 +912,7 @@ impl StreamingExecutorBuilder {
                     storage: context.storage.clone(),
                     space_name: context.space_name.clone().unwrap_or_default(),
                     direction: get_node.direction().to_string(),
-                    rows: super::operators::source_operator::SourceRows::empty(),
+                    state: NeighborScanState::Init,
                 },
             )),
 
@@ -1186,7 +1186,7 @@ impl StreamingExecutorBuilder {
                     storage: context.storage.clone(),
                     space_name: context.space_name.clone().unwrap_or_default(),
                     edge_type: Some(scan_node.edge_type().to_string()),
-                    rows: super::operators::source_operator::SourceRows::empty(),
+                    cursor: None,
                 },
             )),
 
@@ -1197,7 +1197,8 @@ impl StreamingExecutorBuilder {
                     space_name: context.space_name.clone().unwrap_or_default(),
                     index_name: Some(scan_node.index_name().to_string()),
                     index_value: None,
-                    rows: super::operators::source_operator::SourceRows::empty(),
+                    resolved_ids: Vec::new(),
+                    position: 0,
                 },
             )),
 
@@ -1920,7 +1921,9 @@ impl StreamingExecutorBuilder {
         plan: &PlanNodeEnum,
         context: &ExecutionContext,
     ) -> Result<StreamingExecutor, QueryError> {
-        Self::from_plan_node(plan, context)
+        let mut executor = Self::from_plan_node(plan, context)?;
+        executor.set_chunk_size(context.chunk_size);
+        Ok(executor)
     }
 
     fn contextual_to_expression(

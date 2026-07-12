@@ -13,6 +13,10 @@ pub struct OperatorBase {
     /// Local partition that owns this operator. `None` denotes a global or
     /// non-partitioned operator.
     pub partition_id: Option<usize>,
+    /// Rows per chunk when this operator produces output.
+    /// Source operators use this value directly; unary/blocking operators
+    /// pass through whatever they receive from their child.
+    pub chunk_size: usize,
 }
 
 impl OperatorBase {
@@ -23,7 +27,13 @@ impl OperatorBase {
             opened: false,
             is_global: false,
             partition_id: None,
+            chunk_size: 1024,
         }
+    }
+
+    pub fn with_chunk_size(mut self, chunk_size: usize) -> Self {
+        self.chunk_size = chunk_size;
+        self
     }
 
     pub fn with_runtime(mut self, rt: Option<Arc<ExecutionRuntime>>) -> Self {

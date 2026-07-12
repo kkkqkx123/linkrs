@@ -90,10 +90,21 @@ pub async fn execute_stream<
             }
         };
 
-        // Send schema/metadata event BEFORE any row data (SSE protocol contract).
-        // The first chunk's column names are sent as a "schema" event so that
-        // the client can interpret rows before the stream ends.
+        // Send schema event BEFORE any row data, using column names from the
+        // plan (available even for empty results via the fallback mechanism).
         let schema_sent: Arc<std::sync::atomic::AtomicBool> = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        if let Some(columns) = stream_result.column_names() {
+            schema_sent.store(true, std::sync::atomic::Ordering::Relaxed);
+            let schema = json!({
+                "columns": columns,
+                "column_count": columns.len(),
+            });
+            if let Ok(schema_str) = serde_json::to_string(&schema) {
+                let _ = tx
+                    .send(Ok(Event::default().event("schema").data(schema_str)))
+                    .await;
+            }
+        }
 
         // Spawn a blocking task to pull chunks synchronously
         // and send rows through the channel.
@@ -107,7 +118,7 @@ pub async fn execute_stream<
                     Ok(Some(chunk)) => {
                         let columns = chunk.col_names();
 
-                        // Send schema event on first chunk, before any rows.
+                        // Send schema event on first chunk if not already done.
                         if !schema_sent_pull.load(std::sync::atomic::Ordering::Relaxed) {
                             schema_sent_pull.store(true, std::sync::atomic::Ordering::Relaxed);
                             let schema = json!({

@@ -266,8 +266,9 @@ impl Value {
             Value::List(l) => std::mem::size_of::<Self>() + l.estimated_size(),
             Value::Map(m) => {
                 let mut size = std::mem::size_of::<Self>();
-                size +=
-                    m.capacity() * (std::mem::size_of::<String>() + std::mem::size_of::<Value>());
+                // Hash table bucket array overhead: u64 hash per entry
+                size += m.capacity()
+                    * (8 + std::mem::size_of::<String>() + std::mem::size_of::<Value>());
                 for (k, v) in m.as_ref() {
                     size += k.capacity();
                     size += v.estimated_size();
@@ -276,7 +277,8 @@ impl Value {
             }
             Value::Set(s) => {
                 let mut size = std::mem::size_of::<Self>();
-                size += s.capacity() * std::mem::size_of::<Value>();
+                // Hash table bucket array overhead: u64 hash per entry
+                size += s.capacity() * (8 + std::mem::size_of::<Value>());
                 for v in s.as_ref() {
                     size += v.estimated_size();
                 }

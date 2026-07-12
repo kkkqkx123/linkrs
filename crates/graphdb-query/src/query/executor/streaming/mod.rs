@@ -15,7 +15,6 @@ pub mod builder;
 pub mod chunk;
 pub mod context;
 pub mod coordinator;
-pub mod driver;
 pub mod engine;
 pub mod executor;
 pub mod factory;
@@ -32,10 +31,8 @@ pub mod slot;
 pub mod stream;
 pub mod stream_result;
 
-pub use base::ExecutionMode;
 pub use builder::StreamingExecutorBuilder;
 pub use chunk::DataChunk;
-pub use driver::ExecutorDriver;
 pub use engine::StreamingExecutionEngine;
 pub use executor::StreamingExecutor;
 pub use factory::StreamingQueryExecutor;

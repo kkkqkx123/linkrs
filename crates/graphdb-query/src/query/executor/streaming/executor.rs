@@ -99,6 +99,14 @@ impl StreamingExecutor {
         }
     }
 
+    /// Recursively set the chunk size on this operator and all children.
+    pub fn set_chunk_size(&mut self, chunk_size: usize) {
+        self.base_mut().chunk_size = chunk_size;
+        for child in self.children_mut() {
+            child.set_chunk_size(chunk_size);
+        }
+    }
+
     /// Configure P8 execution for Gather nodes below this tree. Nodes that do
     /// not pass the parallel-safety predicate retain their serial pull path.
     pub fn configure_parallel_partitions(

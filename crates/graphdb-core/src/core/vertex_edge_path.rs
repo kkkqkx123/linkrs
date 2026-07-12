@@ -37,9 +37,9 @@ impl Tag {
         // Calculate the actual size of the variable `name` (including heap allocation).
         size += std::mem::size_of::<String>() + self.name.capacity();
 
-        // Calculating the capacity overhead of a HashMap
+        // Hash table bucket array overhead: u64 hash per entry
         size += self.properties.capacity()
-            * (std::mem::size_of::<String>() + std::mem::size_of::<Value>());
+            * (8 + std::mem::size_of::<String>() + std::mem::size_of::<Value>());
 
         for (k, v) in &self.properties {
             size += k.capacity();
@@ -267,7 +267,7 @@ impl Vertex {
             size += std::mem::size_of::<String>() + tag.name.capacity();
 
             size += tag.properties.capacity()
-                * (std::mem::size_of::<String>() + std::mem::size_of::<Value>());
+                * (8 + std::mem::size_of::<String>() + std::mem::size_of::<Value>());
 
             for (k, v) in &tag.properties {
                 size += k.capacity();
@@ -276,7 +276,7 @@ impl Vertex {
         }
 
         size += self.properties.capacity()
-            * (std::mem::size_of::<String>() + std::mem::size_of::<Value>());
+            * (8 + std::mem::size_of::<String>() + std::mem::size_of::<Value>());
 
         for (k, v) in &self.properties {
             size += k.capacity();
@@ -380,8 +380,8 @@ impl Edge {
 
         size += std::mem::size_of::<String>() + self.edge_type.capacity();
 
-        size +=
-            self.props.capacity() * (std::mem::size_of::<String>() + std::mem::size_of::<Value>());
+        size += self.props.capacity()
+            * (8 + std::mem::size_of::<String>() + std::mem::size_of::<Value>());
 
         for (k, v) in &self.props {
             size += k.capacity();

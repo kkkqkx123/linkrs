@@ -1321,7 +1321,16 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             )))
         })?;
 
-        Ok(StreamingQueryResult::new(stream, runtime))
+        let result = StreamingQueryResult::new(stream, runtime);
+
+        // Pre-populate column names from the plan root so that they are
+        // available even when the query returns zero rows.
+        let col_names = root_node.col_names().to_vec();
+        if !col_names.is_empty() {
+            result.set_fallback_column_names(col_names);
+        }
+
+        Ok(result)
     }
 
     /// Execute EXPLAIN statement

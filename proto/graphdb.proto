@@ -19,7 +19,7 @@ service GraphDBService {
   // Query Execution
   rpc ExecuteQuery(ExecuteQueryRequest) returns (ExecuteQueryResponse);
   rpc ValidateQuery(ValidateQueryRequest) returns (ValidateQueryResponse);
-  rpc ExecuteQueryStream(ExecuteQueryRequest) returns (stream QueryResultChunk);
+  rpc ExecuteQueryStream(ExecuteQueryRequest) returns (stream StreamResponse);
   
   // Transaction Management
   rpc BeginTransaction(BeginTransactionRequest) returns (BeginTransactionResponse);
@@ -215,6 +215,17 @@ message QueryResultChunk {
   repeated Row rows = 1;
   bool is_last = 2;
   repeated string column_names = 3;
+}
+
+message SchemaMessage {
+  repeated string column_names = 1;
+}
+
+message StreamResponse {
+  oneof payload {
+    SchemaMessage schema = 1;
+    QueryResultChunk data = 2;
+  }
 }
 
 message ExecutionMetadata {
