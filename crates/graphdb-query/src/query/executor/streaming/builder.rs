@@ -1,5 +1,3 @@
-use std::ops::Range;
-
 use super::executor::FullOuterJoinPhase;
 use super::executor::OperatorBase;
 use super::executor::StreamingExecutor;
@@ -2024,7 +2022,7 @@ impl StreamingExecutorBuilder {
             .collect()
     }
 
-    fn sort_items_to_expressions(
+    pub fn sort_items_to_expressions(
         items: &[crate::query::planning::plan::core::nodes::operation::sort_node::SortItem],
     ) -> Result<(Vec<Expression>, Vec<super::executor::SortDirection>), QueryError> {
         let mut expressions = Vec::new();
@@ -2070,7 +2068,7 @@ impl StreamingExecutorBuilder {
     fn set_partition_on_source(
         executor: &mut StreamingExecutor,
         partition_id: usize,
-        partition_range: Option<Range<u32>>,
+        partition_range: Option<std::ops::Range<i64>>,
     ) -> Result<(), QueryError> {
         executor.set_partition_id(partition_id);
         match executor {
@@ -2098,6 +2096,14 @@ impl StreamingExecutorBuilder {
                     Self::set_partition_on_source(child, partition_id, partition_range.clone())?;
                 }
             }
+            StreamingExecutor::HashShuffleJoin(_, left, right, _) => {
+                for tree in left.iter_mut() {
+                    Self::set_partition_on_source(tree, partition_id, partition_range.clone())?;
+                }
+                for tree in right.iter_mut() {
+                    Self::set_partition_on_source(tree, partition_id, partition_range.clone())?;
+                }
+            }
         }
         Ok(())
     }
@@ -2106,7 +2112,7 @@ impl StreamingExecutorBuilder {
     fn set_partition_on_source_op(
         source: &mut SourceOperator,
         pid: usize,
-        prange: Option<Range<u32>>,
+        prange: Option<std::ops::Range<i64>>,
     ) {
         match source {
             SourceOperator::ScanVertices { partition_id, .. } => {

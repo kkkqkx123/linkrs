@@ -5,10 +5,10 @@
 //! guessing a full integer range would silently omit non-numeric or sparse
 //! identifiers.
 
-use std::ops::Range;
+
 
 use crate::query::optimizer::StatisticsManager;
-use crate::query::planning::plan::{PartitionSpec, PlanNodeEnum};
+use crate::query::planning::plan::{PartitionSource, PartitionSpec, PlanNodeEnum};
 
 /// Static configuration for partition selection. The default is disabled so
 /// introducing the optimizer cannot change query results without an explicit
@@ -18,7 +18,12 @@ pub struct PartitioningConfig {
     pub enabled: bool,
     pub min_rows_per_partition: u64,
     pub max_partitions: usize,
-    pub vertex_id_range: Option<Range<u32>>,
+    /// Trusted vertex ID range.  Ranges use `i64` to match the real vertex
+    /// ID type and avoid silent truncation of values >= 2^32.
+    pub vertex_id_range: Option<std::ops::Range<i64>>,
+    /// Maximum worker threads for intra-query parallelism (P8).
+    /// 1 means fully serial (P7 fallback).
+    pub max_workers: usize,
 }
 
 impl Default for PartitioningConfig {
@@ -28,6 +33,7 @@ impl Default for PartitioningConfig {
             min_rows_per_partition: 100_000,
             max_partitions: 1,
             vertex_id_range: None,
+            max_workers: 1,
         }
     }
 }
@@ -73,6 +79,17 @@ impl PartitioningPlanner {
             return Self::fallback("configured vertex-id range is empty");
         }
 
+        // Reject plans with unsupported node categories.
+        if Self::has_write_operation(root) {
+            return Self::fallback("plan contains write operations; partitioning not supported");
+        }
+        if Self::has_transaction_boundary(root) {
+            return Self::fallback("plan crosses a transaction boundary; partitioning not supported");
+        }
+        if Self::has_graph_traversal(root) {
+            return Self::fallback("plan contains recursive graph traversal; partitioning not supported");
+        }
+
         let mut scans = Vec::new();
         Self::collect_vertex_scans(root, &mut scans);
         if scans.len() != 1 {
@@ -84,6 +101,11 @@ impl PartitioningPlanner {
             return Self::fallback("vertex scan has no tag statistics key");
         };
         let rows = statistics.get_vertex_count(tag);
+        if rows == 0 {
+            return Self::fallback(format!(
+                "missing statistics for vertex tag '{tag}'; cannot estimate row count"
+            ));
+        }
         if rows < self.config.min_rows_per_partition.saturating_mul(2) {
             return Self::fallback(format!(
                 "estimated vertex rows ({rows}) are below the partition threshold"
@@ -94,7 +116,15 @@ impl PartitioningPlanner {
             .unwrap_or(self.config.max_partitions)
             .clamp(2, self.config.max_partitions);
         let ranges = split_range(range, desired);
-        match PartitionSpec::try_new(ranges) {
+        match PartitionSpec::try_new(
+            ranges,
+            PartitionSource::VertexId {
+                tag: tag.to_string(),
+            },
+            // No layout versioning from the partitioning planner yet;
+            // the storage layer will provide one in a later phase.
+            None,
+        ) {
             Ok(spec) => PartitioningDecision {
                 partition_spec: Some(spec),
                 reason: format!(
@@ -118,6 +148,53 @@ impl PartitioningPlanner {
         }
     }
 
+    /// Returns true when the plan tree contains any write operation node.
+    fn has_write_operation(node: &PlanNodeEnum) -> bool {
+        matches!(
+            node,
+            PlanNodeEnum::InsertVertices(_)
+                | PlanNodeEnum::InsertEdges(_)
+                | PlanNodeEnum::DeleteVertices(_)
+                | PlanNodeEnum::DeleteEdges(_)
+                | PlanNodeEnum::DeleteTags(_)
+                | PlanNodeEnum::DeleteIndex(_)
+                | PlanNodeEnum::PipeDeleteVertices(_)
+                | PlanNodeEnum::PipeDeleteEdges(_)
+                | PlanNodeEnum::Update(_)
+                | PlanNodeEnum::UpdateVertices(_)
+                | PlanNodeEnum::UpdateEdges(_)
+        ) || node.children().iter().any(|c| Self::has_write_operation(c))
+    }
+
+    /// Returns true when the plan tree contains a transaction-control node.
+    fn has_transaction_boundary(node: &PlanNodeEnum) -> bool {
+        matches!(
+            node,
+            PlanNodeEnum::BeginTransaction(_)
+                | PlanNodeEnum::Commit(_)
+                | PlanNodeEnum::Rollback(_)
+        ) || node.children().iter().any(|c| Self::has_transaction_boundary(c))
+    }
+
+    /// Returns true when the plan tree contains a recursive graph traversal
+    /// or path-algorithm node.
+    fn has_graph_traversal(node: &PlanNodeEnum) -> bool {
+        matches!(
+            node,
+            PlanNodeEnum::Expand(_)
+                | PlanNodeEnum::ExpandAll(_)
+                | PlanNodeEnum::Traverse(_)
+                | PlanNodeEnum::AppendVertices(_)
+                | PlanNodeEnum::BiExpand(_)
+                | PlanNodeEnum::BiTraverse(_)
+                | PlanNodeEnum::Loop(_)
+                | PlanNodeEnum::MultiShortestPath(_)
+                | PlanNodeEnum::BFSShortest(_)
+                | PlanNodeEnum::AllPaths(_)
+                | PlanNodeEnum::ShortestPath(_)
+        ) || node.children().iter().any(|c| Self::has_graph_traversal(c))
+    }
+
     fn fallback(reason: impl Into<String>) -> PartitioningDecision {
         PartitioningDecision {
             partition_spec: None,
@@ -126,12 +203,12 @@ impl PartitioningPlanner {
     }
 }
 
-fn split_range(range: Range<u32>, partition_count: usize) -> Vec<Range<u32>> {
+fn split_range(range: std::ops::Range<i64>, partition_count: usize) -> Vec<std::ops::Range<i64>> {
     let total = range.end - range.start;
-    let width = total.div_ceil(partition_count as u32);
+    let width = (total + partition_count as i64 - 1) / partition_count as i64;
     let mut ranges = Vec::with_capacity(partition_count);
     for index in 0..partition_count {
-        let start = range.start + (index as u32) * width;
+        let start = range.start + (index as i64) * width;
         if start >= range.end {
             break;
         }
@@ -162,7 +239,8 @@ mod tests {
             enabled: true,
             min_rows_per_partition: 1_000,
             max_partitions: 4,
-            vertex_id_range: Some(0..10_000),
+            vertex_id_range: Some(0i64..10_000),
+            max_workers: 1,
         });
 
         let decision = planner.decide(&tagged_scan(), &stats);
@@ -187,5 +265,52 @@ mod tests {
         let decision = planner.decide(&tagged_scan(), &stats);
         assert!(decision.partition_spec.is_none());
         assert!(decision.reason.contains("trusted vertex-id range"));
+    }
+
+    fn make_planner() -> PartitioningPlanner {
+        PartitioningPlanner::new(PartitioningConfig {
+            enabled: true,
+            min_rows_per_partition: 1_000,
+            max_partitions: 4,
+            vertex_id_range: Some(0i64..10_000),
+            max_workers: 1,
+        })
+    }
+
+    fn make_stats() -> StatisticsManager {
+        let stats = StatisticsManager::new();
+        let mut tag = TagStatistics::new("person".to_string());
+        tag.vertex_count = 10_000;
+        stats.update_tag_stats(tag);
+        stats
+    }
+
+    #[test]
+    fn falls_back_on_missing_statistics() {
+        let stats = StatisticsManager::new(); // no stats populated
+        let plan = tagged_scan();
+        let decision = make_planner().decide(&plan, &stats);
+        assert!(decision.partition_spec.is_none());
+        assert!(decision.reason.contains("missing statistics"));
+    }
+
+    #[test]
+    fn falls_back_on_transaction_boundary() {
+        use crate::query::planning::plan::core::nodes::control_flow::control_flow_node::BeginTransactionNode;
+        let plan = PlanNodeEnum::BeginTransaction(BeginTransactionNode::new(1));
+        let stats = make_stats();
+        let decision = make_planner().decide(&plan, &stats);
+        assert!(decision.partition_spec.is_none());
+        assert!(decision.reason.contains("transaction boundary"));
+    }
+
+    #[test]
+    fn falls_back_on_graph_traversal() {
+        use crate::query::planning::plan::core::nodes::traversal::traversal_node::AppendVerticesNode;
+        let plan = PlanNodeEnum::AppendVertices(AppendVerticesNode::new(1, "person"));
+        let stats = make_stats();
+        let decision = make_planner().decide(&plan, &stats);
+        assert!(decision.partition_spec.is_none());
+        assert!(decision.reason.contains("graph traversal"));
     }
 }

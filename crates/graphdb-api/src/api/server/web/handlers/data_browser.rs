@@ -129,7 +129,7 @@ async fn list_vertices_by_tag<
     );
 
     let total = match graph_service.execute(session_id, &count_query).await {
-        Ok(crate::query::executor::ExecutionResult::DataSet(ds)) => ds
+        Ok(crate::query::executor::ExecutionResult::DataSet { data: ds, .. }) => ds
             .rows
             .first()
             .and_then(|row| row.first())
@@ -156,7 +156,7 @@ async fn list_vertices_by_tag<
         Ok(exec_result) => {
             // Convert ExecutionResult to JSON values
             let rows: Vec<serde_json::Value> = match exec_result {
-                crate::query::executor::ExecutionResult::DataSet(ds) => ds
+                crate::query::executor::ExecutionResult::DataSet { data: ds, .. } => ds
                     .rows
                     .iter()
                     .filter_map(|row| row.first())
@@ -223,7 +223,7 @@ async fn list_edges_by_type<
     );
 
     let total = match graph_service.execute(session_id, &count_query).await {
-        Ok(crate::query::executor::ExecutionResult::DataSet(ds)) => ds
+        Ok(crate::query::executor::ExecutionResult::DataSet { data: ds, .. }) => ds
             .rows
             .first()
             .and_then(|row| row.first())
@@ -250,7 +250,7 @@ async fn list_edges_by_type<
         Ok(exec_result) => {
             // Convert ExecutionResult to JSON values
             let rows: Vec<serde_json::Value> = match exec_result {
-                crate::query::executor::ExecutionResult::DataSet(ds) => ds
+                crate::query::executor::ExecutionResult::DataSet { data: ds, .. } => ds
                     .rows
                     .iter()
                     .filter_map(|row| row.first())

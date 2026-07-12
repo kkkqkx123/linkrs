@@ -251,7 +251,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         execution: crate::query::executor::base::ExecutionResult,
     ) -> CoreResult<QueryResult> {
         match execution {
-            crate::query::executor::base::ExecutionResult::DataSet(data) => {
+            crate::query::executor::base::ExecutionResult::DataSet { data, .. } => {
                 // Processing the results of a dataset: The DataSet uses `col_names` instead of `columns`.
                 let columns = data.col_names.clone();
                 let mut rows = Vec::new();

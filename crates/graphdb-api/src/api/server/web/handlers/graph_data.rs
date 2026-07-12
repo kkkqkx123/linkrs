@@ -69,7 +69,7 @@ async fn get_vertex<
 
     let result = match graph_service.execute(0, &query).await {
         Ok(exec_result) => match exec_result {
-            crate::query::executor::ExecutionResult::DataSet(ds) => {
+            crate::query::executor::ExecutionResult::DataSet { data: ds, .. } => {
                 if let Some(row) = ds.rows.first() {
                     if let Some(vertex) = row.first() {
                         Ok(serde_json::json!({"vertex": vertex}))
@@ -131,7 +131,7 @@ async fn get_edge<
 
     let result = match graph_service.execute(0, &query).await {
         Ok(exec_result) => match exec_result {
-            crate::query::executor::ExecutionResult::DataSet(ds) => {
+            crate::query::executor::ExecutionResult::DataSet { data: ds, .. } => {
                 if let Some(row) = ds.rows.first() {
                     if let Some(edge) = row.first() {
                         Ok(serde_json::json!({"edge": edge}))
@@ -213,7 +213,7 @@ async fn get_neighbors<
     let result = match graph_service.execute(0, &query).await {
         Ok(exec_result) => {
             let neighbors: Vec<serde_json::Value> = match exec_result {
-                crate::query::executor::ExecutionResult::DataSet(dataset) => dataset
+                crate::query::executor::ExecutionResult::DataSet { data: dataset, .. } => dataset
                     .rows
                     .into_iter()
                     .flat_map(|row| row.into_iter())

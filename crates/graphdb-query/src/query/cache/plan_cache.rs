@@ -16,6 +16,7 @@
 //! - Applications use Prepared Statements
 
 use moka::sync::Cache;
+use std::hash::Hasher;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -38,32 +39,81 @@ pub struct ParamPosition {
     pub expected_type: Option<crate::core::types::DataType>,
 }
 
+use crate::query::planning::plan::execution_plan::PartitionSpec;
+
 /// Query Plan Cache Key
 ///
 /// Supports fast lookups using the hash of the query text as the key.
 /// Also store query text for conflict detection.
+///
+/// When a plan carries a non-stale `PartitionSpec` the key includes a
+/// partition fingerprint so that a change in the underlying data layout
+/// (e.g. re-indexing) automatically yields a cache miss, forcing the
+/// planner to produce a fresh physical plan.  Callers that only have
+/// the query text (the common lookup path before planning) query with
+/// `fingerprint == None`, which will *not* match entries that were stored
+/// with a fingerprint — effectively isolating partitioned plans from the
+/// cache until the caller can provide the current layout version.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PlanCacheKey {
     /// Query the hash value of the text
     pub hash: u64,
     /// Query text (for conflict detection, not just debugging)
     query_text: String,
+    /// Partition layout fingerprint.  `Some` when the cached plan holds a
+    /// `PartitionSpec`; absent for single-tree plans.
+    partition_fingerprint: Option<u64>,
 }
 
 impl PlanCacheKey {
     /// Creating Cache Keys from Query Text
     pub fn from_query(query: &str) -> Self {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        let hash = Self::hash_query(query);
+        Self {
+            hash,
+            query_text: query.to_string(),
+            partition_fingerprint: None,
+        }
+    }
 
-        let mut hasher = DefaultHasher::new();
+    /// Create a key that additionally captures a physical partition layout,
+    /// preventing stale cached plans from being reused after layout changes.
+    pub fn from_query_with_partition(query: &str, spec: &PartitionSpec) -> Self {
+        use std::hash::Hash;
+
+        let fp = Self::compute_fingerprint(spec);
+
+        let mut hasher = Self::hasher();
         query.hash(&mut hasher);
+        fp.hash(&mut hasher);
         let hash = hasher.finish();
 
         Self {
             hash,
             query_text: query.to_string(),
+            partition_fingerprint: Some(fp),
         }
+    }
+
+    fn hash_query(query: &str) -> u64 {
+        use std::hash::Hash;
+        let mut hasher = Self::hasher();
+        query.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn hasher() -> std::collections::hash_map::DefaultHasher {
+        std::collections::hash_map::DefaultHasher::new()
+    }
+
+    /// Produce a numeric fingerprint from the partition source and layout
+    /// version so that a change in either component yields a different key.
+    fn compute_fingerprint(spec: &PartitionSpec) -> u64 {
+        use std::hash::Hash;
+        let mut hasher = Self::hasher();
+        spec.source().to_string().hash(&mut hasher);
+        spec.layout_version().hash(&mut hasher);
+        hasher.finish()
     }
 
     /// Verify that the query text matches (for conflict detection)
@@ -74,6 +124,11 @@ impl PlanCacheKey {
     /// Get query text (for debugging or logging)
     pub fn query_text(&self) -> &str {
         &self.query_text
+    }
+
+    /// Whether this key holds a partition fingerprint.
+    pub fn has_partition_fingerprint(&self) -> bool {
+        self.partition_fingerprint.is_some()
     }
 }
 
@@ -306,8 +361,14 @@ impl QueryPlanCache {
         param_positions: Vec<ParamPosition>,
         dependent_tables: Vec<String>,
     ) {
-        let key = PlanCacheKey::from_query(query);
+        // Use a partition-aware key when the plan carries a physical layout
+        // so that layout changes (re-index, layout version bump) yield a
+        // cache miss and force the planner to produce a fresh plan.
         let query_bytes = query.len();
+        let key = plan
+            .partition_spec()
+            .map(|spec| PlanCacheKey::from_query_with_partition(query, spec))
+            .unwrap_or_else(|| PlanCacheKey::from_query(query));
 
         let priority = if self.config.priority_config.enable_priority {
             self.calculate_priority(&plan)

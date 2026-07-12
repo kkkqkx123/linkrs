@@ -11,6 +11,16 @@ use crate::query::planning::plan::explain::{PlanDescription, PlanNodeDescription
 pub fn format_plan_as_table(plan_desc: &PlanDescription) -> String {
     let mut output = String::new();
 
+    // Header with plan-level metadata
+    output.push_str(&format!(
+        "Execution Mode: {} ({})\n",
+        plan_desc.execution_mode, plan_desc.execution_mode_reason
+    ));
+    if let Some(ref part) = plan_desc.partition_spec_description {
+        output.push_str(&format!("Partitioning: {}\n", part));
+    }
+    output.push('\n');
+
     // Header with clear column names
     output.push_str("+------+------------------+------------+------------------+--------------------------------------------------+------------------+\n");
     output.push_str("| id   | name             | deps       | profiling_data   | operator_info                                    | output_var       |\n");
@@ -88,6 +98,16 @@ pub fn format_plan_as_dot(plan_desc: &PlanDescription) -> String {
 
     output.push_str("digraph G {\n");
     output.push_str("    rankdir=BT;\n"); // Bottom to top layout for better flow visualization
+    output.push_str(&format!(
+        "    label=\"Execution Mode: {} | {}\";\n",
+        plan_desc.execution_mode,
+        plan_desc
+            .partition_spec_description
+            .as_deref()
+            .unwrap_or("no partitioning")
+    ));
+    output.push_str("    labelloc=t;\n");
+    output.push_str("    fontsize=12;\n");
     output
         .push_str("    node[shape=box, style=filled, fillcolor=lightblue, fontname=\"Arial\"];\n");
     output.push_str("    edge[arrowhead=none, fontname=\"Arial\"];\n\n");
@@ -316,6 +336,16 @@ pub fn format_plan_with_output_table(
     // Use the built-in table formatter
     let mut output = String::new();
 
+    // Plan-level metadata header
+    output.push_str(&format!(
+        "Execution Mode: {} ({})\n",
+        plan_desc.execution_mode, plan_desc.execution_mode_reason
+    ));
+    if let Some(ref part) = plan_desc.partition_spec_description {
+        output.push_str(&format!("Partitioning: {}\n", part));
+    }
+    output.push('\n');
+
     // Calculate column widths
     let headers = [
         "id",
@@ -444,6 +474,9 @@ pub fn format_plan_as_json(
     #[derive(Serialize)]
     struct SerializablePlanDescription {
         format: String,
+        execution_mode: String,
+        execution_mode_reason: String,
+        partition_spec_description: Option<String>,
         plan_node_descs: Vec<SerializablePlanNodeDescription>,
     }
 
@@ -502,6 +535,9 @@ pub fn format_plan_as_json(
 
     let serializable_plan = SerializablePlanDescription {
         format: plan_desc.format.clone(),
+        execution_mode: plan_desc.execution_mode.clone(),
+        execution_mode_reason: plan_desc.execution_mode_reason.clone(),
+        partition_spec_description: plan_desc.partition_spec_description.clone(),
         plan_node_descs: serializable_nodes,
     };
 

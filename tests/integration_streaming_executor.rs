@@ -3,6 +3,8 @@
 //! Tests the workflow: StreamingExecutor construction → execution call chain
 //! Focus: verify call chain integrity and executor lifecycle
 
+use std::sync::Arc;
+
 use graphdb::core::error::QueryError;
 use graphdb::core::types::expr::Expression;
 use graphdb::core::types::operators::AggregateFunction;
@@ -16,6 +18,8 @@ use graphdb::query::executor::streaming::operators::join_operator::JoinOperator;
 use graphdb::query::executor::streaming::operators::set_operator::SetOperator;
 use graphdb::query::executor::streaming::operators::source_operator::SourceOperator;
 use graphdb::query::executor::streaming::operators::unary_operator::UnaryOperator;
+
+mod common;
 
 // ============ Test Helpers ============
 
@@ -125,7 +129,9 @@ fn test_limit_in_chain() {
         OperatorBase::new(0),
         scan,
         UnaryOperator::Limit {
+            offset: 0,
             limit: 10,
+            skipped: 0,
             consumed: 0,
         },
     );
@@ -208,7 +214,9 @@ fn test_pipeline_scan_limit() {
         OperatorBase::new(0),
         scan,
         UnaryOperator::Limit {
+            offset: 0,
             limit: 5,
+            skipped: 0,
             consumed: 0,
         },
     );
@@ -259,7 +267,9 @@ fn test_pipeline_scan_filter_limit() {
         OperatorBase::new(0),
         filter,
         UnaryOperator::Limit {
+            offset: 0,
             limit: 8,
+            skipped: 0,
             consumed: 0,
         },
     );
@@ -317,6 +327,7 @@ fn test_aggregate_in_chain() {
                 AggregateFunction::Count(None),
                 Expression::Literal(Value::Int(1)),
             )],
+            output_col_names: vec![],
             memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
             state: None,
         },
@@ -469,7 +480,9 @@ fn test_complex_pipeline_4step() {
         OperatorBase::new(0),
         project,
         UnaryOperator::Limit {
+            offset: 0,
             limit: 5,
+            skipped: 0,
             consumed: 0,
         },
     );
@@ -539,7 +552,9 @@ fn test_limit_zero() {
         OperatorBase::new(0),
         scan,
         UnaryOperator::Limit {
+            offset: 0,
             limit: 0,
+            skipped: 0,
             consumed: 0,
         },
     );
@@ -572,4 +587,108 @@ fn test_distinct_all_same() {
         assert!(chunk.len() <= 3);
     }
     distinct.close().unwrap();
+}
+
+// ── Storage-backed integration tests (R5) ──
+
+#[cfg(test)]
+mod storage_backed {
+    use super::common::TestStorage;
+    use graphdb::core::stats::StatsManager;
+    use graphdb::core::types::{PropertyDef, SpaceInfo, TagInfo};
+    use graphdb::core::types::VertexId;
+    use graphdb::core::vertex_edge_path::{Tag, Vertex};
+    use graphdb::core::DataType;
+    use graphdb::core::Value;
+    use graphdb::query::executor::streaming::StreamingQueryResult;
+    use graphdb::query::optimizer::OptimizerEngine;
+    use graphdb::query::query_pipeline_manager::QueryPipelineManager;
+    use graphdb::query::QueryRequestContext;
+    use graphdb::storage::{StorageReader, StorageSchemaContextOps, StorageSchemaOps, StorageWriter};
+    use parking_lot::RwLock;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    /// Set up a minimal graph space with a Person tag and a few vertices.
+    fn setup_test_data(storage: &Arc<RwLock<graphdb::storage::GraphStorage>>) {
+        let mut store = storage.write();
+        let mut space = SpaceInfo::new("test".to_string()).with_vid_type(DataType::BigInt);
+        store.create_space(&mut space).unwrap();
+        let tag = TagInfo::new("Person".to_string()).with_properties(vec![
+            PropertyDef::new("name".to_string(), DataType::String),
+            PropertyDef::new("age".to_string(), DataType::BigInt),
+        ]);
+        store.create_tag("test", &tag).unwrap();
+        for (i, (name, age)) in [
+            ("Alice", 30i64),
+            ("Bob", 25),
+            ("Charlie", 35),
+            ("Diana", 28),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let vid = VertexId::from_int64(i as i64 + 1);
+            let mut props = HashMap::new();
+            props.insert("name".to_string(), Value::String(name.to_string()));
+            props.insert("age".to_string(), Value::BigInt(*age));
+            let vertex = Vertex::new(vid, vec![Tag::new("Person".to_string(), props)]);
+            store.insert_vertex("test", vertex).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_streaming_query_with_storage_backed_scan() {
+        let test_storage = TestStorage::new().expect("Failed to create test storage");
+        let storage = test_storage.storage();
+
+        let stats_manager = Arc::new(StatsManager::new());
+        let schema_manager = {
+            let guard = storage.read();
+            StorageSchemaContextOps::get_schema_manager(&*guard)
+                .expect("Schema manager not available")
+        };
+        let mut pipeline = QueryPipelineManager::with_optimizer(
+            storage.clone(),
+            stats_manager,
+            Arc::new(OptimizerEngine::default()),
+        )
+        .with_schema_manager(schema_manager);
+
+        setup_test_data(&storage);
+
+        let rctx = Arc::new(QueryRequestContext::new(
+            "MATCH (n:Person) RETURN n.name, n.age ORDER BY n.age".to_string(),
+        ));
+        let space_info = {
+            let store = storage.read();
+            store.get_space("test").unwrap()
+        };
+
+        let mut result: StreamingQueryResult = pipeline
+            .execute_query_stream_with_request(
+                "MATCH (n:Person) RETURN n.name, n.age ORDER BY n.age",
+                rctx,
+                space_info,
+            )
+            .expect("Streaming query should succeed");
+
+        let mut total_rows = 0;
+        let mut names: Vec<String> = Vec::new();
+        while let Ok(Some(chunk)) = result.next_chunk() {
+            for row in &chunk.rows {
+                if let (Some(Value::String(name)), Some(Value::BigInt(_age))) =
+                    (row.first(), row.get(1))
+                {
+                    names.push(name.clone());
+                }
+            }
+            total_rows += chunk.len();
+        }
+
+        assert_eq!(total_rows, 4, "Expected 4 Person vertices");
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(sorted, vec!["Alice", "Bob", "Charlie", "Diana"]);
+    }
 }

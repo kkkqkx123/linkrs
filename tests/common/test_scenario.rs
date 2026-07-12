@@ -234,7 +234,7 @@ impl TestScenario {
         eprintln!("\n=== Debug: Last Query Result ===");
         if let Some(ref result) = self.last_result {
             match result {
-                ExecutionResult::DataSet(ds) => {
+                ExecutionResult::DataSet { data: ds, .. } => {
                     eprintln!("Columns: {:?}", ds.col_names);
                     eprintln!("Rows ({}):", ds.rows.len());
                     for (i, row) in ds.rows.iter().enumerate() {
@@ -286,7 +286,7 @@ impl TestScenario {
     pub fn assert_result_columns(self, expected: &[&str]) -> Self {
         if let Some(ref result) = self.last_result {
             let col_names: Vec<String> = match result {
-                ExecutionResult::DataSet(ds) => ds.col_names.clone(),
+                ExecutionResult::DataSet { data: ds, .. } => ds.col_names.clone(),
                 _ => vec![],
             };
 
@@ -306,7 +306,7 @@ impl TestScenario {
     pub fn assert_result_contains(self, expected: Vec<Value>) -> Self {
         if let Some(ref result) = self.last_result {
             let rows: Vec<Vec<Value>> = match result {
-                ExecutionResult::DataSet(ds) => ds.rows.clone(),
+                ExecutionResult::DataSet { data: ds, .. } => ds.rows.clone(),
                 _ => vec![],
             };
 
@@ -333,7 +333,7 @@ impl TestScenario {
     ) -> Self {
         if let Some(ref result) = self.last_result {
             let rows: Vec<Vec<Value>> = match result {
-                ExecutionResult::DataSet(ds) => ds.rows.clone(),
+                ExecutionResult::DataSet { data: ds, .. } => ds.rows.clone(),
                 _ => vec![],
             };
 
@@ -364,7 +364,7 @@ impl TestScenario {
     pub fn assert_plan_contains(self, operator: &str) -> Self {
         if let Some(ref result) = self.last_result {
             let plan_str = match result {
-                ExecutionResult::DataSet(ds) => format!("{:?}", ds),
+                ExecutionResult::DataSet { data: ds, .. } => format!("{:?}", ds),
                 _ => String::new(),
             };
 
@@ -384,7 +384,7 @@ impl TestScenario {
     pub fn assert_plan_contains_any(self, operators: &[&str]) -> Self {
         if let Some(ref result) = self.last_result {
             let plan_str = match result {
-                ExecutionResult::DataSet(ds) => format!("{:?}", ds),
+                ExecutionResult::DataSet { data: ds, .. } => format!("{:?}", ds),
                 _ => String::new(),
             };
 
@@ -403,7 +403,7 @@ impl TestScenario {
     /// Get the plan string for custom assertions
     pub fn get_plan_string(&self) -> Option<String> {
         self.last_result.as_ref().map(|result| match result {
-            ExecutionResult::DataSet(ds) => format!("{:?}", ds),
+            ExecutionResult::DataSet { data: ds, .. } => format!("{:?}", ds),
             _ => String::new(),
         })
     }
@@ -626,7 +626,7 @@ impl TestScenario {
     fn extract_props(&self, result: &ExecutionResult) -> HashMap<String, Value> {
         let mut props = HashMap::new();
 
-        if let ExecutionResult::DataSet(ds) = result {
+        if let ExecutionResult::DataSet { data: ds, .. } = result {
             if let Some(row) = ds.rows.first() {
                 for (i, col_name) in ds.col_names.iter().enumerate() {
                     if let Some(value) = row.get(i) {

@@ -67,7 +67,7 @@ pub trait ResultProcessor {
     /// Verify that the input data is valid
     fn validate_input(&self, input: &ExecutionResult) -> DBResult<()> {
         match input {
-            ExecutionResult::DataSet(_) => Ok(()),
+            ExecutionResult::DataSet { .. } => Ok(()),
             ExecutionResult::Success => Ok(()),
             ExecutionResult::Empty => Ok(()),
             ExecutionResult::SpaceSwitched(_) => Ok(()),

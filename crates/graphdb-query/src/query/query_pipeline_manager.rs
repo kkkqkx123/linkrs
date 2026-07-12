@@ -1207,12 +1207,23 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             )))
         })?;
 
-        executor.execute().map_err(|e| {
+        let reason = plan.execution_mode_reason;
+        let mut result = executor.execute().map_err(|e| {
             DBError::from(QueryError::execution(format!(
                 "Streaming execution failed: {:?}",
                 e
             )))
-        })
+        })?;
+        if !reason.is_empty() && reason != "default" {
+            if let ExecutionResult::DataSet {
+                ref mut execution_mode_reason,
+                ..
+            } = result
+            {
+                *execution_mode_reason = Some(reason);
+            }
+        }
+        Ok(result)
     }
 
     /// Execute a plan and return a [`StreamingQueryResult`] for chunk-at-a-time consumption.

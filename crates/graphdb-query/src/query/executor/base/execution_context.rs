@@ -32,6 +32,10 @@ pub struct ExecutionContext {
     pub parameters: Arc<HashMap<String, crate::core::Value>>,
     /// Per-query memory budget for blocking operators.
     pub memory_budget: MemoryBudget,
+    /// Maximum intra-query workers (P8). 1 = serial only.
+    pub max_workers: usize,
+    /// Server-assigned query ID for KILL QUERY / cancellation support.
+    pub query_id: u64,
 }
 
 impl ExecutionContext {
@@ -50,6 +54,8 @@ impl ExecutionContext {
             space_name: None,
             parameters: Arc::new(HashMap::new()),
             memory_budget: MemoryBudget::default_budget(),
+            max_workers: 1,
+            query_id: 0,
         }
     }
 
@@ -71,6 +77,8 @@ impl ExecutionContext {
             space_name: None,
             parameters: Arc::new(parameters),
             memory_budget: MemoryBudget::default_budget(),
+            max_workers: 1,
+            query_id: 0,
         }
     }
 
@@ -91,6 +99,8 @@ impl ExecutionContext {
             space_name: None,
             parameters: Arc::new(HashMap::new()),
             memory_budget: MemoryBudget::default_budget(),
+            max_workers: 1,
+            query_id: 0,
         }
     }
 
@@ -156,6 +166,8 @@ impl Default for ExecutionContext {
             space_name: None,
             parameters: Arc::new(HashMap::new()),
             memory_budget: MemoryBudget::default_budget(),
+            max_workers: 1,
+            query_id: 0,
         }
     }
 }

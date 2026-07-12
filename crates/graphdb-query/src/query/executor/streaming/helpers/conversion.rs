@@ -5,7 +5,6 @@
 use crate::core::value::NullType;
 use crate::core::Value;
 use crate::core::{Edge, Vertex};
-use std::ops::Range;
 
 /// Convert a Vertex to row representation
 pub fn vertex_to_row(vertex: &Vertex) -> Vec<Value> {
@@ -54,27 +53,28 @@ pub fn edge_to_row(edge: &Edge) -> Vec<Value> {
     row
 }
 
-/// Convert Vertex collection to rows, filtering by partition range
-pub fn vertices_to_rows(vertices: Vec<Vertex>, partition_range: &Range<u32>) -> Vec<Vec<Value>> {
+/// Convert Vertex collection to rows, filtering by partition range.
+/// Range uses `i64` to match the real vertex ID type and avoid silent
+/// truncation of values >= 2^32 or negative IDs.
+pub fn vertices_to_rows(vertices: Vec<Vertex>, partition_range: &std::ops::Range<i64>) -> Vec<Vec<Value>> {
     vertices
         .into_iter()
-        // Filter by partition range using vertex id
-        .filter(|v| {
-            let vid = v.id as u32;
-            vid >= partition_range.start && vid < partition_range.end
-        })
+        .filter(|v| v.id >= partition_range.start && v.id < partition_range.end)
         .map(|v| vertex_to_row(&v))
         .collect()
 }
 
-/// Convert Edge collection to rows, filtering by partition range
-pub fn edges_to_rows(edges: Vec<Edge>, partition_range: &Range<u32>) -> Vec<Vec<Value>> {
+/// Convert Edge collection to rows, filtering by partition range.
+/// Only edges whose source ID can be parsed as `i64` are matched against
+/// the range; non-numeric source IDs are excluded.
+pub fn edges_to_rows(edges: Vec<Edge>, partition_range: &std::ops::Range<i64>) -> Vec<Vec<Value>> {
     edges
         .into_iter()
-        // Filter by partition range using source vertex id
         .filter(|e| {
-            let src_id = e.src.to_string().parse::<u32>().unwrap_or(0);
-            src_id >= partition_range.start && src_id < partition_range.end
+            e.src
+                .to_string()
+                .parse::<i64>()
+                .is_ok_and(|id| id >= partition_range.start && id < partition_range.end)
         })
         .map(|e| edge_to_row(&e))
         .collect()
@@ -143,7 +143,7 @@ mod tests {
         ];
 
         // Filter for partition range [15, 35)
-        let partition_range = Range { start: 15, end: 35 };
+        let partition_range = std::ops::Range { start: 15i64, end: 35 };
         let rows = vertices_to_rows(vertices, &partition_range);
 
         // Should include vertices with id 20 and 30, but not 10

@@ -1,5 +1,4 @@
 use std::collections::{HashSet, VecDeque};
-use std::ops::Range;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -101,7 +100,7 @@ pub enum SourceOperator {
         space_name: String,
         limit: Option<usize>,
         partition_id: usize,
-        partition_range: Option<Range<u32>>,
+        partition_range: Option<std::ops::Range<i64>>,
         cursor: Option<Box<dyn VertexCursor>>,
         buffer: Vec<Vec<Value>>,
         current_index: usize,
@@ -119,7 +118,7 @@ pub enum SourceOperator {
         limit: Option<usize>,
         edge_type: Option<String>,
         partition_id: usize,
-        partition_range: Option<Range<u32>>,
+        partition_range: Option<std::ops::Range<i64>>,
         cursor: Option<Box<dyn EdgeCursor>>,
         buffer: Vec<Vec<Value>>,
         current_index: usize,
@@ -198,6 +197,7 @@ impl SourceOperator {
                 storage,
                 space_name,
                 limit,
+                partition_range,
                 cursor,
                 current_index,
                 ..
@@ -207,6 +207,7 @@ impl SourceOperator {
                 })?;
                 let options = ScanOptions {
                     limit: *limit,
+                    vertex_id_range: partition_range.clone(),
                     ..ScanOptions::default()
                 };
                 *cursor = Some(open_vertex_scan(storage, space_name, &options).map_err(
@@ -219,6 +220,7 @@ impl SourceOperator {
                 space_name,
                 limit,
                 edge_type,
+                partition_range,
                 cursor,
                 current_index,
                 ..
@@ -229,6 +231,7 @@ impl SourceOperator {
                 let options = ScanOptions {
                     limit: *limit,
                     edge_type: edge_type.clone(),
+                    edge_src_id_range: partition_range.clone(),
                     ..ScanOptions::default()
                 };
                 *cursor = Some(
@@ -261,7 +264,6 @@ impl SourceOperator {
             } => Ok(next_buffer_chunk(buffer, current_index, col_names)),
             Self::StorageScanVertices {
                 space_name,
-                partition_range,
                 cursor: cursor_state,
                 col_names,
                 ..
@@ -277,17 +279,7 @@ impl SourceOperator {
                     *cursor_state = None;
                     return Ok(None);
                 }
-                let rows = batch
-                    .into_iter()
-                    .filter(|vertex| match partition_range {
-                        Some(range) => {
-                            let vertex_id = vertex.id as u32;
-                            vertex_id >= range.start && vertex_id < range.end
-                        }
-                        None => true,
-                    })
-                    .map(make_vertex_row)
-                    .collect::<Vec<_>>();
+                let rows = batch.into_iter().map(make_vertex_row).collect::<Vec<_>>();
                 if !rows.is_empty() {
                     return Ok(Some(DataChunk::from_rows_with_col_names(
                         rows,
@@ -297,7 +289,6 @@ impl SourceOperator {
             },
             Self::StorageScanEdges {
                 space_name,
-                partition_range,
                 cursor: cursor_state,
                 col_names,
                 ..
@@ -313,18 +304,7 @@ impl SourceOperator {
                     *cursor_state = None;
                     return Ok(None);
                 }
-                let rows = batch
-                    .into_iter()
-                    .filter(|edge| match partition_range {
-                        Some(range) => edge
-                            .src
-                            .to_string()
-                            .parse::<u32>()
-                            .is_ok_and(|id| id >= range.start && id < range.end),
-                        None => true,
-                    })
-                    .map(make_edge_row)
-                    .collect::<Vec<_>>();
+                let rows = batch.into_iter().map(make_edge_row).collect::<Vec<_>>();
                 if !rows.is_empty() {
                     return Ok(Some(DataChunk::from_rows_with_col_names(
                         rows,

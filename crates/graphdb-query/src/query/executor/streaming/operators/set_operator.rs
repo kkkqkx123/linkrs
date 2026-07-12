@@ -75,7 +75,7 @@ impl SetOperator {
 
     pub fn next(
         &mut self,
-        _base: &mut OperatorBase,
+        base: &mut OperatorBase,
         left: &mut StreamingExecutor,
         right: &mut StreamingExecutor,
     ) -> Result<Option<DataChunk>, QueryError> {
@@ -86,6 +86,7 @@ impl SetOperator {
                 memory_tracker,
                 ..
             } => loop {
+                base.ensure_not_cancelled()?;
                 if !*left_consumed {
                     if let Some(chunk) = left.advance()? {
                         let mut result_rows = Vec::new();
@@ -145,6 +146,7 @@ impl SetOperator {
             } => {
                 if !*left_buffered {
                     while let Some(chunk) = left.advance()? {
+                        base.ensure_not_cancelled()?;
                         for row in &chunk.rows {
                             memory_tracker.try_reserve_row(row)?;
                         }
@@ -155,6 +157,7 @@ impl SetOperator {
 
                 if !*right_buffered {
                     while let Some(chunk) = right.advance()? {
+                        base.ensure_not_cancelled()?;
                         for row in chunk.rows {
                             let row_str = format!("{:?}", row);
                             memory_tracker.try_reserve(row_str.len())?;
@@ -183,6 +186,7 @@ impl SetOperator {
                 memory_tracker,
                 ..
             } => loop {
+                base.ensure_not_cancelled()?;
                 if !*right_buffered {
                     while let Some(chunk) = right.advance()? {
                         for row in chunk.rows {
@@ -218,6 +222,7 @@ impl SetOperator {
                 if !*right_buffered {
                     right.open()?;
                     while let Some(chunk) = right.advance()? {
+                        base.ensure_not_cancelled()?;
                         for row in chunk.rows {
                             let row_str = format!("{:?}", row);
                             memory_tracker.try_reserve(row_str.len())?;
@@ -229,6 +234,7 @@ impl SetOperator {
                 }
 
                 loop {
+                    base.ensure_not_cancelled()?;
                     if let Some(chunk) = left.advance()? {
                         let mut result_rows = Vec::new();
                         for row in chunk.rows {

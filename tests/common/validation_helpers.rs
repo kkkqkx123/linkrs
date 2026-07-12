@@ -44,7 +44,7 @@ impl<S: graphdb::storage::StorageClient + 'static> ValidationHelper<S> {
         let result = self.pipeline.execute_query(&query).map_err(Box::new)?;
 
         match result {
-            ExecutionResult::DataSet(ds) => {
+            ExecutionResult::DataSet { data: ds, .. } => {
                 if ds.row_count() == 0 {
                     return Ok(HashMap::new());
                 }
@@ -102,7 +102,7 @@ impl<S: graphdb::storage::StorageClient + 'static> ValidationHelper<S> {
         let result = self.pipeline.execute_query(&query).map_err(Box::new)?;
 
         match result {
-            ExecutionResult::DataSet(ds) => {
+            ExecutionResult::DataSet { data: ds, .. } => {
                 if ds.row_count() == 0 {
                     return Ok(HashMap::new());
                 }
@@ -165,7 +165,7 @@ impl<S: graphdb::storage::StorageClient + 'static> ValidationHelper<S> {
         let mut schema = Vec::new();
         #[allow(clippy::single_match)]
         match result {
-            ExecutionResult::DataSet(ds) => {
+            ExecutionResult::DataSet { data: ds, .. } => {
                 for row in &ds.rows {
                     if row.len() >= 2 {
                         if let (Value::String(field), Value::String(field_type)) =

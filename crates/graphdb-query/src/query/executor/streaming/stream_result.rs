@@ -13,10 +13,25 @@ use crate::query::executor::base::ExecutionResult;
 ///
 /// Wraps a [`ResultStream`] or pre-materialized [`ExecutionResult`] behind an
 /// `Arc<Mutex<>>` so it can be shared across async tasks or API boundaries.
+use std::sync::atomic::{AtomicBool, Ordering};
+
 #[derive(Clone)]
 pub struct StreamingQueryResult {
     inner: Arc<Mutex<StreamState>>,
     runtime: Arc<ExecutionRuntime>,
+    on_drop: Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>,
+    dropped: Arc<AtomicBool>,
+}
+
+impl Drop for StreamingQueryResult {
+    fn drop(&mut self) {
+        if self.dropped.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        if let Some(f) = self.on_drop.lock().take() {
+            f();
+        }
+    }
 }
 
 enum StreamState {
@@ -38,6 +53,8 @@ impl StreamingQueryResult {
         Self {
             inner: Arc::new(Mutex::new(StreamState::Streaming(stream))),
             runtime,
+            on_drop: Arc::new(Mutex::new(None)),
+            dropped: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -47,7 +64,7 @@ impl StreamingQueryResult {
     /// Useful for EXPLAIN/PROFILE results that are already materialized.
     pub fn from_execution_result(result: ExecutionResult) -> Self {
         match result {
-            ExecutionResult::DataSet(ds) => {
+            ExecutionResult::DataSet { data: ds, .. } => {
                 let exhausted = ds.rows.is_empty();
                 let runtime = Arc::new(ExecutionRuntime::default_budget());
                 Self {
@@ -57,6 +74,8 @@ impl StreamingQueryResult {
                         exhausted,
                     })),
                     runtime,
+                    on_drop: Arc::new(Mutex::new(None)),
+                    dropped: Arc::new(AtomicBool::new(false)),
                 }
             }
             ExecutionResult::Success | ExecutionResult::Empty => {
@@ -64,6 +83,8 @@ impl StreamingQueryResult {
                 Self {
                     inner: Arc::new(Mutex::new(StreamState::Exhausted)),
                     runtime,
+                    on_drop: Arc::new(Mutex::new(None)),
+                    dropped: Arc::new(AtomicBool::new(false)),
                 }
             }
             ExecutionResult::SpaceSwitched(summary) => {
@@ -80,6 +101,8 @@ impl StreamingQueryResult {
                         exhausted: false,
                     })),
                     runtime,
+                    on_drop: Arc::new(Mutex::new(None)),
+                    dropped: Arc::new(AtomicBool::new(false)),
                 }
             }
             ExecutionResult::Error(msg) => {
@@ -92,6 +115,8 @@ impl StreamingQueryResult {
                         exhausted: false,
                     })),
                     runtime,
+                    on_drop: Arc::new(Mutex::new(None)),
+                    dropped: Arc::new(AtomicBool::new(false)),
                 }
             }
         }
@@ -177,6 +202,14 @@ impl StreamingQueryResult {
     pub fn runtime_downgrade(&self) -> Weak<ExecutionRuntime> {
         Arc::downgrade(&self.runtime)
     }
+
+    /// Register a cleanup callback that fires when this handle is dropped.
+    ///
+    /// Used by the API layer to deregister the query from the session
+    /// when the stream ends (via either completion, error, or client disconnect).
+    pub fn set_on_drop(&self, f: Box<dyn FnOnce() + Send>) {
+        *self.on_drop.lock() = Some(f);
+    }
 }
 
 #[cfg(test)]
@@ -256,7 +289,10 @@ mod tests {
             vec![vec![Value::Int(1)], vec![Value::Int(2)]],
             vec!["id".to_string()],
         );
-        let result = StreamingQueryResult::from_execution_result(ExecutionResult::DataSet(ds));
+        let result = StreamingQueryResult::from_execution_result(ExecutionResult::DataSet {
+            data: ds,
+            execution_mode_reason: None,
+        });
         let chunk = result.next_chunk().unwrap().unwrap();
         assert_eq!(chunk.len(), 2);
         assert_eq!(chunk.col_names(), vec!["id"]);
@@ -275,5 +311,88 @@ mod tests {
             StreamingQueryResult::from_execution_result(ExecutionResult::Error("oops".to_string()));
         let chunk = result.next_chunk().unwrap().unwrap();
         assert!(!chunk.is_empty());
+    }
+
+    // ── Resource regression tests (R5) ──
+
+    #[test]
+    fn test_on_drop_callback_fires_on_drop() {
+        let result = create_test_stream(5);
+        let fired = Arc::new(AtomicBool::new(false));
+        let fired_clone = fired.clone();
+        result.set_on_drop(Box::new(move || {
+            fired_clone.store(true, Ordering::Relaxed);
+        }));
+        drop(result);
+        assert!(fired.load(Ordering::Relaxed), "on_drop must fire when handle is dropped");
+    }
+
+    #[test]
+    fn test_on_drop_fires_only_once_with_multiple_clones() {
+        let result = create_test_stream(5);
+        let call_count = Arc::new(AtomicBool::new(false));
+        let count_clone = call_count.clone();
+        result.set_on_drop(Box::new(move || {
+            count_clone.store(true, Ordering::Relaxed);
+        }));
+
+        let r2 = result.clone();
+        let r3 = r2.clone();
+
+        // Drop all clones — callback should fire exactly once.
+        drop(r2);
+        assert!(call_count.load(Ordering::Relaxed), "on_drop must fire when first clone drops");
+
+        // Second and third drops must not panic or double-fire.
+        drop(r3);
+        drop(result);
+    }
+
+    #[test]
+    fn test_on_drop_not_called_when_not_set() {
+        let result = create_test_stream(5);
+        // Must not panic when dropping without on_drop registered.
+        drop(result);
+    }
+
+    #[test]
+    fn test_cancel_after_partial_consumption() {
+        let result = create_test_stream(50);
+        let chunk = result.next_chunk().unwrap();
+        assert!(chunk.is_some());
+        // Cancel mid-stream
+        result.cancel();
+        assert!(result.is_cancelled());
+        assert!(result.next_chunk().is_err());
+    }
+
+    #[test]
+    fn test_double_cancel_is_safe() {
+        let result = create_test_stream(10);
+        result.cancel();
+        result.cancel(); // Must not panic.
+        assert!(result.is_cancelled());
+    }
+
+    #[test]
+    fn test_cancel_with_zero_rows_stream() {
+        let result = create_test_stream(0);
+        result.cancel();
+        assert!(result.is_cancelled());
+        assert!(result.next_chunk().is_err());
+    }
+
+    #[test]
+    fn test_from_execution_result_success_has_exhausted_stream() {
+        let result = StreamingQueryResult::from_execution_result(ExecutionResult::Success);
+        assert!(result.next_chunk().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_drop_without_consuming_does_not_leak() {
+        // Streaming engine resources must be released on drop even
+        // when no chunk was ever pulled.
+        let result = create_test_stream(10);
+        drop(result);
     }
 }

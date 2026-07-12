@@ -11,6 +11,9 @@ use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::SortDirection;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::executor::ValueRowContext;
+use crate::query::executor::streaming::helpers::accumulator_states::{
+    accumulator_to_value, AggregateAccumulator,
+};
 use crate::query::executor::streaming::helpers::compare_values;
 use crate::query::executor::streaming::helpers::compute_aggregate;
 use crate::query::executor::streaming::operator_base::OperatorBase;
@@ -51,6 +54,7 @@ pub struct WindowState {
 #[derive(Debug)]
 pub struct TopNState {
     pub all_rows: Vec<Vec<Value>>,
+    pub col_names: Vec<String>,
     pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
 }
 
@@ -76,6 +80,26 @@ pub struct DataCollectState {
 #[derive(Debug)]
 pub struct RollUpApplyState {
     pub all_rows: Vec<Vec<Value>>,
+    pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+}
+
+/// State for the local partial aggregate operator.
+/// Per-partition rows are grouped and accumulator states are emitted.
+#[derive(Debug)]
+pub struct PartialAggregateState {
+    /// group key → per-function accumulators
+    pub group_map: HashMap<Vec<Value>, Vec<AggregateAccumulator>>,
+    pub col_names: Vec<String>,
+    pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+}
+
+/// State for the global final aggregate operator.
+/// Partial accumulator values are merged and final results produced.
+#[derive(Debug)]
+pub struct FinalAggregateState {
+    /// group key → per-function merged accumulators
+    pub group_map: HashMap<Vec<Value>, Vec<AggregateAccumulator>>,
+    pub col_names: Vec<String>,
     pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
 }
 
@@ -139,6 +163,24 @@ pub enum BlockingOperator {
         memory_tracker: MemoryTracker,
         state: Option<RollUpApplyState>,
     },
+    /// Local partial aggregate that runs per partition.
+    /// Produces group key + encoded accumulator state rows.
+    PartialAggregate {
+        group_by_expressions: Vec<Expression>,
+        aggregate_functions: Vec<AggregateFunction>,
+        output_col_names: Vec<String>,
+        memory_tracker: MemoryTracker,
+        state: Option<PartialAggregateState>,
+    },
+    /// Global final aggregate that merges partial results.
+    /// Reads encoded accumulator rows and produces final values.
+    FinalAggregate {
+        group_by_expressions: Vec<Expression>,
+        aggregate_functions: Vec<AggregateFunction>,
+        output_col_names: Vec<String>,
+        memory_tracker: MemoryTracker,
+        state: Option<FinalAggregateState>,
+    },
 }
 
 impl BlockingOperator {
@@ -153,7 +195,9 @@ impl BlockingOperator {
             | Self::Distinct { memory_tracker, .. }
             | Self::Materialize { memory_tracker, .. }
             | Self::DataCollect { memory_tracker, .. }
-            | Self::RollUpApply { memory_tracker, .. } => memory_tracker,
+            | Self::RollUpApply { memory_tracker, .. }
+            | Self::PartialAggregate { memory_tracker, .. }
+            | Self::FinalAggregate { memory_tracker, .. } => memory_tracker,
         }
     }
 
@@ -197,6 +241,7 @@ impl BlockingOperator {
             Self::TopN { state, .. } => {
                 *state = Some(TopNState {
                     all_rows: vec![],
+                    col_names: vec![],
                     result_iter: None,
                 });
             }
@@ -222,6 +267,20 @@ impl BlockingOperator {
             Self::RollUpApply { state, .. } => {
                 *state = Some(RollUpApplyState {
                     all_rows: vec![],
+                    result_iter: None,
+                });
+            }
+            Self::PartialAggregate { state, .. } => {
+                *state = Some(PartialAggregateState {
+                    group_map: HashMap::new(),
+                    col_names: vec![],
+                    result_iter: None,
+                });
+            }
+            Self::FinalAggregate { state, .. } => {
+                *state = Some(FinalAggregateState {
+                    group_map: HashMap::new(),
+                    col_names: vec![],
                     result_iter: None,
                 });
             }
@@ -717,13 +776,12 @@ impl BlockingOperator {
 
                 let state = state.as_mut().unwrap();
                 if state.result_iter.is_none() {
-                    let mut col_names: Vec<String> = vec![];
                     let limit = *n as usize;
 
                     while let Some(chunk) = input.advance()? {
                         base.ensure_not_cancelled()?;
-                        if col_names.is_empty() {
-                            col_names = chunk.col_names();
+                        if state.col_names.is_empty() {
+                            state.col_names = chunk.col_names();
                         }
                         for row in chunk.rows {
                             memory_tracker.try_reserve_row(&row)?;
@@ -735,7 +793,7 @@ impl BlockingOperator {
                                         compare_rows_for_topn(
                                             a,
                                             b,
-                                            &col_names,
+                                            &state.col_names,
                                             sort_expressions,
                                             sort_directions,
                                         )
@@ -744,7 +802,7 @@ impl BlockingOperator {
                                 let cmp_last = compare_rows_for_topn(
                                     &row,
                                     state.all_rows.last().unwrap(),
-                                    &col_names,
+                                    &state.col_names,
                                     sort_expressions,
                                     sort_directions,
                                 );
@@ -754,7 +812,7 @@ impl BlockingOperator {
                                         compare_rows_for_topn(
                                             existing,
                                             &row,
-                                            &col_names,
+                                            &state.col_names,
                                             sort_expressions,
                                             sort_directions,
                                         )
@@ -773,7 +831,7 @@ impl BlockingOperator {
                             compare_rows_for_topn(
                                 a,
                                 b,
-                                &col_names,
+                                &state.col_names,
                                 sort_expressions,
                                 sort_directions,
                             )
@@ -786,7 +844,10 @@ impl BlockingOperator {
 
                 if let Some(iter) = &mut state.result_iter {
                     if let Some(row) = iter.next() {
-                        Ok(Some(DataChunk::from_rows(vec![row])))
+                        Ok(Some(DataChunk::from_rows_with_col_names(
+                            vec![row],
+                            Some(state.col_names.clone()),
+                        )))
                     } else {
                         Ok(None)
                     }
@@ -941,6 +1002,179 @@ impl BlockingOperator {
 
                 Ok(None)
             }
+
+            Self::PartialAggregate {
+                group_by_expressions,
+                aggregate_functions,
+                output_col_names,
+                memory_tracker,
+                state,
+                ..
+            } => {
+                let state = state.as_mut().unwrap();
+                if state.result_iter.is_none() {
+                    let mut col_names: Vec<String> = vec![];
+                    while let Some(chunk) = input.advance()? {
+                        base.ensure_not_cancelled()?;
+                        if col_names.is_empty() {
+                            col_names = chunk.col_names();
+                        }
+                        for row in &chunk.rows {
+                            memory_tracker.try_reserve_row(row)?;
+                        }
+                        for row in chunk.rows {
+                            let mut group_key = Vec::new();
+                            if group_by_expressions.is_empty() {
+                                group_key.push(Value::Null(NullType::Null));
+                            } else {
+                                for expr in group_by_expressions.iter() {
+                                    let mut ctx =
+                                        ValueRowContext::new(row.clone(), col_names.clone());
+                                    match ExpressionEvaluator::evaluate(expr, &mut ctx) {
+                                        Ok(value) => group_key.push(value),
+                                        Err(_) => group_key.push(Value::Null(NullType::Null)),
+                                    }
+                                }
+                            }
+
+                            let group_accs = state.group_map.entry(group_key).or_insert_with(|| {
+                                aggregate_functions
+                                    .iter()
+                                    .filter_map(|f| AggregateAccumulator::for_function(f))
+                                    .collect()
+                            });
+
+                            for (i, func) in aggregate_functions.iter().enumerate() {
+                                if let Some(acc) = group_accs.get_mut(i) {
+                                    let value = extract_field_value(&row, &col_names, func);
+                                    acc.accumulate(&value);
+                                }
+                            }
+                        }
+                    }
+
+                    let mut result_rows: Vec<Vec<Value>> = Vec::new();
+                    let num_group_keys = group_by_expressions.len();
+                    for (group_key, accs) in std::mem::take(&mut state.group_map) {
+                        let mut row = if num_group_keys == 0 {
+                            vec![]
+                        } else {
+                            group_key
+                        };
+                        for (i, _func) in aggregate_functions.iter().enumerate() {
+                            if let Some(acc) = accs.get(i) {
+                                row.push(accumulator_to_value(acc));
+                            } else {
+                                row.push(Value::Null(NullType::Null));
+                            }
+                        }
+                        result_rows.push(row);
+                    }
+
+                    state.result_iter = Some(result_rows.into_iter());
+                }
+
+                if let Some(iter) = &mut state.result_iter {
+                    let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(1024).collect();
+                    if chunk_rows.is_empty() {
+                        Ok(None)
+                    } else {
+                        Ok(Some(DataChunk::from_rows_with_col_names(
+                            chunk_rows,
+                            Some(output_col_names.clone()),
+                        )))
+                    }
+                } else {
+                    Ok(None)
+                }
+            }
+
+            Self::FinalAggregate {
+                group_by_expressions,
+                aggregate_functions,
+                output_col_names,
+                memory_tracker,
+                state,
+                ..
+            } => {
+                let state = state.as_mut().unwrap();
+                if state.result_iter.is_none() {
+                    let mut col_names: Vec<String> = vec![];
+                    while let Some(chunk) = input.advance()? {
+                        base.ensure_not_cancelled()?;
+                        if col_names.is_empty() {
+                            col_names = chunk.col_names();
+                        }
+                        for row in &chunk.rows {
+                            memory_tracker.try_reserve_row(row)?;
+                        }
+                        for row in chunk.rows {
+                            let num_group_keys = group_by_expressions.len();
+                            let num_agg_funcs = aggregate_functions.len();
+                            let group_key: Vec<Value> = if num_group_keys == 0 {
+                                vec![Value::Null(NullType::Null)]
+                            } else {
+                                row[0..num_group_keys].to_vec()
+                            };
+
+                            let group_accs =
+                                state.group_map.entry(group_key).or_insert_with(|| {
+                                    aggregate_functions
+                                        .iter()
+                                        .filter_map(|f| AggregateAccumulator::for_function(f))
+                                        .collect()
+                                });
+
+                            for i in 0..num_agg_funcs {
+                                if let Some(acc) = group_accs.get_mut(i) {
+                                    let acc_col_idx = num_group_keys + i;
+                                    let partial_value = row.get(acc_col_idx);
+                                    if let Some(val) = partial_value {
+                                        let partial_acc =
+                                            value_to_partial_accumulator(&aggregate_functions[i], val);
+                                        if let Some(other) = partial_acc {
+                                            acc.merge(&other);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    let mut result_rows: Vec<Vec<Value>> = Vec::new();
+                    for (group_key, accs) in std::mem::take(&mut state.group_map) {
+                        let mut row = if group_by_expressions.is_empty() {
+                            vec![]
+                        } else {
+                            group_key
+                        };
+                        for (_i, _func) in aggregate_functions.iter().enumerate() {
+                            if let Some(acc) = accs.get(_i) {
+                                row.push(acc.finalize());
+                            } else {
+                                row.push(Value::Null(NullType::Null));
+                            }
+                        }
+                        result_rows.push(row);
+                    }
+
+                    state.result_iter = Some(result_rows.into_iter());
+                }
+
+                if let Some(iter) = &mut state.result_iter {
+                    let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(1024).collect();
+                    if chunk_rows.is_empty() {
+                        Ok(None)
+                    } else {
+                        Ok(Some(DataChunk::from_rows_with_col_names(
+                            chunk_rows,
+                            Some(output_col_names.clone()),
+                        )))
+                    }
+                } else {
+                    Ok(None)
+                }
+            }
         }
     }
 
@@ -959,7 +1193,9 @@ impl BlockingOperator {
             | Self::Distinct { .. }
             | Self::Materialize { .. }
             | Self::DataCollect { .. }
-            | Self::RollUpApply { .. } => input.stop(),
+            | Self::RollUpApply { .. }
+            | Self::PartialAggregate { .. }
+            | Self::FinalAggregate { .. } => input.stop(),
         }
     }
 
@@ -1061,6 +1297,32 @@ impl BlockingOperator {
                 Ok(())
             }
             Self::Distinct {
+                state,
+                memory_tracker,
+                ..
+            } => {
+                if base.opened {
+                    memory_tracker.reset();
+                    *state = None;
+                    input.close()?;
+                    base.opened = false;
+                }
+                Ok(())
+            }
+            Self::PartialAggregate {
+                state,
+                memory_tracker,
+                ..
+            } => {
+                if base.opened {
+                    memory_tracker.reset();
+                    *state = None;
+                    input.close()?;
+                    base.opened = false;
+                }
+                Ok(())
+            }
+            Self::FinalAggregate {
                 state,
                 memory_tracker,
                 ..
@@ -1237,4 +1499,76 @@ fn compare_rows_for_topn(
         }
     }
     std::cmp::Ordering::Equal
+}
+
+/// Extract the field value from a row for a given aggregate function.
+fn extract_field_value(row: &[Value], col_names: &[String], func: &AggregateFunction) -> Value {
+    match func {
+        AggregateFunction::Count(None) => Value::Int(1),
+        AggregateFunction::Count(Some(field))
+        | AggregateFunction::Sum(field)
+        | AggregateFunction::Avg(field)
+        | AggregateFunction::Min(field)
+        | AggregateFunction::Max(field) => {
+            if let Some(idx) = col_names.iter().position(|c| c == field) {
+                row.get(idx).cloned().unwrap_or(Value::Null(NullType::Null))
+            } else {
+                Value::Null(NullType::Null)
+            }
+        }
+        _ => Value::Null(NullType::Null),
+    }
+}
+
+/// Decode a Value back into a single-use AggregateAccumulator for merging.
+/// The value was produced by `accumulator_to_value`.
+fn value_to_partial_accumulator(func: &AggregateFunction, value: &Value) -> Option<AggregateAccumulator> {
+    match func {
+        AggregateFunction::Count(_) => {
+            if let Value::BigInt(n) = value {
+                Some(AggregateAccumulator::Count(*n as u64))
+            } else {
+                Some(AggregateAccumulator::Count(0))
+            }
+        }
+        AggregateFunction::Sum(_) => {
+            match value {
+                Value::Double(n) => Some(AggregateAccumulator::Sum(*n)),
+                Value::BigInt(n) => Some(AggregateAccumulator::Sum(*n as f64)),
+                Value::Int(n) => Some(AggregateAccumulator::Sum(*n as f64)),
+                _ => Some(AggregateAccumulator::Sum(0.0)),
+            }
+        }
+        AggregateFunction::Min(_) => {
+            if matches!(value, Value::Null(_)) {
+                Some(AggregateAccumulator::Min(None))
+            } else {
+                Some(AggregateAccumulator::Min(Some(value.clone())))
+            }
+        }
+        AggregateFunction::Max(_) => {
+            if matches!(value, Value::Null(_)) {
+                Some(AggregateAccumulator::Max(None))
+            } else {
+                Some(AggregateAccumulator::Max(Some(value.clone())))
+            }
+        }
+        AggregateFunction::Avg(_) => {
+            if let Value::List(list) = value {
+                let sum = list.values.first().and_then(|v| match v {
+                    Value::Double(n) => Some(*n),
+                    Value::BigInt(n) => Some(*n as f64),
+                    _ => None,
+                }).unwrap_or(0.0);
+                let count = list.values.get(1).and_then(|v| match v {
+                    Value::BigInt(n) => Some(*n as u64),
+                    _ => None,
+                }).unwrap_or(0);
+                Some(AggregateAccumulator::Avg { sum, count })
+            } else {
+                Some(AggregateAccumulator::Avg { sum: 0.0, count: 0 })
+            }
+        }
+        _ => None,
+    }
 }

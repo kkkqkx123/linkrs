@@ -4,6 +4,7 @@
 use std::ops::Range;
 use std::{error::Error, fmt};
 
+use crate::core::types::operators::AggregateFunction;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::query::planning::plan::PlanNodeEnum;
 
@@ -26,13 +27,42 @@ impl ExecutionMode {
     }
 }
 
+/// Identifies the data domain that a partition layout maps ranges over.
+///
+/// This prevents the plan cache from reusing a stale `PartitionSpec` when the
+/// underlying storage layout has changed (e.g. re-indexing, new vertex tag).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PartitionSource {
+    /// Ranges over a vertex-id space identified by a tag.
+    VertexId { tag: String },
+    /// Ranges over an edge-id space identified by an edge type.
+    EdgeId { edge_type: String },
+    /// Ranges over an explicit index's key space.
+    Index { index_name: String },
+}
+
+impl fmt::Display for PartitionSource {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::VertexId { tag } => write!(formatter, "vertex tag '{tag}'"),
+            Self::EdgeId { edge_type } => write!(formatter, "edge type '{edge_type}'"),
+            Self::Index { index_name } => write!(formatter, "index '{index_name}'"),
+        }
+    }
+}
+
 /// Physical partition layout selected for a plan.
 ///
 /// An absent layout means single-tree execution.  The planner must only set a
 /// layout after it has split the logical plan at a valid exchange boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PartitionSpec {
-    ranges: Vec<Range<u32>>,
+    ranges: Vec<Range<i64>>,
+    /// Data domain these ranges map onto.
+    source: PartitionSource,
+    /// Monotonically-increasing layout version.  When the underlying data
+    /// layout changes this version lets the plan cache detect stale specs.
+    layout_version: Option<u64>,
 }
 
 /// Validation error returned when a physical partition layout cannot be
@@ -73,7 +103,11 @@ impl PartitionSpec {
     /// Ranges are ordered by start and may be disjoint, but they must not be
     /// empty or overlap. Keeping this invariant at the plan boundary prevents
     /// duplicated or missing rows once a scan is copied for each partition.
-    pub fn try_new(ranges: Vec<Range<u32>>) -> Result<Self, PartitionSpecError> {
+    pub fn try_new(
+        ranges: Vec<Range<i64>>,
+        source: PartitionSource,
+        layout_version: Option<u64>,
+    ) -> Result<Self, PartitionSpecError> {
         if ranges.is_empty() {
             return Err(PartitionSpecError::Empty);
         }
@@ -89,15 +123,27 @@ impl PartitionSpec {
             previous_end = Some(range.end);
         }
 
-        Ok(Self { ranges })
+        Ok(Self {
+            ranges,
+            source,
+            layout_version,
+        })
     }
 
-    pub fn ranges(&self) -> &[Range<u32>] {
+    pub fn ranges(&self) -> &[Range<i64>] {
         &self.ranges
     }
 
     pub fn partition_count(&self) -> usize {
         self.ranges.len()
+    }
+
+    pub fn source(&self) -> &PartitionSource {
+        &self.source
+    }
+
+    pub fn layout_version(&self) -> Option<u64> {
+        self.layout_version
     }
 }
 
@@ -125,6 +171,39 @@ pub enum PartitionedPhysicalNode {
         logical_plan: PlanNodeEnum,
         left: Box<PartitionedPhysicalNode>,
         right: Box<PartitionedPhysicalNode>,
+    },
+    /// An operator that can be split into a local partial phase per partition
+    /// followed by a global final phase. Currently used for Aggregate.
+    /// The factory builds N copies of the partial phase (one per partition),
+    /// wraps them with a Gather, and places the final phase on top.
+    AggregateSplit {
+        logical_plan: PlanNodeEnum,
+        input: Box<PartitionedPhysicalNode>,
+    },
+    /// Dedup operator split into per-partition local dedup followed by
+    /// a global dedup after Gather::Concatenate. This reduces data volume
+    /// before the Gather exchange and the final global dedup step.
+    DistinctSplit {
+        logical_plan: PlanNodeEnum,
+        input: Box<PartitionedPhysicalNode>,
+    },
+    /// TopN operator split into per-partition local TopN followed by
+    /// a global MergeSort with the same limit. The local TopN phase
+    /// keeps only the top N rows per partition, then MergeSort merges
+    /// and truncates to the global limit.
+    TopNSplit {
+        logical_plan: PlanNodeEnum,
+        input: Box<PartitionedPhysicalNode>,
+    },
+    /// Hash repartition exchange for HashInnerJoin and HashLeftJoin.
+    /// Both children must be Local trees (no global ops in their subtrees).
+    /// The factory builds a HashShuffleJoin that distributes rows by hash
+    /// of join keys into `bucket_count` buckets and joins per bucket.
+    HashJoinExchange {
+        logical_plan: PlanNodeEnum,
+        left: Box<PartitionedPhysicalNode>,
+        right: Box<PartitionedPhysicalNode>,
+        bucket_count: usize,
     },
 }
 
@@ -158,18 +237,27 @@ impl PartitionedPhysicalPlan {
                 input: Box::new(Self::split_node(limit.input().clone())),
                 logical_plan: node,
             },
-            PlanNodeEnum::TopN(ref top_n) => PartitionedPhysicalNode::GlobalUnary {
+            PlanNodeEnum::TopN(ref top_n) => PartitionedPhysicalNode::TopNSplit {
                 input: Box::new(Self::split_node(top_n.input().clone())),
                 logical_plan: node,
             },
-            PlanNodeEnum::Dedup(ref dedup) => PartitionedPhysicalNode::GlobalUnary {
+            PlanNodeEnum::Dedup(ref dedup) => PartitionedPhysicalNode::DistinctSplit {
                 input: Box::new(Self::split_node(dedup.input().clone())),
                 logical_plan: node,
             },
-            PlanNodeEnum::Aggregate(ref aggregate) => PartitionedPhysicalNode::GlobalUnary {
-                input: Box::new(Self::split_node(aggregate.input().clone())),
-                logical_plan: node,
-            },
+            PlanNodeEnum::Aggregate(ref aggregate) => {
+                if Self::all_functions_support_partial(aggregate.aggregation_functions()) {
+                    PartitionedPhysicalNode::AggregateSplit {
+                        input: Box::new(Self::split_node(aggregate.input().clone())),
+                        logical_plan: node,
+                    }
+                } else {
+                    PartitionedPhysicalNode::GlobalUnary {
+                        input: Box::new(Self::split_node(aggregate.input().clone())),
+                        logical_plan: node,
+                    }
+                }
+            }
             PlanNodeEnum::Window(ref window) => PartitionedPhysicalNode::GlobalUnary {
                 input: Box::new(Self::split_node(window.input().clone())),
                 logical_plan: node,
@@ -194,16 +282,46 @@ impl PartitionedPhysicalPlan {
                 join.left_input().clone(),
                 join.right_input().clone(),
             ),
-            PlanNodeEnum::HashInnerJoin(ref join) => Self::global_binary(
-                node.clone(),
-                join.left_input().clone(),
-                join.right_input().clone(),
-            ),
-            PlanNodeEnum::HashLeftJoin(ref join) => Self::global_binary(
-                node.clone(),
-                join.left_input().clone(),
-                join.right_input().clone(),
-            ),
+            PlanNodeEnum::HashInnerJoin(ref join) => {
+                let left = Self::split_node(join.left_input().clone());
+                let right = Self::split_node(join.right_input().clone());
+                if matches!(&left, PartitionedPhysicalNode::Local { .. })
+                    && matches!(&right, PartitionedPhysicalNode::Local { .. })
+                {
+                    PartitionedPhysicalNode::HashJoinExchange {
+                        logical_plan: node,
+                        left: Box::new(left),
+                        right: Box::new(right),
+                        bucket_count: 8,
+                    }
+                } else {
+                    PartitionedPhysicalNode::GlobalBinary {
+                        logical_plan: node,
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    }
+                }
+            }
+            PlanNodeEnum::HashLeftJoin(ref join) => {
+                let left = Self::split_node(join.left_input().clone());
+                let right = Self::split_node(join.right_input().clone());
+                if matches!(&left, PartitionedPhysicalNode::Local { .. })
+                    && matches!(&right, PartitionedPhysicalNode::Local { .. })
+                {
+                    PartitionedPhysicalNode::HashJoinExchange {
+                        logical_plan: node,
+                        left: Box::new(left),
+                        right: Box::new(right),
+                        bucket_count: 8,
+                    }
+                } else {
+                    PartitionedPhysicalNode::GlobalBinary {
+                        logical_plan: node,
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    }
+                }
+            }
             PlanNodeEnum::FullOuterJoin(ref join) => Self::global_binary(
                 node.clone(),
                 join.left_input().clone(),
@@ -216,6 +334,19 @@ impl PartitionedPhysicalPlan {
             ),
             logical_plan => PartitionedPhysicalNode::Local { logical_plan },
         }
+    }
+
+    /// Check if all aggregate functions in the node support partial+final
+    /// decomposition (COUNT, SUM, MIN, MAX, AVG). Functions like COLLECT,
+    /// DISTINCT aggregate, PERCENTILE, etc. must remain global-only.
+    fn all_functions_support_partial(funcs: &[AggregateFunction]) -> bool {
+        funcs.iter().all(|f| matches!(f,
+            AggregateFunction::Count(_)
+            | AggregateFunction::Sum(_)
+            | AggregateFunction::Min(_)
+            | AggregateFunction::Max(_)
+            | AggregateFunction::Avg(_)
+        ))
     }
 
     fn global_binary(
@@ -439,18 +570,25 @@ impl SubPlan {
 mod tests {
     use super::*;
 
+    fn test_source() -> PartitionSource {
+        PartitionSource::VertexId {
+            tag: "test".to_string(),
+        }
+    }
+
     #[test]
     fn partition_spec_is_optional_and_round_trips() {
         let mut plan = ExecutionPlan::new(None);
         assert!(plan.partition_spec().is_none());
 
-        let spec = PartitionSpec::try_new(vec![0..10, 10..20])
+        let spec = PartitionSpec::try_new(vec![0..10, 10..20], test_source(), None)
             .expect("non-overlapping ranges should be accepted");
         plan.set_partition_spec(spec.clone());
 
         let stored = plan.partition_spec().expect("partition spec");
         assert_eq!(stored, &spec);
         assert_eq!(stored.partition_count(), 2);
+        assert_eq!(stored.source(), &test_source());
 
         plan.clear_partition_spec();
         assert!(plan.partition_spec().is_none());
@@ -459,17 +597,29 @@ mod tests {
     #[test]
     fn partition_spec_rejects_empty_and_overlapping_ranges() {
         assert_eq!(
-            PartitionSpec::try_new(Vec::new()),
+            PartitionSpec::try_new(Vec::new(), test_source(), None),
             Err(PartitionSpecError::Empty)
         );
         assert_eq!(
-            PartitionSpec::try_new(vec![0..0]),
+            PartitionSpec::try_new(vec![0..0], test_source(), None),
             Err(PartitionSpecError::EmptyRange { index: 0 })
         );
         assert_eq!(
-            PartitionSpec::try_new(vec![0..10, 5..20]),
+            PartitionSpec::try_new(vec![0..10, 5..20], test_source(), None),
             Err(PartitionSpecError::UnorderedOrOverlapping { index: 1 })
         );
+    }
+
+    #[test]
+    fn partition_spec_stores_source_and_layout_version() {
+        let spec = PartitionSpec::try_new(
+            vec![0..10, 10..20],
+            test_source(),
+            Some(42),
+        )
+        .expect("valid spec");
+        assert_eq!(spec.source(), &test_source());
+        assert_eq!(spec.layout_version(), Some(42));
     }
 
     #[test]
@@ -483,12 +633,205 @@ mod tests {
         let sort = SortNode::new(start, Vec::new()).expect("sort plan should build");
         let limit =
             LimitNode::new(PlanNodeEnum::Sort(sort), 0, 10).expect("limit plan should build");
-        let spec = PartitionSpec::try_new(vec![0..10, 10..20]).expect("valid spec");
+        let spec = PartitionSpec::try_new(vec![0..10, 10..20], test_source(), None)
+            .expect("valid spec");
         let physical = PartitionedPhysicalPlan::from_logical(PlanNodeEnum::Limit(limit), spec);
 
         assert!(
             matches!(physical.root(), PartitionedPhysicalNode::GlobalUnary { input, .. }
             if matches!(input.as_ref(), PartitionedPhysicalNode::GlobalUnary { .. }))
+        );
+    }
+
+    #[test]
+    fn aggregate_with_supported_functions_produces_aggregate_split() {
+        use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
+        use crate::query::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+
+        let start = PlanNodeEnum::Start(StartNode::new());
+        let agg = AggregateNode::new(
+            start,
+            vec!["group".to_string()],
+            vec![
+                AggregateFunction::Count(None),
+                AggregateFunction::Sum("amount".to_string()),
+            ],
+        )
+        .expect("aggregate plan should build");
+        let spec = PartitionSpec::try_new(vec![0..10, 10..20], test_source(), None)
+            .expect("valid spec");
+        let physical =
+            PartitionedPhysicalPlan::from_logical(PlanNodeEnum::Aggregate(agg), spec);
+
+        assert!(
+            matches!(physical.root(), PartitionedPhysicalNode::AggregateSplit { .. }),
+            "Expected AggregateSplit for supported functions, got {:?}",
+            physical.root()
+        );
+    }
+
+    #[test]
+    fn aggregate_with_unsupported_function_falls_back_to_global_unary() {
+        use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
+        use crate::query::planning::plan::core::nodes::graph_operations::aggregate_node::AggregateNode;
+
+        let start = PlanNodeEnum::Start(StartNode::new());
+        let agg = AggregateNode::new(
+            start,
+            vec![],
+            vec![AggregateFunction::Collect("x".to_string())],
+        )
+        .expect("aggregate plan should build");
+        let spec = PartitionSpec::try_new(vec![0..10], test_source(), None)
+            .expect("valid spec");
+        let physical =
+            PartitionedPhysicalPlan::from_logical(PlanNodeEnum::Aggregate(agg), spec);
+
+        assert!(
+            matches!(physical.root(), PartitionedPhysicalNode::GlobalUnary { .. }),
+            "Expected GlobalUnary fallback for unsupported functions, got {:?}",
+            physical.root()
+        );
+    }
+
+    #[test]
+    fn dedup_node_produces_distinct_split() {
+        use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
+        use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::DedupNode;
+
+        let start = PlanNodeEnum::Start(StartNode::new());
+        let dedup = DedupNode::new(start).expect("dedup plan should build");
+        let spec = PartitionSpec::try_new(vec![0..10, 10..20], test_source(), None)
+            .expect("valid spec");
+        let physical =
+            PartitionedPhysicalPlan::from_logical(PlanNodeEnum::Dedup(dedup), spec);
+
+        assert!(
+            matches!(physical.root(), PartitionedPhysicalNode::DistinctSplit { .. }),
+            "Expected DistinctSplit for Dedup, got {:?}",
+            physical.root()
+        );
+    }
+
+    #[test]
+    fn topn_node_produces_topn_split() {
+        use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
+        use crate::query::planning::plan::core::nodes::operation::sort_node::{SortItem, TopNNode};
+
+        let start = PlanNodeEnum::Start(StartNode::new());
+        let sort_items = vec![SortItem::column_asc("name".to_string())];
+        let topn = TopNNode::new(start, sort_items, 10).expect("topn plan should build");
+        let spec = PartitionSpec::try_new(vec![0..10, 10..20], test_source(), None)
+            .expect("valid spec");
+        let physical =
+            PartitionedPhysicalPlan::from_logical(PlanNodeEnum::TopN(topn), spec);
+
+        assert!(
+            matches!(physical.root(), PartitionedPhysicalNode::TopNSplit { .. }),
+            "Expected TopNSplit for TopN, got {:?}",
+            physical.root()
+        );
+    }
+
+    #[test]
+    fn hash_join_exchange_produced_when_both_children_are_local() {
+        use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
+        use crate::query::planning::plan::core::nodes::join::join_node::HashInnerJoinNode;
+
+        let start = PlanNodeEnum::Start(StartNode::new());
+        let join = HashInnerJoinNode::new(start.clone(), start, Vec::new(), Vec::new())
+            .expect("hash inner join should build");
+        let spec = PartitionSpec::try_new(vec![0..10, 10..20], test_source(), None)
+            .expect("valid spec");
+        let physical =
+            PartitionedPhysicalPlan::from_logical(PlanNodeEnum::HashInnerJoin(join), spec);
+
+        assert!(
+            matches!(physical.root(), PartitionedPhysicalNode::HashJoinExchange { .. }),
+            "Expected HashJoinExchange when both children are Local, got {:?}",
+            physical.root()
+        );
+    }
+
+    #[test]
+    fn hash_join_exchange_falls_back_to_global_binary_when_children_are_not_local() {
+        use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
+        use crate::query::planning::plan::core::nodes::join::join_node::HashInnerJoinNode;
+        use crate::query::planning::plan::core::nodes::operation::sort_node::SortNode;
+
+        let start = PlanNodeEnum::Start(StartNode::new());
+        let sort = SortNode::new(start.clone(), Vec::new()).expect("sort node should build");
+        let join = HashInnerJoinNode::new(PlanNodeEnum::Sort(sort), start.clone(), Vec::new(), Vec::new())
+            .expect("hash inner join should build");
+        let spec = PartitionSpec::try_new(vec![0..10], test_source(), None)
+            .expect("valid spec");
+        let physical =
+            PartitionedPhysicalPlan::from_logical(PlanNodeEnum::HashInnerJoin(join), spec);
+
+        assert!(
+            matches!(physical.root(), PartitionedPhysicalNode::GlobalBinary { .. }),
+            "Expected GlobalBinary fallback when a child has a global node, got {:?}",
+            physical.root()
+        );
+    }
+
+    #[test]
+    fn hash_left_join_exchange_produced_when_both_children_are_local() {
+        use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
+        use crate::query::planning::plan::core::nodes::join::join_node::HashLeftJoinNode;
+
+        let start = PlanNodeEnum::Start(StartNode::new());
+        let join = HashLeftJoinNode::new(start.clone(), start, Vec::new(), Vec::new())
+            .expect("hash left join should build");
+        let spec = PartitionSpec::try_new(vec![0..10, 10..20], test_source(), None)
+            .expect("valid spec");
+        let physical =
+            PartitionedPhysicalPlan::from_logical(PlanNodeEnum::HashLeftJoin(join), spec);
+
+        assert!(
+            matches!(physical.root(), PartitionedPhysicalNode::HashJoinExchange { .. }),
+            "Expected HashJoinExchange for HashLeftJoin when both children are Local, got {:?}",
+            physical.root()
+        );
+    }
+
+    #[test]
+    fn hash_join_exchange_is_not_produced_for_non_hash_joins() {
+        use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
+        use crate::query::planning::plan::core::nodes::join::join_node::InnerJoinNode;
+
+        let start = PlanNodeEnum::Start(StartNode::new());
+        let join = InnerJoinNode::new(start.clone(), start, Vec::new(), Vec::new())
+            .expect("inner join should build");
+        let spec = PartitionSpec::try_new(vec![0..10, 10..20], test_source(), None)
+            .expect("valid spec");
+        let physical =
+            PartitionedPhysicalPlan::from_logical(PlanNodeEnum::InnerJoin(join), spec);
+
+        assert!(
+            matches!(physical.root(), PartitionedPhysicalNode::GlobalBinary { .. }),
+            "Expected GlobalBinary for non-hash join, got {:?}",
+            physical.root()
+        );
+    }
+
+    #[test]
+    fn topn_with_limit_zero_uses_topn_split() {
+        use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
+        use crate::query::planning::plan::core::nodes::operation::sort_node::{SortItem, TopNNode};
+
+        let start = PlanNodeEnum::Start(StartNode::new());
+        let topn = TopNNode::new(start, vec![SortItem::column_asc("x".to_string())], 0)
+            .expect("topn plan should build");
+        let spec = PartitionSpec::try_new(vec![0..5], test_source(), None)
+            .expect("valid spec");
+        let physical =
+            PartitionedPhysicalPlan::from_logical(PlanNodeEnum::TopN(topn), spec);
+
+        assert!(
+            matches!(physical.root(), PartitionedPhysicalNode::TopNSplit { .. }),
+            "Expected TopNSplit even for limit=0, got {:?}",
+            physical.root()
         );
     }
 }

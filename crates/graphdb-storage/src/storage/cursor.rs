@@ -38,6 +38,13 @@ pub struct ScanOptions {
     pub limit: Option<usize>,
     /// Batch size for cursor reads.
     pub batch_size: usize,
+    /// Optional vertex ID range filter. Only vertices whose `id` falls in
+    /// this range (inclusive of start, exclusive of end) are returned.
+    /// When set, this filter is applied at scan time, not as a post-filter.
+    pub vertex_id_range: Option<std::ops::Range<i64>>,
+    /// Optional edge source ID range filter. Only edges whose source ID
+    /// (parsed as `i64`) falls in this range are returned.
+    pub edge_src_id_range: Option<std::ops::Range<i64>>,
 }
 
 impl ScanOptions {
@@ -153,6 +160,9 @@ pub fn open_vertex_scan(
 ) -> Result<Box<dyn VertexCursor>, StorageError> {
     let reader = storage.read();
     let mut vertices = reader.scan_vertices(space)?;
+    if let Some(range) = &options.vertex_id_range {
+        vertices.retain(|v| v.id >= range.start && v.id < range.end);
+    }
     if let Some(limit) = options.limit {
         vertices.truncate(limit);
     }
@@ -192,6 +202,11 @@ pub fn open_edge_scan(
     } else {
         reader.scan_all_edges(space)?
     };
+    if let Some(range) = &options.edge_src_id_range {
+        edges.retain(|e| {
+            e.src.to_string().parse::<i64>().is_ok_and(|id| id >= range.start && id < range.end)
+        });
+    }
     if let Some(limit) = options.limit {
         edges.truncate(limit);
     }

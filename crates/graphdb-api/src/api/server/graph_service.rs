@@ -21,8 +21,7 @@ use crate::storage::{
 use crate::transaction::TransactionManager;
 use log::{info, warn};
 use parking_lot::RwLock;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 #[cfg(feature = "qdrant")]
@@ -58,6 +57,9 @@ pub struct GraphService<S: StorageClient + Clone + 'static> {
 
     // Transaction management-related
     transaction_manager: Option<Arc<TransactionManager>>,
+
+    /// Monotonically increasing query ID counter (server-assigned, not hash-based).
+    next_query_id: AtomicU64,
 }
 
 impl<
@@ -258,6 +260,7 @@ impl<
             vector_api,
             sync_api,
             transaction_manager,
+            next_query_id: AtomicU64::new(1),
         };
         Arc::new(service)
     }
@@ -415,11 +418,16 @@ impl<
             .execute_stream(stmt, query_request)
             .map_err(|e| e.to_string())?;
 
-        // Register the execution runtime for KILL QUERY support.
-        let mut hasher = DefaultHasher::new();
-        stmt.hash(&mut hasher);
-        let query_id = hasher.finish() as u32;
+        // Assign a server-side monotonic query ID (not from SQL text hash).
+        let query_id = self.next_query_id.fetch_add(1, Ordering::Relaxed) as u32;
+        result.runtime().assign_query_id(query_id as u64);
         session.register_streaming_query(query_id, stmt.to_string(), result.runtime_downgrade());
+
+        // Auto-deregister on Drop (covers completion, error, and disconnect).
+        let session_clone = session.clone();
+        result.set_on_drop(Box::new(move || {
+            session_clone.unregister_streaming_query(query_id);
+        }));
 
         Ok(result)
     }
@@ -560,10 +568,13 @@ impl<
             })
             .collect();
 
-        ExecutionResult::DataSet(DataSet {
-            col_names: result.columns,
-            rows,
-        })
+        ExecutionResult::DataSet {
+            data: DataSet {
+                col_names: result.columns,
+                rows,
+            },
+            execution_mode_reason: None,
+        }
     }
 
     fn extract_permission_from_statement(&self, stmt: &str) -> Permission {
@@ -647,7 +658,7 @@ impl<
     /// This is used for USE statement results that have been converted from SpaceSwitched.
     fn extract_space_summary_from_result(result: &ExecutionResult) -> Option<SpaceSummary> {
         match result {
-            ExecutionResult::DataSet(ds) => {
+            ExecutionResult::DataSet { data: ds, .. } => {
                 let name_idx = ds.col_names.iter().position(|c| c == "space_name")?;
                 let id_idx = ds.col_names.iter().position(|c| c == "space_id")?;
                 let vid_type_idx = ds.col_names.iter().position(|c| c == "vid_type");

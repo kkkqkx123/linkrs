@@ -71,7 +71,7 @@ pub async fn validate<
 /// Converting ExecutionResult to QueryResponse
 fn execution_result_to_response(result: ExecutionResult) -> QueryResponse {
     match result {
-        ExecutionResult::DataSet(dataset) => {
+        ExecutionResult::DataSet { data: dataset, .. } => {
             let columns: Vec<String> = dataset.col_names.clone();
             let rows: Vec<std::collections::HashMap<String, serde_json::Value>> = dataset
                 .rows

@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use axum::{
     extract::{Json, State},
@@ -90,14 +90,16 @@ pub async fn execute_stream<
             }
         };
 
-        // Track column names from the first chunk.
-        let first_columns: Arc<Mutex<Option<Vec<String>>>> = Arc::new(Mutex::new(None));
+        // Send schema/metadata event BEFORE any row data (SSE protocol contract).
+        // The first chunk's column names are sent as a "schema" event so that
+        // the client can interpret rows before the stream ends.
+        let schema_sent: Arc<std::sync::atomic::AtomicBool> = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         // Spawn a blocking task to pull chunks synchronously
         // and send rows through the channel.
         let tx_pull = tx.clone();
         let stream_result_pull = stream_result.clone();
-        let first_columns_pull = first_columns.clone();
+        let schema_sent_pull = schema_sent.clone();
         let pull_handle = tokio::task::spawn_blocking(move || {
             let mut row_index: usize = 0;
             loop {
@@ -105,12 +107,23 @@ pub async fn execute_stream<
                     Ok(Some(chunk)) => {
                         let columns = chunk.col_names();
 
-                        // Capture column names from the first chunk.
-                        let mut cols = first_columns_pull.lock().unwrap();
-                        if cols.is_none() {
-                            *cols = Some(columns.clone());
+                        // Send schema event on first chunk, before any rows.
+                        if !schema_sent_pull.load(std::sync::atomic::Ordering::Relaxed) {
+                            schema_sent_pull.store(true, std::sync::atomic::Ordering::Relaxed);
+                            let schema = json!({
+                                "columns": columns,
+                                "column_count": columns.len(),
+                            });
+                            if let Ok(schema_str) = serde_json::to_string(&schema) {
+                                if tx_pull
+                                    .blocking_send(Ok(Event::default().event("schema").data(schema_str)))
+                                    .is_err()
+                                {
+                                    stream_result_pull.cancel();
+                                    return Ok(row_index);
+                                }
+                            }
                         }
-                        drop(cols);
 
                         for row in chunk.rows {
                             let obj: serde_json::Map<String, serde_json::Value> = row
@@ -149,12 +162,11 @@ pub async fn execute_stream<
         // Wait for the pull task to finish.
         match pull_handle.await {
             Ok(Ok(total_rows)) => {
-                // Send metadata with column names.
-                let columns = first_columns.lock().unwrap().take().unwrap_or_default();
+                // Send metadata summary AFTER all rows.
                 let metadata = StreamMetadata {
                     rows_returned: total_rows,
                     execution_time_ms: start_time.elapsed().as_millis() as u64,
-                    columns,
+                    columns: Vec::new(), // schema was sent upfront
                 };
 
                 if let Ok(meta_str) = serde_json::to_string(&metadata) {

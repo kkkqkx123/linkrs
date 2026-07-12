@@ -356,7 +356,10 @@ impl<S: StorageClient + Send + 'static> BaseExecutorTrait<S> for SubgraphExecuto
         let paths = result.to_paths();
         let rows: Vec<Vec<Value>> = paths.into_iter().map(|p| vec![Value::path(p)]).collect();
         let dataset = DataSet::from_rows(rows, vec!["path".to_string()]);
-        Ok(ExecutionResult::DataSet(dataset))
+        Ok(ExecutionResult::DataSet {
+            data: dataset,
+            execution_mode_reason: None,
+        })
     }
 
     fn open(&mut self) -> ExecDBResult<()> {

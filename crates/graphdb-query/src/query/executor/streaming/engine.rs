@@ -10,6 +10,7 @@
 use std::sync::Arc;
 
 use super::chunk::DataChunk;
+use super::coordinator::try_execute_partitions_parallel;
 use super::driver::ExecutorDriver;
 use super::executor::{SortDirection, StreamingExecutor};
 use super::operator_base::OperatorBase;
@@ -45,6 +46,9 @@ pub struct StreamingExecutionEngine {
     /// Number of local trees currently owned by a Gather root. This remains
     /// meaningful after the legacy `partition_executors` vector is cleared.
     partition_count: usize,
+    /// Maximum worker threads for intra-query parallelism (P8).
+    /// 1 (default) means fully serial — the sequential path is always used.
+    max_workers: usize,
     runtime: Option<Arc<ExecutionRuntime>>,
 }
 
@@ -55,8 +59,19 @@ impl StreamingExecutionEngine {
             root_executor: None,
             partition_executors: Vec::new(),
             partition_count: 0,
+            max_workers: 1,
             runtime: None,
         }
+    }
+
+    /// Set the maximum number of worker threads for intra-query parallelism.
+    pub fn set_max_workers(&mut self, max_workers: usize) {
+        self.max_workers = max_workers;
+    }
+
+    /// Returns the maximum number of worker threads.
+    pub fn max_workers(&self) -> usize {
+        self.max_workers
     }
 
     /// Register the root executor.
@@ -477,8 +492,29 @@ impl StreamingExecutionEngine {
         }
     }
 
-    /// Execute all partition executors sequentially, collecting results.
+    /// Execute all partition executors sequentially.
+    ///
+    /// The parallel path (`try_execute_partitions_parallel`) is never
+    /// taken because `self.max_workers` defaults to 1 and the
+    /// coordinator returns `Ok(None)` when `max_workers <= 1`.  This
+    /// is intentional: the coordinator is experimental and not safe
+    /// for production (see `coordinator.rs`).
     fn execute_partitions(&mut self) -> Result<Vec<DataChunk>, QueryError> {
+        // Try parallel execution via rayon when a runtime is attached.
+        if let Some(ref rt) = self.runtime {
+            if let Some((chunks, profile)) =
+                try_execute_partitions_parallel(&mut self.partition_executors, rt.clone(), self.max_workers)?
+            {
+                if profile.wall_time_us > 0 {
+                    let mut p = rt.profile().lock();
+                    p.parallel_wall_time_us = p.parallel_wall_time_us.saturating_add(profile.wall_time_us);
+                    p.parallel_work_time_us = p.parallel_work_time_us.saturating_add(profile.work_time_us);
+                }
+                return Ok(chunks);
+            }
+        }
+
+        // Sequential fallback.
         let mut all_chunks = Vec::new();
         for executor in &mut self.partition_executors {
             if let Some(ref rt) = self.runtime {

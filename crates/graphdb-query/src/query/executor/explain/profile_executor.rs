@@ -242,7 +242,10 @@ impl<S: StorageClient + Send + 'static> Executor<S> for ProfileExecutor<S> {
         let result_dataset =
             self.build_profile_result(&plan_desc, &stats_context, execution_time_ms);
 
-        Ok(ExecutionResult::DataSet(result_dataset))
+        Ok(ExecutionResult::DataSet {
+            data: result_dataset,
+            execution_mode_reason: None,
+        })
     }
 
     fn open(&mut self) -> ExecutorDBResult<()> {

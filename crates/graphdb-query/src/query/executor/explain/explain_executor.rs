@@ -68,6 +68,27 @@ impl<S: StorageClient + Send + 'static> ExplainExecutor<S> {
         let descriptions = visitor.into_descriptions();
         let mut plan_desc = PlanDescription::new();
         plan_desc.format = format!("{:?}", self.format);
+        plan_desc.execution_mode = self.inner_plan.execution_mode.as_str().to_string();
+        plan_desc.execution_mode_reason = self.inner_plan.execution_mode_reason().to_string();
+
+        if let Some(ref spec) = self.inner_plan.partition_spec {
+            let ranges_str: Vec<String> = spec
+                .ranges()
+                .iter()
+                .map(|r| format!("{}..{}", r.start, r.end))
+                .collect();
+            let layout = spec
+                .layout_version()
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "none".to_string());
+            plan_desc.partition_spec_description = Some(format!(
+                "{} ({} partitions, ranges: [{}], layout_version: {})",
+                spec.source(),
+                spec.partition_count(),
+                ranges_str.join(", "),
+                layout,
+            ));
+        }
 
         for desc in descriptions {
             plan_desc.add_node_desc(desc);

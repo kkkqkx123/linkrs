@@ -59,6 +59,10 @@ pub struct ProfileCollector {
     pub total_time_us: u64,
     pub start_time: Option<Instant>,
     pub end_time: Option<Instant>,
+    /// Wall-clock time spent in parallel partition execution (P8).
+    pub parallel_wall_time_us: u64,
+    /// Sum of per-worker execution time (may exceed wall time, P8).
+    pub parallel_work_time_us: u64,
 }
 
 impl ProfileCollector {
@@ -162,8 +166,8 @@ impl ResourceOwner {
 /// instrumentation.
 #[derive(Debug)]
 pub struct ExecutionRuntime {
-    /// Query identity
-    query_id: QueryIdentity,
+    /// Query identity (behind Mutex for write-once from the API layer).
+    query_id: parking_lot::Mutex<QueryIdentity>,
     /// Set to `true` when the query should be cancelled.
     cancel_token: Arc<AtomicBool>,
     /// Optional deadline; the query is cancelled after this instant.
@@ -180,7 +184,7 @@ impl ExecutionRuntime {
     /// Create a new execution runtime with the given query identity and memory budget.
     pub fn new(query_id: QueryIdentity, memory_budget: MemoryBudget) -> Self {
         Self {
-            query_id,
+            query_id: parking_lot::Mutex::new(query_id),
             cancel_token: Arc::new(AtomicBool::new(false)),
             deadline: None,
             memory_budget,
@@ -196,8 +200,16 @@ impl ExecutionRuntime {
 
     // ── Query identity ──
 
-    pub fn query_id(&self) -> &QueryIdentity {
-        &self.query_id
+    pub fn query_id(&self) -> QueryIdentity {
+        self.query_id.lock().clone()
+    }
+
+    /// Override the query ID number after construction.
+    ///
+    /// The factory initialises `query_id.query_id` to 0; the API layer assigns the
+    /// real server-side ID before the handle is returned to the caller.
+    pub fn assign_query_id(&self, id: u64) {
+        self.query_id.lock().query_id = id;
     }
 
     // ── Cancellation ──

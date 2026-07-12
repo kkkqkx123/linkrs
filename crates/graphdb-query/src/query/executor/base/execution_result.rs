@@ -12,7 +12,12 @@ use crate::query::data_set::DataSet;
 #[derive(Debug, Clone)]
 pub enum ExecutionResult {
     /// Successful execution returns structured dataset (primary result type)
-    DataSet(DataSet),
+    DataSet {
+        data: DataSet,
+        /// Human-readable reason for the selected execution mode and partition
+        /// layout.  Populated by the optimizer and surfaced for diagnostics.
+        execution_mode_reason: Option<String>,
+    },
     /// Successful execution, no data returned
     Empty,
     /// Successful execution, no data returned (alias)
@@ -27,7 +32,7 @@ impl ExecutionResult {
     /// Get the count of elements in the result
     pub fn count(&self) -> usize {
         match self {
-            ExecutionResult::DataSet(ds) => ds.row_count(),
+            ExecutionResult::DataSet { data, .. } => data.row_count(),
             ExecutionResult::Success => 0,
             ExecutionResult::Empty => 0,
             ExecutionResult::SpaceSwitched(_) => 0,
@@ -37,13 +42,27 @@ impl ExecutionResult {
 
     /// Creating an ExecutionResult from a DataSet
     pub fn from_data_set(data: DataSet) -> Self {
-        ExecutionResult::DataSet(data)
+        ExecutionResult::DataSet {
+            data,
+            execution_mode_reason: None,
+        }
     }
 
     /// Convert to DataSet
     pub fn to_data_set(&self) -> Option<&DataSet> {
         match self {
-            ExecutionResult::DataSet(ds) => Some(ds),
+            ExecutionResult::DataSet { data, .. } => Some(data),
+            _ => None,
+        }
+    }
+
+    /// Execution mode reason attached by the optimizer, if any.
+    pub fn execution_mode_reason(&self) -> Option<&str> {
+        match self {
+            ExecutionResult::DataSet {
+                execution_mode_reason,
+                ..
+            } => execution_mode_reason.as_deref(),
             _ => None,
         }
     }
@@ -72,7 +91,10 @@ pub trait IntoExecutionResult {
 
 impl IntoExecutionResult for DataSet {
     fn into_execution_result(self) -> ExecutionResult {
-        ExecutionResult::DataSet(self)
+        ExecutionResult::DataSet {
+            data: self,
+            execution_mode_reason: None,
+        }
     }
 }
 

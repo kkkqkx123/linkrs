@@ -8,6 +8,7 @@ pub mod gather_operator;
 pub mod graph_operator;
 pub mod join_operator;
 pub mod set_operator;
+pub mod shuffle_join_operator;
 pub mod sink_operator;
 pub mod source_operator;
 pub mod txn_operator;

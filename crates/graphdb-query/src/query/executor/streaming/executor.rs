@@ -20,6 +20,7 @@ use super::operators::gather_operator::GatherOperator;
 use super::operators::graph_operator::GraphOperator;
 use super::operators::join_operator::JoinOperator;
 use super::operators::set_operator::SetOperator;
+use super::operators::shuffle_join_operator::HashShuffleJoinOperator;
 use super::operators::sink_operator::SinkOperator;
 use super::operators::source_operator::SourceOperator;
 use super::operators::txn_operator::TxnOperator;
@@ -79,6 +80,14 @@ pub enum StreamingExecutor {
     Vector(OperatorBase, Box<StreamingExecutor>, VectorOperator),
     Txn(OperatorBase, Box<StreamingExecutor>, TxnOperator),
     Gather(OperatorBase, Vec<StreamingExecutor>, GatherOperator),
+    /// Hash repartition join: takes multiple left/right local trees,
+    /// distributes rows by hash of join keys into buckets, joins per bucket.
+    HashShuffleJoin(
+        OperatorBase,
+        Vec<StreamingExecutor>,
+        Vec<StreamingExecutor>,
+        HashShuffleJoinOperator,
+    ),
 }
 
 impl StreamingExecutor {
@@ -147,6 +156,15 @@ impl StreamingExecutor {
                         | UnaryOperator::PassThrough
                 ) && input.is_partition_local()
             }
+            Self::Blocking(_, input, op) => {
+                matches!(
+                    op,
+                    BlockingOperator::PartialAggregate { .. }
+                        | BlockingOperator::Distinct { .. }
+                        | BlockingOperator::TopN { .. }
+                ) && input.is_partition_local()
+            }
+            Self::HashShuffleJoin(..) => false,
             _ => false,
         }
     }
@@ -233,6 +251,8 @@ impl StreamingExecutor {
                 BlockingOperator::Materialize { .. } => "Materialize",
                 BlockingOperator::DataCollect { .. } => "DataCollect",
                 BlockingOperator::RollUpApply { .. } => "RollUpApply",
+                BlockingOperator::PartialAggregate { .. } => "PartialAggregate",
+                BlockingOperator::FinalAggregate { .. } => "FinalAggregate",
             },
             Graph(_, _, op) => match op {
                 GraphOperator::Expand { .. } => "Expand",
@@ -283,6 +303,10 @@ impl StreamingExecutor {
             Gather(_, _, op) => match op {
                 GatherOperator::Concatenate { .. } => "Gather(Concatenate)",
                 GatherOperator::MergeSort { .. } => "Gather(MergeSort)",
+            },
+            HashShuffleJoin(_, _, _, op) => match op.join_kind {
+                super::operators::shuffle_join_operator::HashJoinKind::Inner => "HashShuffleJoin(Inner)",
+                super::operators::shuffle_join_operator::HashJoinKind::Left => "HashShuffleJoin(Left)",
             },
         }
     }
@@ -360,6 +384,7 @@ impl StreamingExecutor {
             Self::Ddl(base, _, _) | Self::Fulltext(base, _, _) | Self::Vector(base, _, _) => base,
             Self::Txn(base, _, _) => base,
             Self::Gather(base, _, _) => base,
+            Self::HashShuffleJoin(base, _, _, _) => base,
         }
     }
 
@@ -377,6 +402,7 @@ impl StreamingExecutor {
             Self::Ddl(base, _, _) | Self::Fulltext(base, _, _) | Self::Vector(base, _, _) => base,
             Self::Txn(base, _, _) => base,
             Self::Gather(base, _, _) => base,
+            Self::HashShuffleJoin(base, _, _, _) => base,
         }
     }
 
@@ -396,6 +422,11 @@ impl StreamingExecutor {
                 vec![input.as_mut()]
             }
             Self::Gather(_, children, _) => children.iter_mut().collect(),
+            Self::HashShuffleJoin(_, left, right, _) => {
+                let mut all: Vec<&mut Self> = left.iter_mut().collect();
+                all.extend(right.iter_mut());
+                all
+            }
         }
     }
 
@@ -416,6 +447,7 @@ impl StreamingExecutor {
             Self::Join(_, _, _, op) => Some(op.memory_tracker()),
             Self::Set(_, _, _, SetOperator::UnionAll { .. }) => None,
             Self::Set(_, _, _, op) => Some(op.memory_tracker()),
+            Self::HashShuffleJoin(_, _, _, op) => Some(op.memory_tracker()),
         }
     }
 
@@ -449,6 +481,7 @@ impl StreamingExecutor {
             Self::Vector(base, input, op) => op.open(base, input),
             Self::Txn(base, input, op) => op.open(base, input),
             Self::Gather(base, children, op) => op.open(base, children),
+            Self::HashShuffleJoin(base, left, right, op) => op.open(base, left, right),
         };
         let elapsed = start.elapsed().as_micros() as u64;
         self.record_profile_timing("open", elapsed);
@@ -486,6 +519,7 @@ impl StreamingExecutor {
             Self::Vector(base, input, op) => op.next(base, input),
             Self::Txn(base, input, op) => op.next(base, input),
             Self::Gather(base, children, op) => op.next(base, children),
+            Self::HashShuffleJoin(base, left, right, op) => op.next(base, left, right),
         };
         let elapsed = start.elapsed().as_micros() as u64;
         if let Ok(Some(ref chunk)) = result {
@@ -515,6 +549,7 @@ impl StreamingExecutor {
             Self::Vector(base, input, op) => op.stop(base, input),
             Self::Txn(base, input, op) => op.stop(base, input),
             Self::Gather(base, children, op) => op.stop(base, children),
+            Self::HashShuffleJoin(base, left, right, op) => op.stop(base, left, right),
         };
         let elapsed = start.elapsed().as_micros() as u64;
         self.record_profile_timing("stop", elapsed);
@@ -538,6 +573,7 @@ impl StreamingExecutor {
             Self::Vector(base, input, op) => op.close(base, input),
             Self::Txn(base, input, op) => op.close(base, input),
             Self::Gather(base, children, op) => op.close(base, children),
+            Self::HashShuffleJoin(base, left, right, op) => op.close(base, left, right),
         };
         let elapsed = start.elapsed().as_micros() as u64;
         self.record_profile_timing("close", elapsed);
