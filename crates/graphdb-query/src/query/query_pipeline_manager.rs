@@ -1146,9 +1146,15 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         plan: crate::query::planning::plan::ExecutionPlan,
     ) -> DBResult<crate::query::planning::plan::ExecutionPlan> {
         // Use the unified optimization interface from OptimizerEngine
-        self.optimizer_engine
+        let mut optimized = self
+            .optimizer_engine
             .optimize(plan)
-            .map_err(|e| DBError::from(QueryError::pipeline_optimization_error(e)))
+            .map_err(|e| DBError::from(QueryError::pipeline_optimization_error(e)))?;
+        // Propagate P8 config from optimizer to plan so EXPLAIN can show it
+        let cfg = self.optimizer_engine.partitioning_config();
+        optimized.set_max_workers(cfg.max_workers.max(1));
+        optimized.set_max_buffered_chunks(cfg.max_buffered_chunks.max(1));
+        Ok(optimized)
     }
 
     fn execute_plan(
@@ -1174,6 +1180,16 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         let mut executor = StreamingQueryExecutor::new();
 
         let mut context = crate::query::executor::base::ExecutionContext::default();
+        context.max_workers = self
+            .optimizer_engine
+            .partitioning_config()
+            .max_workers
+            .max(1);
+        context.max_buffered_chunks = self
+            .optimizer_engine
+            .partitioning_config()
+            .max_buffered_chunks
+            .max(1);
         if let Some(ref storage) = self.storage {
             let dyn_storage: Arc<RwLock<dyn StorageClient>> = storage.clone();
             context.storage = Some(dyn_storage);
@@ -1250,6 +1266,16 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         let mut executor = StreamingQueryExecutor::new();
 
         let mut context = crate::query::executor::base::ExecutionContext::default();
+        context.max_workers = self
+            .optimizer_engine
+            .partitioning_config()
+            .max_workers
+            .max(1);
+        context.max_buffered_chunks = self
+            .optimizer_engine
+            .partitioning_config()
+            .max_buffered_chunks
+            .max(1);
         if let Some(ref storage) = self.storage {
             let dyn_storage: Arc<RwLock<dyn StorageClient>> = storage.clone();
             context.storage = Some(dyn_storage);

@@ -19,6 +19,28 @@ pub fn format_plan_as_table(plan_desc: &PlanDescription) -> String {
     if let Some(ref part) = plan_desc.partition_spec_description {
         output.push_str(&format!("Partitioning: {}\n", part));
     }
+    // P8 parallel configuration
+    output.push_str(&format!(
+        "Parallel Workers: requested={}",
+        plan_desc.requested_workers,
+    ));
+    if plan_desc.actual_workers > 0 {
+        output.push_str(&format!(
+            ", actual={}, wall_time={}us, work_time={}us, buffered_chunks_peak={}, buffered_bytes_peak={}",
+            plan_desc.actual_workers,
+            plan_desc.parallel_wall_time_us,
+            plan_desc.parallel_work_time_us,
+            plan_desc.parallel_buffered_chunks_peak,
+            plan_desc.parallel_buffered_bytes_peak,
+        ));
+    }
+    if !plan_desc.parallel_fallback_reason.is_empty() {
+        output.push_str(&format!(
+            ", fallback_reason=\"{}\"",
+            plan_desc.parallel_fallback_reason,
+        ));
+    }
+    output.push('\n');
     output.push('\n');
 
     // Header with clear column names
@@ -98,13 +120,27 @@ pub fn format_plan_as_dot(plan_desc: &PlanDescription) -> String {
 
     output.push_str("digraph G {\n");
     output.push_str("    rankdir=BT;\n"); // Bottom to top layout for better flow visualization
+    let parallel_str = if plan_desc.actual_workers > 0 {
+        format!(
+            "Parallel: {} workers, wall={}us",
+            plan_desc.actual_workers, plan_desc.parallel_wall_time_us,
+        )
+    } else if !plan_desc.parallel_fallback_reason.is_empty() {
+        format!(
+            "Parallel: fallback (requested={}, {})",
+            plan_desc.requested_workers, plan_desc.parallel_fallback_reason,
+        )
+    } else {
+        format!("Parallel: requested={}", plan_desc.requested_workers)
+    };
     output.push_str(&format!(
-        "    label=\"Execution Mode: {} | {}\";\n",
+        "    label=\"Execution Mode: {} | {} | {}\";\n",
         plan_desc.execution_mode,
         plan_desc
             .partition_spec_description
             .as_deref()
-            .unwrap_or("no partitioning")
+            .unwrap_or("no partitioning"),
+        parallel_str,
     ));
     output.push_str("    labelloc=t;\n");
     output.push_str("    fontsize=12;\n");
@@ -344,6 +380,27 @@ pub fn format_plan_with_output_table(
     if let Some(ref part) = plan_desc.partition_spec_description {
         output.push_str(&format!("Partitioning: {}\n", part));
     }
+    output.push_str(&format!(
+        "Parallel Workers: requested={}",
+        plan_desc.requested_workers,
+    ));
+    if plan_desc.actual_workers > 0 {
+        output.push_str(&format!(
+            ", actual={}, wall_time={}us, work_time={}us, buffered_chunks_peak={}, buffered_bytes_peak={}",
+            plan_desc.actual_workers,
+            plan_desc.parallel_wall_time_us,
+            plan_desc.parallel_work_time_us,
+            plan_desc.parallel_buffered_chunks_peak,
+            plan_desc.parallel_buffered_bytes_peak,
+        ));
+    }
+    if !plan_desc.parallel_fallback_reason.is_empty() {
+        output.push_str(&format!(
+            ", fallback_reason=\"{}\"",
+            plan_desc.parallel_fallback_reason,
+        ));
+    }
+    output.push('\n');
     output.push('\n');
 
     // Calculate column widths
@@ -477,6 +534,13 @@ pub fn format_plan_as_json(
         execution_mode: String,
         execution_mode_reason: String,
         partition_spec_description: Option<String>,
+        requested_workers: usize,
+        actual_workers: usize,
+        parallel_wall_time_us: u64,
+        parallel_work_time_us: u64,
+        parallel_buffered_chunks_peak: usize,
+        parallel_buffered_bytes_peak: usize,
+        parallel_fallback_reason: String,
         plan_node_descs: Vec<SerializablePlanNodeDescription>,
     }
 
@@ -538,6 +602,13 @@ pub fn format_plan_as_json(
         execution_mode: plan_desc.execution_mode.clone(),
         execution_mode_reason: plan_desc.execution_mode_reason.clone(),
         partition_spec_description: plan_desc.partition_spec_description.clone(),
+        requested_workers: plan_desc.requested_workers,
+        actual_workers: plan_desc.actual_workers,
+        parallel_wall_time_us: plan_desc.parallel_wall_time_us,
+        parallel_work_time_us: plan_desc.parallel_work_time_us,
+        parallel_buffered_chunks_peak: plan_desc.parallel_buffered_chunks_peak,
+        parallel_buffered_bytes_peak: plan_desc.parallel_buffered_bytes_peak,
+        parallel_fallback_reason: plan_desc.parallel_fallback_reason.clone(),
         plan_node_descs: serializable_nodes,
     };
 
@@ -562,6 +633,43 @@ mod tests {
         let output = format_plan_as_table(&plan_desc);
         assert!(output.contains("ScanVertices"));
         assert!(output.contains("Person"));
+        assert!(output.contains("Parallel Workers: requested=1"));
+    }
+
+    #[test]
+    fn test_format_plan_as_table_with_p8_profile() {
+        let mut plan_desc = PlanDescription::new();
+        plan_desc.requested_workers = 4;
+        plan_desc.actual_workers = 2;
+        plan_desc.parallel_wall_time_us = 12345;
+        plan_desc.parallel_work_time_us = 23456;
+        plan_desc.parallel_buffered_chunks_peak = 5;
+        plan_desc.parallel_buffered_bytes_peak = 65536;
+        let node = PlanNodeDescription::new("ScanVertices", 1);
+        plan_desc.add_node_desc(node);
+
+        let output = format_plan_as_table(&plan_desc);
+        assert!(output.contains("requested=4"));
+        assert!(output.contains("actual=2"));
+        assert!(output.contains("wall_time=12345us"));
+        assert!(output.contains("work_time=23456us"));
+        assert!(output.contains("buffered_chunks_peak=5"));
+        assert!(output.contains("buffered_bytes_peak=65536"));
+    }
+
+    #[test]
+    fn test_format_plan_as_table_with_p8_fallback() {
+        let mut plan_desc = PlanDescription::new();
+        plan_desc.requested_workers = 4;
+        plan_desc.actual_workers = 0;
+        plan_desc.parallel_fallback_reason = "parallel disabled (max_workers=4)".to_string();
+        let node = PlanNodeDescription::new("ScanVertices", 1);
+        plan_desc.add_node_desc(node);
+
+        let output = format_plan_as_table(&plan_desc);
+        assert!(output.contains("requested=4"));
+        assert!(output.contains("fallback_reason"));
+        assert!(output.contains("max_workers"));
     }
 
     #[test]
@@ -573,6 +681,41 @@ mod tests {
         let output = format_plan_as_dot(&plan_desc);
         assert!(output.contains("digraph G"));
         assert!(output.contains("ScanVertices"));
+    }
+
+    #[test]
+    fn test_format_plan_as_dot_with_p8() {
+        let mut plan_desc = PlanDescription::new();
+        plan_desc.requested_workers = 2;
+        plan_desc.actual_workers = 2;
+        plan_desc.parallel_wall_time_us = 9999;
+        let node = PlanNodeDescription::new("ScanVertices", 1);
+        plan_desc.add_node_desc(node);
+
+        let output = format_plan_as_dot(&plan_desc);
+        assert!(output.contains("Parallel: 2 workers"));
+        assert!(output.contains("wall=9999us"));
+    }
+
+    #[test]
+    fn test_format_json_includes_p8_fields() {
+        let mut plan_desc = PlanDescription::new();
+        plan_desc.requested_workers = 2;
+        plan_desc.actual_workers = 2;
+        plan_desc.parallel_wall_time_us = 100;
+        plan_desc.parallel_work_time_us = 200;
+        plan_desc.parallel_buffered_chunks_peak = 3;
+        plan_desc.parallel_buffered_bytes_peak = 4096;
+        let node = PlanNodeDescription::new("Scan", 1);
+        plan_desc.add_node_desc(node);
+
+        let json = format_plan_as_json(&plan_desc, false).expect("json output");
+        assert!(json.contains("\"requested_workers\":2"));
+        assert!(json.contains("\"actual_workers\":2"));
+        assert!(json.contains("\"parallel_wall_time_us\":100"));
+        assert!(json.contains("\"parallel_work_time_us\":200"));
+        assert!(json.contains("\"parallel_buffered_chunks_peak\":3"));
+        assert!(json.contains("\"parallel_buffered_bytes_peak\":4096"));
     }
 
     #[test]

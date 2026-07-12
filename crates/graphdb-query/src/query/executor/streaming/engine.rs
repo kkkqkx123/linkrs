@@ -1,11 +1,11 @@
 //! Streaming execution engine
 //!
-//! Simplified single-thread pull-based execution engine.
-//! Holds a single root executor and drives it via direct pull (open → next → close).
-//! No task scheduling, worker pool, or partitioning machinery.
+//! Pull-based streaming execution engine.
 //!
-//! The parallel execution infrastructure (PipelineScheduler, WorkerPool) is kept
-//! in the module for reference but is no longer used in the main execution path.
+//! Holds a single root executor and drives it via direct pull
+//! (`open → next → close`). The default remains serial. When explicitly
+//! configured, formal Gather nodes can use the bounded P8 coordinator for
+//! partition-local, parallel-safe child trees.
 
 use std::sync::Arc;
 
@@ -30,9 +30,9 @@ const RIGHT_GATHER_NODE_ID: i64 = i64::MIN + 3;
 /// Drives a single root executor (or multiple partition executors) via
 /// direct pull: open() → loop next() → close().
 ///
-/// When multiple partition executors are registered, each is executed
-/// sequentially in a single thread (no parallelism yet).  This validates
-/// partition semantics before introducing multi-threaded execution.
+/// Partitioned roots retain their normal Gather semantics. Eligible local
+/// inputs may run through the bounded P8 coordinator when `max_workers > 1`;
+/// all other trees retain the serial pull path.
 ///
 /// An optional [`ExecutionRuntime`] can be attached to enable cancellation,
 /// memory tracking, and profiling.  When present operator calls are routed
@@ -46,8 +46,10 @@ pub struct StreamingExecutionEngine {
     /// meaningful after the legacy `partition_executors` vector is cleared.
     partition_count: usize,
     /// Maximum worker threads for intra-query parallelism (P8).
-    /// 1 (default) means fully serial — the sequential path is always used.
+    /// 1 (default) means fully serial.
     max_workers: usize,
+    /// Per-partition output channel capacity for formal P8 Gather nodes.
+    max_buffered_chunks: usize,
     runtime: Option<Arc<ExecutionRuntime>>,
 }
 
@@ -59,21 +61,28 @@ impl StreamingExecutionEngine {
             partition_executors: Vec::new(),
             partition_count: 0,
             max_workers: 1,
+            max_buffered_chunks: 10,
             runtime: None,
         }
     }
 
     /// Set the maximum number of worker threads for intra-query parallelism.
     ///
-    /// ⚠️  P8 parallel coordinator is experimental and not production-safe.
-    /// `max_workers` is forcibly capped at 1 regardless of input.
-    pub fn set_max_workers(&mut self, _max_workers: usize) {
-        self.max_workers = 1;
+    /// Values below one are normalised to the serial fallback.
+    pub fn set_max_workers(&mut self, max_workers: usize) {
+        self.max_workers = max_workers.max(1);
+        self.configure_registered_root_parallelism();
     }
 
     /// Returns the maximum number of worker threads.
     pub fn max_workers(&self) -> usize {
         self.max_workers
+    }
+
+    /// Set the bounded output capacity used by P8 worker channels.
+    pub fn set_max_buffered_chunks(&mut self, max_buffered_chunks: usize) {
+        self.max_buffered_chunks = max_buffered_chunks.max(1);
+        self.configure_registered_root_parallelism();
     }
 
     /// Register the root executor.
@@ -91,6 +100,7 @@ impl StreamingExecutionEngine {
             self.root_executor = Some(Box::new(executor));
         }
         self.partition_count = 0;
+        self.configure_registered_root_parallelism();
     }
 
     /// Register a root that owns local partition trees below one or more
@@ -113,6 +123,7 @@ impl StreamingExecutionEngine {
         self.root_executor = Some(Box::new(executor));
         self.partition_executors.clear();
         self.partition_count = partition_count;
+        self.configure_registered_root_parallelism();
         Ok(())
     }
 
@@ -189,6 +200,7 @@ impl StreamingExecutionEngine {
         }
         self.partition_executors.clear();
         self.partition_count = partition_count;
+        self.configure_registered_root_parallelism();
         Ok(())
     }
 
@@ -294,6 +306,7 @@ impl StreamingExecutionEngine {
         self.root_executor = Some(Box::new(global_join));
         self.partition_executors.clear();
         self.partition_count = partition_count;
+        self.configure_registered_root_parallelism();
         Ok(())
     }
 
@@ -356,6 +369,13 @@ impl StreamingExecutionEngine {
             executor.set_runtime(Some(runtime.clone()));
         }
         self.runtime = Some(runtime);
+        self.configure_registered_root_parallelism();
+    }
+
+    fn configure_registered_root_parallelism(&mut self) {
+        if let Some(root) = self.root_executor.as_mut() {
+            root.configure_parallel_partitions(self.max_workers, self.max_buffered_chunks);
+        }
     }
 
     /// Return a reference to the attached runtime, if any.
@@ -494,12 +514,11 @@ impl StreamingExecutionEngine {
         }
     }
 
-    /// Execute all partition executors sequentially.
+    /// Execute the legacy uncomposed partition list sequentially.
     ///
-    /// ⚠️  The parallel path (`try_execute_partitions_parallel`) has
-    /// been removed from this production path.  The coordinator is
-    /// experimental and not safe for production (see `coordinator.rs`).
-    /// All partitions run sequentially in a single thread.
+    /// Formal P8 parallelism is intentionally attached to the Gather-based
+    /// partitioned root. This compatibility helper has no Gather semantics
+    /// and therefore remains serial.
     fn execute_partitions(&mut self) -> Result<Vec<DataChunk>, QueryError> {
         let mut all_chunks = Vec::new();
         for executor in &mut self.partition_executors {
@@ -937,6 +956,114 @@ mod tests {
                 i64::MIN,
                 None
             )));
+    }
+
+    #[test]
+    fn p8_parallel_gather_preserves_partition_order_and_bounds_buffers() {
+        let runtime = Arc::new(ExecutionRuntime::default_budget());
+        let mut engine = StreamingExecutionEngine::new();
+        engine.set_runtime(runtime.clone());
+        engine.set_max_workers(2);
+        engine.set_max_buffered_chunks(1);
+        engine
+            .build_partitioned_executor(
+                vec![
+                    partitioned_scan_executor(create_test_buffer(1_500), 0, vec!["id".to_string()]),
+                    partitioned_scan_executor(
+                        (1_500..3_000)
+                            .map(|value| {
+                                vec![
+                                    Value::BigInt(value as i64),
+                                    Value::String(format!("item_{value}")),
+                                ]
+                            })
+                            .collect(),
+                        1,
+                        vec!["id".to_string()],
+                    ),
+                ],
+                GatherOperator::concatenate(),
+                None,
+            )
+            .expect("build parallel gather");
+
+        let chunks = engine.execute().expect("parallel gather execute");
+        assert_eq!(
+            extract_ids(&chunks),
+            (0..3_000).map(|value| value as i64).collect::<Vec<_>>()
+        );
+
+        let profile = runtime.profile().lock();
+        assert_eq!(profile.parallel_workers, 2);
+        assert!(profile.parallel_wall_time_us > 0);
+        assert!(profile.parallel_work_time_us > 0);
+        assert!(
+            profile.parallel_buffered_chunks_peak <= 2,
+            "one bounded channel per partition must cap queued chunks"
+        );
+    }
+
+    #[test]
+    fn p8_parallel_gather_cancellation_joins_workers() {
+        let runtime = Arc::new(ExecutionRuntime::default_budget());
+        let mut engine = StreamingExecutionEngine::new();
+        engine.set_runtime(runtime.clone());
+        engine.set_max_workers(2);
+        engine.set_max_buffered_chunks(1);
+        engine
+            .build_partitioned_executor(
+                vec![
+                    partitioned_scan_executor(create_test_buffer(5_000), 0, vec!["id".to_string()]),
+                    partitioned_scan_executor(create_test_buffer(5_000), 1, vec!["id".to_string()]),
+                ],
+                GatherOperator::concatenate(),
+                None,
+            )
+            .expect("build parallel gather");
+
+        let mut stream = engine.into_stream().expect("create stream");
+        assert!(stream.next_chunk().expect("first chunk").is_some());
+        runtime.cancel();
+        assert!(stream.next_chunk().is_err());
+        assert!(stream.close().is_ok());
+        assert!(runtime.profile().lock().parallel_workers > 0);
+    }
+
+    #[test]
+    fn p8_parallel_merge_gather_preserves_global_sort_order() {
+        let runtime = Arc::new(ExecutionRuntime::default_budget());
+        let mut engine = StreamingExecutionEngine::new();
+        engine.set_runtime(runtime.clone());
+        engine.set_max_workers(2);
+        engine.set_max_buffered_chunks(1);
+        engine
+            .build_partitioned_executor(
+                vec![
+                    partitioned_scan_executor(
+                        vec![vec![Value::BigInt(1)], vec![Value::BigInt(3)]],
+                        0,
+                        vec!["id".to_string()],
+                    ),
+                    partitioned_scan_executor(
+                        vec![vec![Value::BigInt(2)], vec![Value::BigInt(4)]],
+                        1,
+                        vec!["id".to_string()],
+                    ),
+                ],
+                GatherOperator::merge_sort(
+                    vec![crate::core::types::expr::Expression::Variable(
+                        "id".to_string(),
+                    )],
+                    vec![SortDirection::Ascending],
+                    None,
+                ),
+                None,
+            )
+            .expect("build parallel merge gather");
+
+        let chunks = engine.execute().expect("parallel merge gather execute");
+        assert_eq!(extract_ids(&chunks), vec![1, 2, 3, 4]);
+        assert_eq!(runtime.profile().lock().parallel_workers, 2);
     }
 
     #[test]

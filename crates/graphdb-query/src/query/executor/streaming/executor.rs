@@ -99,6 +99,28 @@ impl StreamingExecutor {
         }
     }
 
+    /// Configure P8 execution for Gather nodes below this tree. Nodes that do
+    /// not pass the parallel-safety predicate retain their serial pull path.
+    pub fn configure_parallel_partitions(
+        &mut self,
+        max_workers: usize,
+        max_buffered_chunks: usize,
+    ) {
+        match self {
+            Self::Gather(_, children, op) => {
+                op.configure_parallel(max_workers, max_buffered_chunks);
+                for child in children {
+                    child.configure_parallel_partitions(max_workers, max_buffered_chunks);
+                }
+            }
+            _ => {
+                for child in self.children_mut() {
+                    child.configure_parallel_partitions(max_workers, max_buffered_chunks);
+                }
+            }
+        }
+    }
+
     /// Return the plan node ID of this operator.
     pub fn plan_node_id(&self) -> i64 {
         self.base().plan_node_id
@@ -305,8 +327,12 @@ impl StreamingExecutor {
                 GatherOperator::MergeSort { .. } => "Gather(MergeSort)",
             },
             HashShuffleJoin(_, _, _, op) => match op.join_kind {
-                super::operators::shuffle_join_operator::HashJoinKind::Inner => "HashShuffleJoin(Inner)",
-                super::operators::shuffle_join_operator::HashJoinKind::Left => "HashShuffleJoin(Left)",
+                super::operators::shuffle_join_operator::HashJoinKind::Inner => {
+                    "HashShuffleJoin(Inner)"
+                }
+                super::operators::shuffle_join_operator::HashJoinKind::Left => {
+                    "HashShuffleJoin(Left)"
+                }
             },
         }
     }
@@ -337,6 +363,46 @@ impl StreamingExecutor {
     /// Get peak memory from the memory_tracker, if this operator has one.
     pub fn peak_memory_bytes(&self) -> u64 {
         self.memory_tracker().map_or(0, |mt| mt.peak() as u64)
+    }
+
+    /// Return the P8 parallel fallback reason from the first Gather node
+    /// in this tree that has a recorded reason, or `None`.
+    pub fn parallel_fallback_reason(&self) -> Option<String> {
+        match self {
+            Self::Gather(_, children, op) => {
+                let state = match op {
+                    GatherOperator::Concatenate { parallel, .. }
+                    | GatherOperator::MergeSort { parallel, .. } => parallel,
+                };
+                // Check this gather node first, then its children
+                state
+                    .fallback_reason
+                    .clone()
+                    .or_else(|| children.iter().find_map(|c| c.parallel_fallback_reason()))
+            }
+            Self::Unary(_, child, _)
+            | Self::Blocking(_, child, _)
+            | Self::Graph(_, child, _)
+            | Self::Sink(_, child, _)
+            | Self::Ddl(_, child, _)
+            | Self::Fulltext(_, child, _)
+            | Self::Vector(_, child, _)
+            | Self::Txn(_, child, _) => child.parallel_fallback_reason(),
+            Self::Join(_, left, right, _) => left
+                .parallel_fallback_reason()
+                .or_else(|| right.parallel_fallback_reason()),
+            Self::Set(_, left, right, _) => left
+                .parallel_fallback_reason()
+                .or_else(|| right.parallel_fallback_reason()),
+            Self::Apply(_, outer, inner, _) => outer
+                .parallel_fallback_reason()
+                .or_else(|| inner.parallel_fallback_reason()),
+            Self::HashShuffleJoin(_, left, right, _) => left
+                .iter()
+                .find_map(|c| c.parallel_fallback_reason())
+                .or_else(|| right.iter().find_map(|c| c.parallel_fallback_reason())),
+            Self::Source(..) => None,
+        }
     }
 
     /// Record output row count in profile for this operator.

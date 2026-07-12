@@ -12,6 +12,7 @@ use crate::core::error::{DBError, DBResult, QueryError};
 use crate::query::executor::base::{
     BaseExecutor, DBResult as ExecutorDBResult, ExecutionResult, Executor, ExecutorStats,
 };
+use crate::query::executor::streaming::runtime::ExecutionRuntime;
 use crate::query::executor::streaming::StreamingQueryExecutor;
 use crate::query::parser::ast::stmt::ExplainFormat;
 use crate::query::planning::plan::explain::{DescribeVisitor, PlanDescription, ProfilingStats};
@@ -90,6 +91,8 @@ impl<S: StorageClient + Send + 'static> ExplainExecutor<S> {
             ));
         }
 
+        plan_desc.requested_workers = self.inner_plan.max_workers;
+
         for desc in descriptions {
             plan_desc.add_node_desc(desc);
         }
@@ -100,7 +103,11 @@ impl<S: StorageClient + Send + 'static> ExplainExecutor<S> {
     /// Execute the inner plan with instrumentation
     fn execute_with_instrumentation(
         &mut self,
-    ) -> DBResult<(ExecutionResult, Arc<ExecutionStatsContext>)> {
+    ) -> DBResult<(
+        ExecutionResult,
+        Arc<ExecutionStatsContext>,
+        Option<Arc<ExecutionRuntime>>,
+    )> {
         let stats_context = Arc::new(ExecutionStatsContext::new());
         let start = Instant::now();
 
@@ -114,17 +121,22 @@ impl<S: StorageClient + Send + 'static> ExplainExecutor<S> {
             exec_context.storage = Some(dyn_storage);
         }
 
+        exec_context.max_workers = self.inner_plan.max_workers.max(1);
+        exec_context.max_buffered_chunks = self.inner_plan.max_buffered_chunks.max(1);
+
         let mut streaming_executor = StreamingQueryExecutor::new();
         streaming_executor
             .from_plan_node(root_node, &exec_context)
             .map_err(DBError::from)?;
+
+        let runtime = streaming_executor.runtime().cloned();
 
         let result = streaming_executor.execute().map_err(DBError::from)?;
 
         let exec_time_us = start.elapsed().as_micros() as u64;
         stats_context.record_global_execution_time(exec_time_us);
 
-        Ok((result, stats_context))
+        Ok((result, stats_context, runtime))
     }
 
     /// Attach execution statistics to plan description
@@ -195,10 +207,29 @@ impl<S: StorageClient + Send + 'static> Executor<S> for ExplainExecutor<S> {
 
             ExplainMode::Analyze => {
                 let start = Instant::now();
-                let (_exec_result, stats_context) = self.execute_with_instrumentation()?;
+                let (_exec_result, stats_context, runtime) =
+                    self.execute_with_instrumentation()?;
                 let execution_time_ms = start.elapsed().as_micros() as f64 / 1000.0;
 
                 let mut plan_desc = self.generate_plan_description()?;
+
+                // Merge P8 parallel profile data from the execution runtime
+                plan_desc.requested_workers = self.inner_plan.max_workers;
+                if let Some(ref rt) = runtime {
+                    let profile = rt.profile().lock();
+                    let (wall_us, work_us, workers, chunks_peak, bytes_peak) =
+                        profile.parallel_profile();
+                    plan_desc.actual_workers = workers;
+                    plan_desc.parallel_wall_time_us = wall_us;
+                    plan_desc.parallel_work_time_us = work_us;
+                    plan_desc.parallel_buffered_chunks_peak = chunks_peak;
+                    plan_desc.parallel_buffered_bytes_peak = bytes_peak;
+                }
+                if plan_desc.actual_workers == 0 && plan_desc.requested_workers > 1 {
+                    plan_desc.parallel_fallback_reason =
+                        "serial fallback (P8 not activated)".to_string();
+                }
+
                 let node_stats = stats_context.collect_stats();
                 self.attach_execution_stats(&mut plan_desc, &node_stats);
 

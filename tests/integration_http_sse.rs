@@ -22,7 +22,7 @@ use graphdb::api::server::http::server::HttpServer;
 use graphdb::api::server::http::state::AppState;
 use graphdb::api::server::GraphService;
 use graphdb::config::Config;
-use graphdb::core::types::{SpaceInfo, VertexId};
+use graphdb::core::types::{SpaceInfo, SpaceSummary, VertexId};
 use graphdb::core::vertex_edge_path::{Tag, Vertex};
 use graphdb::core::{DataType, Value};
 use graphdb::storage::{GraphStorage, PropertyGraphConfig, StorageSchemaOps, StorageWriter};
@@ -67,7 +67,7 @@ fn parse_sse_events(body: &str) -> Vec<SseEvent> {
 
 /// Set up a minimal graph space with a Person tag and a few vertices
 /// on the given storage.
-fn setup_test_data(storage: &Arc<RwLock<GraphStorage>>) {
+fn setup_test_data(storage: &Arc<RwLock<GraphStorage>>) -> SpaceSummary {
     let mut store = storage.write();
     let mut space = SpaceInfo::new("test".to_string()).with_vid_type(DataType::BigInt);
     store.create_space(&mut space).unwrap();
@@ -92,6 +92,7 @@ fn setup_test_data(storage: &Arc<RwLock<GraphStorage>>) {
         let vertex = Vertex::new(vid, vec![Tag::new("Person".to_string(), props)]);
         store.insert_vertex("test", vertex).unwrap();
     }
+    SpaceSummary::from(&space)
 }
 
 /// Build a test axum router with the SSE streaming endpoint.
@@ -107,7 +108,7 @@ async fn build_sse_app() -> (Router, i64, Arc<RwLock<GraphStorage>>) {
     let storage_rwlock = Arc::new(RwLock::new((*storage).clone()));
 
     // 2. Insert test data
-    setup_test_data(&storage_rwlock);
+    let test_space = setup_test_data(&storage_rwlock);
 
     // 3. GraphService (no background cleanup)
     let config = Config::default();
@@ -121,6 +122,7 @@ async fn build_sse_app() -> (Router, i64, Arc<RwLock<GraphStorage>>) {
         .await
         .expect("session creation");
     let session_id = session.id();
+    session.set_space(test_space);
 
     // 5. TransactionManager (needed for HttpServer::new)
     let txn_manager = Arc::new(TransactionManager::new(TransactionManagerConfig::default()));
@@ -178,7 +180,6 @@ async fn test_sse_successful_query_schema_before_data_and_done() {
         .flat_map(|c| c.iter().copied())
         .map(|b| b as char)
         .collect();
-
     let events = parse_sse_events(&body_str);
     assert!(!events.is_empty(), "Expected at least one SSE event");
 

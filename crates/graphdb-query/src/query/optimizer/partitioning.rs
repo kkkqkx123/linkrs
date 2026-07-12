@@ -5,8 +5,6 @@
 //! guessing a full integer range would silently omit non-numeric or sparse
 //! identifiers.
 
-
-
 use crate::query::optimizer::StatisticsManager;
 use crate::query::planning::plan::{PartitionSource, PartitionSpec, PlanNodeEnum};
 
@@ -24,6 +22,8 @@ pub struct PartitioningConfig {
     /// Maximum worker threads for intra-query parallelism (P8).
     /// 1 means fully serial (P7 fallback).
     pub max_workers: usize,
+    /// Maximum queued chunks per partition worker for P8 backpressure.
+    pub max_buffered_chunks: usize,
 }
 
 impl Default for PartitioningConfig {
@@ -34,6 +34,7 @@ impl Default for PartitioningConfig {
             max_partitions: 1,
             vertex_id_range: None,
             max_workers: 1,
+            max_buffered_chunks: 10,
         }
     }
 }
@@ -84,10 +85,14 @@ impl PartitioningPlanner {
             return Self::fallback("plan contains write operations; partitioning not supported");
         }
         if Self::has_transaction_boundary(root) {
-            return Self::fallback("plan crosses a transaction boundary; partitioning not supported");
+            return Self::fallback(
+                "plan crosses a transaction boundary; partitioning not supported",
+            );
         }
         if Self::has_graph_traversal(root) {
-            return Self::fallback("plan contains recursive graph traversal; partitioning not supported");
+            return Self::fallback(
+                "plan contains recursive graph traversal; partitioning not supported",
+            );
         }
 
         let mut scans = Vec::new();
@@ -170,10 +175,11 @@ impl PartitioningPlanner {
     fn has_transaction_boundary(node: &PlanNodeEnum) -> bool {
         matches!(
             node,
-            PlanNodeEnum::BeginTransaction(_)
-                | PlanNodeEnum::Commit(_)
-                | PlanNodeEnum::Rollback(_)
-        ) || node.children().iter().any(|c| Self::has_transaction_boundary(c))
+            PlanNodeEnum::BeginTransaction(_) | PlanNodeEnum::Commit(_) | PlanNodeEnum::Rollback(_)
+        ) || node
+            .children()
+            .iter()
+            .any(|c| Self::has_transaction_boundary(c))
     }
 
     /// Returns true when the plan tree contains a recursive graph traversal
@@ -241,6 +247,7 @@ mod tests {
             max_partitions: 4,
             vertex_id_range: Some(0i64..10_000),
             max_workers: 1,
+            max_buffered_chunks: 10,
         });
 
         let decision = planner.decide(&tagged_scan(), &stats);
@@ -274,6 +281,7 @@ mod tests {
             max_partitions: 4,
             vertex_id_range: Some(0i64..10_000),
             max_workers: 1,
+            max_buffered_chunks: 10,
         })
     }
 

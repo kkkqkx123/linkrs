@@ -48,6 +48,7 @@ impl StreamingQueryExecutor {
 
         let mut engine = StreamingExecutionEngine::new();
         engine.set_max_workers(context.max_workers);
+        engine.set_max_buffered_chunks(context.max_buffered_chunks);
         engine.register_executor(0, executor);
 
         let runtime = Arc::new(ExecutionRuntime::new(
@@ -82,9 +83,10 @@ impl StreamingQueryExecutor {
 
         let root = match root {
             BuildOutput::Global(executor) => executor,
-            BuildOutput::Local(trees) => {
-                physical_builder::local_to_global(BuildOutput::Local(trees), &mut next_gather_node_id)?
-            }
+            BuildOutput::Local(trees) => physical_builder::local_to_global(
+                BuildOutput::Local(trees),
+                &mut next_gather_node_id,
+            )?,
         };
 
         let runtime = Arc::new(ExecutionRuntime::new(
@@ -97,6 +99,7 @@ impl StreamingQueryExecutor {
         ));
         let mut engine = StreamingExecutionEngine::new();
         engine.set_max_workers(context.max_workers);
+        engine.set_max_buffered_chunks(context.max_buffered_chunks);
         engine.set_runtime(runtime.clone());
         engine.register_partitioned_root(partition_view.partition_count, root)?;
 
@@ -133,10 +136,9 @@ impl StreamingQueryExecutor {
             .engine
             .take()
             .ok_or_else(|| QueryError::execution("Streaming engine not initialized".to_string()))?;
-        let runtime = self
-            .runtime
-            .take()
-            .ok_or_else(|| QueryError::execution("Streaming runtime not initialized".to_string()))?;
+        let runtime = self.runtime.take().ok_or_else(|| {
+            QueryError::execution("Streaming runtime not initialized".to_string())
+        })?;
         let stream = engine.into_stream()?;
         Ok(StreamingQueryResult::new(stream, runtime))
     }

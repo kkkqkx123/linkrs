@@ -142,6 +142,15 @@ pub struct PlanDescription {
     pub execution_mode: String,
     pub execution_mode_reason: String,
     pub partition_spec_description: Option<String>,
+
+    // ── P8 parallel execution profile (populated at runtime) ──
+    pub requested_workers: usize,
+    pub actual_workers: usize,
+    pub parallel_wall_time_us: u64,
+    pub parallel_work_time_us: u64,
+    pub parallel_buffered_chunks_peak: usize,
+    pub parallel_buffered_bytes_peak: usize,
+    pub parallel_fallback_reason: String,
 }
 
 impl PlanDescription {
@@ -154,6 +163,13 @@ impl PlanDescription {
             execution_mode: String::new(),
             execution_mode_reason: String::new(),
             partition_spec_description: None,
+            requested_workers: 1,
+            actual_workers: 1,
+            parallel_wall_time_us: 0,
+            parallel_work_time_us: 0,
+            parallel_buffered_chunks_peak: 0,
+            parallel_buffered_bytes_peak: 0,
+            parallel_fallback_reason: String::new(),
         }
     }
 
@@ -183,5 +199,45 @@ impl PlanDescription {
 impl Default for PlanDescription {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plan_description_p8_fields_defaults() {
+        let desc = PlanDescription::new();
+        assert_eq!(desc.requested_workers, 1);
+        assert_eq!(desc.actual_workers, 1);
+        assert_eq!(desc.parallel_wall_time_us, 0);
+        assert_eq!(desc.parallel_work_time_us, 0);
+        assert_eq!(desc.parallel_buffered_chunks_peak, 0);
+        assert_eq!(desc.parallel_buffered_bytes_peak, 0);
+        assert!(desc.parallel_fallback_reason.is_empty());
+    }
+
+    #[test]
+    fn plan_description_p8_fields_round_trip_serialize() {
+        let mut desc = PlanDescription::new();
+        desc.requested_workers = 4;
+        desc.actual_workers = 2;
+        desc.parallel_wall_time_us = 1000;
+        desc.parallel_work_time_us = 2000;
+        desc.parallel_buffered_chunks_peak = 3;
+        desc.parallel_buffered_bytes_peak = 8192;
+        desc.parallel_fallback_reason = "test fallback".to_string();
+
+        let json = serde_json::to_string(&desc).expect("serialize");
+        let restored: PlanDescription = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(restored.requested_workers, 4);
+        assert_eq!(restored.actual_workers, 2);
+        assert_eq!(restored.parallel_wall_time_us, 1000);
+        assert_eq!(restored.parallel_work_time_us, 2000);
+        assert_eq!(restored.parallel_buffered_chunks_peak, 3);
+        assert_eq!(restored.parallel_buffered_bytes_peak, 8192);
+        assert_eq!(restored.parallel_fallback_reason, "test fallback");
     }
 }

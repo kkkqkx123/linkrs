@@ -11,6 +11,7 @@ use parking_lot::RwLock;
 use crate::core::error::{DBError, DBResult as ExecutorDBResult, QueryError};
 use crate::core::Value;
 use crate::query::executor::base::{BaseExecutor, ExecutionResult, Executor, ExecutorStats};
+use crate::query::executor::streaming::runtime::ExecutionRuntime;
 use crate::query::executor::streaming::StreamingQueryExecutor;
 use crate::query::parser::ast::stmt::ExplainFormat;
 use crate::query::planning::plan::explain::{DescribeVisitor, PlanDescription, ProfilingStats};
@@ -61,7 +62,11 @@ impl<S: StorageClient + Send + 'static> ProfileExecutor<S> {
     /// Execute the inner plan with full instrumentation
     fn execute_profiled(
         &mut self,
-    ) -> ExecutorDBResult<(ExecutionResult, Arc<ExecutionStatsContext>)> {
+    ) -> ExecutorDBResult<(
+        ExecutionResult,
+        Arc<ExecutionStatsContext>,
+        Option<Arc<ExecutionRuntime>>,
+    )> {
         let stats_context = Arc::new(ExecutionStatsContext::new());
         let start = Instant::now();
 
@@ -75,10 +80,16 @@ impl<S: StorageClient + Send + 'static> ProfileExecutor<S> {
             exec_context.storage = Some(dyn_storage);
         }
 
+        // Propagate max_workers/max_buffered_chunks from plan to context
+        exec_context.max_workers = self.inner_plan.max_workers.max(1);
+        exec_context.max_buffered_chunks = self.inner_plan.max_buffered_chunks.max(1);
+
         let mut streaming_executor = StreamingQueryExecutor::new();
         streaming_executor
             .from_plan_node(root_node, &exec_context)
             .map_err(DBError::from)?;
+
+        let runtime = streaming_executor.runtime().cloned();
 
         let result = streaming_executor.execute().map_err(DBError::from)?;
 
@@ -92,7 +103,7 @@ impl<S: StorageClient + Send + 'static> ProfileExecutor<S> {
         stats_context.on_node_complete(root_node.id(), executor_stats);
         stats_context.record_global_execution_time(exec_time_us);
 
-        Ok((result, stats_context))
+        Ok((result, stats_context, runtime))
     }
 
     /// Attach execution statistics to plan description
@@ -186,8 +197,35 @@ impl<S: StorageClient + Send + 'static> ProfileExecutor<S> {
             operator_info.push(Value::String(info));
         }
 
+        // Add P8 parallel profile as a summary row
+        let parallel_info = if plan_desc.actual_workers > 0 {
+            format!(
+                "requested_workers: {}, actual_workers: {}, wall_time: {}us, work_time: {}us, buffered_chunks_peak: {}, buffered_bytes_peak: {}",
+                plan_desc.requested_workers,
+                plan_desc.actual_workers,
+                plan_desc.parallel_wall_time_us,
+                plan_desc.parallel_work_time_us,
+                plan_desc.parallel_buffered_chunks_peak,
+                plan_desc.parallel_buffered_bytes_peak,
+            )
+        } else if !plan_desc.parallel_fallback_reason.is_empty() {
+            format!(
+                "requested_workers: {}, fallback: {}",
+                plan_desc.requested_workers,
+                plan_desc.parallel_fallback_reason,
+            )
+        } else {
+            format!("requested_workers: {}, serial only", plan_desc.requested_workers)
+        };
+        ids.push(Value::BigInt(-1));
+        names.push(Value::String("Parallel".to_string()));
+        dependencies.push(Value::String(String::new()));
+        profiling_data.push(Value::String(String::new()));
+        operator_info.push(Value::String(parallel_info));
+
         let _global_stats = stats_context.get_global_stats();
 
+        let total_rows = plan_desc.plan_node_descs.len() + 1; // +1 for parallel row
         DataSet {
             col_names: vec![
                 "id".to_string(),
@@ -196,11 +234,8 @@ impl<S: StorageClient + Send + 'static> ProfileExecutor<S> {
                 "profiling_data".to_string(),
                 "operator_info".to_string(),
             ],
-            rows: plan_desc
-                .plan_node_descs
-                .iter()
-                .enumerate()
-                .map(|(i, _)| {
+            rows: (0..total_rows)
+                .map(|i| {
                     use crate::core::value::NullType;
                     vec![
                         ids.get(i)
@@ -232,10 +267,28 @@ impl<S: StorageClient + Send + 'static> ProfileExecutor<S> {
 impl<S: StorageClient + Send + 'static> Executor<S> for ProfileExecutor<S> {
     fn execute(&mut self) -> ExecutorDBResult<ExecutionResult> {
         let start = Instant::now();
-        let (_exec_result, stats_context) = self.execute_profiled()?;
+        let (_exec_result, stats_context, runtime) = self.execute_profiled()?;
         let execution_time_ms = start.elapsed().as_micros() as f64 / 1000.0;
 
         let mut plan_desc = self.generate_plan_description()?;
+
+        // Merge P8 parallel profile data from the execution runtime
+        plan_desc.requested_workers = self.inner_plan.max_workers;
+        if let Some(ref rt) = runtime {
+            let profile = rt.profile().lock();
+            let (wall_us, work_us, workers, chunks_peak, bytes_peak) =
+                profile.parallel_profile();
+            plan_desc.actual_workers = workers;
+            plan_desc.parallel_wall_time_us = wall_us;
+            plan_desc.parallel_work_time_us = work_us;
+            plan_desc.parallel_buffered_chunks_peak = chunks_peak;
+            plan_desc.parallel_buffered_bytes_peak = bytes_peak;
+        }
+        if plan_desc.actual_workers == 0 && plan_desc.requested_workers > 1 {
+            plan_desc.parallel_fallback_reason =
+                "serial fallback (P8 not activated)".to_string();
+        }
+
         let node_stats = stats_context.collect_stats();
         self.attach_execution_stats(&mut plan_desc, &node_stats);
 

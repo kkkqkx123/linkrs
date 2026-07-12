@@ -64,6 +64,12 @@ pub struct ProfileCollector {
     pub parallel_wall_time_us: u64,
     /// Sum of per-worker execution time (may exceed wall time, P8).
     pub parallel_work_time_us: u64,
+    /// Maximum number of P8 workers used by any coordinator in this query.
+    pub parallel_workers: usize,
+    /// Peak number of chunks retained in P8 output queues.
+    pub parallel_buffered_chunks_peak: usize,
+    /// Peak accounted bytes retained in P8 output queues.
+    pub parallel_buffered_bytes_peak: usize,
 }
 
 impl ProfileCollector {
@@ -89,6 +95,18 @@ impl ProfileCollector {
     pub fn record_operator_profile(&mut self, profile: OperatorProfile) {
         let key = OperatorProfileKey::new(profile.node_id, profile.partition_id);
         self.operators.insert(key, profile);
+    }
+
+    /// Return a snapshot of the P8 parallel profile fields for
+    /// EXPLAIN / PROFILE output.
+    pub fn parallel_profile(&self) -> (u64, u64, usize, usize, usize) {
+        (
+            self.parallel_wall_time_us,
+            self.parallel_work_time_us,
+            self.parallel_workers,
+            self.parallel_buffered_chunks_peak,
+            self.parallel_buffered_bytes_peak,
+        )
     }
 
     /// Aggregate profiles from partition execution into this collector.

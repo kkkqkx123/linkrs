@@ -357,6 +357,13 @@ pub struct ExecutionPlan {
     /// Optional physical partition layout. A layout is consumed only by a
     /// partition-safe streaming plan; unsupported plans fail explicitly.
     pub partition_spec: Option<PartitionSpec>,
+
+    /// Maximum worker threads for intra-query parallelism (P8).
+    /// 1 means fully serial. Propagated from PartitioningConfig.
+    pub max_workers: usize,
+
+    /// Per-partition output channel capacity for P8 backpressure.
+    pub max_buffered_chunks: usize,
 }
 
 impl ExecutionPlan {
@@ -364,12 +371,14 @@ impl ExecutionPlan {
     pub fn new(root: Option<PlanNodeEnum>) -> Self {
         Self {
             root,
-            id: -1, // This will be allocated later on.
+            id: -1,
             optimize_time_in_us: 0,
             format: "default".to_string(),
             execution_mode: ExecutionMode::default(),
             execution_mode_reason: "default".to_string(),
             partition_spec: None,
+            max_workers: 1,
+            max_buffered_chunks: 10,
         }
     }
 
@@ -431,6 +440,14 @@ impl ExecutionPlan {
 
     pub fn partition_spec(&self) -> Option<&PartitionSpec> {
         self.partition_spec.as_ref()
+    }
+
+    pub fn set_max_workers(&mut self, max_workers: usize) {
+        self.max_workers = max_workers;
+    }
+
+    pub fn set_max_buffered_chunks(&mut self, max_buffered_chunks: usize) {
+        self.max_buffered_chunks = max_buffered_chunks;
     }
 
     /// Calculate the number of nodes in the plan.
@@ -787,6 +804,22 @@ mod tests {
             "Expected GlobalBinary for non-hash join, got {:?}",
             physical.root()
         );
+    }
+
+    #[test]
+    fn execution_plan_max_workers_defaults() {
+        let plan = ExecutionPlan::new(None);
+        assert_eq!(plan.max_workers, 1);
+        assert_eq!(plan.max_buffered_chunks, 10);
+    }
+
+    #[test]
+    fn execution_plan_set_max_workers() {
+        let mut plan = ExecutionPlan::new(None);
+        plan.set_max_workers(4);
+        plan.set_max_buffered_chunks(20);
+        assert_eq!(plan.max_workers, 4);
+        assert_eq!(plan.max_buffered_chunks, 20);
     }
 
     #[test]
