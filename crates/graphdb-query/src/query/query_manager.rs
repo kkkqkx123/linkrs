@@ -96,6 +96,7 @@ pub struct QueryStats {
 }
 
 /// Query Manager
+#[derive(Debug)]
 pub struct QueryManager {
     queries: DashMap<i64, QueryInfo>,
     next_query_id: AtomicI64,

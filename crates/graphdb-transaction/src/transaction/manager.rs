@@ -238,6 +238,10 @@ impl TransactionManager {
     }
 
     /// Start a new insert transaction
+    ///
+    /// Multiple insert transactions can be active concurrently.
+    /// Conflict detection is performed by `check_write_set_conflict()`
+    /// based on actual write set overlaps, not at transaction start time.
     pub fn begin_insert_transaction(
         &self,
         options: TransactionOptions,
@@ -253,10 +257,6 @@ impl TransactionManager {
         let active_count = self.active_transactions.len();
         if active_count >= self.config.max_concurrent_transactions {
             return Err(TransactionError::too_many_transactions());
-        }
-
-        if self.has_active_write_transaction() {
-            return Err(TransactionError::write_transaction_conflict());
         }
 
         let txn_id = TransactionId(self.id_generator.fetch_add(1, Ordering::SeqCst));
@@ -326,10 +326,11 @@ impl TransactionManager {
 
     /// Check for write-set based conflicts with active transactions
     ///
-    /// This method checks if a transaction's write set conflicts with any active write transactions.
-    /// Returns Ok(()) if no conflicts, or Err if conflicts are detected.
+    /// This method checks if a transaction's write set conflicts with any other
+    /// write transactions that have already passed validation.
+    /// After a successful check, the transaction is marked as validated.
     ///
-    /// Note: This is a check-at-call-time method for dynamic conflict detection.
+    /// Returns Ok(()) if no conflicts, or Err if conflicts are detected.
     pub fn check_write_set_conflict(&self, txn_id: TransactionId) -> Result<(), TransactionError> {
         let ctx = self
             .active_transactions
@@ -356,11 +357,16 @@ impl TransactionManager {
                 continue;
             }
 
+            if !other_ctx.is_write_validated() {
+                continue;
+            }
+
             if ctx.has_write_conflict_with(other_ctx) {
                 return Err(TransactionError::write_transaction_conflict());
             }
         }
 
+        ctx.mark_write_validated();
         Ok(())
     }
 

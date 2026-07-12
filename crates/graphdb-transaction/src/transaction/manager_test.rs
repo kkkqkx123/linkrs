@@ -548,44 +548,51 @@ fn test_check_write_set_conflict_no_conflict() {
         .expect("Failed to commit txn2");
 }
 
-#[test]
-fn test_check_write_set_conflict_with_conflict() {
-    use crate::core::types::VertexId;
+    #[test]
+    fn test_check_write_set_conflict_with_conflict() {
+        use crate::core::types::VertexId;
 
-    let manager = create_test_manager();
+        let manager = create_test_manager();
 
-    // Create two write transactions with same vertex writes
-    let txn1 = manager
-        .begin_insert_transaction(TransactionOptions::default())
-        .expect("Failed to begin txn1");
+        // Create two write transactions with same vertex writes
+        let txn1 = manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .expect("Failed to begin txn1");
 
-    let txn2 = manager
-        .begin_insert_transaction(TransactionOptions::default())
-        .expect("Failed to begin txn2");
+        let txn2 = manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .expect("Failed to begin txn2");
 
-    // Record same vertex write
-    let ctx1 = manager.get_context(txn1).expect("Failed to get context 1");
-    let ctx2 = manager.get_context(txn2).expect("Failed to get context 2");
+        // Record same vertex write
+        let ctx1 = manager.get_context(txn1).expect("Failed to get context 1");
+        let ctx2 = manager.get_context(txn2).expect("Failed to get context 2");
 
-    let vid = VertexId::from_int64(1);
+        let vid = VertexId::from_int64(1);
 
-    ctx1.record_vertex_write(vid);
-    ctx2.record_vertex_write(vid);
+        ctx1.record_vertex_write(vid);
+        ctx2.record_vertex_write(vid);
 
-    // Check conflict - should fail because writes are on same vertex
-    let conflict_check = manager.check_write_set_conflict(txn1);
-    assert!(
-        conflict_check.is_err(),
-        "Should detect conflict for same vertex"
-    );
+        // txn1 checks first and passes (first-writer-wins)
+        let conflict_check1 = manager.check_write_set_conflict(txn1);
+        assert!(
+            conflict_check1.is_ok(),
+            "First transaction should pass conflict check"
+        );
 
-    manager
-        .commit_transaction(txn1)
-        .expect("Failed to commit txn1");
-    manager
-        .commit_transaction(txn2)
-        .expect("Failed to commit txn2");
-}
+        // txn2 checks second and fails (conflicts with validated txn1)
+        let conflict_check2 = manager.check_write_set_conflict(txn2);
+        assert!(
+            conflict_check2.is_err(),
+            "Second transaction should detect conflict with first"
+        );
+
+        manager
+            .commit_transaction(txn1)
+            .expect("Failed to commit txn1");
+        manager
+            .commit_transaction(txn2)
+            .expect("Failed to commit txn2");
+    }
 
 #[test]
 fn test_read_insert_transaction_types() {

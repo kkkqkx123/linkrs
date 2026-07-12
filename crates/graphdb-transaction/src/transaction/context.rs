@@ -62,6 +62,8 @@ pub struct TransactionContext {
     two_phase_enabled: bool,
     /// Write set for conflict detection
     write_set: Mutex<WriteSet>,
+    /// Whether this transaction has passed write set conflict validation
+    write_validated: AtomicCell<bool>,
 }
 
 impl fmt::Debug for TransactionContext {
@@ -163,6 +165,7 @@ impl TransactionContext {
             undo_logs: RwLock::new(UndoLogManager::new()),
             two_phase_enabled: config.two_phase_commit,
             write_set: Mutex::new(WriteSet::new()),
+            write_validated: AtomicCell::new(false),
         }
     }
 
@@ -194,6 +197,7 @@ impl TransactionContext {
             undo_logs: RwLock::new(UndoLogManager::new()),
             two_phase_enabled: config.two_phase_commit,
             write_set: Mutex::new(WriteSet::new()),
+            write_validated: AtomicCell::new(false),
         }
     }
 
@@ -337,6 +341,16 @@ impl TransactionContext {
     /// Get write set size (number of modified entities)
     pub fn write_set_size(&self) -> usize {
         self.write_set.lock().size()
+    }
+
+    /// Mark this transaction as having passed write set validation
+    pub fn mark_write_validated(&self) {
+        self.write_validated.store(true);
+    }
+
+    /// Check if this transaction has passed write set validation
+    pub fn is_write_validated(&self) -> bool {
+        self.write_validated.load()
     }
 
     /// Check if this transaction's write set conflicts with another

@@ -21,6 +21,8 @@ pub mod executor;
 pub mod factory;
 pub mod helpers;
 pub mod join_helpers;
+mod physical_builder;
+pub mod result_utils;
 pub mod operator_base;
 pub mod operators;
 pub mod parallel_safety;
@@ -36,11 +38,12 @@ pub use chunk::DataChunk;
 pub use driver::ExecutorDriver;
 pub use engine::StreamingExecutionEngine;
 pub use executor::StreamingExecutor;
-pub use factory::{chunks_to_execution_result, convert_chunks_to_dataset, StreamingQueryExecutor};
+pub use factory::StreamingQueryExecutor;
+pub use result_utils::{chunks_to_execution_result, convert_chunks_to_dataset};
 pub use partition::PartitionView;
 pub use runtime::{
-    ExecutionRuntime, OperatorProfile, OperatorProfileKey, ProfileCollector, QueryIdentity,
-    ResourceOwner,
+    ExecutionRuntime, OperatorProfile, OperatorProfileKey, ProfileCollector, QueryFinishGuard,
+    QueryIdentity, ResourceOwner,
 };
 pub use slot::{
     combine_layouts, combine_layouts_with_dedup, SlotId, SlotInfo, SlotLayout, SlotOrigin,

@@ -25,6 +25,12 @@ pub struct StreamingQueryResult {
 
 impl Drop for StreamingQueryResult {
     fn drop(&mut self) {
+        // A streaming result is routinely cloned between the API task and the
+        // blocking producer. Deregistration must happen only after the final
+        // handle is gone; otherwise KILL QUERY can no longer find active work.
+        if Arc::strong_count(&self.inner) != 1 {
+            return;
+        }
         if self.dropped.swap(true, Ordering::Relaxed) {
             return;
         }
@@ -324,11 +330,14 @@ mod tests {
             fired_clone.store(true, Ordering::Relaxed);
         }));
         drop(result);
-        assert!(fired.load(Ordering::Relaxed), "on_drop must fire when handle is dropped");
+        assert!(
+            fired.load(Ordering::Relaxed),
+            "on_drop must fire when handle is dropped"
+        );
     }
 
     #[test]
-    fn test_on_drop_fires_only_once_with_multiple_clones() {
+    fn test_on_drop_waits_for_the_last_clone() {
         let result = create_test_stream(5);
         let call_count = Arc::new(AtomicBool::new(false));
         let count_clone = call_count.clone();
@@ -339,13 +348,24 @@ mod tests {
         let r2 = result.clone();
         let r3 = r2.clone();
 
-        // Drop all clones — callback should fire exactly once.
+        // Intermediate handles must not deregister an active stream.
         drop(r2);
-        assert!(call_count.load(Ordering::Relaxed), "on_drop must fire when first clone drops");
+        assert!(
+            !call_count.load(Ordering::Relaxed),
+            "on_drop must wait for the last handle"
+        );
 
-        // Second and third drops must not panic or double-fire.
         drop(r3);
+        assert!(
+            !call_count.load(Ordering::Relaxed),
+            "on_drop must wait for the last handle"
+        );
+
         drop(result);
+        assert!(
+            call_count.load(Ordering::Relaxed),
+            "on_drop must fire when the final handle is dropped"
+        );
     }
 
     #[test]

@@ -24,7 +24,14 @@ struct Bucket {
     left_rows: Vec<Vec<Value>>,
     right_rows: Vec<Vec<Value>>,
     right_hash: Option<HashMap<Vec<Value>, Vec<usize>>>,
-    current_probe_index: usize,
+    /// Index of the current left row being probed.
+    current_left_index: usize,
+    /// For hash-key join: offset within the current left row's matching_indices
+    /// that have already been emitted.  None means start from the beginning.
+    current_match_offset: Option<usize>,
+    /// For cross join (no keys): the next right row index to process for the
+    /// current left row.
+    current_right_index: usize,
 }
 
 #[derive(Debug)]
@@ -65,7 +72,9 @@ impl HashShuffleJoinOperator {
                 left_rows: Vec::new(),
                 right_rows: Vec::new(),
                 right_hash: None,
-                current_probe_index: 0,
+                current_left_index: 0,
+                current_match_offset: None,
+                current_right_index: 0,
             });
         }
         Self {
@@ -193,7 +202,9 @@ impl HashShuffleJoinOperator {
         bucket.left_rows.clear();
         bucket.right_rows.clear();
         bucket.right_hash = None;
-        bucket.current_probe_index = 0;
+        bucket.current_left_index = 0;
+        bucket.current_match_offset = None;
+        bucket.current_right_index = 0;
     }
 
     fn process_bucket_chunked(&mut self, bucket_idx: usize) -> Result<Option<DataChunk>, QueryError> {
@@ -211,36 +222,44 @@ impl HashShuffleJoinOperator {
         let right_width = self.right_schema.len();
         let mut chunk_rows = Vec::with_capacity(CHUNK_SIZE);
 
-        while bucket.current_probe_index < bucket.left_rows.len() {
-            let left_row = &bucket.left_rows[bucket.current_probe_index];
+        while bucket.current_left_index < bucket.left_rows.len() {
+            let left_row = &bucket.left_rows[bucket.current_left_index];
 
             if self.left_key_expressions.is_empty() {
-                for right_row in &bucket.right_rows {
+                // Cross join path: iterate right rows starting from saved cursor.
+                while bucket.current_right_index < bucket.right_rows.len() {
+                    let right_row = &bucket.right_rows[bucket.current_right_index];
                     if Self::check_condition(&self.join_condition, left_row, right_row, &self.left_schema, &self.right_schema)? {
                         let mut joined = left_row.clone();
                         joined.extend(right_row.clone());
                         chunk_rows.push(joined);
                         if chunk_rows.len() >= CHUNK_SIZE {
                             let layout = build_combined_layout_from_schemas(&self.left_schema, &self.right_schema);
-                            bucket.current_probe_index += 1;
+                            bucket.current_right_index += 1;
                             return Ok(Some(DataChunk::new_with_layout(chunk_rows, layout)));
                         }
                     }
+                    bucket.current_right_index += 1;
                 }
+                // All right rows processed for this left row.
                 if self.join_kind == HashJoinKind::Left && bucket.right_rows.is_empty() {
                     let mut joined = left_row.clone();
                     joined.extend(vec![Value::Null(crate::core::value::NullType::Null); right_width]);
                     chunk_rows.push(joined);
                     if chunk_rows.len() >= CHUNK_SIZE {
                         let layout = build_combined_layout_from_schemas(&self.left_schema, &self.right_schema);
-                        bucket.current_probe_index += 1;
+                        bucket.current_left_index += 1;
+                        bucket.current_right_index = 0;
                         return Ok(Some(DataChunk::new_with_layout(chunk_rows, layout)));
                     }
                 }
+                bucket.current_right_index = 0;
             } else if let Some(hash) = bucket.right_hash.as_ref() {
                 let probe_key = evaluate_join_key(left_row, &self.left_schema, &self.left_key_expressions)?;
                 if let Some(matching_indices) = hash.get(&probe_key) {
-                    for &right_idx in matching_indices {
+                    let start_offset = bucket.current_match_offset.unwrap_or(0);
+                    for i in start_offset..matching_indices.len() {
+                        let &right_idx = &matching_indices[i];
                         let right_row = &bucket.right_rows[right_idx];
                         if Self::check_condition(&self.join_condition, left_row, right_row, &self.left_schema, &self.right_schema)? {
                             let mut joined = left_row.clone();
@@ -248,18 +267,20 @@ impl HashShuffleJoinOperator {
                             chunk_rows.push(joined);
                             if chunk_rows.len() >= CHUNK_SIZE {
                                 let layout = build_combined_layout_from_schemas(&self.left_schema, &self.right_schema);
-                                bucket.current_probe_index += 1;
+                                bucket.current_match_offset = Some(i + 1);
                                 return Ok(Some(DataChunk::new_with_layout(chunk_rows, layout)));
                             }
                         }
                     }
+                    // All match indices processed for this left row.
+                    bucket.current_match_offset = None;
                 } else if self.join_kind == HashJoinKind::Left {
                     let mut joined = left_row.clone();
                     joined.extend(vec![Value::Null(crate::core::value::NullType::Null); right_width]);
                     chunk_rows.push(joined);
                     if chunk_rows.len() >= CHUNK_SIZE {
                         let layout = build_combined_layout_from_schemas(&self.left_schema, &self.right_schema);
-                        bucket.current_probe_index += 1;
+                        bucket.current_left_index += 1;
                         return Ok(Some(DataChunk::new_with_layout(chunk_rows, layout)));
                     }
                 }
@@ -269,12 +290,12 @@ impl HashShuffleJoinOperator {
                 chunk_rows.push(joined);
                 if chunk_rows.len() >= CHUNK_SIZE {
                     let layout = build_combined_layout_from_schemas(&self.left_schema, &self.right_schema);
-                    bucket.current_probe_index += 1;
+                    bucket.current_left_index += 1;
                     return Ok(Some(DataChunk::new_with_layout(chunk_rows, layout)));
                 }
             }
 
-            bucket.current_probe_index += 1;
+            bucket.current_left_index += 1;
         }
 
         if chunk_rows.is_empty() {

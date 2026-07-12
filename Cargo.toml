@@ -187,6 +187,7 @@ debug = true
 codegen-units = 64
 
 [dev-dependencies]
+futures.workspace = true
 tokio-test = "0.4.4"
 tempfile = "3.23.0"
 criterion = { version = "0.5", features = ["async_tokio"] }

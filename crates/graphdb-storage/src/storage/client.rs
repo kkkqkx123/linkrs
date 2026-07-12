@@ -5,6 +5,7 @@ use crate::core::types::{
     PropertyDef, SpaceInfo, TagInfo, Timestamp, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
 };
 use crate::core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
+use crate::storage::cursor::{EdgeCursor, ScanOptions, VecEdgeCursor, VecVertexCursor, VertexCursor};
 use crate::storage::engine::background_freeze::FreezeStats;
 use crate::storage::engine::graph_storage::context::ExportedEdgeSnapshotRecord;
 use crate::storage::schema::{LabelVersionHistory, PropertyChange};
@@ -159,6 +160,54 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
         from_version: u64,
         to_version: u64,
     ) -> Result<Vec<PropertyChange>, StorageError>;
+
+    // ── Cursor-based scan methods ──
+
+    /// Create a lazy vertex scan cursor.
+    ///
+    /// The default implementation falls back to the Vec-backed cursor.
+    /// Storage engines that support lazy iteration should override this
+    /// to return a native cursor.
+    fn create_vertex_cursor(
+        &self,
+        space: &str,
+        options: &ScanOptions,
+    ) -> Result<Box<dyn VertexCursor>, StorageError> {
+        let mut vertices = self.scan_vertices(space)?;
+        if let Some(range) = &options.vertex_id_range {
+            vertices.retain(|v| v.id >= range.start && v.id < range.end);
+        }
+        if let Some(limit) = options.limit {
+            vertices.truncate(limit);
+        }
+        Ok(Box::new(VecVertexCursor::new(vertices)))
+    }
+
+    /// Create a lazy edge scan cursor.
+    ///
+    /// The default implementation falls back to the Vec-backed cursor.
+    /// Storage engines that support lazy iteration should override this
+    /// to return a native cursor.
+    fn create_edge_cursor(
+        &self,
+        space: &str,
+        options: &ScanOptions,
+    ) -> Result<Box<dyn EdgeCursor>, StorageError> {
+        let mut edges = if let Some(ref et) = options.edge_type {
+            self.scan_edges_by_type(space, et)?
+        } else {
+            self.scan_all_edges(space)?
+        };
+        if let Some(range) = &options.edge_src_id_range {
+            edges.retain(|e| {
+                e.src.to_string().parse::<i64>().is_ok_and(|id| id >= range.start && id < range.end)
+            });
+        }
+        if let Some(limit) = options.limit {
+            edges.truncate(limit);
+        }
+        Ok(Box::new(VecEdgeCursor::new(edges)))
+    }
 }
 
 /// Write operations for vertex and edge data.

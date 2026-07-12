@@ -10,7 +10,6 @@
 use std::sync::Arc;
 
 use super::chunk::DataChunk;
-use super::coordinator::try_execute_partitions_parallel;
 use super::driver::ExecutorDriver;
 use super::executor::{SortDirection, StreamingExecutor};
 use super::operator_base::OperatorBase;
@@ -65,8 +64,11 @@ impl StreamingExecutionEngine {
     }
 
     /// Set the maximum number of worker threads for intra-query parallelism.
-    pub fn set_max_workers(&mut self, max_workers: usize) {
-        self.max_workers = max_workers;
+    ///
+    /// ⚠️  P8 parallel coordinator is experimental and not production-safe.
+    /// `max_workers` is forcibly capped at 1 regardless of input.
+    pub fn set_max_workers(&mut self, _max_workers: usize) {
+        self.max_workers = 1;
     }
 
     /// Returns the maximum number of worker threads.
@@ -494,27 +496,11 @@ impl StreamingExecutionEngine {
 
     /// Execute all partition executors sequentially.
     ///
-    /// The parallel path (`try_execute_partitions_parallel`) is never
-    /// taken because `self.max_workers` defaults to 1 and the
-    /// coordinator returns `Ok(None)` when `max_workers <= 1`.  This
-    /// is intentional: the coordinator is experimental and not safe
-    /// for production (see `coordinator.rs`).
+    /// ⚠️  The parallel path (`try_execute_partitions_parallel`) has
+    /// been removed from this production path.  The coordinator is
+    /// experimental and not safe for production (see `coordinator.rs`).
+    /// All partitions run sequentially in a single thread.
     fn execute_partitions(&mut self) -> Result<Vec<DataChunk>, QueryError> {
-        // Try parallel execution via rayon when a runtime is attached.
-        if let Some(ref rt) = self.runtime {
-            if let Some((chunks, profile)) =
-                try_execute_partitions_parallel(&mut self.partition_executors, rt.clone(), self.max_workers)?
-            {
-                if profile.wall_time_us > 0 {
-                    let mut p = rt.profile().lock();
-                    p.parallel_wall_time_us = p.parallel_wall_time_us.saturating_add(profile.wall_time_us);
-                    p.parallel_work_time_us = p.parallel_work_time_us.saturating_add(profile.work_time_us);
-                }
-                return Ok(chunks);
-            }
-        }
-
-        // Sequential fallback.
         let mut all_chunks = Vec::new();
         for executor in &mut self.partition_executors {
             if let Some(ref rt) = self.runtime {

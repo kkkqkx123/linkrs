@@ -28,13 +28,13 @@ impl WriteSetAnalyzer {
         let vertex_overlap = ws1.vertices.intersection(&ws2.vertices).count();
         let edge_overlap = ws1.edges.intersection(&ws2.edges).count();
 
-        let total_entities = ws1.size() + ws2.size();
-        if total_entities == 0 {
+        let max_size = ws1.size().max(ws2.size());
+        if max_size == 0 {
             return 0.0;
         }
 
         let overlap_count = vertex_overlap + edge_overlap;
-        (overlap_count as f64) / (total_entities as f64)
+        (overlap_count as f64) / (max_size as f64)
     }
 
     /// Check if conflict is due to vertex modification

@@ -34,7 +34,8 @@ pub use client::{
     StorageWriter,
 };
 pub use cursor::{
-    open_edge_scan, open_vertex_scan, EdgeCursor, VecEdgeCursor, VecVertexCursor, VertexCursor,
+    open_edge_scan, open_vertex_scan, EdgeCursor, ScanOptions, ScanTarget, VecEdgeCursor,
+    VecVertexCursor, VertexCursor,
 };
 pub use engine::config::PropertyGraphConfig;
 pub use engine::graph_storage::GraphStorage;

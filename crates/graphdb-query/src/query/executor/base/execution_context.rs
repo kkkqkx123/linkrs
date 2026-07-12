@@ -36,9 +36,16 @@ pub struct ExecutionContext {
     pub max_workers: usize,
     /// Server-assigned query ID for KILL QUERY / cancellation support.
     pub query_id: u64,
+    /// Streaming chunk size (rows per chunk).
+    pub chunk_size: usize,
+    /// Maximum buffered chunks before back-pressure.
+    pub max_buffered_chunks: usize,
 }
 
 impl ExecutionContext {
+    pub const DEFAULT_CHUNK_SIZE: usize = 1024;
+    pub const DEFAULT_MAX_BUFFERED_CHUNKS: usize = 10;
+
     pub fn new(expression_context: Arc<ExpressionAnalysisContext>) -> Self {
         Self {
             results: Arc::new(RwLock::new(HashMap::new())),
@@ -56,6 +63,8 @@ impl ExecutionContext {
             memory_budget: MemoryBudget::default_budget(),
             max_workers: 1,
             query_id: 0,
+            chunk_size: Self::DEFAULT_CHUNK_SIZE,
+            max_buffered_chunks: Self::DEFAULT_MAX_BUFFERED_CHUNKS,
         }
     }
 
@@ -79,6 +88,8 @@ impl ExecutionContext {
             memory_budget: MemoryBudget::default_budget(),
             max_workers: 1,
             query_id: 0,
+            chunk_size: Self::DEFAULT_CHUNK_SIZE,
+            max_buffered_chunks: Self::DEFAULT_MAX_BUFFERED_CHUNKS,
         }
     }
 
@@ -101,6 +112,42 @@ impl ExecutionContext {
             memory_budget: MemoryBudget::default_budget(),
             max_workers: 1,
             query_id: 0,
+            chunk_size: Self::DEFAULT_CHUNK_SIZE,
+            max_buffered_chunks: Self::DEFAULT_MAX_BUFFERED_CHUNKS,
+        }
+    }
+
+    /// Create a context with memory limit configured from a config value.
+    ///
+    /// When `max_memory_per_query` is non-zero it overrides the default
+    /// 512 MiB budget; otherwise the default is used.
+    pub fn with_memory_limit(
+        expression_context: Arc<ExpressionAnalysisContext>,
+        max_memory_per_query: u64,
+    ) -> Self {
+        let budget = if max_memory_per_query > 0 {
+            MemoryBudget::new(max_memory_per_query as usize)
+        } else {
+            MemoryBudget::default_budget()
+        };
+        Self {
+            results: Arc::new(RwLock::new(HashMap::new())),
+            variables: Arc::new(RwLock::new(HashMap::new())),
+            expression_context,
+            #[cfg(feature = "fulltext-search")]
+            search_engine: None,
+            #[cfg(feature = "fulltext-search")]
+            fulltext_manager: None,
+            #[cfg(feature = "qdrant")]
+            vector_coordinator: None,
+            storage: None,
+            space_name: None,
+            parameters: Arc::new(HashMap::new()),
+            memory_budget: budget,
+            max_workers: 1,
+            query_id: 0,
+            chunk_size: Self::DEFAULT_CHUNK_SIZE,
+            max_buffered_chunks: Self::DEFAULT_MAX_BUFFERED_CHUNKS,
         }
     }
 
@@ -168,6 +215,8 @@ impl Default for ExecutionContext {
             memory_budget: MemoryBudget::default_budget(),
             max_workers: 1,
             query_id: 0,
+            chunk_size: Self::DEFAULT_CHUNK_SIZE,
+            max_buffered_chunks: Self::DEFAULT_MAX_BUFFERED_CHUNKS,
         }
     }
 }

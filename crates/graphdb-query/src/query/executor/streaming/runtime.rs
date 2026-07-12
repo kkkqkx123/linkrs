@@ -7,6 +7,7 @@ use parking_lot::Mutex;
 
 use crate::core::error::QueryError;
 use crate::query::executor::base::MemoryBudget;
+use crate::query::query_manager::QueryManager;
 
 /// Query identity information
 #[derive(Debug, Clone, Default)]
@@ -158,8 +159,9 @@ impl ResourceOwner {
 
 /// Per-query execution runtime shared across all operators.
 ///
-/// Centralises cancellation, memory tracking, profiling, and resource
-/// lifecycle so that operators do not each carry ad-hoc context.
+/// Centralises cancellation, memory tracking, profiling, resource
+/// lifecycle, and query-registration so that operators do not each
+/// carry ad-hoc context.
 ///
 /// Phase 1: engine-level cancel checking and basic profile tracking.
 /// Future phases add per-operator cancel checking, spill, and full
@@ -178,6 +180,8 @@ pub struct ExecutionRuntime {
     profile: Arc<Mutex<ProfileCollector>>,
     /// Resource owner for cleanup of cursors, temp files, etc.
     resource_owner: Arc<Mutex<ResourceOwner>>,
+    /// Optional reference to the global QueryManager for KILL QUERY.
+    query_manager: Option<Arc<QueryManager>>,
 }
 
 impl ExecutionRuntime {
@@ -190,6 +194,7 @@ impl ExecutionRuntime {
             memory_budget,
             profile: Arc::new(Mutex::new(ProfileCollector::new())),
             resource_owner: Arc::new(Mutex::new(ResourceOwner::new())),
+            query_manager: None,
         }
     }
 
@@ -210,6 +215,21 @@ impl ExecutionRuntime {
     /// real server-side ID before the handle is returned to the caller.
     pub fn assign_query_id(&self, id: u64) {
         self.query_id.lock().query_id = id;
+    }
+
+    /// Attach a QueryManager so that KILL QUERY and finish tracking work.
+    pub fn set_query_manager(&mut self, qm: Arc<QueryManager>) {
+        self.query_manager = Some(qm);
+    }
+
+    /// Register this query with the attached QueryManager and return a
+    /// [`QueryFinishGuard`] that marks it finished on drop.
+    ///
+    /// Returns `None` when no QueryManager is attached (non-fatal).
+    pub fn finish_guard(&self) -> Option<QueryFinishGuard> {
+        let qm = self.query_manager.as_ref()?.clone();
+        let id = self.query_id();
+        Some(QueryFinishGuard::new(qm, id.query_id as i64))
     }
 
     // ── Cancellation ──
@@ -235,8 +255,14 @@ impl ExecutionRuntime {
     }
 
     /// Cancel this query (set the cancel token).
+    ///
+    /// Also marks the query as Killed in the attached QueryManager.
     pub fn cancel(&self) {
         self.cancel_token.store(true, Ordering::Relaxed);
+        if let Some(ref qm) = self.query_manager {
+            let id = self.query_id();
+            let _ = qm.kill_query(id.query_id as i64);
+        }
     }
 
     /// Set or clear a deadline.
@@ -282,6 +308,44 @@ impl ExecutionRuntime {
     /// Release all owned resources.
     pub fn release_resources(&self) {
         self.resource_owner.lock().release_all();
+    }
+}
+
+/// RAII guard that marks a query as finished in the QueryManager on drop.
+///
+/// Created by [`ExecutionRuntime::finish_guard`]. Ensures the query
+/// lifecycle is tracked even when the caller forgets to call finish
+/// explicitly, or when execution panics mid-flight.
+#[derive(Debug)]
+pub struct QueryFinishGuard {
+    query_manager: Arc<QueryManager>,
+    query_id: i64,
+    finished: bool,
+}
+
+impl QueryFinishGuard {
+    pub fn new(query_manager: Arc<QueryManager>, query_id: i64) -> Self {
+        Self {
+            query_manager,
+            query_id,
+            finished: false,
+        }
+    }
+
+    /// Mark the query as finished immediately without waiting for Drop.
+    pub fn finish(&mut self) {
+        if !self.finished {
+            self.finished = true;
+            let _ = self.query_manager.finish_query(self.query_id);
+        }
+    }
+}
+
+impl Drop for QueryFinishGuard {
+    fn drop(&mut self) {
+        if !self.finished {
+            let _ = self.query_manager.finish_query(self.query_id);
+        }
     }
 }
 

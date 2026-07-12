@@ -74,7 +74,8 @@ impl MemoryBudget {
 
     /// Release `bytes` from the budget (called when data is freed).
     pub fn release(&self, bytes: usize) {
-        self.allocated.fetch_sub(bytes, std::sync::atomic::Ordering::Relaxed);
+        self.allocated
+            .fetch_sub(bytes, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Current allocated bytes.
@@ -161,6 +162,109 @@ impl MemoryTracker {
         self.budget.release(self.current_bytes);
         self.current_bytes = 0;
         // peak_bytes intentionally preserved for profile reporting
+    }
+}
+
+/// RAII guard that releases reserved memory when dropped.
+///
+/// Created by [`MemoryBudget::reserve`]. The caller can `forget()` this
+/// guard to transfer release responsibility to an explicit `release()` call.
+#[derive(Debug)]
+pub struct MemoryReservation {
+    budget: MemoryBudget,
+    bytes: usize,
+}
+
+/// Scoped reservation associated with one [`MemoryTracker`].
+///
+/// Unlike [`MemoryReservation`], dropping this guard updates both the
+/// query-wide budget and the per-operator tracker. The mutable borrow keeps
+/// the tracker from being reset while the reservation is still outstanding.
+#[derive(Debug)]
+pub struct MemoryTrackerReservation<'a> {
+    tracker: &'a mut MemoryTracker,
+    bytes: usize,
+}
+
+impl MemoryReservation {
+    fn new(budget: MemoryBudget, bytes: usize) -> Self {
+        Self { budget, bytes }
+    }
+
+    /// Forget the reservation — the memory is not released on drop.
+    ///
+    /// Use when the caller takes over release responsibility (e.g. after
+    /// transferring ownership of the allocated data).
+    pub fn forget(mut self) {
+        self.bytes = 0;
+    }
+
+    /// The amount of memory currently reserved by this guard.
+    pub fn bytes(&self) -> usize {
+        self.bytes
+    }
+}
+
+impl Drop for MemoryReservation {
+    fn drop(&mut self) {
+        if self.bytes > 0 {
+            self.budget.release(self.bytes);
+        }
+    }
+}
+
+impl Drop for MemoryTrackerReservation<'_> {
+    fn drop(&mut self) {
+        if self.bytes > 0 {
+            self.tracker.release(self.bytes);
+        }
+    }
+}
+
+impl MemoryBudget {
+    /// Reserve `bytes` and return a [`MemoryReservation`] guard.
+    ///
+    /// The guard releases the memory on drop.  This is the recommended
+    /// RAII alternative to the raw `try_reserve` / `release` pair.
+    pub fn reserve(&self, bytes: usize) -> Result<MemoryReservation, QueryError> {
+        self.try_reserve(bytes)?;
+        Ok(MemoryReservation::new(self.clone(), bytes))
+    }
+}
+
+impl MemoryTracker {
+    /// Reserve `bytes` through the shared budget and return a scoped
+    /// reservation guard.  Unlike the raw `try_reserve` the guard
+    /// automatically releases on drop, protecting against leaks.
+    pub fn reserve_guarded(
+        &mut self,
+        bytes: usize,
+    ) -> Result<MemoryTrackerReservation<'_>, QueryError> {
+        self.try_reserve(bytes)?;
+        Ok(MemoryTrackerReservation {
+            tracker: self,
+            bytes,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tracked_reservation_releases_budget_and_tracker() {
+        let budget = MemoryBudget::new(64);
+        let mut tracker = MemoryTracker::new(budget.clone());
+
+        {
+            let reservation = tracker.reserve_guarded(32).expect("reserve memory");
+            assert_eq!(reservation.bytes, 32);
+        }
+
+        assert_eq!(budget.current(), 0);
+        assert_eq!(tracker.current(), 0);
+        assert_eq!(tracker.peak(), 32);
     }
 }
 

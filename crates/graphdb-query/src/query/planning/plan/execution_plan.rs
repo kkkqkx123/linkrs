@@ -282,46 +282,16 @@ impl PartitionedPhysicalPlan {
                 join.left_input().clone(),
                 join.right_input().clone(),
             ),
-            PlanNodeEnum::HashInnerJoin(ref join) => {
-                let left = Self::split_node(join.left_input().clone());
-                let right = Self::split_node(join.right_input().clone());
-                if matches!(&left, PartitionedPhysicalNode::Local { .. })
-                    && matches!(&right, PartitionedPhysicalNode::Local { .. })
-                {
-                    PartitionedPhysicalNode::HashJoinExchange {
-                        logical_plan: node,
-                        left: Box::new(left),
-                        right: Box::new(right),
-                        bucket_count: 8,
-                    }
-                } else {
-                    PartitionedPhysicalNode::GlobalBinary {
-                        logical_plan: node,
-                        left: Box::new(left),
-                        right: Box::new(right),
-                    }
-                }
-            }
-            PlanNodeEnum::HashLeftJoin(ref join) => {
-                let left = Self::split_node(join.left_input().clone());
-                let right = Self::split_node(join.right_input().clone());
-                if matches!(&left, PartitionedPhysicalNode::Local { .. })
-                    && matches!(&right, PartitionedPhysicalNode::Local { .. })
-                {
-                    PartitionedPhysicalNode::HashJoinExchange {
-                        logical_plan: node,
-                        left: Box::new(left),
-                        right: Box::new(right),
-                        bucket_count: 8,
-                    }
-                } else {
-                    PartitionedPhysicalNode::GlobalBinary {
-                        logical_plan: node,
-                        left: Box::new(left),
-                        right: Box::new(right),
-                    }
-                }
-            }
+            PlanNodeEnum::HashInnerJoin(ref join) => Self::global_binary(
+                node.clone(),
+                join.left_input().clone(),
+                join.right_input().clone(),
+            ),
+            PlanNodeEnum::HashLeftJoin(ref join) => Self::global_binary(
+                node.clone(),
+                join.left_input().clone(),
+                join.right_input().clone(),
+            ),
             PlanNodeEnum::FullOuterJoin(ref join) => Self::global_binary(
                 node.clone(),
                 join.left_input().clone(),
@@ -734,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn hash_join_exchange_produced_when_both_children_are_local() {
+    fn hash_join_exchange_is_temporarily_disabled_and_falls_back_to_global_binary() {
         use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
         use crate::query::planning::plan::core::nodes::join::join_node::HashInnerJoinNode;
 
@@ -746,9 +716,11 @@ mod tests {
         let physical =
             PartitionedPhysicalPlan::from_logical(PlanNodeEnum::HashInnerJoin(join), spec);
 
+        // HashJoinExchange is disabled pending the chunk-boundary fix (R1).
+        // See streaming_current_remediation_plan.md §P0.
         assert!(
-            matches!(physical.root(), PartitionedPhysicalNode::HashJoinExchange { .. }),
-            "Expected HashJoinExchange when both children are Local, got {:?}",
+            matches!(physical.root(), PartitionedPhysicalNode::GlobalBinary { .. }),
+            "Expected GlobalBinary fallback (HashJoinExchange is disabled), got {:?}",
             physical.root()
         );
     }
@@ -776,7 +748,7 @@ mod tests {
     }
 
     #[test]
-    fn hash_left_join_exchange_produced_when_both_children_are_local() {
+    fn hash_left_join_exchange_is_temporarily_disabled_and_falls_back_to_global_binary() {
         use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
         use crate::query::planning::plan::core::nodes::join::join_node::HashLeftJoinNode;
 
@@ -788,9 +760,11 @@ mod tests {
         let physical =
             PartitionedPhysicalPlan::from_logical(PlanNodeEnum::HashLeftJoin(join), spec);
 
+        // HashJoinExchange is disabled pending the chunk-boundary fix (R1).
+        // See streaming_current_remediation_plan.md §P0.
         assert!(
-            matches!(physical.root(), PartitionedPhysicalNode::HashJoinExchange { .. }),
-            "Expected HashJoinExchange for HashLeftJoin when both children are Local, got {:?}",
+            matches!(physical.root(), PartitionedPhysicalNode::GlobalBinary { .. }),
+            "Expected GlobalBinary fallback (HashJoinExchange is disabled), got {:?}",
             physical.root()
         );
     }

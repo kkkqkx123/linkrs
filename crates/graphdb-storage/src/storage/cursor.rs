@@ -22,6 +22,22 @@ use crate::core::StorageError;
 use crate::storage::StorageClient;
 
 // ---------------------------------------------------------------------------
+// Scan target (type-safe scan intent)
+// ---------------------------------------------------------------------------
+
+/// Identifies what kind of scan is being performed.
+///
+/// Used alongside [`ScanOptions`] to make the scan intent explicit and
+/// catch misconfiguration (e.g. passing `edge_type` with a vertex scan).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScanTarget {
+    Vertex,
+    Edge {
+        edge_type: Option<String>,
+    },
+}
+
+// ---------------------------------------------------------------------------
 // Scan options
 // ---------------------------------------------------------------------------
 
@@ -32,8 +48,6 @@ use crate::storage::StorageClient;
 /// range, and snapshot support.
 #[derive(Debug, Clone, Default)]
 pub struct ScanOptions {
-    /// Optional edge type filter (for edge scans only).
-    pub edge_type: Option<String>,
     /// Maximum number of rows to return (None = unlimited).
     pub limit: Option<usize>,
     /// Batch size for cursor reads.
@@ -45,6 +59,8 @@ pub struct ScanOptions {
     /// Optional edge source ID range filter. Only edges whose source ID
     /// (parsed as `i64`) falls in this range are returned.
     pub edge_src_id_range: Option<std::ops::Range<i64>>,
+    /// Edge type filter (for edge scans only).
+    pub edge_type: Option<String>,
 }
 
 impl ScanOptions {
@@ -57,6 +73,18 @@ impl ScanOptions {
     /// Builder: set edge type filter.
     pub fn with_edge_type(mut self, edge_type: String) -> Self {
         self.edge_type = Some(edge_type);
+        self
+    }
+
+    /// Builder: set vertex ID range filter.
+    pub fn with_vertex_id_range(mut self, range: std::ops::Range<i64>) -> Self {
+        self.vertex_id_range = Some(range);
+        self
+    }
+
+    /// Builder: set edge source ID range filter.
+    pub fn with_edge_src_id_range(mut self, range: std::ops::Range<i64>) -> Self {
+        self.edge_src_id_range = Some(range);
         self
     }
 
@@ -149,8 +177,9 @@ impl EdgeCursor for VecEdgeCursor {
 
 /// Open a vertex scan cursor through a storage client.
 ///
-/// Uses the default Vec-backed cursor unless the client provides a
-/// native cursor implementation.
+/// Prefers the storage engine's native cursor when available (via
+/// [`StorageReader::create_vertex_cursor`]), falling back to the default
+/// Vec-backed cursor.
 ///
 /// When `options.limit` is `Some(n)`, at most `n` vertices are returned.
 pub fn open_vertex_scan(
@@ -159,14 +188,7 @@ pub fn open_vertex_scan(
     options: &ScanOptions,
 ) -> Result<Box<dyn VertexCursor>, StorageError> {
     let reader = storage.read();
-    let mut vertices = reader.scan_vertices(space)?;
-    if let Some(range) = &options.vertex_id_range {
-        vertices.retain(|v| v.id >= range.start && v.id < range.end);
-    }
-    if let Some(limit) = options.limit {
-        vertices.truncate(limit);
-    }
-    Ok(Box::new(VecVertexCursor::new(vertices)))
+    reader.create_vertex_cursor(space, options)
 }
 
 /// Open a vertex scan cursor with a limit.
@@ -183,32 +205,17 @@ pub fn open_vertex_scan_with_limit(
 
 /// Open an edge scan cursor through a storage client.
 ///
-/// Uses the default Vec-backed cursor unless the client provides a
-/// native cursor implementation.
+/// Prefers the storage engine's native cursor when available (via
+/// [`StorageReader::create_edge_cursor`]), falling back to the default
+/// Vec-backed cursor.
 ///
 /// When `options.edge_type` is set, only edges of that type are scanned.
 /// When `options.limit` is `Some(n)`, at most `n` edges are returned.
-///
-/// Phase 3 improvement: `edge_type` from the plan node is now passed
-/// through `ScanOptions` instead of a separate parameter.
 pub fn open_edge_scan(
     storage: &Arc<RwLock<dyn StorageClient>>,
     space: &str,
     options: &ScanOptions,
 ) -> Result<Box<dyn EdgeCursor>, StorageError> {
     let reader = storage.read();
-    let mut edges = if let Some(ref et) = options.edge_type {
-        reader.scan_edges_by_type(space, et)?
-    } else {
-        reader.scan_all_edges(space)?
-    };
-    if let Some(range) = &options.edge_src_id_range {
-        edges.retain(|e| {
-            e.src.to_string().parse::<i64>().is_ok_and(|id| id >= range.start && id < range.end)
-        });
-    }
-    if let Some(limit) = options.limit {
-        edges.truncate(limit);
-    }
-    Ok(Box::new(VecEdgeCursor::new(edges)))
+    reader.create_edge_cursor(space, options)
 }

@@ -30,7 +30,7 @@ use graphdb::transaction::{TransactionManager, TransactionManagerConfig};
 use parking_lot::RwLock;
 use tower::ServiceExt;
 
-use http_body::Body as HttpBody;
+use futures::StreamExt;
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -102,8 +102,7 @@ fn setup_test_data(storage: &Arc<RwLock<GraphStorage>>) {
 async fn build_sse_app() -> (Router, i64, Arc<RwLock<GraphStorage>>) {
     // 1. In-memory storage
     let storage = Arc::new(
-        GraphStorage::new_with_config(PropertyGraphConfig::test())
-            .expect("in-memory storage"),
+        GraphStorage::new_with_config(PropertyGraphConfig::test()).expect("in-memory storage"),
     );
     let storage_rwlock = Arc::new(RwLock::new((*storage).clone()));
 
@@ -174,7 +173,11 @@ async fn test_sse_successful_query_schema_before_data_and_done() {
         .filter_map(|r| async move { r.ok() })
         .collect()
         .await;
-    let body_str: String = chunks.iter().flat_map(|c| c.iter().copied()).map(|b| b as char).collect();
+    let body_str: String = chunks
+        .iter()
+        .flat_map(|c| c.iter().copied())
+        .map(|b| b as char)
+        .collect();
 
     let events = parse_sse_events(&body_str);
     assert!(!events.is_empty(), "Expected at least one SSE event");
@@ -197,11 +200,11 @@ async fn test_sse_successful_query_schema_before_data_and_done() {
     assert_eq!(data_events.len(), 4, "Expected 4 row events");
 
     // Verify row ordering (by name: Alice, Bob, Charlie, Diana)
-    let names: Vec<&str> = data_events
+    let names: Vec<String> = data_events
         .iter()
         .filter_map(|e| {
             let v: serde_json::Value = serde_json::from_str(&e.data).ok()?;
-            v["row"]["n.name"].as_str()
+            v["row"]["n.name"].as_str().map(str::to_owned)
         })
         .collect();
     assert_eq!(names, vec!["Alice", "Bob", "Charlie", "Diana"]);
@@ -219,7 +222,11 @@ async fn test_sse_successful_query_schema_before_data_and_done() {
         .iter()
         .filter(|e| e.event_type == "metadata")
         .collect();
-    assert_eq!(metadata_events.len(), 1, "Expected exactly one metadata event");
+    assert_eq!(
+        metadata_events.len(),
+        1,
+        "Expected exactly one metadata event"
+    );
     let meta: serde_json::Value =
         serde_json::from_str(&metadata_events[0].data).expect("metadata is valid JSON");
     assert_eq!(meta["rows_returned"], 4);
@@ -251,7 +258,11 @@ async fn test_sse_error_query_reports_error_and_done() {
         .filter_map(|r| async move { r.ok() })
         .collect()
         .await;
-    let body_str: String = chunks.iter().flat_map(|c| c.iter().copied()).map(|b| b as char).collect();
+    let body_str: String = chunks
+        .iter()
+        .flat_map(|c| c.iter().copied())
+        .map(|b| b as char)
+        .collect();
 
     let events = parse_sse_events(&body_str);
     assert!(!events.is_empty(), "Expected SSE events on error");
@@ -305,7 +316,11 @@ async fn test_sse_invalid_session_returns_error_and_done() {
         .filter_map(|r| async move { r.ok() })
         .collect()
         .await;
-    let body_str: String = chunks.iter().flat_map(|c| c.iter().copied()).map(|b| b as char).collect();
+    let body_str: String = chunks
+        .iter()
+        .flat_map(|c| c.iter().copied())
+        .map(|b| b as char)
+        .collect();
 
     let events = parse_sse_events(&body_str);
     assert!(!events.is_empty(), "Expected SSE events on invalid session");
@@ -353,7 +368,11 @@ async fn test_sse_row_indices_are_sequential() {
         .filter_map(|r| async move { r.ok() })
         .collect()
         .await;
-    let body_str: String = chunks.iter().flat_map(|c| c.iter().copied()).map(|b| b as char).collect();
+    let body_str: String = chunks
+        .iter()
+        .flat_map(|c| c.iter().copied())
+        .map(|b| b as char)
+        .collect();
 
     let events = parse_sse_events(&body_str);
 
@@ -403,7 +422,11 @@ async fn test_sse_schema_not_sent_for_ddl_statements() {
         .filter_map(|r| async move { r.ok() })
         .collect()
         .await;
-    let body_str: String = chunks.iter().flat_map(|c| c.iter().copied()).map(|b| b as char).collect();
+    let body_str: String = chunks
+        .iter()
+        .flat_map(|c| c.iter().copied())
+        .map(|b| b as char)
+        .collect();
 
     let events = parse_sse_events(&body_str);
     assert!(!events.is_empty(), "Expected at least done event");

@@ -5,6 +5,7 @@
 //! and the low-level storage engine.
 
 pub mod context;
+mod cursor_impl;
 mod index_engine;
 mod index_manager;
 mod ops;
@@ -34,6 +35,7 @@ use crate::storage::engine::background_freeze::{BackgroundFreezeManager, FreezeS
 use crate::storage::engine::graph_storage::context::ExportedEdgeSnapshotRecord;
 use crate::storage::engine::PersistenceConfig;
 use crate::storage::index::IndexGcConfig;
+use crate::storage::cursor::{EdgeCursor, ScanOptions, VertexCursor};
 use crate::storage::{
     StorageAdmin, StorageAuthOps, StorageGcOps, StoragePersistenceOps, StorageReader,
     StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps, StorageStats,
@@ -459,6 +461,32 @@ impl StorageReader for GraphStorage {
     ) -> Result<Vec<crate::storage::PropertyChange>, StorageError> {
         let changes = self.get_edge_schema_changes(space, edge_type, from_version, to_version)?;
         Ok(changes.into_iter().filter(|c| c.is_breaking()).collect())
+    }
+
+    fn create_vertex_cursor(
+        &self,
+        space: &str,
+        options: &ScanOptions,
+    ) -> Result<Box<dyn VertexCursor>, StorageError> {
+        let cursor = cursor_impl::GraphVertexCursor::new(
+            self.ctx.clone(),
+            space.to_string(),
+            options,
+        )?;
+        Ok(Box::new(cursor))
+    }
+
+    fn create_edge_cursor(
+        &self,
+        space: &str,
+        options: &ScanOptions,
+    ) -> Result<Box<dyn EdgeCursor>, StorageError> {
+        let cursor = cursor_impl::GraphEdgeCursor::new(
+            self.ctx.clone(),
+            space,
+            options,
+        )?;
+        Ok(Box::new(cursor))
     }
 }
 
