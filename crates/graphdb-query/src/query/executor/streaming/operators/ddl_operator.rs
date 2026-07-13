@@ -161,7 +161,7 @@ impl DdlOperator {
             | DdlOperator::Analyze { .. }
             | DdlOperator::Migrate { .. } => {
                 input.open()?;
-                base.opened = true;
+                base.lifecycle.mark_opened();
                 Ok(())
             }
         }
@@ -178,7 +178,7 @@ impl DdlOperator {
                 action,
                 space_name,
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Ok(None);
                 }
                 let result = match action.as_str() {
@@ -351,7 +351,7 @@ impl DdlOperator {
                         action
                     ))),
                 };
-                base.opened = false;
+                base.lifecycle.mark_closed();
                 result
             }
 
@@ -362,7 +362,7 @@ impl DdlOperator {
                 tag_name,
                 properties,
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Ok(None);
                 }
                 let result = match action.as_str() {
@@ -507,7 +507,7 @@ impl DdlOperator {
                         action
                     ))),
                 };
-                base.opened = false;
+                base.lifecycle.mark_closed();
                 result
             }
 
@@ -518,7 +518,7 @@ impl DdlOperator {
                 edge_type,
                 properties,
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Ok(None);
                 }
                 let result = match action.as_str() {
@@ -645,7 +645,7 @@ impl DdlOperator {
                         action
                     ))),
                 };
-                base.opened = false;
+                base.lifecycle.mark_closed();
                 result
             }
 
@@ -655,7 +655,7 @@ impl DdlOperator {
                 action,
                 index_name,
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Ok(None);
                 }
                 let result = match action.as_str() {
@@ -795,7 +795,7 @@ impl DdlOperator {
                         action
                     ))),
                 };
-                base.opened = false;
+                base.lifecycle.mark_closed();
                 result
             }
 
@@ -804,7 +804,7 @@ impl DdlOperator {
                 action,
                 username,
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Ok(None);
                 }
                 let result = match action.as_str() {
@@ -875,15 +875,15 @@ impl DdlOperator {
                         action
                     ))),
                 };
-                base.opened = false;
+                base.lifecycle.mark_closed();
                 result
             }
 
             DdlOperator::ShowStats { storage, .. } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution("ShowStats not opened".to_string()));
                 }
-                base.opened = false;
+                base.lifecycle.mark_closed();
 
                 if let Some(storage_lock) = storage {
                     let reader = storage_lock.read();
@@ -949,7 +949,7 @@ impl DdlOperator {
                 analyze_target,
                 target_name,
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Ok(None);
                 }
                 let result = match analyze_target.as_str() {
@@ -991,7 +991,7 @@ impl DdlOperator {
                         analyze_target
                     ))),
                 };
-                base.opened = false;
+                base.lifecycle.mark_closed();
                 result
             }
 
@@ -1001,7 +1001,7 @@ impl DdlOperator {
                 action,
                 migration_data: _migration_data,
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Ok(None);
                 }
                 let result = match action.as_str() {
@@ -1032,7 +1032,7 @@ impl DdlOperator {
                         action
                     ))),
                 };
-                base.opened = false;
+                base.lifecycle.mark_closed();
                 result
             }
         }
@@ -1052,9 +1052,9 @@ impl DdlOperator {
             | DdlOperator::ShowStats { .. }
             | DdlOperator::Analyze { .. }
             | DdlOperator::Migrate { .. } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     input.stop()?;
-                    base.opened = false;
+                    base.lifecycle.mark_stopped();
                 }
                 Ok(())
             }
@@ -1075,9 +1075,9 @@ impl DdlOperator {
             | DdlOperator::ShowStats { .. }
             | DdlOperator::Analyze { .. }
             | DdlOperator::Migrate { .. } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     input.close()?;
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                 }
                 Ok(())
             }

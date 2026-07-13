@@ -2,6 +2,24 @@
 //!
 //! A DataChunk represents a fixed-size batch of rows processed in streaming mode.
 //! Typical size: 1024 rows (~4MB)
+//!
+//! # Ownership & Memory Accounting Rules
+//!
+//! - **`rows`**: Owned `Vec<Vec<Value>>`. Deep-cloned on `Clone`.
+//! - **`schema`**: `Arc<Schema>` — shared reference, cheap `Arc::clone` on `Clone`.
+//! - **`layout`**: `Arc<SlotLayout>` — always present; shared reference, cheap on `Clone`.
+//! - **`memory_reservation`**: `Option<MemoryReservation>` — **ownership stays with
+//!   the original chunk on `Clone`**; the clone gets `memory_reservation: None`.
+//!   Use `take_memory_reservation()` to transfer ownership explicitly.
+//!   The reserved bytes are released when the `MemoryReservation` is dropped.
+//!
+//! # Construction Paths
+//!
+//! - `new_with_layout(rows, layout)` — **Production path**. Schema is derived from
+//!   layout slot metadata. Always preferred when a `SlotLayout` is available.
+//! - `new(rows, schema)` — Schema-driven path. Layout auto-created from column names.
+//! - `from_rows(rows)` / `from_rows_with_col_names(rows, col_names)` — Convenience
+//!   constructors for tests and legacy code. Always produce a layout (auto-created).
 
 use super::slot::{SlotId, SlotLayout};
 use crate::core::Value;
@@ -16,8 +34,9 @@ pub struct DataChunk {
     /// Schema information (column names and types)
     pub schema: Arc<Schema>,
     /// Slot layout for slot-based value access.
-    /// Production paths should always set this.
-    pub layout: Option<Arc<SlotLayout>>,
+    /// Always set for production chunks; convenience constructors auto-create
+    /// from column names when no explicit layout is provided.
+    pub layout: Arc<SlotLayout>,
     /// Memory reservation for this chunk's data.
     /// Dropping the chunk releases the reserved bytes.
     pub memory_reservation: Option<MemoryReservation>,
@@ -28,7 +47,7 @@ impl Clone for DataChunk {
         Self {
             rows: self.rows.clone(),
             schema: self.schema.clone(),
-            layout: self.layout.clone(),
+            layout: Arc::clone(&self.layout),
             memory_reservation: None,
         }
     }
@@ -62,12 +81,16 @@ impl Schema {
 }
 
 impl DataChunk {
-    /// Create a new DataChunk with rows, schema, and optional layout
+    /// Create a new DataChunk with rows and schema.
+    /// SlotLayout is auto-created from schema column names.
     pub fn new(rows: Vec<Vec<Value>>, schema: Arc<Schema>) -> Self {
+        let layout = Arc::new(SlotLayout::from_names(
+            &schema.columns.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+        ));
         Self {
             rows,
             schema,
-            layout: None,
+            layout,
             memory_reservation: None,
         }
     }
@@ -85,7 +108,8 @@ impl DataChunk {
         self.memory_reservation.take()
     }
 
-    /// Create a DataChunk with layout from Arc<SlotLayout>
+    /// Create a DataChunk with explicit SlotLayout.
+    /// Schema is derived from the layout's slot metadata.
     pub fn new_with_layout(rows: Vec<Vec<Value>>, layout: Arc<SlotLayout>) -> Self {
         let columns: Vec<ColumnInfo> = layout
             .slots
@@ -103,20 +127,22 @@ impl DataChunk {
         Self {
             rows,
             schema,
-            layout: Some(layout),
+            layout,
             memory_reservation: None,
         }
     }
 
-    /// Create a DataChunk from rows, inferring schema and generating col_N names
+    /// Create a DataChunk from rows, inferring schema and generating col_N names.
+    /// SlotLayout is auto-created from the inferred column names.
     pub fn from_rows(rows: Vec<Vec<Value>>) -> Self {
         Self::from_rows_with_col_names(rows, None)
     }
 
-    /// Create a DataChunk from rows, using provided column names if available
+    /// Create a DataChunk from rows, using provided column names if available.
     ///
     /// When col_names is None, falls back to col_N inference (backward compat).
     /// When col_names is Some, uses those names directly.
+    /// SlotLayout is auto-created from the resulting column names.
     pub fn from_rows_with_col_names(rows: Vec<Vec<Value>>, col_names: Option<Vec<String>>) -> Self {
         let schema = if rows.is_empty() {
             if let Some(names) = col_names {
@@ -168,10 +194,13 @@ impl DataChunk {
                 .collect();
             Arc::new(Schema::new(columns))
         };
+        let layout = Arc::new(SlotLayout::from_names(
+            &schema.columns.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+        ));
         Self {
             rows,
             schema,
-            layout: None,
+            layout,
             memory_reservation: None,
         }
     }
@@ -211,12 +240,9 @@ impl DataChunk {
             .collect()
     }
 
-    /// Get the slot layout, or build and cache one from schema if missing.
-    pub fn get_or_create_layout(&self) -> Arc<SlotLayout> {
-        if let Some(ref layout) = self.layout {
-            return layout.clone();
-        }
-        Arc::new(SlotLayout::from_names(&self.col_names()))
+    /// Return a clone of the slot layout Arc.
+    pub fn get_layout(&self) -> Arc<SlotLayout> {
+        Arc::clone(&self.layout)
     }
 
     /// Get value by slot ID (fast path using layout).

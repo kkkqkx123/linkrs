@@ -184,6 +184,144 @@ pub enum BlockingOperator {
 }
 
 impl BlockingOperator {
+    /// Create a BlockingOperator with fresh mutable state from an immutable spec.
+    pub fn from_spec(
+        spec: &super::super::operator_spec::BlockingSpec,
+        memory_budget: &crate::query::executor::base::MemoryBudget,
+    ) -> Self {
+        match spec {
+            super::super::operator_spec::BlockingSpec::Sort {
+                sort_expressions,
+                sort_directions,
+            } => Self::Sort {
+                sort_expressions: sort_expressions.clone(),
+                sort_directions: sort_directions.clone(),
+                memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                    memory_budget.clone(),
+                ),
+                state: None,
+            },
+            super::super::operator_spec::BlockingSpec::Aggregate {
+                group_by_expressions,
+                aggregate_functions,
+                output_col_names,
+            } => Self::Aggregate {
+                group_by_expressions: group_by_expressions.clone(),
+                aggregate_functions: aggregate_functions.clone(),
+                output_col_names: output_col_names.clone(),
+                memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                    memory_budget.clone(),
+                ),
+                state: None,
+            },
+            super::super::operator_spec::BlockingSpec::GroupBy {
+                group_by_expressions,
+            } => Self::GroupBy {
+                group_by_expressions: group_by_expressions.clone(),
+                memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                    memory_budget.clone(),
+                ),
+                state: None,
+            },
+            super::super::operator_spec::BlockingSpec::WindowFunction {
+                window_exprs,
+                partition_by_exprs,
+                order_by_exprs,
+                order_by_directions,
+            } => Self::WindowFunction {
+                window_exprs: window_exprs.clone(),
+                partition_by_exprs: partition_by_exprs.clone(),
+                order_by_exprs: order_by_exprs.clone(),
+                order_by_directions: order_by_directions.clone(),
+                memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                    memory_budget.clone(),
+                ),
+                state: None,
+            },
+            super::super::operator_spec::BlockingSpec::Window {
+                window_exprs,
+                partition_by_exprs,
+                order_by_exprs,
+                order_by_directions,
+            } => Self::Window {
+                window_exprs: window_exprs.clone(),
+                partition_by_exprs: partition_by_exprs.clone(),
+                order_by_exprs: order_by_exprs.clone(),
+                order_by_directions: order_by_directions.clone(),
+                memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                    memory_budget.clone(),
+                ),
+                state: None,
+            },
+            super::super::operator_spec::BlockingSpec::TopN {
+                n,
+                sort_expressions,
+                sort_directions,
+            } => Self::TopN {
+                n: *n,
+                sort_expressions: sort_expressions.clone(),
+                sort_directions: sort_directions.clone(),
+                memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                    memory_budget.clone(),
+                ),
+                state: None,
+            },
+            super::super::operator_spec::BlockingSpec::Distinct => Self::Distinct {
+                memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                    memory_budget.clone(),
+                ),
+                state: None,
+            },
+            super::super::operator_spec::BlockingSpec::Materialize => Self::Materialize {
+                memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                    memory_budget.clone(),
+                ),
+                state: None,
+            },
+            super::super::operator_spec::BlockingSpec::DataCollect => Self::DataCollect {
+                memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                    memory_budget.clone(),
+                ),
+                state: None,
+            },
+            super::super::operator_spec::BlockingSpec::RollUpApply {
+                rollup_expressions,
+            } => Self::RollUpApply {
+                rollup_expressions: rollup_expressions.clone(),
+                memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                    memory_budget.clone(),
+                ),
+                state: None,
+            },
+            super::super::operator_spec::BlockingSpec::PartialAggregate {
+                group_by_expressions,
+                aggregate_functions,
+                output_col_names,
+            } => Self::PartialAggregate {
+                group_by_expressions: group_by_expressions.clone(),
+                aggregate_functions: aggregate_functions.clone(),
+                output_col_names: output_col_names.clone(),
+                memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                    memory_budget.clone(),
+                ),
+                state: None,
+            },
+            super::super::operator_spec::BlockingSpec::FinalAggregate {
+                group_by_expressions,
+                aggregate_functions,
+                output_col_names,
+            } => Self::FinalAggregate {
+                group_by_expressions: group_by_expressions.clone(),
+                aggregate_functions: aggregate_functions.clone(),
+                output_col_names: output_col_names.clone(),
+                memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                    memory_budget.clone(),
+                ),
+                state: None,
+            },
+        }
+    }
+
     pub fn memory_tracker(&self) -> &MemoryTracker {
         match self {
             Self::Sort { memory_tracker, .. }
@@ -286,7 +424,7 @@ impl BlockingOperator {
             }
         }
         input.open()?;
-        base.opened = true;
+        base.lifecycle.mark_opened();
         Ok(())
     }
 
@@ -770,7 +908,7 @@ impl BlockingOperator {
                 state,
                 ..
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution("TopN not opened".to_string()));
                 }
 
@@ -898,7 +1036,7 @@ impl BlockingOperator {
                 state,
                 ..
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution("Materialize not opened".to_string()));
                 }
 
@@ -932,7 +1070,7 @@ impl BlockingOperator {
                 state,
                 ..
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution("DataCollect not opened".to_string()));
                 }
 
@@ -964,7 +1102,7 @@ impl BlockingOperator {
                 state,
                 ..
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution("RollUpApply not opened".to_string()));
                 }
 
@@ -1210,11 +1348,11 @@ impl BlockingOperator {
                 memory_tracker,
                 ..
             } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     *state = None;
                     input.close()?;
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                 }
                 Ok(())
             }
@@ -1223,11 +1361,11 @@ impl BlockingOperator {
                 memory_tracker,
                 ..
             } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     *state = None;
                     input.close()?;
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                 }
                 Ok(())
             }
@@ -1236,11 +1374,11 @@ impl BlockingOperator {
                 memory_tracker,
                 ..
             } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     *state = None;
                     input.close()?;
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                 }
                 Ok(())
             }
@@ -1249,11 +1387,11 @@ impl BlockingOperator {
                 memory_tracker,
                 ..
             } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     *state = None;
                     input.close()?;
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                 }
                 Ok(())
             }
@@ -1262,11 +1400,11 @@ impl BlockingOperator {
                 memory_tracker,
                 ..
             } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     *state = None;
                     input.close()?;
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                 }
                 Ok(())
             }
@@ -1275,11 +1413,11 @@ impl BlockingOperator {
                 memory_tracker,
                 ..
             } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     *state = None;
                     input.close()?;
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                 }
                 Ok(())
             }
@@ -1288,11 +1426,11 @@ impl BlockingOperator {
                 memory_tracker,
                 ..
             } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     *state = None;
                     input.close()?;
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                 }
                 Ok(())
             }
@@ -1301,11 +1439,11 @@ impl BlockingOperator {
                 memory_tracker,
                 ..
             } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     *state = None;
                     input.close()?;
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                 }
                 Ok(())
             }
@@ -1314,11 +1452,11 @@ impl BlockingOperator {
                 memory_tracker,
                 ..
             } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     *state = None;
                     input.close()?;
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                 }
                 Ok(())
             }
@@ -1327,11 +1465,11 @@ impl BlockingOperator {
                 memory_tracker,
                 ..
             } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     *state = None;
                     input.close()?;
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                 }
                 Ok(())
             }
@@ -1340,11 +1478,11 @@ impl BlockingOperator {
                 memory_tracker,
                 ..
             } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     *state = None;
                     input.close()?;
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                 }
                 Ok(())
             }
@@ -1353,11 +1491,11 @@ impl BlockingOperator {
                 memory_tracker,
                 ..
             } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     *state = None;
                     input.close()?;
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                 }
                 Ok(())
             }

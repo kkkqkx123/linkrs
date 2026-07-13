@@ -211,11 +211,13 @@ impl<S: StorageClient + Send + 'static> ProfileExecutor<S> {
         } else if !plan_desc.parallel_fallback_reason.is_empty() {
             format!(
                 "requested_workers: {}, fallback: {}",
-                plan_desc.requested_workers,
-                plan_desc.parallel_fallback_reason,
+                plan_desc.requested_workers, plan_desc.parallel_fallback_reason,
             )
         } else {
-            format!("requested_workers: {}, serial only", plan_desc.requested_workers)
+            format!(
+                "requested_workers: {}, serial only",
+                plan_desc.requested_workers
+            )
         };
         ids.push(Value::BigInt(-1));
         names.push(Value::String("Parallel".to_string()));
@@ -276,8 +278,7 @@ impl<S: StorageClient + Send + 'static> Executor<S> for ProfileExecutor<S> {
         plan_desc.requested_workers = self.inner_plan.max_workers;
         if let Some(ref rt) = runtime {
             let profile = rt.profile().lock();
-            let (wall_us, work_us, workers, chunks_peak, bytes_peak) =
-                profile.parallel_profile();
+            let (wall_us, work_us, workers, chunks_peak, bytes_peak) = profile.parallel_profile();
             plan_desc.actual_workers = workers;
             plan_desc.parallel_wall_time_us = wall_us;
             plan_desc.parallel_work_time_us = work_us;
@@ -285,8 +286,7 @@ impl<S: StorageClient + Send + 'static> Executor<S> for ProfileExecutor<S> {
             plan_desc.parallel_buffered_bytes_peak = bytes_peak;
         }
         if plan_desc.actual_workers == 0 && plan_desc.requested_workers > 1 {
-            plan_desc.parallel_fallback_reason =
-                "serial fallback (P8 not activated)".to_string();
+            plan_desc.parallel_fallback_reason = "serial fallback (P8 not activated)".to_string();
         }
 
         let node_stats = stats_context.collect_stats();
@@ -297,7 +297,6 @@ impl<S: StorageClient + Send + 'static> Executor<S> for ProfileExecutor<S> {
 
         Ok(ExecutionResult::DataSet {
             data: result_dataset,
-            execution_mode_reason: None,
         })
     }
 

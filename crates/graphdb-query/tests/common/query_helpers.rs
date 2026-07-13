@@ -53,7 +53,7 @@ impl<S: graphdb_query::storage::StorageClient + 'static> QueryHelper<S> {
         match result {
             ExecutionResult::Success => Ok(1),
             ExecutionResult::Empty => Ok(0),
-            ExecutionResult::DataSet(ds) => Ok(ds.row_count()),
+            ExecutionResult::DataSet { data: ds, .. } => Ok(ds.row_count()),
             ExecutionResult::Error(msg) => Err(Box::new(DBError::query(msg))),
             _ => Ok(0),
         }
@@ -63,7 +63,7 @@ impl<S: graphdb_query::storage::StorageClient + 'static> QueryHelper<S> {
     pub fn query_rows(&mut self, query: &str) -> TestResult<Vec<Vec<Value>>> {
         let result = self.execute(query)?;
         match result {
-            ExecutionResult::DataSet(ds) => Ok(ds.rows),
+            ExecutionResult::DataSet { data: ds, .. } => Ok(ds.rows),
             ExecutionResult::Empty => Ok(vec![]),
             ExecutionResult::Error(msg) => Err(Box::new(DBError::query(msg))),
             _ => Ok(vec![]),

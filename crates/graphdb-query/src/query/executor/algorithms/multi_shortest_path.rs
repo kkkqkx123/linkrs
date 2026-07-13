@@ -452,10 +452,7 @@ impl<S: StorageClient + Send + 'static> BaseExecutorTrait<S> for MultiShortestPa
 
         let rows: Vec<Vec<Value>> = paths.into_iter().map(|p| vec![Value::path(p)]).collect();
         let dataset = DataSet::from_rows(rows, vec!["path".to_string()]);
-        Ok(ExecutionResult::DataSet {
-            data: dataset,
-            execution_mode_reason: None,
-        })
+        Ok(ExecutionResult::DataSet { data: dataset })
     }
 
     fn open(&mut self) -> ExecDBResult<()> {

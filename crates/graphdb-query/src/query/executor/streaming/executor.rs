@@ -183,7 +183,6 @@ impl StreamingExecutor {
                         | UnaryOperator::Remove { .. }
                         | UnaryOperator::Unwind { .. }
                         | UnaryOperator::AppendVertices { .. }
-                        | UnaryOperator::PassThrough
                 ) && input.is_partition_local()
             }
             Self::Blocking(_, input, op) => {
@@ -239,9 +238,6 @@ impl StreamingExecutor {
                 UnaryOperator::Unwind { .. } => "Unwind",
                 UnaryOperator::AppendVertices { .. } => "AppendVertices",
                 UnaryOperator::Sample { .. } => "Sample",
-                UnaryOperator::Loop { .. } => "Loop",
-                UnaryOperator::Select { .. } => "Select",
-                UnaryOperator::PassThrough => "PassThrough",
             },
             Txn(_, _, op) => match op {
                 TxnOperator::BeginTransaction { .. } => "BeginTransaction",
@@ -525,14 +521,9 @@ impl StreamingExecutor {
         }
     }
 
-    /// Whether this operator has been opened.
+    /// Whether this operator is in an opened state (can produce chunks).
     pub fn opened(&self) -> bool {
-        self.base().opened
-    }
-
-    /// Set opened flag.
-    pub fn set_opened(&mut self, val: bool) {
-        self.base_mut().opened = val;
+        self.base().lifecycle.is_opened()
     }
 
     // ── Lifecycle dispatch ──

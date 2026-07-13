@@ -57,7 +57,6 @@ fn storage_error(
     ))
 }
 
-
 #[derive(Debug)]
 pub enum SourceOperator {
     ScanVertices {
@@ -149,6 +148,149 @@ pub enum SourceOperator {
 }
 
 impl SourceOperator {
+    /// Create a SourceOperator with fresh mutable state from an immutable spec.
+    pub fn from_spec(spec: &super::super::operator_spec::SourceSpec) -> Self {
+        match spec {
+            super::super::operator_spec::SourceSpec::ScanVertices { rows, col_names } => {
+                Self::ScanVertices {
+                    partition_id: 0,
+                    buffer: rows.clone(),
+                    current_index: 0,
+                    col_names: col_names.clone(),
+                }
+            }
+            super::super::operator_spec::SourceSpec::StorageScanVertices {
+                storage,
+                space_name,
+                limit,
+                col_names,
+            } => Self::StorageScanVertices {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                limit: *limit,
+                partition_id: 0,
+                partition_range: None,
+                cursor: None,
+                buffer: Vec::new(),
+                current_index: 0,
+                col_names: col_names.clone(),
+            },
+            super::super::operator_spec::SourceSpec::ScanEdges { rows, col_names } => {
+                Self::ScanEdges {
+                    partition_id: 0,
+                    buffer: rows.clone(),
+                    current_index: 0,
+                    col_names: col_names.clone(),
+                }
+            }
+            super::super::operator_spec::SourceSpec::StorageScanEdges {
+                storage,
+                space_name,
+                limit,
+                edge_type,
+                col_names,
+            } => Self::StorageScanEdges {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                limit: *limit,
+                edge_type: edge_type.clone(),
+                partition_id: 0,
+                partition_range: None,
+                cursor: None,
+                buffer: Vec::new(),
+                current_index: 0,
+                col_names: col_names.clone(),
+            },
+            super::super::operator_spec::SourceSpec::GetVertices {
+                storage,
+                space_name,
+                vertex_ids,
+            } => Self::GetVertices {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                vertex_ids: vertex_ids.clone(),
+                position: 0,
+            },
+            super::super::operator_spec::SourceSpec::GetEdges {
+                storage,
+                space_name,
+                edge_type,
+                src,
+                dst,
+                rank,
+            } => Self::GetEdges {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                edge_type: edge_type.clone(),
+                src: src.clone(),
+                dst: dst.clone(),
+                rank: *rank,
+                cursor: None,
+            },
+            super::super::operator_spec::SourceSpec::GetNeighbors {
+                storage,
+                space_name,
+                direction,
+            } => Self::GetNeighbors {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                direction: direction.clone(),
+                state: NeighborScanState::Init,
+            },
+            super::super::operator_spec::SourceSpec::EdgeIndexScan {
+                storage,
+                space_name,
+                edge_type,
+            } => Self::EdgeIndexScan {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                edge_type: edge_type.clone(),
+                cursor: None,
+            },
+            super::super::operator_spec::SourceSpec::IndexScan {
+                storage,
+                space_name,
+                index_name,
+                index_value,
+            } => Self::IndexScan {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                index_name: index_name.clone(),
+                index_value: index_value.clone(),
+                resolved_ids: Vec::new(),
+                position: 0,
+            },
+            super::super::operator_spec::SourceSpec::Argument => Self::Argument,
+            super::super::operator_spec::SourceSpec::GetProp {
+                storage,
+                space_name,
+                vertex_ids,
+                edge_ids,
+                prop_names,
+            } => Self::GetProp {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                vertex_ids: vertex_ids.clone(),
+                edge_ids: edge_ids.clone(),
+                prop_names: prop_names.clone(),
+            },
+            super::super::operator_spec::SourceSpec::LookupIndex {
+                storage,
+                space_name,
+                index_name,
+                index_condition,
+                limit,
+            } => Self::LookupIndex {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                index_name: index_name.clone(),
+                index_condition: index_condition.clone(),
+                limit: *limit,
+            },
+            super::super::operator_spec::SourceSpec::Start => Self::Start,
+        }
+    }
+
     pub fn open(&mut self, base: &mut OperatorBase) -> Result<(), QueryError> {
         match self {
             Self::ScanVertices { current_index, .. } | Self::ScanEdges { current_index, .. } => {
@@ -225,9 +367,7 @@ impl SourceOperator {
                     let dst = parse_vertex_id(dst);
                     guard
                         .get_edge(space_name, &src, &dst, edge_type, *rank)
-                        .map_err(|error| {
-                            storage_error("GetEdges", "get edge", space_name, error)
-                        })?
+                        .map_err(|error| storage_error("GetEdges", "get edge", space_name, error))?
                         .into_iter()
                         .collect::<Vec<_>>()
                 } else {
@@ -237,8 +377,8 @@ impl SourceOperator {
                     };
                     // Release storage read lock before cursor creation
                     drop(guard);
-                    let cursor_obj = open_edge_scan(storage_ref, space_name, &scan_opts)
-                        .map_err(|error| {
+                    let cursor_obj =
+                        open_edge_scan(storage_ref, space_name, &scan_opts).map_err(|error| {
                             storage_error("GetEdges", "open cursor", space_name, error)
                         })?;
                     *cursor = Some(cursor_obj);
@@ -263,9 +403,7 @@ impl SourceOperator {
                         ..ScanOptions::default()
                     };
                     *cursor = Some(open_edge_scan(storage_ref, space_name, &options).map_err(
-                        |error| {
-                            storage_error("EdgeIndexScan", "open cursor", space_name, error)
-                        },
+                        |error| storage_error("EdgeIndexScan", "open cursor", space_name, error),
                     )?);
                 }
             }
@@ -280,7 +418,7 @@ impl SourceOperator {
             _ => {}
         }
 
-        base.opened = true;
+        base.lifecycle.mark_opened();
         Ok(())
     }
 
@@ -297,7 +435,7 @@ impl SourceOperator {
                 buffer,
                 col_names,
                 ..
-            } => Ok(next_buffer_chunk(buffer, current_index, col_names, base.chunk_size)),
+            } => next_buffer_chunk(base, buffer, current_index, col_names),
             Self::StorageScanVertices {
                 space_name,
                 cursor: cursor_state,
@@ -317,11 +455,9 @@ impl SourceOperator {
                 }
                 let rows = batch.into_iter().map(make_vertex_row).collect::<Vec<_>>();
                 if !rows.is_empty() {
-                    let reservation = reserve_memory(base, &rows);
-                    let mut chunk = DataChunk::from_rows_with_col_names(
-                        rows,
-                        optional_col_names(col_names),
-                    );
+                    let reservation = reserve_memory(base, &rows)?;
+                    let mut chunk =
+                        DataChunk::from_rows_with_col_names(rows, optional_col_names(col_names));
                     if let Some(r) = reservation {
                         chunk = chunk.with_memory_reservation(r);
                     }
@@ -347,11 +483,9 @@ impl SourceOperator {
                 }
                 let rows = batch.into_iter().map(make_edge_row).collect::<Vec<_>>();
                 if !rows.is_empty() {
-                    let reservation = reserve_memory(base, &rows);
-                    let mut chunk = DataChunk::from_rows_with_col_names(
-                        rows,
-                        optional_col_names(col_names),
-                    );
+                    let reservation = reserve_memory(base, &rows)?;
+                    let mut chunk =
+                        DataChunk::from_rows_with_col_names(rows, optional_col_names(col_names));
                     if let Some(r) = reservation {
                         chunk = chunk.with_memory_reservation(r);
                     }
@@ -379,15 +513,9 @@ impl SourceOperator {
                     let mut rows = Vec::new();
                     for id_val in batch {
                         if let Ok(vid) = VertexId::try_from(id_val) {
-                            if let Some(vertex) = guard
-                                .get_vertex(space_name, &vid)
-                                .map_err(|error| {
-                                    storage_error(
-                                        "GetVertices",
-                                        "get vertex",
-                                        space_name,
-                                        error,
-                                    )
+                            if let Some(vertex) =
+                                guard.get_vertex(space_name, &vid).map_err(|error| {
+                                    storage_error("GetVertices", "get vertex", space_name, error)
                                 })?
                             {
                                 rows.push(make_vertex_row(vertex));
@@ -395,7 +523,7 @@ impl SourceOperator {
                         }
                     }
                     if !rows.is_empty() {
-                        let reservation = reserve_memory(base, &rows);
+                        let reservation = reserve_memory(base, &rows)?;
                         let mut chunk = DataChunk::from_rows(rows);
                         if let Some(r) = reservation {
                             chunk = chunk.with_memory_reservation(r);
@@ -413,16 +541,16 @@ impl SourceOperator {
                 let Some(cursor) = cursor_state.as_mut() else {
                     return Ok(None);
                 };
-                let batch = cursor.next_batch(base.chunk_size).map_err(|error| {
-                    storage_error("GetEdges", "read cursor", space_name, error)
-                })?;
+                let batch = cursor
+                    .next_batch(base.chunk_size)
+                    .map_err(|error| storage_error("GetEdges", "read cursor", space_name, error))?;
                 if batch.is_empty() {
                     *cursor_state = None;
                     return Ok(None);
                 }
                 let rows = batch.into_iter().map(make_edge_row).collect::<Vec<_>>();
                 if !rows.is_empty() {
-                    let reservation = reserve_memory(base, &rows);
+                    let reservation = reserve_memory(base, &rows)?;
                     let mut chunk = DataChunk::from_rows(rows);
                     if let Some(r) = reservation {
                         chunk = chunk.with_memory_reservation(r);
@@ -528,9 +656,8 @@ impl SourceOperator {
                             let guard = storage_ref.read();
                             let mut rows = Vec::new();
                             for neighbor_id in &neighbor_ids[*position..end] {
-                                if let Some(vertex) = guard
-                                    .get_vertex(space_name, neighbor_id)
-                                    .map_err(|error| {
+                                if let Some(vertex) =
+                                    guard.get_vertex(space_name, neighbor_id).map_err(|error| {
                                         storage_error(
                                             "GetNeighbors",
                                             "get neighbor vertex",
@@ -546,7 +673,7 @@ impl SourceOperator {
                             *position = end;
 
                             if !rows.is_empty() {
-                                let reservation = reserve_memory(base, &rows);
+                                let reservation = reserve_memory(base, &rows)?;
                                 let mut chunk = DataChunk::from_rows(rows);
                                 if let Some(r) = reservation {
                                     chunk = chunk.with_memory_reservation(r);
@@ -577,7 +704,7 @@ impl SourceOperator {
                 }
                 let rows = batch.into_iter().map(make_edge_row).collect::<Vec<_>>();
                 if !rows.is_empty() {
-                    let reservation = reserve_memory(base, &rows);
+                    let reservation = reserve_memory(base, &rows)?;
                     let mut chunk = DataChunk::from_rows(rows);
                     if let Some(r) = reservation {
                         chunk = chunk.with_memory_reservation(r);
@@ -619,9 +746,8 @@ impl SourceOperator {
                     let mut rows = Vec::new();
                     for id_val in batch {
                         if let Ok(vid) = VertexId::try_from(id_val) {
-                            if let Some(vertex) = guard
-                                .get_vertex(space_name, &vid)
-                                .map_err(|error| {
+                            if let Some(vertex) =
+                                guard.get_vertex(space_name, &vid).map_err(|error| {
                                     storage_error("IndexScan", "get vertex", space_name, error)
                                 })?
                             {
@@ -630,7 +756,7 @@ impl SourceOperator {
                         }
                     }
                     if !rows.is_empty() {
-                        let reservation = reserve_memory(base, &rows);
+                        let reservation = reserve_memory(base, &rows)?;
                         let mut chunk = DataChunk::from_rows(rows);
                         if let Some(r) = reservation {
                             chunk = chunk.with_memory_reservation(r);
@@ -691,17 +817,20 @@ impl SourceOperator {
             }
             Self::GetProp { .. } | Self::LookupIndex { .. } | Self::Argument | Self::Start => {}
         }
-        base.opened = false;
+        base.lifecycle.mark_closed();
         Ok(())
     }
-
 }
 
-fn reserve_memory(base: &OperatorBase, rows: &[Vec<Value>]) -> Option<MemoryReservation> {
-    base.runtime.as_ref().and_then(|rt| {
-        let bytes = MemoryBudget::estimate_rows_memory(rows);
-        rt.memory_budget.reserve(bytes).ok()
-    })
+fn reserve_memory(
+    base: &OperatorBase,
+    rows: &[Vec<Value>],
+) -> Result<Option<MemoryReservation>, QueryError> {
+    let Some(runtime) = base.runtime.as_ref() else {
+        return Ok(None);
+    };
+    let bytes = MemoryBudget::estimate_rows_memory(rows);
+    runtime.memory_budget.reserve(bytes).map(Some)
 }
 
 fn parse_vertex_id(value: &str) -> VertexId {
@@ -716,21 +845,23 @@ fn optional_col_names(col_names: &[String]) -> Option<Vec<String>> {
 }
 
 fn next_buffer_chunk(
+    base: &OperatorBase,
     buffer: &[Vec<Value>],
     current_index: &mut usize,
     col_names: &[String],
-    chunk_size: usize,
-) -> Option<DataChunk> {
+) -> Result<Option<DataChunk>, QueryError> {
     if *current_index >= buffer.len() {
-        return None;
+        return Ok(None);
     }
-    let end = (*current_index + chunk_size).min(buffer.len());
+    let end = (*current_index + base.chunk_size).min(buffer.len());
     let rows = buffer[*current_index..end].to_vec();
     *current_index = end;
-    Some(DataChunk::from_rows_with_col_names(
-        rows,
-        optional_col_names(col_names),
-    ))
+    let reservation = reserve_memory(base, &rows)?;
+    let mut chunk = DataChunk::from_rows_with_col_names(rows, optional_col_names(col_names));
+    if let Some(reservation) = reservation {
+        chunk = chunk.with_memory_reservation(reservation);
+    }
+    Ok(Some(chunk))
 }
 
 #[cfg(test)]
@@ -813,6 +944,29 @@ mod tests {
             .sum();
         let expected: i64 = (0..row_count as i64).sum();
         assert_eq!(total, expected);
+    }
+
+    #[test]
+    fn buffered_scan_propagates_memory_budget_errors() {
+        let runtime = Arc::new(
+            crate::query::executor::streaming::runtime::ExecutionRuntime::new(
+                crate::query::executor::streaming::runtime::QueryIdentity::default(),
+                MemoryBudget::new(0),
+            ),
+        );
+        let mut base = OperatorBase::new(0).with_runtime(Some(runtime));
+        let mut source = SourceOperator::ScanVertices {
+            partition_id: 0,
+            buffer: vec![vec![Value::String("row".to_string())]],
+            current_index: 0,
+            col_names: Vec::new(),
+        };
+
+        source.open(&mut base).expect("source should open");
+        let error = source
+            .next(&mut base)
+            .expect_err("the source must propagate a memory budget error");
+        assert!(error.to_string().contains("Memory budget exceeded"));
     }
 
     #[test]

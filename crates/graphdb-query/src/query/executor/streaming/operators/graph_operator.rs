@@ -468,6 +468,122 @@ pub enum GraphOperator {
 }
 
 impl GraphOperator {
+    pub fn from_spec(spec: &super::super::operator_spec::GraphSpec) -> Self {
+        match spec {
+            super::super::operator_spec::GraphSpec::Expand {
+                edge_types,
+                direction,
+                filter_expr,
+            } => Self::Expand {
+                storage: None,
+                space_name: String::new(),
+                edge_types: edge_types.clone(),
+                direction: *direction,
+                filter_expr: filter_expr.clone(),
+            },
+            super::super::operator_spec::GraphSpec::ExpandAll {
+                edge_types,
+                direction,
+                filter_expr,
+            } => Self::ExpandAll {
+                storage: None,
+                space_name: String::new(),
+                edge_types: edge_types.clone(),
+                direction: *direction,
+                filter_expr: filter_expr.clone(),
+            },
+            super::super::operator_spec::GraphSpec::Traverse {
+                edge_types,
+                direction,
+                min_depth,
+                max_depth,
+                filter_expr,
+            } => Self::Traverse {
+                storage: None,
+                space_name: String::new(),
+                edge_types: edge_types.clone(),
+                direction: *direction,
+                min_depth: *min_depth,
+                max_depth: *max_depth,
+                filter_expr: filter_expr.clone(),
+                visited: std::collections::HashSet::new(),
+            },
+            super::super::operator_spec::GraphSpec::BiExpand {
+                edge_types,
+                direction,
+            } => Self::BiExpand {
+                storage: None,
+                space_name: String::new(),
+                edge_types: edge_types.clone(),
+                direction: *direction,
+            },
+            super::super::operator_spec::GraphSpec::BiTraverse {
+                edge_types,
+                direction,
+                min_depth,
+                max_depth,
+            } => Self::BiTraverse {
+                storage: None,
+                space_name: String::new(),
+                edge_types: edge_types.clone(),
+                direction: *direction,
+                min_depth: *min_depth,
+                max_depth: *max_depth,
+                visited: std::collections::HashSet::new(),
+            },
+            super::super::operator_spec::GraphSpec::ShortestPath {
+                target_vertex,
+                edge_types,
+                direction,
+            } => Self::ShortestPath {
+                storage: None,
+                space_name: String::new(),
+                target_vertex: target_vertex.clone(),
+                edge_types: edge_types.clone(),
+                direction: *direction,
+            },
+            super::super::operator_spec::GraphSpec::BFSShortest {
+                target_vertex,
+                edge_types,
+                direction,
+            } => Self::BFSShortest {
+                storage: None,
+                space_name: String::new(),
+                target_vertex: target_vertex.clone(),
+                edge_types: edge_types.clone(),
+                direction: *direction,
+                frontier: Vec::new(),
+                visited: std::collections::HashSet::new(),
+            },
+            super::super::operator_spec::GraphSpec::AllPaths {
+                target_vertex,
+                edge_types,
+                direction,
+            } => Self::AllPaths {
+                storage: None,
+                space_name: String::new(),
+                target_vertex: target_vertex.clone(),
+                edge_types: edge_types.clone(),
+                direction: *direction,
+                all_paths: Vec::new(),
+                result_iter: None,
+            },
+            super::super::operator_spec::GraphSpec::MultiShortestPath {
+                target_vertices,
+                edge_types,
+                direction,
+            } => Self::MultiShortestPath {
+                storage: None,
+                space_name: String::new(),
+                target_vertices: target_vertices.clone(),
+                edge_types: edge_types.clone(),
+                direction: *direction,
+                all_paths: Vec::new(),
+                result_iter: None,
+            },
+        }
+    }
+
     pub fn open(
         &mut self,
         base: &mut OperatorBase,
@@ -486,7 +602,7 @@ impl GraphOperator {
             | Self::MultiShortestPath { .. }
             | Self::Subgraph { .. } => {
                 input.open()?;
-                base.opened = true;
+                base.lifecycle.mark_opened();
                 Ok(())
             }
         }
@@ -507,7 +623,7 @@ impl GraphOperator {
                 direction,
                 filter_expr,
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution("Expand not opened".to_string()));
                 }
 
@@ -568,7 +684,7 @@ impl GraphOperator {
                 direction,
                 filter_expr,
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution("ExpandAll not opened".to_string()));
                 }
 
@@ -626,7 +742,7 @@ impl GraphOperator {
                 visited,
                 ..
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution("Traverse not opened".to_string()));
                 }
 
@@ -686,7 +802,7 @@ impl GraphOperator {
                 edge_types,
                 ..
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution("BiExpand not opened".to_string()));
                 }
                 if let Some(chunk) = input.advance()? {
@@ -697,6 +813,7 @@ impl GraphOperator {
 
                         let mut out_rows = Vec::new();
                         for row in &chunk.rows {
+                            base.ensure_not_cancelled()?;
                             let context = ValueRowContext::new(row.clone(), col_names.clone());
                             let vid_val = context
                                 .get_variable("vid")
@@ -768,7 +885,7 @@ impl GraphOperator {
                 visited,
                 ..
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution("BiTraverse not opened".to_string()));
                 }
                 let chunk = input.advance()?;
@@ -780,6 +897,7 @@ impl GraphOperator {
 
                         let mut out_rows = Vec::new();
                         for row in &chunk.rows {
+                            base.ensure_not_cancelled()?;
                             let ctx = ValueRowContext::new(row.clone(), col_names.clone());
                             let vid_val = ctx
                                 .get_variable("vid")
@@ -881,7 +999,7 @@ impl GraphOperator {
                 edge_types,
                 ..
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution("ShortestPath not opened".to_string()));
                 }
                 let chunk = input.advance()?;
@@ -892,6 +1010,7 @@ impl GraphOperator {
 
                         let mut out_rows = Vec::new();
                         for row in &chunk.rows {
+                            base.ensure_not_cancelled()?;
                             let ctx = ValueRowContext::new(row.clone(), col_names.clone());
                             let src_val = ctx
                                 .get_variable("vid")
@@ -930,6 +1049,7 @@ impl GraphOperator {
                                 )?;
 
                                 for path in &paths {
+                                    base.ensure_not_cancelled()?;
                                     let mut out_row = row.clone();
                                     out_row.push(Value::Path(Box::new(path.clone())));
                                     out_rows.push(out_row);
@@ -967,7 +1087,7 @@ impl GraphOperator {
                 edge_types,
                 ..
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution("BFSShortest not opened".to_string()));
                 }
                 let chunk = input.advance()?;
@@ -978,6 +1098,7 @@ impl GraphOperator {
 
                         let mut out_rows = Vec::new();
                         for row in &chunk.rows {
+                            base.ensure_not_cancelled()?;
                             let ctx = ValueRowContext::new(row.clone(), col_names.clone());
                             let src_val = ctx
                                 .get_variable("vid")
@@ -1016,6 +1137,7 @@ impl GraphOperator {
                                 )?;
 
                                 for path in &paths {
+                                    base.ensure_not_cancelled()?;
                                     let mut out_row = row.clone();
                                     out_row.push(Value::Path(Box::new(path.clone())));
                                     out_rows.push(out_row);
@@ -1053,7 +1175,7 @@ impl GraphOperator {
                 edge_types,
                 ..
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution("AllPaths not opened".to_string()));
                 }
                 let chunk = input.advance()?;
@@ -1064,6 +1186,7 @@ impl GraphOperator {
 
                         let mut out_rows = Vec::new();
                         for row in &chunk.rows {
+                            base.ensure_not_cancelled()?;
                             let ctx = ValueRowContext::new(row.clone(), col_names.clone());
                             let src_val = ctx
                                 .get_variable("vid")
@@ -1102,6 +1225,7 @@ impl GraphOperator {
                                 )?;
 
                                 for path in &paths {
+                                    base.ensure_not_cancelled()?;
                                     let mut out_row = row.clone();
                                     out_row.push(Value::Path(Box::new(path.clone())));
                                     out_rows.push(out_row);
@@ -1140,7 +1264,7 @@ impl GraphOperator {
                 edge_types,
                 ..
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution(
                         "MultiShortestPath not opened".to_string(),
                     ));
@@ -1153,6 +1277,7 @@ impl GraphOperator {
 
                         let mut dst_vids = Vec::new();
                         for expr in target_vertices.iter() {
+                            base.ensure_not_cancelled()?;
                             let mut ctx = ValueRowContext::new(vec![], col_names.clone());
                             if let Ok(val) = ExpressionEvaluator::evaluate(expr, &mut ctx) {
                                 if let Ok(vid) = VertexId::try_from(&val) {
@@ -1163,6 +1288,7 @@ impl GraphOperator {
 
                         let mut out_rows = Vec::new();
                         for row in &chunk.rows {
+                            base.ensure_not_cancelled()?;
                             let ctx = ValueRowContext::new(row.clone(), col_names.clone());
                             let src_val = ctx
                                 .get_variable("vid")
@@ -1178,6 +1304,7 @@ impl GraphOperator {
                                 };
 
                                 for dst_vid in &dst_vids {
+                                    base.ensure_not_cancelled()?;
                                     let cancel_token =
                                         base.runtime.as_ref().map(|rt| rt.cancel_token());
                                     let paths = bidir_bfs_shortest_path(
@@ -1194,6 +1321,7 @@ impl GraphOperator {
                                         cancel_token.as_deref(),
                                     )?;
                                     for path in &paths {
+                                        base.ensure_not_cancelled()?;
                                         let mut out_row = row.clone();
                                         out_row.push(Value::Path(Box::new(path.clone())));
                                         out_rows.push(out_row);
@@ -1233,7 +1361,7 @@ impl GraphOperator {
                 direction,
                 edge_types,
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution("Subgraph not opened".to_string()));
                 }
                 let chunk = input.advance()?;
@@ -1244,6 +1372,7 @@ impl GraphOperator {
 
                         let mut out_rows = Vec::new();
                         for row in &chunk.rows {
+                            base.ensure_not_cancelled()?;
                             let ctx = ValueRowContext::new(row.clone(), col_names.clone());
                             let vid_val = ctx
                                 .get_variable("vid")
@@ -1360,7 +1489,7 @@ impl GraphOperator {
         base: &mut OperatorBase,
         input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
-        if base.opened {
+        if base.lifecycle.can_close() {
             match self {
                 Self::Expand { .. }
                 | Self::ExpandAll { .. }
@@ -1374,7 +1503,7 @@ impl GraphOperator {
                 | Self::MultiShortestPath { .. }
                 | Self::Subgraph { .. } => {
                     input.stop()?;
-                    base.opened = false;
+                    base.lifecycle.mark_stopped();
                 }
             }
         }
@@ -1386,7 +1515,7 @@ impl GraphOperator {
         base: &mut OperatorBase,
         input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
-        if base.opened {
+        if base.lifecycle.can_close() {
             match self {
                 Self::Expand { .. }
                 | Self::ExpandAll { .. }
@@ -1400,7 +1529,7 @@ impl GraphOperator {
                 | Self::MultiShortestPath { .. }
                 | Self::Subgraph { .. } => {
                     input.close()?;
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                 }
             }
         }

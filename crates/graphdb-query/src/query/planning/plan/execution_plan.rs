@@ -8,25 +8,6 @@ use crate::core::types::operators::AggregateFunction;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::query::planning::plan::PlanNodeEnum;
 
-/// Execution mode for a query plan
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ExecutionMode {
-    /// Use traditional materialized execution (buffer all intermediate results)
-    #[default]
-    Materialized,
-    /// Use streaming pull-based execution (process row-at-a-time, minimal buffering)
-    Streaming,
-}
-
-impl ExecutionMode {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ExecutionMode::Materialized => "Materialized",
-            ExecutionMode::Streaming => "Streaming",
-        }
-    }
-}
-
 /// Identifies the data domain that a partition layout maps ranges over.
 ///
 /// This prevents the plan cache from reusing a stale `PartitionSpec` when the
@@ -310,13 +291,16 @@ impl PartitionedPhysicalPlan {
     /// decomposition (COUNT, SUM, MIN, MAX, AVG). Functions like COLLECT,
     /// DISTINCT aggregate, PERCENTILE, etc. must remain global-only.
     fn all_functions_support_partial(funcs: &[AggregateFunction]) -> bool {
-        funcs.iter().all(|f| matches!(f,
-            AggregateFunction::Count(_)
-            | AggregateFunction::Sum(_)
-            | AggregateFunction::Min(_)
-            | AggregateFunction::Max(_)
-            | AggregateFunction::Avg(_)
-        ))
+        funcs.iter().all(|f| {
+            matches!(
+                f,
+                AggregateFunction::Count(_)
+                    | AggregateFunction::Sum(_)
+                    | AggregateFunction::Min(_)
+                    | AggregateFunction::Max(_)
+                    | AggregateFunction::Avg(_)
+            )
+        })
     }
 
     fn global_binary(
@@ -348,12 +332,6 @@ pub struct ExecutionPlan {
     /// Of course! Please provide the text you would like to have translated.
     pub format: String,
 
-    /// Execution mode determined by Phase 3 optimizer (Streaming or Materialized)
-    pub execution_mode: ExecutionMode,
-
-    /// Reason for execution mode selection (for debugging/logging)
-    pub execution_mode_reason: String,
-
     /// Optional physical partition layout. A layout is consumed only by a
     /// partition-safe streaming plan; unsupported plans fail explicitly.
     pub partition_spec: Option<PartitionSpec>,
@@ -374,8 +352,6 @@ impl ExecutionPlan {
             id: -1,
             optimize_time_in_us: 0,
             format: "default".to_string(),
-            execution_mode: ExecutionMode::default(),
-            execution_mode_reason: "default".to_string(),
             partition_spec: None,
             max_workers: 1,
             max_buffered_chunks: 10,
@@ -410,22 +386,6 @@ impl ExecutionPlan {
     /// Set the output format
     pub fn set_format(&mut self, format: String) {
         self.format = format;
-    }
-
-    /// Set the execution mode (determined by Phase 3 optimizer)
-    pub fn set_execution_mode(&mut self, mode: ExecutionMode, reason: &str) {
-        self.execution_mode = mode;
-        self.execution_mode_reason = reason.to_string();
-    }
-
-    /// Get the execution mode
-    pub fn execution_mode(&self) -> ExecutionMode {
-        self.execution_mode
-    }
-
-    /// Get the execution mode reason
-    pub fn execution_mode_reason(&self) -> &str {
-        &self.execution_mode_reason
     }
 
     /// Attach the physical partition layout chosen by the optimizer.
@@ -599,12 +559,8 @@ mod tests {
 
     #[test]
     fn partition_spec_stores_source_and_layout_version() {
-        let spec = PartitionSpec::try_new(
-            vec![0..10, 10..20],
-            test_source(),
-            Some(42),
-        )
-        .expect("valid spec");
+        let spec = PartitionSpec::try_new(vec![0..10, 10..20], test_source(), Some(42))
+            .expect("valid spec");
         assert_eq!(spec.source(), &test_source());
         assert_eq!(spec.layout_version(), Some(42));
     }
@@ -620,8 +576,8 @@ mod tests {
         let sort = SortNode::new(start, Vec::new()).expect("sort plan should build");
         let limit =
             LimitNode::new(PlanNodeEnum::Sort(sort), 0, 10).expect("limit plan should build");
-        let spec = PartitionSpec::try_new(vec![0..10, 10..20], test_source(), None)
-            .expect("valid spec");
+        let spec =
+            PartitionSpec::try_new(vec![0..10, 10..20], test_source(), None).expect("valid spec");
         let physical = PartitionedPhysicalPlan::from_logical(PlanNodeEnum::Limit(limit), spec);
 
         assert!(
@@ -645,13 +601,15 @@ mod tests {
             ],
         )
         .expect("aggregate plan should build");
-        let spec = PartitionSpec::try_new(vec![0..10, 10..20], test_source(), None)
-            .expect("valid spec");
-        let physical =
-            PartitionedPhysicalPlan::from_logical(PlanNodeEnum::Aggregate(agg), spec);
+        let spec =
+            PartitionSpec::try_new(vec![0..10, 10..20], test_source(), None).expect("valid spec");
+        let physical = PartitionedPhysicalPlan::from_logical(PlanNodeEnum::Aggregate(agg), spec);
 
         assert!(
-            matches!(physical.root(), PartitionedPhysicalNode::AggregateSplit { .. }),
+            matches!(
+                physical.root(),
+                PartitionedPhysicalNode::AggregateSplit { .. }
+            ),
             "Expected AggregateSplit for supported functions, got {:?}",
             physical.root()
         );
@@ -669,10 +627,8 @@ mod tests {
             vec![AggregateFunction::Collect("x".to_string())],
         )
         .expect("aggregate plan should build");
-        let spec = PartitionSpec::try_new(vec![0..10], test_source(), None)
-            .expect("valid spec");
-        let physical =
-            PartitionedPhysicalPlan::from_logical(PlanNodeEnum::Aggregate(agg), spec);
+        let spec = PartitionSpec::try_new(vec![0..10], test_source(), None).expect("valid spec");
+        let physical = PartitionedPhysicalPlan::from_logical(PlanNodeEnum::Aggregate(agg), spec);
 
         assert!(
             matches!(physical.root(), PartitionedPhysicalNode::GlobalUnary { .. }),
@@ -688,13 +644,15 @@ mod tests {
 
         let start = PlanNodeEnum::Start(StartNode::new());
         let dedup = DedupNode::new(start).expect("dedup plan should build");
-        let spec = PartitionSpec::try_new(vec![0..10, 10..20], test_source(), None)
-            .expect("valid spec");
-        let physical =
-            PartitionedPhysicalPlan::from_logical(PlanNodeEnum::Dedup(dedup), spec);
+        let spec =
+            PartitionSpec::try_new(vec![0..10, 10..20], test_source(), None).expect("valid spec");
+        let physical = PartitionedPhysicalPlan::from_logical(PlanNodeEnum::Dedup(dedup), spec);
 
         assert!(
-            matches!(physical.root(), PartitionedPhysicalNode::DistinctSplit { .. }),
+            matches!(
+                physical.root(),
+                PartitionedPhysicalNode::DistinctSplit { .. }
+            ),
             "Expected DistinctSplit for Dedup, got {:?}",
             physical.root()
         );
@@ -708,10 +666,9 @@ mod tests {
         let start = PlanNodeEnum::Start(StartNode::new());
         let sort_items = vec![SortItem::column_asc("name".to_string())];
         let topn = TopNNode::new(start, sort_items, 10).expect("topn plan should build");
-        let spec = PartitionSpec::try_new(vec![0..10, 10..20], test_source(), None)
-            .expect("valid spec");
-        let physical =
-            PartitionedPhysicalPlan::from_logical(PlanNodeEnum::TopN(topn), spec);
+        let spec =
+            PartitionSpec::try_new(vec![0..10, 10..20], test_source(), None).expect("valid spec");
+        let physical = PartitionedPhysicalPlan::from_logical(PlanNodeEnum::TopN(topn), spec);
 
         assert!(
             matches!(physical.root(), PartitionedPhysicalNode::TopNSplit { .. }),
@@ -728,15 +685,18 @@ mod tests {
         let start = PlanNodeEnum::Start(StartNode::new());
         let join = HashInnerJoinNode::new(start.clone(), start, Vec::new(), Vec::new())
             .expect("hash inner join should build");
-        let spec = PartitionSpec::try_new(vec![0..10, 10..20], test_source(), None)
-            .expect("valid spec");
+        let spec =
+            PartitionSpec::try_new(vec![0..10, 10..20], test_source(), None).expect("valid spec");
         let physical =
             PartitionedPhysicalPlan::from_logical(PlanNodeEnum::HashInnerJoin(join), spec);
 
         // HashJoinExchange is disabled pending the chunk-boundary fix (R1).
         // See streaming_current_remediation_plan.md §P0.
         assert!(
-            matches!(physical.root(), PartitionedPhysicalNode::GlobalBinary { .. }),
+            matches!(
+                physical.root(),
+                PartitionedPhysicalNode::GlobalBinary { .. }
+            ),
             "Expected GlobalBinary fallback (HashJoinExchange is disabled), got {:?}",
             physical.root()
         );
@@ -750,15 +710,22 @@ mod tests {
 
         let start = PlanNodeEnum::Start(StartNode::new());
         let sort = SortNode::new(start.clone(), Vec::new()).expect("sort node should build");
-        let join = HashInnerJoinNode::new(PlanNodeEnum::Sort(sort), start.clone(), Vec::new(), Vec::new())
-            .expect("hash inner join should build");
-        let spec = PartitionSpec::try_new(vec![0..10], test_source(), None)
-            .expect("valid spec");
+        let join = HashInnerJoinNode::new(
+            PlanNodeEnum::Sort(sort),
+            start.clone(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("hash inner join should build");
+        let spec = PartitionSpec::try_new(vec![0..10], test_source(), None).expect("valid spec");
         let physical =
             PartitionedPhysicalPlan::from_logical(PlanNodeEnum::HashInnerJoin(join), spec);
 
         assert!(
-            matches!(physical.root(), PartitionedPhysicalNode::GlobalBinary { .. }),
+            matches!(
+                physical.root(),
+                PartitionedPhysicalNode::GlobalBinary { .. }
+            ),
             "Expected GlobalBinary fallback when a child has a global node, got {:?}",
             physical.root()
         );
@@ -772,15 +739,18 @@ mod tests {
         let start = PlanNodeEnum::Start(StartNode::new());
         let join = HashLeftJoinNode::new(start.clone(), start, Vec::new(), Vec::new())
             .expect("hash left join should build");
-        let spec = PartitionSpec::try_new(vec![0..10, 10..20], test_source(), None)
-            .expect("valid spec");
+        let spec =
+            PartitionSpec::try_new(vec![0..10, 10..20], test_source(), None).expect("valid spec");
         let physical =
             PartitionedPhysicalPlan::from_logical(PlanNodeEnum::HashLeftJoin(join), spec);
 
         // HashJoinExchange is disabled pending the chunk-boundary fix (R1).
         // See streaming_current_remediation_plan.md §P0.
         assert!(
-            matches!(physical.root(), PartitionedPhysicalNode::GlobalBinary { .. }),
+            matches!(
+                physical.root(),
+                PartitionedPhysicalNode::GlobalBinary { .. }
+            ),
             "Expected GlobalBinary fallback (HashJoinExchange is disabled), got {:?}",
             physical.root()
         );
@@ -794,13 +764,15 @@ mod tests {
         let start = PlanNodeEnum::Start(StartNode::new());
         let join = InnerJoinNode::new(start.clone(), start, Vec::new(), Vec::new())
             .expect("inner join should build");
-        let spec = PartitionSpec::try_new(vec![0..10, 10..20], test_source(), None)
-            .expect("valid spec");
-        let physical =
-            PartitionedPhysicalPlan::from_logical(PlanNodeEnum::InnerJoin(join), spec);
+        let spec =
+            PartitionSpec::try_new(vec![0..10, 10..20], test_source(), None).expect("valid spec");
+        let physical = PartitionedPhysicalPlan::from_logical(PlanNodeEnum::InnerJoin(join), spec);
 
         assert!(
-            matches!(physical.root(), PartitionedPhysicalNode::GlobalBinary { .. }),
+            matches!(
+                physical.root(),
+                PartitionedPhysicalNode::GlobalBinary { .. }
+            ),
             "Expected GlobalBinary for non-hash join, got {:?}",
             physical.root()
         );
@@ -830,10 +802,8 @@ mod tests {
         let start = PlanNodeEnum::Start(StartNode::new());
         let topn = TopNNode::new(start, vec![SortItem::column_asc("x".to_string())], 0)
             .expect("topn plan should build");
-        let spec = PartitionSpec::try_new(vec![0..5], test_source(), None)
-            .expect("valid spec");
-        let physical =
-            PartitionedPhysicalPlan::from_logical(PlanNodeEnum::TopN(topn), spec);
+        let spec = PartitionSpec::try_new(vec![0..5], test_source(), None).expect("valid spec");
+        let physical = PartitionedPhysicalPlan::from_logical(PlanNodeEnum::TopN(topn), spec);
 
         assert!(
             matches!(physical.root(), PartitionedPhysicalNode::TopNSplit { .. }),

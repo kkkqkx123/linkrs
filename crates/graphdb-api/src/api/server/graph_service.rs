@@ -573,7 +573,6 @@ impl<
                 col_names: result.columns,
                 rows,
             },
-            execution_mode_reason: None,
         }
     }
 

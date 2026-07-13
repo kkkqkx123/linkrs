@@ -12,10 +12,7 @@ pub fn format_plan_as_table(plan_desc: &PlanDescription) -> String {
     let mut output = String::new();
 
     // Header with plan-level metadata
-    output.push_str(&format!(
-        "Execution Mode: {} ({})\n",
-        plan_desc.execution_mode, plan_desc.execution_mode_reason
-    ));
+    output.push_str("Execution Model: Batch Pull\n");
     if let Some(ref part) = plan_desc.partition_spec_description {
         output.push_str(&format!("Partitioning: {}\n", part));
     }
@@ -134,8 +131,7 @@ pub fn format_plan_as_dot(plan_desc: &PlanDescription) -> String {
         format!("Parallel: requested={}", plan_desc.requested_workers)
     };
     output.push_str(&format!(
-        "    label=\"Execution Mode: {} | {} | {}\";\n",
-        plan_desc.execution_mode,
+        "    label=\"Execution Model: Batch Pull | {} | {}\";\n",
         plan_desc
             .partition_spec_description
             .as_deref()
@@ -373,10 +369,7 @@ pub fn format_plan_with_output_table(
     let mut output = String::new();
 
     // Plan-level metadata header
-    output.push_str(&format!(
-        "Execution Mode: {} ({})\n",
-        plan_desc.execution_mode, plan_desc.execution_mode_reason
-    ));
+    output.push_str("Execution Model: Batch Pull\n");
     if let Some(ref part) = plan_desc.partition_spec_description {
         output.push_str(&format!("Partitioning: {}\n", part));
     }
@@ -531,8 +524,7 @@ pub fn format_plan_as_json(
     #[derive(Serialize)]
     struct SerializablePlanDescription {
         format: String,
-        execution_mode: String,
-        execution_mode_reason: String,
+        execution_model: &'static str,
         partition_spec_description: Option<String>,
         requested_workers: usize,
         actual_workers: usize,
@@ -599,8 +591,7 @@ pub fn format_plan_as_json(
 
     let serializable_plan = SerializablePlanDescription {
         format: plan_desc.format.clone(),
-        execution_mode: plan_desc.execution_mode.clone(),
-        execution_mode_reason: plan_desc.execution_mode_reason.clone(),
+        execution_model: "batch_pull",
         partition_spec_description: plan_desc.partition_spec_description.clone(),
         requested_workers: plan_desc.requested_workers,
         actual_workers: plan_desc.actual_workers,

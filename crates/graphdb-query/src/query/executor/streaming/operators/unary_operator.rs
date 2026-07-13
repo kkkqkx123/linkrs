@@ -48,16 +48,63 @@ pub enum UnaryOperator {
         count: u64,
         consumed: u64,
     },
-    Loop {
-        condition: Option<String>,
-    },
-    Select {
-        selection_expr: Option<String>,
-    },
-    PassThrough,
 }
 
 impl UnaryOperator {
+    /// Create a UnaryOperator with fresh mutable state from an immutable spec.
+    pub fn from_spec(spec: &super::super::operator_spec::UnarySpec) -> Self {
+        match spec {
+            super::super::operator_spec::UnarySpec::Filter { predicate } => {
+                Self::Filter {
+                    predicate: predicate.clone(),
+                }
+            }
+            super::super::operator_spec::UnarySpec::Project {
+                output_expressions,
+                output_col_names,
+            } => Self::Project {
+                output_expressions: output_expressions.clone(),
+                output_col_names: output_col_names.clone(),
+            },
+            super::super::operator_spec::UnarySpec::Limit { offset, limit } => {
+                Self::Limit {
+                    offset: *offset,
+                    limit: *limit,
+                    skipped: 0,
+                    consumed: 0,
+                }
+            }
+            super::super::operator_spec::UnarySpec::Assign { assignments } => {
+                Self::Assign {
+                    assignments: assignments.clone(),
+                }
+            }
+            super::super::operator_spec::UnarySpec::Remove {
+                columns_to_remove,
+            } => Self::Remove {
+                columns_to_remove: columns_to_remove.clone(),
+            },
+            super::super::operator_spec::UnarySpec::Unwind { unwind_column } => {
+                Self::Unwind {
+                    unwind_column: unwind_column.clone(),
+                    col_index: None,
+                    all_rows: Vec::new(),
+                    current_row_index: 0,
+                    current_unwind_index: 0,
+                }
+            }
+            super::super::operator_spec::UnarySpec::AppendVertices {
+                vertex_properties,
+            } => Self::AppendVertices {
+                vertex_properties: vertex_properties.clone(),
+            },
+            super::super::operator_spec::UnarySpec::Sample { count } => Self::Sample {
+                count: *count,
+                consumed: 0,
+            },
+        }
+    }
+
     pub fn open(
         &mut self,
         _base: &mut OperatorBase,
@@ -72,12 +119,9 @@ impl UnaryOperator {
             | Self::Remove { .. }
             | Self::Unwind { .. }
             | Self::AppendVertices { .. }
-            | Self::Sample { .. }
-            | Self::Loop { .. }
-            | Self::Select { .. }
-            | Self::PassThrough => {
+            | Self::Sample { .. } => {
                 input.open()?;
-                _base.opened = true;
+                _base.lifecycle.mark_opened();
                 Ok(())
             }
         }
@@ -93,7 +137,7 @@ impl UnaryOperator {
                 match input.advance()? {
                     Some(chunk) => {
                         let col_names = chunk.col_names();
-                        let layout = chunk.get_or_create_layout();
+                        let layout = chunk.get_layout();
                         let mut filtered_rows = Vec::new();
                         for row in chunk.rows {
                             let mut context = ValueRowContext::new(row.clone(), col_names.clone());
@@ -343,13 +387,6 @@ impl UnaryOperator {
                     None => Ok(None),
                 }
             }
-            Self::Loop { .. } | Self::Select { .. } | Self::PassThrough => {
-                if let Some(chunk) = input.advance()? {
-                    Ok(Some(chunk))
-                } else {
-                    Ok(None)
-                }
-            }
         }
     }
 
@@ -367,10 +404,7 @@ impl UnaryOperator {
             | Self::Remove { .. }
             | Self::Unwind { .. }
             | Self::AppendVertices { .. }
-            | Self::Sample { .. }
-            | Self::Loop { .. }
-            | Self::Select { .. }
-            | Self::PassThrough => input.stop(),
+            | Self::Sample { .. } => input.stop(),
         }
     }
 
@@ -386,18 +420,18 @@ impl UnaryOperator {
             | Self::Dedup { .. }
             | Self::Unwind { .. }
             | Self::AppendVertices { .. }
-            | Self::Sample { .. }
-            | Self::Loop { .. }
-            | Self::Select { .. }
-            | Self::PassThrough => {
-                if _base.opened {
+            | Self::Sample { .. } => {
+                if _base.lifecycle.can_close() {
                     input.close()?;
-                    _base.opened = false;
+                    _base.lifecycle.mark_closed();
                 }
                 Ok(())
             }
             Self::Assign { .. } | Self::Remove { .. } => {
-                input.close()?;
+                if _base.lifecycle.can_close() {
+                    input.close()?;
+                    _base.lifecycle.mark_closed();
+                }
                 Ok(())
             }
         }

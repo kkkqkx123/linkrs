@@ -101,7 +101,7 @@ impl FulltextOperator {
             | FulltextOperator::FulltextLookup { .. }
             | FulltextOperator::MatchFulltext { .. } => {
                 input.open()?;
-                base.opened = true;
+                base.lifecycle.mark_opened();
                 Ok(())
             }
         }
@@ -124,10 +124,10 @@ impl FulltextOperator {
                 #[cfg(feature = "fulltext-search")]
                 fulltext_manager,
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Ok(None);
                 }
-                base.opened = false;
+                base.lifecycle.mark_closed();
 
                 #[cfg(feature = "fulltext-search")]
                 {
@@ -305,7 +305,7 @@ impl FulltextOperator {
                 #[cfg(not(feature = "fulltext-search"))]
                 let _ = (&search_query, &space_id, &tag_name, &field_name);
 
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution(
                         "FulltextSearch not opened".to_string(),
                     ));
@@ -354,7 +354,7 @@ impl FulltextOperator {
                 #[cfg(not(feature = "fulltext-search"))]
                 let _ = (&search_query, &space_id, &tag_name, &field_name);
 
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution(
                         "FulltextLookup not opened".to_string(),
                     ));
@@ -402,7 +402,7 @@ impl FulltextOperator {
                 #[cfg(not(feature = "fulltext-search"))]
                 let _ = (&match_expr, &tag_name, &field_name);
 
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution(
                         "MatchFulltext not opened".to_string(),
                     ));
@@ -423,7 +423,7 @@ impl FulltextOperator {
                         for result in search_results {
                             rows.push(vec![result.doc_id, Value::Double(result.score as f64)]);
                         }
-                        base.opened = false;
+                        base.lifecycle.mark_closed();
                         return if rows.is_empty() {
                             Ok(None)
                         } else {
@@ -433,10 +433,10 @@ impl FulltextOperator {
                 }
 
                 if let Some(chunk) = input.advance()? {
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                     return Ok(Some(chunk));
                 }
-                base.opened = false;
+                base.lifecycle.mark_closed();
                 Ok(None)
             }
         }
@@ -452,9 +452,9 @@ impl FulltextOperator {
             | FulltextOperator::FulltextSearch { .. }
             | FulltextOperator::FulltextLookup { .. }
             | FulltextOperator::MatchFulltext { .. } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     input.stop()?;
-                    base.opened = false;
+                    base.lifecycle.mark_stopped();
                 }
                 Ok(())
             }
@@ -471,9 +471,9 @@ impl FulltextOperator {
             | FulltextOperator::FulltextSearch { .. }
             | FulltextOperator::FulltextLookup { .. }
             | FulltextOperator::MatchFulltext { .. } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     input.close()?;
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                 }
                 Ok(())
             }

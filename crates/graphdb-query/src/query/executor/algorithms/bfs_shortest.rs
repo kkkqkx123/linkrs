@@ -458,10 +458,7 @@ impl<S: StorageClient + 'static> Executor<S> for BFSShortestExecutor<S> {
             .collect();
 
         let dataset = DataSet::from_rows(rows, vec!["path".to_string()]);
-        Ok(ExecutionResult::DataSet {
-            data: dataset,
-            execution_mode_reason: None,
-        })
+        Ok(ExecutionResult::DataSet { data: dataset })
     }
 
     fn open(&mut self) -> DBResult<()> {

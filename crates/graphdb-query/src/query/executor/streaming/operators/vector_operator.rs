@@ -100,7 +100,7 @@ impl VectorOperator {
             | VectorOperator::VectorLookup { .. }
             | VectorOperator::VectorMatch { .. } => {
                 input.open()?;
-                base.opened = true;
+                base.lifecycle.mark_opened();
                 Ok(())
             }
         }
@@ -128,7 +128,7 @@ impl VectorOperator {
                 #[cfg(feature = "qdrant")]
                 let _ = (&storage, &space_name);
 
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Ok(None);
                 }
 
@@ -221,7 +221,7 @@ impl VectorOperator {
                     ))),
                 };
 
-                base.opened = false;
+                base.lifecycle.mark_closed();
                 result
             }
 
@@ -238,7 +238,7 @@ impl VectorOperator {
                 #[cfg(not(feature = "qdrant"))]
                 let _ = (&space_id, &tag_name, &field_name, &query_vector, &top_k);
 
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution("VectorSearch not opened".to_string()));
                 }
 
@@ -264,7 +264,7 @@ impl VectorOperator {
                                 Value::Double(result.score as f64),
                             ]);
                         }
-                        base.opened = false;
+                        base.lifecycle.mark_closed();
                         return if rows.is_empty() {
                             Ok(None)
                         } else {
@@ -274,15 +274,15 @@ impl VectorOperator {
                 }
 
                 if let Some(chunk) = input.advance()? {
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                     return Ok(Some(chunk));
                 }
-                base.opened = false;
+                base.lifecycle.mark_closed();
                 Ok(None)
             }
 
             VectorOperator::VectorLookup { .. } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution("VectorLookup not opened".to_string()));
                 }
                 if let Some(chunk) = input.advance()? {
@@ -304,7 +304,7 @@ impl VectorOperator {
                 #[cfg(not(feature = "qdrant"))]
                 let _ = (&space_id, &tag_name, &field_name, &query_vector, &threshold);
 
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution("VectorMatch not opened".to_string()));
                 }
 
@@ -331,7 +331,7 @@ impl VectorOperator {
                                 Value::Double(result.score as f64),
                             ]);
                         }
-                        base.opened = false;
+                        base.lifecycle.mark_closed();
                         return if rows.is_empty() {
                             Ok(None)
                         } else {
@@ -341,10 +341,10 @@ impl VectorOperator {
                 }
 
                 if let Some(chunk) = input.advance()? {
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                     return Ok(Some(chunk));
                 }
-                base.opened = false;
+                base.lifecycle.mark_closed();
                 Ok(None)
             }
         }
@@ -360,9 +360,9 @@ impl VectorOperator {
             | VectorOperator::VectorSearch { .. }
             | VectorOperator::VectorLookup { .. }
             | VectorOperator::VectorMatch { .. } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     input.stop()?;
-                    base.opened = false;
+                    base.lifecycle.mark_stopped();
                 }
                 Ok(())
             }
@@ -379,9 +379,9 @@ impl VectorOperator {
             | VectorOperator::VectorSearch { .. }
             | VectorOperator::VectorLookup { .. }
             | VectorOperator::VectorMatch { .. } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     input.close()?;
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                 }
                 Ok(())
             }

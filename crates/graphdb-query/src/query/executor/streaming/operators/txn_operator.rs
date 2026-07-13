@@ -20,7 +20,7 @@ impl TxnOperator {
         match self {
             Self::BeginTransaction { .. } | Self::Commit { .. } | Self::Rollback { .. } => {
                 input.open()?;
-                _base.opened = true;
+                _base.lifecycle.mark_opened();
                 Ok(())
             }
         }
@@ -70,9 +70,9 @@ impl TxnOperator {
     ) -> Result<(), QueryError> {
         match self {
             Self::BeginTransaction { .. } | Self::Commit { .. } | Self::Rollback { .. } => {
-                if _base.opened {
+                if _base.lifecycle.can_close() {
                     input.close()?;
-                    _base.opened = false;
+                    _base.lifecycle.mark_closed();
                 }
                 Ok(())
             }

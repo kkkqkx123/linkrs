@@ -69,9 +69,6 @@ impl<S: StorageClient + Send + 'static> ExplainExecutor<S> {
         let descriptions = visitor.into_descriptions();
         let mut plan_desc = PlanDescription::new();
         plan_desc.format = format!("{:?}", self.format);
-        plan_desc.execution_mode = self.inner_plan.execution_mode.as_str().to_string();
-        plan_desc.execution_mode_reason = self.inner_plan.execution_mode_reason().to_string();
-
         if let Some(ref spec) = self.inner_plan.partition_spec {
             let ranges_str: Vec<String> = spec
                 .ranges()
@@ -207,8 +204,7 @@ impl<S: StorageClient + Send + 'static> Executor<S> for ExplainExecutor<S> {
 
             ExplainMode::Analyze => {
                 let start = Instant::now();
-                let (_exec_result, stats_context, runtime) =
-                    self.execute_with_instrumentation()?;
+                let (_exec_result, stats_context, runtime) = self.execute_with_instrumentation()?;
                 let execution_time_ms = start.elapsed().as_micros() as f64 / 1000.0;
 
                 let mut plan_desc = self.generate_plan_description()?;

@@ -127,6 +127,127 @@ pub enum JoinOperator {
 }
 
 impl JoinOperator {
+    /// Create a JoinOperator with fresh mutable state from an immutable spec.
+    pub fn from_spec(
+        spec: &super::super::operator_spec::JoinSpec,
+        memory_budget: &crate::query::executor::base::MemoryBudget,
+    ) -> Self {
+        match spec {
+            super::super::operator_spec::JoinSpec::HashJoin {
+                join_condition,
+                hash_keys,
+                probe_keys,
+            } => Self::HashJoin {
+                join_condition: join_condition.clone(),
+                hash_keys: hash_keys.clone(),
+                probe_keys: probe_keys.clone(),
+                build_side_hash: std::collections::HashMap::new(),
+                all_right_rows: Vec::new(),
+                left_consumed: false,
+                memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                    memory_budget.clone(),
+                ),
+                right_col_names: Vec::new(),
+            },
+            super::super::operator_spec::JoinSpec::HashLeftJoin {
+                join_condition,
+                hash_keys,
+                probe_keys,
+            } => Self::HashLeftJoin {
+                join_condition: join_condition.clone(),
+                hash_keys: hash_keys.clone(),
+                probe_keys: probe_keys.clone(),
+                build_side_hash: std::collections::HashMap::new(),
+                all_right_rows: Vec::new(),
+                left_consumed: false,
+                memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                    memory_budget.clone(),
+                ),
+                right_col_names: Vec::new(),
+            },
+            super::super::operator_spec::JoinSpec::NestedLoopJoin { join_condition } => {
+                Self::NestedLoopJoin {
+                    join_condition: join_condition.clone(),
+                    build_side_tuples: Vec::new(),
+                    left_consumed: false,
+                    memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                        memory_budget.clone(),
+                    ),
+                    right_col_names: Vec::new(),
+                }
+            }
+            super::super::operator_spec::JoinSpec::InnerJoin { join_condition } => {
+                Self::InnerJoin {
+                    join_condition: join_condition.clone(),
+                    build_side_tuples: Vec::new(),
+                    left_consumed: false,
+                    memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                        memory_budget.clone(),
+                    ),
+                    right_col_names: Vec::new(),
+                }
+            }
+            super::super::operator_spec::JoinSpec::LeftJoin { join_condition } => {
+                Self::LeftJoin {
+                    join_condition: join_condition.clone(),
+                    build_side_tuples: Vec::new(),
+                    left_consumed: false,
+                    memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                        memory_budget.clone(),
+                    ),
+                    right_col_names: Vec::new(),
+                }
+            }
+            super::super::operator_spec::JoinSpec::RightJoin { join_condition } => {
+                Self::RightJoin {
+                    join_condition: join_condition.clone(),
+                    build_side_tuples: Vec::new(),
+                    right_consumed: false,
+                    memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                        memory_budget.clone(),
+                    ),
+                    right_col_names: Vec::new(),
+                }
+            }
+            super::super::operator_spec::JoinSpec::FullOuterJoin { join_condition } => {
+                use super::super::executor::FullOuterJoinPhase;
+                Self::FullOuterJoin {
+                    join_condition: join_condition.clone(),
+                    left_rows: Vec::new(),
+                    right_rows: Vec::new(),
+                    matched_right_indices: std::collections::HashSet::new(),
+                    result_iter: None,
+                    phase: FullOuterJoinPhase::BuildingRight,
+                    memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                        memory_budget.clone(),
+                    ),
+                    right_col_names: Vec::new(),
+                }
+            }
+            super::super::operator_spec::JoinSpec::CrossJoin => Self::CrossJoin {
+                all_left_rows: Vec::new(),
+                all_right_rows: Vec::new(),
+                left_consumed: false,
+                right_consumed: false,
+                memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                    memory_budget.clone(),
+                ),
+                right_col_names: Vec::new(),
+            },
+            super::super::operator_spec::JoinSpec::SemiJoin { join_condition } => {
+                Self::SemiJoin {
+                    join_condition: join_condition.clone(),
+                    right_rows: Vec::new(),
+                    right_consumed: false,
+                    memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                        memory_budget.clone(),
+                    ),
+                    right_col_names: Vec::new(),
+                }
+            }
+        }
+    }
+
     pub fn memory_tracker(&self) -> &MemoryTracker {
         match self {
             Self::HashJoin { memory_tracker, .. }
@@ -159,7 +280,7 @@ impl JoinOperator {
             | Self::SemiJoin { .. } => {
                 left.open()?;
                 right.open()?;
-                base.opened = true;
+                base.lifecycle.mark_opened();
                 Ok(())
             }
         }
@@ -243,7 +364,7 @@ impl JoinOperator {
                     if result_rows.is_empty() {
                         Ok(None)
                     } else {
-                        let left_layout = left_chunk.get_or_create_layout();
+                        let left_layout = left_chunk.get_layout();
                         let right_layout = Arc::new(SlotLayout::from_names(&build_combined_names(
                             &[],
                             right_col_names,
@@ -343,7 +464,7 @@ impl JoinOperator {
                     if result_rows.is_empty() {
                         Ok(None)
                     } else {
-                        let left_layout = left_chunk.get_or_create_layout();
+                        let left_layout = left_chunk.get_layout();
                         let right_layout = if right_col_names.is_empty() {
                             Arc::new(SlotLayout::from_names(
                                 &all_right_rows
@@ -434,7 +555,7 @@ impl JoinOperator {
                     if result_rows.is_empty() {
                         Ok(None)
                     } else {
-                        let left_layout = left_chunk.get_or_create_layout();
+                        let left_layout = left_chunk.get_layout();
                         let right_layout = Arc::new(SlotLayout::from_names(&build_combined_names(
                             &[],
                             right_col_names,
@@ -507,7 +628,7 @@ impl JoinOperator {
                     if result_rows.is_empty() {
                         Ok(None)
                     } else {
-                        let left_layout = left_chunk.get_or_create_layout();
+                        let left_layout = left_chunk.get_layout();
                         let right_layout = Arc::new(SlotLayout::from_names(&build_combined_names(
                             &[],
                             right_col_names,
@@ -590,7 +711,7 @@ impl JoinOperator {
                     if result_rows.is_empty() {
                         Ok(None)
                     } else {
-                        let left_layout = left_chunk.get_or_create_layout();
+                        let left_layout = left_chunk.get_layout();
                         let right_layout = Arc::new(SlotLayout::from_names(&build_combined_names(
                             &[],
                             right_col_names,
@@ -968,7 +1089,7 @@ impl JoinOperator {
                     if result_rows.is_empty() {
                         Ok(None)
                     } else {
-                        let left_layout = left_chunk.get_or_create_layout();
+                        let left_layout = left_chunk.get_layout();
                         Ok(Some(DataChunk::new_with_layout(result_rows, left_layout)))
                     }
                 } else {
@@ -1013,13 +1134,13 @@ impl JoinOperator {
                 memory_tracker,
                 ..
             } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     build_side_hash.clear();
                     all_right_rows.clear();
                     let left_err = left.close().err();
                     let right_err = right.close().err();
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                     match (left_err, right_err) {
                         (Some(e), _) => Err(e),
                         (_, Some(e)) => Err(e),
@@ -1035,13 +1156,13 @@ impl JoinOperator {
                 memory_tracker,
                 ..
             } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     build_side_hash.clear();
                     all_right_rows.clear();
                     let left_err = left.close().err();
                     let right_err = right.close().err();
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                     match (left_err, right_err) {
                         (Some(e), _) => Err(e),
                         (_, Some(e)) => Err(e),
@@ -1056,12 +1177,12 @@ impl JoinOperator {
                 memory_tracker,
                 ..
             } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     build_side_tuples.clear();
                     let left_err = left.close().err();
                     let right_err = right.close().err();
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                     match (left_err, right_err) {
                         (Some(e), _) => Err(e),
                         (_, Some(e)) => Err(e),
@@ -1076,12 +1197,12 @@ impl JoinOperator {
                 memory_tracker,
                 ..
             } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     build_side_tuples.clear();
                     let left_err = left.close().err();
                     let right_err = right.close().err();
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                     match (left_err, right_err) {
                         (Some(e), _) => Err(e),
                         (_, Some(e)) => Err(e),
@@ -1096,12 +1217,12 @@ impl JoinOperator {
                 memory_tracker,
                 ..
             } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     build_side_tuples.clear();
                     let left_err = left.close().err();
                     let right_err = right.close().err();
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                     match (left_err, right_err) {
                         (Some(e), _) => Err(e),
                         (_, Some(e)) => Err(e),
@@ -1116,12 +1237,12 @@ impl JoinOperator {
                 memory_tracker,
                 ..
             } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     build_side_tuples.clear();
                     let left_err = left.close().err();
                     let right_err = right.close().err();
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                     match (left_err, right_err) {
                         (Some(e), _) => Err(e),
                         (_, Some(e)) => Err(e),
@@ -1137,13 +1258,13 @@ impl JoinOperator {
                 memory_tracker,
                 ..
             } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     left_rows.clear();
                     right_rows.clear();
                     let left_err = left.close().err();
                     let right_err = right.close().err();
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                     match (left_err, right_err) {
                         (Some(e), _) => Err(e),
                         (_, Some(e)) => Err(e),
@@ -1159,13 +1280,13 @@ impl JoinOperator {
                 memory_tracker,
                 ..
             } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     all_left_rows.clear();
                     all_right_rows.clear();
                     let left_err = left.close().err();
                     let right_err = right.close().err();
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                     match (left_err, right_err) {
                         (Some(e), _) => Err(e),
                         (_, Some(e)) => Err(e),
@@ -1180,12 +1301,12 @@ impl JoinOperator {
                 memory_tracker,
                 ..
             } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     right_rows.clear();
                     let left_err = left.close().err();
                     let right_err = right.close().err();
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                     match (left_err, right_err) {
                         (Some(e), _) => Err(e),
                         (_, Some(e)) => Err(e),

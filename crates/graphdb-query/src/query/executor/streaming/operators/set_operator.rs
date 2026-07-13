@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use crate::core::error::QueryError;
 use crate::core::Value;
-use crate::query::executor::base::MemoryTracker;
+use crate::query::executor::base::{MemoryBudget, MemoryTracker};
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::operator_base::OperatorBase;
@@ -37,6 +37,36 @@ pub enum SetOperator {
 }
 
 impl SetOperator {
+    pub fn from_spec(spec: &super::super::operator_spec::SetSpec, budget: &MemoryBudget) -> Self {
+        match spec {
+            super::super::operator_spec::SetSpec::Union => Self::Union {
+                seen_rows: std::collections::HashSet::new(),
+                left_consumed: false,
+                memory_tracker: MemoryTracker::new(budget.clone()),
+            },
+            super::super::operator_spec::SetSpec::UnionAll => Self::UnionAll {
+                left_consumed: false,
+            },
+            super::super::operator_spec::SetSpec::Intersect => Self::Intersect {
+                left_rows: Vec::new(),
+                right_rows: std::collections::HashSet::new(),
+                left_buffered: false,
+                right_buffered: false,
+                memory_tracker: MemoryTracker::new(budget.clone()),
+            },
+            super::super::operator_spec::SetSpec::Except => Self::Except {
+                exclude_rows: std::collections::HashSet::new(),
+                right_buffered: false,
+                memory_tracker: MemoryTracker::new(budget.clone()),
+            },
+            super::super::operator_spec::SetSpec::Minus => Self::Minus {
+                exclude_rows: std::collections::HashSet::new(),
+                right_buffered: false,
+                memory_tracker: MemoryTracker::new(budget.clone()),
+            },
+        }
+    }
+
     pub fn memory_tracker(&self) -> &MemoryTracker {
         match self {
             Self::Union { memory_tracker, .. }
@@ -62,12 +92,12 @@ impl SetOperator {
             | Self::Except { .. } => {
                 left.open()?;
                 right.open()?;
-                base.opened = true;
+                base.lifecycle.mark_opened();
                 Ok(())
             }
             Self::Minus { .. } => {
                 left.open()?;
-                base.opened = true;
+                base.lifecycle.mark_opened();
                 Ok(())
             }
         }
@@ -287,12 +317,12 @@ impl SetOperator {
                 memory_tracker,
                 ..
             } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     seen_rows.clear();
                     let left_err = left.close().err();
                     let right_err = right.close().err();
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                     match (left_err, right_err) {
                         (Some(e), _) => Err(e),
                         (_, Some(e)) => Err(e),
@@ -303,10 +333,10 @@ impl SetOperator {
                 }
             }
             Self::UnionAll { .. } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     let left_err = left.close().err();
                     let right_err = right.close().err();
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                     match (left_err, right_err) {
                         (Some(e), _) => Err(e),
                         (_, Some(e)) => Err(e),
@@ -322,13 +352,13 @@ impl SetOperator {
                 memory_tracker,
                 ..
             } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     left_rows.clear();
                     right_rows.clear();
                     let left_err = left.close().err();
                     let right_err = right.close().err();
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                     match (left_err, right_err) {
                         (Some(e), _) => Err(e),
                         (_, Some(e)) => Err(e),
@@ -343,12 +373,12 @@ impl SetOperator {
                 memory_tracker,
                 ..
             } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     exclude_rows.clear();
                     let left_err = left.close().err();
                     let right_err = right.close().err();
-                    base.opened = false;
+                    base.lifecycle.mark_closed();
                     match (left_err, right_err) {
                         (Some(e), _) => Err(e),
                         (_, Some(e)) => Err(e),
@@ -366,7 +396,7 @@ impl SetOperator {
                 memory_tracker.reset();
                 exclude_rows.clear();
                 let left_err = left.close().err();
-                base.opened = false;
+                base.lifecycle.mark_closed();
                 match left_err {
                     Some(e) => Err(e),
                     None => Ok(()),

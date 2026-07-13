@@ -109,6 +109,101 @@ fn eval_expr(expr: &Expression, context: &mut ValueRowContext) -> Result<Value, 
 }
 
 impl SinkOperator {
+    pub fn from_spec(spec: &super::super::operator_spec::SinkSpec) -> Self {
+        match spec {
+            super::super::operator_spec::SinkSpec::InsertVertices {
+                vertex_properties,
+                tags,
+            } => Self::InsertVertices {
+                storage: None,
+                space_name: String::new(),
+                vertex_properties: vertex_properties.clone(),
+                tags: tags.clone(),
+                rows_inserted: 0,
+            },
+            super::super::operator_spec::SinkSpec::InsertEdges {
+                src_col,
+                dst_col,
+                edge_type,
+                edge_properties,
+            } => Self::InsertEdges {
+                storage: None,
+                space_name: String::new(),
+                src_col: src_col.clone(),
+                dst_col: dst_col.clone(),
+                edge_type: edge_type.clone(),
+                edge_properties: edge_properties.clone(),
+                rows_inserted: 0,
+            },
+            super::super::operator_spec::SinkSpec::UpdateVertices { updates } => {
+                Self::UpdateVertices {
+                    storage: None,
+                    space_name: String::new(),
+                    updates: updates.clone(),
+                    rows_updated: 0,
+                }
+            }
+            super::super::operator_spec::SinkSpec::UpdateEdges {
+                src_col,
+                dst_col,
+                edge_type,
+                updates,
+            } => Self::UpdateEdges {
+                storage: None,
+                space_name: String::new(),
+                src_col: src_col.clone(),
+                dst_col: dst_col.clone(),
+                edge_type: edge_type.clone(),
+                updates: updates.clone(),
+                rows_updated: 0,
+            },
+            super::super::operator_spec::SinkSpec::DeleteVertices { vertex_id_col } => {
+                Self::DeleteVertices {
+                    storage: None,
+                    space_name: String::new(),
+                    vertex_id_col: vertex_id_col.clone(),
+                    rows_deleted: 0,
+                }
+            }
+            super::super::operator_spec::SinkSpec::DeleteEdges { src_col, dst_col } => {
+                Self::DeleteEdges {
+                    storage: None,
+                    space_name: String::new(),
+                    src_col: src_col.clone(),
+                    dst_col: dst_col.clone(),
+                    rows_deleted: 0,
+                }
+            }
+            super::super::operator_spec::SinkSpec::PipeDeleteVertices { vertex_id_col } => {
+                Self::PipeDeleteVertices {
+                    storage: None,
+                    space_name: String::new(),
+                    vertex_id_col: vertex_id_col.clone(),
+                    rows_deleted: 0,
+                }
+            }
+            super::super::operator_spec::SinkSpec::PipeDeleteEdges { src_col, dst_col } => {
+                Self::PipeDeleteEdges {
+                    storage: None,
+                    space_name: String::new(),
+                    src_col: src_col.clone(),
+                    dst_col: dst_col.clone(),
+                    rows_deleted: 0,
+                }
+            }
+            super::super::operator_spec::SinkSpec::DeleteTags {
+                tag_names,
+                vertex_ids,
+            } => Self::DeleteTags {
+                storage: None,
+                space_name: String::new(),
+                tag_names: tag_names.clone(),
+                vertex_ids: vertex_ids.clone(),
+                rows_deleted: 0,
+            },
+        }
+    }
+
     pub fn open(
         &mut self,
         base: &mut OperatorBase,
@@ -125,7 +220,7 @@ impl SinkOperator {
             | SinkOperator::PipeDeleteEdges { .. }
             | SinkOperator::DeleteTags { .. } => {
                 input.open()?;
-                base.opened = true;
+                base.lifecycle.mark_opened();
                 Ok(())
             }
         }
@@ -145,13 +240,14 @@ impl SinkOperator {
                 rows_inserted,
                 ..
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution(
                         "InsertVertices not opened".to_string(),
                     ));
                 }
 
                 if let Some(chunk) = input.advance()? {
+                    base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
                         let col_names = chunk.col_names();
@@ -205,11 +301,12 @@ impl SinkOperator {
                 rows_inserted,
                 ..
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution("InsertEdges not opened".to_string()));
                 }
 
                 if let Some(chunk) = input.advance()? {
+                    base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
                         let col_names = chunk.col_names();
@@ -253,13 +350,14 @@ impl SinkOperator {
                 rows_updated,
                 ..
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution(
                         "UpdateVertices not opened".to_string(),
                     ));
                 }
 
                 if let Some(chunk) = input.advance()? {
+                    base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
                         let col_names = chunk.col_names();
@@ -301,11 +399,12 @@ impl SinkOperator {
                 rows_updated,
                 ..
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution("UpdateEdges not opened".to_string()));
                 }
 
                 if let Some(chunk) = input.advance()? {
+                    base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
                         let col_names = chunk.col_names();
@@ -355,7 +454,7 @@ impl SinkOperator {
                 rows_deleted,
                 ..
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution(
                         "DeleteVertices not opened".to_string(),
                     ));
@@ -393,11 +492,64 @@ impl SinkOperator {
                 rows_deleted,
                 ..
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution("DeleteEdges not opened".to_string()));
                 }
 
                 if let Some(chunk) = input.advance()? {
+                    base.ensure_not_cancelled()?;
+                    if let Some(storage_lock) = storage {
+                        let mut writer = storage_lock.write();
+                        let col_names = chunk.col_names();
+
+                        for row in &chunk.rows {
+                            let context = ValueRowContext::new(row.clone(), col_names.clone());
+                            let src_val = context
+                                .get_variable(src_col)
+                                .unwrap_or(Value::Null(crate::core::NullType::Null));
+                            let dst_val = context
+                                .get_variable(dst_col)
+                                .unwrap_or(Value::Null(crate::core::NullType::Null));
+                            if let (Ok(src), Ok(dst)) =
+                                (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
+                            {
+                                StorageWriter::delete_edge(
+                                    &mut *writer,
+                                    space_name,
+                                    &src,
+                                    &dst,
+                                    "",
+                                    0,
+                                )
+                                .map_err(|e| QueryError::execution(e.to_string()))?;
+                                *rows_deleted += 1;
+                            }
+                        }
+                    } else {
+                        *rows_deleted += chunk.rows.len() as u64;
+                    }
+                    Ok(Some(chunk))
+                } else {
+                    Ok(Some(make_modify_result("delete_edges", *rows_deleted)))
+                }
+            }
+
+            SinkOperator::PipeDeleteEdges {
+                storage,
+                space_name,
+                src_col,
+                dst_col,
+                rows_deleted,
+                ..
+            } => {
+                if !base.lifecycle.is_opened() {
+                    return Err(QueryError::execution(
+                        "PipeDeleteEdges not opened".to_string(),
+                    ));
+                }
+
+                if let Some(chunk) = input.advance()? {
+                    base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
                         let col_names = chunk.col_names();
@@ -441,13 +593,14 @@ impl SinkOperator {
                 rows_deleted,
                 ..
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution(
                         "PipeDeleteVertices not opened".to_string(),
                     ));
                 }
 
                 if let Some(chunk) = input.advance()? {
+                    base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
                         let col_names = chunk.col_names();
@@ -474,57 +627,6 @@ impl SinkOperator {
                 }
             }
 
-            SinkOperator::PipeDeleteEdges {
-                storage,
-                space_name,
-                src_col,
-                dst_col,
-                rows_deleted,
-                ..
-            } => {
-                if !base.opened {
-                    return Err(QueryError::execution(
-                        "PipeDeleteEdges not opened".to_string(),
-                    ));
-                }
-
-                if let Some(chunk) = input.advance()? {
-                    if let Some(storage_lock) = storage {
-                        let mut writer = storage_lock.write();
-                        let col_names = chunk.col_names();
-
-                        for row in &chunk.rows {
-                            let context = ValueRowContext::new(row.clone(), col_names.clone());
-                            let src_val = context
-                                .get_variable(src_col)
-                                .unwrap_or(Value::Null(crate::core::NullType::Null));
-                            let dst_val = context
-                                .get_variable(dst_col)
-                                .unwrap_or(Value::Null(crate::core::NullType::Null));
-                            if let (Ok(src), Ok(dst)) =
-                                (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
-                            {
-                                StorageWriter::delete_edge(
-                                    &mut *writer,
-                                    space_name,
-                                    &src,
-                                    &dst,
-                                    "",
-                                    0,
-                                )
-                                .map_err(|e| QueryError::execution(e.to_string()))?;
-                                *rows_deleted += 1;
-                            }
-                        }
-                    } else {
-                        *rows_deleted += chunk.rows.len() as u64;
-                    }
-                    Ok(Some(chunk))
-                } else {
-                    Ok(Some(make_modify_result("pipe_delete_edges", *rows_deleted)))
-                }
-            }
-
             SinkOperator::DeleteTags {
                 storage,
                 space_name,
@@ -533,7 +635,7 @@ impl SinkOperator {
                 rows_deleted,
                 ..
             } => {
-                if !base.opened {
+                if !base.lifecycle.is_opened() {
                     return Err(QueryError::execution("DeleteTags not opened".to_string()));
                 }
 
@@ -541,6 +643,7 @@ impl SinkOperator {
                     return Ok(None);
                 }
 
+                base.ensure_not_cancelled()?;
                 if let Some(storage_lock) = storage {
                     if let Some(ref ids) = vertex_ids {
                         let mut writer = storage_lock.write();
@@ -582,9 +685,9 @@ impl SinkOperator {
             | SinkOperator::UpdateEdges { .. }
             | SinkOperator::DeleteVertices { .. }
             | SinkOperator::DeleteEdges { .. } => {
-                if base.opened {
+                if base.lifecycle.can_close() {
                     input.stop()?;
-                    base.opened = false;
+                    base.lifecycle.mark_stopped();
                 }
                 Ok(())
             }
@@ -602,9 +705,9 @@ impl SinkOperator {
         base: &mut OperatorBase,
         input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
-        if base.opened {
+        if base.lifecycle.can_close() {
             input.close()?;
-            base.opened = false;
+            base.lifecycle.mark_closed();
         }
         Ok(())
     }

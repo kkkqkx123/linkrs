@@ -139,8 +139,6 @@ pub struct PlanDescription {
     pub node_index_map: std::collections::HashMap<i64, usize>,
     pub format: String,
     pub optimize_time_in_us: i64,
-    pub execution_mode: String,
-    pub execution_mode_reason: String,
     pub partition_spec_description: Option<String>,
 
     // ── P8 parallel execution profile (populated at runtime) ──
@@ -160,8 +158,6 @@ impl PlanDescription {
             node_index_map: std::collections::HashMap::new(),
             format: String::new(),
             optimize_time_in_us: 0,
-            execution_mode: String::new(),
-            execution_mode_reason: String::new(),
             partition_spec_description: None,
             requested_workers: 1,
             actual_workers: 1,

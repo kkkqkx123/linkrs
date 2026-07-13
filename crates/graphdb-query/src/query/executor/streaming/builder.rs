@@ -1,6 +1,8 @@
+use std::sync::Arc;
+
 use super::executor::FullOuterJoinPhase;
-use super::executor::OperatorBase;
 use super::executor::StreamingExecutor;
+use super::operator_base::OperatorBase;
 use super::operators::apply_operator::ApplyOperator;
 use super::operators::blocking_operator::BlockingOperator;
 use super::operators::ddl_operator::DdlOperator;
@@ -14,12 +16,14 @@ use super::operators::txn_operator::TxnOperator;
 use super::operators::unary_operator::UnaryOperator;
 use super::operators::vector_operator::VectorOperator;
 use super::partition::PartitionView;
+use super::physical_node::PhysicalNode;
+use super::runtime::ExecutionRuntime;
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::{AggregateFunction, BinaryOperator as BinOp};
 use crate::core::Value;
 use crate::query::core::NodeType;
-use crate::query::executor::base::{ExecutionContext, MemoryTracker};
+use crate::query::executor::base::{ExecutionContext, MemoryBudget, MemoryTracker};
 use crate::query::parser::ast::fulltext::FulltextQueryExpr;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
@@ -33,6 +37,30 @@ use crate::query::planning::plan::core::nodes::management::manage_node_enums::{
 pub struct StreamingExecutorBuilder;
 
 impl StreamingExecutorBuilder {
+    /// Build an immutable PhysicalNode tree from a plan node.
+    ///
+    /// The returned tree can be cached and repeatedly materialized into
+    /// fresh `StreamingExecutor` instances without sharing mutable state.
+    pub fn from_plan_node_physical(
+        node: &PlanNodeEnum,
+        context: &ExecutionContext,
+    ) -> Result<PhysicalNode, QueryError> {
+        super::lowering::lower_plan_node(node, context)
+    }
+
+    /// Build a `StreamingExecutor` from a PhysicalNode tree with fresh state.
+    ///
+    /// This is used internally by `from_plan_node` for pilot operators and
+    /// can be used directly for plan caching scenarios.
+    pub fn materialize_physical(
+        physical: &PhysicalNode,
+        runtime: Option<Arc<ExecutionRuntime>>,
+        memory_budget: &MemoryBudget,
+        chunk_size: usize,
+    ) -> StreamingExecutor {
+        physical.materialize(runtime, memory_budget, chunk_size)
+    }
+
     pub fn build_simple_scan(rows: Vec<Vec<Value>>) -> Result<StreamingExecutor, QueryError> {
         Self::build_simple_scan_with_col_names(rows, vec![])
     }
@@ -1660,46 +1688,17 @@ impl StreamingExecutorBuilder {
                 ))
             }
 
-            PlanNodeEnum::Loop(node) => {
-                let body_executor = if let Some(body) = node.body() {
-                    Self::from_plan_node(body, context)?
-                } else {
-                    StreamingExecutor::Source(OperatorBase::new(0), SourceOperator::Start)
-                };
-                Ok(StreamingExecutor::Unary(
-                    OperatorBase::new(node.id()),
-                    Box::new(body_executor),
-                    UnaryOperator::Loop {
-                        condition: Some(format!("{:?}", node.condition())),
-                    },
-                ))
-            }
-
-            PlanNodeEnum::PassThrough(_) => Ok(StreamingExecutor::Unary(
-                OperatorBase::new(node.id()),
-                Box::new(StreamingExecutor::Source(
-                    OperatorBase::new(0),
-                    SourceOperator::Start,
-                )),
-                UnaryOperator::PassThrough,
+            PlanNodeEnum::Loop(_) => Err(QueryError::execution(
+                "Loop plan nodes are not supported by the streaming executor".to_string(),
             )),
 
-            PlanNodeEnum::Select(node) => {
-                let branch_executor = if let Some(if_branch) = node.if_branch() {
-                    Self::from_plan_node(if_branch, context)?
-                } else if let Some(else_branch) = node.else_branch() {
-                    Self::from_plan_node(else_branch, context)?
-                } else {
-                    StreamingExecutor::Source(OperatorBase::new(0), SourceOperator::Start)
-                };
-                Ok(StreamingExecutor::Unary(
-                    OperatorBase::new(node.id()),
-                    Box::new(branch_executor),
-                    UnaryOperator::Select {
-                        selection_expr: None,
-                    },
-                ))
-            }
+            PlanNodeEnum::PassThrough(_) => Err(QueryError::execution(
+                "PassThrough plan nodes are not supported by the streaming executor".to_string(),
+            )),
+
+            PlanNodeEnum::Select(_) => Err(QueryError::execution(
+                "Select plan nodes are not supported by the streaming executor".to_string(),
+            )),
 
             PlanNodeEnum::BeginTransaction(_) => Ok(StreamingExecutor::Txn(
                 OperatorBase::new(node.id()),
@@ -2191,5 +2190,16 @@ mod tests {
             }
             _ => panic!("Expected ScanVertices"),
         }
+    }
+
+    #[test]
+    fn unsupported_control_flow_node_fails_during_build() {
+        use crate::query::planning::plan::core::nodes::PassThroughNode;
+
+        let node = PlanNodeEnum::PassThrough(PassThroughNode::new(42));
+        let error = StreamingExecutorBuilder::from_plan_node(&node, &ExecutionContext::default())
+            .expect_err("unsupported control flow must not silently pass through");
+
+        assert!(error.to_string().contains("PassThrough"));
     }
 }

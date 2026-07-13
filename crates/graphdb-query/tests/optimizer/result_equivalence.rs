@@ -118,7 +118,10 @@ fn test_optimizer_result_equivalence_with_content() {
 
         // Compare actual content - this is the key enhancement
         match (&result_on, &result_off) {
-            (ExecutionResult::DataSet(ds_on), ExecutionResult::DataSet(ds_off)) => {
+            (
+                ExecutionResult::DataSet { data: ds_on, .. },
+                ExecutionResult::DataSet { data: ds_off, .. },
+            ) => {
                 // Compare column names
                 assert_eq!(
                     ds_on.col_names, ds_off.col_names,

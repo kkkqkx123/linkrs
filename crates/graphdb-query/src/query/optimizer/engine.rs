@@ -35,7 +35,6 @@
 
 use std::sync::Arc;
 
-use crate::query::optimizer::execution_mode_optimizer::ExecutionModeOptimizer;
 use crate::query::optimizer::heuristic::PlanRewriter;
 use crate::query::optimizer::partitioning::{PartitioningConfig, PartitioningPlanner};
 use crate::query::optimizer::{
@@ -72,8 +71,6 @@ pub struct OptimizerEngine {
     batch_plan_analyzer: BatchPlanAnalyzer,
     /// Subquery de-correlating optimizer
     subquery_unnesting_optimizer: SubqueryUnnestingOptimizer,
-    /// Execution Mode Optimizer (Phase 3)
-    execution_mode_optimizer: ExecutionModeOptimizer,
     /// Cost model configuration
     cost_config: CostModelConfig,
     /// Heuristic plan rewriter
@@ -84,8 +81,6 @@ pub struct OptimizerEngine {
     enable_heuristic: bool,
     /// Enable cost-based optimization phase
     enable_cost_based: bool,
-    /// Enable execution mode selection phase (Phase 3)
-    enable_execution_mode: bool,
     /// Maximum iterations for heuristic rules
     max_heuristic_iterations: usize,
 }
@@ -160,9 +155,6 @@ impl OptimizerEngine {
         // Create a heuristic plan rewriter
         let heuristic_rewriter = PlanRewriter::default();
 
-        // Create Execution Mode Optimizer (Phase 3)
-        let execution_mode_optimizer = ExecutionModeOptimizer::new(stats_manager.clone());
-
         Self {
             expression_context,
             stats_manager,
@@ -174,13 +166,11 @@ impl OptimizerEngine {
             aggregate_strategy_selector,
             batch_plan_analyzer,
             subquery_unnesting_optimizer,
-            execution_mode_optimizer,
             cost_config,
             heuristic_rewriter,
             partitioning_planner: PartitioningPlanner::new(PartitioningConfig::default()),
             enable_heuristic: true,
             enable_cost_based: true,
-            enable_execution_mode: true,
             max_heuristic_iterations: 100,
         }
     }
@@ -238,11 +228,6 @@ impl OptimizerEngine {
     /// Obtaining the subquery to de-associate the optimizer
     pub fn subquery_unnesting_optimizer(&self) -> &SubqueryUnnestingOptimizer {
         &self.subquery_unnesting_optimizer
-    }
-
-    /// Obtaining the Execution Mode Optimizer (Phase 3)
-    pub fn execution_mode_optimizer(&self) -> &ExecutionModeOptimizer {
-        &self.execution_mode_optimizer
     }
 
     /// Obtaining the Selective Feedback Manager
@@ -355,13 +340,6 @@ impl OptimizerEngine {
             log::debug!("Phase 2 completed successfully");
         }
 
-        // Phase 3: Execution Mode Selection (Optional)
-        if self.enable_execution_mode {
-            log::debug!("Starting Phase 3: Execution Mode Selection");
-            current_plan = self.apply_execution_mode_selection(current_plan)?;
-            log::debug!("Phase 3 completed successfully");
-        }
-
         current_plan = self.apply_partitioning_selection(current_plan);
 
         Ok(current_plan)
@@ -376,9 +354,8 @@ impl OptimizerEngine {
         };
         let decision = self.partitioning_planner.decide(root, &self.stats_manager);
         if let Some(spec) = decision.partition_spec {
+            log::debug!("Selected partition layout: {}", decision.reason);
             plan.set_partition_spec(spec);
-            plan.execution_mode_reason =
-                format!("{}; {}", plan.execution_mode_reason, decision.reason);
         }
         plan
     }
@@ -432,19 +409,6 @@ impl OptimizerEngine {
         }
 
         Ok(current_plan)
-    }
-
-    /// Apply execution mode selection (Phase 3)
-    fn apply_execution_mode_selection(
-        &self,
-        mut plan: ExecutionPlan,
-    ) -> OptimizeResult<ExecutionPlan> {
-        if let Some(ref root) = plan.root {
-            let (mode, reason) = self.execution_mode_optimizer.decide_execution_mode(root)?;
-            plan.set_execution_mode(mode, &reason);
-            log::info!("Execution mode: {}: {}", mode.as_str(), reason);
-        }
-        Ok(plan)
     }
 
     /// Get the heuristic rewriter

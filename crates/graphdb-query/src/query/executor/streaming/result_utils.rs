@@ -66,10 +66,7 @@ pub fn chunks_to_execution_result(
     col_names: Option<Vec<String>>,
 ) -> Result<ExecutionResult, QueryError> {
     let dataset = convert_chunks_to_dataset(chunks, col_names)?;
-    Ok(ExecutionResult::DataSet {
-        data: dataset,
-        execution_mode_reason: None,
-    })
+    Ok(ExecutionResult::DataSet { data: dataset })
 }
 
 #[cfg(test)]

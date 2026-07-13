@@ -117,10 +117,7 @@ impl StreamingQueryExecutor {
 
         let stream = engine.into_stream()?;
         let dataset = stream.collect()?;
-        Ok(ExecutionResult::DataSet {
-            data: dataset,
-            execution_mode_reason: None,
-        })
+        Ok(ExecutionResult::DataSet { data: dataset })
     }
 
     /// Alias for `execute_materialized` — default path materializes the result.

@@ -62,7 +62,9 @@ fn test_filter_then_limit_pipeline() {
         OperatorBase::new(0),
         Box::new(filter),
         UnaryOperator::Limit {
+            offset: 0,
             limit: 10,
+            skipped: 0,
             consumed: 0,
         },
     );
@@ -163,7 +165,9 @@ fn test_union_then_limit_pipeline() {
         OperatorBase::new(0),
         Box::new(union),
         UnaryOperator::Limit {
+            offset: 0,
             limit: 2,
+            skipped: 0,
             consumed: 0,
         },
     );

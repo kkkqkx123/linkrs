@@ -137,7 +137,7 @@ impl GatherOperator {
         }
 
         if Self::uses_parallel(self) {
-            base.opened = true;
+            base.lifecycle.mark_opened();
             return Ok(());
         }
 
@@ -149,7 +149,7 @@ impl GatherOperator {
             }
             opened_children += 1;
         }
-        base.opened = true;
+        base.lifecycle.mark_opened();
         Ok(())
     }
 
@@ -425,7 +425,7 @@ impl GatherOperator {
         } else {
             Ok(())
         };
-        base.opened = false;
+        base.lifecycle.mark_closed();
         parallel_result.and(close_children(children).map_or(Ok(()), Err))
     }
 

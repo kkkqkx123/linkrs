@@ -103,7 +103,7 @@ impl HashShuffleJoinOperator {
         for tree in right_trees.iter_mut() {
             tree.open()?;
         }
-        base.opened = true;
+        base.lifecycle.mark_opened();
         Ok(())
     }
 
@@ -355,7 +355,7 @@ impl HashShuffleJoinOperator {
         left_trees: &mut [StreamingExecutor],
         right_trees: &mut [StreamingExecutor],
     ) -> Result<(), QueryError> {
-        if base.opened {
+        if base.lifecycle.can_close() {
             self.memory_tracker.reset();
             self.buckets.clear();
             let mut first_error = None;
@@ -373,7 +373,7 @@ impl HashShuffleJoinOperator {
                     }
                 }
             }
-            base.opened = false;
+            base.lifecycle.mark_closed();
             first_error.map_or(Ok(()), Err)
         } else {
             Ok(())

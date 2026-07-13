@@ -301,8 +301,7 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
 
     /// Execute query with streaming execution support
     ///
-    /// This is now the standard execution path (using StreamingExecutor).
-    /// ExecutionModeOptimizer determines streaming vs materialized mode during optimization.
+    /// This is the standard execution path using the batch pull executor.
     ///
     /// # Parameters
     /// * `query_text` - The SQL query to execute
@@ -1164,12 +1163,7 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
     ) -> DBResult<ExecutionResult> {
         // Unified execution path: all queries use StreamingExecutor
 
-        let exec_mode = plan.execution_mode;
-        log::debug!(
-            "Executing with StreamingExecutor, mode: {} (reason: {})",
-            exec_mode.as_str(),
-            plan.execution_mode_reason
-        );
+        log::debug!("Executing with StreamingExecutor");
 
         // Get the root plan node
         let root_node = plan.root.as_ref().ok_or_else(|| {
@@ -1223,22 +1217,12 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             )))
         })?;
 
-        let reason = plan.execution_mode_reason;
-        let mut result = executor.execute().map_err(|e| {
+        let result = executor.execute().map_err(|e| {
             DBError::from(QueryError::execution(format!(
                 "Streaming execution failed: {:?}",
                 e
             )))
         })?;
-        if !reason.is_empty() && reason != "default" {
-            if let ExecutionResult::DataSet {
-                ref mut execution_mode_reason,
-                ..
-            } = result
-            {
-                *execution_mode_reason = Some(reason);
-            }
-        }
         Ok(result)
     }
 
@@ -1252,12 +1236,7 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         query_context: Arc<QueryContext>,
         plan: crate::query::planning::plan::ExecutionPlan,
     ) -> DBResult<StreamingQueryResult> {
-        let exec_mode = plan.execution_mode;
-        log::debug!(
-            "Executing with StreamingExecutor (stream), mode: {} (reason: {})",
-            exec_mode.as_str(),
-            plan.execution_mode_reason
-        );
+        log::debug!("Executing with StreamingExecutor (stream)");
 
         let root_node = plan.root.as_ref().ok_or_else(|| {
             DBError::from(QueryError::execution("Empty execution plan".to_string()))

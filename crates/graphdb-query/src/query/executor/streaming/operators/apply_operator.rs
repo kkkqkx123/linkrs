@@ -1,7 +1,7 @@
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::Value;
-use crate::query::executor::base::MemoryTracker;
+use crate::query::executor::base::{MemoryBudget, MemoryTracker};
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
@@ -22,6 +22,22 @@ pub enum ApplyOperator {
 }
 
 impl ApplyOperator {
+    pub fn from_spec(spec: &super::super::operator_spec::ApplySpec, budget: &MemoryBudget) -> Self {
+        match spec {
+            super::super::operator_spec::ApplySpec::Apply { apply_expression } => {
+                Self::Apply {
+                    apply_expression: apply_expression.clone(),
+                }
+            }
+            super::super::operator_spec::ApplySpec::PatternApply { pattern } => Self::PatternApply {
+                pattern: pattern.clone(),
+                all_rows: Vec::new(),
+                result_iter: None,
+                memory_tracker: MemoryTracker::new(budget.clone()),
+            },
+        }
+    }
+
     pub fn memory_tracker(&self) -> &MemoryTracker {
         match self {
             Self::PatternApply { memory_tracker, .. } => memory_tracker,
@@ -41,7 +57,7 @@ impl ApplyOperator {
             Self::Apply { .. } | Self::PatternApply { .. } => {
                 left.open()?;
                 _right.open()?;
-                base.opened = true;
+                base.lifecycle.mark_opened();
                 Ok(())
             }
         }

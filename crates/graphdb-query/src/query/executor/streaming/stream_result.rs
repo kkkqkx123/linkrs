@@ -335,10 +335,8 @@ mod tests {
             vec![vec![Value::Int(1)], vec![Value::Int(2)]],
             vec!["id".to_string()],
         );
-        let result = StreamingQueryResult::from_execution_result(ExecutionResult::DataSet {
-            data: ds,
-            execution_mode_reason: None,
-        });
+        let result =
+            StreamingQueryResult::from_execution_result(ExecutionResult::DataSet { data: ds });
         let chunk = result.next_chunk().unwrap().unwrap();
         assert_eq!(chunk.len(), 2);
         assert_eq!(chunk.col_names(), vec!["id"]);
