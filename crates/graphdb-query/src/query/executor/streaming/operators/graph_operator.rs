@@ -14,6 +14,7 @@ use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::context::ValueRowContext;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::operator_base::OperatorBase;
+use crate::query::executor::streaming::slot::SlotLayout;
 use crate::query::executor::traversal::config::TraversalConfig;
 use crate::query::executor::traversal::graph_reader::TraversalGraphReader;
 use crate::query::executor::traversal::runtime::TraversalRuntime;
@@ -36,11 +37,54 @@ fn row_passes_filter(row: &[Value], col_names: &[String], filter: &Option<Expres
         return true;
     };
 
-    let mut context = ValueRowContext::new(row.to_vec(), col_names.to_vec());
+    let layout = Arc::new(SlotLayout::from_names(col_names));
+    let mut context = ValueRowContext::new(row.to_vec(), layout);
     matches!(
         ExpressionEvaluator::evaluate(expr, &mut context),
         Ok(Value::Bool(true))
     )
+}
+
+fn path_endpoint_pairs(
+    row: &[Value],
+    layout: Arc<SlotLayout>,
+    start_vertices: &[Value],
+    target_vertices: &[Value],
+    target_expression: Option<&Expression>,
+) -> Result<Vec<(Value, Value)>, QueryError> {
+    let context = ValueRowContext::new_with_layout(row.to_vec(), layout.clone());
+    let row_start = context.get_variable("vid").or_else(|| row.first().cloned());
+    let row_target = if let Some(expression) = target_expression {
+        let mut expression_context = ValueRowContext::new_with_layout(row.to_vec(), layout);
+        Some(
+            ExpressionEvaluator::evaluate(expression, &mut expression_context).map_err(
+                |error| QueryError::execution(format!("Path target evaluation failed: {error}")),
+            )?,
+        )
+    } else {
+        context
+            .get_variable("dst_vid")
+            .or_else(|| row.get(1).cloned())
+    };
+    let starts: Vec<Value> = if start_vertices.is_empty() {
+        row_start.into_iter().collect()
+    } else {
+        start_vertices.to_vec()
+    };
+    let targets: Vec<Value> = if target_vertices.is_empty() {
+        row_target.into_iter().collect()
+    } else {
+        target_vertices.to_vec()
+    };
+    Ok(starts
+        .into_iter()
+        .flat_map(|start| {
+            targets
+                .iter()
+                .cloned()
+                .map(move |target| (start.clone(), target))
+        })
+        .collect())
 }
 
 fn bidir_bfs_shortest_path(
@@ -214,6 +258,101 @@ fn bidir_bfs_shortest_path(
     Ok(result_paths)
 }
 
+struct AllPathsConfig<'a> {
+    space_name: &'a str,
+    edge_types: &'a [String],
+    direction: EdgeDirection,
+    min_depth: usize,
+    max_depth: usize,
+    acyclic: bool,
+    result_cap: usize,
+}
+
+fn enumerate_all_paths(
+    storage: &dyn StorageClient,
+    start_id: &VertexId,
+    end_id: &VertexId,
+    cfg: AllPathsConfig<'_>,
+    cancel_token: Option<&AtomicBool>,
+) -> Result<Vec<Path>, QueryError> {
+    let Some(start_vertex) = storage
+        .get_vertex(cfg.space_name, start_id)
+        .map_err(|error| QueryError::execution(format!("Failed to read start vertex: {error}")))?
+    else {
+        return Ok(Vec::new());
+    };
+    let mut initial_visited = HashSet::new();
+    initial_visited.insert(*start_id);
+    let mut stack = vec![(
+        *start_id,
+        Arc::new(NPath::new(Arc::new(start_vertex))),
+        initial_visited,
+    )];
+    let mut paths = Vec::new();
+
+    while let Some((current_id, current_path, visited)) = stack.pop() {
+        if let Some(token) = cancel_token {
+            if token.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(QueryError::execution("Query cancelled".to_string()));
+            }
+        }
+        let depth = current_path.len();
+        if current_id == *end_id && depth >= cfg.min_depth {
+            paths.push(current_path.to_path());
+            if paths.len() >= cfg.result_cap {
+                break;
+            }
+        }
+        if depth >= cfg.max_depth || current_id == *end_id {
+            continue;
+        }
+        let edges = storage
+            .get_node_edges(cfg.space_name, &current_id, cfg.direction)
+            .map_err(|error| {
+                QueryError::execution(format!("Failed to read path edges: {error}"))
+            })?;
+        for edge in edges {
+            if !cfg.edge_types.is_empty() && !cfg.edge_types.contains(&edge.edge_type) {
+                continue;
+            }
+            let next_id = match cfg.direction {
+                EdgeDirection::Out => *edge.dst(),
+                EdgeDirection::In => *edge.src(),
+                EdgeDirection::Both => {
+                    if edge.src() == &current_id {
+                        *edge.dst()
+                    } else {
+                        *edge.src()
+                    }
+                }
+            };
+            if cfg.acyclic && visited.contains(&next_id) {
+                continue;
+            }
+            let Some(vertex) = storage
+                .get_vertex(cfg.space_name, &next_id)
+                .map_err(|error| {
+                    QueryError::execution(format!("Failed to read path vertex: {error}"))
+                })?
+            else {
+                continue;
+            };
+            let mut next_visited = visited.clone();
+            next_visited.insert(next_id);
+            stack.push((
+                next_id,
+                Arc::new(NPath::extend(
+                    current_path.clone(),
+                    Arc::new(edge),
+                    Arc::new(vertex),
+                )),
+                next_visited,
+            ));
+        }
+    }
+    Ok(paths)
+}
+
 fn expand_on_chunk(
     chunk: DataChunk,
     reader: &dyn StorageClient,
@@ -227,7 +366,7 @@ fn expand_on_chunk(
 
     let mut out_rows = Vec::new();
     for row in &chunk.rows {
-        let context = ValueRowContext::new(row.clone(), col_names.clone());
+        let context = ValueRowContext::new_with_layout(row.clone(), chunk.get_layout());
         let vid_val = context
             .get_variable("vid")
             .or_else(|| row.first().cloned())
@@ -307,7 +446,7 @@ fn traverse_on_chunk(
 
     let mut out_rows = Vec::new();
     for row in &chunk.rows {
-        let context = ValueRowContext::new(row.clone(), col_names.clone());
+        let context = ValueRowContext::new_with_layout(row.clone(), chunk.get_layout());
         let vid_val = context
             .get_variable("vid")
             .or_else(|| row.first().cloned())
@@ -430,6 +569,9 @@ pub enum GraphOperator {
         target_vertex: Option<Expression>,
         edge_types: Vec<String>,
         direction: EdgeDirection,
+        max_depth: usize,
+        start_vertices: Vec<Value>,
+        target_vertices: Vec<Value>,
     },
     BFSShortest {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
@@ -437,6 +579,9 @@ pub enum GraphOperator {
         target_vertex: Option<Expression>,
         edge_types: Vec<String>,
         direction: EdgeDirection,
+        max_depth: usize,
+        allow_cycles: bool,
+        allow_loops: bool,
         frontier: Vec<Vec<Value>>,
         visited: HashSet<String>,
     },
@@ -446,6 +591,14 @@ pub enum GraphOperator {
         target_vertex: Option<Expression>,
         edge_types: Vec<String>,
         direction: EdgeDirection,
+        min_depth: usize,
+        max_depth: usize,
+        acyclic: bool,
+        limit: Option<usize>,
+        offset: usize,
+        filter: Option<Expression>,
+        start_vertices: Vec<Value>,
+        target_vertices: Vec<Value>,
         all_paths: Vec<Vec<Value>>,
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
     },
@@ -455,6 +608,10 @@ pub enum GraphOperator {
         target_vertices: Vec<Expression>,
         edge_types: Vec<String>,
         direction: EdgeDirection,
+        max_depth: usize,
+        left_vertex_column: String,
+        right_vertex_column: String,
+        single_shortest: bool,
         all_paths: Vec<Vec<Value>>,
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
     },
@@ -468,15 +625,84 @@ pub enum GraphOperator {
 }
 
 impl GraphOperator {
-    pub fn from_spec(spec: &super::super::operator_spec::GraphSpec) -> Self {
+    pub fn bind_runtime(&mut self, runtime: &super::super::runtime::ExecutionRuntime) {
+        let storage = runtime.storage.clone();
+        let space_name = runtime.query_id().space_name.unwrap_or_default();
+        match self {
+            Self::Expand {
+                storage: target_storage,
+                space_name: target_space,
+                ..
+            }
+            | Self::ExpandAll {
+                storage: target_storage,
+                space_name: target_space,
+                ..
+            }
+            | Self::Traverse {
+                storage: target_storage,
+                space_name: target_space,
+                ..
+            }
+            | Self::TraverseAll {
+                storage: target_storage,
+                space_name: target_space,
+                ..
+            }
+            | Self::BiExpand {
+                storage: target_storage,
+                space_name: target_space,
+                ..
+            }
+            | Self::BiTraverse {
+                storage: target_storage,
+                space_name: target_space,
+                ..
+            }
+            | Self::ShortestPath {
+                storage: target_storage,
+                space_name: target_space,
+                ..
+            }
+            | Self::BFSShortest {
+                storage: target_storage,
+                space_name: target_space,
+                ..
+            }
+            | Self::AllPaths {
+                storage: target_storage,
+                space_name: target_space,
+                ..
+            }
+            | Self::MultiShortestPath {
+                storage: target_storage,
+                space_name: target_space,
+                ..
+            }
+            | Self::Subgraph {
+                storage: target_storage,
+                space_name: target_space,
+                ..
+            } => {
+                *target_storage = storage;
+                *target_space = space_name;
+            }
+        }
+    }
+
+    pub fn from_spec(
+        spec: &super::super::operator_spec::GraphSpec,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
+    ) -> Self {
         match spec {
             super::super::operator_spec::GraphSpec::Expand {
                 edge_types,
                 direction,
                 filter_expr,
             } => Self::Expand {
-                storage: None,
-                space_name: String::new(),
+                storage: storage.clone(),
+                space_name: space_name.clone(),
                 edge_types: edge_types.clone(),
                 direction: *direction,
                 filter_expr: filter_expr.clone(),
@@ -486,8 +712,8 @@ impl GraphOperator {
                 direction,
                 filter_expr,
             } => Self::ExpandAll {
-                storage: None,
-                space_name: String::new(),
+                storage: storage.clone(),
+                space_name: space_name.clone(),
                 edge_types: edge_types.clone(),
                 direction: *direction,
                 filter_expr: filter_expr.clone(),
@@ -499,8 +725,8 @@ impl GraphOperator {
                 max_depth,
                 filter_expr,
             } => Self::Traverse {
-                storage: None,
-                space_name: String::new(),
+                storage: storage.clone(),
+                space_name: space_name.clone(),
                 edge_types: edge_types.clone(),
                 direction: *direction,
                 min_depth: *min_depth,
@@ -512,8 +738,8 @@ impl GraphOperator {
                 edge_types,
                 direction,
             } => Self::BiExpand {
-                storage: None,
-                space_name: String::new(),
+                storage: storage.clone(),
+                space_name: space_name.clone(),
                 edge_types: edge_types.clone(),
                 direction: *direction,
             },
@@ -523,8 +749,8 @@ impl GraphOperator {
                 min_depth,
                 max_depth,
             } => Self::BiTraverse {
-                storage: None,
-                space_name: String::new(),
+                storage: storage.clone(),
+                space_name: space_name.clone(),
                 edge_types: edge_types.clone(),
                 direction: *direction,
                 min_depth: *min_depth,
@@ -535,23 +761,35 @@ impl GraphOperator {
                 target_vertex,
                 edge_types,
                 direction,
+                max_depth,
+                start_vertices,
+                target_vertices,
             } => Self::ShortestPath {
-                storage: None,
-                space_name: String::new(),
+                storage: storage.clone(),
+                space_name: space_name.clone(),
                 target_vertex: target_vertex.clone(),
                 edge_types: edge_types.clone(),
                 direction: *direction,
+                max_depth: *max_depth,
+                start_vertices: start_vertices.clone(),
+                target_vertices: target_vertices.clone(),
             },
             super::super::operator_spec::GraphSpec::BFSShortest {
                 target_vertex,
                 edge_types,
                 direction,
+                max_depth,
+                allow_cycles,
+                allow_loops,
             } => Self::BFSShortest {
-                storage: None,
-                space_name: String::new(),
+                storage: storage.clone(),
+                space_name: space_name.clone(),
                 target_vertex: target_vertex.clone(),
                 edge_types: edge_types.clone(),
                 direction: *direction,
+                max_depth: *max_depth,
+                allow_cycles: *allow_cycles,
+                allow_loops: *allow_loops,
                 frontier: Vec::new(),
                 visited: std::collections::HashSet::new(),
             },
@@ -559,12 +797,28 @@ impl GraphOperator {
                 target_vertex,
                 edge_types,
                 direction,
+                min_depth,
+                max_depth,
+                acyclic,
+                limit,
+                offset,
+                filter,
+                start_vertices,
+                target_vertices,
             } => Self::AllPaths {
-                storage: None,
-                space_name: String::new(),
+                storage: storage.clone(),
+                space_name: space_name.clone(),
                 target_vertex: target_vertex.clone(),
                 edge_types: edge_types.clone(),
                 direction: *direction,
+                min_depth: *min_depth,
+                max_depth: *max_depth,
+                acyclic: *acyclic,
+                limit: *limit,
+                offset: *offset,
+                filter: filter.clone(),
+                start_vertices: start_vertices.clone(),
+                target_vertices: target_vertices.clone(),
                 all_paths: Vec::new(),
                 result_iter: None,
             },
@@ -572,12 +826,20 @@ impl GraphOperator {
                 target_vertices,
                 edge_types,
                 direction,
+                max_depth,
+                left_vertex_column,
+                right_vertex_column,
+                single_shortest,
             } => Self::MultiShortestPath {
-                storage: None,
-                space_name: String::new(),
+                storage,
+                space_name,
                 target_vertices: target_vertices.clone(),
                 edge_types: edge_types.clone(),
                 direction: *direction,
+                max_depth: *max_depth,
+                left_vertex_column: left_vertex_column.clone(),
+                right_vertex_column: right_vertex_column.clone(),
+                single_shortest: *single_shortest,
                 all_paths: Vec::new(),
                 result_iter: None,
             },
@@ -814,7 +1076,8 @@ impl GraphOperator {
                         let mut out_rows = Vec::new();
                         for row in &chunk.rows {
                             base.ensure_not_cancelled()?;
-                            let context = ValueRowContext::new(row.clone(), col_names.clone());
+                            let context =
+                                ValueRowContext::new_with_layout(row.clone(), chunk.get_layout());
                             let vid_val = context
                                 .get_variable("vid")
                                 .or_else(|| row.first().cloned())
@@ -898,7 +1161,8 @@ impl GraphOperator {
                         let mut out_rows = Vec::new();
                         for row in &chunk.rows {
                             base.ensure_not_cancelled()?;
-                            let ctx = ValueRowContext::new(row.clone(), col_names.clone());
+                            let ctx =
+                                ValueRowContext::new_with_layout(row.clone(), chunk.get_layout());
                             let vid_val = ctx
                                 .get_variable("vid")
                                 .or_else(|| row.first().cloned())
@@ -996,7 +1260,11 @@ impl GraphOperator {
             Self::ShortestPath {
                 storage,
                 space_name,
+                target_vertex,
                 edge_types,
+                max_depth,
+                start_vertices,
+                target_vertices,
                 ..
             } => {
                 if !base.lifecycle.is_opened() {
@@ -1011,19 +1279,18 @@ impl GraphOperator {
                         let mut out_rows = Vec::new();
                         for row in &chunk.rows {
                             base.ensure_not_cancelled()?;
-                            let ctx = ValueRowContext::new(row.clone(), col_names.clone());
-                            let src_val = ctx
-                                .get_variable("vid")
-                                .or_else(|| row.first().cloned())
-                                .unwrap_or(Value::Null(crate::core::NullType::Null));
-                            let dst_val = ctx
-                                .get_variable("dst_vid")
-                                .or_else(|| row.get(1).cloned())
-                                .unwrap_or(Value::Null(crate::core::NullType::Null));
-
-                            if let (Ok(src_vid), Ok(dst_vid)) =
-                                (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
-                            {
+                            for (src_val, dst_val) in path_endpoint_pairs(
+                                row,
+                                chunk.get_layout(),
+                                start_vertices,
+                                target_vertices,
+                                target_vertex.as_ref(),
+                            )? {
+                                let (Ok(src_vid), Ok(dst_vid)) =
+                                    (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
+                                else {
+                                    continue;
+                                };
                                 let et_ref: Option<&[String]> = if edge_types.is_empty()
                                     || edge_types.contains(&"both".to_string())
                                 {
@@ -1041,9 +1308,9 @@ impl GraphOperator {
                                     BidirBfsConfig {
                                         space_name,
                                         edge_type_filter: et_ref,
-                                        max_depth: 10,
-                                        single_shortest: false,
-                                        limit: 100,
+                                        max_depth: *max_depth,
+                                        single_shortest: true,
+                                        limit: 1,
                                     },
                                     cancel_token.as_deref(),
                                 )?;
@@ -1085,6 +1352,7 @@ impl GraphOperator {
                 storage,
                 space_name,
                 edge_types,
+                max_depth,
                 ..
             } => {
                 if !base.lifecycle.is_opened() {
@@ -1099,7 +1367,8 @@ impl GraphOperator {
                         let mut out_rows = Vec::new();
                         for row in &chunk.rows {
                             base.ensure_not_cancelled()?;
-                            let ctx = ValueRowContext::new(row.clone(), col_names.clone());
+                            let ctx =
+                                ValueRowContext::new_with_layout(row.clone(), chunk.get_layout());
                             let src_val = ctx
                                 .get_variable("vid")
                                 .or_else(|| row.first().cloned())
@@ -1129,9 +1398,9 @@ impl GraphOperator {
                                     BidirBfsConfig {
                                         space_name,
                                         edge_type_filter: et_ref,
-                                        max_depth: 10,
-                                        single_shortest: false,
-                                        limit: 100,
+                                        max_depth: *max_depth,
+                                        single_shortest: true,
+                                        limit: 1,
                                     },
                                     cancel_token.as_deref(),
                                 )?;
@@ -1172,7 +1441,17 @@ impl GraphOperator {
             Self::AllPaths {
                 storage,
                 space_name,
+                target_vertex,
                 edge_types,
+                direction,
+                min_depth,
+                max_depth,
+                acyclic,
+                limit,
+                offset,
+                filter,
+                start_vertices,
+                target_vertices,
                 ..
             } => {
                 if !base.lifecycle.is_opened() {
@@ -1187,48 +1466,49 @@ impl GraphOperator {
                         let mut out_rows = Vec::new();
                         for row in &chunk.rows {
                             base.ensure_not_cancelled()?;
-                            let ctx = ValueRowContext::new(row.clone(), col_names.clone());
-                            let src_val = ctx
-                                .get_variable("vid")
-                                .or_else(|| row.first().cloned())
-                                .unwrap_or(Value::Null(crate::core::NullType::Null));
-                            let dst_val = ctx
-                                .get_variable("dst_vid")
-                                .or_else(|| row.get(1).cloned())
-                                .unwrap_or(Value::Null(crate::core::NullType::Null));
-
-                            if let (Ok(src_vid), Ok(dst_vid)) =
-                                (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
-                            {
-                                let et_ref: Option<&[String]> = if edge_types.is_empty()
-                                    || edge_types.contains(&"both".to_string())
-                                {
-                                    None
-                                } else {
-                                    Some(edge_types.as_slice())
+                            for (src_val, dst_val) in path_endpoint_pairs(
+                                row,
+                                chunk.get_layout(),
+                                start_vertices,
+                                target_vertices,
+                                target_vertex.as_ref(),
+                            )? {
+                                let (Ok(src_vid), Ok(dst_vid)) =
+                                    (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
+                                else {
+                                    continue;
                                 };
-
                                 let cancel_token =
                                     base.runtime.as_ref().map(|rt| rt.cancel_token());
-                                let paths = bidir_bfs_shortest_path(
+                                let result_cap =
+                                    limit.unwrap_or(usize::MAX).saturating_add(*offset);
+                                let paths = enumerate_all_paths(
                                     &*reader,
                                     &src_vid,
                                     &dst_vid,
-                                    BidirBfsConfig {
+                                    AllPathsConfig {
                                         space_name,
-                                        edge_type_filter: et_ref,
-                                        max_depth: 10,
-                                        single_shortest: false,
-                                        limit: 100,
+                                        edge_types,
+                                        direction: *direction,
+                                        min_depth: *min_depth,
+                                        max_depth: *max_depth,
+                                        acyclic: *acyclic,
+                                        result_cap,
                                     },
                                     cancel_token.as_deref(),
                                 )?;
 
-                                for path in &paths {
+                                for path in paths
+                                    .into_iter()
+                                    .skip(*offset)
+                                    .take(limit.unwrap_or(usize::MAX))
+                                {
                                     base.ensure_not_cancelled()?;
                                     let mut out_row = row.clone();
-                                    out_row.push(Value::Path(Box::new(path.clone())));
-                                    out_rows.push(out_row);
+                                    out_row.push(Value::Path(Box::new(path)));
+                                    if row_passes_filter(&out_row, &col_names, filter) {
+                                        out_rows.push(out_row);
+                                    }
                                 }
                             }
                         }
@@ -1262,6 +1542,10 @@ impl GraphOperator {
                 space_name,
                 target_vertices,
                 edge_types,
+                max_depth,
+                left_vertex_column,
+                right_vertex_column,
+                single_shortest,
                 ..
             } => {
                 if !base.lifecycle.is_opened() {
@@ -1275,25 +1559,43 @@ impl GraphOperator {
                         let reader = storage_lock.read();
                         let col_names = chunk.col_names();
 
-                        let mut dst_vids = Vec::new();
-                        for expr in target_vertices.iter() {
-                            base.ensure_not_cancelled()?;
-                            let mut ctx = ValueRowContext::new(vec![], col_names.clone());
-                            if let Ok(val) = ExpressionEvaluator::evaluate(expr, &mut ctx) {
-                                if let Ok(vid) = VertexId::try_from(&val) {
-                                    dst_vids.push(vid);
-                                }
-                            }
-                        }
-
                         let mut out_rows = Vec::new();
                         for row in &chunk.rows {
                             base.ensure_not_cancelled()?;
-                            let ctx = ValueRowContext::new(row.clone(), col_names.clone());
-                            let src_val = ctx
-                                .get_variable("vid")
+                            let ctx =
+                                ValueRowContext::new_with_layout(row.clone(), chunk.get_layout());
+                            let src_val = (!left_vertex_column.is_empty())
+                                .then(|| ctx.get_variable(left_vertex_column))
+                                .flatten()
+                                .or_else(|| ctx.get_variable("vid"))
                                 .or_else(|| row.first().cloned())
                                 .unwrap_or(Value::Null(crate::core::NullType::Null));
+                            let mut dst_values = Vec::new();
+                            if let Some(value) = (!right_vertex_column.is_empty())
+                                .then(|| ctx.get_variable(right_vertex_column))
+                                .flatten()
+                                .or_else(|| ctx.get_variable("dst_vid"))
+                                .or_else(|| row.get(1).cloned())
+                            {
+                                dst_values.push(value);
+                            }
+                            for expression in target_vertices.iter() {
+                                let mut expression_context = ValueRowContext::new_with_layout(
+                                    row.clone(),
+                                    chunk.get_layout(),
+                                );
+                                dst_values.push(
+                                    ExpressionEvaluator::evaluate(
+                                        expression,
+                                        &mut expression_context,
+                                    )
+                                    .map_err(|error| {
+                                        QueryError::execution(format!(
+                                            "MultiShortestPath target evaluation failed: {error}"
+                                        ))
+                                    })?,
+                                );
+                            }
                             if let Ok(src_vid) = VertexId::try_from(&src_val) {
                                 let et_ref: Option<&[String]> = if edge_types.is_empty()
                                     || edge_types.contains(&"both".to_string())
@@ -1303,20 +1605,23 @@ impl GraphOperator {
                                     Some(edge_types.as_slice())
                                 };
 
-                                for dst_vid in &dst_vids {
+                                for dst_value in dst_values {
+                                    let Ok(dst_vid) = VertexId::try_from(&dst_value) else {
+                                        continue;
+                                    };
                                     base.ensure_not_cancelled()?;
                                     let cancel_token =
                                         base.runtime.as_ref().map(|rt| rt.cancel_token());
                                     let paths = bidir_bfs_shortest_path(
                                         &*reader,
                                         &src_vid,
-                                        dst_vid,
+                                        &dst_vid,
                                         BidirBfsConfig {
                                             space_name,
                                             edge_type_filter: et_ref,
-                                            max_depth: 10,
-                                            single_shortest: true,
-                                            limit: 10,
+                                            max_depth: *max_depth,
+                                            single_shortest: *single_shortest,
+                                            limit: if *single_shortest { 1 } else { 10 },
                                         },
                                         cancel_token.as_deref(),
                                     )?;
@@ -1373,7 +1678,8 @@ impl GraphOperator {
                         let mut out_rows = Vec::new();
                         for row in &chunk.rows {
                             base.ensure_not_cancelled()?;
-                            let ctx = ValueRowContext::new(row.clone(), col_names.clone());
+                            let ctx =
+                                ValueRowContext::new_with_layout(row.clone(), chunk.get_layout());
                             let vid_val = ctx
                                 .get_variable("vid")
                                 .or_else(|| row.first().cloned())

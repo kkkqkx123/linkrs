@@ -61,8 +61,7 @@ pub async fn execute_stream<
     let buffer_capacity = request.event_buffer_capacity.clamp(1, 1000);
     let server = state.server.clone();
 
-    let (tx, rx) =
-        tokio::sync::mpsc::channel::<Result<Event, HttpError>>(buffer_capacity);
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, HttpError>>(buffer_capacity);
 
     tokio::spawn(async move {
         let start_time = std::time::Instant::now();
@@ -92,7 +91,8 @@ pub async fn execute_stream<
 
         // Send schema event BEFORE any row data, using column names from the
         // plan (available even for empty results via the fallback mechanism).
-        let schema_sent: Arc<std::sync::atomic::AtomicBool> = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let schema_sent: Arc<std::sync::atomic::AtomicBool> =
+            Arc::new(std::sync::atomic::AtomicBool::new(false));
         if let Some(columns) = stream_result.column_names() {
             schema_sent.store(true, std::sync::atomic::Ordering::Relaxed);
             let schema = json!({
@@ -127,7 +127,9 @@ pub async fn execute_stream<
                             });
                             if let Ok(schema_str) = serde_json::to_string(&schema) {
                                 if tx_pull
-                                    .blocking_send(Ok(Event::default().event("schema").data(schema_str)))
+                                    .blocking_send(Ok(Event::default()
+                                        .event("schema")
+                                        .data(schema_str)))
                                     .is_err()
                                 {
                                     stream_result_pull.cancel();
@@ -141,8 +143,7 @@ pub async fn execute_stream<
                                 .into_iter()
                                 .enumerate()
                                 .map(|(i, v)| {
-                                    let col_name =
-                                        columns.get(i).cloned().unwrap_or_default();
+                                    let col_name = columns.get(i).cloned().unwrap_or_default();
                                     (col_name, value_to_json(v))
                                 })
                                 .collect();
@@ -197,7 +198,9 @@ pub async fn execute_stream<
                     "code": "QUERY_ERROR"
                 });
                 let _ = tx
-                    .send(Ok(Event::default().event("error").data(error_msg.to_string())))
+                    .send(Ok(Event::default()
+                        .event("error")
+                        .data(error_msg.to_string())))
                     .await;
                 let _ = tx.send(Ok(Event::default().event("done").data("{}"))).await;
             }

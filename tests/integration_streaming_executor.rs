@@ -69,8 +69,16 @@ fn test_scan_vertices_lifecycle() {
 #[test]
 fn test_scan_edges_lifecycle() {
     let buffer = vec![
-        vec![Value::Int(1), Value::Int(2), Value::String("edge".to_string())],
-        vec![Value::Int(2), Value::Int(3), Value::String("edge".to_string())],
+        vec![
+            Value::Int(1),
+            Value::Int(2),
+            Value::String("edge".to_string()),
+        ],
+        vec![
+            Value::Int(2),
+            Value::Int(3),
+            Value::String("edge".to_string()),
+        ],
     ];
     let mut executor = StreamingExecutor::Source(
         OperatorBase::new(0),
@@ -342,8 +350,14 @@ fn test_aggregate_in_chain() {
 
 #[test]
 fn test_hash_join_in_chain() {
-    let left = Box::new(scan_vertices(vec![vec![Value::Int(1), Value::String("a".to_string())]]));
-    let right = Box::new(scan_vertices(vec![vec![Value::Int(1), Value::String("x".to_string())]]));
+    let left = Box::new(scan_vertices(vec![vec![
+        Value::Int(1),
+        Value::String("a".to_string()),
+    ]]));
+    let right = Box::new(scan_vertices(vec![vec![
+        Value::Int(1),
+        Value::String("x".to_string()),
+    ]]));
 
     let mut join = StreamingExecutor::Join(
         OperatorBase::new(0),
@@ -595,8 +609,8 @@ fn test_distinct_all_same() {
 mod storage_backed {
     use super::common::TestStorage;
     use graphdb::core::stats::StatsManager;
-    use graphdb::core::types::{PropertyDef, SpaceInfo, TagInfo};
     use graphdb::core::types::VertexId;
+    use graphdb::core::types::{PropertyDef, SpaceInfo, TagInfo};
     use graphdb::core::vertex_edge_path::{Tag, Vertex};
     use graphdb::core::DataType;
     use graphdb::core::Value;
@@ -604,7 +618,9 @@ mod storage_backed {
     use graphdb::query::optimizer::OptimizerEngine;
     use graphdb::query::query_pipeline_manager::QueryPipelineManager;
     use graphdb::query::QueryRequestContext;
-    use graphdb::storage::{StorageReader, StorageSchemaContextOps, StorageSchemaOps, StorageWriter};
+    use graphdb::storage::{
+        StorageReader, StorageSchemaContextOps, StorageSchemaOps, StorageWriter,
+    };
     use parking_lot::RwLock;
     use std::collections::HashMap;
     use std::sync::Arc;

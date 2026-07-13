@@ -18,7 +18,10 @@ pub enum AggregateAccumulator {
 #[derive(Debug)]
 pub enum AccumulatorError {
     Overflow,
-    TypeMismatch { expected: &'static str, actual: &'static str },
+    TypeMismatch {
+        expected: &'static str,
+        actual: &'static str,
+    },
 }
 
 impl AggregateAccumulator {
@@ -86,30 +89,26 @@ impl AggregateAccumulator {
         match (self, other) {
             (Self::Count(a), Self::Count(b)) => *a += b,
             (Self::Sum(a), Self::Sum(b)) => *a += b,
-            (Self::Min(ref mut a), Self::Min(b)) => {
-                match (a.as_ref(), b) {
-                    (None, Some(v)) => *a = Some(v.clone()),
-                    (Some(_), None) => {}
-                    (Some(a_val), Some(b_val)) => {
-                        if compare_values_for_minmax(b_val, a_val).is_lt() {
-                            *a = Some(b_val.clone());
-                        }
+            (Self::Min(ref mut a), Self::Min(b)) => match (a.as_ref(), b) {
+                (None, Some(v)) => *a = Some(v.clone()),
+                (Some(_), None) => {}
+                (Some(a_val), Some(b_val)) => {
+                    if compare_values_for_minmax(b_val, a_val).is_lt() {
+                        *a = Some(b_val.clone());
                     }
-                    (None, None) => {}
                 }
-            }
-            (Self::Max(ref mut a), Self::Max(b)) => {
-                match (a.as_ref(), b) {
-                    (None, Some(v)) => *a = Some(v.clone()),
-                    (Some(_), None) => {}
-                    (Some(a_val), Some(b_val)) => {
-                        if compare_values_for_minmax(b_val, a_val).is_gt() {
-                            *a = Some(b_val.clone());
-                        }
+                (None, None) => {}
+            },
+            (Self::Max(ref mut a), Self::Max(b)) => match (a.as_ref(), b) {
+                (None, Some(v)) => *a = Some(v.clone()),
+                (Some(_), None) => {}
+                (Some(a_val), Some(b_val)) => {
+                    if compare_values_for_minmax(b_val, a_val).is_gt() {
+                        *a = Some(b_val.clone());
                     }
-                    (None, None) => {}
                 }
-            }
+                (None, None) => {}
+            },
             (Self::Avg { sum: s1, count: c1 }, Self::Avg { sum: s2, count: c2 }) => {
                 *s1 += s2;
                 *c1 += c2;
@@ -259,10 +258,12 @@ mod tests {
         acc.accumulate(&Value::BigInt(2));
         acc.accumulate(&Value::Double(3.5));
         acc.accumulate(&Value::Null(NullType::Null));
-        assert!((match acc.finalize() {
-            Value::Double(d) => (d - 6.5).abs() < 1e-10,
-            _ => false,
-        }));
+        assert!(
+            (match acc.finalize() {
+                Value::Double(d) => (d - 6.5).abs() < 1e-10,
+                _ => false,
+            })
+        );
     }
 
     #[test]
@@ -285,10 +286,12 @@ mod tests {
         acc.accumulate(&Value::Int(2));
         acc.accumulate(&Value::Int(4));
         acc.accumulate(&Value::Int(6));
-        assert!((match acc.finalize() {
-            Value::Double(d) => (d - 4.0).abs() < 1e-10,
-            _ => false,
-        }));
+        assert!(
+            (match acc.finalize() {
+                Value::Double(d) => (d - 4.0).abs() < 1e-10,
+                _ => false,
+            })
+        );
     }
 
     #[test]
@@ -301,13 +304,21 @@ mod tests {
 
     #[test]
     fn test_merge_avg() {
-        let mut a = AggregateAccumulator::Avg { sum: 10.0, count: 3 };
-        let b = AggregateAccumulator::Avg { sum: 20.0, count: 2 };
+        let mut a = AggregateAccumulator::Avg {
+            sum: 10.0,
+            count: 3,
+        };
+        let b = AggregateAccumulator::Avg {
+            sum: 20.0,
+            count: 2,
+        };
         a.merge(&b);
-        assert!((match a.finalize() {
-            Value::Double(d) => (d - 6.0).abs() < 1e-10,
-            _ => false,
-        }));
+        assert!(
+            (match a.finalize() {
+                Value::Double(d) => (d - 6.0).abs() < 1e-10,
+                _ => false,
+            })
+        );
     }
 
     #[test]
@@ -323,25 +334,37 @@ mod tests {
     #[test]
     fn test_for_function_mapping() {
         assert!(AggregateAccumulator::for_function(&AggregateFunction::Count(None)).is_some());
-        assert!(AggregateAccumulator::for_function(&AggregateFunction::Sum("x".to_string())).is_some());
-        assert!(AggregateAccumulator::for_function(&AggregateFunction::Min("x".to_string())).is_some());
-        assert!(AggregateAccumulator::for_function(&AggregateFunction::Max("x".to_string())).is_some());
-        assert!(AggregateAccumulator::for_function(&AggregateFunction::Avg("x".to_string())).is_some());
-        assert!(AggregateAccumulator::for_function(&AggregateFunction::Collect("x".to_string())).is_none());
+        assert!(
+            AggregateAccumulator::for_function(&AggregateFunction::Sum("x".to_string())).is_some()
+        );
+        assert!(
+            AggregateAccumulator::for_function(&AggregateFunction::Min("x".to_string())).is_some()
+        );
+        assert!(
+            AggregateAccumulator::for_function(&AggregateFunction::Max("x".to_string())).is_some()
+        );
+        assert!(
+            AggregateAccumulator::for_function(&AggregateFunction::Avg("x".to_string())).is_some()
+        );
+        assert!(
+            AggregateAccumulator::for_function(&AggregateFunction::Collect("x".to_string()))
+                .is_none()
+        );
     }
 
     #[test]
     fn test_accumulator_to_value_roundtrip() {
-        let acc = AggregateAccumulator::Avg { sum: 15.0, count: 3 };
+        let acc = AggregateAccumulator::Avg {
+            sum: 15.0,
+            count: 3,
+        };
         let v = accumulator_to_value(&acc);
-        let result = finalize_accumulator_value(
-            &AggregateFunction::Avg("x".to_string()),
-            &v,
-            None,
+        let result = finalize_accumulator_value(&AggregateFunction::Avg("x".to_string()), &v, None);
+        assert!(
+            (match result {
+                Value::Double(d) => (d - 5.0).abs() < 1e-10,
+                _ => false,
+            })
         );
-        assert!((match result {
-            Value::Double(d) => (d - 5.0).abs() < 1e-10,
-            _ => false,
-        }));
     }
 }

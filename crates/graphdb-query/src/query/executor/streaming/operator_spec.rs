@@ -32,7 +32,6 @@ pub enum SourceSpec {
         col_names: Vec<String>,
     },
     StorageScanVertices {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         limit: Option<usize>,
         col_names: Vec<String>,
@@ -42,19 +41,16 @@ pub enum SourceSpec {
         col_names: Vec<String>,
     },
     StorageScanEdges {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         limit: Option<usize>,
         edge_type: Option<String>,
         col_names: Vec<String>,
     },
     GetVertices {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         vertex_ids: Option<Vec<Value>>,
     },
     GetEdges {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         edge_type: Option<String>,
         src: Option<String>,
@@ -62,31 +58,26 @@ pub enum SourceSpec {
         rank: i64,
     },
     GetNeighbors {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         direction: String,
     },
     EdgeIndexScan {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         edge_type: Option<String>,
     },
     IndexScan {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         index_name: Option<String>,
         index_value: Option<Value>,
     },
     Argument,
     GetProp {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         vertex_ids: Option<Vec<Value>>,
         edge_ids: Option<Vec<Value>>,
         prop_names: Vec<String>,
     },
     LookupIndex {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         index_name: String,
         index_condition: Option<(String, Value)>,
@@ -252,21 +243,39 @@ pub enum GraphSpec {
         target_vertex: Option<Expression>,
         edge_types: Vec<String>,
         direction: EdgeDirection,
+        max_depth: usize,
+        start_vertices: Vec<Value>,
+        target_vertices: Vec<Value>,
     },
     BFSShortest {
         target_vertex: Option<Expression>,
         edge_types: Vec<String>,
         direction: EdgeDirection,
+        max_depth: usize,
+        allow_cycles: bool,
+        allow_loops: bool,
     },
     AllPaths {
         target_vertex: Option<Expression>,
         edge_types: Vec<String>,
         direction: EdgeDirection,
+        min_depth: usize,
+        max_depth: usize,
+        acyclic: bool,
+        limit: Option<usize>,
+        offset: usize,
+        filter: Option<Expression>,
+        start_vertices: Vec<Value>,
+        target_vertices: Vec<Value>,
     },
     MultiShortestPath {
         target_vertices: Vec<Expression>,
         edge_types: Vec<String>,
         direction: EdgeDirection,
+        max_depth: usize,
+        left_vertex_column: String,
+        right_vertex_column: String,
+        single_shortest: bool,
     },
 }
 
@@ -276,39 +285,57 @@ pub enum GraphSpec {
 #[derive(Debug, Clone)]
 pub enum SinkSpec {
     InsertVertices {
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         vertex_properties: Vec<(String, Expression)>,
         tags: Vec<String>,
     },
     InsertEdges {
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         src_col: String,
         dst_col: String,
         edge_type: String,
         edge_properties: Vec<(String, Expression)>,
     },
     UpdateVertices {
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         updates: Vec<(String, Expression)>,
     },
     UpdateEdges {
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         src_col: String,
         dst_col: String,
         edge_type: String,
         updates: Vec<(String, Expression)>,
     },
     DeleteVertices {
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         vertex_id_col: String,
     },
     DeleteEdges {
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         src_col: String,
         dst_col: String,
     },
     PipeDeleteVertices {
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         vertex_id_col: String,
     },
     PipeDeleteEdges {
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         src_col: String,
         dst_col: String,
     },
     DeleteTags {
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        space_name: String,
         tag_names: Vec<String>,
         vertex_ids: Option<Vec<Value>>,
     },
@@ -324,9 +351,7 @@ pub enum SinkSpec {
 #[derive(Debug, Clone)]
 pub enum ExchangeSpec {
     /// Concatenate N partition outputs in partition order.
-    Concatenate {
-        partition_count: usize,
-    },
+    Concatenate { partition_count: usize },
     /// N-way merge-sort of pre-sorted partition inputs.
     MergeSort {
         sort_expressions: Vec<Expression>,
@@ -353,9 +378,139 @@ pub enum SetSpec {
 #[derive(Debug, Clone)]
 pub enum ApplySpec {
     Apply {
-        apply_expression: Expression,
+        kind: ApplyKind,
+        correlated_columns: Vec<String>,
     },
     PatternApply {
-        pattern: Expression,
+        key_expressions: Vec<Expression>,
+        anti: bool,
     },
+    RollUpApply {
+        compare_columns: Vec<String>,
+        collect_column: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplyKind {
+    Standard,
+    Semi,
+    Anti,
+    Single,
+    All,
+}
+
+// ── DDL spec ─────────────────────────────────────────────────────────────────
+
+/// Immutable config for DDL operators.
+#[derive(Debug, Clone)]
+pub enum DdlSpec {
+    SpaceManage {
+        command: crate::query::planning::plan::core::nodes::management::manage_node_enums::SpaceManageNode,
+    },
+    TagManage {
+        space_name: String,
+        command: crate::query::planning::plan::core::nodes::management::manage_node_enums::TagManageNode,
+    },
+    EdgeManage {
+        space_name: String,
+        command: crate::query::planning::plan::core::nodes::management::manage_node_enums::EdgeManageNode,
+    },
+    IndexManage {
+        space_name: String,
+        command: crate::query::planning::plan::core::nodes::management::manage_node_enums::IndexManageNode,
+    },
+    DeleteIndex {
+        space_name: String,
+        index_name: String,
+    },
+    UserManage {
+        command: crate::query::planning::plan::core::nodes::management::manage_node_enums::UserManageNode,
+    },
+    ShowStats {
+        space_name: String,
+    },
+    Analyze {
+        space_name: String,
+    },
+    Migrate,
+}
+
+// ── Fulltext spec ────────────────────────────────────────────────────────────
+
+/// Immutable config for fulltext search operators.
+#[derive(Debug, Clone)]
+pub enum FulltextSpec {
+    FulltextManage {
+        space_name: String,
+        command: crate::query::planning::plan::core::nodes::management::manage_node_enums::FulltextManageNode,
+    },
+    FulltextSearch {
+        space_name: String,
+        space_id: u64,
+        index_name: String,
+        search_query: String,
+        tag_name: String,
+        field_name: String,
+    },
+    FulltextLookup {
+        space_name: String,
+        space_id: u64,
+        index_name: String,
+        search_query: String,
+        tag_name: String,
+        field_name: String,
+    },
+    MatchFulltext {
+        space_name: String,
+        match_expr: Expression,
+        match_field: Option<String>,
+        tag_name: String,
+        field_name: String,
+    },
+}
+
+// ── Vector spec ──────────────────────────────────────────────────────────────
+
+/// Immutable config for vector search operators.
+#[derive(Debug, Clone)]
+pub enum VectorSpec {
+    VectorManage {
+        space_name: String,
+        command: crate::query::planning::plan::core::nodes::management::manage_node_enums::VectorManageNode,
+    },
+    VectorSearch {
+        space_name: String,
+        space_id: u64,
+        index_name: String,
+        query_vector: Vec<f32>,
+        top_k: u32,
+        tag_name: String,
+        field_name: String,
+    },
+    VectorLookup {
+        space_name: String,
+        index_name: String,
+        lookup_key: Expression,
+    },
+    VectorMatch {
+        space_name: String,
+        pattern: String,
+        field: String,
+        query_vector: Vec<f32>,
+        threshold: Option<f32>,
+        tag_name: String,
+        field_name: String,
+        space_id: u64,
+    },
+}
+
+// ── Txn spec ─────────────────────────────────────────────────────────────────
+
+/// Immutable config for transaction operators.
+#[derive(Debug, Clone)]
+pub enum TxnSpec {
+    BeginTransaction { transaction_id: Option<String> },
+    Commit { transaction_id: Option<String> },
+    Rollback { transaction_id: Option<String> },
 }

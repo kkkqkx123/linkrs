@@ -56,7 +56,10 @@ pub fn edge_to_row(edge: &Edge) -> Vec<Value> {
 /// Convert Vertex collection to rows, filtering by partition range.
 /// Range uses `i64` to match the real vertex ID type and avoid silent
 /// truncation of values >= 2^32 or negative IDs.
-pub fn vertices_to_rows(vertices: Vec<Vertex>, partition_range: &std::ops::Range<i64>) -> Vec<Vec<Value>> {
+pub fn vertices_to_rows(
+    vertices: Vec<Vertex>,
+    partition_range: &std::ops::Range<i64>,
+) -> Vec<Vec<Value>> {
     vertices
         .into_iter()
         .filter(|v| v.id >= partition_range.start && v.id < partition_range.end)
@@ -143,7 +146,10 @@ mod tests {
         ];
 
         // Filter for partition range [15, 35)
-        let partition_range = std::ops::Range { start: 15i64, end: 35 };
+        let partition_range = std::ops::Range {
+            start: 15i64,
+            end: 35,
+        };
         let rows = vertices_to_rows(vertices, &partition_range);
 
         // Should include vertices with id 20 and 30, but not 10

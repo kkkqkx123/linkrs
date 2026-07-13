@@ -1,14 +1,17 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
 use parking_lot::Mutex;
 
+use parking_lot::RwLock;
+
 use crate::core::error::QueryError;
 use crate::query::executor::base::MemoryBudget;
-use crate::query::executor::streaming::pool::MorselWorkerPool;
+use crate::query::executor::streaming::pool::TaskScheduler;
 use crate::query::query_manager::QueryManager;
+use crate::storage::StorageClient;
 
 /// Query identity information
 #[derive(Debug, Clone, Default)]
@@ -203,12 +206,32 @@ pub struct ExecutionRuntime {
     query_manager: Option<Arc<QueryManager>>,
     /// Query-level morsel worker pool for dynamic partition execution.
     /// Created when `max_workers > 1`; `None` means serial fallback.
-    pub worker_pool: Option<Arc<MorselWorkerPool>>,
+    /// Behind a Mutex so the engine can set the pool after construction.
+    pub worker_pool: Arc<parking_lot::Mutex<Option<Arc<dyn TaskScheduler>>>>,
+    /// Per-partition output channel capacity for parallel exchange/gather.
+    pub max_buffered_chunks: AtomicUsize,
+    /// Storage client for this query execution.
+    /// Moved here from OperatorSpec so that the physical plan tree is
+    /// truly immutable and cacheable without sharing storage handles.
+    pub storage: Option<Arc<RwLock<dyn StorageClient>>>,
+    #[cfg(feature = "fulltext-search")]
+    pub fulltext_manager: Option<Arc<crate::search::manager::FulltextIndexManager>>,
+    #[cfg(feature = "qdrant")]
+    pub vector_coordinator: Option<Arc<crate::sync::VectorSyncCoordinator>>,
 }
 
 impl ExecutionRuntime {
-    /// Create a new execution runtime with the given query identity and memory budget.
-    pub fn new(query_id: QueryIdentity, memory_budget: MemoryBudget) -> Self {
+    /// Create a new execution runtime with the given query identity, memory budget,
+    /// and optional storage client.
+    pub fn new(
+        query_id: QueryIdentity,
+        memory_budget: MemoryBudget,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        #[cfg(feature = "fulltext-search")]
+        fulltext_manager: Option<Arc<crate::search::manager::FulltextIndexManager>>,
+        #[cfg(feature = "qdrant")]
+        vector_coordinator: Option<Arc<crate::sync::VectorSyncCoordinator>>,
+    ) -> Self {
         Self {
             query_id: parking_lot::Mutex::new(query_id),
             cancel_token: Arc::new(AtomicBool::new(false)),
@@ -217,13 +240,27 @@ impl ExecutionRuntime {
             profile: Arc::new(Mutex::new(ProfileCollector::new())),
             resource_owner: Arc::new(Mutex::new(ResourceOwner::new())),
             query_manager: None,
-            worker_pool: None,
+            worker_pool: Arc::new(parking_lot::Mutex::new(None)),
+            max_buffered_chunks: AtomicUsize::new(10),
+            storage,
+            #[cfg(feature = "fulltext-search")]
+            fulltext_manager,
+            #[cfg(feature = "qdrant")]
+            vector_coordinator,
         }
     }
 
-    /// Create a runtime with default settings (query_id = 0, default memory budget).
+    /// Create a runtime with default settings (query_id = 0, default memory budget, no storage).
     pub fn default_budget() -> Self {
-        Self::new(QueryIdentity::default(), MemoryBudget::default_budget())
+        Self::new(
+            QueryIdentity::default(),
+            MemoryBudget::default_budget(),
+            None,
+            #[cfg(feature = "fulltext-search")]
+            None,
+            #[cfg(feature = "qdrant")]
+            None,
+        )
     }
 
     // ── Query identity ──
@@ -238,6 +275,22 @@ impl ExecutionRuntime {
     /// real server-side ID before the handle is returned to the caller.
     pub fn assign_query_id(&self, id: u64) {
         self.query_id.lock().query_id = id;
+    }
+
+    #[cfg(feature = "fulltext-search")]
+    pub fn set_fulltext_manager(
+        &mut self,
+        manager: Option<Arc<crate::search::manager::FulltextIndexManager>>,
+    ) {
+        self.fulltext_manager = manager;
+    }
+
+    #[cfg(feature = "qdrant")]
+    pub fn set_vector_coordinator(
+        &mut self,
+        coordinator: Option<Arc<crate::sync::VectorSyncCoordinator>>,
+    ) {
+        self.vector_coordinator = coordinator;
     }
 
     /// Attach a QueryManager so that KILL QUERY and finish tracking work.
@@ -333,11 +386,20 @@ impl ExecutionRuntime {
         self.resource_owner.lock().release_all();
     }
 
-    /// Set the morsel worker pool for this query. When configured, Exchange
-    /// operators use the pool's bounded workers for parallel partition execution
-    /// with dynamic morsel-style task assignment.
-    pub fn set_worker_pool(&mut self, pool: Option<MorselWorkerPool>) {
-        self.worker_pool = pool.map(Arc::new);
+    /// Set the morsel worker pool for this query. When configured, Gather and
+    /// Exchange operators use the pool's bounded workers for parallel partition
+    /// execution with dynamic morsel-style task assignment.
+    ///
+    /// Uses `&self` (internal mutability) so callers can configure the pool
+    /// through an `Arc<ExecutionRuntime>`.
+    pub fn set_worker_pool(&self, pool: Option<super::pool::MorselWorkerPool>) {
+        *self.worker_pool.lock() = pool.map(|p| Arc::new(p) as Arc<dyn TaskScheduler>);
+    }
+
+    /// Set the per-partition output channel capacity for parallel operators.
+    pub fn set_max_buffered_chunks(&self, chunks: usize) {
+        self.max_buffered_chunks
+            .store(chunks.max(1), Ordering::Relaxed);
     }
 }
 

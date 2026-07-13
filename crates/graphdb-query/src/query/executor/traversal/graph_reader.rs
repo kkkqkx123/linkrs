@@ -11,11 +11,7 @@ impl<'a> TraversalGraphReader<'a> {
         Self { storage }
     }
 
-    pub fn get_vertex(
-        &self,
-        space_name: &str,
-        vertex_id: &VertexId,
-    ) -> Option<Vertex> {
+    pub fn get_vertex(&self, space_name: &str, vertex_id: &VertexId) -> Option<Vertex> {
         self.storage.get_vertex(space_name, vertex_id).ok()?
     }
 
@@ -30,11 +26,7 @@ impl<'a> TraversalGraphReader<'a> {
             .unwrap_or_default()
     }
 
-    pub fn filter_edges<'b>(
-        &self,
-        edges: &'b [Edge],
-        edge_types: &[String],
-    ) -> Vec<&'b Edge> {
+    pub fn filter_edges<'b>(&self, edges: &'b [Edge], edge_types: &[String]) -> Vec<&'b Edge> {
         if edge_types.is_empty() {
             edges.iter().collect()
         } else {

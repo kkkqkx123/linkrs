@@ -14,8 +14,8 @@ pub use base::{
 
 // Re-export streaming executors (Primary Execution Framework)
 pub use streaming::{
-    combine_layouts, DataChunk, ExecutionRuntime, OperatorProfile, PartitionView,
-    ProfileCollector, QueryIdentity, ResourceOwner, ResultStream, SlotId, SlotInfo, SlotLayout,
+    combine_layouts, DataChunk, ExecutionRuntime, OperatorProfile, PartitionView, ProfileCollector,
+    QueryIdentity, ResourceOwner, ResultStream, SlotId, SlotInfo, SlotLayout,
     StreamingExecutionEngine, StreamingExecutor, StreamingExecutorBuilder, StreamingQueryResult,
 };
 

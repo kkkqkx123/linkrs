@@ -20,38 +20,118 @@ use std::sync::Arc;
 
 use super::executor::StreamingExecutor;
 use super::operator_base::OperatorBase;
+use super::operator_spec::{
+    ApplySpec, DdlSpec, FulltextSpec, GraphSpec, SetSpec, SinkSpec, TxnSpec, VectorSpec,
+};
 use super::operator_spec::{BlockingSpec, ExchangeSpec, JoinSpec, SourceSpec, UnarySpec};
-use super::operator_spec::{ApplySpec, GraphSpec, SetSpec, SinkSpec};
 use super::operators::apply_operator::ApplyOperator;
 use super::operators::blocking_operator::BlockingOperator;
+use super::operators::ddl_operator::DdlOperator;
+use super::operators::exchange_operator::ExchangeOperator;
+use super::operators::fulltext_operator::FulltextOperator;
 use super::operators::graph_operator::GraphOperator;
 use super::operators::join_operator::JoinOperator;
 use super::operators::set_operator::SetOperator;
 use super::operators::sink_operator::SinkOperator;
-use super::operators::exchange_operator::ExchangeOperator;
 use super::operators::source_operator::SourceOperator;
+use super::operators::txn_operator::TxnOperator;
 use super::operators::unary_operator::UnaryOperator;
+use super::operators::vector_operator::VectorOperator;
+use super::physical_properties::PhysicalProperties;
 use super::runtime::ExecutionRuntime;
 use crate::query::executor::base::MemoryBudget;
 
+/// Stable identifier for a physical plan node.
+pub type PhysicalNodeId = i64;
+
 /// Immutable physical plan node.
+///
+/// Every variant carries a stable [`PhysicalNodeId`] that matches the source
+/// logical plan's node id, enabling PROFILE and EXPLAIN to report accurate
+/// per-node metrics.
 ///
 /// Contains only immutable configuration — expressions, column names, storage
 /// handles — and never cursors, hash tables, lifecycle markers, or runtime
 /// references.
 #[derive(Debug, Clone)]
 pub enum PhysicalNode {
-    Source(SourceSpec),
-    Unary(Box<PhysicalNode>, UnarySpec),
-    Blocking(Box<PhysicalNode>, BlockingSpec),
-    Join(Box<PhysicalNode>, Box<PhysicalNode>, JoinSpec),
-    Graph(Box<PhysicalNode>, GraphSpec),
-    Sink(Box<PhysicalNode>, SinkSpec),
-    Set(Box<PhysicalNode>, Box<PhysicalNode>, SetSpec),
-    Apply(Box<PhysicalNode>, Box<PhysicalNode>, ApplySpec),
+    Source(PhysicalNodeId, SourceSpec, PhysicalProperties),
+    Unary(
+        PhysicalNodeId,
+        Box<PhysicalNode>,
+        UnarySpec,
+        PhysicalProperties,
+    ),
+    Blocking(
+        PhysicalNodeId,
+        Box<PhysicalNode>,
+        BlockingSpec,
+        PhysicalProperties,
+    ),
+    Join(
+        PhysicalNodeId,
+        Box<PhysicalNode>,
+        Box<PhysicalNode>,
+        JoinSpec,
+        PhysicalProperties,
+    ),
+    Graph(
+        PhysicalNodeId,
+        Box<PhysicalNode>,
+        GraphSpec,
+        PhysicalProperties,
+    ),
+    Sink(
+        PhysicalNodeId,
+        Box<PhysicalNode>,
+        SinkSpec,
+        PhysicalProperties,
+    ),
+    Set(
+        PhysicalNodeId,
+        Box<PhysicalNode>,
+        Box<PhysicalNode>,
+        SetSpec,
+        PhysicalProperties,
+    ),
+    Apply(
+        PhysicalNodeId,
+        Box<PhysicalNode>,
+        Box<PhysicalNode>,
+        ApplySpec,
+        PhysicalProperties,
+    ),
     /// Exchange node: gathers N child partition outputs via Concatenate or MergeSort.
-    /// Uses the query-level `MorselWorkerPool` for parallel execution when configured.
-    Exchange(Vec<PhysicalNode>, ExchangeSpec),
+    Exchange(
+        PhysicalNodeId,
+        Vec<PhysicalNode>,
+        ExchangeSpec,
+        PhysicalProperties,
+    ),
+    Ddl(
+        PhysicalNodeId,
+        Box<PhysicalNode>,
+        DdlSpec,
+        PhysicalProperties,
+    ),
+    Fulltext(
+        PhysicalNodeId,
+        Box<PhysicalNode>,
+        FulltextSpec,
+        PhysicalProperties,
+    ),
+    Vector(
+        PhysicalNodeId,
+        Box<PhysicalNode>,
+        VectorSpec,
+        PhysicalProperties,
+    ),
+    Txn(
+        PhysicalNodeId,
+        Box<PhysicalNode>,
+        TxnSpec,
+        PhysicalProperties,
+    ),
 }
 
 impl PhysicalNode {
@@ -64,143 +144,172 @@ impl PhysicalNode {
         memory_budget: &MemoryBudget,
         chunk_size: usize,
     ) -> StreamingExecutor {
-        match self {
-            Self::Source(spec) => {
-                let source = SourceOperator::from_spec(spec);
-                let mut exec = StreamingExecutor::Source(OperatorBase::new(0), source);
-                exec.set_chunk_size(chunk_size);
-                if let Some(rt) = runtime {
-                    exec.set_runtime(Some(rt));
-                }
-                exec
+        let mut exec = match self {
+            Self::Source(node_id, spec, _) => {
+                let storage = runtime.as_ref().and_then(|rt| rt.storage.clone());
+                let source = SourceOperator::from_spec(spec, storage);
+                StreamingExecutor::Source(OperatorBase::new(*node_id), source)
             }
-            Self::Unary(child, spec) => {
+            Self::Unary(node_id, child, spec, _) => {
                 let child_exec = child.materialize(runtime.clone(), memory_budget, chunk_size);
                 let unary = UnaryOperator::from_spec(spec);
-                let mut exec =
-                    StreamingExecutor::Unary(OperatorBase::new(0), Box::new(child_exec), unary);
-                exec.set_chunk_size(chunk_size);
-                if let Some(rt) = runtime {
-                    exec.set_runtime(Some(rt));
-                }
-                exec
+                StreamingExecutor::Unary(
+                    OperatorBase::new(*node_id),
+                    Box::new(child_exec),
+                    unary,
+                )
             }
-            Self::Blocking(child, spec) => {
+            Self::Blocking(node_id, child, spec, _) => {
                 let child_exec = child.materialize(runtime.clone(), memory_budget, chunk_size);
                 let blocking = BlockingOperator::from_spec(spec, memory_budget);
-                let mut exec = StreamingExecutor::Blocking(
-                    OperatorBase::new(0),
+                StreamingExecutor::Blocking(
+                    OperatorBase::new(*node_id),
                     Box::new(child_exec),
                     blocking,
-                );
-                exec.set_chunk_size(chunk_size);
-                if let Some(rt) = runtime {
-                    exec.set_runtime(Some(rt));
-                }
-                exec
+                )
             }
-            Self::Join(left, right, spec) => {
+            Self::Join(node_id, left, right, spec, _) => {
                 let left_exec = left.materialize(runtime.clone(), memory_budget, chunk_size);
                 let right_exec = right.materialize(runtime.clone(), memory_budget, chunk_size);
                 let join = JoinOperator::from_spec(spec, memory_budget);
-                let mut exec = StreamingExecutor::Join(
-                    OperatorBase::new(0),
+                StreamingExecutor::Join(
+                    OperatorBase::new(*node_id),
                     Box::new(left_exec),
                     Box::new(right_exec),
                     join,
-                );
-                exec.set_chunk_size(chunk_size);
-                if let Some(rt) = runtime {
-                    exec.set_runtime(Some(rt));
-                }
-                exec
+                )
             }
-            Self::Graph(child, spec) => {
+            Self::Graph(node_id, child, spec, _) => {
                 let child_exec = child.materialize(runtime.clone(), memory_budget, chunk_size);
-                let mut exec = StreamingExecutor::Graph(
-                    OperatorBase::new(0),
+                let storage = runtime.as_ref().and_then(|runtime| runtime.storage.clone());
+                let space_name = runtime
+                    .as_ref()
+                    .and_then(|runtime| runtime.query_id().space_name)
+                    .unwrap_or_default();
+                StreamingExecutor::Graph(
+                    OperatorBase::new(*node_id),
                     Box::new(child_exec),
-                    GraphOperator::from_spec(spec),
-                );
-                exec.set_chunk_size(chunk_size);
-                if let Some(rt) = runtime {
-                    exec.set_runtime(Some(rt));
-                }
-                exec
+                    GraphOperator::from_spec(spec, storage, space_name),
+                )
             }
-            Self::Sink(child, spec) => {
+            Self::Sink(node_id, child, spec, _) => {
                 let child_exec = child.materialize(runtime.clone(), memory_budget, chunk_size);
-                let mut exec = StreamingExecutor::Sink(
-                    OperatorBase::new(0),
+                StreamingExecutor::Sink(
+                    OperatorBase::new(*node_id),
                     Box::new(child_exec),
                     SinkOperator::from_spec(spec),
-                );
-                exec.set_chunk_size(chunk_size);
-                if let Some(rt) = runtime {
-                    exec.set_runtime(Some(rt));
-                }
-                exec
+                )
             }
-            Self::Set(left, right, spec) => {
+            Self::Set(node_id, left, right, spec, _) => {
                 let left_exec = left.materialize(runtime.clone(), memory_budget, chunk_size);
                 let right_exec = right.materialize(runtime.clone(), memory_budget, chunk_size);
-                let mut exec = StreamingExecutor::Set(
-                    OperatorBase::new(0),
+                StreamingExecutor::Set(
+                    OperatorBase::new(*node_id),
                     Box::new(left_exec),
                     Box::new(right_exec),
                     SetOperator::from_spec(spec, memory_budget),
-                );
-                exec.set_chunk_size(chunk_size);
-                if let Some(rt) = runtime {
-                    exec.set_runtime(Some(rt));
-                }
-                exec
+                )
             }
-            Self::Apply(left, right, spec) => {
+            Self::Apply(node_id, left, right, spec, _) => {
                 let left_exec = left.materialize(runtime.clone(), memory_budget, chunk_size);
                 let right_exec = right.materialize(runtime.clone(), memory_budget, chunk_size);
-                let mut exec = StreamingExecutor::Apply(
-                    OperatorBase::new(0),
+                StreamingExecutor::Apply(
+                    OperatorBase::new(*node_id),
                     Box::new(left_exec),
                     Box::new(right_exec),
                     ApplyOperator::from_spec(spec, memory_budget),
-                );
-                exec.set_chunk_size(chunk_size);
-                if let Some(rt) = runtime {
-                    exec.set_runtime(Some(rt));
-                }
-                exec
+                )
             }
-            Self::Exchange(children, spec) => {
+            Self::Exchange(node_id, children, spec, _) => {
                 let child_execs: Vec<StreamingExecutor> = children
                     .iter()
                     .map(|c| c.materialize(runtime.clone(), memory_budget, chunk_size))
                     .collect();
-                let mut exec = StreamingExecutor::Exchange(
-                    OperatorBase::new(0),
+                StreamingExecutor::Exchange(
+                    OperatorBase::new(*node_id),
                     child_execs,
                     ExchangeOperator::from_spec(spec),
-                );
-                exec.set_chunk_size(chunk_size);
-                if let Some(rt) = runtime {
-                    exec.set_runtime(Some(rt));
-                }
-                exec
+                )
             }
+            Self::Ddl(node_id, child, spec, _) => {
+                let child_exec = child.materialize(runtime.clone(), memory_budget, chunk_size);
+                let storage = runtime.as_ref().and_then(|runtime| runtime.storage.clone());
+                StreamingExecutor::Ddl(
+                    OperatorBase::new(*node_id),
+                    Box::new(child_exec),
+                    DdlOperator::from_spec(spec, storage),
+                )
+            }
+            Self::Fulltext(node_id, child, spec, _) => {
+                let child_exec = child.materialize(runtime.clone(), memory_budget, chunk_size);
+                let storage = runtime.as_ref().and_then(|runtime| runtime.storage.clone());
+                #[cfg(feature = "fulltext-search")]
+                let fulltext_manager = runtime
+                    .as_ref()
+                    .and_then(|runtime| runtime.fulltext_manager.clone());
+                StreamingExecutor::Fulltext(
+                    OperatorBase::new(*node_id),
+                    Box::new(child_exec),
+                    FulltextOperator::from_spec(
+                        spec,
+                        storage,
+                        #[cfg(feature = "fulltext-search")]
+                        fulltext_manager,
+                    ),
+                )
+            }
+            Self::Vector(node_id, child, spec, _) => {
+                let child_exec = child.materialize(runtime.clone(), memory_budget, chunk_size);
+                let storage = runtime.as_ref().and_then(|runtime| runtime.storage.clone());
+                #[cfg(feature = "qdrant")]
+                let vector_coordinator = runtime
+                    .as_ref()
+                    .and_then(|runtime| runtime.vector_coordinator.clone());
+                StreamingExecutor::Vector(
+                    OperatorBase::new(*node_id),
+                    Box::new(child_exec),
+                    VectorOperator::from_spec(
+                        spec,
+                        storage,
+                        #[cfg(feature = "qdrant")]
+                        vector_coordinator,
+                    ),
+                )
+            }
+            Self::Txn(node_id, child, spec, _) => {
+                let child_exec = child.materialize(runtime.clone(), memory_budget, chunk_size);
+                StreamingExecutor::Txn(
+                    OperatorBase::new(*node_id),
+                    Box::new(child_exec),
+                    TxnOperator::from_spec(spec),
+                )
+            }
+        };
+        exec.set_chunk_size(chunk_size);
+        if let Some(rt) = runtime {
+            exec.set_runtime(Some(rt));
         }
+        exec
     }
 
     /// Return child nodes for tree traversal.
     pub fn children(&self) -> Vec<&PhysicalNode> {
         match self {
-            Self::Source(_) => vec![],
-            Self::Unary(child, _) | Self::Blocking(child, _) | Self::Graph(child, _) | Self::Sink(child, _) => {
+            Self::Source(..) => vec![],
+            Self::Unary(_, child, _, _)
+            | Self::Blocking(_, child, _, _)
+            | Self::Graph(_, child, _, _)
+            | Self::Sink(_, child, _, _)
+            | Self::Ddl(_, child, _, _)
+            | Self::Fulltext(_, child, _, _)
+            | Self::Vector(_, child, _, _)
+            | Self::Txn(_, child, _, _) => {
                 vec![child.as_ref()]
             }
-            Self::Join(left, right, _)
-            | Self::Set(left, right, _)
-            | Self::Apply(left, right, _) => vec![left.as_ref(), right.as_ref()],
-            Self::Exchange(children, _) => children.iter().collect(),
+            Self::Join(_, left, right, _, _)
+            | Self::Set(_, left, right, _, _)
+            | Self::Apply(_, left, right, _, _) => vec![left.as_ref(), right.as_ref()],
+            Self::Exchange(_, children, _, _) => children.iter().collect(),
         }
     }
 }

@@ -9,6 +9,7 @@ use crate::core::{EdgeDirection, Value};
 use crate::query::executor::base::{MemoryBudget, MemoryReservation};
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::operator_base::OperatorBase;
+use crate::query::executor::streaming::slot::SlotLayout;
 use crate::storage::cursor::{
     open_edge_scan, open_vertex_scan, EdgeCursor, ScanOptions, VecEdgeCursor, VertexCursor,
 };
@@ -148,8 +149,12 @@ pub enum SourceOperator {
 }
 
 impl SourceOperator {
-    /// Create a SourceOperator with fresh mutable state from an immutable spec.
-    pub fn from_spec(spec: &super::super::operator_spec::SourceSpec) -> Self {
+    /// Create a SourceOperator with fresh mutable state from an immutable spec
+    /// and the per-query storage client.
+    pub fn from_spec(
+        spec: &super::super::operator_spec::SourceSpec,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+    ) -> Self {
         match spec {
             super::super::operator_spec::SourceSpec::ScanVertices { rows, col_names } => {
                 Self::ScanVertices {
@@ -160,7 +165,6 @@ impl SourceOperator {
                 }
             }
             super::super::operator_spec::SourceSpec::StorageScanVertices {
-                storage,
                 space_name,
                 limit,
                 col_names,
@@ -184,7 +188,6 @@ impl SourceOperator {
                 }
             }
             super::super::operator_spec::SourceSpec::StorageScanEdges {
-                storage,
                 space_name,
                 limit,
                 edge_type,
@@ -202,7 +205,6 @@ impl SourceOperator {
                 col_names: col_names.clone(),
             },
             super::super::operator_spec::SourceSpec::GetVertices {
-                storage,
                 space_name,
                 vertex_ids,
             } => Self::GetVertices {
@@ -212,7 +214,6 @@ impl SourceOperator {
                 position: 0,
             },
             super::super::operator_spec::SourceSpec::GetEdges {
-                storage,
                 space_name,
                 edge_type,
                 src,
@@ -228,7 +229,6 @@ impl SourceOperator {
                 cursor: None,
             },
             super::super::operator_spec::SourceSpec::GetNeighbors {
-                storage,
                 space_name,
                 direction,
             } => Self::GetNeighbors {
@@ -238,7 +238,6 @@ impl SourceOperator {
                 state: NeighborScanState::Init,
             },
             super::super::operator_spec::SourceSpec::EdgeIndexScan {
-                storage,
                 space_name,
                 edge_type,
             } => Self::EdgeIndexScan {
@@ -248,7 +247,6 @@ impl SourceOperator {
                 cursor: None,
             },
             super::super::operator_spec::SourceSpec::IndexScan {
-                storage,
                 space_name,
                 index_name,
                 index_value,
@@ -262,7 +260,6 @@ impl SourceOperator {
             },
             super::super::operator_spec::SourceSpec::Argument => Self::Argument,
             super::super::operator_spec::SourceSpec::GetProp {
-                storage,
                 space_name,
                 vertex_ids,
                 edge_ids,
@@ -275,7 +272,6 @@ impl SourceOperator {
                 prop_names: prop_names.clone(),
             },
             super::super::operator_spec::SourceSpec::LookupIndex {
-                storage,
                 space_name,
                 index_name,
                 index_condition,
@@ -456,8 +452,10 @@ impl SourceOperator {
                 let rows = batch.into_iter().map(make_vertex_row).collect::<Vec<_>>();
                 if !rows.is_empty() {
                     let reservation = reserve_memory(base, &rows)?;
-                    let mut chunk =
-                        DataChunk::from_rows_with_col_names(rows, optional_col_names(col_names));
+                    let mut chunk = DataChunk::new_with_layout(
+                        rows,
+                        Arc::new(SlotLayout::from_names(col_names)),
+                    );
                     if let Some(r) = reservation {
                         chunk = chunk.with_memory_reservation(r);
                     }
@@ -484,8 +482,10 @@ impl SourceOperator {
                 let rows = batch.into_iter().map(make_edge_row).collect::<Vec<_>>();
                 if !rows.is_empty() {
                     let reservation = reserve_memory(base, &rows)?;
-                    let mut chunk =
-                        DataChunk::from_rows_with_col_names(rows, optional_col_names(col_names));
+                    let mut chunk = DataChunk::new_with_layout(
+                        rows,
+                        Arc::new(SlotLayout::from_names(col_names)),
+                    );
                     if let Some(r) = reservation {
                         chunk = chunk.with_memory_reservation(r);
                     }
@@ -840,10 +840,6 @@ fn parse_vertex_id(value: &str) -> VertexId {
         .unwrap_or_else(|_| VertexId::from_string(value.to_string()))
 }
 
-fn optional_col_names(col_names: &[String]) -> Option<Vec<String>> {
-    (!col_names.is_empty()).then(|| col_names.to_vec())
-}
-
 fn next_buffer_chunk(
     base: &OperatorBase,
     buffer: &[Vec<Value>],
@@ -857,7 +853,7 @@ fn next_buffer_chunk(
     let rows = buffer[*current_index..end].to_vec();
     *current_index = end;
     let reservation = reserve_memory(base, &rows)?;
-    let mut chunk = DataChunk::from_rows_with_col_names(rows, optional_col_names(col_names));
+    let mut chunk = DataChunk::new_with_layout(rows, Arc::new(SlotLayout::from_names(col_names)));
     if let Some(reservation) = reservation {
         chunk = chunk.with_memory_reservation(reservation);
     }
@@ -952,6 +948,11 @@ mod tests {
             crate::query::executor::streaming::runtime::ExecutionRuntime::new(
                 crate::query::executor::streaming::runtime::QueryIdentity::default(),
                 MemoryBudget::new(0),
+                None,
+                #[cfg(feature = "fulltext-search")]
+                None,
+                #[cfg(feature = "qdrant")]
+                None,
             ),
         );
         let mut base = OperatorBase::new(0).with_runtime(Some(runtime));

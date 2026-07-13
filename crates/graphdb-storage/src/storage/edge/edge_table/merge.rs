@@ -554,18 +554,14 @@ mod tests {
         for i in 0..edge_count {
             let src = i % 5;
             let dst = (i / 5) + 5;
-            table
-                .insert_edge(src, dst, 0, &[], 100 + i)
-                .unwrap();
+            table.insert_edge(src, dst, 0, &[], 100 + i).unwrap();
         }
         table.freeze_csr_only(100 + edge_count);
 
         for i in 0..10 {
             let src = (i + 10) % 5;
             let dst = 20 + i;
-            table
-                .insert_edge(src, dst, 0, &[], 200 + i)
-                .unwrap();
+            table.insert_edge(src, dst, 0, &[], 200 + i).unwrap();
         }
         table.freeze_csr_only(210);
 
@@ -587,18 +583,14 @@ mod tests {
         for i in 0..100 {
             let src = i % 20;
             let dst = 100 + (i / 20) * 20 + i % 20;
-            table
-                .insert_edge(src, dst, 0, &[], 1000 + i)
-                .unwrap();
+            table.insert_edge(src, dst, 0, &[], 1000 + i).unwrap();
         }
         table.freeze_csr_only(1100);
 
         for i in 0..50 {
             let src = (i + 5) % 20;
             let dst = 500 + i;
-            table
-                .insert_edge(src, dst, 0, &[], 2000 + i)
-                .unwrap();
+            table.insert_edge(src, dst, 0, &[], 2000 + i).unwrap();
         }
         table.freeze_csr_only(2050);
 

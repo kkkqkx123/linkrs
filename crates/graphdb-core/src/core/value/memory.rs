@@ -44,7 +44,8 @@ impl MemoryEstimatable for Value {
             }
             Value::Map(map) => {
                 base_size
-                    + map.capacity() * (8 + std::mem::size_of::<String>() + std::mem::size_of::<Value>())
+                    + map.capacity()
+                        * (8 + std::mem::size_of::<String>() + std::mem::size_of::<Value>())
                     + map
                         .iter()
                         .map(|(k, v)| k.capacity() + v.estimate_memory())

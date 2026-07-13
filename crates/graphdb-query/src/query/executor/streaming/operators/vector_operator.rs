@@ -8,6 +8,7 @@ use crate::core::Value;
 use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::operator_base::OperatorBase;
+use crate::query::planning::plan::core::nodes::management::manage_node_enums::VectorManageNode;
 use crate::storage::StorageClient;
 #[cfg(feature = "qdrant")]
 use crate::sync::VectorSyncCoordinator;
@@ -45,11 +46,7 @@ pub enum VectorOperator {
     VectorManage {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
-        space_id: u64,
-        action: String,
-        index_name: Option<String>,
-        tag_name: Option<String>,
-        field_name: Option<String>,
+        command: VectorManageNode,
         #[cfg(feature = "qdrant")]
         vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     },
@@ -89,6 +86,80 @@ pub enum VectorOperator {
 }
 
 impl VectorOperator {
+    /// Create a VectorOperator from an immutable spec.
+    pub fn from_spec(
+        spec: &super::super::operator_spec::VectorSpec,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        #[cfg(feature = "qdrant")] vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
+    ) -> Self {
+        match spec {
+            super::super::operator_spec::VectorSpec::VectorManage {
+                space_name,
+                command,
+            } => VectorOperator::VectorManage {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                command: command.clone(),
+                #[cfg(feature = "qdrant")]
+                vector_coordinator: vector_coordinator.clone(),
+            },
+            super::super::operator_spec::VectorSpec::VectorSearch {
+                space_name,
+                space_id,
+                index_name,
+                query_vector,
+                top_k,
+                tag_name,
+                field_name,
+            } => VectorOperator::VectorSearch {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                space_id: *space_id,
+                index_name: index_name.clone(),
+                query_vector: query_vector.clone(),
+                top_k: *top_k,
+                tag_name: tag_name.clone(),
+                field_name: field_name.clone(),
+                #[cfg(feature = "qdrant")]
+                vector_coordinator: vector_coordinator.clone(),
+            },
+            super::super::operator_spec::VectorSpec::VectorLookup {
+                space_name,
+                index_name,
+                lookup_key,
+            } => VectorOperator::VectorLookup {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                index_name: index_name.clone(),
+                lookup_key: lookup_key.clone(),
+                #[cfg(feature = "qdrant")]
+                vector_coordinator: vector_coordinator.clone(),
+            },
+            super::super::operator_spec::VectorSpec::VectorMatch {
+                space_name,
+                pattern,
+                field,
+                query_vector,
+                threshold,
+                tag_name,
+                field_name,
+                space_id,
+            } => VectorOperator::VectorMatch {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                pattern: pattern.clone(),
+                field: field.clone(),
+                query_vector: query_vector.clone(),
+                threshold: *threshold,
+                tag_name: tag_name.clone(),
+                field_name: field_name.clone(),
+                space_id: *space_id,
+                #[cfg(feature = "qdrant")]
+                vector_coordinator: vector_coordinator.clone(),
+            },
+        }
+    }
+
     pub fn open(
         &mut self,
         base: &mut OperatorBase,
@@ -115,16 +186,10 @@ impl VectorOperator {
             VectorOperator::VectorManage {
                 storage,
                 space_name,
-                space_id,
-                action,
-                index_name,
-                tag_name,
-                field_name,
+                command,
                 #[cfg(feature = "qdrant")]
                 vector_coordinator,
             } => {
-                #[cfg(not(feature = "qdrant"))]
-                let _ = (&tag_name, &field_name, &space_id);
                 #[cfg(feature = "qdrant")]
                 let _ = (&storage, &space_name);
 
@@ -132,20 +197,29 @@ impl VectorOperator {
                     return Ok(None);
                 }
 
-                let result = match action.as_str() {
-                    "create_vector_index" | "create" => {
+                let result = match command {
+                    VectorManageNode::Create(node) => {
                         #[cfg(feature = "qdrant")]
                         {
                             if let Some(coordinator) = vector_coordinator {
-                                let tn = tag_name.as_deref().unwrap_or("default_tag");
-                                let fn_ = field_name.as_deref().unwrap_or("default_field");
+                                let distance = match node.distance {
+                                    crate::query::parser::ast::vector::VectorDistance::Cosine => {
+                                        vector_client::DistanceMetric::Cosine
+                                    }
+                                    crate::query::parser::ast::vector::VectorDistance::Euclidean => {
+                                        vector_client::DistanceMetric::Euclid
+                                    }
+                                    crate::query::parser::ast::vector::VectorDistance::Dot => {
+                                        vector_client::DistanceMetric::Dot
+                                    }
+                                };
                                 let res = futures::executor::block_on(
                                     coordinator.create_vector_index(
-                                        *space_id,
-                                        tn,
-                                        fn_,
-                                        128,
-                                        vector_client::DistanceMetric::Cosine,
+                                        node.space_id,
+                                        &node.tag_name,
+                                        &node.field_name,
+                                        node.vector_size,
+                                        distance,
                                     ),
                                 )
                                 .map_err(|e| {
@@ -154,7 +228,7 @@ impl VectorOperator {
                                 match res {
                                     Ok(_) => Ok(Some(make_manage_result(
                                         "create_vector_index",
-                                        index_name.as_deref(),
+                                        Some(&node.index_name),
                                         "created",
                                     ))),
                                     Err(e) => Err(e),
@@ -162,7 +236,7 @@ impl VectorOperator {
                             } else {
                                 Ok(Some(make_manage_result(
                                     "create_vector_index",
-                                    index_name.as_deref(),
+                                    Some(&node.index_name),
                                     "no-coordinator",
                                 )))
                             }
@@ -172,53 +246,30 @@ impl VectorOperator {
                             let _ = (storage, space_name);
                             Ok(Some(make_manage_result(
                                 "create_vector_index",
-                                index_name.as_deref(),
+                                Some(&node.index_name),
                                 "qdrant feature disabled",
                             )))
                         }
                     }
-                    "drop_vector_index" | "drop" => {
+                    VectorManageNode::Drop(node) => {
                         #[cfg(feature = "qdrant")]
                         {
-                            if let Some(coordinator) = vector_coordinator {
-                                let tn = tag_name.as_deref().unwrap_or("default_tag");
-                                let fn_ = field_name.as_deref().unwrap_or("default_field");
-                                let res = futures::executor::block_on(
-                                    coordinator.drop_vector_index(*space_id, tn, fn_),
-                                )
-                                .map_err(|e| {
-                                    QueryError::execution(format!("Vector drop failed: {}", e))
-                                });
-                                match res {
-                                    Ok(_) => Ok(Some(make_manage_result(
-                                        "drop_vector_index",
-                                        index_name.as_deref(),
-                                        "dropped",
-                                    ))),
-                                    Err(e) => Err(e),
-                                }
-                            } else {
-                                Ok(Some(make_manage_result(
-                                    "drop_vector_index",
-                                    index_name.as_deref(),
-                                    "no-coordinator",
-                                )))
-                            }
+                            let _ = vector_coordinator;
+                            Err(QueryError::execution(format!(
+                                "Vector index drop requires tag and field metadata: {}",
+                                node.index_name
+                            )))
                         }
                         #[cfg(not(feature = "qdrant"))]
                         {
                             let _ = (storage, space_name);
                             Ok(Some(make_manage_result(
                                 "drop_vector_index",
-                                index_name.as_deref(),
+                                Some(&node.index_name),
                                 "qdrant feature disabled",
                             )))
                         }
                     }
-                    _ => Err(QueryError::execution(format!(
-                        "Unsupported vector action: {}",
-                        action
-                    ))),
                 };
 
                 base.lifecycle.mark_closed();

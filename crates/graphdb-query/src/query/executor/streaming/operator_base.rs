@@ -33,6 +33,10 @@ impl OperatorLifecycle {
         matches!(self, Self::Opened | Self::Exhausted)
     }
 
+    pub fn is_exhausted(self) -> bool {
+        matches!(self, Self::Exhausted)
+    }
+
     /// Whether the operator is in a state that allows closing.
     /// Everything except `Closed` needs cleanup.
     pub fn can_close(self) -> bool {

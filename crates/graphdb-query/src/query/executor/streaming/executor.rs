@@ -96,9 +96,35 @@ pub enum StreamingExecutor {
     ),
 }
 
+/// Dispatch to the correct operator's lifecycle method.
+macro_rules! dispatch {
+    ($self:expr, $method:ident) => {
+        match $self {
+            Self::Source(base, op) => op.$method(base),
+            Self::Unary(base, child, op) => op.$method(base, child),
+            Self::Join(base, left, right, op) => op.$method(base, left, right),
+            Self::Set(base, left, right, op) => op.$method(base, left, right),
+            Self::Apply(base, left, right, op) => op.$method(base, left, right),
+            Self::Blocking(base, child, op) => op.$method(base, child),
+            Self::Graph(base, child, op) => op.$method(base, child),
+            Self::Sink(base, child, op) => op.$method(base, child),
+            Self::Ddl(base, child, op) => op.$method(base, child),
+            Self::Fulltext(base, child, op) => op.$method(base, child),
+            Self::Vector(base, child, op) => op.$method(base, child),
+            Self::Txn(base, child, op) => op.$method(base, child),
+            Self::Gather(base, children, op) => op.$method(base, children),
+            Self::Exchange(base, children, op) => op.$method(base, children),
+            Self::HashShuffleJoin(base, left, right, op) => op.$method(base, left, right),
+        }
+    };
+}
+
 impl StreamingExecutor {
     /// Recursively set the runtime on this operator and all children.
     pub fn set_runtime(&mut self, rt: Option<Arc<ExecutionRuntime>>) {
+        if let (Self::Graph(_, _, operator), Some(runtime)) = (&mut *self, rt.as_ref()) {
+            operator.bind_runtime(runtime);
+        }
         self.base_mut().runtime = rt.clone();
         for child in self.children_mut() {
             child.set_runtime(rt.clone());
@@ -113,24 +139,15 @@ impl StreamingExecutor {
         }
     }
 
-    /// Configure P8 execution for Gather/Exchange nodes below this tree.
+    /// Configure P8 execution for nodes below this tree (deprecated — now
+    /// managed through the runtime's `MorselWorkerPool`).
     pub fn configure_parallel_partitions(
         &mut self,
-        max_workers: usize,
-        max_buffered_chunks: usize,
+        _max_workers: usize,
+        _max_buffered_chunks: usize,
     ) {
-        match self {
-            Self::Gather(_, children, op) => {
-                op.configure_parallel(max_workers, max_buffered_chunks);
-                for child in children {
-                    child.configure_parallel_partitions(max_workers, max_buffered_chunks);
-                }
-            }
-            _ => {
-                for child in self.children_mut() {
-                    child.configure_parallel_partitions(max_workers, max_buffered_chunks);
-                }
-            }
+        for child in self.children_mut() {
+            child.configure_parallel_partitions(_max_workers, _max_buffered_chunks);
         }
     }
 
@@ -270,6 +287,7 @@ impl StreamingExecutor {
             Apply(_, _, _, op) => match op {
                 ApplyOperator::Apply { .. } => "Apply",
                 ApplyOperator::PatternApply { .. } => "PatternApply",
+                ApplyOperator::RollUpApply { .. } => "RollUpApply",
             },
             Blocking(_, _, op) => match op {
                 BlockingOperator::Sort { .. } => "Sort",
@@ -314,6 +332,7 @@ impl StreamingExecutor {
                 DdlOperator::TagManage { .. } => "TagManage",
                 DdlOperator::EdgeManage { .. } => "EdgeManage",
                 DdlOperator::IndexManage { .. } => "IndexManage",
+                DdlOperator::DeleteIndex { .. } => "DeleteIndex",
                 DdlOperator::UserManage { .. } => "UserManage",
                 DdlOperator::ShowStats { .. } => "ShowStats",
                 DdlOperator::Analyze { .. } => "Analyze",
@@ -378,19 +397,12 @@ impl StreamingExecutor {
         self.memory_tracker().map_or(0, |mt| mt.peak() as u64)
     }
 
-    /// Return the P8 parallel fallback reason from the first Gather node
-    /// in this tree that has a recorded reason, or `None`.
+    /// Return the P8 parallel fallback reason from any operator in this
+    /// tree that has a recorded reason, or `None`.
     pub fn parallel_fallback_reason(&self) -> Option<String> {
         match self {
-            Self::Gather(_, children, op) => {
-                let state = match op {
-                    GatherOperator::Concatenate { parallel, .. }
-                    | GatherOperator::MergeSort { parallel, .. } => parallel,
-                };
-                state
-                    .fallback_reason
-                    .clone()
-                    .or_else(|| children.iter().find_map(|c| c.parallel_fallback_reason()))
+            Self::Gather(_, children, _) | Self::Exchange(_, children, _) => {
+                children.iter().find_map(|c| c.parallel_fallback_reason())
             }
             Self::Unary(_, child, _)
             | Self::Blocking(_, child, _)
@@ -409,9 +421,6 @@ impl StreamingExecutor {
             Self::Apply(_, outer, inner, _) => outer
                 .parallel_fallback_reason()
                 .or_else(|| inner.parallel_fallback_reason()),
-            Self::Exchange(_, children, _) => children
-                .iter()
-                .find_map(|c| c.parallel_fallback_reason()),
             Self::HashShuffleJoin(_, left, right, _) => left
                 .iter()
                 .find_map(|c| c.parallel_fallback_reason())
@@ -546,23 +555,7 @@ impl StreamingExecutor {
     pub fn open(&mut self) -> Result<(), QueryError> {
         self.ensure_not_cancelled()?;
         let start = Instant::now();
-        let result = match self {
-            Self::Source(base, op) => op.open(base),
-            Self::Unary(base, input, op) => op.open(base, input),
-            Self::Join(base, left, right, op) => op.open(base, left, right),
-            Self::Set(base, left, right, op) => op.open(base, left, right),
-            Self::Apply(base, left, right, op) => op.open(base, left, right),
-            Self::Blocking(base, input, op) => op.open(base, input),
-            Self::Graph(base, input, op) => op.open(base, input),
-            Self::Sink(base, input, op) => op.open(base, input),
-            Self::Ddl(base, input, op) => op.open(base, input),
-            Self::Fulltext(base, input, op) => op.open(base, input),
-            Self::Vector(base, input, op) => op.open(base, input),
-            Self::Txn(base, input, op) => op.open(base, input),
-            Self::Gather(base, children, op) => op.open(base, children),
-            Self::Exchange(base, children, op) => op.open(base, children),
-            Self::HashShuffleJoin(base, left, right, op) => op.open(base, left, right),
-        };
+        let result = dispatch!(self, open);
         let elapsed = start.elapsed().as_micros() as u64;
         self.record_profile_timing("open", elapsed);
         if let Err(error) = result {
@@ -580,27 +573,18 @@ impl StreamingExecutor {
     /// Pull the next chunk.
     pub fn advance(&mut self) -> Result<Option<DataChunk>, QueryError> {
         self.ensure_not_cancelled()?;
+        if self.base().lifecycle.is_exhausted() {
+            return Ok(None);
+        }
+        let one_shot = matches!(self, Self::Ddl(..) | Self::Fulltext(..) | Self::Vector(..));
         let start = Instant::now();
-        let result = match self {
-            Self::Source(base, op) => op.next(base),
-            Self::Unary(base, input, op) => op.next(base, input),
-            Self::Join(base, left, right, op) => op.next(base, left, right),
-            Self::Set(base, left, right, op) => op.next(base, left, right),
-            Self::Apply(base, left, right, op) => op.next(base, left, right),
-            Self::Blocking(base, input, op) => op.next(base, input),
-            Self::Graph(base, input, op) => op.next(base, input),
-            Self::Sink(base, input, op) => op.next(base, input),
-            Self::Ddl(base, input, op) => op.next(base, input),
-            Self::Fulltext(base, input, op) => op.next(base, input),
-            Self::Vector(base, input, op) => op.next(base, input),
-            Self::Txn(base, input, op) => op.next(base, input),
-            Self::Gather(base, children, op) => op.next(base, children),
-            Self::Exchange(base, children, op) => op.next(base, children),
-            Self::HashShuffleJoin(base, left, right, op) => op.next(base, left, right),
-        };
+        let result = dispatch!(self, next);
         let elapsed = start.elapsed().as_micros() as u64;
         if let Ok(Some(ref chunk)) = result {
             self.record_profile_rows(chunk.len() as u64);
+        }
+        if matches!(&result, Ok(None)) || (one_shot && matches!(&result, Ok(Some(_)))) {
+            self.base_mut().lifecycle.mark_exhausted();
         }
         self.record_profile_timing("next", elapsed);
         result
@@ -609,23 +593,7 @@ impl StreamingExecutor {
     /// Stop the executor (signal no more input needed).
     pub fn stop(&mut self) -> Result<(), QueryError> {
         let start = Instant::now();
-        let result = match self {
-            Self::Source(base, op) => op.stop(base),
-            Self::Unary(base, input, op) => op.stop(base, input),
-            Self::Join(base, left, right, op) => op.stop(base, left, right),
-            Self::Set(base, left, right, op) => op.stop(base, left, right),
-            Self::Apply(base, left, right, op) => op.stop(base, left, right),
-            Self::Blocking(base, input, op) => op.stop(base, input),
-            Self::Graph(base, input, op) => op.stop(base, input),
-            Self::Sink(base, input, op) => op.stop(base, input),
-            Self::Ddl(base, input, op) => op.stop(base, input),
-            Self::Fulltext(base, input, op) => op.stop(base, input),
-            Self::Vector(base, input, op) => op.stop(base, input),
-            Self::Txn(base, input, op) => op.stop(base, input),
-            Self::Gather(base, children, op) => op.stop(base, children),
-            Self::Exchange(base, children, op) => op.stop(base, children),
-            Self::HashShuffleJoin(base, left, right, op) => op.stop(base, left, right),
-        };
+        let result = dispatch!(self, stop);
         let elapsed = start.elapsed().as_micros() as u64;
         self.record_profile_timing("stop", elapsed);
         result
@@ -634,23 +602,7 @@ impl StreamingExecutor {
     /// Close the executor (clean up resources).
     pub fn close(&mut self) -> Result<(), QueryError> {
         let start = Instant::now();
-        let result = match self {
-            Self::Source(base, op) => op.close(base),
-            Self::Unary(base, input, op) => op.close(base, input),
-            Self::Join(base, left, right, op) => op.close(base, left, right),
-            Self::Set(base, left, right, op) => op.close(base, left, right),
-            Self::Apply(base, left, right, op) => op.close(base, left, right),
-            Self::Blocking(base, input, op) => op.close(base, input),
-            Self::Graph(base, input, op) => op.close(base, input),
-            Self::Sink(base, input, op) => op.close(base, input),
-            Self::Ddl(base, input, op) => op.close(base, input),
-            Self::Fulltext(base, input, op) => op.close(base, input),
-            Self::Vector(base, input, op) => op.close(base, input),
-            Self::Txn(base, input, op) => op.close(base, input),
-            Self::Gather(base, children, op) => op.close(base, children),
-            Self::Exchange(base, children, op) => op.close(base, children),
-            Self::HashShuffleJoin(base, left, right, op) => op.close(base, left, right),
-        };
+        let result = dispatch!(self, close);
         let elapsed = start.elapsed().as_micros() as u64;
         self.record_profile_timing("close", elapsed);
         let peak = self.peak_memory_bytes();
@@ -839,7 +791,8 @@ mod tests {
             ],
         ];
 
-        let mut executor = scan_executor(buffer.clone(), vec![]);
+        let col_names = (0..9).map(|i| format!("col_{}", i)).collect::<Vec<_>>();
+        let mut executor = scan_executor(buffer.clone(), col_names);
         executor.open().unwrap();
         let chunk = executor.advance().unwrap();
         assert!(chunk.is_some());

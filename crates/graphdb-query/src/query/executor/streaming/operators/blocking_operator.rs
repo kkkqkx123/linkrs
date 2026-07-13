@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
@@ -17,6 +18,7 @@ use crate::query::executor::streaming::helpers::accumulator_states::{
 use crate::query::executor::streaming::helpers::compare_values;
 use crate::query::executor::streaming::helpers::compute_aggregate;
 use crate::query::executor::streaming::operator_base::OperatorBase;
+use crate::query::executor::streaming::slot::SlotLayout;
 
 // ——— state structs ———
 
@@ -284,15 +286,15 @@ impl BlockingOperator {
                 ),
                 state: None,
             },
-            super::super::operator_spec::BlockingSpec::RollUpApply {
-                rollup_expressions,
-            } => Self::RollUpApply {
-                rollup_expressions: rollup_expressions.clone(),
-                memory_tracker: crate::query::executor::base::MemoryTracker::new(
-                    memory_budget.clone(),
-                ),
-                state: None,
-            },
+            super::super::operator_spec::BlockingSpec::RollUpApply { rollup_expressions } => {
+                Self::RollUpApply {
+                    rollup_expressions: rollup_expressions.clone(),
+                    memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                        memory_budget.clone(),
+                    ),
+                    state: None,
+                }
+            }
             super::super::operator_spec::BlockingSpec::PartialAggregate {
                 group_by_expressions,
                 aggregate_functions,
@@ -463,9 +465,9 @@ impl BlockingOperator {
                                     .unwrap_or(SortDirection::Ascending);
 
                                 let mut ctx_a =
-                                    ValueRowContext::new(a.clone(), state.col_names.clone());
+                                    ValueRowContext::from_names(a.clone(), state.col_names.clone());
                                 let mut ctx_b =
-                                    ValueRowContext::new(b.clone(), state.col_names.clone());
+                                    ValueRowContext::from_names(b.clone(), state.col_names.clone());
 
                                 let val_a = ExpressionEvaluator::evaluate(expr, &mut ctx_a)
                                     .unwrap_or(Value::Null(NullType::Null));
@@ -496,10 +498,8 @@ impl BlockingOperator {
                     if chunk_rows.is_empty() {
                         Ok(None)
                     } else {
-                        Ok(Some(DataChunk::from_rows_with_col_names(
-                            chunk_rows,
-                            Some(state.col_names.clone()),
-                        )))
+                        let result_layout = Arc::new(SlotLayout::from_names(&state.col_names));
+                        Ok(Some(DataChunk::new_with_layout(chunk_rows, result_layout)))
                     }
                 } else {
                     Ok(None)
@@ -537,7 +537,7 @@ impl BlockingOperator {
                         } else {
                             for expr in group_by_expressions.iter() {
                                 let mut context =
-                                    ValueRowContext::new(row.clone(), col_names.clone());
+                                    ValueRowContext::from_names(row.clone(), col_names.clone());
                                 match ExpressionEvaluator::evaluate(expr, &mut context) {
                                     Ok(value) => group_key.push(value),
                                     Err(_) => group_key.push(Value::Null(NullType::Null)),
@@ -554,8 +554,10 @@ impl BlockingOperator {
 
                         for expr in group_by_expressions.iter() {
                             if let Some(first_row) = group_rows.first() {
-                                let mut context =
-                                    ValueRowContext::new(first_row.clone(), col_names.clone());
+                                let mut context = ValueRowContext::from_names(
+                                    first_row.clone(),
+                                    col_names.clone(),
+                                );
                                 match ExpressionEvaluator::evaluate(expr, &mut context) {
                                     Ok(value) => result_row.push(value),
                                     Err(_) => result_row.push(Value::Null(NullType::Null)),
@@ -579,10 +581,8 @@ impl BlockingOperator {
                     if chunk_rows.is_empty() {
                         Ok(None)
                     } else {
-                        Ok(Some(DataChunk::from_rows_with_col_names(
-                            chunk_rows,
-                            Some(output_col_names.clone()),
-                        )))
+                        let result_layout = Arc::new(SlotLayout::from_names(output_col_names));
+                        Ok(Some(DataChunk::new_with_layout(chunk_rows, result_layout)))
                     }
                 } else {
                     Ok(None)
@@ -617,7 +617,8 @@ impl BlockingOperator {
                     for row in state.all_rows.iter() {
                         let mut key_parts: Vec<String> = Vec::new();
                         for expr in group_by_expressions.iter() {
-                            let mut context = ValueRowContext::new(row.clone(), col_names.clone());
+                            let mut context =
+                                ValueRowContext::from_names(row.clone(), col_names.clone());
                             let key_val = ExpressionEvaluator::evaluate(expr, &mut context)
                                 .unwrap_or(Value::Null(NullType::Null));
                             key_parts.push(format!("{:?}", key_val));
@@ -678,7 +679,7 @@ impl BlockingOperator {
                             } else {
                                 for expr in partition_by_exprs.iter() {
                                     let mut ctx =
-                                        ValueRowContext::new(row.clone(), col_names.clone());
+                                        ValueRowContext::from_names(row.clone(), col_names.clone());
                                     match ExpressionEvaluator::evaluate(expr, &mut ctx) {
                                         Ok(val) => partition_key.push(val),
                                         Err(_) => partition_key.push(Value::Null(NullType::Null)),
@@ -700,10 +701,14 @@ impl BlockingOperator {
                                             .get(idx)
                                             .copied()
                                             .unwrap_or(SortDirection::Ascending);
-                                        let mut ctx_a =
-                                            ValueRowContext::new(a.1.clone(), col_names.clone());
-                                        let mut ctx_b =
-                                            ValueRowContext::new(b.1.clone(), col_names.clone());
+                                        let mut ctx_a = ValueRowContext::from_names(
+                                            a.1.clone(),
+                                            col_names.clone(),
+                                        );
+                                        let mut ctx_b = ValueRowContext::from_names(
+                                            b.1.clone(),
+                                            col_names.clone(),
+                                        );
                                         let val_a = ExpressionEvaluator::evaluate(expr, &mut ctx_a)
                                             .unwrap_or(Value::Null(NullType::Null));
                                         let val_b = ExpressionEvaluator::evaluate(expr, &mut ctx_b)
@@ -730,7 +735,7 @@ impl BlockingOperator {
                                         let func_args: Vec<Value> = args
                                             .iter()
                                             .map(|arg| {
-                                                let mut ctx = ValueRowContext::new(
+                                                let mut ctx = ValueRowContext::from_names(
                                                     row.clone(),
                                                     col_names.clone(),
                                                 );
@@ -807,7 +812,7 @@ impl BlockingOperator {
                             } else {
                                 for expr in partition_by_exprs.iter() {
                                     let mut ctx =
-                                        ValueRowContext::new(row.clone(), col_names.clone());
+                                        ValueRowContext::from_names(row.clone(), col_names.clone());
                                     match ExpressionEvaluator::evaluate(expr, &mut ctx) {
                                         Ok(val) => partition_key.push(val),
                                         Err(_) => partition_key.push(Value::Null(NullType::Null)),
@@ -829,10 +834,14 @@ impl BlockingOperator {
                                             .get(idx)
                                             .copied()
                                             .unwrap_or(SortDirection::Ascending);
-                                        let mut ctx_a =
-                                            ValueRowContext::new(a.1.clone(), col_names.clone());
-                                        let mut ctx_b =
-                                            ValueRowContext::new(b.1.clone(), col_names.clone());
+                                        let mut ctx_a = ValueRowContext::from_names(
+                                            a.1.clone(),
+                                            col_names.clone(),
+                                        );
+                                        let mut ctx_b = ValueRowContext::from_names(
+                                            b.1.clone(),
+                                            col_names.clone(),
+                                        );
                                         let val_a = ExpressionEvaluator::evaluate(expr, &mut ctx_a)
                                             .unwrap_or(Value::Null(NullType::Null));
                                         let val_b = ExpressionEvaluator::evaluate(expr, &mut ctx_b)
@@ -859,7 +868,7 @@ impl BlockingOperator {
                                         let func_args: Vec<Value> = args
                                             .iter()
                                             .map(|arg| {
-                                                let mut ctx = ValueRowContext::new(
+                                                let mut ctx = ValueRowContext::from_names(
                                                     row.clone(),
                                                     col_names.clone(),
                                                 );
@@ -982,10 +991,8 @@ impl BlockingOperator {
 
                 if let Some(iter) = &mut state.result_iter {
                     if let Some(row) = iter.next() {
-                        Ok(Some(DataChunk::from_rows_with_col_names(
-                            vec![row],
-                            Some(state.col_names.clone()),
-                        )))
+                        let result_layout = Arc::new(SlotLayout::from_names(&state.col_names));
+                        Ok(Some(DataChunk::new_with_layout(vec![row], result_layout)))
                     } else {
                         Ok(None)
                     }
@@ -1012,9 +1019,11 @@ impl BlockingOperator {
                             state.seen_rows.insert(row.clone());
                             result_rows.push(row);
                             if result_rows.len() == 1024 {
-                                return Ok(Some(DataChunk::from_rows_with_col_names(
+                                let result_layout =
+                                    Arc::new(SlotLayout::from_names(&state.col_names));
+                                return Ok(Some(DataChunk::new_with_layout(
                                     result_rows,
-                                    Some(state.col_names.clone()),
+                                    result_layout,
                                 )));
                             }
                         }
@@ -1024,10 +1033,8 @@ impl BlockingOperator {
                 if result_rows.is_empty() {
                     Ok(None)
                 } else {
-                    Ok(Some(DataChunk::from_rows_with_col_names(
-                        result_rows,
-                        Some(state.col_names.clone()),
-                    )))
+                    let result_layout = Arc::new(SlotLayout::from_names(&state.col_names));
+                    Ok(Some(DataChunk::new_with_layout(result_rows, result_layout)))
                 }
             }
 
@@ -1118,7 +1125,8 @@ impl BlockingOperator {
                             memory_tracker.try_reserve_row(row)?;
                         }
                         for row in chunk.rows {
-                            let mut ctx = ValueRowContext::new(row.clone(), col_names.clone());
+                            let mut ctx =
+                                ValueRowContext::from_names(row.clone(), col_names.clone());
                             let mut aggregated = row.clone();
                             for expr in rollup_expressions.iter() {
                                 match ExpressionEvaluator::evaluate(expr, &mut ctx) {
@@ -1167,7 +1175,7 @@ impl BlockingOperator {
                             } else {
                                 for expr in group_by_expressions.iter() {
                                     let mut ctx =
-                                        ValueRowContext::new(row.clone(), col_names.clone());
+                                        ValueRowContext::from_names(row.clone(), col_names.clone());
                                     match ExpressionEvaluator::evaluate(expr, &mut ctx) {
                                         Ok(value) => group_key.push(value),
                                         Err(_) => group_key.push(Value::Null(NullType::Null)),
@@ -1175,12 +1183,13 @@ impl BlockingOperator {
                                 }
                             }
 
-                            let group_accs = state.group_map.entry(group_key).or_insert_with(|| {
-                                aggregate_functions
-                                    .iter()
-                                    .filter_map(|f| AggregateAccumulator::for_function(f))
-                                    .collect()
-                            });
+                            let group_accs =
+                                state.group_map.entry(group_key).or_insert_with(|| {
+                                    aggregate_functions
+                                        .iter()
+                                        .filter_map(|f| AggregateAccumulator::for_function(f))
+                                        .collect()
+                                });
 
                             for (i, func) in aggregate_functions.iter().enumerate() {
                                 if let Some(acc) = group_accs.get_mut(i) {
@@ -1217,10 +1226,8 @@ impl BlockingOperator {
                     if chunk_rows.is_empty() {
                         Ok(None)
                     } else {
-                        Ok(Some(DataChunk::from_rows_with_col_names(
-                            chunk_rows,
-                            Some(output_col_names.clone()),
-                        )))
+                        let result_layout = Arc::new(SlotLayout::from_names(output_col_names));
+                        Ok(Some(DataChunk::new_with_layout(chunk_rows, result_layout)))
                     }
                 } else {
                     Ok(None)
@@ -1268,8 +1275,10 @@ impl BlockingOperator {
                                     let acc_col_idx = num_group_keys + i;
                                     let partial_value = row.get(acc_col_idx);
                                     if let Some(val) = partial_value {
-                                        let partial_acc =
-                                            value_to_partial_accumulator(&aggregate_functions[i], val);
+                                        let partial_acc = value_to_partial_accumulator(
+                                            &aggregate_functions[i],
+                                            val,
+                                        );
                                         if let Some(other) = partial_acc {
                                             acc.merge(&other);
                                         }
@@ -1304,10 +1313,8 @@ impl BlockingOperator {
                     if chunk_rows.is_empty() {
                         Ok(None)
                     } else {
-                        Ok(Some(DataChunk::from_rows_with_col_names(
-                            chunk_rows,
-                            Some(output_col_names.clone()),
-                        )))
+                        let result_layout = Arc::new(SlotLayout::from_names(output_col_names));
+                        Ok(Some(DataChunk::new_with_layout(chunk_rows, result_layout)))
                     }
                 } else {
                     Ok(None)
@@ -1617,8 +1624,8 @@ fn compare_rows_for_topn(
             .copied()
             .unwrap_or(SortDirection::Ascending);
 
-        let mut ctx_a = ValueRowContext::new(a.to_vec(), col_names.to_vec());
-        let mut ctx_b = ValueRowContext::new(b.to_vec(), col_names.to_vec());
+        let mut ctx_a = ValueRowContext::from_names(a.to_vec(), col_names.to_vec());
+        let mut ctx_b = ValueRowContext::from_names(b.to_vec(), col_names.to_vec());
 
         let val_a =
             ExpressionEvaluator::evaluate(expr, &mut ctx_a).unwrap_or(Value::Null(NullType::Null));
@@ -1660,7 +1667,10 @@ fn extract_field_value(row: &[Value], col_names: &[String], func: &AggregateFunc
 
 /// Decode a Value back into a single-use AggregateAccumulator for merging.
 /// The value was produced by `accumulator_to_value`.
-fn value_to_partial_accumulator(func: &AggregateFunction, value: &Value) -> Option<AggregateAccumulator> {
+fn value_to_partial_accumulator(
+    func: &AggregateFunction,
+    value: &Value,
+) -> Option<AggregateAccumulator> {
     match func {
         AggregateFunction::Count(_) => {
             if let Value::BigInt(n) = value {
@@ -1669,14 +1679,12 @@ fn value_to_partial_accumulator(func: &AggregateFunction, value: &Value) -> Opti
                 Some(AggregateAccumulator::Count(0))
             }
         }
-        AggregateFunction::Sum(_) => {
-            match value {
-                Value::Double(n) => Some(AggregateAccumulator::Sum(*n)),
-                Value::BigInt(n) => Some(AggregateAccumulator::Sum(*n as f64)),
-                Value::Int(n) => Some(AggregateAccumulator::Sum(*n as f64)),
-                _ => Some(AggregateAccumulator::Sum(0.0)),
-            }
-        }
+        AggregateFunction::Sum(_) => match value {
+            Value::Double(n) => Some(AggregateAccumulator::Sum(*n)),
+            Value::BigInt(n) => Some(AggregateAccumulator::Sum(*n as f64)),
+            Value::Int(n) => Some(AggregateAccumulator::Sum(*n as f64)),
+            _ => Some(AggregateAccumulator::Sum(0.0)),
+        },
         AggregateFunction::Min(_) => {
             if matches!(value, Value::Null(_)) {
                 Some(AggregateAccumulator::Min(None))
@@ -1693,15 +1701,23 @@ fn value_to_partial_accumulator(func: &AggregateFunction, value: &Value) -> Opti
         }
         AggregateFunction::Avg(_) => {
             if let Value::List(list) = value {
-                let sum = list.values.first().and_then(|v| match v {
-                    Value::Double(n) => Some(*n),
-                    Value::BigInt(n) => Some(*n as f64),
-                    _ => None,
-                }).unwrap_or(0.0);
-                let count = list.values.get(1).and_then(|v| match v {
-                    Value::BigInt(n) => Some(*n as u64),
-                    _ => None,
-                }).unwrap_or(0);
+                let sum = list
+                    .values
+                    .first()
+                    .and_then(|v| match v {
+                        Value::Double(n) => Some(*n),
+                        Value::BigInt(n) => Some(*n as f64),
+                        _ => None,
+                    })
+                    .unwrap_or(0.0);
+                let count = list
+                    .values
+                    .get(1)
+                    .and_then(|v| match v {
+                        Value::BigInt(n) => Some(*n as u64),
+                        _ => None,
+                    })
+                    .unwrap_or(0);
                 Some(AggregateAccumulator::Avg { sum, count })
             } else {
                 Some(AggregateAccumulator::Avg { sum: 0.0, count: 0 })

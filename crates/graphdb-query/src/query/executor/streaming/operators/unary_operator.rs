@@ -54,11 +54,9 @@ impl UnaryOperator {
     /// Create a UnaryOperator with fresh mutable state from an immutable spec.
     pub fn from_spec(spec: &super::super::operator_spec::UnarySpec) -> Self {
         match spec {
-            super::super::operator_spec::UnarySpec::Filter { predicate } => {
-                Self::Filter {
-                    predicate: predicate.clone(),
-                }
-            }
+            super::super::operator_spec::UnarySpec::Filter { predicate } => Self::Filter {
+                predicate: predicate.clone(),
+            },
             super::super::operator_spec::UnarySpec::Project {
                 output_expressions,
                 output_col_names,
@@ -66,38 +64,30 @@ impl UnaryOperator {
                 output_expressions: output_expressions.clone(),
                 output_col_names: output_col_names.clone(),
             },
-            super::super::operator_spec::UnarySpec::Limit { offset, limit } => {
-                Self::Limit {
-                    offset: *offset,
-                    limit: *limit,
-                    skipped: 0,
-                    consumed: 0,
-                }
-            }
-            super::super::operator_spec::UnarySpec::Assign { assignments } => {
-                Self::Assign {
-                    assignments: assignments.clone(),
-                }
-            }
-            super::super::operator_spec::UnarySpec::Remove {
-                columns_to_remove,
-            } => Self::Remove {
+            super::super::operator_spec::UnarySpec::Limit { offset, limit } => Self::Limit {
+                offset: *offset,
+                limit: *limit,
+                skipped: 0,
+                consumed: 0,
+            },
+            super::super::operator_spec::UnarySpec::Assign { assignments } => Self::Assign {
+                assignments: assignments.clone(),
+            },
+            super::super::operator_spec::UnarySpec::Remove { columns_to_remove } => Self::Remove {
                 columns_to_remove: columns_to_remove.clone(),
             },
-            super::super::operator_spec::UnarySpec::Unwind { unwind_column } => {
-                Self::Unwind {
-                    unwind_column: unwind_column.clone(),
-                    col_index: None,
-                    all_rows: Vec::new(),
-                    current_row_index: 0,
-                    current_unwind_index: 0,
+            super::super::operator_spec::UnarySpec::Unwind { unwind_column } => Self::Unwind {
+                unwind_column: unwind_column.clone(),
+                col_index: None,
+                all_rows: Vec::new(),
+                current_row_index: 0,
+                current_unwind_index: 0,
+            },
+            super::super::operator_spec::UnarySpec::AppendVertices { vertex_properties } => {
+                Self::AppendVertices {
+                    vertex_properties: vertex_properties.clone(),
                 }
             }
-            super::super::operator_spec::UnarySpec::AppendVertices {
-                vertex_properties,
-            } => Self::AppendVertices {
-                vertex_properties: vertex_properties.clone(),
-            },
             super::super::operator_spec::UnarySpec::Sample { count } => Self::Sample {
                 count: *count,
                 consumed: 0,
@@ -136,11 +126,11 @@ impl UnaryOperator {
             Self::Filter { predicate } => loop {
                 match input.advance()? {
                     Some(chunk) => {
-                        let col_names = chunk.col_names();
                         let layout = chunk.get_layout();
                         let mut filtered_rows = Vec::new();
                         for row in chunk.rows {
-                            let mut context = ValueRowContext::new(row.clone(), col_names.clone());
+                            let mut context =
+                                ValueRowContext::new_with_layout(row.clone(), layout.clone());
                             let keep = match ExpressionEvaluator::evaluate(predicate, &mut context)
                             {
                                 Ok(value) => match value {
@@ -177,6 +167,7 @@ impl UnaryOperator {
             } => {
                 if let Some(chunk) = input.advance()? {
                     let input_col_names = chunk.col_names();
+                    let input_layout = chunk.get_layout();
                     let output_col_names_final: Vec<String> = if output_col_names.is_empty() {
                         input_col_names.clone()
                     } else {
@@ -185,7 +176,8 @@ impl UnaryOperator {
                     let layout = Arc::new(SlotLayout::from_names(&output_col_names_final));
                     let mut projected_rows = Vec::new();
                     for row in chunk.rows {
-                        let mut context = ValueRowContext::new(row, input_col_names.clone());
+                        let mut context =
+                            ValueRowContext::new_with_layout(row, input_layout.clone());
                         let mut projected_row = Vec::new();
                         for expr in output_expressions.iter() {
                             match ExpressionEvaluator::evaluate(expr, &mut context) {
@@ -255,12 +247,13 @@ impl UnaryOperator {
             }
             Self::Assign { assignments } => {
                 if let Some(chunk) = input.advance()? {
-                    let col_names = chunk.col_names();
+                    let layout = chunk.get_layout();
                     let mut result_rows = vec![];
                     for row in chunk.rows {
                         let mut new_row = row.clone();
                         for (_col_name, expr) in assignments.iter() {
-                            let mut context = ValueRowContext::new(row.clone(), col_names.clone());
+                            let mut context =
+                                ValueRowContext::new_with_layout(row.clone(), layout.clone());
                             match ExpressionEvaluator::evaluate(expr, &mut context) {
                                 Ok(val) => new_row.push(val),
                                 Err(_) => {
@@ -345,11 +338,11 @@ impl UnaryOperator {
             }
             Self::AppendVertices { vertex_properties } => {
                 if let Some(chunk) = input.advance()? {
-                    let col_names = chunk.col_names();
+                    let layout = chunk.get_layout();
                     let mut result_rows = Vec::new();
                     for row in chunk.rows {
                         let mut new_row = row.clone();
-                        let mut ctx = ValueRowContext::new(row.clone(), col_names.clone());
+                        let mut ctx = ValueRowContext::new_with_layout(row.clone(), layout.clone());
                         for (_prop_name, expr) in vertex_properties.iter() {
                             match ExpressionEvaluator::evaluate(expr, &mut ctx) {
                                 Ok(val) => new_row.push(val),
@@ -370,16 +363,13 @@ impl UnaryOperator {
                 match input.advance()? {
                     Some(chunk) => {
                         let remaining = (*count - *consumed) as usize;
-                        let col_names = chunk.col_names();
+                        let layout = chunk.get_layout();
                         let take_count = chunk.rows.len().min(remaining);
                         let rows: Vec<Vec<Value>> =
                             chunk.rows.into_iter().take(take_count).collect();
                         *consumed += take_count as u64;
                         if !rows.is_empty() {
-                            Ok(Some(DataChunk::from_rows_with_col_names(
-                                rows,
-                                Some(col_names),
-                            )))
+                            Ok(Some(DataChunk::new_with_layout(rows, layout)))
                         } else {
                             Ok(None)
                         }

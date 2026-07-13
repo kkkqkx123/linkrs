@@ -5,6 +5,9 @@ use parking_lot::RwLock;
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::Value;
+use crate::query::planning::plan::core::nodes::management::FulltextManageNode;
+#[cfg(not(feature = "fulltext-search"))]
+use crate::query::core::NodeType;
 use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::operator_base::OperatorBase;
@@ -13,6 +16,22 @@ use crate::query::executor::streaming::operators::ddl_operator::make_single_row;
 #[cfg(feature = "fulltext-search")]
 use crate::search::manager::FulltextIndexManager;
 use crate::storage::StorageClient;
+
+#[cfg(not(feature = "fulltext-search"))]
+fn fulltext_command_name(cmd: &FulltextManageNode) -> &str {
+    cmd.node_type_id()
+}
+
+#[cfg(not(feature = "fulltext-search"))]
+fn fulltext_command_index_name(cmd: &FulltextManageNode) -> Option<&str> {
+    match cmd {
+        FulltextManageNode::Create(n) => Some(&n.index_name),
+        FulltextManageNode::Drop(n) => Some(&n.index_name),
+        FulltextManageNode::Alter(n) => Some(&n.index_name),
+        FulltextManageNode::Show(n) => n.pattern.as_deref(),
+        FulltextManageNode::Describe(n) => Some(&n.index_name),
+    }
+}
 
 fn make_manage_result(action: &str, name: Option<&str>, status: &str) -> DataChunk {
     let name_val = name
@@ -47,11 +66,7 @@ pub enum FulltextOperator {
     FulltextManage {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
-        space_id: u64,
-        action: String,
-        index_name: Option<String>,
-        tag_name: Option<String>,
-        field_name: Option<String>,
+        command: FulltextManageNode,
         #[cfg(feature = "fulltext-search")]
         fulltext_manager: Option<Arc<FulltextIndexManager>>,
     },
@@ -90,6 +105,78 @@ pub enum FulltextOperator {
 }
 
 impl FulltextOperator {
+    /// Create a FulltextOperator from an immutable spec.
+    pub fn from_spec(
+        spec: &super::super::operator_spec::FulltextSpec,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        #[cfg(feature = "fulltext-search")] fulltext_manager: Option<Arc<FulltextIndexManager>>,
+    ) -> Self {
+        match spec {
+            super::super::operator_spec::FulltextSpec::FulltextManage {
+                space_name,
+                command,
+            } => FulltextOperator::FulltextManage {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                command: command.clone(),
+                #[cfg(feature = "fulltext-search")]
+                fulltext_manager: fulltext_manager.clone(),
+            },
+            super::super::operator_spec::FulltextSpec::FulltextSearch {
+                space_name,
+                space_id,
+                index_name,
+                search_query,
+                tag_name,
+                field_name,
+            } => FulltextOperator::FulltextSearch {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                space_id: *space_id,
+                index_name: index_name.clone(),
+                search_query: search_query.clone(),
+                tag_name: tag_name.clone(),
+                field_name: field_name.clone(),
+                #[cfg(feature = "fulltext-search")]
+                fulltext_manager: fulltext_manager.clone(),
+            },
+            super::super::operator_spec::FulltextSpec::FulltextLookup {
+                space_name,
+                space_id,
+                index_name,
+                search_query,
+                tag_name,
+                field_name,
+            } => FulltextOperator::FulltextLookup {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                space_id: *space_id,
+                index_name: index_name.clone(),
+                search_query: search_query.clone(),
+                tag_name: tag_name.clone(),
+                field_name: field_name.clone(),
+                #[cfg(feature = "fulltext-search")]
+                fulltext_manager: fulltext_manager.clone(),
+            },
+            super::super::operator_spec::FulltextSpec::MatchFulltext {
+                space_name,
+                match_expr,
+                match_field,
+                tag_name,
+                field_name,
+            } => FulltextOperator::MatchFulltext {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                match_expr: match_expr.clone(),
+                match_field: match_field.clone(),
+                tag_name: tag_name.clone(),
+                field_name: field_name.clone(),
+                #[cfg(feature = "fulltext-search")]
+                fulltext_manager: fulltext_manager.clone(),
+            },
+        }
+    }
+
     pub fn open(
         &mut self,
         base: &mut OperatorBase,
@@ -116,11 +203,7 @@ impl FulltextOperator {
             FulltextOperator::FulltextManage {
                 storage: _storage,
                 space_name: _space_name,
-                space_id: _space_id,
-                action: _action,
-                index_name: _index_name,
-                tag_name: _tag_name,
-                field_name: _field_name,
+                command,
                 #[cfg(feature = "fulltext-search")]
                 fulltext_manager,
             } => {
@@ -131,62 +214,83 @@ impl FulltextOperator {
 
                 #[cfg(feature = "fulltext-search")]
                 {
-                    let result = match _action.as_str() {
-                        "create_fulltext_index" | "create" => {
+                    use FulltextManageNode::*;
+                    let result = match command {
+                        Create(node) => {
                             if let Some(manager) = fulltext_manager {
-                                let sid = *_space_id;
-                                let tn = _tag_name.as_deref().unwrap_or("");
-                                let fn_ = _field_name.as_deref().unwrap_or("");
-                                futures::executor::block_on(
-                                    manager.create_index(sid, tn, fn_, None),
-                                )
-                                .map_err(|e| {
-                                    QueryError::execution(format!("Fulltext create failed: {}", e))
-                                })?;
+                                for field in &node.fields {
+                                    futures::executor::block_on(manager.create_index(
+                                        node.space_id,
+                                        &node.schema_name,
+                                        &field.field_name,
+                                        None,
+                                    ))
+                                    .map_err(|e| {
+                                        QueryError::execution(format!(
+                                            "Fulltext create failed: {}",
+                                            e
+                                        ))
+                                    })?;
+                                }
                                 Some(make_manage_result(
                                     "create_fulltext_index",
-                                    _index_name.as_deref(),
+                                    Some(&node.index_name),
                                     "created",
                                 ))
                             } else {
                                 Some(make_manage_result(
                                     "create_fulltext_index",
-                                    _index_name.as_deref(),
+                                    Some(&node.index_name),
                                     "no-manager",
                                 ))
                             }
                         }
-                        "drop_fulltext_index" | "drop" => {
+                        Drop(node) => {
                             if let Some(manager) = fulltext_manager {
-                                let sid = *_space_id;
-                                let tn = _tag_name.as_deref().unwrap_or("");
-                                let fn_ = _field_name.as_deref().unwrap_or("");
-                                futures::executor::block_on(manager.drop_index(sid, tn, fn_))
+                                let matching: Vec<_> = manager
+                                    .list_indexes()
+                                    .into_iter()
+                                    .filter(|metadata| metadata.index_name == node.index_name)
+                                    .collect();
+                                if matching.is_empty() && !node.if_exists {
+                                    return Err(QueryError::execution(format!(
+                                        "Fulltext index not found: {}",
+                                        node.index_name
+                                    )));
+                                }
+                                for metadata in matching {
+                                    futures::executor::block_on(manager.drop_index(
+                                        metadata.space_id,
+                                        &metadata.tag_name,
+                                        &metadata.field_name,
+                                    ))
                                     .map_err(|e| {
                                         QueryError::execution(format!(
                                             "Fulltext drop failed: {}",
                                             e
                                         ))
                                     })?;
+                                }
                                 Some(make_manage_result(
                                     "drop_fulltext_index",
-                                    _index_name.as_deref(),
+                                    Some(&node.index_name),
                                     "dropped",
                                 ))
                             } else {
                                 Some(make_manage_result(
                                     "drop_fulltext_index",
-                                    _index_name.as_deref(),
+                                    Some(&node.index_name),
                                     "no-manager",
                                 ))
                             }
                         }
-                        "describe_fulltext_index" | "desc" => {
+                        Describe(node) => {
                             if let Some(manager) = fulltext_manager {
-                                let sid = *_space_id;
-                                let tn = _tag_name.as_deref().unwrap_or("");
-                                let fn_ = _field_name.as_deref().unwrap_or("");
-                                if let Some(meta) = manager.get_metadata(sid, tn, fn_) {
+                                if let Some(meta) = manager
+                                    .list_indexes()
+                                    .into_iter()
+                                    .find(|metadata| metadata.index_name == node.index_name)
+                                {
                                     let schema = Arc::new(Schema::new(vec![
                                         ColumnInfo {
                                             name: "index_id".to_string(),
@@ -217,21 +321,32 @@ impl FulltextOperator {
                                 } else {
                                     Some(make_manage_result(
                                         "describe_fulltext_index",
-                                        _index_name.as_deref(),
+                                        Some(&node.index_name),
                                         "not-found",
                                     ))
                                 }
                             } else {
                                 Some(make_manage_result(
                                     "describe_fulltext_index",
-                                    _index_name.as_deref(),
+                                    Some(&node.index_name),
                                     "no-manager",
                                 ))
                             }
                         }
-                        "show_fulltext_indexes" | "show" => {
+                        Show(node) => {
                             if let Some(manager) = fulltext_manager {
-                                let indexes = manager.list_indexes();
+                                let indexes: Vec<_> = manager
+                                    .list_indexes()
+                                    .into_iter()
+                                    .filter(|metadata| {
+                                        node.pattern.as_ref().is_none_or(|pattern| {
+                                            metadata.index_name.contains(pattern)
+                                        }) && node
+                                            .from_schema
+                                            .as_ref()
+                                            .is_none_or(|schema| &metadata.tag_name == schema)
+                                    })
+                                    .collect();
                                 let schema = Arc::new(Schema::new(vec![
                                     ColumnInfo {
                                         name: "index_id".to_string(),
@@ -275,11 +390,11 @@ impl FulltextOperator {
                                 ))
                             }
                         }
-                        _ => {
-                            return Err(QueryError::execution(format!(
-                                "Unsupported fulltext action: {}",
-                                _action
-                            )));
+                        Alter(_) => {
+                            return Err(QueryError::execution(
+                                "Fulltext ALTER is not supported by FulltextIndexManager"
+                                    .to_string(),
+                            ))
                         }
                     };
                     Ok(result)
@@ -287,8 +402,8 @@ impl FulltextOperator {
 
                 #[cfg(not(feature = "fulltext-search"))]
                 Ok(Some(make_manage_result(
-                    _action,
-                    _index_name.as_deref(),
+                    fulltext_command_name(command),
+                    fulltext_command_index_name(command),
                     "fulltext-search feature disabled",
                 )))
             }

@@ -112,91 +112,111 @@ impl SinkOperator {
     pub fn from_spec(spec: &super::super::operator_spec::SinkSpec) -> Self {
         match spec {
             super::super::operator_spec::SinkSpec::InsertVertices {
+                storage,
+                space_name,
                 vertex_properties,
                 tags,
             } => Self::InsertVertices {
-                storage: None,
-                space_name: String::new(),
+                storage: storage.clone(),
+                space_name: space_name.clone(),
                 vertex_properties: vertex_properties.clone(),
                 tags: tags.clone(),
                 rows_inserted: 0,
             },
             super::super::operator_spec::SinkSpec::InsertEdges {
+                storage,
+                space_name,
                 src_col,
                 dst_col,
                 edge_type,
                 edge_properties,
             } => Self::InsertEdges {
-                storage: None,
-                space_name: String::new(),
+                storage: storage.clone(),
+                space_name: space_name.clone(),
                 src_col: src_col.clone(),
                 dst_col: dst_col.clone(),
                 edge_type: edge_type.clone(),
                 edge_properties: edge_properties.clone(),
                 rows_inserted: 0,
             },
-            super::super::operator_spec::SinkSpec::UpdateVertices { updates } => {
-                Self::UpdateVertices {
-                    storage: None,
-                    space_name: String::new(),
-                    updates: updates.clone(),
-                    rows_updated: 0,
-                }
-            }
+            super::super::operator_spec::SinkSpec::UpdateVertices {
+                storage,
+                space_name,
+                updates,
+            } => Self::UpdateVertices {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                updates: updates.clone(),
+                rows_updated: 0,
+            },
             super::super::operator_spec::SinkSpec::UpdateEdges {
+                storage,
+                space_name,
                 src_col,
                 dst_col,
                 edge_type,
                 updates,
             } => Self::UpdateEdges {
-                storage: None,
-                space_name: String::new(),
+                storage: storage.clone(),
+                space_name: space_name.clone(),
                 src_col: src_col.clone(),
                 dst_col: dst_col.clone(),
                 edge_type: edge_type.clone(),
                 updates: updates.clone(),
                 rows_updated: 0,
             },
-            super::super::operator_spec::SinkSpec::DeleteVertices { vertex_id_col } => {
-                Self::DeleteVertices {
-                    storage: None,
-                    space_name: String::new(),
-                    vertex_id_col: vertex_id_col.clone(),
-                    rows_deleted: 0,
-                }
-            }
-            super::super::operator_spec::SinkSpec::DeleteEdges { src_col, dst_col } => {
-                Self::DeleteEdges {
-                    storage: None,
-                    space_name: String::new(),
-                    src_col: src_col.clone(),
-                    dst_col: dst_col.clone(),
-                    rows_deleted: 0,
-                }
-            }
-            super::super::operator_spec::SinkSpec::PipeDeleteVertices { vertex_id_col } => {
-                Self::PipeDeleteVertices {
-                    storage: None,
-                    space_name: String::new(),
-                    vertex_id_col: vertex_id_col.clone(),
-                    rows_deleted: 0,
-                }
-            }
-            super::super::operator_spec::SinkSpec::PipeDeleteEdges { src_col, dst_col } => {
-                Self::PipeDeleteEdges {
-                    storage: None,
-                    space_name: String::new(),
-                    src_col: src_col.clone(),
-                    dst_col: dst_col.clone(),
-                    rows_deleted: 0,
-                }
-            }
+            super::super::operator_spec::SinkSpec::DeleteVertices {
+                storage,
+                space_name,
+                vertex_id_col,
+            } => Self::DeleteVertices {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                vertex_id_col: vertex_id_col.clone(),
+                rows_deleted: 0,
+            },
+            super::super::operator_spec::SinkSpec::DeleteEdges {
+                storage,
+                space_name,
+                src_col,
+                dst_col,
+            } => Self::DeleteEdges {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                src_col: src_col.clone(),
+                dst_col: dst_col.clone(),
+                rows_deleted: 0,
+            },
+            super::super::operator_spec::SinkSpec::PipeDeleteVertices {
+                storage,
+                space_name,
+                vertex_id_col,
+            } => Self::PipeDeleteVertices {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                vertex_id_col: vertex_id_col.clone(),
+                rows_deleted: 0,
+            },
+            super::super::operator_spec::SinkSpec::PipeDeleteEdges {
+                storage,
+                space_name,
+                src_col,
+                dst_col,
+            } => Self::PipeDeleteEdges {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                src_col: src_col.clone(),
+                dst_col: dst_col.clone(),
+                rows_deleted: 0,
+            },
             super::super::operator_spec::SinkSpec::DeleteTags {
+                storage,
+                space_name,
                 tag_names,
                 vertex_ids,
             } => Self::DeleteTags {
-                storage: None,
-                space_name: String::new(),
+                storage: storage.clone(),
+                space_name: space_name.clone(),
                 tag_names: tag_names.clone(),
                 vertex_ids: vertex_ids.clone(),
                 rows_deleted: 0,
@@ -250,10 +270,11 @@ impl SinkOperator {
                     base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
-                        let col_names = chunk.col_names();
+                        let layout = chunk.get_layout();
 
                         for row in &chunk.rows {
-                            let mut context = ValueRowContext::new(row.clone(), col_names.clone());
+                            let mut context =
+                                ValueRowContext::new_with_layout(row.clone(), layout.clone());
 
                             let vid = if let Some((_name, expr)) = vertex_properties.first() {
                                 let val = eval_expr(expr, &mut context)?;
@@ -309,10 +330,11 @@ impl SinkOperator {
                     base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
-                        let col_names = chunk.col_names();
+                        let layout = chunk.get_layout();
 
                         for row in &chunk.rows {
-                            let mut context = ValueRowContext::new(row.clone(), col_names.clone());
+                            let mut context =
+                                ValueRowContext::new_with_layout(row.clone(), layout.clone());
                             let src_val = context
                                 .get_variable(src_col)
                                 .unwrap_or(Value::Null(crate::core::NullType::Null));
@@ -360,10 +382,11 @@ impl SinkOperator {
                     base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
-                        let col_names = chunk.col_names();
+                        let layout = chunk.get_layout();
 
                         for row in &chunk.rows {
-                            let mut context = ValueRowContext::new(row.clone(), col_names.clone());
+                            let mut context =
+                                ValueRowContext::new_with_layout(row.clone(), layout.clone());
                             let vid_val = context
                                 .get_variable("vid")
                                 .or_else(|| row.first().cloned())
@@ -407,10 +430,11 @@ impl SinkOperator {
                     base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
-                        let col_names = chunk.col_names();
+                        let layout = chunk.get_layout();
 
                         for row in &chunk.rows {
-                            let mut context = ValueRowContext::new(row.clone(), col_names.clone());
+                            let mut context =
+                                ValueRowContext::new_with_layout(row.clone(), layout.clone());
                             let src_val = context
                                 .get_variable(src_col)
                                 .or_else(|| row.first().cloned())
@@ -463,10 +487,11 @@ impl SinkOperator {
                 if let Some(chunk) = input.advance()? {
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
-                        let col_names = chunk.col_names();
+                        let layout = chunk.get_layout();
 
                         for row in &chunk.rows {
-                            let context = ValueRowContext::new(row.clone(), col_names.clone());
+                            let context =
+                                ValueRowContext::new_with_layout(row.clone(), layout.clone());
                             if let Some(vid_val) = context.get_variable(vertex_id_col) {
                                 if let Ok(vid) = VertexId::try_from(&vid_val) {
                                     StorageWriter::delete_vertex(&mut *writer, space_name, &vid)
@@ -500,10 +525,11 @@ impl SinkOperator {
                     base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
-                        let col_names = chunk.col_names();
+                        let layout = chunk.get_layout();
 
                         for row in &chunk.rows {
-                            let context = ValueRowContext::new(row.clone(), col_names.clone());
+                            let context =
+                                ValueRowContext::new_with_layout(row.clone(), layout.clone());
                             let src_val = context
                                 .get_variable(src_col)
                                 .unwrap_or(Value::Null(crate::core::NullType::Null));
@@ -552,10 +578,11 @@ impl SinkOperator {
                     base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
-                        let col_names = chunk.col_names();
+                        let layout = chunk.get_layout();
 
                         for row in &chunk.rows {
-                            let context = ValueRowContext::new(row.clone(), col_names.clone());
+                            let context =
+                                ValueRowContext::new_with_layout(row.clone(), layout.clone());
                             let src_val = context
                                 .get_variable(src_col)
                                 .unwrap_or(Value::Null(crate::core::NullType::Null));
@@ -603,10 +630,11 @@ impl SinkOperator {
                     base.ensure_not_cancelled()?;
                     if let Some(storage_lock) = storage {
                         let mut writer = storage_lock.write();
-                        let col_names = chunk.col_names();
+                        let layout = chunk.get_layout();
 
                         for row in &chunk.rows {
-                            let context = ValueRowContext::new(row.clone(), col_names.clone());
+                            let context =
+                                ValueRowContext::new_with_layout(row.clone(), layout.clone());
                             if let Some(vid_val) = context.get_variable(vertex_id_col) {
                                 if let Ok(vid) = VertexId::try_from(&vid_val) {
                                     StorageWriter::delete_vertex(&mut *writer, space_name, &vid)

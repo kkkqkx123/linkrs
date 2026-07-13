@@ -7,12 +7,15 @@ use crate::core::types::expr::Expression;
 use crate::core::Value;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
-use crate::query::executor::streaming::executor::{SortDirection, StreamingExecutor, ValueRowContext};
+use crate::query::executor::streaming::executor::{
+    SortDirection, StreamingExecutor, ValueRowContext,
+};
 use crate::query::executor::streaming::helpers::compare_values;
 use crate::query::executor::streaming::operator_base::OperatorBase;
 use crate::query::executor::streaming::operator_spec::ExchangeSpec;
 use crate::query::executor::streaming::operator_state::{ExchangeState, MergeInputState};
-use crate::query::executor::streaming::pool::{MorselWorkerPool, PartitionBatch, PartitionHandle};
+use crate::query::executor::streaming::pool::{PartitionBatch, PartitionHandle};
+use crate::query::executor::streaming::slot::SlotLayout;
 
 const CHUNK_SIZE: usize = 1024;
 
@@ -20,7 +23,6 @@ const CHUNK_SIZE: usize = 1024;
 pub struct ExchangeOperator {
     pub state: ExchangeState,
     pub(crate) handle: Option<PartitionHandle>,
-    pool: Option<Arc<MorselWorkerPool>>,
 }
 
 impl ExchangeOperator {
@@ -46,7 +48,6 @@ impl ExchangeOperator {
         Self {
             state,
             handle: None,
-            pool: None,
         }
     }
 
@@ -58,9 +59,7 @@ impl ExchangeOperator {
         match &mut self.state {
             ExchangeState::Concatenate { .. } => {}
             ExchangeState::MergeSort {
-                inputs,
-                emitted,
-                ..
+                inputs, emitted, ..
             } => {
                 *inputs = (0..children.len())
                     .map(|_| MergeInputState::Pending)
@@ -70,29 +69,27 @@ impl ExchangeOperator {
         }
 
         let runtime = base.runtime.clone();
-        let pool = runtime.as_ref().and_then(|rt| rt.worker_pool.clone());
-        self.pool = pool.clone();
-
-        if let (Some(pool), Some(runtime)) = (&pool, &runtime) {
-            if children.len() > 1 && pool.max_workers() > 1 {
-                let max_buffered = base.chunk_size.max(1).min(10);
-                let (batch, receivers, error_rx) = PartitionBatch::new(
-                    std::mem::take(children),
-                    runtime.clone(),
-                    max_buffered,
-                );
-                let batch = Arc::new(batch);
-                let handle = PartitionHandle::from_batch(
-                    &batch,
-                    receivers,
-                    error_rx,
-                    runtime.clone(),
-                    Instant::now(),
-                );
-                pool.submit(batch);
-                self.handle = Some(handle);
-                base.lifecycle.mark_opened();
-                return Ok(());
+        if let Some(rt) = &runtime {
+            let pool = rt.worker_pool.lock().clone();
+            if let Some(pool) = pool {
+                if children.len() > 1 && pool.max_workers() > 1 {
+                    let max_buffered = base.chunk_size.max(1).min(10);
+                    let (batch, receivers, error_rx) =
+                        PartitionBatch::new(std::mem::take(children), rt.clone(), max_buffered);
+                    let batch = Arc::new(batch);
+                    let handle = PartitionHandle::from_batch(
+                        &batch,
+                        receivers,
+                        error_rx,
+                        rt.clone(),
+                        Instant::now(),
+                        pool.max_workers(),
+                    );
+                    pool.submit(batch);
+                    self.handle = Some(handle);
+                    base.lifecycle.mark_opened();
+                    return Ok(());
+                }
             }
         }
 
@@ -116,8 +113,7 @@ impl ExchangeOperator {
             } => {
                 while *current_index < input_count(children, &self.handle) {
                     base.ensure_not_cancelled()?;
-                    if let Some(chunk) =
-                        advance_input(children, &mut self.handle, *current_index)?
+                    if let Some(chunk) = advance_input(children, &mut self.handle, *current_index)?
                     {
                         validate_schema(*current_index, &chunk, col_names)?;
                         return Ok(Some(chunk));
@@ -164,10 +160,9 @@ impl ExchangeOperator {
                 if result_rows.is_empty() {
                     Ok(None)
                 } else {
-                    Ok(Some(DataChunk::from_rows_with_col_names(
-                        result_rows,
-                        col_names.clone(),
-                    )))
+                    let layout =
+                        Arc::new(SlotLayout::from_names(col_names.as_deref().unwrap_or(&[])));
+                    Ok(Some(DataChunk::new_with_layout(result_rows, layout)))
                 }
             }
         }
@@ -193,16 +188,12 @@ impl ExchangeOperator {
             let _ = handle.stop_and_join();
             self.handle = None;
         }
-        self.pool = None;
         base.lifecycle.mark_closed();
         close_children(children).map_or(Ok(()), Err)
     }
 }
 
-fn input_count(
-    serial: &[StreamingExecutor],
-    handle: &Option<PartitionHandle>,
-) -> usize {
+fn input_count(serial: &[StreamingExecutor], handle: &Option<PartitionHandle>) -> usize {
     handle
         .as_ref()
         .map(|h| h.partition_count)
@@ -284,9 +275,7 @@ fn next_merge_row(
         ));
     };
     let row = chunk.rows.get(*row_index).cloned().ok_or_else(|| {
-        QueryError::execution(
-            "Exchange merge input has an invalid selected row index".to_string(),
-        )
+        QueryError::execution("Exchange merge input has an invalid selected row index".to_string())
     })?;
     *row_index += 1;
     if *row_index >= chunk.rows.len() {
@@ -332,18 +321,20 @@ fn compare_rows(
     sort_directions: &[SortDirection],
     col_names: &[String],
 ) -> Result<Ordering, QueryError> {
+    let layout = Arc::new(SlotLayout::from_names(col_names));
     for (index, expression) in sort_expressions.iter().enumerate() {
         let direction = sort_directions
             .get(index)
             .copied()
             .unwrap_or(SortDirection::Ascending);
-        let mut left_context = ValueRowContext::new(a.to_vec(), col_names.to_vec());
-        let mut right_context = ValueRowContext::new(b.to_vec(), col_names.to_vec());
-        let left = ExpressionEvaluator::evaluate(expression, &mut left_context).map_err(|error| {
-            QueryError::execution(format!(
-                "Exchange failed to evaluate left sort key: {error}"
-            ))
-        })?;
+        let mut left_context = ValueRowContext::new(a.to_vec(), layout.clone());
+        let mut right_context = ValueRowContext::new(b.to_vec(), layout.clone());
+        let left =
+            ExpressionEvaluator::evaluate(expression, &mut left_context).map_err(|error| {
+                QueryError::execution(format!(
+                    "Exchange failed to evaluate left sort key: {error}"
+                ))
+            })?;
         let right =
             ExpressionEvaluator::evaluate(expression, &mut right_context).map_err(|error| {
                 QueryError::execution(format!(

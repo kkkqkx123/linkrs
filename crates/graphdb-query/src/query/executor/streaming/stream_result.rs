@@ -274,6 +274,11 @@ mod tests {
         let runtime = Arc::new(ExecutionRuntime::new(
             QueryIdentity::default(),
             MemoryBudget::default_budget(),
+            None,
+            #[cfg(feature = "fulltext-search")]
+            None,
+            #[cfg(feature = "qdrant")]
+            None,
         ));
         engine.set_runtime(runtime.clone());
 

@@ -12,6 +12,7 @@
 
 pub mod base;
 pub mod builder;
+mod partition_builder;
 pub mod chunk;
 pub mod context;
 pub mod coordinator;
@@ -20,16 +21,17 @@ pub mod executor;
 pub mod factory;
 pub mod helpers;
 pub mod join_helpers;
-pub mod lowering;
 pub mod operator_base;
+pub mod operator_plan_builder;
 pub mod operator_spec;
 pub mod operator_state;
 pub mod operators;
 pub mod parallel_safety;
 pub mod partition;
-pub mod pool;
 mod physical_builder;
 pub mod physical_node;
+pub mod physical_properties;
+pub mod pool;
 pub mod result_utils;
 pub mod runtime;
 pub mod slot;
@@ -42,12 +44,10 @@ pub use engine::StreamingExecutionEngine;
 pub use executor::StreamingExecutor;
 pub use factory::StreamingQueryExecutor;
 pub use operator_spec::{BlockingSpec, ExchangeSpec, JoinSpec, SourceSpec, UnarySpec};
-pub use operator_state::{
-    BlockingState, ExchangeState, JoinState, SourceState, UnaryState,
-};
+pub use operator_state::{BlockingState, ExchangeState, JoinState, SourceState, UnaryState};
+pub use partition::PartitionView;
 pub use physical_node::PhysicalNode;
 pub use result_utils::{chunks_to_execution_result, convert_chunks_to_dataset};
-pub use partition::PartitionView;
 pub use runtime::{
     ExecutionRuntime, OperatorProfile, OperatorProfileKey, ProfileCollector, QueryFinishGuard,
     QueryIdentity, ResourceOwner,

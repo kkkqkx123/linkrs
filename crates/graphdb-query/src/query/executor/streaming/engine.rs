@@ -19,6 +19,7 @@ use super::stream::ResultStream;
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::query::executor::base::{MemoryBudget, MemoryTracker};
+use crate::query::executor::streaming::pool::MorselWorkerPool;
 
 const GATHER_NODE_ID: i64 = i64::MIN;
 const LOCAL_SORT_NODE_ID: i64 = i64::MIN + 1;
@@ -67,9 +68,19 @@ impl StreamingExecutionEngine {
     /// Set the maximum number of worker threads for intra-query parallelism.
     ///
     /// Values below one are normalised to the serial fallback.
+    /// When a runtime is already attached, this creates a `MorselWorkerPool`
+    /// and attaches it to the runtime so that Gather/Exchange operators can
+    /// use it during execution.
     pub fn set_max_workers(&mut self, max_workers: usize) {
         self.max_workers = max_workers.max(1);
-        self.configure_registered_root_parallelism();
+        if let Some(rt) = &self.runtime {
+            if self.max_workers > 1 {
+                let pool = MorselWorkerPool::new(self.max_workers);
+                rt.set_worker_pool(Some(pool));
+            } else {
+                rt.set_worker_pool(None);
+            }
+        }
     }
 
     /// Returns the maximum number of worker threads.
@@ -80,7 +91,9 @@ impl StreamingExecutionEngine {
     /// Set the bounded output capacity used by P8 worker channels.
     pub fn set_max_buffered_chunks(&mut self, max_buffered_chunks: usize) {
         self.max_buffered_chunks = max_buffered_chunks.max(1);
-        self.configure_registered_root_parallelism();
+        if let Some(rt) = &self.runtime {
+            rt.set_max_buffered_chunks(self.max_buffered_chunks);
+        }
     }
 
     /// Register the root executor.
@@ -359,6 +372,7 @@ impl StreamingExecutionEngine {
 
     /// Attach an execution runtime (for cancellation, profiling, memory tracking).
     /// Also propagates the runtime recursively into all operators.
+    /// If `max_workers > 1`, creates a `MorselWorkerPool` and attaches it.
     pub fn set_runtime(&mut self, runtime: Arc<ExecutionRuntime>) {
         if let Some(ref mut executor) = self.root_executor {
             executor.set_runtime(Some(runtime.clone()));
@@ -366,14 +380,16 @@ impl StreamingExecutionEngine {
         for executor in &mut self.partition_executors {
             executor.set_runtime(Some(runtime.clone()));
         }
+        if self.max_workers > 1 {
+            let pool = MorselWorkerPool::new(self.max_workers);
+            runtime.set_worker_pool(Some(pool));
+        }
         self.runtime = Some(runtime);
-        self.configure_registered_root_parallelism();
     }
 
     fn configure_registered_root_parallelism(&mut self) {
-        if let Some(root) = self.root_executor.as_mut() {
-            root.configure_parallel_partitions(self.max_workers, self.max_buffered_chunks);
-        }
+        // No longer needed — parallel config is stored on the runtime.
+        // Kept as a hook for future per-operator config.
     }
 
     /// Return a reference to the attached runtime, if any.

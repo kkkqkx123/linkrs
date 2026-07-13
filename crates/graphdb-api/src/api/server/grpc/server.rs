@@ -216,9 +216,7 @@ impl<
         if let Some(cols) = stream_result.column_names() {
             let msg = super::proto::StreamResponse {
                 payload: Some(super::proto::stream_response::Payload::Schema(
-                    super::proto::SchemaMessage {
-                        column_names: cols,
-                    },
+                    super::proto::SchemaMessage { column_names: cols },
                 )),
             };
             if tx.blocking_send(Ok(msg)).is_err() {
@@ -243,13 +241,9 @@ impl<
                             if !schema_sent_clone.load(std::sync::atomic::Ordering::Relaxed) {
                                 let cols = chunk.col_names();
                                 let schema_msg = super::proto::StreamResponse {
-                                    payload: Some(
-                                        super::proto::stream_response::Payload::Schema(
-                                            super::proto::SchemaMessage {
-                                                column_names: cols,
-                                            },
-                                        ),
-                                    ),
+                                    payload: Some(super::proto::stream_response::Payload::Schema(
+                                        super::proto::SchemaMessage { column_names: cols },
+                                    )),
                                 };
                                 if tx_pull.blocking_send(Ok(schema_msg)).is_err() {
                                     stream_result.cancel();
@@ -264,10 +258,8 @@ impl<
                                 .rows
                                 .into_iter()
                                 .map(|row| {
-                                    let values: Vec<super::proto::Value> = row
-                                        .into_iter()
-                                        .map(value_to_proto_value)
-                                        .collect();
+                                    let values: Vec<super::proto::Value> =
+                                        row.into_iter().map(value_to_proto_value).collect();
                                     super::proto::Row { values }
                                 })
                                 .collect();
@@ -302,8 +294,7 @@ impl<
                             return;
                         }
                         Err(e) => {
-                            let _ = tx_pull
-                                .blocking_send(Err(Status::internal(e.to_string())));
+                            let _ = tx_pull.blocking_send(Err(Status::internal(e.to_string())));
                             return;
                         }
                     }
@@ -854,7 +845,9 @@ fn value_to_proto_value(value: crate::core::Value) -> super::proto::Value {
     use super::proto::Value as ProtoValueMsg;
 
     let proto_val = match value {
-        crate::core::Value::Empty | crate::core::Value::Null(_) => ProtoValue::StringValue(String::new()),
+        crate::core::Value::Empty | crate::core::Value::Null(_) => {
+            ProtoValue::StringValue(String::new())
+        }
         crate::core::Value::Bool(b) => ProtoValue::BoolValue(b),
         crate::core::Value::SmallInt(i) => ProtoValue::IntValue(i as i64),
         crate::core::Value::Int(i) => ProtoValue::IntValue(i as i64),

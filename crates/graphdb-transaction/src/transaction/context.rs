@@ -10,12 +10,12 @@ use std::time::{Duration, Instant};
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};
 
-use crate::core::types::VertexId;
 use super::error::TransactionError;
 use super::rollback::CombinedRollback;
 use super::types::*;
 use super::undo_log::{UndoLogEntry, UndoLogManager, UndoTarget};
 use super::wal::Timestamp;
+use crate::core::types::VertexId;
 
 /// Transaction Context
 ///

@@ -5,26 +5,25 @@ use crate::query::executor::base::ExecutionContext;
 use crate::query::executor::streaming::operator_spec::SinkSpec;
 use crate::query::executor::streaming::operator_spec::SourceSpec;
 use crate::query::executor::streaming::physical_node::PhysicalNode;
+use crate::query::executor::streaming::physical_properties::PhysicalProperties;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 
 fn contextual_to_value(
     expr: &crate::core::types::expr::ContextualExpression,
 ) -> Result<Value, QueryError> {
-    expr.constant_value().ok_or_else(|| {
-        QueryError::execution("Expected constant value in plan node".to_string())
-    })
+    if let Some(value) = expr.constant_value() {
+        return Ok(value);
+    }
+    match expr.get_expression() {
+        Some(Expression::Literal(value)) => Ok(value),
+        _ => Err(QueryError::execution(format!(
+            "Standalone data modification requires constant values, got expression"
+        ))),
+    }
 }
 
-fn contextual_to_expression(
-    expr: &crate::core::types::expr::ContextualExpression,
-) -> Result<Expression, QueryError> {
-    expr.get_expression().ok_or_else(|| {
-        QueryError::execution("Failed to get expression from ContextualExpression".to_string())
-    })
-}
-
-pub fn lower_write_node(
+pub fn build_write_node(
     node: &PlanNodeEnum,
     context: &ExecutionContext,
 ) -> Result<PhysicalNode, QueryError> {
@@ -53,30 +52,34 @@ pub fn lower_write_node(
                 }
                 rows.push(row);
             }
-            let source = PhysicalNode::Source(SourceSpec::ScanVertices {
-                rows,
-                col_names: scan_col_names,
-            });
+            let source = PhysicalNode::Source(
+                0,
+                SourceSpec::ScanVertices {
+                    rows,
+                    col_names: scan_col_names,
+                },
+                PhysicalProperties::single_streaming(),
+            );
             Ok(PhysicalNode::Sink(
+                node.id(),
                 Box::new(source),
                 SinkSpec::InsertVertices {
+                    storage: context.storage.clone(),
+                    space_name: context.space_name.clone().unwrap_or_default(),
                     vertex_properties,
                     tags: insert_node.tag_names(),
                 },
+                PhysicalProperties::single_streaming(),
             ))
         }
 
         PlanNodeEnum::InsertEdges(insert_node) => {
             let mut rows = Vec::new();
             let prop_names = insert_node.prop_names();
-            let mut scan_col_names =
-                vec!["src".to_string(), "dst".to_string(), "rank".to_string()];
+            let mut scan_col_names = vec!["src".to_string(), "dst".to_string(), "rank".to_string()];
             scan_col_names.extend(prop_names.iter().cloned());
             for (src, dst, rank, props) in insert_node.edges() {
-                let mut row = vec![
-                    contextual_to_value(src)?,
-                    contextual_to_value(dst)?,
-                ];
+                let mut row = vec![contextual_to_value(src)?, contextual_to_value(dst)?];
                 row.push(match rank {
                     Some(rank_expr) => contextual_to_value(rank_expr)?,
                     None => Value::BigInt(0),
@@ -90,18 +93,26 @@ pub fn lower_write_node(
                 .iter()
                 .map(|prop| (prop.clone(), Expression::Variable(prop.clone())))
                 .collect();
-            let source = PhysicalNode::Source(SourceSpec::ScanVertices {
-                rows,
-                col_names: scan_col_names,
-            });
+            let source = PhysicalNode::Source(
+                0,
+                SourceSpec::ScanVertices {
+                    rows,
+                    col_names: scan_col_names,
+                },
+                PhysicalProperties::single_streaming(),
+            );
             Ok(PhysicalNode::Sink(
+                node.id(),
                 Box::new(source),
                 SinkSpec::InsertEdges {
+                    storage: context.storage.clone(),
+                    space_name: context.space_name.clone().unwrap_or_default(),
                     src_col: "src".to_string(),
                     dst_col: "dst".to_string(),
                     edge_type: insert_node.edge_name().to_string(),
                     edge_properties,
                 },
+                PhysicalProperties::single_streaming(),
             ))
         }
 
@@ -111,16 +122,26 @@ pub fn lower_write_node(
             for update in update_node.updates() {
                 rows.push(vec![contextual_to_value(&update.vertex_id)?]);
                 for (name, expr) in &update.properties {
-                    updates.push((name.clone(), contextual_to_expression(expr)?));
+                    updates.push((name.clone(), super::contextual_to_expression(expr)?));
                 }
             }
-            let source = PhysicalNode::Source(SourceSpec::ScanVertices {
-                rows,
-                col_names: vec!["vid".to_string()],
-            });
+            let source = PhysicalNode::Source(
+                0,
+                SourceSpec::ScanVertices {
+                    rows,
+                    col_names: vec!["vid".to_string()],
+                },
+                PhysicalProperties::single_streaming(),
+            );
             Ok(PhysicalNode::Sink(
+                node.id(),
                 Box::new(source),
-                SinkSpec::UpdateVertices { updates },
+                SinkSpec::UpdateVertices {
+                    storage: context.storage.clone(),
+                    space_name: context.space_name.clone().unwrap_or_default(),
+                    updates,
+                },
+                PhysicalProperties::single_streaming(),
             ))
         }
 
@@ -137,13 +158,23 @@ pub fn lower_write_node(
                         .vertex_id
                         .constant_value()
                         .unwrap_or(Value::Null(crate::core::NullType::Null))];
-                    let source = PhysicalNode::Source(SourceSpec::ScanVertices {
-                        rows: vec![row],
-                        col_names: vec!["vid".to_string()],
-                    });
+                    let source = PhysicalNode::Source(
+                        0,
+                        SourceSpec::ScanVertices {
+                            rows: vec![row],
+                            col_names: vec!["vid".to_string()],
+                        },
+                        PhysicalProperties::single_streaming(),
+                    );
                     Ok(PhysicalNode::Sink(
+                        node.id(),
                         Box::new(source),
-                        SinkSpec::UpdateVertices { updates },
+                        SinkSpec::UpdateVertices {
+                            storage: context.storage.clone(),
+                            space_name: context.space_name.clone().unwrap_or_default(),
+                            updates,
+                        },
+                        PhysicalProperties::single_streaming(),
                     ))
                 }
                 UpdateTargetType::Edge(einfo) => {
@@ -162,18 +193,26 @@ pub fn lower_write_node(
                             .constant_value()
                             .unwrap_or(Value::Null(crate::core::NullType::Null)),
                     ];
-                    let source = PhysicalNode::Source(SourceSpec::ScanVertices {
-                        rows: vec![row],
-                        col_names: vec!["src".to_string(), "dst".to_string()],
-                    });
+                    let source = PhysicalNode::Source(
+                        0,
+                        SourceSpec::ScanVertices {
+                            rows: vec![row],
+                            col_names: vec!["src".to_string(), "dst".to_string()],
+                        },
+                        PhysicalProperties::single_streaming(),
+                    );
                     Ok(PhysicalNode::Sink(
+                        node.id(),
                         Box::new(source),
                         SinkSpec::UpdateEdges {
+                            storage: context.storage.clone(),
+                            space_name: context.space_name.clone().unwrap_or_default(),
                             src_col: "src".to_string(),
                             dst_col: "dst".to_string(),
                             edge_type: einfo.edge_type.clone().unwrap_or_default(),
                             updates,
                         },
+                        PhysicalProperties::single_streaming(),
                     ))
                 }
             }
@@ -204,15 +243,20 @@ pub fn lower_write_node(
                 .first()
                 .and_then(|u| u.edge_type.clone())
                 .unwrap_or_default();
-            let source = PhysicalNode::Source(SourceSpec::Start);
+            let source =
+                PhysicalNode::Source(0, SourceSpec::Start, PhysicalProperties::single_streaming());
             Ok(PhysicalNode::Sink(
+                node.id(),
                 Box::new(source),
                 SinkSpec::UpdateEdges {
+                    storage: context.storage.clone(),
+                    space_name: context.space_name.clone().unwrap_or_default(),
                     src_col,
                     dst_col,
                     edge_type,
                     updates,
                 },
+                PhysicalProperties::single_streaming(),
             ))
         }
 
@@ -222,15 +266,23 @@ pub fn lower_write_node(
                 .iter()
                 .map(|id| contextual_to_value(id).map(|value| vec![value]))
                 .collect::<Result<Vec<_>, _>>()?;
-            let source = PhysicalNode::Source(SourceSpec::ScanVertices {
-                rows,
-                col_names: vec!["vid".to_string()],
-            });
+            let source = PhysicalNode::Source(
+                0,
+                SourceSpec::ScanVertices {
+                    rows,
+                    col_names: vec!["vid".to_string()],
+                },
+                PhysicalProperties::single_streaming(),
+            );
             Ok(PhysicalNode::Sink(
+                node.id(),
                 Box::new(source),
                 SinkSpec::DeleteVertices {
+                    storage: context.storage.clone(),
+                    space_name: context.space_name.clone().unwrap_or_default(),
                     vertex_id_col: "vid".to_string(),
                 },
+                PhysicalProperties::single_streaming(),
             ))
         }
 
@@ -239,61 +291,81 @@ pub fn lower_write_node(
                 .edges()
                 .iter()
                 .map(|(src, dst, _rank)| {
-                    Ok(vec![
-                        contextual_to_value(src)?,
-                        contextual_to_value(dst)?,
-                    ])
+                    Ok(vec![contextual_to_value(src)?, contextual_to_value(dst)?])
                 })
                 .collect::<Result<Vec<_>, QueryError>>()?;
-            let source = PhysicalNode::Source(SourceSpec::ScanVertices {
-                rows,
-                col_names: vec!["src".to_string(), "dst".to_string()],
-            });
+            let source = PhysicalNode::Source(
+                0,
+                SourceSpec::ScanVertices {
+                    rows,
+                    col_names: vec!["src".to_string(), "dst".to_string()],
+                },
+                PhysicalProperties::single_streaming(),
+            );
             Ok(PhysicalNode::Sink(
+                node.id(),
                 Box::new(source),
                 SinkSpec::DeleteEdges {
+                    storage: context.storage.clone(),
+                    space_name: context.space_name.clone().unwrap_or_default(),
                     src_col: "src".to_string(),
                     dst_col: "dst".to_string(),
                 },
+                PhysicalProperties::single_streaming(),
             ))
         }
 
         PlanNodeEnum::PipeDeleteVertices(delete_node) => {
             let input_plan = delete_node.input();
-            let input_phys = super::lower_plan_node(input_plan, context)?;
+            let input_phys = super::build_plan_node(input_plan, context)?;
             Ok(PhysicalNode::Sink(
+                node.id(),
                 Box::new(input_phys),
                 SinkSpec::PipeDeleteVertices {
+                    storage: context.storage.clone(),
+                    space_name: context.space_name.clone().unwrap_or_default(),
                     vertex_id_col: "vid".to_string(),
                 },
+                PhysicalProperties::single_streaming(),
             ))
         }
 
         PlanNodeEnum::PipeDeleteEdges(delete_node) => {
             let input_plan = delete_node.input();
-            let input_phys = super::lower_plan_node(input_plan, context)?;
+            let input_phys = super::build_plan_node(input_plan, context)?;
             Ok(PhysicalNode::Sink(
+                node.id(),
                 Box::new(input_phys),
                 SinkSpec::PipeDeleteEdges {
+                    storage: context.storage.clone(),
+                    space_name: context.space_name.clone().unwrap_or_default(),
                     src_col: "src".to_string(),
                     dst_col: "dst".to_string(),
                 },
+                PhysicalProperties::single_streaming(),
             ))
         }
 
-        PlanNodeEnum::DeleteTags(delete_tags_node) => {
-            Ok(PhysicalNode::Sink(
-                Box::new(PhysicalNode::Source(SourceSpec::Start)),
-                SinkSpec::DeleteTags {
-                    tag_names: delete_tags_node.tag_names().to_vec(),
-                    vertex_ids: None,
-                },
-            ))
-        }
+        PlanNodeEnum::DeleteTags(delete_tags_node) => Ok(PhysicalNode::Sink(
+            node.id(),
+            Box::new(PhysicalNode::Source(
+                0,
+                SourceSpec::Start,
+                PhysicalProperties::single_streaming(),
+            )),
+            SinkSpec::DeleteTags {
+                storage: context.storage.clone(),
+                space_name: context.space_name.clone().unwrap_or_default(),
+                tag_names: delete_tags_node.tag_names().to_vec(),
+                vertex_ids: None,
+            },
+            PhysicalProperties::single_streaming(),
+        )),
 
         _ => Err(QueryError::execution(format!(
-            "lowering::writes does not handle node type: {}",
-            node.name()
+            "Internal routing error: node {} (id={}) was incorrectly routed to writes builder",
+            node.name(),
+            node.id()
         ))),
     }
 }

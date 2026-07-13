@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
@@ -10,6 +11,7 @@ use crate::query::executor::streaming::join_helpers::{
     build_combined_layout_from_schemas, evaluate_join_key, evaluate_residual_condition,
 };
 use crate::query::executor::streaming::operator_base::OperatorBase;
+use crate::query::executor::streaming::slot::SlotLayout;
 
 const CHUNK_SIZE: usize = 1024;
 
@@ -116,7 +118,8 @@ impl HashShuffleJoinOperator {
         if key_expressions.is_empty() || bucket_count == 0 {
             return Ok(0);
         }
-        let key = evaluate_join_key(row, col_names, key_expressions)?;
+        let layout = Arc::new(SlotLayout::from_names(col_names));
+        let key = evaluate_join_key(row, layout, key_expressions)?;
         let hash = Self::hash_values(&key);
         Ok((hash % bucket_count as u64) as usize)
     }
@@ -207,13 +210,17 @@ impl HashShuffleJoinOperator {
         bucket.current_right_index = 0;
     }
 
-    fn process_bucket_chunked(&mut self, bucket_idx: usize) -> Result<Option<DataChunk>, QueryError> {
+    fn process_bucket_chunked(
+        &mut self,
+        bucket_idx: usize,
+    ) -> Result<Option<DataChunk>, QueryError> {
         let bucket = &mut self.buckets[bucket_idx];
 
         if bucket.right_hash.is_none() && !bucket.right_rows.is_empty() {
             let mut hash: HashMap<Vec<Value>, Vec<usize>> = HashMap::new();
             for (idx, row) in bucket.right_rows.iter().enumerate() {
-                let key = evaluate_join_key(row, &self.right_schema, &self.right_key_expressions)?;
+                let right_layout = Arc::new(SlotLayout::from_names(&self.right_schema));
+                let key = evaluate_join_key(row, right_layout, &self.right_key_expressions)?;
                 hash.entry(key).or_default().push(idx);
             }
             bucket.right_hash = Some(hash);
@@ -229,12 +236,21 @@ impl HashShuffleJoinOperator {
                 // Cross join path: iterate right rows starting from saved cursor.
                 while bucket.current_right_index < bucket.right_rows.len() {
                     let right_row = &bucket.right_rows[bucket.current_right_index];
-                    if Self::check_condition(&self.join_condition, left_row, right_row, &self.left_schema, &self.right_schema)? {
+                    if Self::check_condition(
+                        &self.join_condition,
+                        left_row,
+                        right_row,
+                        &self.left_schema,
+                        &self.right_schema,
+                    )? {
                         let mut joined = left_row.clone();
                         joined.extend(right_row.clone());
                         chunk_rows.push(joined);
                         if chunk_rows.len() >= CHUNK_SIZE {
-                            let layout = build_combined_layout_from_schemas(&self.left_schema, &self.right_schema);
+                            let layout = build_combined_layout_from_schemas(
+                                &self.left_schema,
+                                &self.right_schema,
+                            );
                             bucket.current_right_index += 1;
                             return Ok(Some(DataChunk::new_with_layout(chunk_rows, layout)));
                         }
@@ -244,10 +260,16 @@ impl HashShuffleJoinOperator {
                 // All right rows processed for this left row.
                 if self.join_kind == HashJoinKind::Left && bucket.right_rows.is_empty() {
                     let mut joined = left_row.clone();
-                    joined.extend(vec![Value::Null(crate::core::value::NullType::Null); right_width]);
+                    joined.extend(vec![
+                        Value::Null(crate::core::value::NullType::Null);
+                        right_width
+                    ]);
                     chunk_rows.push(joined);
                     if chunk_rows.len() >= CHUNK_SIZE {
-                        let layout = build_combined_layout_from_schemas(&self.left_schema, &self.right_schema);
+                        let layout = build_combined_layout_from_schemas(
+                            &self.left_schema,
+                            &self.right_schema,
+                        );
                         bucket.current_left_index += 1;
                         bucket.current_right_index = 0;
                         return Ok(Some(DataChunk::new_with_layout(chunk_rows, layout)));
@@ -255,18 +277,29 @@ impl HashShuffleJoinOperator {
                 }
                 bucket.current_right_index = 0;
             } else if let Some(hash) = bucket.right_hash.as_ref() {
-                let probe_key = evaluate_join_key(left_row, &self.left_schema, &self.left_key_expressions)?;
+                let left_layout = Arc::new(SlotLayout::from_names(&self.left_schema));
+                let probe_key =
+                    evaluate_join_key(left_row, left_layout, &self.left_key_expressions)?;
                 if let Some(matching_indices) = hash.get(&probe_key) {
                     let start_offset = bucket.current_match_offset.unwrap_or(0);
                     for i in start_offset..matching_indices.len() {
                         let &right_idx = &matching_indices[i];
                         let right_row = &bucket.right_rows[right_idx];
-                        if Self::check_condition(&self.join_condition, left_row, right_row, &self.left_schema, &self.right_schema)? {
+                        if Self::check_condition(
+                            &self.join_condition,
+                            left_row,
+                            right_row,
+                            &self.left_schema,
+                            &self.right_schema,
+                        )? {
                             let mut joined = left_row.clone();
                             joined.extend(right_row.clone());
                             chunk_rows.push(joined);
                             if chunk_rows.len() >= CHUNK_SIZE {
-                                let layout = build_combined_layout_from_schemas(&self.left_schema, &self.right_schema);
+                                let layout = build_combined_layout_from_schemas(
+                                    &self.left_schema,
+                                    &self.right_schema,
+                                );
                                 bucket.current_match_offset = Some(i + 1);
                                 return Ok(Some(DataChunk::new_with_layout(chunk_rows, layout)));
                             }
@@ -276,20 +309,30 @@ impl HashShuffleJoinOperator {
                     bucket.current_match_offset = None;
                 } else if self.join_kind == HashJoinKind::Left {
                     let mut joined = left_row.clone();
-                    joined.extend(vec![Value::Null(crate::core::value::NullType::Null); right_width]);
+                    joined.extend(vec![
+                        Value::Null(crate::core::value::NullType::Null);
+                        right_width
+                    ]);
                     chunk_rows.push(joined);
                     if chunk_rows.len() >= CHUNK_SIZE {
-                        let layout = build_combined_layout_from_schemas(&self.left_schema, &self.right_schema);
+                        let layout = build_combined_layout_from_schemas(
+                            &self.left_schema,
+                            &self.right_schema,
+                        );
                         bucket.current_left_index += 1;
                         return Ok(Some(DataChunk::new_with_layout(chunk_rows, layout)));
                     }
                 }
             } else if self.join_kind == HashJoinKind::Left {
                 let mut joined = left_row.clone();
-                joined.extend(vec![Value::Null(crate::core::value::NullType::Null); right_width]);
+                joined.extend(vec![
+                    Value::Null(crate::core::value::NullType::Null);
+                    right_width
+                ]);
                 chunk_rows.push(joined);
                 if chunk_rows.len() >= CHUNK_SIZE {
-                    let layout = build_combined_layout_from_schemas(&self.left_schema, &self.right_schema);
+                    let layout =
+                        build_combined_layout_from_schemas(&self.left_schema, &self.right_schema);
                     bucket.current_left_index += 1;
                     return Ok(Some(DataChunk::new_with_layout(chunk_rows, layout)));
                 }

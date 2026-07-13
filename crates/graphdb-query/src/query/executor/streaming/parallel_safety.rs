@@ -80,11 +80,11 @@ pub fn is_parallel_safe(tree: &StreamingExecutor) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::core::Value;
     use crate::query::executor::streaming::executor::StreamingExecutor;
     use crate::query::executor::streaming::operator_base::OperatorBase;
     use crate::query::executor::streaming::operators::source_operator::SourceOperator;
     use crate::query::executor::streaming::operators::unary_operator::UnaryOperator;
-    use crate::core::Value;
 
     use super::*;
 
@@ -127,7 +127,9 @@ mod tests {
                 join_condition: None,
                 build_side_tuples: Vec::new(),
                 left_consumed: false,
-                memory_tracker: crate::query::executor::base::MemoryTracker::new(MemoryBudget::default_budget()),
+                memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                    MemoryBudget::default_budget(),
+                ),
                 right_col_names: Vec::new(),
             },
         );

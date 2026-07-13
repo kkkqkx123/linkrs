@@ -1,0 +1,124 @@
+//! Physical properties for physical plan nodes.
+//!
+//! Describes the output characteristics of each [`PhysicalNode`](super::PhysicalNode):
+//! distribution, ordering, pipeline kind, parallelism, and memory policy.
+//! Used in the cost model, optimizer, and parallel execution planning.
+
+use super::executor::SortDirection;
+
+/// Data distribution strategy for the output of a physical node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Distribution {
+    Single,
+    Broadcast,
+    HashPartitioned(Vec<String>),
+}
+
+/// Output ordering guarantee.
+#[derive(Debug, Clone)]
+pub enum Ordering {
+    None,
+    Sorted(Vec<SortOrder>),
+}
+
+#[derive(Debug, Clone)]
+pub struct SortOrder {
+    pub column: String,
+    pub direction: SortDirection,
+}
+
+/// Whether the operator is streaming (produces incremental results)
+/// or blocking (must consume all input before producing output).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PipelineKind {
+    Streaming,
+    Blocking,
+}
+
+/// Parallelism constraints for this node.
+#[derive(Debug, Clone)]
+pub struct Parallelism {
+    pub min_workers: usize,
+    pub max_workers: usize,
+}
+
+impl Default for Parallelism {
+    fn default() -> Self {
+        Self {
+            min_workers: 1,
+            max_workers: 1,
+        }
+    }
+}
+
+/// Memory policy for blocking/spill-capable operators.
+#[derive(Debug, Clone)]
+pub struct MemoryPolicy {
+    pub spill_threshold: Option<u64>,
+}
+
+impl Default for MemoryPolicy {
+    fn default() -> Self {
+        Self {
+            spill_threshold: None,
+        }
+    }
+}
+
+/// Physical plan properties attached to each node's output.
+#[derive(Debug, Clone)]
+pub struct PhysicalProperties {
+    pub distribution: Distribution,
+    pub ordering: Ordering,
+    pub pipeline_kind: PipelineKind,
+    pub parallelism: Parallelism,
+    pub memory_policy: MemoryPolicy,
+}
+
+impl PhysicalProperties {
+    pub fn new(
+        distribution: Distribution,
+        ordering: Ordering,
+        pipeline_kind: PipelineKind,
+        parallelism: Parallelism,
+        memory_policy: MemoryPolicy,
+    ) -> Self {
+        Self {
+            distribution,
+            ordering,
+            pipeline_kind,
+            parallelism,
+            memory_policy,
+        }
+    }
+
+    pub fn single_streaming() -> Self {
+        Self::new(
+            Distribution::Single,
+            Ordering::None,
+            PipelineKind::Streaming,
+            Parallelism::default(),
+            MemoryPolicy::default(),
+        )
+    }
+
+    pub fn single_blocking() -> Self {
+        Self::new(
+            Distribution::Single,
+            Ordering::None,
+            PipelineKind::Blocking,
+            Parallelism::default(),
+            MemoryPolicy::default(),
+        )
+    }
+
+    pub fn sorted_blocking(ordering: Ordering) -> Self {
+        Self::new(
+            Distribution::Single,
+            ordering,
+            PipelineKind::Blocking,
+            Parallelism::default(),
+            MemoryPolicy::default(),
+        )
+    }
+}

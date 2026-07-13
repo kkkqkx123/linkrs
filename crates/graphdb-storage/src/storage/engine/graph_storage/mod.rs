@@ -31,11 +31,11 @@ use crate::core::types::{
     PropertyDef, SpaceInfo, TagInfo, Timestamp, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
 };
 use crate::core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
+use crate::storage::cursor::{EdgeCursor, ScanOptions, VertexCursor};
 use crate::storage::engine::background_freeze::{BackgroundFreezeManager, FreezeStats};
 use crate::storage::engine::graph_storage::context::ExportedEdgeSnapshotRecord;
 use crate::storage::engine::PersistenceConfig;
 use crate::storage::index::IndexGcConfig;
-use crate::storage::cursor::{EdgeCursor, ScanOptions, VertexCursor};
 use crate::storage::{
     StorageAdmin, StorageAuthOps, StorageGcOps, StoragePersistenceOps, StorageReader,
     StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps, StorageStats,
@@ -468,11 +468,8 @@ impl StorageReader for GraphStorage {
         space: &str,
         options: &ScanOptions,
     ) -> Result<Box<dyn VertexCursor>, StorageError> {
-        let cursor = cursor_impl::GraphVertexCursor::new(
-            self.ctx.clone(),
-            space.to_string(),
-            options,
-        )?;
+        let cursor =
+            cursor_impl::GraphVertexCursor::new(self.ctx.clone(), space.to_string(), options)?;
         Ok(Box::new(cursor))
     }
 
@@ -481,11 +478,7 @@ impl StorageReader for GraphStorage {
         space: &str,
         options: &ScanOptions,
     ) -> Result<Box<dyn EdgeCursor>, StorageError> {
-        let cursor = cursor_impl::GraphEdgeCursor::new(
-            self.ctx.clone(),
-            space,
-            options,
-        )?;
+        let cursor = cursor_impl::GraphEdgeCursor::new(self.ctx.clone(), space, options)?;
         Ok(Box::new(cursor))
     }
 }

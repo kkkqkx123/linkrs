@@ -119,6 +119,7 @@ impl SetOperator {
                 base.ensure_not_cancelled()?;
                 if !*left_consumed {
                     if let Some(chunk) = left.advance()? {
+                        let layout = chunk.get_layout();
                         let mut result_rows = Vec::new();
                         for row in chunk.rows {
                             let row_str = format!("{:?}", row);
@@ -129,7 +130,7 @@ impl SetOperator {
                             }
                         }
                         if !result_rows.is_empty() {
-                            return Ok(Some(DataChunk::from_rows(result_rows)));
+                            return Ok(Some(DataChunk::new_with_layout(result_rows, layout)));
                         }
                         continue;
                     } else {
@@ -138,16 +139,18 @@ impl SetOperator {
                 }
 
                 if let Some(chunk) = right.advance()? {
+                    let layout = chunk.get_layout();
                     let mut result_rows = Vec::new();
                     for row in chunk.rows {
                         let row_str = format!("{:?}", row);
                         if !seen_rows.contains(&row_str) {
+                            memory_tracker.try_reserve(row_str.len())?;
                             seen_rows.insert(row_str);
                             result_rows.push(row);
                         }
                     }
                     if !result_rows.is_empty() {
-                        return Ok(Some(DataChunk::from_rows(result_rows)));
+                        return Ok(Some(DataChunk::new_with_layout(result_rows, layout)));
                     }
                     continue;
                 }

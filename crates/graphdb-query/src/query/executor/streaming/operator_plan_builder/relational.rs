@@ -1,4 +1,4 @@
-//! Lower relational plan nodes (Filter, Project, Limit, Sort, Aggregate, etc.)
+//! Build physical plans for relational nodes.
 //! into PhysicalNode trees.
 
 use crate::core::error::QueryError;
@@ -9,78 +9,84 @@ use crate::query::executor::base::ExecutionContext;
 use crate::query::executor::streaming::executor::SortDirection;
 use crate::query::executor::streaming::operator_spec::{BlockingSpec, UnarySpec};
 use crate::query::executor::streaming::physical_node::PhysicalNode;
+use crate::query::executor::streaming::physical_properties::PhysicalProperties;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 
-/// Lower a relational plan node into a PhysicalNode tree.
-pub fn lower_relational_node(
+/// Build a physical plan for a relational node.
+pub fn build_relational_node(
     node: &PlanNodeEnum,
     context: &ExecutionContext,
 ) -> Result<PhysicalNode, QueryError> {
     match node {
         PlanNodeEnum::Filter(filter_node) => {
             let input_plan = filter_node.input();
-            let input_phys = super::lower_plan_node(input_plan, context)?;
+            let input_phys = super::build_plan_node(input_plan, context)?;
             let condition = filter_node.condition();
-            let predicate = contextual_to_expression(condition)?;
+            let predicate = super::contextual_to_expression(condition)?;
             Ok(PhysicalNode::Unary(
+                node.id(),
                 Box::new(input_phys),
                 UnarySpec::Filter { predicate },
+                PhysicalProperties::single_streaming(),
             ))
         }
 
         PlanNodeEnum::Project(project_node) => {
             let input_plan = project_node.input();
-            let input_phys = super::lower_plan_node(input_plan, context)?;
+            let input_phys = super::build_plan_node(input_plan, context)?;
             let columns = project_node.columns();
             let output_expressions = yield_columns_to_expressions(columns)?;
             Ok(PhysicalNode::Unary(
+                node.id(),
                 Box::new(input_phys),
                 UnarySpec::Project {
                     output_expressions,
                     output_col_names: project_node.col_names().to_vec(),
                 },
+                PhysicalProperties::single_streaming(),
             ))
         }
 
         PlanNodeEnum::Limit(limit_node) => {
             let input_plan = limit_node.input();
-            let input_phys = super::lower_plan_node(input_plan, context)?;
+            let input_phys = super::build_plan_node(input_plan, context)?;
             let count = limit_node.count();
             let offset = limit_node.offset();
-            let offset = u32::try_from(offset).map_err(|_| {
-                QueryError::execution("Limit offset must fit in u32".to_string())
-            })?;
-            let limit = u32::try_from(count).map_err(|_| {
-                QueryError::execution("Limit count must fit in u32".to_string())
-            })?;
+            let offset = u32::try_from(offset)
+                .map_err(|_| QueryError::execution("Limit offset must fit in u32".to_string()))?;
+            let limit = u32::try_from(count)
+                .map_err(|_| QueryError::execution("Limit count must fit in u32".to_string()))?;
             Ok(PhysicalNode::Unary(
+                node.id(),
                 Box::new(input_phys),
                 UnarySpec::Limit { offset, limit },
+                PhysicalProperties::single_streaming(),
             ))
         }
 
         PlanNodeEnum::Sort(sort_node) => {
             let input_plan = sort_node.input();
-            let input_phys = super::lower_plan_node(input_plan, context)?;
+            let input_phys = super::build_plan_node(input_plan, context)?;
             let sort_items = sort_node.sort_items();
             if sort_items.is_empty() {
                 return Ok(input_phys);
             }
-            let (sort_expressions, sort_directions) =
-                sort_items_to_expressions(sort_items)?;
+            let (sort_expressions, sort_directions) = sort_items_to_expressions(sort_items)?;
             Ok(PhysicalNode::Blocking(
+                node.id(),
                 Box::new(input_phys),
                 BlockingSpec::Sort {
                     sort_expressions,
                     sort_directions,
                 },
+                PhysicalProperties::single_blocking(),
             ))
         }
 
         PlanNodeEnum::Aggregate(agg_node) => {
             let input_plan = agg_node.input();
-            let input_phys = super::lower_plan_node(input_plan, context)?;
+            let input_phys = super::build_plan_node(input_plan, context)?;
             let group_keys = agg_node.group_keys();
             let group_by_expressions: Vec<Expression> = group_keys
                 .iter()
@@ -106,43 +112,48 @@ pub fn lower_relational_node(
                 })
                 .collect();
             Ok(PhysicalNode::Blocking(
+                node.id(),
                 Box::new(input_phys),
                 BlockingSpec::Aggregate {
                     group_by_expressions,
                     aggregate_functions,
                     output_col_names: agg_node.col_names().to_vec(),
                 },
+                PhysicalProperties::single_blocking(),
             ))
         }
 
         PlanNodeEnum::Dedup(dedup_node) => {
             let input_plan = dedup_node.input();
-            let input_phys = super::lower_plan_node(input_plan, context)?;
+            let input_phys = super::build_plan_node(input_plan, context)?;
             Ok(PhysicalNode::Blocking(
+                node.id(),
                 Box::new(input_phys),
                 BlockingSpec::Distinct,
+                PhysicalProperties::single_blocking(),
             ))
         }
 
         PlanNodeEnum::TopN(topn_node) => {
             let input_plan = topn_node.input();
-            let input_phys = super::lower_plan_node(input_plan, context)?;
+            let input_phys = super::build_plan_node(input_plan, context)?;
             let sort_items = topn_node.sort_items();
-            let (sort_expressions, sort_directions) =
-                sort_items_to_expressions(sort_items)?;
+            let (sort_expressions, sort_directions) = sort_items_to_expressions(sort_items)?;
             Ok(PhysicalNode::Blocking(
+                node.id(),
                 Box::new(input_phys),
                 BlockingSpec::TopN {
                     n: topn_node.limit() as u32,
                     sort_expressions,
                     sort_directions,
                 },
+                PhysicalProperties::single_blocking(),
             ))
         }
 
         PlanNodeEnum::Sample(sample_node) => {
             let input_plan = sample_node.input();
-            let input_phys = super::lower_plan_node(input_plan, context)?;
+            let input_phys = super::build_plan_node(input_plan, context)?;
             let count = if sample_node.count() > 0 {
                 sample_node.count() as u64
             } else {
@@ -151,69 +162,81 @@ pub fn lower_relational_node(
                 ));
             };
             Ok(PhysicalNode::Unary(
+                node.id(),
                 Box::new(input_phys),
                 UnarySpec::Sample { count },
+                PhysicalProperties::single_streaming(),
             ))
         }
 
         PlanNodeEnum::Remove(remove_node) => {
             let input_plan = remove_node.input();
-            let input_phys = super::lower_plan_node(input_plan, context)?;
+            let input_phys = super::build_plan_node(input_plan, context)?;
             let remove_items = remove_node.remove_items();
             let columns_to_remove: Vec<String> =
                 remove_items.iter().map(|(col, _)| col.clone()).collect();
             Ok(PhysicalNode::Unary(
+                node.id(),
                 Box::new(input_phys),
                 UnarySpec::Remove { columns_to_remove },
+                PhysicalProperties::single_streaming(),
             ))
         }
 
         PlanNodeEnum::Assign(node) => {
             let input_plan = node.input();
-            let input_phys = super::lower_plan_node(input_plan, context)?;
+            let input_phys = super::build_plan_node(input_plan, context)?;
             let assignments: Vec<(String, Expression)> = node
                 .assignments()
                 .iter()
                 .filter_map(|(name, expr)| expr.get_expression().map(|e| (name.clone(), e)))
                 .collect();
             Ok(PhysicalNode::Unary(
+                node.id(),
                 Box::new(input_phys),
                 UnarySpec::Assign { assignments },
+                PhysicalProperties::single_streaming(),
             ))
         }
 
         PlanNodeEnum::Unwind(node) => {
             let input_plan = node.input();
-            let input_phys = super::lower_plan_node(input_plan, context)?;
+            let input_phys = super::build_plan_node(input_plan, context)?;
             Ok(PhysicalNode::Unary(
+                node.id(),
                 Box::new(input_phys),
                 UnarySpec::Unwind {
                     unwind_column: node.alias().to_string(),
                 },
+                PhysicalProperties::single_streaming(),
             ))
         }
 
         PlanNodeEnum::Materialize(node) => {
             let input_plan = node.input();
-            let input_phys = super::lower_plan_node(input_plan, context)?;
+            let input_phys = super::build_plan_node(input_plan, context)?;
             Ok(PhysicalNode::Blocking(
+                node.id(),
                 Box::new(input_phys),
                 BlockingSpec::Materialize,
+                PhysicalProperties::single_blocking(),
             ))
         }
 
         PlanNodeEnum::DataCollect(node) => {
             let input_plan = node.input();
-            let input_phys = super::lower_plan_node(input_plan, context)?;
+            let input_phys = super::build_plan_node(input_plan, context)?;
             Ok(PhysicalNode::Blocking(
+                node.id(),
                 Box::new(input_phys),
                 BlockingSpec::DataCollect,
+                PhysicalProperties::single_blocking(),
             ))
         }
 
         PlanNodeEnum::Window(window_node) => {
             let input_plan = window_node.input();
-            let input_phys = super::lower_plan_node(input_plan, context)?;
+            let input_phys = super::build_plan_node(input_plan, context)?;
             let window_functions = window_node.window_functions();
             let mut window_exprs = Vec::new();
             let mut partition_by_exprs = Vec::new();
@@ -247,6 +270,7 @@ pub fn lower_relational_node(
                 }
             }
             Ok(PhysicalNode::Blocking(
+                node.id(),
                 Box::new(input_phys),
                 BlockingSpec::WindowFunction {
                     window_exprs,
@@ -254,46 +278,26 @@ pub fn lower_relational_node(
                     order_by_exprs,
                     order_by_directions,
                 },
-            ))
-        }
-
-        PlanNodeEnum::RollUpApply(node) => {
-            let input_plan = node.input();
-            let input_phys = super::lower_plan_node(input_plan, context)?;
-            let rollup_expressions: Vec<Expression> = node
-                .compare_cols()
-                .iter()
-                .map(|c| Expression::Variable(c.clone()))
-                .collect();
-            Ok(PhysicalNode::Blocking(
-                Box::new(input_phys),
-                BlockingSpec::RollUpApply { rollup_expressions },
+                PhysicalProperties::single_blocking(),
             ))
         }
 
         _ => Err(QueryError::execution(format!(
-            "lowering::relational does not handle node type: {}",
-            node.name()
+            "Internal routing error: node {} (id={}) was incorrectly routed to relational builder",
+            node.name(),
+            node.id()
         ))),
     }
 }
 
 // ── Helper functions (extracted from builder.rs) ──
 
-fn contextual_to_expression(
-    expr: &crate::core::types::expr::ContextualExpression,
-) -> Result<Expression, QueryError> {
-    expr.get_expression().ok_or_else(|| {
-        QueryError::execution("Failed to get expression from ContextualExpression".to_string())
-    })
-}
-
 fn yield_columns_to_expressions(
     columns: &[crate::core::YieldColumn],
 ) -> Result<Vec<Expression>, QueryError> {
     columns
         .iter()
-        .map(|col| contextual_to_expression(&col.expression))
+        .map(|col| super::contextual_to_expression(&col.expression))
         .collect()
 }
 

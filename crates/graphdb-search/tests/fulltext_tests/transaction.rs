@@ -10,8 +10,8 @@
 //! Test cases: TC-FT-TXN-001 ~ TC-FT-TXN-010
 
 use super::common::FulltextTestContext;
-use graphdb_search::search::EngineType;
 use graphdb_search::core::types::TransactionId;
+use graphdb_search::search::EngineType;
 use graphdb_sync::sync::batch::BatchConfig;
 use graphdb_sync::sync::coordinator::{ChangeContext, ChangeType, SyncCoordinator};
 use graphdb_sync::sync::manager::SyncManager;

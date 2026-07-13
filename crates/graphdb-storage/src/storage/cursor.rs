@@ -32,9 +32,7 @@ use crate::storage::StorageClient;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScanTarget {
     Vertex,
-    Edge {
-        edge_type: Option<String>,
-    },
+    Edge { edge_type: Option<String> },
 }
 
 // ---------------------------------------------------------------------------

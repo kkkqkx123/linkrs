@@ -85,7 +85,11 @@ impl DataChunk {
     /// SlotLayout is auto-created from schema column names.
     pub fn new(rows: Vec<Vec<Value>>, schema: Arc<Schema>) -> Self {
         let layout = Arc::new(SlotLayout::from_names(
-            &schema.columns.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+            &schema
+                .columns
+                .iter()
+                .map(|c| c.name.clone())
+                .collect::<Vec<_>>(),
         ));
         Self {
             rows,
@@ -195,7 +199,11 @@ impl DataChunk {
             Arc::new(Schema::new(columns))
         };
         let layout = Arc::new(SlotLayout::from_names(
-            &schema.columns.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+            &schema
+                .columns
+                .iter()
+                .map(|c| c.name.clone())
+                .collect::<Vec<_>>(),
         ));
         Self {
             rows,
@@ -251,6 +259,21 @@ impl DataChunk {
         self.rows
             .get(row_idx)
             .and_then(|row| row.get(slot).cloned())
+    }
+
+    /// Extract an entire column as a Vec<Value>.
+    ///
+    /// This is the primary API for selective columnarization: callers that
+    /// need to repeatedly access the same column (e.g. sorting, hashing,
+    /// aggregation) should pull it once via `get_column()` and iterate the
+    /// returned `Vec<Value>` rather than calling `get_by_slot` per row.
+    ///
+    /// Returns `None` if `slot` is out of range for the layout.
+    pub fn get_column(&self, slot: SlotId) -> Option<Vec<Value>> {
+        if slot >= self.layout.len() {
+            return None;
+        }
+        Some(self.rows.iter().map(|row| row[slot].clone()).collect())
     }
 }
 

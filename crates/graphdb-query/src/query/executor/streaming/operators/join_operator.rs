@@ -39,9 +39,10 @@ fn evaluate_join_key(
         return Ok(Vec::new());
     }
 
+    let layout = Arc::new(SlotLayout::from_names(col_names));
     let mut key = Vec::with_capacity(key_expressions.len());
     for expr in key_expressions {
-        let mut context = ValueRowContext::new(row.to_vec(), col_names.to_vec());
+        let mut context = ValueRowContext::new_with_layout(row.to_vec(), layout.clone());
         let value = ExpressionEvaluator::evaluate(expr, &mut context)
             .map_err(|e| QueryError::execution(format!("HashJoin key evaluation failed: {}", e)))?;
         key.push(value);
@@ -187,17 +188,15 @@ impl JoinOperator {
                     right_col_names: Vec::new(),
                 }
             }
-            super::super::operator_spec::JoinSpec::LeftJoin { join_condition } => {
-                Self::LeftJoin {
-                    join_condition: join_condition.clone(),
-                    build_side_tuples: Vec::new(),
-                    left_consumed: false,
-                    memory_tracker: crate::query::executor::base::MemoryTracker::new(
-                        memory_budget.clone(),
-                    ),
-                    right_col_names: Vec::new(),
-                }
-            }
+            super::super::operator_spec::JoinSpec::LeftJoin { join_condition } => Self::LeftJoin {
+                join_condition: join_condition.clone(),
+                build_side_tuples: Vec::new(),
+                left_consumed: false,
+                memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                    memory_budget.clone(),
+                ),
+                right_col_names: Vec::new(),
+            },
             super::super::operator_spec::JoinSpec::RightJoin { join_condition } => {
                 Self::RightJoin {
                     join_condition: join_condition.clone(),
@@ -234,17 +233,15 @@ impl JoinOperator {
                 ),
                 right_col_names: Vec::new(),
             },
-            super::super::operator_spec::JoinSpec::SemiJoin { join_condition } => {
-                Self::SemiJoin {
-                    join_condition: join_condition.clone(),
-                    right_rows: Vec::new(),
-                    right_consumed: false,
-                    memory_tracker: crate::query::executor::base::MemoryTracker::new(
-                        memory_budget.clone(),
-                    ),
-                    right_col_names: Vec::new(),
-                }
-            }
+            super::super::operator_spec::JoinSpec::SemiJoin { join_condition } => Self::SemiJoin {
+                join_condition: join_condition.clone(),
+                right_rows: Vec::new(),
+                right_consumed: false,
+                memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                    memory_budget.clone(),
+                ),
+                right_col_names: Vec::new(),
+            },
         }
     }
 
@@ -343,7 +340,7 @@ impl JoinOperator {
                                         right_row.len(),
                                     );
                                     let mut context =
-                                        ValueRowContext::new(combined_row, combined_names);
+                                        ValueRowContext::from_names(combined_row, combined_names);
                                     match ExpressionEvaluator::evaluate(condition, &mut context) {
                                         Ok(Value::Bool(b)) => b,
                                         _ => false,
@@ -428,7 +425,7 @@ impl JoinOperator {
                                         right_row.len(),
                                     );
                                     let mut context =
-                                        ValueRowContext::new(combined_row, combined_names);
+                                        ValueRowContext::from_names(combined_row, combined_names);
                                     match ExpressionEvaluator::evaluate(condition, &mut context) {
                                         Ok(value) => match value {
                                             Value::Bool(b) => b,
@@ -526,7 +523,7 @@ impl JoinOperator {
                                     right_row.len(),
                                 );
                                 let mut context =
-                                    ValueRowContext::new(combined_row, combined_names);
+                                    ValueRowContext::from_names(combined_row, combined_names);
                                 match ExpressionEvaluator::evaluate(condition, &mut context) {
                                     Ok(value) => match value {
                                         Value::Bool(b) => b,
@@ -608,7 +605,7 @@ impl JoinOperator {
                                     right_row.len(),
                                 );
                                 let mut context =
-                                    ValueRowContext::new(combined_row, combined_names);
+                                    ValueRowContext::from_names(combined_row, combined_names);
                                 match ExpressionEvaluator::evaluate(condition, &mut context) {
                                     Ok(Value::Bool(b)) => b,
                                     _ => false,
@@ -682,7 +679,7 @@ impl JoinOperator {
                                     right_row.len(),
                                 );
                                 let mut context =
-                                    ValueRowContext::new(combined_row, combined_names);
+                                    ValueRowContext::from_names(combined_row, combined_names);
                                 match ExpressionEvaluator::evaluate(condition, &mut context) {
                                     Ok(Value::Bool(b)) => b,
                                     _ => false,
@@ -765,7 +762,7 @@ impl JoinOperator {
                                     left_row.len(),
                                 );
                                 let mut context =
-                                    ValueRowContext::new(combined_row, combined_names);
+                                    ValueRowContext::from_names(combined_row, combined_names);
                                 match ExpressionEvaluator::evaluate(condition, &mut context) {
                                     Ok(Value::Bool(b)) => b,
                                     _ => false,
@@ -867,7 +864,7 @@ impl JoinOperator {
                                         right_row.len(),
                                     );
                                     let mut context =
-                                        ValueRowContext::new(combined_row, combined_names);
+                                        ValueRowContext::from_names(combined_row, combined_names);
                                     match ExpressionEvaluator::evaluate(condition, &mut context) {
                                         Ok(Value::Bool(b)) => b,
                                         _ => false,
@@ -1070,7 +1067,7 @@ impl JoinOperator {
                                     combined_col_names.push(format!("right_{}", i));
                                 }
                                 let mut context =
-                                    ValueRowContext::new(combined_row, combined_col_names);
+                                    ValueRowContext::from_names(combined_row, combined_col_names);
                                 match ExpressionEvaluator::evaluate(condition, &mut context) {
                                     Ok(Value::Bool(b)) => b,
                                     _ => false,

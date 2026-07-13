@@ -1,7 +1,9 @@
 //! ValueRowContext: Expression evaluation context for streaming rows
 //!
 //! Provides expression evaluation context for Vec<Value> rows.
-//! No type conversion needed since data is already in Value format.
+//! Runtime uses SlotId-based access via SlotLayout; column-name lookup
+//! at runtime is prohibited — all Variable references are resolved through
+//! the layout.
 
 use crate::core::Value;
 use crate::query::executor::expression::evaluator::traits::ExpressionContext;
@@ -11,87 +13,63 @@ use std::sync::Arc;
 
 /// Row context for expression evaluation with Value types
 ///
-/// Provides expression evaluation context for Vec<Value> rows.
-/// Supports both name-based and slot-based variable access.
+/// Every context carries an [`Arc<SlotLayout>`] so that `get_variable(name)`
+/// resolves through `layout.slot_id(name)` → `row[slot]` without any
+/// separate name-to-index map or runtime fallback.
 pub struct ValueRowContext {
     /// Column values (as Values, no conversion needed)
     row: Vec<Value>,
-    /// Column name to index mapping
-    col_name_index: HashMap<String, usize>,
     /// Extra variables for expression evaluation
     variables: HashMap<String, Value>,
-    /// Optional slot layout for fast slot-based access
-    layout: Option<Arc<SlotLayout>>,
+    /// Slot layout — always set; drives all variable resolution
+    layout: Arc<SlotLayout>,
 }
 
 impl ValueRowContext {
-    /// Create a new context from a row and column names
-    pub fn new(row: Vec<Value>, col_names: Vec<String>) -> Self {
-        let col_name_index: HashMap<String, usize> = col_names
-            .into_iter()
-            .enumerate()
-            .map(|(i, name)| (name, i))
-            .collect();
-
+    /// Create a new context from a row and slot layout.
+    pub fn new(row: Vec<Value>, layout: Arc<SlotLayout>) -> Self {
         Self {
             row,
-            col_name_index,
             variables: HashMap::new(),
-            layout: None,
+            layout,
         }
     }
 
-    /// Create a new context from a row and slot layout (fast slot-based access)
+    /// Create a new context from a row and slot layout.
+    /// Alias that makes call sites where a layout is explicitly built read
+    /// naturally.
     pub fn new_with_layout(row: Vec<Value>, layout: Arc<SlotLayout>) -> Self {
-        let col_name_index: HashMap<String, usize> = layout
-            .slots
-            .iter()
-            .enumerate()
-            .map(|(i, info)| (info.name.clone(), i))
-            .collect();
-
-        Self {
-            row,
-            col_name_index,
-            variables: HashMap::new(),
-            layout: Some(layout),
-        }
+        Self::new(row, layout)
     }
 
-    /// Get a column value by name
-    fn get_value_by_name(&self, name: &str) -> Option<Value> {
-        self.col_name_index
-            .get(name)
-            .and_then(|&idx| self.row.get(idx))
-            .cloned()
-    }
-
-    /// Get a column value by slot ID (fast path)
-    fn get_value_by_slot(&self, slot: SlotId) -> Option<Value> {
-        self.row.get(slot).cloned()
+    /// Create a new context by building a layout from column names.
+    ///
+    /// This is a convenience for sites that only have column-name strings
+    /// (e.g. legacy signatures or helper functions).  The layout is
+    /// created once and reused for all subsequent `get_variable()` calls
+    /// so there is never a name-map fallback at runtime.
+    pub fn from_names(row: Vec<Value>, col_names: Vec<String>) -> Self {
+        let layout = Arc::new(SlotLayout::from_names(&col_names));
+        Self::new(row, layout)
     }
 }
 
 impl ExpressionContext for ValueRowContext {
     fn get_variable(&self, name: &str) -> Option<Value> {
-        // First check explicit variables
+        // First check explicit variables (e.g. bindings from Apply)
         if let Some(value) = self.variables.get(name) {
             return Some(value.clone());
         }
-
-        // Try slot-based access as fast path
-        if let Some(ref layout) = self.layout {
-            if let Some(slot_id) = layout.slot_id(name) {
-                return self.get_value_by_slot(slot_id);
-            }
-        }
-
-        // Fall back to name-based lookup
-        self.get_value_by_name(name)
+        // Slot-based access via layout — the ONLY resolution path at runtime.
+        // Column-name lookup by hash map is intentionally removed; all
+        // Variable(name) expressions must be resolvable through the layout.
+        self.layout
+            .slot_id(name)
+            .and_then(|slot_id| self.row.get(slot_id).cloned())
     }
 
     fn get_variable_by_slot(&self, slot: SlotId) -> Option<Value> {
-        self.get_value_by_slot(slot)
+        self.row.get(slot).cloned()
     }
 
     fn set_variable(&mut self, name: String, value: Value) {
@@ -111,10 +89,10 @@ mod tests {
             Value::Bool(true),
         ];
         let col_names = vec!["id".to_string(), "name".to_string(), "active".to_string()];
+        let layout = Arc::new(SlotLayout::from_names(&col_names));
 
-        let context = ValueRowContext::new(row, col_names);
+        let context = ValueRowContext::new(row, layout);
 
-        // Verify column index mappings work
         assert_eq!(context.get_variable("id"), Some(Value::Int(1)));
         assert_eq!(
             context.get_variable("name"),
@@ -127,9 +105,9 @@ mod tests {
     fn test_variable_storage() {
         let row = vec![Value::Int(1)];
         let col_names = vec!["id".to_string()];
-        let mut context = ValueRowContext::new(row, col_names);
+        let layout = Arc::new(SlotLayout::from_names(&col_names));
+        let mut context = ValueRowContext::new(row, layout);
 
-        // Set and retrieve variables
         context.set_variable("var1".to_string(), Value::String("hello".to_string()));
         context.set_variable("var2".to_string(), Value::Int(42));
 
@@ -144,12 +122,11 @@ mod tests {
     fn test_missing_column() {
         let row = vec![Value::Int(1), Value::String("test".to_string())];
         let col_names = vec!["id".to_string(), "name".to_string()];
+        let layout = Arc::new(SlotLayout::from_names(&col_names));
 
-        let context = ValueRowContext::new(row, col_names);
+        let context = ValueRowContext::new(row, layout);
 
-        // Non-existent column should return None
         assert_eq!(context.get_variable("nonexistent"), None);
-        // Non-existent variable should return None
         assert_eq!(context.get_variable("var_not_set"), None);
     }
 }

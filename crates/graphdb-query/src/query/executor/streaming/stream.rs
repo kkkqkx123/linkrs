@@ -167,6 +167,11 @@ mod tests {
         let runtime = Arc::new(ExecutionRuntime::new(
             QueryIdentity::default(),
             MemoryBudget::default_budget(),
+            None,
+            #[cfg(feature = "fulltext-search")]
+            None,
+            #[cfg(feature = "qdrant")]
+            None,
         ));
         let released = Arc::new(AtomicBool::new(false));
         let released_for_cleanup = released.clone();

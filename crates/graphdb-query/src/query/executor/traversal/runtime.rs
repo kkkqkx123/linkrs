@@ -72,7 +72,9 @@ impl<'a> TraversalRuntime<'a> {
     pub fn check_cancel(&self) -> Result<(), QueryError> {
         if let Some(ref token) = self.cancel_token {
             if token.load(Ordering::Relaxed) {
-                return Err(QueryError::execution("Query cancelled during traversal".to_string()));
+                return Err(QueryError::execution(
+                    "Query cancelled during traversal".to_string(),
+                ));
             }
         }
         Ok(())
@@ -134,9 +136,11 @@ impl<'a> TraversalRuntime<'a> {
                 continue;
             }
 
-            let edges = self
-                .reader
-                .get_edges(&self.config.space_name, &item.vertex_id, self.config.direction);
+            let edges = self.reader.get_edges(
+                &self.config.space_name,
+                &item.vertex_id,
+                self.config.direction,
+            );
             self.stats.record_edge_scan(edges.len());
 
             let filtered = self.reader.filter_edges(&edges, &self.config.edge_types);
@@ -149,9 +153,9 @@ impl<'a> TraversalRuntime<'a> {
                     return Ok(());
                 }
 
-                let neighbor_id = self
-                    .reader
-                    .get_neighbor_id(edge, &item.vertex_id, self.config.direction);
+                let neighbor_id =
+                    self.reader
+                        .get_neighbor_id(edge, &item.vertex_id, self.config.direction);
 
                 if !self.should_visit(&neighbor_id) {
                     continue;
@@ -161,7 +165,9 @@ impl<'a> TraversalRuntime<'a> {
                     self.visited.insert(neighbor_id);
                 }
 
-                if let Some(vertex) = self.reader.get_vertex(&self.config.space_name, &neighbor_id)
+                if let Some(vertex) = self
+                    .reader
+                    .get_vertex(&self.config.space_name, &neighbor_id)
                 {
                     self.stats.record_vertex_visit();
                     let new_depth = item.depth + 1;

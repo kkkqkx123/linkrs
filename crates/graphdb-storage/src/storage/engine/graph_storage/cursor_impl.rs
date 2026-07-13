@@ -56,7 +56,10 @@ impl GraphVertexCursor {
         let tag_infos = ctx.schema_manager().list_tags(&space)?;
         let tags = TagCache {
             labels: tag_infos.iter().map(|t| t.tag_id).collect(),
-            names: tag_infos.into_iter().map(|t| (t.tag_id, t.tag_name)).collect(),
+            names: tag_infos
+                .into_iter()
+                .map(|t| (t.tag_id, t.tag_name))
+                .collect(),
         };
 
         let max_internal_id = {
@@ -278,14 +281,14 @@ impl EdgeCursor for GraphEdgeCursor {
         let edge_tables = ctx.data_store().edge_tables().read();
 
         'outer: while batch.len() < batch_size {
-            while *target_idx >= targets.len() {
+            if *target_idx >= targets.len() {
                 *exhausted = true;
                 break 'outer;
             }
 
             let target = &targets[*target_idx];
 
-            while *table_idx >= target.tables.len() {
+            if *table_idx >= target.tables.len() {
                 *target_idx += 1;
                 *table_idx = 0;
                 *table_state = TableScanState::new();
@@ -304,15 +307,36 @@ impl EdgeCursor for GraphEdgeCursor {
 
             match table_state.phase {
                 TablePhase::Mutable => {
-                    scan_mutable(
-                        ctx, store, target, td, ts, src_id_range, limit,
-                        emitted, table_state, &mut batch, batch_size,
-                    );
+                    scan_mutable(ScanArgs {
+                        ctx,
+                        store,
+                        target,
+                        td,
+                        ts,
+                        src_id_range,
+                        limit,
+                        emitted,
+                        state: table_state,
+                        batch: &mut batch,
+                        batch_size,
+                    });
                 }
                 TablePhase::Segment(seg_idx) => {
                     scan_segments(
-                        ctx, store, target, td, seg_idx, ts, src_id_range, limit,
-                        emitted, table_state, &mut batch, batch_size,
+                        ScanArgs {
+                            ctx,
+                            store,
+                            target,
+                            td,
+                            ts,
+                            src_id_range,
+                            limit,
+                            emitted,
+                            state: table_state,
+                            batch: &mut batch,
+                            batch_size,
+                        },
+                        seg_idx,
                     );
                 }
                 TablePhase::Done => {
@@ -331,136 +355,146 @@ impl EdgeCursor for GraphEdgeCursor {
     }
 }
 
+struct ScanArgs<'a> {
+    ctx: &'a GraphStorageContext,
+    store: &'a TimeTravelEdgeStore,
+    target: &'a TargetDef,
+    td: &'a TableDef,
+    ts: Timestamp,
+    src_id_range: &'a Option<Range<i64>>,
+    limit: Option<usize>,
+    emitted: &'a mut usize,
+    state: &'a mut TableScanState,
+    batch: &'a mut Vec<Edge>,
+    batch_size: usize,
+}
+
 // ---------------------------------------------------------------------------
 // Free-function scan helpers
 // ---------------------------------------------------------------------------
 
-fn scan_mutable(
-    ctx: &GraphStorageContext,
-    store: &TimeTravelEdgeStore,
-    target: &TargetDef,
-    td: &TableDef,
-    ts: Timestamp,
-    src_id_range: &Option<Range<i64>>,
-    limit: Option<usize>,
-    emitted: &mut usize,
-    state: &mut TableScanState,
-    batch: &mut Vec<Edge>,
-    batch_size: usize,
-) {
-    let mut iter = store.out_csr.iter(ts);
+fn scan_mutable(args: ScanArgs) {
+    let mut iter = args.store.out_csr.iter(args.ts);
 
-    let mut remaining = state.mutable_consumed;
+    let mut remaining = args.state.mutable_consumed;
     while remaining > 0 {
         match iter.next() {
             Some(_) => remaining -= 1,
             None => {
-                state.phase = TablePhase::Segment(0);
+                args.state.phase = TablePhase::Segment(0);
                 return;
             }
         }
     }
 
     for (src_vid, nbr) in iter {
-        if store.mvcc.is_tombstoned(nbr.edge_id, ts) {
+        if args.store.mvcc.is_tombstoned(nbr.edge_id, args.ts) {
             continue;
         }
-        if !state.seen.insert(nbr.edge_id) {
+        if !args.state.seen.insert(nbr.edge_id) {
             continue;
         }
-        if let Some(ref r) = *src_id_range {
+        if let Some(ref r) = *args.src_id_range {
             let src_int = src_vid.as_int64().unwrap_or(0);
             if src_int < r.start || src_int >= r.end {
                 continue;
             }
         }
 
-        let edge = build_edge(ctx, store, target, td, &src_vid, nbr, ts);
-        batch.push(edge);
-        *emitted += 1;
-        state.mutable_consumed += 1;
+        let edge = build_edge(
+            args.ctx,
+            args.store,
+            args.target,
+            args.td,
+            &src_vid,
+            nbr,
+            args.ts,
+        );
+        args.batch.push(edge);
+        *args.emitted += 1;
+        args.state.mutable_consumed += 1;
 
-        if batch.len() >= batch_size {
+        if args.batch.len() >= args.batch_size {
             return;
         }
-        if limit.is_some_and(|l| *emitted >= l) {
+        if args.limit.is_some_and(|l| *args.emitted >= l) {
             return;
         }
     }
 
-    state.phase = TablePhase::Segment(0);
+    args.state.phase = TablePhase::Segment(0);
 }
 
-fn scan_segments(
-    ctx: &GraphStorageContext,
-    store: &TimeTravelEdgeStore,
-    target: &TargetDef,
-    td: &TableDef,
-    seg_idx: usize,
-    ts: Timestamp,
-    src_id_range: &Option<Range<i64>>,
-    limit: Option<usize>,
-    emitted: &mut usize,
-    state: &mut TableScanState,
-    batch: &mut Vec<Edge>,
-    batch_size: usize,
-) {
-    let seg_count = store.out_segments.len();
+fn scan_segments(args: ScanArgs, seg_idx: usize) {
+    let seg_count = args.store.out_segments.len();
     if seg_idx >= seg_count {
-        state.phase = TablePhase::Done;
+        args.state.phase = TablePhase::Done;
         return;
     }
 
-    let segment = &store.out_segments[seg_count - 1 - seg_idx];
+    let segment = &args.store.out_segments[seg_count - 1 - seg_idx];
     let mut iter = segment.csr.iter();
 
-    let mut skip = state.seg_raw_consumed;
+    let mut skip = args.state.seg_raw_consumed;
     while skip > 0 {
         if iter.next().is_none() {
-            state.phase = TablePhase::Done;
+            args.state.phase = TablePhase::Done;
             return;
         }
         skip -= 1;
     }
 
     for (src_vid, edge) in &mut iter {
-        state.seg_raw_consumed += 1;
+        args.state.seg_raw_consumed += 1;
 
-        if edge.timestamp > ts {
+        if edge.timestamp > args.ts {
             continue;
         }
-        if store.mvcc.is_tombstoned(edge.edge_id, ts) {
+        if args.store.mvcc.is_tombstoned(edge.edge_id, args.ts) {
             continue;
         }
-        if !state.seen.insert(edge.edge_id) {
+        if !args.state.seen.insert(edge.edge_id) {
             continue;
         }
-        if let Some(ref r) = *src_id_range {
+        if let Some(ref r) = *args.src_id_range {
             let src_int = src_vid.as_int64().unwrap_or(0);
             if src_int < r.start || src_int >= r.end {
                 continue;
             }
         }
 
-        let nbr = Nbr::new(edge.neighbor, edge.edge_id, edge.prop_offset, edge.timestamp);
-        let edge = build_edge(ctx, store, target, td, &src_vid, nbr, ts);
-        batch.push(edge);
-        *emitted += 1;
+        let nbr = Nbr::new(
+            edge.neighbor,
+            edge.edge_id,
+            edge.prop_offset,
+            edge.timestamp,
+        );
+        let edge = build_edge(
+            args.ctx,
+            args.store,
+            args.target,
+            args.td,
+            &src_vid,
+            nbr,
+            args.ts,
+        );
+        args.batch.push(edge);
+        *args.emitted += 1;
 
-        if batch.len() >= batch_size {
+        if args.batch.len() >= args.batch_size {
             return;
         }
-        if limit.is_some_and(|l| *emitted >= l) {
+        if args.limit.is_some_and(|l| *args.emitted >= l) {
             return;
         }
     }
 
     let next = seg_idx + 1;
     if next >= seg_count {
-        state.phase = TablePhase::Done;
+        args.state.phase = TablePhase::Done;
     } else {
-        state.phase = TablePhase::Segment(next);
-        state.seg_raw_consumed = 0;
+        args.state.phase = TablePhase::Segment(next);
+        args.state.seg_raw_consumed = 0;
     }
 }
 

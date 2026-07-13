@@ -10,7 +10,7 @@ use crate::query::executor::streaming::slot::{combine_layouts, SlotLayout};
 /// Evaluate join key expressions against a row, returning the key values.
 pub fn evaluate_join_key(
     row: &[Value],
-    col_names: &[String],
+    layout: Arc<SlotLayout>,
     key_expressions: &[Expression],
 ) -> Result<Vec<Value>, QueryError> {
     if key_expressions.is_empty() {
@@ -18,7 +18,7 @@ pub fn evaluate_join_key(
     }
     let mut key = Vec::with_capacity(key_expressions.len());
     for expr in key_expressions {
-        let mut context = ValueRowContext::new(row.to_vec(), col_names.to_vec());
+        let mut context = ValueRowContext::new(row.to_vec(), layout.clone());
         let value = ExpressionEvaluator::evaluate(expr, &mut context)
             .map_err(|e| QueryError::execution(format!("HashJoin key evaluation failed: {e}")))?;
         key.push(value);
@@ -36,9 +36,8 @@ pub fn evaluate_residual_condition(
 ) -> Result<bool, QueryError> {
     let mut combined = left_row.to_vec();
     combined.extend_from_slice(right_row);
-    let mut names = left_schema.to_vec();
-    names.extend_from_slice(right_schema);
-    let mut context = ValueRowContext::new(combined, names);
+    let combined_layout = build_combined_layout_from_schemas(left_schema, right_schema);
+    let mut context = ValueRowContext::new(combined, combined_layout);
     match ExpressionEvaluator::evaluate(condition, &mut context) {
         Ok(Value::Bool(b)) => Ok(b),
         Ok(Value::Null(_)) => Ok(false),

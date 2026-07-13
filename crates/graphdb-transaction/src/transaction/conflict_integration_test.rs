@@ -4,9 +4,7 @@
 
 use crate::core::types::VertexId;
 use crate::transaction::manager::TransactionManager;
-use crate::transaction::types::{
-    TransactionManagerConfig, TransactionOptions,
-};
+use crate::transaction::types::{TransactionManagerConfig, TransactionOptions};
 use crate::transaction::WriteSetAnalyzer;
 
 fn create_test_manager() -> TransactionManager {

@@ -1,27 +1,180 @@
 //! Morsel-style query-level bounded worker pool for dynamic partition execution.
 //!
-//! Unlike the per-Gather `ParallelPartitionCoordinator` which spawns threads per
-//! Gather node with static round-robin partition assignment, this pool creates
-//! workers once per query. Partition tasks are dynamically claimed from a shared
-//! atomic counter — a "morsel queue" — providing natural load balancing: faster
-//! workers automatically process more partitions.
+//! Workers are created once per query. Partition tasks are dynamically claimed
+//! from a shared atomic counter — a "morsel queue" — providing natural load
+//! balancing: faster workers automatically process more partitions.
 //!
-//! Phase 4: shared worker pool + morsel queue replaces per-Gather `thread::spawn`.
+//! This is the only parallel execution mechanism (replaces the per-Gather
+//! `ParallelPartitionCoordinator`). The [`TaskScheduler`] trait abstracts
+//! over pool implementations.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TryRecvError};
+use std::sync::mpsc::{
+    self, Receiver, RecvTimeoutError, Sender, SyncSender, TryRecvError, TrySendError,
+};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::core::error::QueryError;
+use crate::query::executor::base::{MemoryBudget, MemoryReservation};
 
 use super::chunk::DataChunk;
-use super::coordinator::{release_queue_metrics, run_partition, PartitionMessage};
 use super::executor::StreamingExecutor;
 use super::runtime::ExecutionRuntime;
 
 const CHANNEL_WAIT: Duration = Duration::from_millis(2);
+
+/// Abstract task scheduler for parallel partition execution.
+///
+/// Implementations manage a set of worker threads that dynamically claim
+/// partition tasks from a shared atomic counter for natural load balancing.
+pub trait TaskScheduler: Send + Sync + std::fmt::Debug {
+    /// Submit a batch of partition tasks for execution.
+    fn submit(&self, batch: Arc<PartitionBatch>);
+    /// Number of worker threads in this scheduler.
+    fn max_workers(&self) -> usize;
+}
+
+#[derive(Debug)]
+pub struct BufferedChunk {
+    pub(crate) chunk: DataChunk,
+    pub(crate) _reservation: MemoryReservation,
+    pub(crate) bytes: usize,
+}
+
+#[derive(Debug)]
+pub enum PartitionMessage {
+    Chunk(BufferedChunk),
+    Finished,
+}
+
+/// Run a partition tree, sending output chunks through the given sender.
+/// This is the core worker loop: open, advance in a loop, close.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_partition(
+    tree: &mut StreamingExecutor,
+    sender: &SyncSender<PartitionMessage>,
+    stop: &AtomicBool,
+    runtime: &ExecutionRuntime,
+    queued_chunks: &AtomicUsize,
+    queued_chunks_peak: &AtomicUsize,
+    queued_bytes: &AtomicUsize,
+    queued_bytes_peak: &AtomicUsize,
+) -> Result<(), QueryError> {
+    tree.open()?;
+    let execution_result = (|| {
+        while !stop.load(Ordering::Relaxed) {
+            runtime.ensure_not_cancelled()?;
+            let Some(chunk) = tree.advance()? else {
+                send_message(sender, PartitionMessage::Finished, stop, runtime)?;
+                return Ok(());
+            };
+            let bytes = MemoryBudget::estimate_rows_memory(&chunk.rows);
+            let reservation = runtime.memory_budget.reserve(bytes)?;
+            let message = PartitionMessage::Chunk(BufferedChunk {
+                chunk,
+                _reservation: reservation,
+                bytes,
+            });
+            send_chunk(
+                sender,
+                message,
+                stop,
+                runtime,
+                queued_chunks,
+                queued_chunks_peak,
+                queued_bytes,
+                queued_bytes_peak,
+            )?;
+        }
+        Ok(())
+    })();
+    let close_result = tree.close_tree();
+    execution_result.and(close_result)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn send_chunk(
+    sender: &SyncSender<PartitionMessage>,
+    mut message: PartitionMessage,
+    stop: &AtomicBool,
+    runtime: &ExecutionRuntime,
+    queued_chunks: &AtomicUsize,
+    queued_chunks_peak: &AtomicUsize,
+    queued_bytes: &AtomicUsize,
+    queued_bytes_peak: &AtomicUsize,
+) -> Result<(), QueryError> {
+    loop {
+        if stop.load(Ordering::Relaxed) || runtime.is_cancelled() {
+            return Ok(());
+        }
+        let bytes = match &message {
+            PartitionMessage::Chunk(buffered) => buffered.bytes,
+            PartitionMessage::Finished => 0,
+        };
+        let pre_count = queued_chunks.fetch_add(1, Ordering::Relaxed);
+        let pre_bytes = queued_bytes.fetch_add(bytes, Ordering::Relaxed);
+        match sender.try_send(message) {
+            Ok(()) => {
+                update_peak_value(queued_chunks_peak, pre_count + 1);
+                update_peak_value(queued_bytes_peak, pre_bytes + bytes);
+                return Ok(());
+            }
+            Err(TrySendError::Full(returned)) => {
+                queued_chunks.fetch_sub(1, Ordering::Relaxed);
+                queued_bytes.fetch_sub(bytes, Ordering::Relaxed);
+                message = returned;
+                thread::sleep(CHANNEL_WAIT);
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                queued_chunks.fetch_sub(1, Ordering::Relaxed);
+                queued_bytes.fetch_sub(bytes, Ordering::Relaxed);
+                return Ok(());
+            }
+        }
+    }
+}
+
+pub(crate) fn update_peak_value(peak: &AtomicUsize, candidate: usize) {
+    let mut prev = peak.load(Ordering::Relaxed);
+    while candidate > prev {
+        match peak.compare_exchange_weak(prev, candidate, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return,
+            Err(actual) => prev = actual,
+        }
+    }
+}
+
+fn send_message(
+    sender: &SyncSender<PartitionMessage>,
+    mut message: PartitionMessage,
+    stop: &AtomicBool,
+    runtime: &ExecutionRuntime,
+) -> Result<(), QueryError> {
+    loop {
+        if stop.load(Ordering::Relaxed) || runtime.is_cancelled() {
+            return Ok(());
+        }
+        match sender.try_send(message) {
+            Ok(()) => return Ok(()),
+            Err(TrySendError::Full(returned)) => {
+                message = returned;
+                thread::sleep(CHANNEL_WAIT);
+            }
+            Err(TrySendError::Disconnected(_)) => return Ok(()),
+        }
+    }
+}
+
+pub(crate) fn release_queue_metrics(
+    queued_chunks: &AtomicUsize,
+    queued_bytes: &AtomicUsize,
+    bytes: usize,
+) {
+    queued_chunks.fetch_sub(1, Ordering::Relaxed);
+    queued_bytes.fetch_sub(bytes, Ordering::Relaxed);
+}
 
 /// A batch of partition tasks submitted to the pool for execution.
 ///
@@ -30,14 +183,14 @@ const CHANNEL_WAIT: Duration = Duration::from_millis(2);
 /// Partition trees are wrapped in `Mutex` to satisfy `Send + Sync` for `Arc<PartitionBatch>`
 /// (each index is claimed by at most one worker via the atomic counter, so contention
 /// on the mutex is limited to the brief `take()` window).
-pub(crate) struct PartitionBatch {
+pub struct PartitionBatch {
     pub partitions: Vec<Mutex<Option<StreamingExecutor>>>,
     pub senders: Vec<SyncSender<PartitionMessage>>,
     pub error_tx: Sender<(usize, QueryError)>,
     pub next_index: AtomicUsize,
     pub total: usize,
     pub runtime: Arc<ExecutionRuntime>,
-    pub worker_time_us: AtomicU64,
+    pub worker_time_us: Arc<AtomicU64>,
     pub buffered_chunks: Arc<AtomicUsize>,
     pub buffered_bytes: Arc<AtomicUsize>,
     pub buffered_chunks_peak: Arc<AtomicUsize>,
@@ -52,7 +205,11 @@ impl PartitionBatch {
         partitions: Vec<StreamingExecutor>,
         runtime: Arc<ExecutionRuntime>,
         max_buffered_chunks: usize,
-    ) -> (Self, Vec<Receiver<PartitionMessage>>, Receiver<(usize, QueryError)>) {
+    ) -> (
+        Self,
+        Vec<Receiver<PartitionMessage>>,
+        Receiver<(usize, QueryError)>,
+    ) {
         let partition_count = partitions.len();
         let capacity = max_buffered_chunks.max(1);
         let mut senders = Vec::with_capacity(partition_count);
@@ -65,13 +222,16 @@ impl PartitionBatch {
         let (error_tx, error_rx) = mpsc::channel();
 
         let batch = Self {
-            partitions: partitions.into_iter().map(|p| Mutex::new(Some(p))).collect(),
+            partitions: partitions
+                .into_iter()
+                .map(|p| Mutex::new(Some(p)))
+                .collect(),
             senders,
             error_tx,
             next_index: AtomicUsize::new(0),
             total: partition_count,
             runtime,
-            worker_time_us: AtomicU64::new(0),
+            worker_time_us: Arc::new(AtomicU64::new(0)),
             buffered_chunks: Arc::new(AtomicUsize::new(0)),
             buffered_bytes: Arc::new(AtomicUsize::new(0)),
             buffered_chunks_peak: Arc::new(AtomicUsize::new(0)),
@@ -85,9 +245,9 @@ impl PartitionBatch {
 /// Handle for consuming results from a submitted batch.
 ///
 /// Returned by `MorselWorkerPool::submit()`. Provides per-partition chunk
-/// access (same interface as `ParallelPartitionCoordinator`).
+/// access via `next_for_partition()`.
 #[derive(Debug)]
-pub(crate) struct PartitionHandle {
+pub struct PartitionHandle {
     pub receivers: Vec<Receiver<PartitionMessage>>,
     pub error_rx: Mutex<Receiver<(usize, QueryError)>>,
     pub stop: Arc<AtomicBool>,
@@ -100,6 +260,7 @@ pub(crate) struct PartitionHandle {
     pub started_at: Instant,
     pub profile_recorded: bool,
     pub runtime: Arc<ExecutionRuntime>,
+    worker_count: usize,
 }
 
 impl PartitionHandle {
@@ -110,6 +271,7 @@ impl PartitionHandle {
         error_rx: Receiver<(usize, QueryError)>,
         runtime: Arc<ExecutionRuntime>,
         started_at: Instant,
+        worker_count: usize,
     ) -> Self {
         Self {
             receivers,
@@ -120,10 +282,11 @@ impl PartitionHandle {
             buffered_bytes: batch.buffered_bytes.clone(),
             buffered_chunks_peak: batch.buffered_chunks_peak.clone(),
             buffered_bytes_peak: batch.buffered_bytes_peak.clone(),
-            worker_time_us: Arc::new(AtomicU64::new(0)),
+            worker_time_us: Arc::clone(&batch.worker_time_us),
             started_at,
             profile_recorded: false,
             runtime,
+            worker_count,
         }
     }
 
@@ -199,6 +362,7 @@ impl PartitionHandle {
         profile.parallel_work_time_us = profile
             .parallel_work_time_us
             .saturating_add(self.worker_time_us.load(Ordering::Relaxed));
+        profile.parallel_workers = profile.parallel_workers.max(self.worker_count);
         profile.parallel_buffered_chunks_peak = profile
             .parallel_buffered_chunks_peak
             .max(self.buffered_chunks_peak.load(Ordering::Relaxed));
@@ -215,7 +379,7 @@ impl PartitionHandle {
 /// atomic counter, so faster workers naturally process more work — this
 /// eliminates the static round-robin load imbalance of per-Gather threads.
 pub struct MorselWorkerPool {
-    batch_tx: Sender<Arc<PartitionBatch>>,
+    batch_tx: Mutex<Option<Sender<Arc<PartitionBatch>>>>,
     workers: Vec<JoinHandle<()>>,
     stop: Arc<AtomicBool>,
     max_workers: usize,
@@ -249,7 +413,7 @@ impl MorselWorkerPool {
         }
 
         Self {
-            batch_tx,
+            batch_tx: Mutex::new(Some(batch_tx)),
             workers,
             stop,
             max_workers: worker_count,
@@ -261,10 +425,13 @@ impl MorselWorkerPool {
     /// Workers dynamically claim partitions from the batch's shared atomic
     /// counter.
     pub(crate) fn submit(&self, batch: Arc<PartitionBatch>) {
-        let workers_to_notify = self.max_workers.min(batch.total);
-        for _ in 0..workers_to_notify {
-            if self.batch_tx.send(batch.clone()).is_err() {
-                break;
+        let guard = self.batch_tx.lock().unwrap();
+        if let Some(ref tx) = *guard {
+            let workers_to_notify = self.max_workers.min(batch.total);
+            for _ in 0..workers_to_notify {
+                if tx.send(batch.clone()).is_err() {
+                    break;
+                }
             }
         }
     }
@@ -277,6 +444,8 @@ impl MorselWorkerPool {
     /// Signal all workers to stop and join them. Called during query teardown.
     pub fn shutdown(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        // Drop the sender so blocked workers wake up from recv() with Err.
+        *self.batch_tx.get_mut().unwrap() = None;
         for handle in self.workers.drain(..) {
             let _ = handle.join();
         }
@@ -324,6 +493,16 @@ impl MorselWorkerPool {
 impl Drop for MorselWorkerPool {
     fn drop(&mut self) {
         self.shutdown();
+    }
+}
+
+impl TaskScheduler for MorselWorkerPool {
+    fn submit(&self, batch: Arc<PartitionBatch>) {
+        self.submit(batch);
+    }
+
+    fn max_workers(&self) -> usize {
+        self.max_workers
     }
 }
 

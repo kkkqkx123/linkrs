@@ -5,7 +5,9 @@ use crate::core::types::{
     PropertyDef, SpaceInfo, TagInfo, Timestamp, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
 };
 use crate::core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
-use crate::storage::cursor::{EdgeCursor, ScanOptions, VecEdgeCursor, VecVertexCursor, VertexCursor};
+use crate::storage::cursor::{
+    EdgeCursor, ScanOptions, VecEdgeCursor, VecVertexCursor, VertexCursor,
+};
 use crate::storage::engine::background_freeze::FreezeStats;
 use crate::storage::engine::graph_storage::context::ExportedEdgeSnapshotRecord;
 use crate::storage::schema::{LabelVersionHistory, PropertyChange};
@@ -200,7 +202,10 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
         };
         if let Some(range) = &options.edge_src_id_range {
             edges.retain(|e| {
-                e.src.to_string().parse::<i64>().is_ok_and(|id| id >= range.start && id < range.end)
+                e.src
+                    .to_string()
+                    .parse::<i64>()
+                    .is_ok_and(|id| id >= range.start && id < range.end)
             });
         }
         if let Some(limit) = options.limit {
