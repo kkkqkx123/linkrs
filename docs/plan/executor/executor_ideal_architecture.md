@@ -1,6 +1,7 @@
 # GraphDB Executor 架构设计
 
 > 日期：2026-07-13  
+> 修订：2026-07-13，根据现有实现差距评审澄清结果、事务、调度、状态和缓存边界。
 > 范围：`graphdb-query` 查询规划结果到查询执行、结果输出的完整边界。
 > 定位：本文是 executor 的唯一目标架构规范；未完成事项及实施顺序见 `executor_remaining_work.md`。
 
@@ -12,8 +13,8 @@ GraphDB executor 面向轻量单机图数据库，采用同步、批量化、pul
 2. 物理计划不可变、可验证、可解释、可缓存，并能并发创建互不共享状态的执行实例；
 3. 串行和并行执行消费同一个物理计划，并行不是第二套算子构建路径；
 4. schema、slot、ordering、distribution、阻塞性、并行能力和内存策略在执行前可验证；
-5. transaction、参数、storage、cursor、buffer、hash table、memory reservation 和生命周期状态均属于本次执行，不进入可缓存计划；
-6. 物化结果、chunk stream、HTTP、gRPC 和未来 Arrow 输出通过 ResultSink 适配，不改变算子语义；
+5. transaction scope、参数、storage binding、cursor、buffer、hash table、memory reservation 和生命周期状态均不进入可缓存计划；
+6. 物化结果、chunk stream、HTTP、gRPC 和未来 Arrow 输出通过 ResultSink 或 PullHandle 适配，不改变算子语义；
 7. 图遍历、路径算法、DML、DDL、全文和向量查询遵循相同计划、资源、错误和生命周期模型。
 
 非目标：短期不引入分布式执行、async operator API、第三方算子 ABI、全量列式重写或完整 Factorized Table。
@@ -37,15 +38,15 @@ Parse / Validate / Logical Plan / Optimize
              instantiate
                   ▼
         QueryExecutionInstance
- bindings + transaction + states + memory + profile
+ bindings + transaction scope + states + memory + profile
                   │
         ┌─────────┴─────────┐
         ▼                   ▼
- SerialFragmentDriver   FragmentScheduler
-     (one worker)      (worker pool + morsels)
+ SerialFragmentDriver    QueryTaskGroup
+     (one task)       (shared scheduler + morsels)
         └─────────┬─────────┘
                   ▼
-              ResultSink
+        Bound ResultSink / PullHandle
  DataSet / chunk stream / discard / future Arrow
 ```
 
@@ -54,8 +55,8 @@ Parse / Validate / Logical Plan / Optimize
 - planning 决定采用什么物理算子、数据如何分布以及何处插入 Exchange；
 - immutable plan 描述执行方式和正确性契约；
 - execution instance 保存本次查询的绑定、资源和状态；
-- scheduler 只运行 fragment/task；
-- sink 只处理结果交付和背压。
+- scheduler service 只运行 fragment/task，查询实例只拥有 task group，不拥有独立线程池；
+- 具体 sink 属于执行绑定，只处理结果交付和背压，不改变可缓存计划。
 
 ## 三、计划层次
 
@@ -92,7 +93,7 @@ PhysicalPlan
   ├── fragments: FragmentSpec graph
   ├── root_fragment: FragmentId
   ├── output: OutputContract
-  ├── compatibility: schema/statistics/layout/feature versions
+  ├── compatibility: schema/layout/feature versions
   └── required_capabilities
 ```
 
@@ -130,10 +131,12 @@ PhysicalOperatorSpec
   | Write(WriteSpec)
   | Command(CommandSpec)
   | Exchange(ExchangeSpec)
-  | ResultSink(ResultSinkSpec)
+  | ResultBoundary(ResultBoundarySpec)
 ```
 
 DDL、事务、全文和向量管理操作使用强类型 command enum。禁止使用 `String action + Option<String>` 表达操作类型；新增 action 必须触发 planner、builder 和 executor 的穷尽匹配检查。
+
+`ResultBoundarySpec` 只声明稳定的输出 schema、layout、ordering 和是否允许流式交付，不选择 `DataSetSink`、`ChunkStreamSink` 或网络协议。具体 sink 在实例化时绑定，因此相同缓存计划可用于物化、流式和丢弃结果，而不需要复制或改写计划。
 
 ## 四、Physical properties
 
@@ -174,11 +177,13 @@ QueryExecutionInstance
   ├── transaction: TransactionScope
   ├── memory: hierarchical MemoryPool
   ├── global_states: GlobalStateRegistry
-  ├── scheduler: SerialDriver or FragmentScheduler
-  └── result_sink: ResultSinkState
+  ├── task_group: SerialDriver or scheduler task group
+  └── result_delivery: ResultSinkState or PullHandleState
 ```
 
 `QueryBindings` 保存本次执行的参数、space/data source 解析、权限和 session variables。相同物理计划的多个实例之间不能共享任何可变状态。
+
+并行 scheduler 是数据库引擎级共享服务，负责全局线程上限和查询间公平性。查询实例只持有可取消、可等待的 task group；关闭查询必须等待该 task group 退出，但不能销毁或 join 共享 worker 线程。
 
 ### 5.2 GlobalState 与 LocalState
 
@@ -189,7 +194,7 @@ QueryExecutionInstance
 | GlobalState | query + physical operator | hash build table、global aggregate、sort runs、exchange、result collector |
 | LocalState | task/worker/morsel | scan cursor、chunk buffer、probe cursor、partial aggregate |
 
-每个 state 通过 `(PhysicalOperatorId, FragmentId, TaskId)` 寻址。算子 enum 不直接混入 spec 和 mutable state；memory tracker 从执行实例的分层内存池派生。
+每个 state 通过 `(PhysicalOperatorId, FragmentId, TaskId)` 寻址。registry 使用与 `PhysicalOperatorSpec` 对应的封闭强类型 state enum 或按 operator category 划分的 typed arena，禁止以 `dyn Any`、字符串 key 或不受约束的 downcast 作为主状态模型。算子 enum 不直接混入 spec 和 mutable state；memory tracker 从执行实例的分层内存池派生。
 
 ### 5.3 生命周期
 
@@ -213,7 +218,7 @@ New -> Opening -> Open -> Exhausted
 近期允许 `Vec<Vec<Value>>` 作为数据主体，但必须满足：
 
 - chunk 转移时显式转移 reservation；
-- clone 必须建立新 reservation，或禁止进入生产热路径；
+- 生产 `DataChunk` 不提供无条件 `Clone`；需要复制时使用 `deep_copy(pool) -> Result<DataChunk>` 建立新 reservation。测试辅助数据可以使用明确标记的无计账复制接口；
 - expression workspace、hash key、sort buffer 和 exchange queue 进入内存账户；
 - operator 声明输出是复用、切片、复制还是新分配。
 
@@ -243,13 +248,13 @@ Factorized result 仅在多跳图查询 benchmark 证明重复前缀是主要成
 - 连续 streaming unary operator 位于同一 fragment；
 - Sort、Distinct、HashJoin build、global Aggregate、Window 和 Materialize 形成 blocker boundary；
 - Gather、Repartition、Broadcast 和 Merge 形成 Exchange boundary；
-- ResultSink、DML sink 和事务 command 是 terminal fragment。
+- ResultBoundary、DML sink 和事务 command 是 terminal fragment。
 
 串行执行同样消费 fragment 图，只由 `SerialFragmentDriver` 使用一个 task 运行。
 
 ### 7.2 Morsel 与 worker pool
 
-可切分 scan 产生多个小 morsel，而不是用一个完整 partition tree 作为最小调度单位。固定大小、query-aware 的 worker pool 动态领取 morsel并创建独立 LocalState。
+可切分 scan 产生多个小 morsel，而不是用一个完整 partition tree 作为最小调度单位。引擎级固定大小、query-aware 的共享 worker pool 动态领取 morsel并创建独立 LocalState。
 
 查询只能向 scheduler 提交 task，算子和 Exchange 不自行创建线程。首个错误、取消和内存超限会关闭上下游 queue，并在返回调用方前等待本查询所有任务退出。
 
@@ -272,19 +277,21 @@ Expand 可作为普通 streaming fragment。变长路径和多轮 BFS 使用显�
 
 ## 八、结果、事务与命令
 
-### 8.1 ResultSink
+### 8.1 ResultSink 与 PullHandle
 
-ResultSink 是物理计划的终端节点，接收 schema/layout、chunk、完成和错误事件：
+物理计划以抽象 `ResultBoundarySpec` 结束；实例化时绑定具体结果交付方式。主动驱动查询时，ResultSink 接收 schema/layout、chunk、完成和错误事件：
 
 - `DataSetSink`：嵌入式物化结果；
 - `ChunkStreamSink`：HTTP、gRPC、C API 流式输出；
 - `DiscardSink`：EXPLAIN ANALYZE、DML 和 benchmark。
 
-sink 在首个数据 chunk 前发布 schema；空结果也发布 schema。网络背压作用于 sink/exchange queue，不修改 operator 语义。
+调用方直接 pull 时，`PullHandle` 暴露同一 output contract，并由调用方拉取驱动根 fragment。两种方式共享 operator、fragment、生命周期和错误模型，只允许在执行绑定层转换，禁止为 HTTP、gRPC 或物化结果重建算子树。
+
+sink 或 pull handle 在首个数据 chunk 前发布 schema；空结果也发布 schema。同步 pull 本身形成自然背压；需要跨 async/网络边界时使用有界 bridge queue，队列属于执行实例并进入内存账户。网络背压不得修改 operator 语义。
 
 ### 8.2 TransactionScope
 
-transaction 属于 `QueryExecutionInstance`，不是产生文本行的普通 operator。TransactionScope 负责：
+transaction 不属于可缓存计划，也不是产生文本行的普通 operator。`TransactionScope` 是本次语句对事务的执行视图，负责：
 
 - 显式和自动提交事务；
 - snapshot、读写模式和 transaction id；
@@ -292,6 +299,8 @@ transaction 属于 `QueryExecutionInstance`，不是产生文本行的普通 ope
 - storage 与全文/向量同步的一致提交边界。
 
 Begin、Commit、Rollback 可作为 terminal command spec，但实际状态迁移由 TransactionScope 执行。
+
+显式事务可跨越多个查询，因此实际 transaction handle 由 session 级 `SessionTransactionController` 持有；每个 `QueryExecutionInstance` 的 `TransactionScope` 只借用并校验该 handle。自动提交事务由 scope 创建并拥有。查询结束不得自动提交或销毁仍由 session 持有的显式事务，但语句失败必须按既定策略标记事务失败或回滚到语句保存点。
 
 ### 8.3 DML 与 DDL
 
@@ -304,12 +313,12 @@ DML sink 消费输入 chunk，使用 instance transaction 写入，不直接持�
 只缓存 `PhysicalPlan`，不缓存 state 或 binding。cache compatibility 至少包含：
 
 - query fingerprint；
-- schema、layout 和 statistics version；
+- schema 和 storage layout version；
 - feature/capability set；
 - physical planning config；
-- 权限相关版本。
+- 仅当权限或行级策略会改变计划形状时包含对应策略版本。
 
-schema 改变、索引重建、space 切换和 capability 改变必须使计划失效。
+schema 改变、索引重建、space 切换和 capability 改变必须使计划失效。statistics version 和代价相关配置通常影响计划质量而非结果正确性，应记录为 freshness/replan 元数据：超过阈值时异步或同步重规划，而不是让每次统计更新都强制失效。权限必须在每次实例化时重新校验；只有会改变 scan/filter 形状的行级策略才参与 cache compatibility。
 
 ### 9.2 EXPLAIN 与 PROFILE
 
@@ -343,11 +352,11 @@ deadline、KILL QUERY、客户端断连和内存超限进入同一取消传播�
 | `executor/instance` | QueryExecutionInstance 与 TransactionScope |
 | `executor/state` | GlobalState/LocalState registry |
 | `executor/driver` | serial fragment driver |
-| `executor/scheduler` | worker pool、task lifecycle 和 morsel 调度 |
+| `executor/scheduler` | 引擎级共享 worker pool、query task group、task lifecycle 和 morsel 调度 |
 | `executor/exchange` | bounded queue、gather、merge、repartition、broadcast |
 | `executor/operators` | runtime operators，不可变 spec 的实例化实现 |
 | `executor/runtime` | memory、spill owner、profile、cancellation |
-| `executor/result` | DataSet、stream、discard 和 future Arrow sink |
+| `executor/result` | output contract、pull handle、DataSet、stream、discard 和 future Arrow sink |
 | `executor/graph/recursive` | frontier/visited recursive fragment |
 
 公开 facade 可以保持稳定，但内部只能委托给同一 plan/instance/driver 路径。
@@ -363,5 +372,5 @@ deadline、KILL QUERY、客户端断连和内存超限进入同一取消传播�
 - 所有跨 task 通信经过显式、可计账、可取消的 Exchange；
 - slot、ordering、distribution、阻塞性和内存策略在执行前验证；
 - 图递归、DML/DDL、全文/向量遵循相同 lifecycle、错误和结果契约；
-- 客户端结果格式变化不要求修改算子树；
+- 客户端结果格式变化只改变执行绑定，不修改或复制可缓存计划和算子树；
 - benchmark 和 profile 能证明新增复杂度改善吞吐、首行延迟、内存或并行度。

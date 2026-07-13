@@ -17,16 +17,11 @@ use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::AggregateFunction;
 use crate::query::executor::base::{ExecutionContext, MemoryTracker};
+use super::physical_plan::SyntheticNodeIdAllocator;
 use crate::query::planning::plan::{PartitionedPhysicalNode, PlanNodeEnum};
 
-pub(crate) const PHYSICAL_GATHER_NODE_ID_START: i64 = i64::MIN + 100;
-
-fn allocate_gather_node_id(next_id: &mut i64) -> Result<i64, QueryError> {
-    let id = *next_id;
-    *next_id = next_id.checked_add(1).ok_or_else(|| {
-        QueryError::execution("Synthetic gather node id overflow".to_string())
-    })?;
-    Ok(id)
+fn allocate_gather_node_id(alloc: &mut SyntheticNodeIdAllocator) -> i64 {
+    alloc.allocate()
 }
 
 fn require_partition_local(
@@ -63,7 +58,7 @@ pub fn build_partitioned_physical_node(
     node: &PartitionedPhysicalNode,
     context: &ExecutionContext,
     partition_view: &PartitionView,
-    next_gather_node_id: &mut i64,
+    synthetic_id_alloc: &mut SyntheticNodeIdAllocator,
 ) -> Result<BuildOutput, QueryError> {
     match node {
         PartitionedPhysicalNode::Local { logical_plan } => {
@@ -83,9 +78,9 @@ pub fn build_partitioned_physical_node(
                 input,
                 context,
                 partition_view,
-                next_gather_node_id,
+                synthetic_id_alloc,
             )?;
-            let input = local_to_global(input, next_gather_node_id)?;
+            let input = local_to_global(input, synthetic_id_alloc)?;
             let mut global = StreamingExecutorBuilder::from_plan_node(logical_plan, context)?;
             global.set_global();
             replace_single_input(&mut global, input)?;
@@ -141,17 +136,18 @@ pub fn build_partitioned_physical_node(
                 })
                 .collect();
 
-            let gather_node_id = allocate_gather_node_id(next_gather_node_id)?;
+            let gather_node_id = allocate_gather_node_id(synthetic_id_alloc);
             let gather = StreamingExecutor::Gather(
                 OperatorBase::new(gather_node_id).with_global(true),
                 partial_aggregates,
                 GatherOperator::concatenate(),
             );
 
+            let start_id = synthetic_id_alloc.allocate();
             let mut final_aggregate = StreamingExecutor::Blocking(
                 OperatorBase::new(aggregate.id()).with_global(true),
                 Box::new(StreamingExecutor::Source(
-                    OperatorBase::new(i64::MIN + 2),
+                    OperatorBase::new(start_id),
                     super::operators::source_operator::SourceOperator::Start,
                 )),
                 BlockingOperator::FinalAggregate {
@@ -196,17 +192,18 @@ pub fn build_partitioned_physical_node(
                 })
                 .collect();
 
-            let gather_node_id = allocate_gather_node_id(next_gather_node_id)?;
+            let gather_node_id = allocate_gather_node_id(synthetic_id_alloc);
             let gather = StreamingExecutor::Gather(
                 OperatorBase::new(gather_node_id).with_global(true),
                 local_distincts,
                 GatherOperator::concatenate(),
             );
 
+            let start_id = synthetic_id_alloc.allocate();
             let mut global_distinct = StreamingExecutor::Blocking(
                 OperatorBase::new(logical_plan.id()).with_global(true),
                 Box::new(StreamingExecutor::Source(
-                    OperatorBase::new(i64::MIN + 2),
+                    OperatorBase::new(start_id),
                     super::operators::source_operator::SourceOperator::Start,
                 )),
                 BlockingOperator::Distinct {
@@ -264,7 +261,7 @@ pub fn build_partitioned_physical_node(
                 })
                 .collect();
 
-            let gather_node_id = allocate_gather_node_id(next_gather_node_id)?;
+            let gather_node_id = allocate_gather_node_id(synthetic_id_alloc);
             Ok(BuildOutput::Global(StreamingExecutor::Gather(
                 OperatorBase::new(gather_node_id).with_global(true),
                 local_topns,
@@ -283,13 +280,13 @@ pub fn build_partitioned_physical_node(
                         left,
                         context,
                         partition_view,
-                        next_gather_node_id,
+                        synthetic_id_alloc,
                     )?;
                     let right_output = build_partitioned_physical_node(
                         right,
                         context,
                         partition_view,
-                        next_gather_node_id,
+                        synthetic_id_alloc,
                     )?;
                     match (left_output, right_output) {
                         (BuildOutput::Local(left_trees), BuildOutput::Local(right_trees)) => {
@@ -395,16 +392,16 @@ pub fn build_partitioned_physical_node(
                 left,
                 context,
                 partition_view,
-                next_gather_node_id,
+                synthetic_id_alloc,
             )?;
-            let left = local_to_global(left, next_gather_node_id)?;
+            let left = local_to_global(left, synthetic_id_alloc)?;
             let right = build_partitioned_physical_node(
                 right,
                 context,
                 partition_view,
-                next_gather_node_id,
+                synthetic_id_alloc,
             )?;
-            let right = local_to_global(right, next_gather_node_id)?;
+            let right = local_to_global(right, synthetic_id_alloc)?;
             let mut global = StreamingExecutorBuilder::from_plan_node(logical_plan, context)?;
             global.set_global();
             replace_binary_inputs(&mut global, left, right)?;
@@ -417,7 +414,7 @@ pub fn build_partitioned_physical_node(
 /// Gather::Concatenate. Identity for BuildOutput::Global.
 pub fn local_to_global(
     output: BuildOutput,
-    next_gather_node_id: &mut i64,
+    synthetic_id_alloc: &mut SyntheticNodeIdAllocator,
 ) -> Result<StreamingExecutor, QueryError> {
     match output {
         BuildOutput::Global(executor) => Ok(executor),
@@ -427,7 +424,7 @@ pub fn local_to_global(
                     "Cannot gather empty local trees".to_string(),
                 ));
             }
-            let gather_node_id = allocate_gather_node_id(next_gather_node_id)?;
+            let gather_node_id = allocate_gather_node_id(synthetic_id_alloc);
             Ok(StreamingExecutor::Gather(
                 OperatorBase::new(gather_node_id).with_global(true),
                 trees,

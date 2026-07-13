@@ -9,6 +9,7 @@ use super::builder::StreamingExecutorBuilder;
 use super::chunk::DataChunk;
 use super::engine::StreamingExecutionEngine;
 use super::physical_builder::{self, BuildOutput};
+use super::physical_plan::SyntheticNodeIdAllocator;
 use super::runtime::{ExecutionRuntime, QueryIdentity};
 use super::stream::ResultStream;
 use super::stream_result::StreamingQueryResult;
@@ -39,19 +40,29 @@ impl StreamingQueryExecutor {
     }
 
     /// Build executor from a plan node
+    ///
+    /// Creates a single [`ExecutionRuntime`] shared by the engine, the
+    /// operator tree, and the result handle so that cancellation, profiling,
+    /// and resource tracking refer to the same instance.
     pub fn from_plan_node(
         &mut self,
         plan_node: &PlanNodeEnum,
         context: &ExecutionContext,
     ) -> Result<(), QueryError> {
-        let executor = StreamingExecutorBuilder::from_plan_node(plan_node, context)?;
+        let physical = StreamingExecutorBuilder::from_plan_node_physical(plan_node, context)?;
+        let runtime = Arc::new(runtime_from_context(context));
+        let executor = StreamingExecutorBuilder::materialize_physical(
+            &physical,
+            Some(runtime.clone()),
+            &context.memory_budget,
+            context.chunk_size,
+        );
 
         let mut engine = StreamingExecutionEngine::new();
         engine.set_max_workers(context.max_workers);
         engine.set_max_buffered_chunks(context.max_buffered_chunks);
+        engine.set_runtime(runtime.clone());
         engine.register_executor(0, executor);
-
-        let runtime = Arc::new(runtime_from_context(context));
 
         self.engine = Some(engine);
         self.runtime = Some(runtime);
@@ -65,19 +76,19 @@ impl StreamingQueryExecutor {
         context: &ExecutionContext,
     ) -> Result<(), QueryError> {
         let partition_view = PartitionView::from(physical_plan.partition_spec());
-        let mut next_gather_node_id = physical_builder::PHYSICAL_GATHER_NODE_ID_START;
+        let mut synthetic_id_alloc = SyntheticNodeIdAllocator::new();
         let root = physical_builder::build_partitioned_physical_node(
             physical_plan.root(),
             context,
             &partition_view,
-            &mut next_gather_node_id,
+            &mut synthetic_id_alloc,
         )?;
 
         let root = match root {
             BuildOutput::Global(executor) => executor,
             BuildOutput::Local(trees) => physical_builder::local_to_global(
                 BuildOutput::Local(trees),
-                &mut next_gather_node_id,
+                &mut synthetic_id_alloc,
             )?,
         };
 

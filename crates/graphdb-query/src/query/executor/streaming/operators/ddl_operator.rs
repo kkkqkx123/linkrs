@@ -226,11 +226,15 @@ impl DdlOperator {
                 target_name: None,
                 emitted: false,
             },
-            super::super::operator_spec::DdlSpec::Migrate => DdlOperator::Migrate {
+            super::super::operator_spec::DdlSpec::Migrate {
+                space_name,
+                action,
+                migration_data,
+            } => DdlOperator::Migrate {
                 storage,
-                space_name: String::new(),
-                action: String::new(),
-                migration_data: None,
+                space_name: space_name.clone(),
+                action: action.clone(),
+                migration_data: migration_data.clone(),
                 emitted: false,
             },
         }

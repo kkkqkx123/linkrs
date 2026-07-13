@@ -1,330 +1,329 @@
 # GraphDB Executor 剩余任务
 
 > 日期：2026-07-13  
-> 范围：仅记录尚未完成的 executor 功能和架构工作。  
-> 目标架构：见 `executor_ideal_architecture.md`。已完成的基础设施不在本文重复记录。
+> 状态：根据当前代码重新核对，删除已经完成的旧任务。
+> 目标架构：见 `executor_ideal_architecture.md`。
+> 差距依据：见 `executor_current_gap_analysis.md`。
 
-## 一、当前结论
+## 一、当前基线
 
-当前 executor 已具备可编译、可测试的 streaming 主路径，但仍存在会影响查询正确性的语义缺口，以及两套物理构建路径、不可验证属性和状态边界混杂等架构问题。
+当前 streaming executor 已经具备批量 pull、`DataChunk`、slot layout、spec/state 初步分离、operator lifecycle、query runtime、显式 Exchange、并行 worker 和有界输出队列等基础设施。以下旧问题已经完成，不再列为剩余任务：
 
-剩余工作按以下原则排序：
+- 顶层 operator plan builder 已对 `PlanNodeEnum` 穷尽分派，不再把领域构建错误吞成 unsupported；
+- `UNION ALL` 已根据 distinct 标志选择独立 spec；
+- Apply family 已使用强类型 kind，并消费右输入；
+- Begin、Commit、Rollback 已具备一次性输出状态；
+- BFSShortest、ShortestPath 和 AllPaths 已开始保留双输入和主要配置。
 
-1. 先修复会吞错或返回错误结果的正确性问题；
-2. 再统一 immutable physical plan 和实例化路径；
-3. 随后建立 execution instance、事务、结果和资源边界；
-4. 最后进行 fragment、spill、列式化和图执行优化。
+这些局部完成项不代表目标架构已经形成。当前主要问题是非分区执行 runtime 接线错误、两套物理构建路径、缓存对象仍为逻辑 `ExecutionPlan`、计划持有执行资源、properties 不可验证，以及缺少 execution instance、transaction scope、fragment DAG 和统一结果边界。
 
-禁止以默认值、空列表、字符串占位或 silent fallback 将未实现语义伪装成成功计划。
+执行顺序遵循四条原则：
 
-## 二、P0：计划构建正确性
+1. 先修复生产路径会直接失败、泄漏或返回错误结果的问题；
+2. 在引入 scheduler、spill 等复杂机制前统一并验证物理计划；
+3. 先建立资源所有权，再扩大并行度；
+4. 不使用空列表、默认方向、空字符串 action 或 silent fallback 伪装未实现语义。
 
-### 2.1 修复节点分派和错误吞噬
+## 二、P0：恢复可靠的生产执行路径
 
-当前计划转换入口依次调用 scan、relational、graph、write、control、DDL 等领域函数，并把所有 `Err` 当成“该领域不处理此节点”。因此表达式解析、数值转换和子节点构建错误可能被吞掉，最终被错误报告为 unsupported node。
+### 2.1 修复非分区执行的双 runtime
+
+当前 `StreamingExecutorBuilder::from_plan_node` 创建 runtime A 并注入 operator tree，`StreamingQueryExecutor::from_plan_node` 随后创建 runtime B，却没有为 engine 调用 `set_runtime`。`execute()` 和 `into_stream()` 最终要求 engine 持有 runtime，因此普通无分区计划可能直接返回 `No ExecutionRuntime attached`；即使绕过该错误，取消和 profile 也可能操作错误实例。
 
 处理要求：
 
-- 将当前 `streaming/lowering` 改为语义明确的过渡模块 `operator_plan_builder`；
-- 顶层对 `PlanNodeEnum` 只进行一次穷尽 `match`；
-- 禁止顶层和领域路由使用 `_` 捕获新增节点；
-- 领域函数接收确定的具体节点类型，`Err` 只表示真实构建失败；
-- unsupported、invalid value、expression binding、property mismatch 和 feature unavailable 使用结构化错误；
-- 子节点错误保留原始错误类型、node kind 和 node ID。
+- runtime 只能由 execution instance/factory 创建一次；
+- engine、operator、result handle 和公开 cancel/profile handle 必须引用同一个 `Arc<ExecutionRuntime>`；
+- 删除 builder 内部创建 runtime 的行为，builder 只构建 immutable plan 或从显式 bindings 实例化；
+- 分区与非分区入口使用同一 runtime 装配顺序；
+- 执行失败不得用新建的 execution error 覆盖原始错误 kind。
 
 验收：
 
-- 非法 Limit、Sample 和表达式绑定错误不会变成 unsupported；
-- 新增 `PlanNodeEnum` variant 时 builder 编译失败；
-- default、`fulltext-search` 和 `qdrant` feature 下均具有穷尽覆盖。
+- 无 partition spec 的 scan/filter/empty result 可通过物化和 stream 两种生产入口执行；
+- 从 result handle 发出的 cancel 能停止 operator tree；
+- profile、resource owner 和 memory budget 的对象身份在整条调用链一致；
+- EXPLAIN ANALYZE 和 PROFILE 不再走缺失 runtime 的单独路径。
 
-### 2.2 修复 `UNION ALL`
+### 2.2 修复 worker teardown 和隐藏线程 panic
 
-当前已有 `SetSpec::UnionAll` 和运行时算子，但计划构建仍固定生成去重 Union。
-
-处理要求：
-
-- 根据 `UnionNode::distinct()` 选择 Union 或 UnionAll；
-- 两侧列数和 layout 不一致时在计划构建阶段失败；
-- UnionAll 只顺序拼接，不分配去重 hash set；
-- 定义串行和并行情况下的顺序契约。
-
-验收：重复行、NULL、空输入、多 chunk、嵌套值和并行退化路径均有差分测试。
-
-### 2.3 完成 Apply 家族语义
-
-当前 Apply 和 PatternApply 会打开右输入但不消费右输入；apply kind 被转换成字符串表达式，多列关联 key 也可能被替换为占位字符串。RollUpApply 尚未形成完整双输入关联语义。
+定向测试 `p8_parallel_gather_preserves_partition_order_and_bounds_buffers` 中曾出现 worker 自己 join 自己导致的 `Resource deadlock avoided`，但测试仍报告通过。当前 query runtime 持有 pool，pool 又可能在 worker 所持最后一个 runtime 引用释放时 Drop，所有权形成环状 teardown 风险。
 
 处理要求：
 
-- `ApplySpec` 保存强类型 `ApplyKind`、左右 layout 和关联 slot；
-- Standard、Semi、Anti、Single、All 分别实现明确语义；
-- PatternApply 支持 EXISTS/NOT EXISTS，不吞表达式错误；
-- RollUpApply 消费左右输入，按 compare key 收集指定右侧列；
-- 右侧物化/hash 状态纳入 memory budget；
-- 删除字符串 kind 和 `"correlated"` 等占位表达式。
+- 在迁移到共享 scheduler 前，禁止 worker 线程执行 pool 的最终 Drop/join；
+- query handle 只等待本查询 task group，不 join 当前线程；
+- 捕获 worker panic 并转为查询首个错误，测试不得静默通过；
+- 关闭 queue 后等待本查询所有 task 退出，清理错误只记录日志，不覆盖原始执行错误；
+- 增加取消、消费者提前断开、worker error、open failure 和 Drop-only 五类并发测试。
 
-验收：覆盖空右侧、多列 key、重复 key、NULL、左右多 chunk、EXISTS/NOT EXISTS 和所有 ApplyKind。
+验收：相同测试循环运行至少 100 次，无子线程 panic、死锁、遗留 task 或未释放 reservation。
 
-### 2.4 修复一次性命令终止
+### 2.3 清除仍会制造错误语义的占位值
 
-Begin、Commit、Rollback 当前可重复返回文本结果。其他 command operator 也必须统一检查一次性输出状态。
+当前至少仍有以下已知占位：
 
-处理要求：
+- `MultiShortestPath` 生成空 target、空 edge types 和默认 Both 方向；
+- DDL Migrate 运行时使用空 space、空 action 和空 migration data；
+- 合成 Start/DML source 仍使用硬编码 physical ID `0`；
+- 部分 command 和 scan 在缺少 space 时使用空字符串。
 
-- command state 包含明确的 `emitted`/terminal 状态；
-- 第一次输出后持续返回 `None`；
-- `stop`、`close` 和错误路径幂等；
-- 后续 TransactionScope 落地后，事务命令不再自行伪造状态文本。
+处理要求：无法无损构建的节点必须在 planner/physical builder 阶段返回结构化错误；只有语义完整后才能进入 executor。
 
-验收：所有一次性命令在有限次 `advance()` 后终止，物化执行不会无限循环。
+## 三、P1：建立唯一、可验证的 PhysicalPlan
 
-## 三、P1：计划参数保真与功能语义
+### 3.1 定义顶层 PhysicalPlan 和稳定 ID
 
-### 3.1 补全图路径计划
+在现有 `PhysicalNode` 试验结构上建立正式计划对象：
 
-当前 BFSShortest、ShortestPath、AllPaths、MultiShortestPath 等节点仍可能只消费左输入，或使用空 target、空 edge types、默认方向。
+```text
+PhysicalPlan
+  operators: arena<PhysicalOperatorSpec>
+  fragments: fragment graph
+  root_fragment: FragmentId
+  output: OutputContract
+  compatibility: PlanCompatibility
+  required_capabilities: CapabilitySet
+```
 
-处理要求：
-
-- 消费逻辑节点声明的全部输入；
-- 保留 source/target、edge types、方向、hop 范围、环策略和算法配置；
-- 明确输入输出 layout，禁止运行时猜测顶点列；
-- 长循环定期检查取消和内存预算；
-- 变长路径最终迁移到 `RecursiveFragmentSpec`。
-
-验收：覆盖单源/多源、定向边、多 edge type、hop 范围、不可达目标、环控制和空输入。
-
-### 3.2 将管理命令改为强类型 spec
-
-当前 DDL、全文和向量管理 spec 仍使用 `String action`，并丢失部分 ALTER、用户、角色、索引和数据源参数。
+每个 operator 必须包含独立 `PhysicalOperatorId`、可选 `LogicalNodeId`、输入/输出 layout、输入要求、输出 properties、cardinality、memory policy 和 explain name。
 
 处理要求：
 
-- 定义 `SpaceCommand`、`TagCommand`、`EdgeCommand`、`IndexCommand`、`UserCommand`、`FulltextCommand` 和 `VectorCommand`；
-- 无损传递 create/alter/drop/show/rebuild 的所有字段；
-- executor 穷尽匹配 command enum，不匹配字符串；
-- plan spec 不持有 `StorageClient`；
-- schema 变更触发 plan cache invalidation；
-- 明确仍保留的管理语法，删除不可达 plan variant。
+- 使用统一 allocator 分配所有物理 ID，包括 Start、Gather、partial/final 和其他 synthetic node；
+- logical node 一对多拆分时保留来源 logical ID，但不复用 physical ID；
+- 移除所有硬编码 `0`、`i64::MIN + n` 和领域私有 synthetic ID 空间；
+- `PhysicalPlan` 构建完成后只读共享，不能通过替换 child 修改。
 
-验收：每个领域至少完成“创建 → 查询 → 修改 → 验证 → 删除”端到端测试，并断言实际对象字段。
+### 3.2 分离 LogicalPlan 与 PhysicalPlan
 
-### 3.3 处理遗留控制流节点
-
-`Loop`、`PassThrough`、`Select` 仍存在于计划枚举，但执行阶段不支持。
-
-优先选择删除或禁止生成：
-
-- 若 parser/planner 不再需要，删除 node、visitor 和 optimizer 分支；
-- 若仍有公开语法依赖，在 planner 阶段返回明确 unsupported error；
-- 只有存在确定语义时才实现；Loop 必须有步数上限、取消和内存边界。
-
-验收：任何 parser/planner 可生成的计划都不会在 executor 才首次发现“不支持”。
-
-### 3.4 完成 planner 到 storage 的语义测试
-
-现有单元测试不能替代语义完整性验证。为 Union、Apply、路径、事务和管理命令建立：
-
-- parser/planner → physical plan 测试；
-- physical plan → executor tree 测试；
-- executor → real storage 端到端测试；
-- 物化接口与 chunk stream 差分测试；
-- 串行与并行退化路径差分测试；
-- 错误、空输入、取消和内存超限测试。
-
-## 四、P1：统一物理计划
-
-### 4.1 缩小计划构建上下文
-
-当前计划构建接收完整 `ExecutionContext`，部分 spec 直接保存 storage 和当前 space。
+当前 `PlanNodeEnum` 同时包含 InnerJoin/HashInnerJoin、Scan/IndexScan 等语义层和算法层节点。
 
 处理要求：
 
-- 引入只读的 plan build context，只包含 schema、statistics、capability 和稳定数据源标识；
-- 参数值、storage、transaction、session、memory 和 cancellation 在实例化时通过 `QueryBindings` 注入；
-- 建立 schema/layout/statistics/feature compatibility key；
-- 验证同一 plan 的并发实例互不共享状态。
+- logical join 只保留 join kind、condition 和输入；
+- logical scan 只描述访问需求；
+- HashJoin、IndexScan、partial/final Aggregate、TopN、Distinct 和 Exchange 只存在于 physical spec；
+- planner/optimizer 不生成 executor 专用 variant；
+- executor 不再根据 logical variant 选择算法。
 
-### 4.2 分离 LogicalPlan 与 PhysicalPlan
+### 3.3 合并单树和分区构建路径
 
-当前 `PlanNodeEnum` 同时包含 InnerJoin/HashInnerJoin、普通 Scan/IndexScan 等不同层次概念。
+删除当前两条生产路线：
 
-处理要求：
+- `PlanNodeEnum → PhysicalNode → StreamingExecutor`；
+- `PlanNodeEnum → PartitionedPhysicalPlan → physical_builder → StreamingExecutor`。
 
-- 逻辑节点只表达语义；
-- physical builder 选择 HashJoin、IndexScan 等具体算法；
-- local/final Aggregate、Distinct、TopN 和 Exchange 只出现在物理计划；
-- executor 不再根据逻辑 variant 选择算法。
+统一为：
 
-### 4.3 合并两套物理构建路径
+```text
+LogicalPlan → PhysicalPlanBuilder → PhysicalPlanValidator
+            → Arc<PhysicalPlan> → QueryExecutionInstance::instantiate
+```
 
-当前普通路径为 `PlanNodeEnum → PhysicalNode → StreamingExecutor`，分区路径又通过 `PartitionedPhysicalPlan` 和 `physical_builder` 直接创建部分运行时算子。
+Gather、Merge、HashRepartition、partial/final Aggregate、Distinct 和 TopN 必须先成为 immutable physical spec。删除构建 executor 后再 `replace_single_input`、直接创建 `BlockingOperator` 和专用 `HashShuffleJoin` tree 的路径。
 
-处理要求：
+验收：串行和并行查询在实例化前可 EXPLAIN 同一个完整 PhysicalPlan；执行模式只影响 task 数，不改变 operator 选择和 fragment graph。
 
-- 统一 `PhysicalNode` 与 `PartitionedPhysicalNode` 的表达能力；
-- Gather、Merge、HashRepartition、partial/final Aggregate、Distinct 和 TopN 全部成为 immutable physical node；
-- 删除构造 executor 后再 `replace_single_input` 的方式；
-- 删除直接从 logical/partitioned node 创建生产 executor 的入口；
-- 生产环境只保留 `PhysicalPlan → ExecutorFactory::instantiate`。
+### 3.4 缩小 plan build context 和清理 spec
 
-验收：串行和分区查询都先生成可 EXPLAIN 的完整 PhysicalPlan。
+引入只读 `PhysicalPlanBuildContext`，只包含 schema catalog、statistics snapshot、capability、planning config 和稳定对象标识。
 
-### 4.4 实现属性推导和验证
+必须从 spec 移除：
 
-当前 `PhysicalProperties` 大量使用 `single_streaming()` 或 `single_blocking()`，没有系统推导和消费。
+- `StorageClient`、transaction/session handle；
+- runtime、memory tracker、cursor、buffer 和 emitted state；
+- 本次执行的 parameter value、权限上下文和当前 snapshot；
+- 可由 binding 解析的临时 space/storage 引用。
 
-处理要求：
+注意：SQL/GQL 文本中的常量属于查询语义，可以作为 immutable literal 进入计划；prepared parameter 的实际值必须保留为 parameter slot，不能在构建缓存计划时固化。
 
-- 实现 source、unary、blocking、join 和 exchange 属性推导；
-- Sort 输出 ordering，Filter/Project 正确继承或失效属性；
-- blocking 与 distribution 分离；
-- 分区 local 节点不得标记为 Single；
-- HashRepartition、GatherMerge 和 FinalAggregate 验证输入契约；
-- 删除不被 planner、validator、EXPLAIN 或 scheduler 消费的虚假字段；
-- 实现 `PhysicalPlanValidator`。
-
-### 4.5 统一物理节点 ID
-
-当前合成 Start 等节点仍存在硬编码 ID `0`。
+### 3.5 完成 slot binding、property derivation 和 validator
 
 处理要求：
 
-- 区分 `LogicalNodeId` 和 `PhysicalOperatorId`；
-- 使用统一 allocator 为所有物理节点分配唯一 ID；
-- 一对多拆分保留来源 logical ID；
-- EXPLAIN 标记 synthetic node；
-- PROFILE 以 physical ID 聚合。
+- 所有 expression、join key、filter、sort key 和 graph input column 在构建期绑定到 `SlotId`；
+- 每个 operator 声明输入/输出 `SlotLayout`，空结果沿用 output contract；
+- Filter 继承 distribution/ordering，Project 只继承仍存在的 key；
+- Sort 明确输出 ordering；blocking 与 distribution 分开表达；
+- local partition 不得标记为 Single；
+- HashRepartition、GatherMerge 和 FinalAggregate 验证完整输入契约；
+- 阻塞 operator 必须选择 `RequiresBudget` 或 `Spillable`，不能使用无语义默认值；
+- 实现 `PhysicalPlanValidator`，验证 input count、ID 唯一性、schema/slot、properties、capability、transaction mode 和 memory policy。
 
-## 五、P2：执行实例、状态与事务
+validator 必须在缓存写入前和实例化前运行；cache load 后仍检查 compatibility，但不重复执行不依赖 binding 的昂贵验证。
 
-### 5.1 引入 QueryExecutionInstance
-
-建立统一的每查询执行边界，持有：
-
-- immutable plan；
-- QueryBindings；
-- ExecutionRuntime；
-- TransactionScope；
-- hierarchical MemoryPool；
-- GlobalStateRegistry；
-- scheduler；
-- ResultSinkState。
-
-### 5.2 接入 GlobalState/LocalState
-
-当前 `operator_state.rs` 尚未成为运行时主状态模型，许多 mutable state 仍直接位于 operator enum。
+### 3.6 让 cache、EXPLAIN 和 PROFILE 使用物理计划
 
 处理要求：
 
-- hash table、global aggregate、sort runs、exchange 和 result collector 进入 GlobalState；
-- cursor、probe state、chunk buffer 和 partial aggregate 进入 LocalState；
-- state 以 `(PhysicalOperatorId, FragmentId, TaskId)` 寻址；
-- operator spec 和 runtime state 不重复保存 schema/layout；
-- memory tracker 从 instance memory pool 派生。
+- plan cache 只保存 `Arc<PhysicalPlan>` 和 parameter metadata；
+- correctness compatibility 包含 query fingerprint、schema/layout version、feature/capability、planning config，以及会改变计划形状的策略版本；
+- statistics version 作为 freshness/replan 信息，不因每次统计更新强制 correctness miss；
+- 权限在每次实例化时重新校验；
+- EXPLAIN 输出 slot、properties、fragment 和 Exchange；
+- PROFILE 按 `(PhysicalOperatorId, FragmentId, TaskId)` 聚合，并保留 synthetic/source logical 标记。
 
-### 5.3 建立 TransactionScope
+## 四、P1：完成仍缺失的查询语义
+
+### 4.1 图路径和递归
+
+- 无损保存 source/target、edge types、方向、hop 范围、环策略、权重和算法配置；
+- `MultiShortestPath` 禁止使用空配置占位；
+- 明确 graph operator 的输入/输出 slot，不猜测顶点列；
+- 长循环定期检查取消和 memory budget；
+- weighted shortest path 在实现前返回 feature unavailable；
+- 变长路径最终迁移到 `RecursiveFragmentSpec`，不得用无界通用 Loop 模拟。
+
+### 4.2 强类型 command
+
+- 定义封闭的 Space、Tag、Edge、Index、User、Fulltext、Vector 和 Migration command enum；
+- 无损传递 create/alter/drop/show/rebuild/migrate 的全部字段；
+- 删除 runtime 中的字符串 action 和空字符串 fallback；
+- schema 变更发布 catalog version，并使依赖计划失效；
+- 明确哪些 command 不进入 plan cache，但仍遵循相同 validation、lifecycle 和 result contract。
+
+### 4.3 遗留控制流
+
+删除或在 planner 阶段明确拒绝 `Loop`、`PassThrough`、`Select`、`AppendVertices` 等 executor 不支持的可生成节点。只有定义了终止条件、取消、内存边界和输出 schema 后才能新增实现。
+
+### 4.4 语义测试矩阵
+
+为 Union、Apply、路径、事务和管理命令建立：
+
+- parser/planner → PhysicalPlan；
+- PhysicalPlan validation；
+- PhysicalPlan → execution instance；
+- executor → real storage；
+- materialized 与 chunk stream/PullHandle 差分；
+- serial 与 parallel 差分；
+- error、empty input、cancel、memory exceeded 和 feature matrix。
+
+## 五、P2：建立 QueryExecutionInstance 和资源边界
+
+### 5.1 QueryBindings 与单一实例入口
+
+`QueryExecutionInstance` 必须拥有本次执行的 bindings、runtime、root memory pool、typed states、transaction scope、task group 和结果交付状态。相同 `Arc<PhysicalPlan>` 并发实例化时不得共享任何 mutable state。
+
+生产环境只保留：
+
+```text
+QueryExecutionInstance::instantiate(plan, bindings, delivery, scheduler)
+```
+
+测试 builder 可以保留，但必须明确标注 test-only，不能绕过 validator 和资源绑定进入 API。
+
+### 5.2 Typed GlobalState/LocalState
+
+- hash build、global aggregate、sort runs、exchange 和 result collector 进入 GlobalState；
+- cursor、probe cursor、chunk buffer 和 partial aggregate 进入 LocalState；
+- 使用封闭 state enum 或 typed arena，禁止 `dyn Any`/字符串 downcast registry；
+- state 通过 physical/fragment/task ID 寻址；
+- spec 和 state 不重复保存 schema/layout；
+- 所有 tracker 从 instance memory pool 派生。
+
+### 5.3 TransactionScope 与 session transaction
+
+显式事务跨查询存在，不能完全由单个 QueryExecutionInstance 拥有。
 
 处理要求：
 
-- 显式事务和自动提交使用同一 scope；
-- DML/DDL 成功提交，失败、取消或客户端断连回滚；
-- storage 与全文/向量同步使用一致提交边界；
-- Begin/Commit/Rollback 只触发 scope 状态迁移；
-- 重复提交、重复回滚和超时返回结构化错误。
+- session 级 `SessionTransactionController` 持有显式 transaction handle；
+- QueryExecutionInstance 的 `TransactionScope` 借用显式事务，或拥有自动提交事务；
+- Begin/Commit/Rollback command 只触发 controller/scope 状态迁移，不产生伪造文本；
+- 明确语句失败时显式事务是整体失败、自动回滚还是回到 savepoint；
+- DML/DDL、storage、全文和向量同步使用一致提交边界；
+- 客户端断开只回滚本实例拥有的自动提交事务，不擅自结束 session 显式事务。
 
-验收：使用真实 storage 验证提交可见性、失败回滚和取消清理。
+### 5.4 结果交付边界
 
-### 5.4 实现统一 ResultSink
-
-实现：
+可缓存计划只保存 `OutputContract`/`ResultBoundarySpec`。实例化时绑定：
 
 - `DataSetSink`；
 - `ChunkStreamSink`；
-- `DiscardSink`。
+- `DiscardSink`；
+- 同步 `PullHandle`。
 
-要求所有 sink 在空结果和错误时提供稳定 schema/终态，并把网络背压转换为 bounded queue 压力或查询取消。
+所有交付方式必须在首个数据前提供 schema，空结果也保持 schema。同步 pull 使用自然背压；跨 async/HTTP/gRPC 的 bridge queue 必须有界、可取消、可计账。更换交付方式不得重建 PhysicalPlan。
 
-## 六、P2：Fragment、Exchange 与资源治理
+### 5.5 分层内存和可失败复制
 
-### 6.1 建立 FragmentSpec
+- 建立 instance → fragment → operator → task/queue 子池；
+- 删除生产 `DataChunk` 的无条件 Clone，提供需要 reservation 的可失败 deep copy；
+- chunk transfer 显式转移 reservation；
+- expression workspace、hash key、sort buffer、graph frontier 和 queue 全部计账；
+- 资源 owner 统一清理 cursor、临时文件和 bridge queue。
 
-从统一 PhysicalPlan 按 source、blocking、exchange 和 sink boundary 构建 fragment DAG。串行 driver 和并行 scheduler 消费同一 DAG。
+## 六、P2：Fragment、共享调度和 Exchange
 
-### 6.2 从 partition task 演进为 scan morsel
+### 6.1 FragmentSpec DAG
 
-当前 worker pool 动态领取的主要单位仍是完整 partition tree。
+按 source、blocking、exchange、result boundary 和 write/command terminal 划分 fragment。串行 driver 与并行 task group 必须消费同一个 DAG。
+
+### 6.2 引擎级共享 scheduler
+
+当前每查询创建线程池不利于全局限流，并产生复杂 Drop/join 所有权。
 
 处理要求：
+
+- 数据库引擎持有固定大小共享 worker pool；
+- 查询实例只持有 task group、取消令牌和配额；
+- scheduler 提供查询间公平性、全局线程上限和 worker panic 隔离；
+- operator 和 Exchange 只能提交 task，不能创建线程；
+- query teardown 等待自己的 task，不关闭共享 pool。
+
+### 6.3 从 partition tree 演进到 scan morsel
 
 - vertex、edge 和 index scan 提供可切分 morsel；
-- 每个 task 创建独立 LocalState；
-- 数据倾斜时 worker 能动态领取更多 morsel；
-- 查询级资源限制控制线程、queue 和任务数量。
+- worker 动态领取 morsel并创建独立 LocalState；
+- partition/layout 只描述数据域，不再等同于一个完整 executor tree；
+- profile 记录 morsel 数、task 数、倾斜和 worker utilization。
 
-### 6.3 补齐 Exchange
+### 6.4 通用 Exchange
 
-在现有 Concatenate 和 MergeSort 基础上统一实现：
+在 Concatenate 和 MergeSort 基础上实现 `GatherConcatenate`、`GatherMerge`、`RepartitionHash`、`Broadcast`、`Barrier` 和显式 Materialize boundary。Hash shuffle join 收敛到通用 RepartitionHash，不保留第二套 join scheduler。
 
-- `RepartitionHash`；
-- `Broadcast`；
-- `Barrier`；
-- 显式 `Materialize` lifecycle boundary。
+每个 queue 必须固定容量、分层计账、传播首个错误，并在 cancel 时同时唤醒 producer 和 consumer。
 
-Hash shuffle join 等特例应收敛到通用 Exchange contract。
+### 6.5 Spill
 
-### 6.4 完成内存和 spill
+优先实现可复用的外排 Sort 或 hash partition spill，定义临时文件 owner、格式、校验、清理和 profile。Aggregate 与 Join 在基础设施稳定后复用。不可 spill 的 blocker 超预算时必须返回结构化错误。
 
-当前 `spill_to_disk` 尚未实现。
+## 七、P3：有证据后再做的优化
 
-处理要求：
+以下工作不阻塞架构完成的正确性阶段：
 
-- instance → fragment → operator → task/queue 分层计账；
-- chunk clone 和 transfer 的 reservation 所有权完整；
-- expression workspace、hash key 和临时 buffer 纳入预算；
-- 先实现可复用的外排 Sort 或 hash partition spill；
-- 临时文件由 query resource owner 统一清理；
-- PROFILE 记录 peak memory、spill bytes/count。
+1. scan/filter/project、aggregate key 和 join key 的渐进列式化；
+2. Vertex/Edge/Path ID 或轻量引用的 late materialization；
+3. frontier/visited bitmap 和递归 fragment 专项优化；
+4. factorized graph result；
+5. 针对 NUMA、SIMD 或 work stealing 的进一步调优。
 
-## 七、P3：布局和图执行优化
+每项优化必须报告吞吐、首行延迟、分配次数、peak memory、queue wait、worker utilization 和 spill bytes，并保持语义差分测试通过。
 
-以下工作必须在统一计划、slot binding、资源边界和 profile 稳定后实施：
+## 八、推荐里程碑
 
-1. 在表达式热路径消除字符串列名查找，只使用 `SlotId`；
-2. 对 scan/filter/project、aggregate key 和 join key 选择性列式化；
-3. Vertex/Edge/Path 使用 ID 或轻量引用进行 late materialization；
-4. 为图递归引入 frontier、visited bitmap 和 `RecursiveFragmentSpec`；
-5. 只有 benchmark 证明收益时才评估 factorized graph result。
+1. **M0 可靠性**：修复双 runtime、worker self-join/panic、占位语义和生产入口测试。
+2. **M1 统一计划**：正式 PhysicalPlan、ID allocator、build context、slot/properties、validator。
+3. **M2 唯一入口**：合并单树/分区构建，cache、EXPLAIN、PROFILE 切换到 PhysicalPlan。
+4. **M3 执行边界**：QueryExecutionInstance、typed state、transaction scope、result delivery、分层内存。
+5. **M4 调度**：FragmentSpec、共享 scheduler、scan morsel、通用 Exchange。
+6. **M5 资源与图**：spill、RecursiveFragmentSpec、真实 storage 和并发压力测试。
+7. **M6 优化**：只实施 benchmark 能证明收益的列式化和图数据布局优化。
 
-每项优化必须报告 rows/s、首行延迟、分配次数、peak memory、worker utilization 和 spill bytes，并保持语义差分测试通过。
-
-## 八、推荐实施顺序
-
-1. 补计划构建错误传播测试，改为穷尽分派；
-2. 修复 UnionAll、Apply 和一次性命令终止；
-3. 补全路径参数和强类型管理 command；
-4. 处理遗留控制流节点，建立语义测试矩阵；
-5. 缩小 plan build context，统一 physical ID；
-6. 分离 logical/physical node，加入 property derivation 和 validator；
-7. 合并分区与非分区物理构建路径；
-8. 引入 QueryExecutionInstance、Global/Local State、TransactionScope 和 ResultSink；
-9. 建立 FragmentSpec，补齐 Exchange 和 scan morsel；
-10. 实现分层内存与 spill；
-11. 依据 profile 实施列式化和图执行优化。
-
-每个提交只处理一个可验证边界，必须保持构建通过，并包含对应的计划测试、执行测试和错误边界测试。禁止把目录重命名、语义修复和计划类型重写混在同一提交。
+每个里程碑必须先完成结构和 validator，再迁移 production facade，最后删除旧路径。禁止长期保留双写、silent fallback 或“新路径失败后回退旧 executor”的兼容逻辑。
 
 ## 九、完成定义
 
-以下条件全部满足后，本文可以删除：
+以下条件全部满足后，本文可以归档：
 
-- 所有 planner 可生成语义均能正确执行，或在 planner 阶段被明确拒绝；
-- 一个 immutable、可验证的 PhysicalPlan 覆盖全部生产查询；
-- executor 只有一条实例化路径；
-- 串行和并行消费同一 fragment graph；
-- transaction、state、memory、profile 和 result 均属于 QueryExecutionInstance；
-- 所有跨 task 通信可计账、可取消并传播首个错误；
-- schema、slot、properties、feature 和内存策略在执行前验证；
-- 语义差分、真实 storage、取消、超限和 feature 测试全部通过。
-
+- 所有 planner 可生成语义都能正确执行，或在 planner/physical builder 阶段被结构化拒绝；
+- 一个 immutable、可验证、可缓存的 PhysicalPlan 覆盖所有生产查询和 command；
+- executor 只有一条实例化路径，串行和并行消费同一 fragment graph；
+- 每次执行独占 bindings、state、memory、profile、task group 和结果交付状态；
+- 显式事务由 session controller 持有，语句 scope 和自动提交事务边界清晰；
+- 所有跨 task 通信可计账、可取消、可等待并传播首个错误；
+- schema、slot、properties、capability 和 memory policy 在执行前验证；
+- cache、EXPLAIN 和 PROFILE 只以 PhysicalPlan/physical ID 为事实来源；
+- 语义差分、真实 storage、取消、超限、worker panic 和 feature matrix 测试全部通过；
+- benchmark 证明 fragment/scheduler/spill 等新增复杂度带来可衡量收益。

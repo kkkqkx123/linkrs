@@ -19,11 +19,8 @@ use super::stream::ResultStream;
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::query::executor::base::{MemoryBudget, MemoryTracker};
+use crate::query::executor::streaming::physical_plan::SyntheticNodeIdAllocator;
 use crate::query::executor::streaming::pool::MorselWorkerPool;
-
-const GATHER_NODE_ID: i64 = i64::MIN;
-const LOCAL_SORT_NODE_ID: i64 = i64::MIN + 1;
-const RIGHT_GATHER_NODE_ID: i64 = i64::MIN + 3;
 
 /// Streaming execution engine
 ///
@@ -50,6 +47,9 @@ pub struct StreamingExecutionEngine {
     /// Per-partition output channel capacity for formal P8 Gather nodes.
     max_buffered_chunks: usize,
     runtime: Option<Arc<ExecutionRuntime>>,
+    /// Allocator for synthetic node IDs (Gather, Start sources, etc.).
+    /// Replaces hardcoded sentinel values to avoid collision with real IDs.
+    synthetic_id_alloc: SyntheticNodeIdAllocator,
 }
 
 impl StreamingExecutionEngine {
@@ -62,6 +62,7 @@ impl StreamingExecutionEngine {
             max_workers: 1,
             max_buffered_chunks: 10,
             runtime: None,
+            synthetic_id_alloc: SyntheticNodeIdAllocator::new(),
         }
     }
 
@@ -189,8 +190,9 @@ impl StreamingExecutionEngine {
         for (partition_id, tree) in local_trees.iter_mut().enumerate() {
             tree.set_partition_id(partition_id);
         }
+        let gather_id = self.synthetic_id_alloc.allocate();
         let mut gather = StreamingExecutor::Gather(
-            OperatorBase::new(GATHER_NODE_ID).with_global(true),
+            OperatorBase::new(gather_id).with_global(true),
             local_trees,
             gather_mode,
         );
@@ -238,11 +240,12 @@ impl StreamingExecutionEngine {
             .as_ref()
             .map(|runtime| runtime.memory_budget.clone())
             .unwrap_or_else(MemoryBudget::default_budget);
+        let local_sort_id = self.synthetic_id_alloc.allocate();
         let local_sorts = local_trees
             .into_iter()
             .map(|input| {
                 StreamingExecutor::Blocking(
-                    OperatorBase::new(LOCAL_SORT_NODE_ID),
+                    OperatorBase::new(local_sort_id),
                     Box::new(input),
                     BlockingOperator::Sort {
                         sort_expressions: sort_expressions.clone(),
@@ -293,13 +296,15 @@ impl StreamingExecutionEngine {
             tree.set_partition_id(partition_id);
         }
 
+        let left_gather_id = self.synthetic_id_alloc.allocate();
+        let right_gather_id = self.synthetic_id_alloc.allocate();
         let mut left_gather = StreamingExecutor::Gather(
-            OperatorBase::new(GATHER_NODE_ID).with_global(true),
+            OperatorBase::new(left_gather_id).with_global(true),
             left_local_trees,
             GatherOperator::concatenate(),
         );
         let mut right_gather = StreamingExecutor::Gather(
-            OperatorBase::new(RIGHT_GATHER_NODE_ID).with_global(true),
+            OperatorBase::new(right_gather_id).with_global(true),
             right_local_trees,
             GatherOperator::concatenate(),
         );
@@ -529,10 +534,10 @@ impl StreamingExecutionEngine {
                 Ok(())
             })();
             let close_err = executor.close_tree().err();
-            loop_result?;
-            if let Some(e) = close_err {
-                return Err(e);
+            if let Some(e) = &close_err {
+                log::error!("Executor close error during partition execution: {e}");
             }
+            loop_result?;
         }
         Ok(all_chunks)
     }
@@ -554,10 +559,10 @@ impl StreamingExecutionEngine {
             Ok(())
         })();
         let close_err = executor.close_tree().err();
-        loop_result?;
-        if let Some(e) = close_err {
-            return Err(e);
+        if let Some(e) = &close_err {
+            log::error!("Executor close error during single execution: {e}");
         }
+        loop_result?;
 
         Ok(output_chunks)
     }

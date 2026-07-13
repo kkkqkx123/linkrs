@@ -217,9 +217,14 @@ pub(super) fn contextual_to_expression(
     })
 }
 
+/// Synthetic node ID for the no-op Start source used as the child of
+/// leaf command operators. Chosen from the reserved sentinel range
+/// to avoid collisions with real plan node IDs.
+const SYNTHETIC_START_NODE_ID: i64 = i64::MIN + 4;
+
 pub(super) fn single_start_source() -> Box<PhysicalNode> {
     Box::new(PhysicalNode::Source(
-        0,
+        SYNTHETIC_START_NODE_ID,
         SourceSpec::Start,
         PhysicalProperties::single_streaming(),
     ))

@@ -433,7 +433,11 @@ pub enum DdlSpec {
     Analyze {
         space_name: String,
     },
-    Migrate,
+    Migrate {
+        space_name: String,
+        action: String,
+        migration_data: Option<String>,
+    },
 }
 
 // ── Fulltext spec ────────────────────────────────────────────────────────────

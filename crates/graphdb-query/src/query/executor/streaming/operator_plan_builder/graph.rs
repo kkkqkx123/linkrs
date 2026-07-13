@@ -238,23 +238,17 @@ pub fn build_graph_node(
             ))
         }
 
-        PlanNodeEnum::MultiShortestPath(node) => {
-            let input_phys =
-                build_binary_path_input(node.id(), node.left_input(), node.right_input(), context)?;
-            Ok(PhysicalNode::Graph(
-                node.id(),
-                Box::new(input_phys),
-                GraphSpec::MultiShortestPath {
-                    target_vertices: Vec::new(),
-                    edge_types: Vec::new(),
-                    direction: crate::core::EdgeDirection::Both,
-                    max_depth: node.steps(),
-                    left_vertex_column: node.left_vid_var().to_string(),
-                    right_vertex_column: node.right_vid_var().to_string(),
-                    single_shortest: node.single_shortest(),
-                },
-                PhysicalProperties::single_streaming(),
-            ))
+        PlanNodeEnum::MultiShortestPath(_node) => {
+            // MultiShortestPath is structurally incomplete — the planner
+            // node does not carry edge_types, direction, or target vertices,
+            // and the executor spec would silently produce wrong results.
+            // Full support requires a planner that emits the missing fields.
+            return Err(QueryError::execution(format!(
+                "MultiShortestPath is not supported: planner must provide edge_types, \
+                 direction, and target vertex columns, but current planner node (id={}) \
+                 lacks these required fields",
+                _node.id(),
+            )));
         }
 
         _ => Err(super::internal_routing_error(node, "graph")),

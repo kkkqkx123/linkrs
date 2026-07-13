@@ -406,7 +406,25 @@ impl MorselWorkerPool {
                     guard.recv()
                 };
                 match batch {
-                    Ok(batch) => Self::process_batch(batch, &stopper),
+                    Ok(batch) => {
+                        // Catch panics in worker execution so a panicked
+                        // worker reports the error instead of poisoning state.
+                        let result =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                Self::process_batch(batch, &stopper)
+                            }));
+                        if let Err(panic_payload) = result {
+                            let msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                                s.to_string()
+                            } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                                s.clone()
+                            } else {
+                                "Worker panicked".to_string()
+                            };
+                            log::error!("Morsel worker panicked: {msg}");
+                            return;
+                        }
+                    }
                     Err(_) => return,
                 }
             }));
@@ -441,14 +459,27 @@ impl MorselWorkerPool {
         self.max_workers
     }
 
-    /// Signal all workers to stop and join them. Called during query teardown.
+    /// Signal all workers to stop and wait for them to exit.
+    ///
+    /// Must be called from a non-worker thread — never from within
+    /// a worker that holds the final runtime reference.
     pub fn shutdown(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        // Drop the sender so blocked workers wake up from recv() with Err.
         *self.batch_tx.get_mut().unwrap() = None;
         for handle in self.workers.drain(..) {
             let _ = handle.join();
         }
+    }
+
+    /// Signal workers to stop without joining.
+    ///
+    /// Safe to call from any context (including a worker that may own
+    /// the last `Arc<ExecutionRuntime>`). Workers exit naturally when
+    /// they observe the stop flag or the closed channel.
+    pub fn detach(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        *self.batch_tx.get_mut().unwrap() = None;
+        self.workers.clear();
     }
 
     fn process_batch(batch: Arc<PartitionBatch>, stopper: &AtomicBool) {
@@ -492,7 +523,9 @@ impl MorselWorkerPool {
 
 impl Drop for MorselWorkerPool {
     fn drop(&mut self) {
-        self.shutdown();
+        // Use detach (not shutdown) to avoid joining our own thread when
+        // the last runtime reference is dropped inside a worker context.
+        self.detach();
     }
 }
 

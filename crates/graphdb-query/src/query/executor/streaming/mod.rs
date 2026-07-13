@@ -29,6 +29,9 @@ pub mod parallel_safety;
 pub mod partition;
 mod physical_builder;
 pub mod physical_node;
+pub mod physical_plan;
+pub mod physical_plan_context;
+pub mod physical_plan_validator;
 pub mod physical_properties;
 pub mod pool;
 pub mod result_utils;
@@ -56,3 +59,11 @@ pub use slot::{
 };
 pub use stream::ResultStream;
 pub use stream_result::StreamingQueryResult;
+
+pub use physical_plan::{
+    CapabilitySet, FragmentGraph, FragmentId, FragmentKind, FragmentSpec, LogicalNodeId,
+    OperatorKindSpec, OutputContract, PhysicalOperatorId, PhysicalOperatorIdAllocator,
+    PhysicalOperatorSpec, PhysicalPlan, PlanCompatibility,
+};
+pub use physical_plan_context::PhysicalPlanBuildContext;
+pub use physical_plan_validator::{PhysicalPlanValidator, ValidationResult, ValidationTier};
