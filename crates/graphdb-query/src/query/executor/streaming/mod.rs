@@ -27,6 +27,7 @@ pub mod operator_state;
 pub mod operators;
 pub mod parallel_safety;
 pub mod partition;
+pub mod pool;
 mod physical_builder;
 pub mod physical_node;
 pub mod result_utils;
@@ -40,9 +41,9 @@ pub use chunk::DataChunk;
 pub use engine::StreamingExecutionEngine;
 pub use executor::StreamingExecutor;
 pub use factory::StreamingQueryExecutor;
-pub use operator_spec::{BlockingSpec, JoinSpec, SourceSpec, UnarySpec};
+pub use operator_spec::{BlockingSpec, ExchangeSpec, JoinSpec, SourceSpec, UnarySpec};
 pub use operator_state::{
-    BlockingState, JoinState, SourceState, UnaryState,
+    BlockingState, ExchangeState, JoinState, SourceState, UnaryState,
 };
 pub use physical_node::PhysicalNode;
 pub use result_utils::{chunks_to_execution_result, convert_chunks_to_dataset};

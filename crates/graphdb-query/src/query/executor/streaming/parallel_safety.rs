@@ -64,6 +64,7 @@ pub fn is_parallel_safe(tree: &StreamingExecutor) -> bool {
         | StreamingExecutor::Set(..)
         | StreamingExecutor::Apply(..)
         | StreamingExecutor::Gather(..)
+        | StreamingExecutor::Exchange(..)
         | StreamingExecutor::HashShuffleJoin(..) => false,
         // Handles to external systems (DDL, graph, fulltext, vector, txn)
         // are excluded as a conservative default — they may hold non-Send

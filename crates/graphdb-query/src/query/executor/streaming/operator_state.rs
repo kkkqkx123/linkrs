@@ -7,10 +7,13 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::core::types::expr::Expression;
 use crate::core::Value;
 use crate::query::executor::base::MemoryTracker;
 use crate::storage::cursor::{EdgeCursor, VertexCursor};
 
+use super::chunk::DataChunk;
+use super::executor::SortDirection;
 use super::operator_spec::SourceSpec;
 use super::operators::source_operator::NeighborScanState;
 
@@ -351,6 +354,36 @@ pub enum SinkState {
 }
 
 
+
+// ── Exchange state ───────────────────────────────────────────────────────────
+
+/// Mutable execution state for exchange (gather / merge / repartition) operators.
+#[derive(Debug)]
+pub enum ExchangeState {
+    Concatenate {
+        current_index: usize,
+        col_names: Option<Vec<String>>,
+    },
+    MergeSort {
+        sort_expressions: Vec<Expression>,
+        sort_directions: Vec<SortDirection>,
+        inputs: Vec<MergeInputState>,
+        col_names: Option<Vec<String>>,
+        limit: Option<usize>,
+        emitted: usize,
+    },
+}
+
+/// Internal merge cursor state for Exchange merge-sort.
+#[derive(Debug)]
+pub enum MergeInputState {
+    Pending,
+    Buffered {
+        chunk: DataChunk,
+        row_index: usize,
+    },
+    Exhausted,
+}
 
 // ── Set state ────────────────────────────────────────────────────────────────
 

@@ -2093,7 +2093,8 @@ impl StreamingExecutorBuilder {
                 Self::set_partition_on_source(left, partition_id, partition_range.clone())?;
                 Self::set_partition_on_source(right, partition_id, partition_range)?;
             }
-            StreamingExecutor::Gather(_, children, _) => {
+            StreamingExecutor::Gather(_, children, _)
+            | StreamingExecutor::Exchange(_, children, _) => {
                 for child in children.iter_mut() {
                     Self::set_partition_on_source(child, partition_id, partition_range.clone())?;
                 }

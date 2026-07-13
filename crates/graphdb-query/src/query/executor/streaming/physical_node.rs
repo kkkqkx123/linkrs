@@ -14,14 +14,13 @@
 //! ```
 //!
 //! Phase 2 pilot: Source / Filter / Project / Limit / Sort / HashJoin.
-//! All other node types still use the legacy `StreamingExecutorBuilder` path
-//! and bypass `PhysicalNode` entirely.
+//! Phase 4: Exchange node for morsel-style partition execution.
 
 use std::sync::Arc;
 
 use super::executor::StreamingExecutor;
 use super::operator_base::OperatorBase;
-use super::operator_spec::{BlockingSpec, JoinSpec, SourceSpec, UnarySpec};
+use super::operator_spec::{BlockingSpec, ExchangeSpec, JoinSpec, SourceSpec, UnarySpec};
 use super::operator_spec::{ApplySpec, GraphSpec, SetSpec, SinkSpec};
 use super::operators::apply_operator::ApplyOperator;
 use super::operators::blocking_operator::BlockingOperator;
@@ -29,12 +28,13 @@ use super::operators::graph_operator::GraphOperator;
 use super::operators::join_operator::JoinOperator;
 use super::operators::set_operator::SetOperator;
 use super::operators::sink_operator::SinkOperator;
+use super::operators::exchange_operator::ExchangeOperator;
 use super::operators::source_operator::SourceOperator;
 use super::operators::unary_operator::UnaryOperator;
 use super::runtime::ExecutionRuntime;
 use crate::query::executor::base::MemoryBudget;
 
-/// Immutable physical plan node for Phase 2 pilot operators.
+/// Immutable physical plan node.
 ///
 /// Contains only immutable configuration — expressions, column names, storage
 /// handles — and never cursors, hash tables, lifecycle markers, or runtime
@@ -49,6 +49,9 @@ pub enum PhysicalNode {
     Sink(Box<PhysicalNode>, SinkSpec),
     Set(Box<PhysicalNode>, Box<PhysicalNode>, SetSpec),
     Apply(Box<PhysicalNode>, Box<PhysicalNode>, ApplySpec),
+    /// Exchange node: gathers N child partition outputs via Concatenate or MergeSort.
+    /// Uses the query-level `MorselWorkerPool` for parallel execution when configured.
+    Exchange(Vec<PhysicalNode>, ExchangeSpec),
 }
 
 impl PhysicalNode {
@@ -168,6 +171,22 @@ impl PhysicalNode {
                 }
                 exec
             }
+            Self::Exchange(children, spec) => {
+                let child_execs: Vec<StreamingExecutor> = children
+                    .iter()
+                    .map(|c| c.materialize(runtime.clone(), memory_budget, chunk_size))
+                    .collect();
+                let mut exec = StreamingExecutor::Exchange(
+                    OperatorBase::new(0),
+                    child_execs,
+                    ExchangeOperator::from_spec(spec),
+                );
+                exec.set_chunk_size(chunk_size);
+                if let Some(rt) = runtime {
+                    exec.set_runtime(Some(rt));
+                }
+                exec
+            }
         }
     }
 
@@ -181,6 +200,7 @@ impl PhysicalNode {
             Self::Join(left, right, _)
             | Self::Set(left, right, _)
             | Self::Apply(left, right, _) => vec![left.as_ref(), right.as_ref()],
+            Self::Exchange(children, _) => children.iter().collect(),
         }
     }
 }

@@ -3,6 +3,7 @@
 pub mod apply_operator;
 pub mod blocking_operator;
 pub mod ddl_operator;
+pub mod exchange_operator;
 pub mod fulltext_operator;
 pub mod gather_operator;
 pub mod graph_operator;

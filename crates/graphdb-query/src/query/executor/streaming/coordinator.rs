@@ -21,14 +21,14 @@ use super::runtime::ExecutionRuntime;
 const CHANNEL_WAIT: Duration = Duration::from_millis(2);
 
 #[derive(Debug)]
-struct BufferedChunk {
-    chunk: DataChunk,
-    _reservation: MemoryReservation,
-    bytes: usize,
+pub(crate) struct BufferedChunk {
+    pub(crate) chunk: DataChunk,
+    pub(crate) _reservation: MemoryReservation,
+    pub(crate) bytes: usize,
 }
 
 #[derive(Debug)]
-enum PartitionMessage {
+pub(crate) enum PartitionMessage {
     Chunk(BufferedChunk),
     Finished,
 }
@@ -258,7 +258,7 @@ impl Drop for ParallelPartitionCoordinator {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_partition(
+pub(crate) fn run_partition(
     tree: &mut StreamingExecutor,
     sender: &SyncSender<PartitionMessage>,
     stop: &AtomicBool,
@@ -347,7 +347,7 @@ fn send_chunk(
     }
 }
 
-fn update_peak_value(peak: &AtomicUsize, candidate: usize) {
+pub(crate) fn update_peak_value(peak: &AtomicUsize, candidate: usize) {
     let mut prev = peak.load(Ordering::Relaxed);
     while candidate > prev {
         match peak.compare_exchange_weak(prev, candidate, Ordering::Relaxed, Ordering::Relaxed) {
@@ -378,7 +378,11 @@ fn send_message(
     }
 }
 
-fn release_queue_metrics(queued_chunks: &AtomicUsize, queued_bytes: &AtomicUsize, bytes: usize) {
+pub(crate) fn release_queue_metrics(
+    queued_chunks: &AtomicUsize,
+    queued_bytes: &AtomicUsize,
+    bytes: usize,
+) {
     queued_chunks.fetch_sub(1, Ordering::Relaxed);
     queued_bytes.fetch_sub(bytes, Ordering::Relaxed);
 }

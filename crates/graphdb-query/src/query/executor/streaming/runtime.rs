@@ -7,6 +7,7 @@ use parking_lot::Mutex;
 
 use crate::core::error::QueryError;
 use crate::query::executor::base::MemoryBudget;
+use crate::query::executor::streaming::pool::MorselWorkerPool;
 use crate::query::query_manager::QueryManager;
 
 /// Query identity information
@@ -200,6 +201,9 @@ pub struct ExecutionRuntime {
     resource_owner: Arc<Mutex<ResourceOwner>>,
     /// Optional reference to the global QueryManager for KILL QUERY.
     query_manager: Option<Arc<QueryManager>>,
+    /// Query-level morsel worker pool for dynamic partition execution.
+    /// Created when `max_workers > 1`; `None` means serial fallback.
+    pub worker_pool: Option<Arc<MorselWorkerPool>>,
 }
 
 impl ExecutionRuntime {
@@ -213,6 +217,7 @@ impl ExecutionRuntime {
             profile: Arc::new(Mutex::new(ProfileCollector::new())),
             resource_owner: Arc::new(Mutex::new(ResourceOwner::new())),
             query_manager: None,
+            worker_pool: None,
         }
     }
 
@@ -326,6 +331,13 @@ impl ExecutionRuntime {
     /// Release all owned resources.
     pub fn release_resources(&self) {
         self.resource_owner.lock().release_all();
+    }
+
+    /// Set the morsel worker pool for this query. When configured, Exchange
+    /// operators use the pool's bounded workers for parallel partition execution
+    /// with dynamic morsel-style task assignment.
+    pub fn set_worker_pool(&mut self, pool: Option<MorselWorkerPool>) {
+        self.worker_pool = pool.map(Arc::new);
     }
 }
 

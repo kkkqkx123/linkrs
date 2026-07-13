@@ -11,10 +11,12 @@ use crate::query::executor::base::{MemoryTracker, Spillable};
 pub use super::context::ValueRowContext;
 pub use super::helpers::{aggregation, comparison, conversion};
 pub use super::operator_base::OperatorBase;
+use super::operator_state::ExchangeState;
 
 use super::operators::apply_operator::ApplyOperator;
 use super::operators::blocking_operator::BlockingOperator;
 use super::operators::ddl_operator::DdlOperator;
+use super::operators::exchange_operator::ExchangeOperator;
 use super::operators::fulltext_operator::FulltextOperator;
 use super::operators::gather_operator::GatherOperator;
 use super::operators::graph_operator::GraphOperator;
@@ -42,14 +44,15 @@ pub enum FullOuterJoinPhase {
     EmitUnmatchedRight,
 }
 
-/// StreamingExecutor: 13-variant dispatch enum over domain-specific operators.
+/// StreamingExecutor: 14-variant dispatch enum over domain-specific operators.
 ///
 /// Each variant holds an OperatorBase (shared fields), zero or more child
 /// executors, and a domain-specific operator enum that implements the
 /// per-operator lifecycle logic.
 ///
-/// Gather is special: it takes N children (Vec) and merges their output
-/// via Concatenate or MergeSort mode.
+/// Gather/Exchange take N children (Vec) and merge their output via
+/// Concatenate or MergeSort mode. Exchange additionally uses the query-level
+/// `MorselWorkerPool` for morsel-style dynamic partition execution.
 #[derive(Debug)]
 pub enum StreamingExecutor {
     Source(OperatorBase, SourceOperator),
@@ -80,6 +83,9 @@ pub enum StreamingExecutor {
     Vector(OperatorBase, Box<StreamingExecutor>, VectorOperator),
     Txn(OperatorBase, Box<StreamingExecutor>, TxnOperator),
     Gather(OperatorBase, Vec<StreamingExecutor>, GatherOperator),
+    /// Morsel-style exchange: gathers N partition outputs via Concatenate
+    /// or MergeSort using the query-level `MorselWorkerPool`.
+    Exchange(OperatorBase, Vec<StreamingExecutor>, ExchangeOperator),
     /// Hash repartition join: takes multiple left/right local trees,
     /// distributes rows by hash of join keys into buckets, joins per bucket.
     HashShuffleJoin(
@@ -107,8 +113,7 @@ impl StreamingExecutor {
         }
     }
 
-    /// Configure P8 execution for Gather nodes below this tree. Nodes that do
-    /// not pass the parallel-safety predicate retain their serial pull path.
+    /// Configure P8 execution for Gather/Exchange nodes below this tree.
     pub fn configure_parallel_partitions(
         &mut self,
         max_workers: usize,
@@ -149,7 +154,7 @@ impl StreamingExecutor {
     }
 
     /// Recursively mark an executor tree as global. This is applied before a
-    /// gather node is attached, so the gather's local children retain their
+    /// gather/exchange node is attached, so the local children retain their
     /// own partition identifiers.
     pub fn set_global(&mut self) {
         self.base_mut().partition_id = None;
@@ -193,7 +198,7 @@ impl StreamingExecutor {
                         | BlockingOperator::TopN { .. }
                 ) && input.is_partition_local()
             }
-            Self::HashShuffleJoin(..) => false,
+            Self::HashShuffleJoin(..) | Self::Exchange(..) => false,
             _ => false,
         }
     }
@@ -330,6 +335,10 @@ impl StreamingExecutor {
                 GatherOperator::Concatenate { .. } => "Gather(Concatenate)",
                 GatherOperator::MergeSort { .. } => "Gather(MergeSort)",
             },
+            Exchange(_, _, op) => match &op.state {
+                ExchangeState::Concatenate { .. } => "Exchange(Concatenate)",
+                ExchangeState::MergeSort { .. } => "Exchange(MergeSort)",
+            },
             HashShuffleJoin(_, _, _, op) => match op.join_kind {
                 super::operators::shuffle_join_operator::HashJoinKind::Inner => {
                     "HashShuffleJoin(Inner)"
@@ -378,7 +387,6 @@ impl StreamingExecutor {
                     GatherOperator::Concatenate { parallel, .. }
                     | GatherOperator::MergeSort { parallel, .. } => parallel,
                 };
-                // Check this gather node first, then its children
                 state
                     .fallback_reason
                     .clone()
@@ -401,6 +409,9 @@ impl StreamingExecutor {
             Self::Apply(_, outer, inner, _) => outer
                 .parallel_fallback_reason()
                 .or_else(|| inner.parallel_fallback_reason()),
+            Self::Exchange(_, children, _) => children
+                .iter()
+                .find_map(|c| c.parallel_fallback_reason()),
             Self::HashShuffleJoin(_, left, right, _) => left
                 .iter()
                 .find_map(|c| c.parallel_fallback_reason())
@@ -453,7 +464,7 @@ impl StreamingExecutor {
             Self::Sink(base, _, _) => base,
             Self::Ddl(base, _, _) | Self::Fulltext(base, _, _) | Self::Vector(base, _, _) => base,
             Self::Txn(base, _, _) => base,
-            Self::Gather(base, _, _) => base,
+            Self::Gather(base, _, _) | Self::Exchange(base, _, _) => base,
             Self::HashShuffleJoin(base, _, _, _) => base,
         }
     }
@@ -471,7 +482,7 @@ impl StreamingExecutor {
             Self::Sink(base, _, _) => base,
             Self::Ddl(base, _, _) | Self::Fulltext(base, _, _) | Self::Vector(base, _, _) => base,
             Self::Txn(base, _, _) => base,
-            Self::Gather(base, _, _) => base,
+            Self::Gather(base, _, _) | Self::Exchange(base, _, _) => base,
             Self::HashShuffleJoin(base, _, _, _) => base,
         }
     }
@@ -491,7 +502,9 @@ impl StreamingExecutor {
             Self::Ddl(_, input, _) | Self::Fulltext(_, input, _) | Self::Vector(_, input, _) => {
                 vec![input.as_mut()]
             }
-            Self::Gather(_, children, _) => children.iter_mut().collect(),
+            Self::Gather(_, children, _) | Self::Exchange(_, children, _) => {
+                children.iter_mut().collect()
+            }
             Self::HashShuffleJoin(_, left, right, _) => {
                 let mut all: Vec<&mut Self> = left.iter_mut().collect();
                 all.extend(right.iter_mut());
@@ -512,7 +525,8 @@ impl StreamingExecutor {
             | Self::Ddl(..)
             | Self::Fulltext(..)
             | Self::Vector(..)
-            | Self::Gather(..) => None,
+            | Self::Gather(..)
+            | Self::Exchange(..) => None,
             Self::Blocking(_, _, op) => Some(op.memory_tracker()),
             Self::Join(_, _, _, op) => Some(op.memory_tracker()),
             Self::Set(_, _, _, SetOperator::UnionAll { .. }) => None,
@@ -546,15 +560,12 @@ impl StreamingExecutor {
             Self::Vector(base, input, op) => op.open(base, input),
             Self::Txn(base, input, op) => op.open(base, input),
             Self::Gather(base, children, op) => op.open(base, children),
+            Self::Exchange(base, children, op) => op.open(base, children),
             Self::HashShuffleJoin(base, left, right, op) => op.open(base, left, right),
         };
         let elapsed = start.elapsed().as_micros() as u64;
         self.record_profile_timing("open", elapsed);
         if let Err(error) = result {
-            // A parent may fail after one or more children have opened (for
-            // example, when the second side of a join fails to open).  The
-            // parent itself is not necessarily marked as opened yet, so a
-            // normal parent close would otherwise skip those children.
             if let Err(close_error) = self.close_tree() {
                 log::warn!(
                     "Failed to close streaming executor tree after open error: {}",
@@ -584,6 +595,7 @@ impl StreamingExecutor {
             Self::Vector(base, input, op) => op.next(base, input),
             Self::Txn(base, input, op) => op.next(base, input),
             Self::Gather(base, children, op) => op.next(base, children),
+            Self::Exchange(base, children, op) => op.next(base, children),
             Self::HashShuffleJoin(base, left, right, op) => op.next(base, left, right),
         };
         let elapsed = start.elapsed().as_micros() as u64;
@@ -595,9 +607,6 @@ impl StreamingExecutor {
     }
 
     /// Stop the executor (signal no more input needed).
-    ///
-    /// Must be callable in any state (Open, Exhausted, Failed, Cancelled)
-    /// since the consumer may stop reading before exhaustion.
     pub fn stop(&mut self) -> Result<(), QueryError> {
         let start = Instant::now();
         let result = match self {
@@ -614,6 +623,7 @@ impl StreamingExecutor {
             Self::Vector(base, input, op) => op.stop(base, input),
             Self::Txn(base, input, op) => op.stop(base, input),
             Self::Gather(base, children, op) => op.stop(base, children),
+            Self::Exchange(base, children, op) => op.stop(base, children),
             Self::HashShuffleJoin(base, left, right, op) => op.stop(base, left, right),
         };
         let elapsed = start.elapsed().as_micros() as u64;
@@ -638,6 +648,7 @@ impl StreamingExecutor {
             Self::Vector(base, input, op) => op.close(base, input),
             Self::Txn(base, input, op) => op.close(base, input),
             Self::Gather(base, children, op) => op.close(base, children),
+            Self::Exchange(base, children, op) => op.close(base, children),
             Self::HashShuffleJoin(base, left, right, op) => op.close(base, left, right),
         };
         let elapsed = start.elapsed().as_micros() as u64;

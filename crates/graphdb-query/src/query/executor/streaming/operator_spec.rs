@@ -314,6 +314,27 @@ pub enum SinkSpec {
     },
 }
 
+// ── Exchange spec ────────────────────────────────────────────────────────────
+
+/// Immutable config for exchange (gather / merge / repartition) operators.
+///
+/// Phase 4: explicit Exchange node replaces ad-hoc Gather coordination.
+/// Workers in the query-level `MorselWorkerPool` execute partition tasks
+/// dynamically via a shared morsel queue.
+#[derive(Debug, Clone)]
+pub enum ExchangeSpec {
+    /// Concatenate N partition outputs in partition order.
+    Concatenate {
+        partition_count: usize,
+    },
+    /// N-way merge-sort of pre-sorted partition inputs.
+    MergeSort {
+        sort_expressions: Vec<Expression>,
+        sort_directions: Vec<SortDirection>,
+        limit: Option<usize>,
+    },
+}
+
 // ── Set spec ─────────────────────────────────────────────────────────────────
 
 /// Immutable config for set operators.
