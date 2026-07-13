@@ -19,9 +19,9 @@ pub mod memory_budget;
 pub mod result_processor;
 
 pub use config::{
-    AllPathsConfig, AppendVerticesConfig, ApplyConfig, BfsShortestConfig, ExecutorConfig,
-    IndexScanConfig, JoinConfig, JoinConfigWithDesc, LoopConfig, MultiShortestPathConfig,
-    PathConfig, PatternApplyConfig, RollupApplyConfig, ShortestPathConfig,
+    AppendVerticesConfig, ApplyConfig, ExecutorConfig,
+    IndexScanConfig, JoinConfig, JoinConfigWithDesc, LoopConfig,
+    PatternApplyConfig, RollupApplyConfig,
 };
 pub use execution_context::ExecutionContext;
 pub use execution_result::{DBResult, ExecutionResult, IntoExecutionResult};

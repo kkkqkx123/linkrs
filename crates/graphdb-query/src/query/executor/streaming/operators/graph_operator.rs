@@ -13,7 +13,7 @@ use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::context::ValueRowContext;
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::query::executor::streaming::operator_base::OperatorBase;
+use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::slot::SlotLayout;
 use crate::query::executor::traversal::config::TraversalConfig;
 use crate::query::executor::traversal::graph_reader::TraversalGraphReader;
@@ -691,12 +691,12 @@ impl GraphOperator {
     }
 
     pub fn from_spec(
-        spec: &super::super::operator_spec::GraphSpec,
+        spec: &super::spec::GraphSpec,
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
     ) -> Self {
         match spec {
-            super::super::operator_spec::GraphSpec::Expand {
+            super::spec::GraphSpec::Expand {
                 edge_types,
                 direction,
                 filter_expr,
@@ -707,7 +707,7 @@ impl GraphOperator {
                 direction: *direction,
                 filter_expr: filter_expr.clone(),
             },
-            super::super::operator_spec::GraphSpec::ExpandAll {
+            super::spec::GraphSpec::ExpandAll {
                 edge_types,
                 direction,
                 filter_expr,
@@ -718,7 +718,7 @@ impl GraphOperator {
                 direction: *direction,
                 filter_expr: filter_expr.clone(),
             },
-            super::super::operator_spec::GraphSpec::Traverse {
+            super::spec::GraphSpec::Traverse {
                 edge_types,
                 direction,
                 min_depth,
@@ -734,7 +734,7 @@ impl GraphOperator {
                 filter_expr: filter_expr.clone(),
                 visited: std::collections::HashSet::new(),
             },
-            super::super::operator_spec::GraphSpec::BiExpand {
+            super::spec::GraphSpec::BiExpand {
                 edge_types,
                 direction,
             } => Self::BiExpand {
@@ -743,7 +743,7 @@ impl GraphOperator {
                 edge_types: edge_types.clone(),
                 direction: *direction,
             },
-            super::super::operator_spec::GraphSpec::BiTraverse {
+            super::spec::GraphSpec::BiTraverse {
                 edge_types,
                 direction,
                 min_depth,
@@ -757,7 +757,7 @@ impl GraphOperator {
                 max_depth: *max_depth,
                 visited: std::collections::HashSet::new(),
             },
-            super::super::operator_spec::GraphSpec::ShortestPath {
+            super::spec::GraphSpec::ShortestPath {
                 target_vertex,
                 edge_types,
                 direction,
@@ -774,7 +774,7 @@ impl GraphOperator {
                 start_vertices: start_vertices.clone(),
                 target_vertices: target_vertices.clone(),
             },
-            super::super::operator_spec::GraphSpec::BFSShortest {
+            super::spec::GraphSpec::BFSShortest {
                 target_vertex,
                 edge_types,
                 direction,
@@ -793,7 +793,7 @@ impl GraphOperator {
                 frontier: Vec::new(),
                 visited: std::collections::HashSet::new(),
             },
-            super::super::operator_spec::GraphSpec::AllPaths {
+            super::spec::GraphSpec::AllPaths {
                 target_vertex,
                 edge_types,
                 direction,
@@ -822,7 +822,7 @@ impl GraphOperator {
                 all_paths: Vec::new(),
                 result_iter: None,
             },
-            super::super::operator_spec::GraphSpec::MultiShortestPath {
+            super::spec::GraphSpec::MultiShortestPath {
                 target_vertices,
                 edge_types,
                 direction,

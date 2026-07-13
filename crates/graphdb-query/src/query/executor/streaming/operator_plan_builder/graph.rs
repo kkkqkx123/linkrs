@@ -1,9 +1,9 @@
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::query::executor::base::ExecutionContext;
-use crate::query::executor::streaming::operator_spec::{GraphSpec, JoinSpec};
-use crate::query::executor::streaming::physical_node::PhysicalNode;
-use crate::query::executor::streaming::physical_properties::PhysicalProperties;
+use crate::query::executor::streaming::operators::spec::{GraphSpec, JoinSpec};
+use crate::query::executor::streaming::plan::node::PhysicalNode;
+use crate::query::executor::streaming::plan::properties::PhysicalProperties;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
     MultipleInputNode, SingleInputNode,
@@ -243,12 +243,11 @@ pub fn build_graph_node(
             // node does not carry edge_types, direction, or target vertices,
             // and the executor spec would silently produce wrong results.
             // Full support requires a planner that emits the missing fields.
-            return Err(QueryError::execution(format!(
+            Err(QueryError::execution(
                 "MultiShortestPath is not supported: planner must provide edge_types, \
                  direction, and target vertex columns, but current planner node (id={}) \
-                 lacks these required fields",
-                _node.id(),
-            )));
+                 lacks these required fields".to_string()
+            ))
         }
 
         _ => Err(super::internal_routing_error(node, "graph")),

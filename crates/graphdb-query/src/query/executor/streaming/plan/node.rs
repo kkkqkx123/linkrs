@@ -18,27 +18,27 @@
 
 use std::sync::Arc;
 
-use super::executor::StreamingExecutor;
-use super::operator_base::OperatorBase;
-use super::operator_spec::{
+use super::super::executor::StreamingExecutor;
+use super::super::operators::base::OperatorBase;
+use super::super::operators::spec::{
     ApplySpec, DdlSpec, FulltextSpec, GraphSpec, SetSpec, SinkSpec, TxnSpec, VectorSpec,
 };
-use super::operator_spec::{BlockingSpec, ExchangeSpec, JoinSpec, SourceSpec, UnarySpec};
-use super::operators::apply_operator::ApplyOperator;
-use super::operators::blocking_operator::BlockingOperator;
-use super::operators::ddl_operator::DdlOperator;
-use super::operators::exchange_operator::ExchangeOperator;
-use super::operators::fulltext_operator::FulltextOperator;
-use super::operators::graph_operator::GraphOperator;
-use super::operators::join_operator::JoinOperator;
-use super::operators::set_operator::SetOperator;
-use super::operators::sink_operator::SinkOperator;
-use super::operators::source_operator::SourceOperator;
-use super::operators::txn_operator::TxnOperator;
-use super::operators::unary_operator::UnaryOperator;
-use super::operators::vector_operator::VectorOperator;
-use super::physical_properties::PhysicalProperties;
-use super::runtime::ExecutionRuntime;
+use super::super::operators::spec::{BlockingSpec, ExchangeSpec, JoinSpec, SourceSpec, UnarySpec};
+use super::super::operators::apply_operator::ApplyOperator;
+use super::super::operators::blocking_operator::BlockingOperator;
+use super::super::operators::ddl_operator::DdlOperator;
+use super::super::operators::exchange_operator::ExchangeOperator;
+use super::super::operators::fulltext_operator::FulltextOperator;
+use super::super::operators::graph_operator::GraphOperator;
+use super::super::operators::join_operator::JoinOperator;
+use super::super::operators::set_operator::SetOperator;
+use super::super::operators::sink_operator::SinkOperator;
+use super::super::operators::source_operator::SourceOperator;
+use super::super::operators::txn_operator::TxnOperator;
+use super::super::operators::unary_operator::UnaryOperator;
+use super::super::operators::vector_operator::VectorOperator;
+use super::properties::PhysicalProperties;
+use super::super::runtime::ExecutionRuntime;
 use crate::query::executor::base::MemoryBudget;
 
 /// Stable identifier for a physical plan node.

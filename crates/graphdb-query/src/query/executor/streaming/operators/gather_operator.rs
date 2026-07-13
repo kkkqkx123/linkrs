@@ -11,7 +11,7 @@ use crate::query::executor::streaming::executor::{
     SortDirection, StreamingExecutor, ValueRowContext,
 };
 use crate::query::executor::streaming::helpers::compare_values;
-use crate::query::executor::streaming::operator_base::OperatorBase;
+use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::pool::{PartitionBatch, PartitionHandle};
 use crate::query::executor::streaming::slot::SlotLayout;
 

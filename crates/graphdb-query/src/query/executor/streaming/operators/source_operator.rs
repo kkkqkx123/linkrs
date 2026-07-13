@@ -8,7 +8,7 @@ use crate::core::types::storage_ids::VertexId;
 use crate::core::{EdgeDirection, Value};
 use crate::query::executor::base::{MemoryBudget, MemoryReservation};
 use crate::query::executor::streaming::chunk::DataChunk;
-use crate::query::executor::streaming::operator_base::OperatorBase;
+use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::slot::SlotLayout;
 use crate::storage::cursor::{
     open_edge_scan, open_vertex_scan, EdgeCursor, ScanOptions, VecEdgeCursor, VertexCursor,
@@ -152,11 +152,11 @@ impl SourceOperator {
     /// Create a SourceOperator with fresh mutable state from an immutable spec
     /// and the per-query storage client.
     pub fn from_spec(
-        spec: &super::super::operator_spec::SourceSpec,
+        spec: &super::spec::SourceSpec,
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
     ) -> Self {
         match spec {
-            super::super::operator_spec::SourceSpec::ScanVertices { rows, col_names } => {
+            super::spec::SourceSpec::ScanVertices { rows, col_names } => {
                 Self::ScanVertices {
                     partition_id: 0,
                     buffer: rows.clone(),
@@ -164,7 +164,7 @@ impl SourceOperator {
                     col_names: col_names.clone(),
                 }
             }
-            super::super::operator_spec::SourceSpec::StorageScanVertices {
+            super::spec::SourceSpec::StorageScanVertices {
                 space_name,
                 limit,
                 col_names,
@@ -179,7 +179,7 @@ impl SourceOperator {
                 current_index: 0,
                 col_names: col_names.clone(),
             },
-            super::super::operator_spec::SourceSpec::ScanEdges { rows, col_names } => {
+            super::spec::SourceSpec::ScanEdges { rows, col_names } => {
                 Self::ScanEdges {
                     partition_id: 0,
                     buffer: rows.clone(),
@@ -187,7 +187,7 @@ impl SourceOperator {
                     col_names: col_names.clone(),
                 }
             }
-            super::super::operator_spec::SourceSpec::StorageScanEdges {
+            super::spec::SourceSpec::StorageScanEdges {
                 space_name,
                 limit,
                 edge_type,
@@ -204,7 +204,7 @@ impl SourceOperator {
                 current_index: 0,
                 col_names: col_names.clone(),
             },
-            super::super::operator_spec::SourceSpec::GetVertices {
+            super::spec::SourceSpec::GetVertices {
                 space_name,
                 vertex_ids,
             } => Self::GetVertices {
@@ -213,7 +213,7 @@ impl SourceOperator {
                 vertex_ids: vertex_ids.clone(),
                 position: 0,
             },
-            super::super::operator_spec::SourceSpec::GetEdges {
+            super::spec::SourceSpec::GetEdges {
                 space_name,
                 edge_type,
                 src,
@@ -228,7 +228,7 @@ impl SourceOperator {
                 rank: *rank,
                 cursor: None,
             },
-            super::super::operator_spec::SourceSpec::GetNeighbors {
+            super::spec::SourceSpec::GetNeighbors {
                 space_name,
                 direction,
             } => Self::GetNeighbors {
@@ -237,7 +237,7 @@ impl SourceOperator {
                 direction: direction.clone(),
                 state: NeighborScanState::Init,
             },
-            super::super::operator_spec::SourceSpec::EdgeIndexScan {
+            super::spec::SourceSpec::EdgeIndexScan {
                 space_name,
                 edge_type,
             } => Self::EdgeIndexScan {
@@ -246,7 +246,7 @@ impl SourceOperator {
                 edge_type: edge_type.clone(),
                 cursor: None,
             },
-            super::super::operator_spec::SourceSpec::IndexScan {
+            super::spec::SourceSpec::IndexScan {
                 space_name,
                 index_name,
                 index_value,
@@ -258,8 +258,8 @@ impl SourceOperator {
                 resolved_ids: Vec::new(),
                 position: 0,
             },
-            super::super::operator_spec::SourceSpec::Argument => Self::Argument,
-            super::super::operator_spec::SourceSpec::GetProp {
+            super::spec::SourceSpec::Argument => Self::Argument,
+            super::spec::SourceSpec::GetProp {
                 space_name,
                 vertex_ids,
                 edge_ids,
@@ -271,7 +271,7 @@ impl SourceOperator {
                 edge_ids: edge_ids.clone(),
                 prop_names: prop_names.clone(),
             },
-            super::super::operator_spec::SourceSpec::LookupIndex {
+            super::spec::SourceSpec::LookupIndex {
                 space_name,
                 index_name,
                 index_condition,
@@ -283,7 +283,7 @@ impl SourceOperator {
                 index_condition: index_condition.clone(),
                 limit: *limit,
             },
-            super::super::operator_spec::SourceSpec::Start => Self::Start,
+            super::spec::SourceSpec::Start => Self::Start,
         }
     }
 

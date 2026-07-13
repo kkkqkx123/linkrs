@@ -4,8 +4,8 @@ use crate::core::types::expr::Expression;
 #[cfg(feature = "qdrant")]
 use crate::core::Value;
 use crate::query::executor::base::ExecutionContext;
-use crate::query::executor::streaming::operator_spec::VectorSpec;
-use crate::query::executor::streaming::physical_node::PhysicalNode;
+use crate::query::executor::streaming::operators::spec::VectorSpec;
+use crate::query::executor::streaming::plan::node::PhysicalNode;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 
 pub fn build_vector_node(

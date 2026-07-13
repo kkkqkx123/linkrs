@@ -7,9 +7,9 @@ use crate::core::types::operators::AggregateFunction;
 use crate::core::Value;
 use crate::query::executor::base::ExecutionContext;
 use crate::query::executor::streaming::executor::SortDirection;
-use crate::query::executor::streaming::operator_spec::{BlockingSpec, UnarySpec};
-use crate::query::executor::streaming::physical_node::PhysicalNode;
-use crate::query::executor::streaming::physical_properties::PhysicalProperties;
+use crate::query::executor::streaming::operators::spec::{BlockingSpec, UnarySpec};
+use crate::query::executor::streaming::plan::node::PhysicalNode;
+use crate::query::executor::streaming::plan::properties::PhysicalProperties;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 

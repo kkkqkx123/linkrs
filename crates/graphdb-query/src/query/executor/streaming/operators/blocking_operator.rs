@@ -6,6 +6,7 @@ use crate::core::types::expr::Expression;
 use crate::core::types::operators::AggregateFunction;
 use crate::core::value::NullType;
 use crate::core::Value;
+use crate::query::executor::streaming::spill::{SpilledFile, SpillManager, SpillReader};
 use crate::query::executor::base::MemoryTracker;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
@@ -17,7 +18,7 @@ use crate::query::executor::streaming::helpers::accumulator_states::{
 };
 use crate::query::executor::streaming::helpers::compare_values;
 use crate::query::executor::streaming::helpers::compute_aggregate;
-use crate::query::executor::streaming::operator_base::OperatorBase;
+use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::slot::SlotLayout;
 
 // ——— state structs ———
@@ -27,30 +28,35 @@ pub struct SortState {
     pub all_rows: Vec<Vec<Value>>,
     pub row_iter: Option<std::vec::IntoIter<Vec<Value>>>,
     pub col_names: Vec<String>,
+    pub spill_files: Vec<SpilledFile>,
 }
 
 #[derive(Debug)]
 pub struct AggregateState {
     pub all_rows: Vec<Vec<Value>>,
     pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+    pub spill_files: Vec<SpilledFile>,
 }
 
 #[derive(Debug)]
 pub struct GroupByState {
     pub all_rows: Vec<Vec<Value>>,
     pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+    pub spill_files: Vec<SpilledFile>,
 }
 
 #[derive(Debug)]
 pub struct WindowFunctionState {
     pub all_rows: Vec<Vec<Value>>,
     pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+    pub spill_files: Vec<SpilledFile>,
 }
 
 #[derive(Debug)]
 pub struct WindowState {
     pub all_rows: Vec<Vec<Value>>,
     pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+    pub spill_files: Vec<SpilledFile>,
 }
 
 #[derive(Debug)]
@@ -64,6 +70,7 @@ pub struct TopNState {
 pub struct DistinctState {
     pub seen_rows: std::collections::HashSet<Vec<Value>>,
     pub col_names: Vec<String>,
+    pub spill_files: Vec<SpilledFile>,
 }
 
 #[derive(Debug)]
@@ -71,18 +78,21 @@ pub struct MaterializeState {
     pub materialized_rows: Vec<Vec<Value>>,
     pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
     pub materialized: bool,
+    pub spill_files: Vec<SpilledFile>,
 }
 
 #[derive(Debug)]
 pub struct DataCollectState {
     pub all_rows: Vec<Vec<Value>>,
     pub emitted: bool,
+    pub spill_files: Vec<SpilledFile>,
 }
 
 #[derive(Debug)]
 pub struct RollUpApplyState {
     pub all_rows: Vec<Vec<Value>>,
     pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+    pub spill_files: Vec<SpilledFile>,
 }
 
 /// State for the local partial aggregate operator.
@@ -93,6 +103,7 @@ pub struct PartialAggregateState {
     pub group_map: HashMap<Vec<Value>, Vec<AggregateAccumulator>>,
     pub col_names: Vec<String>,
     pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+    pub spill_files: Vec<SpilledFile>,
 }
 
 /// State for the global final aggregate operator.
@@ -103,6 +114,41 @@ pub struct FinalAggregateState {
     pub group_map: HashMap<Vec<Value>, Vec<AggregateAccumulator>>,
     pub col_names: Vec<String>,
     pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+    pub spill_files: Vec<SpilledFile>,
+}
+
+/// Spill all rows in `buffer` to a new file, clear the buffer, and reset tracker.
+fn spill_buffer(
+    buffer: &mut Vec<Vec<Value>>,
+    sm: &SpillManager,
+    spill_files: &mut Vec<SpilledFile>,
+    tracker: &mut MemoryTracker,
+) -> Result<(), QueryError> {
+    if buffer.is_empty() {
+        return Ok(());
+    }
+    let mut writer = sm.create_writer()?;
+    writer.write_rows(buffer)?;
+    let file = writer.finalize()?;
+    buffer.clear();
+    tracker.reset();
+    spill_files.push(file);
+    Ok(())
+}
+
+/// Read all rows from spill files.
+fn drain_spill_files(
+    spill_files: &mut Vec<SpilledFile>,
+    _sm: &SpillManager,
+) -> Result<Vec<Vec<Value>>, QueryError> {
+    let mut all = Vec::new();
+    for sf in spill_files.drain(..) {
+        let mut reader = SpillReader::open(&sf)?;
+        while let Some(row) = reader.read_row()? {
+            all.push(row);
+        }
+    }
+    Ok(all)
 }
 
 #[derive(Debug)]
@@ -188,11 +234,11 @@ pub enum BlockingOperator {
 impl BlockingOperator {
     /// Create a BlockingOperator with fresh mutable state from an immutable spec.
     pub fn from_spec(
-        spec: &super::super::operator_spec::BlockingSpec,
+        spec: &super::spec::BlockingSpec,
         memory_budget: &crate::query::executor::base::MemoryBudget,
     ) -> Self {
         match spec {
-            super::super::operator_spec::BlockingSpec::Sort {
+            super::spec::BlockingSpec::Sort {
                 sort_expressions,
                 sort_directions,
             } => Self::Sort {
@@ -203,7 +249,7 @@ impl BlockingOperator {
                 ),
                 state: None,
             },
-            super::super::operator_spec::BlockingSpec::Aggregate {
+            super::spec::BlockingSpec::Aggregate {
                 group_by_expressions,
                 aggregate_functions,
                 output_col_names,
@@ -216,7 +262,7 @@ impl BlockingOperator {
                 ),
                 state: None,
             },
-            super::super::operator_spec::BlockingSpec::GroupBy {
+            super::spec::BlockingSpec::GroupBy {
                 group_by_expressions,
             } => Self::GroupBy {
                 group_by_expressions: group_by_expressions.clone(),
@@ -225,7 +271,7 @@ impl BlockingOperator {
                 ),
                 state: None,
             },
-            super::super::operator_spec::BlockingSpec::WindowFunction {
+            super::spec::BlockingSpec::WindowFunction {
                 window_exprs,
                 partition_by_exprs,
                 order_by_exprs,
@@ -240,7 +286,7 @@ impl BlockingOperator {
                 ),
                 state: None,
             },
-            super::super::operator_spec::BlockingSpec::Window {
+            super::spec::BlockingSpec::Window {
                 window_exprs,
                 partition_by_exprs,
                 order_by_exprs,
@@ -255,7 +301,7 @@ impl BlockingOperator {
                 ),
                 state: None,
             },
-            super::super::operator_spec::BlockingSpec::TopN {
+            super::spec::BlockingSpec::TopN {
                 n,
                 sort_expressions,
                 sort_directions,
@@ -268,25 +314,25 @@ impl BlockingOperator {
                 ),
                 state: None,
             },
-            super::super::operator_spec::BlockingSpec::Distinct => Self::Distinct {
+            super::spec::BlockingSpec::Distinct => Self::Distinct {
                 memory_tracker: crate::query::executor::base::MemoryTracker::new(
                     memory_budget.clone(),
                 ),
                 state: None,
             },
-            super::super::operator_spec::BlockingSpec::Materialize => Self::Materialize {
+            super::spec::BlockingSpec::Materialize => Self::Materialize {
                 memory_tracker: crate::query::executor::base::MemoryTracker::new(
                     memory_budget.clone(),
                 ),
                 state: None,
             },
-            super::super::operator_spec::BlockingSpec::DataCollect => Self::DataCollect {
+            super::spec::BlockingSpec::DataCollect => Self::DataCollect {
                 memory_tracker: crate::query::executor::base::MemoryTracker::new(
                     memory_budget.clone(),
                 ),
                 state: None,
             },
-            super::super::operator_spec::BlockingSpec::RollUpApply { rollup_expressions } => {
+            super::spec::BlockingSpec::RollUpApply { rollup_expressions } => {
                 Self::RollUpApply {
                     rollup_expressions: rollup_expressions.clone(),
                     memory_tracker: crate::query::executor::base::MemoryTracker::new(
@@ -295,7 +341,7 @@ impl BlockingOperator {
                     state: None,
                 }
             }
-            super::super::operator_spec::BlockingSpec::PartialAggregate {
+            super::spec::BlockingSpec::PartialAggregate {
                 group_by_expressions,
                 aggregate_functions,
                 output_col_names,
@@ -308,7 +354,7 @@ impl BlockingOperator {
                 ),
                 state: None,
             },
-            super::super::operator_spec::BlockingSpec::FinalAggregate {
+            super::spec::BlockingSpec::FinalAggregate {
                 group_by_expressions,
                 aggregate_functions,
                 output_col_names,
@@ -352,30 +398,35 @@ impl BlockingOperator {
                     all_rows: vec![],
                     row_iter: None,
                     col_names: vec![],
+                    spill_files: vec![],
                 });
             }
             Self::Aggregate { state, .. } => {
                 *state = Some(AggregateState {
                     all_rows: vec![],
                     result_iter: None,
+                    spill_files: vec![],
                 });
             }
             Self::GroupBy { state, .. } => {
                 *state = Some(GroupByState {
                     all_rows: vec![],
                     result_iter: None,
+                    spill_files: vec![],
                 });
             }
             Self::WindowFunction { state, .. } => {
                 *state = Some(WindowFunctionState {
                     all_rows: vec![],
                     result_iter: None,
+                    spill_files: vec![],
                 });
             }
             Self::Window { state, .. } => {
                 *state = Some(WindowState {
                     all_rows: vec![],
                     result_iter: None,
+                    spill_files: vec![],
                 });
             }
             Self::TopN { state, .. } => {
@@ -389,6 +440,7 @@ impl BlockingOperator {
                 *state = Some(DistinctState {
                     seen_rows: std::collections::HashSet::new(),
                     col_names: Vec::new(),
+                    spill_files: vec![],
                 });
             }
             Self::Materialize { state, .. } => {
@@ -396,18 +448,21 @@ impl BlockingOperator {
                     materialized_rows: vec![],
                     result_iter: None,
                     materialized: false,
+                    spill_files: vec![],
                 });
             }
             Self::DataCollect { state, .. } => {
                 *state = Some(DataCollectState {
                     all_rows: vec![],
                     emitted: false,
+                    spill_files: vec![],
                 });
             }
             Self::RollUpApply { state, .. } => {
                 *state = Some(RollUpApplyState {
                     all_rows: vec![],
                     result_iter: None,
+                    spill_files: vec![],
                 });
             }
             Self::PartialAggregate { state, .. } => {
@@ -415,6 +470,7 @@ impl BlockingOperator {
                     group_map: HashMap::new(),
                     col_names: vec![],
                     result_iter: None,
+                    spill_files: vec![],
                 });
             }
             Self::FinalAggregate { state, .. } => {
@@ -422,6 +478,7 @@ impl BlockingOperator {
                     group_map: HashMap::new(),
                     col_names: vec![],
                     result_iter: None,
+                    spill_files: vec![],
                 });
             }
         }
@@ -450,10 +507,26 @@ impl BlockingOperator {
                         if state.col_names.is_empty() {
                             state.col_names = chunk.col_names();
                         }
-                        for row in &chunk.rows {
-                            memory_tracker.try_reserve_row(row)?;
+                        for row in chunk.rows {
+                            if let Err(e) = memory_tracker.try_reserve_row(&row) {
+                                if let Some(sm) = base.spill_manager() {
+                                    spill_buffer(&mut state.all_rows, &sm, &mut state.spill_files, memory_tracker)?;
+                                    memory_tracker.try_reserve_row(&row)?;
+                                } else {
+                                    return Err(e);
+                                }
+                            }
+                            state.all_rows.push(row);
                         }
-                        state.all_rows.extend(chunk.rows);
+                    }
+
+                    if !state.spill_files.is_empty() {
+                        if let Some(sm) = base.spill_manager() {
+                            let spilled = drain_spill_files(&mut state.spill_files, &sm)?;
+                            let mut combined = spilled;
+                            combined.append(&mut state.all_rows);
+                            state.all_rows = combined;
+                        }
                     }
 
                     if !sort_expressions.is_empty() {
@@ -522,10 +595,26 @@ impl BlockingOperator {
                         if col_names.is_empty() {
                             col_names = chunk.col_names();
                         }
-                        for row in &chunk.rows {
-                            memory_tracker.try_reserve_row(row)?;
+                        for row in chunk.rows {
+                            if let Err(e) = memory_tracker.try_reserve_row(&row) {
+                                if let Some(sm) = base.spill_manager() {
+                                    spill_buffer(&mut state.all_rows, &sm, &mut state.spill_files, memory_tracker)?;
+                                    memory_tracker.try_reserve_row(&row)?;
+                                } else {
+                                    return Err(e);
+                                }
+                            }
+                            state.all_rows.push(row);
                         }
-                        state.all_rows.extend(chunk.rows);
+                    }
+
+                    if !state.spill_files.is_empty() {
+                        if let Some(sm) = base.spill_manager() {
+                            let spilled = drain_spill_files(&mut state.spill_files, &sm)?;
+                            let mut combined = spilled;
+                            combined.append(&mut state.all_rows);
+                            state.all_rows = combined;
+                        }
                     }
 
                     let mut group_map: HashMap<Vec<Value>, Vec<Vec<Value>>> = HashMap::new();
@@ -599,10 +688,26 @@ impl BlockingOperator {
                 if state.result_iter.is_none() {
                     while let Some(chunk) = input.advance()? {
                         base.ensure_not_cancelled()?;
-                        for row in &chunk.rows {
-                            memory_tracker.try_reserve_row(row)?;
+                        for row in chunk.rows {
+                            if let Err(e) = memory_tracker.try_reserve_row(&row) {
+                                if let Some(sm) = base.spill_manager() {
+                                    spill_buffer(&mut state.all_rows, &sm, &mut state.spill_files, memory_tracker)?;
+                                    memory_tracker.try_reserve_row(&row)?;
+                                } else {
+                                    return Err(e);
+                                }
+                            }
+                            state.all_rows.push(row);
                         }
-                        state.all_rows.extend(chunk.rows);
+                    }
+
+                    if !state.spill_files.is_empty() {
+                        if let Some(sm) = base.spill_manager() {
+                            let spilled = drain_spill_files(&mut state.spill_files, &sm)?;
+                            let mut combined = spilled;
+                            combined.append(&mut state.all_rows);
+                            state.all_rows = combined;
+                        }
                     }
 
                     if state.all_rows.is_empty() {
@@ -660,10 +765,26 @@ impl BlockingOperator {
                         if col_names.is_empty() {
                             col_names = chunk.col_names();
                         }
-                        for row in &chunk.rows {
-                            memory_tracker.try_reserve_row(row)?;
+                        for row in chunk.rows {
+                            if let Err(e) = memory_tracker.try_reserve_row(&row) {
+                                if let Some(sm) = base.spill_manager() {
+                                    spill_buffer(&mut state.all_rows, &sm, &mut state.spill_files, memory_tracker)?;
+                                    memory_tracker.try_reserve_row(&row)?;
+                                } else {
+                                    return Err(e);
+                                }
+                            }
+                            state.all_rows.push(row);
                         }
-                        state.all_rows.extend(chunk.rows);
+                    }
+
+                    if !state.spill_files.is_empty() {
+                        if let Some(sm) = base.spill_manager() {
+                            let spilled = drain_spill_files(&mut state.spill_files, &sm)?;
+                            let mut combined = spilled;
+                            combined.append(&mut state.all_rows);
+                            state.all_rows = combined;
+                        }
                     }
 
                     if state.all_rows.is_empty() {
@@ -793,10 +914,26 @@ impl BlockingOperator {
                         if col_names.is_empty() {
                             col_names = chunk.col_names();
                         }
-                        for row in &chunk.rows {
-                            memory_tracker.try_reserve_row(row)?;
+                        for row in chunk.rows {
+                            if let Err(e) = memory_tracker.try_reserve_row(&row) {
+                                if let Some(sm) = base.spill_manager() {
+                                    spill_buffer(&mut state.all_rows, &sm, &mut state.spill_files, memory_tracker)?;
+                                    memory_tracker.try_reserve_row(&row)?;
+                                } else {
+                                    return Err(e);
+                                }
+                            }
+                            state.all_rows.push(row);
                         }
-                        state.all_rows.extend(chunk.rows);
+                    }
+
+                    if !state.spill_files.is_empty() {
+                        if let Some(sm) = base.spill_manager() {
+                            let spilled = drain_spill_files(&mut state.spill_files, &sm)?;
+                            let mut combined = spilled;
+                            combined.append(&mut state.all_rows);
+                            state.all_rows = combined;
+                        }
                     }
 
                     if state.all_rows.is_empty() {
@@ -1051,11 +1188,28 @@ impl BlockingOperator {
                 if !state.materialized {
                     while let Some(chunk) = input.advance()? {
                         base.ensure_not_cancelled()?;
-                        for row in &chunk.rows {
-                            memory_tracker.try_reserve_row(row)?;
+                        for row in chunk.rows {
+                            if let Err(e) = memory_tracker.try_reserve_row(&row) {
+                                if let Some(sm) = base.spill_manager() {
+                                    spill_buffer(&mut state.materialized_rows, &sm, &mut state.spill_files, memory_tracker)?;
+                                    memory_tracker.try_reserve_row(&row)?;
+                                } else {
+                                    return Err(e);
+                                }
+                            }
+                            state.materialized_rows.push(row);
                         }
-                        state.materialized_rows.extend(chunk.rows);
                     }
+
+                    if !state.spill_files.is_empty() {
+                        if let Some(sm) = base.spill_manager() {
+                            let spilled = drain_spill_files(&mut state.spill_files, &sm)?;
+                            let mut combined = spilled;
+                            combined.append(&mut state.materialized_rows);
+                            state.materialized_rows = combined;
+                        }
+                    }
+
                     state.materialized = true;
                     state.result_iter =
                         Some(std::mem::take(&mut state.materialized_rows).into_iter());
@@ -1088,10 +1242,26 @@ impl BlockingOperator {
 
                 while let Some(chunk) = input.advance()? {
                     base.ensure_not_cancelled()?;
-                    for row in &chunk.rows {
-                        memory_tracker.try_reserve_row(row)?;
+                    for row in chunk.rows {
+                        if let Err(e) = memory_tracker.try_reserve_row(&row) {
+                            if let Some(sm) = base.spill_manager() {
+                                spill_buffer(&mut state.all_rows, &sm, &mut state.spill_files, memory_tracker)?;
+                                memory_tracker.try_reserve_row(&row)?;
+                            } else {
+                                return Err(e);
+                            }
+                        }
+                        state.all_rows.push(row);
                     }
-                    state.all_rows.extend(chunk.rows);
+                }
+
+                if !state.spill_files.is_empty() {
+                    if let Some(sm) = base.spill_manager() {
+                        let spilled = drain_spill_files(&mut state.spill_files, &sm)?;
+                        let mut combined = spilled;
+                        combined.append(&mut state.all_rows);
+                        state.all_rows = combined;
+                    }
                 }
 
                 if !state.all_rows.is_empty() {
@@ -1121,10 +1291,15 @@ impl BlockingOperator {
                         if col_names.is_empty() {
                             col_names = chunk.col_names();
                         }
-                        for row in &chunk.rows {
-                            memory_tracker.try_reserve_row(row)?;
-                        }
                         for row in chunk.rows {
+                            if let Err(e) = memory_tracker.try_reserve_row(&row) {
+                                if let Some(sm) = base.spill_manager() {
+                                    spill_buffer(&mut state.all_rows, &sm, &mut state.spill_files, memory_tracker)?;
+                                    memory_tracker.try_reserve_row(&row)?;
+                                } else {
+                                    return Err(e);
+                                }
+                            }
                             let mut ctx =
                                 ValueRowContext::from_names(row.clone(), col_names.clone());
                             let mut aggregated = row.clone();
@@ -1137,6 +1312,16 @@ impl BlockingOperator {
                             state.all_rows.push(aggregated);
                         }
                     }
+
+                    if !state.spill_files.is_empty() {
+                        if let Some(sm) = base.spill_manager() {
+                            let spilled = drain_spill_files(&mut state.spill_files, &sm)?;
+                            let mut combined = spilled;
+                            combined.append(&mut state.all_rows);
+                            state.all_rows = combined;
+                        }
+                    }
+
                     state.result_iter = Some(std::mem::take(&mut state.all_rows).into_iter());
                 }
 
@@ -1187,7 +1372,7 @@ impl BlockingOperator {
                                 state.group_map.entry(group_key).or_insert_with(|| {
                                     aggregate_functions
                                         .iter()
-                                        .filter_map(|f| AggregateAccumulator::for_function(f))
+                                        .filter_map(AggregateAccumulator::for_function)
                                         .collect()
                                 });
 
@@ -1266,17 +1451,17 @@ impl BlockingOperator {
                                 state.group_map.entry(group_key).or_insert_with(|| {
                                     aggregate_functions
                                         .iter()
-                                        .filter_map(|f| AggregateAccumulator::for_function(f))
+                                        .filter_map(AggregateAccumulator::for_function)
                                         .collect()
                                 });
 
-                            for i in 0..num_agg_funcs {
+                            for (i, func) in aggregate_functions.iter().enumerate().take(num_agg_funcs) {
                                 if let Some(acc) = group_accs.get_mut(i) {
                                     let acc_col_idx = num_group_keys + i;
                                     let partial_value = row.get(acc_col_idx);
                                     if let Some(val) = partial_value {
                                         let partial_acc = value_to_partial_accumulator(
-                                            &aggregate_functions[i],
+                                            &func,
                                             val,
                                         );
                                         if let Some(other) = partial_acc {
@@ -1506,6 +1691,138 @@ impl BlockingOperator {
                 }
                 Ok(())
             }
+        }
+    }
+
+    /// Spill operator state to disk using the given manager.
+    pub fn spill_with_manager(&mut self, sm: &SpillManager) -> Result<(), QueryError> {
+        match self {
+            Self::Sort { state, memory_tracker, .. } => {
+                if let Some(ref mut s) = state {
+                    spill_buffer(&mut s.all_rows, sm, &mut s.spill_files, memory_tracker)?;
+                }
+                Ok(())
+            }
+            Self::Aggregate { state, memory_tracker, .. } => {
+                if let Some(ref mut s) = state {
+                    spill_buffer(&mut s.all_rows, sm, &mut s.spill_files, memory_tracker)?;
+                }
+                Ok(())
+            }
+            Self::GroupBy { state, memory_tracker, .. } => {
+                if let Some(ref mut s) = state {
+                    spill_buffer(&mut s.all_rows, sm, &mut s.spill_files, memory_tracker)?;
+                }
+                Ok(())
+            }
+            Self::WindowFunction { state, memory_tracker, .. } => {
+                if let Some(ref mut s) = state {
+                    spill_buffer(&mut s.all_rows, sm, &mut s.spill_files, memory_tracker)?;
+                }
+                Ok(())
+            }
+            Self::Window { state, memory_tracker, .. } => {
+                if let Some(ref mut s) = state {
+                    spill_buffer(&mut s.all_rows, sm, &mut s.spill_files, memory_tracker)?;
+                }
+                Ok(())
+            }
+            Self::TopN { .. } => Ok(()),
+            Self::Distinct { state, memory_tracker, .. } => {
+                if let Some(ref mut s) = state {
+                    if !s.seen_rows.is_empty() {
+                        let rows: Vec<Vec<Value>> = s.seen_rows.iter().cloned().collect();
+                        let mut writer = sm.create_writer()?;
+                        writer.write_rows(&rows)?;
+                        let file = writer.finalize()?;
+                        s.seen_rows.clear();
+                        memory_tracker.reset();
+                        s.spill_files.push(file);
+                    }
+                }
+                Ok(())
+            }
+            Self::Materialize { state, memory_tracker, .. } => {
+                if let Some(ref mut s) = state {
+                    spill_buffer(&mut s.materialized_rows, sm, &mut s.spill_files, memory_tracker)?;
+                }
+                Ok(())
+            }
+            Self::DataCollect { state, memory_tracker, .. } => {
+                if let Some(ref mut s) = state {
+                    spill_buffer(&mut s.all_rows, sm, &mut s.spill_files, memory_tracker)?;
+                }
+                Ok(())
+            }
+            Self::PartialAggregate { state, memory_tracker, .. } => {
+                if let Some(ref mut s) = state {
+                    if !s.group_map.is_empty() {
+                        let mut writer = sm.create_writer()?;
+                        for (key, accs) in &s.group_map {
+                            let mut row = key.clone();
+                            for acc in accs {
+                                row.push(accumulator_to_value(acc));
+                            }
+                            writer.write_row(&row)?;
+                        }
+                        let file = writer.finalize()?;
+                        s.group_map.clear();
+                        memory_tracker.reset();
+                        s.spill_files.push(file);
+                    }
+                }
+                Ok(())
+            }
+            Self::RollUpApply { state, memory_tracker, .. } => {
+                if let Some(ref mut s) = state {
+                    spill_buffer(&mut s.all_rows, sm, &mut s.spill_files, memory_tracker)?;
+                }
+                Ok(())
+            }
+            Self::FinalAggregate { state, memory_tracker, .. } => {
+                if let Some(ref mut s) = state {
+                    if !s.group_map.is_empty() {
+                        let mut writer = sm.create_writer()?;
+                        for (key, accs) in &s.group_map {
+                            let mut row = key.clone();
+                            for acc in accs {
+                                row.push(accumulator_to_value(acc));
+                            }
+                            writer.write_row(&row)?;
+                        }
+                        let file = writer.finalize()?;
+                        s.group_map.clear();
+                        memory_tracker.reset();
+                        s.spill_files.push(file);
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Total bytes spilled to disk across all spill files.
+    pub fn spilled_bytes(&self) -> u64 {
+        macro_rules! sum_spill {
+            ($state:expr) => {
+                $state.as_ref().map_or(0, |s| {
+                    s.spill_files.iter().map(|f| f.byte_size).sum::<u64>()
+                })
+            };
+        }
+        match self {
+            Self::Sort { state, .. } => sum_spill!(state),
+            Self::Aggregate { state, .. } => sum_spill!(state),
+            Self::GroupBy { state, .. } => sum_spill!(state),
+            Self::WindowFunction { state, .. } => sum_spill!(state),
+            Self::Window { state, .. } => sum_spill!(state),
+            Self::TopN { .. } => 0,
+            Self::Distinct { state, .. } => sum_spill!(state),
+            Self::Materialize { state, .. } => sum_spill!(state),
+            Self::DataCollect { state, .. } => sum_spill!(state),
+            Self::RollUpApply { state, .. } => sum_spill!(state),
+            Self::PartialAggregate { state, .. } => sum_spill!(state),
+            Self::FinalAggregate { state, .. } => sum_spill!(state),
         }
     }
 }

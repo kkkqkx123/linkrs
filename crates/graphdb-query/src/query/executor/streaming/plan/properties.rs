@@ -4,7 +4,7 @@
 //! distribution, ordering, pipeline kind, parallelism, and memory policy.
 //! Used in the cost model, optimizer, and parallel execution planning.
 
-use super::executor::SortDirection;
+use super::super::executor::SortDirection;
 
 /// Data distribution strategy for the output of a physical node.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -18,12 +18,12 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use super::operator_spec::{
+use super::super::operators::spec::{
     ApplySpec, BlockingSpec, DdlSpec, ExchangeSpec, FulltextSpec, GraphSpec, JoinSpec, SetSpec,
     SinkSpec, SourceSpec, TxnSpec, UnarySpec, VectorSpec,
 };
-use super::physical_properties::PhysicalProperties;
-use super::slot::SlotLayout;
+use super::properties::PhysicalProperties;
+use super::super::slot::SlotLayout;
 
 // ── Identity types ──────────────────────────────────────────────────────────
 

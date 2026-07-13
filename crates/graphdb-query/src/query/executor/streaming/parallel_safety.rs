@@ -82,7 +82,7 @@ pub fn is_parallel_safe(tree: &StreamingExecutor) -> bool {
 mod tests {
     use crate::core::Value;
     use crate::query::executor::streaming::executor::StreamingExecutor;
-    use crate::query::executor::streaming::operator_base::OperatorBase;
+    use crate::query::executor::streaming::operators::base::OperatorBase;
     use crate::query::executor::streaming::operators::source_operator::SourceOperator;
     use crate::query::executor::streaming::operators::unary_operator::UnaryOperator;
 

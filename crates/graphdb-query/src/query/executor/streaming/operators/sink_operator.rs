@@ -13,7 +13,7 @@ use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::context::ValueRowContext;
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::query::executor::streaming::operator_base::OperatorBase;
+use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::storage::{StorageClient, StorageWriter};
 
 #[derive(Debug)]
@@ -109,9 +109,9 @@ fn eval_expr(expr: &Expression, context: &mut ValueRowContext) -> Result<Value, 
 }
 
 impl SinkOperator {
-    pub fn from_spec(spec: &super::super::operator_spec::SinkSpec) -> Self {
+    pub fn from_spec(spec: &super::spec::SinkSpec) -> Self {
         match spec {
-            super::super::operator_spec::SinkSpec::InsertVertices {
+            super::spec::SinkSpec::InsertVertices {
                 storage,
                 space_name,
                 vertex_properties,
@@ -123,7 +123,7 @@ impl SinkOperator {
                 tags: tags.clone(),
                 rows_inserted: 0,
             },
-            super::super::operator_spec::SinkSpec::InsertEdges {
+            super::spec::SinkSpec::InsertEdges {
                 storage,
                 space_name,
                 src_col,
@@ -139,7 +139,7 @@ impl SinkOperator {
                 edge_properties: edge_properties.clone(),
                 rows_inserted: 0,
             },
-            super::super::operator_spec::SinkSpec::UpdateVertices {
+            super::spec::SinkSpec::UpdateVertices {
                 storage,
                 space_name,
                 updates,
@@ -149,7 +149,7 @@ impl SinkOperator {
                 updates: updates.clone(),
                 rows_updated: 0,
             },
-            super::super::operator_spec::SinkSpec::UpdateEdges {
+            super::spec::SinkSpec::UpdateEdges {
                 storage,
                 space_name,
                 src_col,
@@ -165,7 +165,7 @@ impl SinkOperator {
                 updates: updates.clone(),
                 rows_updated: 0,
             },
-            super::super::operator_spec::SinkSpec::DeleteVertices {
+            super::spec::SinkSpec::DeleteVertices {
                 storage,
                 space_name,
                 vertex_id_col,
@@ -175,7 +175,7 @@ impl SinkOperator {
                 vertex_id_col: vertex_id_col.clone(),
                 rows_deleted: 0,
             },
-            super::super::operator_spec::SinkSpec::DeleteEdges {
+            super::spec::SinkSpec::DeleteEdges {
                 storage,
                 space_name,
                 src_col,
@@ -187,7 +187,7 @@ impl SinkOperator {
                 dst_col: dst_col.clone(),
                 rows_deleted: 0,
             },
-            super::super::operator_spec::SinkSpec::PipeDeleteVertices {
+            super::spec::SinkSpec::PipeDeleteVertices {
                 storage,
                 space_name,
                 vertex_id_col,
@@ -197,7 +197,7 @@ impl SinkOperator {
                 vertex_id_col: vertex_id_col.clone(),
                 rows_deleted: 0,
             },
-            super::super::operator_spec::SinkSpec::PipeDeleteEdges {
+            super::spec::SinkSpec::PipeDeleteEdges {
                 storage,
                 space_name,
                 src_col,
@@ -209,7 +209,7 @@ impl SinkOperator {
                 dst_col: dst_col.clone(),
                 rows_deleted: 0,
             },
-            super::super::operator_spec::SinkSpec::DeleteTags {
+            super::spec::SinkSpec::DeleteTags {
                 storage,
                 space_name,
                 tag_names,

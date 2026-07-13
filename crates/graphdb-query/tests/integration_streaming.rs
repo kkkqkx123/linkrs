@@ -7,7 +7,7 @@ use graphdb_query::core::types::expr::Expression;
 use graphdb_query::core::Value;
 use graphdb_query::query::executor::base::{MemoryBudget, MemoryTracker};
 use graphdb_query::query::executor::streaming::executor::StreamingExecutor;
-use graphdb_query::query::executor::streaming::operator_base::OperatorBase;
+use graphdb_query::query::executor::streaming::operators::base::OperatorBase;
 use graphdb_query::query::executor::streaming::operators::blocking_operator::BlockingOperator;
 use graphdb_query::query::executor::streaming::operators::join_operator::JoinOperator;
 use graphdb_query::query::executor::streaming::operators::set_operator::SetOperator;

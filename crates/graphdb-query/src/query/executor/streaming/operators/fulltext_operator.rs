@@ -10,7 +10,7 @@ use crate::query::planning::plan::core::nodes::management::FulltextManageNode;
 use crate::query::core::NodeType;
 use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::query::executor::streaming::operator_base::OperatorBase;
+use crate::query::executor::streaming::operators::base::OperatorBase;
 #[cfg(feature = "fulltext-search")]
 use crate::query::executor::streaming::operators::ddl_operator::make_single_row;
 #[cfg(feature = "fulltext-search")]
@@ -107,12 +107,12 @@ pub enum FulltextOperator {
 impl FulltextOperator {
     /// Create a FulltextOperator from an immutable spec.
     pub fn from_spec(
-        spec: &super::super::operator_spec::FulltextSpec,
+        spec: &super::spec::FulltextSpec,
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         #[cfg(feature = "fulltext-search")] fulltext_manager: Option<Arc<FulltextIndexManager>>,
     ) -> Self {
         match spec {
-            super::super::operator_spec::FulltextSpec::FulltextManage {
+            super::spec::FulltextSpec::FulltextManage {
                 space_name,
                 command,
             } => FulltextOperator::FulltextManage {
@@ -122,7 +122,7 @@ impl FulltextOperator {
                 #[cfg(feature = "fulltext-search")]
                 fulltext_manager: fulltext_manager.clone(),
             },
-            super::super::operator_spec::FulltextSpec::FulltextSearch {
+            super::spec::FulltextSpec::FulltextSearch {
                 space_name,
                 space_id,
                 index_name,
@@ -140,7 +140,7 @@ impl FulltextOperator {
                 #[cfg(feature = "fulltext-search")]
                 fulltext_manager: fulltext_manager.clone(),
             },
-            super::super::operator_spec::FulltextSpec::FulltextLookup {
+            super::spec::FulltextSpec::FulltextLookup {
                 space_name,
                 space_id,
                 index_name,
@@ -158,7 +158,7 @@ impl FulltextOperator {
                 #[cfg(feature = "fulltext-search")]
                 fulltext_manager: fulltext_manager.clone(),
             },
-            super::super::operator_spec::FulltextSpec::MatchFulltext {
+            super::spec::FulltextSpec::MatchFulltext {
                 space_name,
                 match_expr,
                 match_field,

@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use super::executor::StreamingExecutor;
-use super::operator_base::OperatorBase;
+use super::operators::base::OperatorBase;
 use super::operators::source_operator::SourceOperator;
-use super::physical_node::PhysicalNode;
+use super::plan::node::PhysicalNode;
 use super::runtime::ExecutionRuntime;
 use crate::core::error::QueryError;
 use crate::core::Value;

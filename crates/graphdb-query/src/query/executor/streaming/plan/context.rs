@@ -4,14 +4,12 @@
 //! planning configuration — never runtime handles, storage clients,
 //! transaction handles, or per-query mutable state.
 //!
-//! This ensures the resulting [`PhysicalPlan`](super::physical_plan::PhysicalPlan)
+//! This ensures the resulting [`PhysicalPlan`](super::types::PhysicalPlan)
 //! is immutable, cacheable, and safe to share across concurrent executions.
 
 use crate::core::error::QueryError;
 use crate::query::executor::base::ExecutionContext;
-use crate::query::executor::streaming::physical_plan::{
-    FragmentIdAllocator, PhysicalOperatorIdAllocator,
-};
+use super::types::{FragmentIdAllocator, PhysicalOperatorIdAllocator};
 use crate::query::executor::streaming::slot::SlotLayout;
 
 /// Schema identifier for catalog lookups during plan building.
@@ -112,17 +110,17 @@ impl PhysicalPlanBuildContext {
     }
 
     /// Allocate a new physical operator ID from the unified arena.
-    pub fn allocate_operator_id(&mut self) -> crate::query::executor::streaming::physical_plan::PhysicalOperatorId {
+    pub fn allocate_operator_id(&mut self) -> crate::query::executor::streaming::plan::types::PhysicalOperatorId {
         self.operator_id_alloc.allocate()
     }
 
     /// Allocate a new fragment ID.
-    pub fn allocate_fragment_id(&mut self) -> crate::query::executor::streaming::physical_plan::FragmentId {
+    pub fn allocate_fragment_id(&mut self) -> crate::query::executor::streaming::plan::types::FragmentId {
         self.fragment_id_alloc.allocate()
     }
 
     /// Peek at the next operator ID without consuming it.
-    pub fn peek_operator_id(&self) -> crate::query::executor::streaming::physical_plan::PhysicalOperatorId {
+    pub fn peek_operator_id(&self) -> crate::query::executor::streaming::plan::types::PhysicalOperatorId {
         self.operator_id_alloc.peek()
     }
 

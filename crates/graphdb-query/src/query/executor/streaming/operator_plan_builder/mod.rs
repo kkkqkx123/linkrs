@@ -22,9 +22,9 @@ use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::BinaryOperator;
 use crate::query::executor::base::ExecutionContext;
-use crate::query::executor::streaming::operator_spec::{JoinSpec, SourceSpec};
-use crate::query::executor::streaming::physical_node::PhysicalNode;
-use crate::query::executor::streaming::physical_properties::PhysicalProperties;
+use crate::query::executor::streaming::operators::spec::{JoinSpec, SourceSpec};
+use crate::query::executor::streaming::plan::node::PhysicalNode;
+use crate::query::executor::streaming::plan::properties::PhysicalProperties;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 
 /// Build a physical operator plan for any planner node.

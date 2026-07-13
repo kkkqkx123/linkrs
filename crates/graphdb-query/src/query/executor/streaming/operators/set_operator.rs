@@ -5,7 +5,7 @@ use crate::core::Value;
 use crate::query::executor::base::{MemoryBudget, MemoryTracker};
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::query::executor::streaming::operator_base::OperatorBase;
+use crate::query::executor::streaming::operators::base::OperatorBase;
 
 #[derive(Debug)]
 pub enum SetOperator {
@@ -37,29 +37,29 @@ pub enum SetOperator {
 }
 
 impl SetOperator {
-    pub fn from_spec(spec: &super::super::operator_spec::SetSpec, budget: &MemoryBudget) -> Self {
+    pub fn from_spec(spec: &super::spec::SetSpec, budget: &MemoryBudget) -> Self {
         match spec {
-            super::super::operator_spec::SetSpec::Union => Self::Union {
+            super::spec::SetSpec::Union => Self::Union {
                 seen_rows: std::collections::HashSet::new(),
                 left_consumed: false,
                 memory_tracker: MemoryTracker::new(budget.clone()),
             },
-            super::super::operator_spec::SetSpec::UnionAll => Self::UnionAll {
+            super::spec::SetSpec::UnionAll => Self::UnionAll {
                 left_consumed: false,
             },
-            super::super::operator_spec::SetSpec::Intersect => Self::Intersect {
+            super::spec::SetSpec::Intersect => Self::Intersect {
                 left_rows: Vec::new(),
                 right_rows: std::collections::HashSet::new(),
                 left_buffered: false,
                 right_buffered: false,
                 memory_tracker: MemoryTracker::new(budget.clone()),
             },
-            super::super::operator_spec::SetSpec::Except => Self::Except {
+            super::spec::SetSpec::Except => Self::Except {
                 exclude_rows: std::collections::HashSet::new(),
                 right_buffered: false,
                 memory_tracker: MemoryTracker::new(budget.clone()),
             },
-            super::super::operator_spec::SetSpec::Minus => Self::Minus {
+            super::spec::SetSpec::Minus => Self::Minus {
                 exclude_rows: std::collections::HashSet::new(),
                 right_buffered: false,
                 memory_tracker: MemoryTracker::new(budget.clone()),
@@ -406,5 +406,47 @@ impl SetOperator {
                 }
             }
         }
+    }
+
+    pub fn spill_with_manager(&mut self, sm: &crate::query::executor::streaming::spill::SpillManager) -> Result<(), crate::core::error::QueryError> {
+        match self {
+            Self::Union { seen_rows, memory_tracker, .. } => {
+                if !seen_rows.is_empty() {
+                    let rows: Vec<Vec<crate::core::Value>> = seen_rows.iter().map(|s| {
+                        vec![crate::core::Value::String(s.clone())]
+                    }).collect();
+                    let mut writer = sm.create_writer()?;
+                    writer.write_rows(&rows)?;
+                    seen_rows.clear();
+                    memory_tracker.reset();
+                }
+                Ok(())
+            }
+            Self::Intersect { left_rows, right_rows, memory_tracker, .. } => {
+                if !left_rows.is_empty() {
+                    let mut writer = sm.create_writer()?;
+                    writer.write_rows(left_rows)?;
+                    left_rows.clear();
+                    memory_tracker.reset();
+                }
+                if !right_rows.is_empty() {
+                    right_rows.clear();
+                }
+                Ok(())
+            }
+            Self::Except { exclude_rows, memory_tracker, .. }
+            | Self::Minus { exclude_rows, memory_tracker, .. } => {
+                if !exclude_rows.is_empty() {
+                    exclude_rows.clear();
+                    memory_tracker.reset();
+                }
+                Ok(())
+            }
+            Self::UnionAll { .. } => Ok(()),
+        }
+    }
+
+    pub fn spilled_bytes(&self) -> u64 {
+        0
     }
 }

@@ -1,7 +1,7 @@
 //! OperatorState: Mutable per-execution state for operator nodes.
 //!
 //! Created fresh for each query execution from an immutable
-//! [`OperatorSpec`](super::operator_spec::OperatorSpec).  Holds cursors,
+//! [`OperatorSpec`](super::spec::OperatorSpec).  Holds cursors,
 //! buffers, hash tables, row iterators, and all other mutable data that
 //! must NOT be shared across concurrent executions of the same cached plan.
 
@@ -12,10 +12,10 @@ use crate::core::Value;
 use crate::query::executor::base::MemoryTracker;
 use crate::storage::cursor::{EdgeCursor, VertexCursor};
 
-use super::chunk::DataChunk;
-use super::executor::SortDirection;
-use super::operator_spec::SourceSpec;
-use super::operators::source_operator::NeighborScanState;
+use super::super::chunk::DataChunk;
+use super::super::executor::SortDirection;
+use super::spec::SourceSpec;
+use super::source_operator::NeighborScanState;
 
 // ── Source state ─────────────────────────────────────────────────────────────
 
@@ -173,7 +173,7 @@ impl UnaryState {
 // ── Blocking state ───────────────────────────────────────────────────────────
 
 /// Re-export state structs from blocking_operator for use here.
-pub use super::operators::blocking_operator::{
+pub use super::blocking_operator::{
     AggregateState, DataCollectState, DistinctState, FinalAggregateState, GroupByState,
     MaterializeState, PartialAggregateState, RollUpApplyState, SortState, TopNState,
     WindowFunctionState, WindowState,
@@ -280,7 +280,7 @@ pub enum JoinState {
         right_rows: Vec<Vec<Value>>,
         matched_right_indices: HashSet<usize>,
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
-        phase: super::executor::FullOuterJoinPhase,
+        phase: super::super::executor::FullOuterJoinPhase,
         memory_tracker: MemoryTracker,
         right_col_names: Vec<String>,
     },
@@ -434,17 +434,17 @@ pub enum DdlState {
 }
 
 impl DdlState {
-    pub fn from_spec(spec: &super::operator_spec::DdlSpec) -> Self {
+    pub fn from_spec(spec: &super::spec::DdlSpec) -> Self {
         match spec {
-            super::operator_spec::DdlSpec::SpaceManage { .. } => DdlState::SpaceManage,
-            super::operator_spec::DdlSpec::TagManage { .. } => DdlState::TagManage,
-            super::operator_spec::DdlSpec::EdgeManage { .. } => DdlState::EdgeManage,
-            super::operator_spec::DdlSpec::IndexManage { .. } => DdlState::IndexManage,
-            super::operator_spec::DdlSpec::DeleteIndex { .. } => DdlState::IndexManage,
-            super::operator_spec::DdlSpec::UserManage { .. } => DdlState::UserManage,
-            super::operator_spec::DdlSpec::ShowStats { .. } => DdlState::ShowStats,
-            super::operator_spec::DdlSpec::Analyze { .. } => DdlState::Analyze,
-            super::operator_spec::DdlSpec::Migrate { .. } => DdlState::Migrate,
+            super::spec::DdlSpec::SpaceManage { .. } => DdlState::SpaceManage,
+            super::spec::DdlSpec::TagManage { .. } => DdlState::TagManage,
+            super::spec::DdlSpec::EdgeManage { .. } => DdlState::EdgeManage,
+            super::spec::DdlSpec::IndexManage { .. } => DdlState::IndexManage,
+            super::spec::DdlSpec::DeleteIndex { .. } => DdlState::IndexManage,
+            super::spec::DdlSpec::UserManage { .. } => DdlState::UserManage,
+            super::spec::DdlSpec::ShowStats { .. } => DdlState::ShowStats,
+            super::spec::DdlSpec::Analyze { .. } => DdlState::Analyze,
+            super::spec::DdlSpec::Migrate { .. } => DdlState::Migrate,
         }
     }
 }
@@ -461,18 +461,18 @@ pub enum FulltextState {
 }
 
 impl FulltextState {
-    pub fn from_spec(spec: &super::operator_spec::FulltextSpec) -> Self {
+    pub fn from_spec(spec: &super::spec::FulltextSpec) -> Self {
         match spec {
-            super::operator_spec::FulltextSpec::FulltextManage { .. } => {
+            super::spec::FulltextSpec::FulltextManage { .. } => {
                 FulltextState::FulltextManage
             }
-            super::operator_spec::FulltextSpec::FulltextSearch { .. } => {
+            super::spec::FulltextSpec::FulltextSearch { .. } => {
                 FulltextState::FulltextSearch
             }
-            super::operator_spec::FulltextSpec::FulltextLookup { .. } => {
+            super::spec::FulltextSpec::FulltextLookup { .. } => {
                 FulltextState::FulltextLookup
             }
-            super::operator_spec::FulltextSpec::MatchFulltext { .. } => {
+            super::spec::FulltextSpec::MatchFulltext { .. } => {
                 FulltextState::MatchFulltext
             }
         }
@@ -491,12 +491,12 @@ pub enum VectorState {
 }
 
 impl VectorState {
-    pub fn from_spec(spec: &super::operator_spec::VectorSpec) -> Self {
+    pub fn from_spec(spec: &super::spec::VectorSpec) -> Self {
         match spec {
-            super::operator_spec::VectorSpec::VectorManage { .. } => VectorState::VectorManage,
-            super::operator_spec::VectorSpec::VectorSearch { .. } => VectorState::VectorSearch,
-            super::operator_spec::VectorSpec::VectorLookup { .. } => VectorState::VectorLookup,
-            super::operator_spec::VectorSpec::VectorMatch { .. } => VectorState::VectorMatch,
+            super::spec::VectorSpec::VectorManage { .. } => VectorState::VectorManage,
+            super::spec::VectorSpec::VectorSearch { .. } => VectorState::VectorSearch,
+            super::spec::VectorSpec::VectorLookup { .. } => VectorState::VectorLookup,
+            super::spec::VectorSpec::VectorMatch { .. } => VectorState::VectorMatch,
         }
     }
 }
@@ -512,11 +512,11 @@ pub enum TxnState {
 }
 
 impl TxnState {
-    pub fn from_spec(spec: &super::operator_spec::TxnSpec) -> Self {
+    pub fn from_spec(spec: &super::spec::TxnSpec) -> Self {
         match spec {
-            super::operator_spec::TxnSpec::BeginTransaction { .. } => TxnState::BeginTransaction,
-            super::operator_spec::TxnSpec::Commit { .. } => TxnState::Commit,
-            super::operator_spec::TxnSpec::Rollback { .. } => TxnState::Rollback,
+            super::spec::TxnSpec::BeginTransaction { .. } => TxnState::BeginTransaction,
+            super::spec::TxnSpec::Commit { .. } => TxnState::Commit,
+            super::spec::TxnSpec::Rollback { .. } => TxnState::Rollback,
         }
     }
 }

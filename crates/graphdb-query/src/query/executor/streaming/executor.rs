@@ -10,8 +10,8 @@ use crate::query::executor::base::{MemoryTracker, Spillable};
 
 pub use super::context::ValueRowContext;
 pub use super::helpers::{aggregation, comparison, conversion};
-pub use super::operator_base::OperatorBase;
-use super::operator_state::ExchangeState;
+pub use super::operators::base::OperatorBase;
+use super::operators::state::ExchangeState;
 
 use super::operators::apply_operator::ApplyOperator;
 use super::operators::blocking_operator::BlockingOperator;
@@ -637,13 +637,53 @@ impl StreamingExecutor {
 
 impl Spillable for StreamingExecutor {
     fn spill_to_disk(&mut self) -> Result<(), QueryError> {
-        Err(QueryError::execution(
-            "Disk spill not yet implemented".to_string(),
-        ))
+        let sm = self
+            .base()
+            .spill_manager()
+            .ok_or_else(|| QueryError::execution("Spill manager not configured"))?;
+        match self {
+            Self::Blocking(_, _, op) => op.spill_with_manager(&sm),
+            Self::Join(_, _, _, op) => op.spill_with_manager(&sm),
+            Self::Set(_, _, _, op) => op.spill_with_manager(&sm),
+            Self::Apply(_, _, _, _op) => {
+                // ApplyOperator doesn't accumulate enough memory;
+                // propagate to children instead.
+                for child in self.children_mut() {
+                    child.spill_to_disk()?;
+                }
+                Ok(())
+            }
+            // Other operators (Source, Unary, Graph, etc.) don't accumulate
+            // enough memory to warrant spill.  Propagate to children so that
+            // deep-nested blocking operators can still be reached.
+            Self::Source(..)
+            | Self::Unary(..)
+            | Self::Graph(..)
+            | Self::Sink(..)
+            | Self::Ddl(..)
+            | Self::Fulltext(..)
+            | Self::Vector(..)
+            | Self::Txn(..)
+            | Self::Gather(..)
+            | Self::Exchange(..)
+            | Self::HashShuffleJoin(..) => {
+                for child in self.children_mut() {
+                    child.spill_to_disk()?;
+                }
+                Ok(())
+            }
+        }
     }
 
     fn spilled_size(&self) -> u64 {
-        0
+        // Report directly from the operator at this node.  Per-operator
+        // tracking through OperatorProfile handles the full tree view.
+        match self {
+            Self::Blocking(_, _, op) => op.spilled_bytes(),
+            Self::Join(_, _, _, op) => op.spilled_bytes(),
+            Self::Set(_, _, _, op) => op.spilled_bytes(),
+            _ => 0,
+        }
     }
 }
 

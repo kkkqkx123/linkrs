@@ -158,7 +158,7 @@ mod tests {
     use crate::core::Value;
     use crate::query::executor::base::MemoryBudget;
     use crate::query::executor::streaming::executor::StreamingExecutor;
-    use crate::query::executor::streaming::operator_base::OperatorBase;
+    use crate::query::executor::streaming::operators::base::OperatorBase;
     use crate::query::executor::streaming::operators::source_operator::SourceOperator;
     use crate::query::executor::streaming::runtime::QueryIdentity;
 

@@ -10,7 +10,7 @@ use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::join_helpers::{
     build_combined_layout_from_schemas, evaluate_join_key, evaluate_residual_condition,
 };
-use crate::query::executor::streaming::operator_base::OperatorBase;
+use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::slot::SlotLayout;
 
 const CHUNK_SIZE: usize = 1024;

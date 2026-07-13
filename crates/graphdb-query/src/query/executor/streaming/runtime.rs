@@ -8,6 +8,7 @@ use parking_lot::Mutex;
 use parking_lot::RwLock;
 
 use crate::core::error::QueryError;
+use super::spill::SpillManager;
 use crate::query::executor::base::MemoryBudget;
 use crate::query::executor::streaming::pool::TaskScheduler;
 use crate::query::query_manager::QueryManager;
@@ -210,6 +211,8 @@ pub struct ExecutionRuntime {
     pub worker_pool: Arc<parking_lot::Mutex<Option<Arc<dyn TaskScheduler>>>>,
     /// Per-partition output channel capacity for parallel exchange/gather.
     pub max_buffered_chunks: AtomicUsize,
+    /// Spill manager for offloading operator data to disk.
+    pub spill_manager: Arc<parking_lot::Mutex<Option<Arc<SpillManager>>>>,
     /// Storage client for this query execution.
     /// Moved here from OperatorSpec so that the physical plan tree is
     /// truly immutable and cacheable without sharing storage handles.
@@ -242,6 +245,7 @@ impl ExecutionRuntime {
             query_manager: None,
             worker_pool: Arc::new(parking_lot::Mutex::new(None)),
             max_buffered_chunks: AtomicUsize::new(10),
+            spill_manager: Arc::new(parking_lot::Mutex::new(None)),
             storage,
             #[cfg(feature = "fulltext-search")]
             fulltext_manager,
@@ -394,6 +398,19 @@ impl ExecutionRuntime {
     /// through an `Arc<ExecutionRuntime>`.
     pub fn set_worker_pool(&self, pool: Option<super::pool::MorselWorkerPool>) {
         *self.worker_pool.lock() = pool.map(|p| Arc::new(p) as Arc<dyn TaskScheduler>);
+    }
+
+    /// Set the spill manager for this query execution.
+    pub fn set_spill_manager(&self, manager: Option<Arc<SpillManager>>) {
+        if let Some(ref m) = manager {
+            m.register_cleanup(self);
+        }
+        *self.spill_manager.lock() = manager;
+    }
+
+    /// Access the spill manager.
+    pub fn get_spill_manager(&self) -> Option<Arc<SpillManager>> {
+        self.spill_manager.lock().clone()
     }
 
     /// Set the per-partition output channel capacity for parallel operators.

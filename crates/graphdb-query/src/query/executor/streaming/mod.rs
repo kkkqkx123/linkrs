@@ -19,36 +19,33 @@ pub mod engine;
 pub mod executor;
 pub mod factory;
 pub mod helpers;
+pub mod instance;
 pub mod join_helpers;
-pub mod operator_base;
 pub mod operator_plan_builder;
-pub mod operator_spec;
-pub mod operator_state;
 pub mod operators;
 pub mod parallel_safety;
 pub mod partition;
-mod physical_builder;
-pub mod physical_node;
-pub mod physical_plan;
-pub mod physical_plan_context;
-pub mod physical_plan_validator;
-pub mod physical_properties;
+pub mod plan;
 pub mod pool;
 pub mod result_utils;
 pub mod runtime;
 pub mod slot;
+pub mod spill;
+pub mod state;
 pub mod stream;
 pub mod stream_result;
+pub mod transaction_scope;
 
 pub use builder::StreamingExecutorBuilder;
 pub use chunk::DataChunk;
 pub use engine::StreamingExecutionEngine;
 pub use executor::StreamingExecutor;
 pub use factory::StreamingQueryExecutor;
-pub use operator_spec::{BlockingSpec, ExchangeSpec, JoinSpec, SourceSpec, UnarySpec};
-pub use operator_state::{BlockingState, ExchangeState, JoinState, SourceState, UnaryState};
+pub use operators::base::OperatorBase;
+pub use operators::spec::{BlockingSpec, ExchangeSpec, JoinSpec, SourceSpec, UnarySpec};
+pub use operators::state::{BlockingState, ExchangeState, JoinState, SourceState, UnaryState};
 pub use partition::PartitionView;
-pub use physical_node::PhysicalNode;
+pub use plan::node::PhysicalNode;
 pub use result_utils::{chunks_to_execution_result, convert_chunks_to_dataset};
 pub use runtime::{
     ExecutionRuntime, OperatorProfile, OperatorProfileKey, ProfileCollector, QueryFinishGuard,
@@ -60,10 +57,23 @@ pub use slot::{
 pub use stream::ResultStream;
 pub use stream_result::StreamingQueryResult;
 
-pub use physical_plan::{
+pub use plan::types::{
     CapabilitySet, FragmentGraph, FragmentId, FragmentKind, FragmentSpec, LogicalNodeId,
     OperatorKindSpec, OutputContract, PhysicalOperatorId, PhysicalOperatorIdAllocator,
     PhysicalOperatorSpec, PhysicalPlan, PlanCompatibility,
 };
-pub use physical_plan_context::PhysicalPlanBuildContext;
-pub use physical_plan_validator::{PhysicalPlanValidator, ValidationResult, ValidationTier};
+pub use plan::context::PhysicalPlanBuildContext;
+pub use plan::validator::{PhysicalPlanValidator, ValidationResult, ValidationTier};
+
+// ── Spill types ──
+pub use spill::{RowBuffer, SpillConfig, SpilledFile, SpillManager, SpillReader, SpillWriter};
+
+// ── P2: New types ──
+pub use instance::{QueryBindings, QueryExecutionInstance, ResultSink};
+pub use state::{
+    GlobalState, GlobalStateArena, GlobalStateKey, LocalState, LocalStateArena, LocalStateKey,
+    StateArenaSet, TaskId,
+};
+pub use transaction_scope::{
+    SessionTransactionController, TransactionCommandResult, TransactionId, TransactionScope,
+};

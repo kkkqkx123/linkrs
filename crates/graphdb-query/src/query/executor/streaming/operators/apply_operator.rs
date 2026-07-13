@@ -6,8 +6,8 @@ use crate::query::executor::base::{MemoryBudget, MemoryTracker};
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::join_helpers::evaluate_join_key;
-use crate::query::executor::streaming::operator_base::OperatorBase;
-use crate::query::executor::streaming::operator_spec::{ApplyKind, ApplySpec};
+use crate::query::executor::streaming::operators::base::OperatorBase;
+use crate::query::executor::streaming::operators::spec::{ApplyKind, ApplySpec};
 use crate::query::executor::streaming::slot::{combine_layouts, SlotLayout};
 
 #[derive(Debug)]

@@ -7,7 +7,7 @@ use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::executor::ValueRowContext;
-use crate::query::executor::streaming::operator_base::OperatorBase;
+use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::slot::SlotLayout;
 
 #[derive(Debug)]
@@ -52,43 +52,43 @@ pub enum UnaryOperator {
 
 impl UnaryOperator {
     /// Create a UnaryOperator with fresh mutable state from an immutable spec.
-    pub fn from_spec(spec: &super::super::operator_spec::UnarySpec) -> Self {
+    pub fn from_spec(spec: &super::spec::UnarySpec) -> Self {
         match spec {
-            super::super::operator_spec::UnarySpec::Filter { predicate } => Self::Filter {
+            super::spec::UnarySpec::Filter { predicate } => Self::Filter {
                 predicate: predicate.clone(),
             },
-            super::super::operator_spec::UnarySpec::Project {
+            super::spec::UnarySpec::Project {
                 output_expressions,
                 output_col_names,
             } => Self::Project {
                 output_expressions: output_expressions.clone(),
                 output_col_names: output_col_names.clone(),
             },
-            super::super::operator_spec::UnarySpec::Limit { offset, limit } => Self::Limit {
+            super::spec::UnarySpec::Limit { offset, limit } => Self::Limit {
                 offset: *offset,
                 limit: *limit,
                 skipped: 0,
                 consumed: 0,
             },
-            super::super::operator_spec::UnarySpec::Assign { assignments } => Self::Assign {
+            super::spec::UnarySpec::Assign { assignments } => Self::Assign {
                 assignments: assignments.clone(),
             },
-            super::super::operator_spec::UnarySpec::Remove { columns_to_remove } => Self::Remove {
+            super::spec::UnarySpec::Remove { columns_to_remove } => Self::Remove {
                 columns_to_remove: columns_to_remove.clone(),
             },
-            super::super::operator_spec::UnarySpec::Unwind { unwind_column } => Self::Unwind {
+            super::spec::UnarySpec::Unwind { unwind_column } => Self::Unwind {
                 unwind_column: unwind_column.clone(),
                 col_index: None,
                 all_rows: Vec::new(),
                 current_row_index: 0,
                 current_unwind_index: 0,
             },
-            super::super::operator_spec::UnarySpec::AppendVertices { vertex_properties } => {
+            super::spec::UnarySpec::AppendVertices { vertex_properties } => {
                 Self::AppendVertices {
                     vertex_properties: vertex_properties.clone(),
                 }
             }
-            super::super::operator_spec::UnarySpec::Sample { count } => Self::Sample {
+            super::spec::UnarySpec::Sample { count } => Self::Sample {
                 count: *count,
                 consumed: 0,
             },

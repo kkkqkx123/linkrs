@@ -1,7 +1,7 @@
 use crate::core::error::QueryError;
 use crate::query::executor::base::ExecutionContext;
-use crate::query::executor::streaming::operator_spec::TxnSpec;
-use crate::query::executor::streaming::physical_node::PhysicalNode;
+use crate::query::executor::streaming::operators::spec::TxnSpec;
+use crate::query::executor::streaming::plan::node::PhysicalNode;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 
 pub fn build_txn_node(

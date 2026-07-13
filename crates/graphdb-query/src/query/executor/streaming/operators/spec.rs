@@ -24,7 +24,7 @@ use crate::storage::StorageClient;
 /// Immutable config for source operators.
 ///
 /// Mutable state (`cursor`, `buffer`, `current_index`, `partition_id`,
-/// `partition_range`) lives in [`SourceState`](super::operator_state::SourceState).
+/// `partition_range`) lives in [`SourceState`](super::state::SourceState).
 #[derive(Debug, Clone)]
 pub enum SourceSpec {
     ScanVertices {

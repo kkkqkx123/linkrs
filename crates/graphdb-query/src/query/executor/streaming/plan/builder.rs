@@ -4,20 +4,20 @@
 //! tree into [`BuildOutput`] — either a single global executor or a set of
 //! per-partition local trees — which the caller gathers into a final root.
 
-use super::builder::StreamingExecutorBuilder;
-use super::executor::StreamingExecutor;
-use super::operator_base::OperatorBase;
-use super::operator_plan_builder::relational;
-use super::operators::blocking_operator::BlockingOperator;
-use super::operators::gather_operator::GatherOperator;
-use super::operators::shuffle_join_operator::{HashJoinKind, HashShuffleJoinOperator};
-use super::partition::PartitionView;
-use super::partition_builder;
+use super::super::builder::StreamingExecutorBuilder;
+use super::super::executor::StreamingExecutor;
+use super::super::operators::base::OperatorBase;
+use super::super::operator_plan_builder::relational;
+use super::super::operators::blocking_operator::BlockingOperator;
+use super::super::operators::gather_operator::GatherOperator;
+use super::super::operators::shuffle_join_operator::{HashJoinKind, HashShuffleJoinOperator};
+use super::super::partition::PartitionView;
+use super::super::partition_builder;
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::AggregateFunction;
 use crate::query::executor::base::{ExecutionContext, MemoryTracker};
-use super::physical_plan::SyntheticNodeIdAllocator;
+use super::types::SyntheticNodeIdAllocator;
 use crate::query::planning::plan::{PartitionedPhysicalNode, PlanNodeEnum};
 
 fn allocate_gather_node_id(alloc: &mut SyntheticNodeIdAllocator) -> i64 {
@@ -54,7 +54,7 @@ pub(crate) enum BuildOutput {
 /// produce per-partition trees; `GlobalUnary`, `GlobalBinary`,
 /// `AggregateSplit`, `DistinctSplit`, `TopNSplit` and `HashJoinExchange`
 /// produce a single global tree.
-pub fn build_partitioned_physical_node(
+pub(crate) fn build_partitioned_physical_node(
     node: &PartitionedPhysicalNode,
     context: &ExecutionContext,
     partition_view: &PartitionView,
@@ -148,7 +148,7 @@ pub fn build_partitioned_physical_node(
                 OperatorBase::new(aggregate.id()).with_global(true),
                 Box::new(StreamingExecutor::Source(
                     OperatorBase::new(start_id),
-                    super::operators::source_operator::SourceOperator::Start,
+                    super::super::operators::source_operator::SourceOperator::Start,
                 )),
                 BlockingOperator::FinalAggregate {
                     group_by_expressions,
@@ -204,7 +204,7 @@ pub fn build_partitioned_physical_node(
                 OperatorBase::new(logical_plan.id()).with_global(true),
                 Box::new(StreamingExecutor::Source(
                     OperatorBase::new(start_id),
-                    super::operators::source_operator::SourceOperator::Start,
+                    super::super::operators::source_operator::SourceOperator::Start,
                 )),
                 BlockingOperator::Distinct {
                     memory_tracker,
@@ -307,7 +307,7 @@ pub fn build_partitioned_physical_node(
                 }
             };
 
-            let to_expr = super::operator_plan_builder::contextual_to_expression;
+            let to_expr = super::super::operator_plan_builder::contextual_to_expression;
 
             let (
                 left_key_exprs,
@@ -320,7 +320,7 @@ pub fn build_partitioned_physical_node(
                 PlanNodeEnum::HashInnerJoin(join_node) => {
                     let hash_keys: Vec<Expression> = join_node.hash_keys().iter().map(to_expr).collect::<Result<_, _>>()?;
                     let probe_keys: Vec<Expression> = join_node.probe_keys().iter().map(to_expr).collect::<Result<_, _>>()?;
-                    let condition = super::operator_plan_builder::join_condition_from_keys(
+                    let condition = super::super::operator_plan_builder::join_condition_from_keys(
                         join_node.hash_keys(),
                         join_node.probe_keys(),
                         join_node.right_input().col_names(),
@@ -339,7 +339,7 @@ pub fn build_partitioned_physical_node(
                 PlanNodeEnum::HashLeftJoin(join_node) => {
                     let hash_keys: Vec<Expression> = join_node.hash_keys().iter().map(to_expr).collect::<Result<_, _>>()?;
                     let probe_keys: Vec<Expression> = join_node.probe_keys().iter().map(to_expr).collect::<Result<_, _>>()?;
-                    let condition = super::operator_plan_builder::join_condition_from_keys(
+                    let condition = super::super::operator_plan_builder::join_condition_from_keys(
                         join_node.hash_keys(),
                         join_node.probe_keys(),
                         join_node.right_input().col_names(),
@@ -412,7 +412,7 @@ pub fn build_partitioned_physical_node(
 
 /// Convert a BuildOutput::Local to a global executor by wrapping with
 /// Gather::Concatenate. Identity for BuildOutput::Global.
-pub fn local_to_global(
+pub(crate) fn local_to_global(
     output: BuildOutput,
     synthetic_id_alloc: &mut SyntheticNodeIdAllocator,
 ) -> Result<StreamingExecutor, QueryError> {
@@ -476,5 +476,5 @@ fn replace_binary_inputs(
 }
 
 #[cfg(test)]
-#[path = "physical_builder_test.rs"]
+#[path = "builder_test.rs"]
 mod tests;

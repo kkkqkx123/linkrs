@@ -8,8 +8,8 @@ use std::sync::Arc;
 use super::builder::StreamingExecutorBuilder;
 use super::chunk::DataChunk;
 use super::engine::StreamingExecutionEngine;
-use super::physical_builder::{self, BuildOutput};
-use super::physical_plan::SyntheticNodeIdAllocator;
+use super::plan::builder::BuildOutput;
+use super::plan::types::SyntheticNodeIdAllocator;
 use super::runtime::{ExecutionRuntime, QueryIdentity};
 use super::stream::ResultStream;
 use super::stream_result::StreamingQueryResult;
@@ -77,7 +77,7 @@ impl StreamingQueryExecutor {
     ) -> Result<(), QueryError> {
         let partition_view = PartitionView::from(physical_plan.partition_spec());
         let mut synthetic_id_alloc = SyntheticNodeIdAllocator::new();
-        let root = physical_builder::build_partitioned_physical_node(
+        let root = super::plan::builder::build_partitioned_physical_node(
             physical_plan.root(),
             context,
             &partition_view,
@@ -86,7 +86,7 @@ impl StreamingQueryExecutor {
 
         let root = match root {
             BuildOutput::Global(executor) => executor,
-            BuildOutput::Local(trees) => physical_builder::local_to_global(
+            BuildOutput::Local(trees) => super::plan::builder::local_to_global(
                 BuildOutput::Local(trees),
                 &mut synthetic_id_alloc,
             )?,

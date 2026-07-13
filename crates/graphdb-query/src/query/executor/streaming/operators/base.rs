@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use super::runtime::{ExecutionRuntime, OperatorProfileKey};
+use super::super::runtime::{ExecutionRuntime, OperatorProfileKey};
+use super::super::spill::SpillManager;
 
 /// Explicit operator lifecycle state machine.
 ///
@@ -150,5 +151,12 @@ impl OperatorBase {
         if let Some(rt) = &self.runtime {
             rt.on_cleanup(f);
         }
+    }
+
+    /// Convenience accessor for the spill manager from the runtime.
+    pub fn spill_manager(&self) -> Option<Arc<SpillManager>> {
+        self.runtime
+            .as_ref()
+            .and_then(|rt| rt.get_spill_manager())
     }
 }

@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use super::chunk::DataChunk;
 use super::executor::{SortDirection, StreamingExecutor};
-use super::operator_base::OperatorBase;
+use super::operators::base::OperatorBase;
 use super::operators::blocking_operator::BlockingOperator;
 use super::operators::gather_operator::GatherOperator;
 use super::runtime::ExecutionRuntime;
@@ -19,7 +19,7 @@ use super::stream::ResultStream;
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::query::executor::base::{MemoryBudget, MemoryTracker};
-use crate::query::executor::streaming::physical_plan::SyntheticNodeIdAllocator;
+use crate::query::executor::streaming::plan::types::SyntheticNodeIdAllocator;
 use crate::query::executor::streaming::pool::MorselWorkerPool;
 
 /// Streaming execution engine
@@ -594,7 +594,7 @@ impl Default for StreamingExecutionEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::super::operator_base::OperatorBase;
+    use super::super::operators::base::OperatorBase;
     use super::super::operators::gather_operator::GatherOperator;
     use super::super::operators::source_operator::SourceOperator;
     use super::super::operators::unary_operator::UnaryOperator;

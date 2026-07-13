@@ -2,8 +2,8 @@ use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::Value;
 use crate::query::executor::base::ExecutionContext;
-use crate::query::executor::streaming::operator_spec::FulltextSpec;
-use crate::query::executor::streaming::physical_node::PhysicalNode;
+use crate::query::executor::streaming::operators::spec::FulltextSpec;
+use crate::query::executor::streaming::plan::node::PhysicalNode;
 use crate::query::parser::ast::fulltext::FulltextQueryExpr;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 

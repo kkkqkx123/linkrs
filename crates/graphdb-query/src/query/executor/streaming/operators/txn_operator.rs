@@ -2,7 +2,7 @@ use crate::core::error::QueryError;
 use crate::core::Value;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::query::executor::streaming::operator_base::OperatorBase;
+use crate::query::executor::streaming::operators::base::OperatorBase;
 
 #[derive(Debug)]
 pub enum TxnOperator {
@@ -22,21 +22,21 @@ pub enum TxnOperator {
 
 impl TxnOperator {
     /// Create a TxnOperator from an immutable spec.
-    pub fn from_spec(spec: &super::super::operator_spec::TxnSpec) -> Self {
+    pub fn from_spec(spec: &super::spec::TxnSpec) -> Self {
         match spec {
-            super::super::operator_spec::TxnSpec::BeginTransaction { transaction_id } => {
+            super::spec::TxnSpec::BeginTransaction { transaction_id } => {
                 TxnOperator::BeginTransaction {
                     transaction_id: transaction_id.clone(),
                     emitted: false,
                 }
             }
-            super::super::operator_spec::TxnSpec::Commit { transaction_id } => {
+            super::spec::TxnSpec::Commit { transaction_id } => {
                 TxnOperator::Commit {
                     transaction_id: transaction_id.clone(),
                     emitted: false,
                 }
             }
-            super::super::operator_spec::TxnSpec::Rollback { transaction_id } => {
+            super::spec::TxnSpec::Rollback { transaction_id } => {
                 TxnOperator::Rollback {
                     transaction_id: transaction_id.clone(),
                     emitted: false,
@@ -122,7 +122,7 @@ fn emit_once(emitted: &mut bool, message: &str) -> Result<Option<DataChunk>, Que
 mod tests {
     use super::*;
     use crate::query::executor::streaming::builder::StreamingExecutorBuilder;
-    use crate::query::executor::streaming::operator_spec::TxnSpec;
+    use crate::query::executor::streaming::operators::spec::TxnSpec;
 
     #[test]
     fn transaction_command_emits_once() {

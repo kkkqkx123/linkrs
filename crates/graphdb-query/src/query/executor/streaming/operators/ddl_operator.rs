@@ -14,7 +14,7 @@ use crate::core::types::PropertyDef;
 use crate::core::{NullType, Value};
 use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::query::executor::streaming::operator_base::OperatorBase;
+use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::planning::plan::core::nodes::management::manage_node_enums::{
     EdgeManageNode, IndexManageNode, SpaceManageNode, TagManageNode, UserManageNode,
 };
@@ -158,18 +158,18 @@ pub enum DdlOperator {
 impl DdlOperator {
     /// Create a DdlOperator from an immutable spec.
     pub fn from_spec(
-        spec: &super::super::operator_spec::DdlSpec,
+        spec: &super::spec::DdlSpec,
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
     ) -> Self {
         match spec {
-            super::super::operator_spec::DdlSpec::SpaceManage { command } => {
+            super::spec::DdlSpec::SpaceManage { command } => {
                 DdlOperator::SpaceManage {
                     storage: storage.clone(),
                     command: command.clone(),
                     emitted: false,
                 }
             }
-            super::super::operator_spec::DdlSpec::TagManage {
+            super::spec::DdlSpec::TagManage {
                 space_name,
                 command,
             } => DdlOperator::TagManage {
@@ -178,7 +178,7 @@ impl DdlOperator {
                 command: command.clone(),
                 emitted: false,
             },
-            super::super::operator_spec::DdlSpec::EdgeManage {
+            super::spec::DdlSpec::EdgeManage {
                 space_name,
                 command,
             } => DdlOperator::EdgeManage {
@@ -187,7 +187,7 @@ impl DdlOperator {
                 command: command.clone(),
                 emitted: false,
             },
-            super::super::operator_spec::DdlSpec::IndexManage {
+            super::spec::DdlSpec::IndexManage {
                 space_name,
                 command,
             } => DdlOperator::IndexManage {
@@ -196,7 +196,7 @@ impl DdlOperator {
                 command: command.clone(),
                 emitted: false,
             },
-            super::super::operator_spec::DdlSpec::DeleteIndex {
+            super::spec::DdlSpec::DeleteIndex {
                 space_name,
                 index_name,
             } => DdlOperator::DeleteIndex {
@@ -205,28 +205,28 @@ impl DdlOperator {
                 index_name: index_name.clone(),
                 emitted: false,
             },
-            super::super::operator_spec::DdlSpec::UserManage { command } => {
+            super::spec::DdlSpec::UserManage { command } => {
                 DdlOperator::UserManage {
                     storage: storage.clone(),
                     command: command.clone(),
                     emitted: false,
                 }
             }
-            super::super::operator_spec::DdlSpec::ShowStats { space_name } => {
+            super::spec::DdlSpec::ShowStats { space_name } => {
                 DdlOperator::ShowStats {
                     storage: storage.clone(),
                     space_name: space_name.clone(),
                     emitted: false,
                 }
             }
-            super::super::operator_spec::DdlSpec::Analyze { space_name } => DdlOperator::Analyze {
+            super::spec::DdlSpec::Analyze { space_name } => DdlOperator::Analyze {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 analyze_target: String::new(),
                 target_name: None,
                 emitted: false,
             },
-            super::super::operator_spec::DdlSpec::Migrate {
+            super::spec::DdlSpec::Migrate {
                 space_name,
                 action,
                 migration_data,

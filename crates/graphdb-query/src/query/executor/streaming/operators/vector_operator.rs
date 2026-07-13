@@ -7,7 +7,7 @@ use crate::core::types::expr::Expression;
 use crate::core::Value;
 use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::query::executor::streaming::operator_base::OperatorBase;
+use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::planning::plan::core::nodes::management::manage_node_enums::VectorManageNode;
 use crate::storage::StorageClient;
 #[cfg(feature = "qdrant")]
@@ -88,12 +88,12 @@ pub enum VectorOperator {
 impl VectorOperator {
     /// Create a VectorOperator from an immutable spec.
     pub fn from_spec(
-        spec: &super::super::operator_spec::VectorSpec,
+        spec: &super::spec::VectorSpec,
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         #[cfg(feature = "qdrant")] vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     ) -> Self {
         match spec {
-            super::super::operator_spec::VectorSpec::VectorManage {
+            super::spec::VectorSpec::VectorManage {
                 space_name,
                 command,
             } => VectorOperator::VectorManage {
@@ -103,7 +103,7 @@ impl VectorOperator {
                 #[cfg(feature = "qdrant")]
                 vector_coordinator: vector_coordinator.clone(),
             },
-            super::super::operator_spec::VectorSpec::VectorSearch {
+            super::spec::VectorSpec::VectorSearch {
                 space_name,
                 space_id,
                 index_name,
@@ -123,7 +123,7 @@ impl VectorOperator {
                 #[cfg(feature = "qdrant")]
                 vector_coordinator: vector_coordinator.clone(),
             },
-            super::super::operator_spec::VectorSpec::VectorLookup {
+            super::spec::VectorSpec::VectorLookup {
                 space_name,
                 index_name,
                 lookup_key,
@@ -135,7 +135,7 @@ impl VectorOperator {
                 #[cfg(feature = "qdrant")]
                 vector_coordinator: vector_coordinator.clone(),
             },
-            super::super::operator_spec::VectorSpec::VectorMatch {
+            super::spec::VectorSpec::VectorMatch {
                 space_name,
                 pattern,
                 field,

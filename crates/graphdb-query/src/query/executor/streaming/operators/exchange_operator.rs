@@ -11,9 +11,9 @@ use crate::query::executor::streaming::executor::{
     SortDirection, StreamingExecutor, ValueRowContext,
 };
 use crate::query::executor::streaming::helpers::compare_values;
-use crate::query::executor::streaming::operator_base::OperatorBase;
-use crate::query::executor::streaming::operator_spec::ExchangeSpec;
-use crate::query::executor::streaming::operator_state::{ExchangeState, MergeInputState};
+use crate::query::executor::streaming::operators::base::OperatorBase;
+use crate::query::executor::streaming::operators::spec::ExchangeSpec;
+use crate::query::executor::streaming::operators::state::{ExchangeState, MergeInputState};
 use crate::query::executor::streaming::pool::{PartitionBatch, PartitionHandle};
 use crate::query::executor::streaming::slot::SlotLayout;
 
@@ -73,7 +73,7 @@ impl ExchangeOperator {
             let pool = rt.worker_pool.lock().clone();
             if let Some(pool) = pool {
                 if children.len() > 1 && pool.max_workers() > 1 {
-                    let max_buffered = base.chunk_size.max(1).min(10);
+                    let max_buffered = base.chunk_size.clamp(1, 10);
                     let (batch, receivers, error_rx) =
                         PartitionBatch::new(std::mem::take(children), rt.clone(), max_buffered);
                     let batch = Arc::new(batch);

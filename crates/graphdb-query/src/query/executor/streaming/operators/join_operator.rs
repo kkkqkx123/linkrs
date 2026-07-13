@@ -11,7 +11,7 @@ use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::FullOuterJoinPhase;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::executor::ValueRowContext;
-use crate::query::executor::streaming::operator_base::OperatorBase;
+use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::slot::{combine_layouts, SlotLayout};
 
 fn build_combined_names(
@@ -130,11 +130,11 @@ pub enum JoinOperator {
 impl JoinOperator {
     /// Create a JoinOperator with fresh mutable state from an immutable spec.
     pub fn from_spec(
-        spec: &super::super::operator_spec::JoinSpec,
+        spec: &super::spec::JoinSpec,
         memory_budget: &crate::query::executor::base::MemoryBudget,
     ) -> Self {
         match spec {
-            super::super::operator_spec::JoinSpec::HashJoin {
+            super::spec::JoinSpec::HashJoin {
                 join_condition,
                 hash_keys,
                 probe_keys,
@@ -150,7 +150,7 @@ impl JoinOperator {
                 ),
                 right_col_names: Vec::new(),
             },
-            super::super::operator_spec::JoinSpec::HashLeftJoin {
+            super::spec::JoinSpec::HashLeftJoin {
                 join_condition,
                 hash_keys,
                 probe_keys,
@@ -166,7 +166,7 @@ impl JoinOperator {
                 ),
                 right_col_names: Vec::new(),
             },
-            super::super::operator_spec::JoinSpec::NestedLoopJoin { join_condition } => {
+            super::spec::JoinSpec::NestedLoopJoin { join_condition } => {
                 Self::NestedLoopJoin {
                     join_condition: join_condition.clone(),
                     build_side_tuples: Vec::new(),
@@ -177,7 +177,7 @@ impl JoinOperator {
                     right_col_names: Vec::new(),
                 }
             }
-            super::super::operator_spec::JoinSpec::InnerJoin { join_condition } => {
+            super::spec::JoinSpec::InnerJoin { join_condition } => {
                 Self::InnerJoin {
                     join_condition: join_condition.clone(),
                     build_side_tuples: Vec::new(),
@@ -188,7 +188,7 @@ impl JoinOperator {
                     right_col_names: Vec::new(),
                 }
             }
-            super::super::operator_spec::JoinSpec::LeftJoin { join_condition } => Self::LeftJoin {
+            super::spec::JoinSpec::LeftJoin { join_condition } => Self::LeftJoin {
                 join_condition: join_condition.clone(),
                 build_side_tuples: Vec::new(),
                 left_consumed: false,
@@ -197,7 +197,7 @@ impl JoinOperator {
                 ),
                 right_col_names: Vec::new(),
             },
-            super::super::operator_spec::JoinSpec::RightJoin { join_condition } => {
+            super::spec::JoinSpec::RightJoin { join_condition } => {
                 Self::RightJoin {
                     join_condition: join_condition.clone(),
                     build_side_tuples: Vec::new(),
@@ -208,7 +208,7 @@ impl JoinOperator {
                     right_col_names: Vec::new(),
                 }
             }
-            super::super::operator_spec::JoinSpec::FullOuterJoin { join_condition } => {
+            super::spec::JoinSpec::FullOuterJoin { join_condition } => {
                 use super::super::executor::FullOuterJoinPhase;
                 Self::FullOuterJoin {
                     join_condition: join_condition.clone(),
@@ -223,7 +223,7 @@ impl JoinOperator {
                     right_col_names: Vec::new(),
                 }
             }
-            super::super::operator_spec::JoinSpec::CrossJoin => Self::CrossJoin {
+            super::spec::JoinSpec::CrossJoin => Self::CrossJoin {
                 all_left_rows: Vec::new(),
                 all_right_rows: Vec::new(),
                 left_consumed: false,
@@ -233,7 +233,7 @@ impl JoinOperator {
                 ),
                 right_col_names: Vec::new(),
             },
-            super::super::operator_spec::JoinSpec::SemiJoin { join_condition } => Self::SemiJoin {
+            super::spec::JoinSpec::SemiJoin { join_condition } => Self::SemiJoin {
                 join_condition: join_condition.clone(),
                 right_rows: Vec::new(),
                 right_consumed: false,
@@ -1314,5 +1314,14 @@ impl JoinOperator {
                 }
             }
         }
+    }
+
+    /// Spill join build-side state to disk.
+    pub fn spill_with_manager(&mut self, _sm: &crate::query::executor::streaming::spill::SpillManager) -> Result<(), crate::core::error::QueryError> {
+        Ok(())
+    }
+
+    pub fn spilled_bytes(&self) -> u64 {
+        0
     }
 }

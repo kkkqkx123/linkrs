@@ -13,10 +13,8 @@
 use std::collections::HashSet;
 
 use crate::core::error::QueryError;
-use crate::query::executor::streaming::physical_plan::{FragmentId, PhysicalPlan};
-use crate::query::executor::streaming::physical_properties::{
-    Distribution, MemoryPolicy, Ordering, PipelineKind,
-};
+use super::types::{FragmentId, PhysicalPlan};
+use super::properties::{Distribution, MemoryPolicy, Ordering, PipelineKind};
 
 /// The two validation tiers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -174,36 +172,36 @@ impl PhysicalPlanValidator {
         for op in &plan.operators {
             match &op.spec {
                 // Source and terminal operators have 0 children.
-                crate::query::executor::streaming::physical_plan::OperatorKindSpec::Source(_)
-                | crate::query::executor::streaming::physical_plan::OperatorKindSpec::Txn(_) => {}
+                crate::query::executor::streaming::plan::types::OperatorKindSpec::Source(_)
+                | crate::query::executor::streaming::plan::types::OperatorKindSpec::Txn(_) => {}
                 // Unary operators have 1 child.
-                crate::query::executor::streaming::physical_plan::OperatorKindSpec::Unary(_)
-                | crate::query::executor::streaming::physical_plan::OperatorKindSpec::Blocking(_)
-                | crate::query::executor::streaming::physical_plan::OperatorKindSpec::Graph(_)
-                | crate::query::executor::streaming::physical_plan::OperatorKindSpec::Sink(_)
-                | crate::query::executor::streaming::physical_plan::OperatorKindSpec::Ddl(_)
-                | crate::query::executor::streaming::physical_plan::OperatorKindSpec::Fulltext(_)
-                | crate::query::executor::streaming::physical_plan::OperatorKindSpec::Vector(_) => {}
+                crate::query::executor::streaming::plan::types::OperatorKindSpec::Unary(_)
+                | crate::query::executor::streaming::plan::types::OperatorKindSpec::Blocking(_)
+                | crate::query::executor::streaming::plan::types::OperatorKindSpec::Graph(_)
+                | crate::query::executor::streaming::plan::types::OperatorKindSpec::Sink(_)
+                | crate::query::executor::streaming::plan::types::OperatorKindSpec::Ddl(_)
+                | crate::query::executor::streaming::plan::types::OperatorKindSpec::Fulltext(_)
+                | crate::query::executor::streaming::plan::types::OperatorKindSpec::Vector(_) => {}
                 // Binary operators have 2 children.
-                crate::query::executor::streaming::physical_plan::OperatorKindSpec::Join(_)
-                | crate::query::executor::streaming::physical_plan::OperatorKindSpec::Set(_)
-                | crate::query::executor::streaming::physical_plan::OperatorKindSpec::Apply(_) => {}
+                crate::query::executor::streaming::plan::types::OperatorKindSpec::Join(_)
+                | crate::query::executor::streaming::plan::types::OperatorKindSpec::Set(_)
+                | crate::query::executor::streaming::plan::types::OperatorKindSpec::Apply(_) => {}
                 // Exchange operators have N children.
-                crate::query::executor::streaming::physical_plan::OperatorKindSpec::Exchange(_) => {}
+                crate::query::executor::streaming::plan::types::OperatorKindSpec::Exchange(_) => {}
             }
         }
     }
 
     fn check_output_layouts(plan: &PhysicalPlan, result: &mut ValidationResult) {
         for op in &plan.operators {
-            if op.output_layout.is_empty() && !matches!(&op.spec, crate::query::executor::streaming::physical_plan::OperatorKindSpec::Source(_) if false)
+            if op.output_layout.is_empty() && !matches!(&op.spec, crate::query::executor::streaming::plan::types::OperatorKindSpec::Source(_) if false)
             {
                 // Allow empty output layout only for DDL / command operators
                 // that produce status messages.
                 let is_command = matches!(
                     &op.spec,
-                    crate::query::executor::streaming::physical_plan::OperatorKindSpec::Ddl(_)
-                        | crate::query::executor::streaming::physical_plan::OperatorKindSpec::Txn(_)
+                    crate::query::executor::streaming::plan::types::OperatorKindSpec::Ddl(_)
+                        | crate::query::executor::streaming::plan::types::OperatorKindSpec::Txn(_)
                 );
                 if !is_command {
                     result.warnings.push(format!(
@@ -221,24 +219,24 @@ impl PhysicalPlanValidator {
             // Sort must declare ordering.
             // Local partition must not be marked as Single.
             match &op.spec {
-                crate::query::executor::streaming::physical_plan::OperatorKindSpec::Unary(
+                crate::query::executor::streaming::plan::types::OperatorKindSpec::Unary(
                     spec,
                 ) => {
                     if matches!(
                         spec,
-                        crate::query::executor::streaming::operator_spec::UnarySpec::Filter { .. }
+                        crate::query::executor::streaming::operators::spec::UnarySpec::Filter { .. }
                     ) && op.properties.distribution == Distribution::Single
                     {
                         // Filter inherits distribution; Single is valid
                         // only in non-partitioned context.
                     }
                 }
-                crate::query::executor::streaming::physical_plan::OperatorKindSpec::Blocking(
+                crate::query::executor::streaming::plan::types::OperatorKindSpec::Blocking(
                     spec,
                 ) => {
                     if matches!(
                         spec,
-                        crate::query::executor::streaming::operator_spec::BlockingSpec::Sort { .. }
+                        crate::query::executor::streaming::operators::spec::BlockingSpec::Sort { .. }
                     ) && matches!(op.properties.ordering, Ordering::None)
                     {
                         result.warnings.push(format!(

@@ -4,7 +4,6 @@
 
 use std::sync::Arc;
 
-use crate::core::types::VertexId;
 use crate::core::Expression;
 use crate::query::validator::context::ExpressionAnalysisContext;
 use parking_lot::RwLock;
@@ -45,50 +44,6 @@ pub struct IndexScanConfig {
     pub return_columns: Vec<String>,
     pub limit: Option<usize>,
     pub is_edge: bool,
-}
-
-/// Path Actuator Configuration
-pub struct PathConfig {
-    pub start_vertex: crate::core::Value,
-    pub end_vertex: Option<crate::core::Value>,
-    pub max_hops: usize,
-    pub edge_types: Option<Vec<String>>,
-    pub direction: crate::core::types::EdgeDirection,
-}
-
-/// BFS Shortest Path Algorithm Configuration
-pub struct BfsShortestConfig {
-    pub steps: usize,
-    pub direction: crate::core::types::EdgeDirection,
-    pub edge_types: Option<Vec<String>>,
-    pub space_name: String,
-}
-
-/// Multiple Starting Point Shortest Path Configuration
-pub struct MultiShortestPathConfig {
-    pub start_vids: Vec<VertexId>,
-    pub direction: crate::core::types::EdgeDirection,
-    pub edge_types: Option<Vec<String>>,
-    pub max_steps: usize,
-    pub space_name: String,
-}
-
-/// All path configurations
-pub struct AllPathsConfig {
-    pub left_start_ids: Vec<VertexId>,
-    pub right_start_ids: Vec<VertexId>,
-    pub max_hops: usize,
-    pub edge_types: Option<Vec<String>>,
-    pub direction: crate::core::types::EdgeDirection,
-    pub space_name: String,
-}
-
-/// Shortest Path Configuration
-pub struct ShortestPathConfig {
-    pub start_vertex_ids: Vec<VertexId>,
-    pub direction: crate::core::types::EdgeDirection,
-    pub edge_types: Option<Vec<String>>,
-    pub space_name: String,
 }
 
 /// Connected Actuator Configuration

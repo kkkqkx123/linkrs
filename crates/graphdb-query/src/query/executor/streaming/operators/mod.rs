@@ -1,5 +1,9 @@
 //! Domain-specific operator enums
 
+pub mod base;
+pub mod spec;
+pub mod state;
+
 pub mod apply_operator;
 pub mod blocking_operator;
 pub mod ddl_operator;

@@ -78,7 +78,7 @@ fn test_multi_shortest_path_executor_creation() {
             storage.clone(),
             Arc::new(ExpressionAnalysisContext::new()),
         ),
-        graphdb_query::query::executor::base::MultiShortestPathConfig {
+        graphdb_query::query::executor::algorithms::MultiShortestPathConfig {
             start_vids: vec![VertexId::from_string("alice")],
             direction: ExecEdgeDirection::Out,
             edge_types: None,
@@ -103,7 +103,7 @@ fn test_multi_shortest_path_with_edge_filter() {
             storage.clone(),
             Arc::new(ExpressionAnalysisContext::new()),
         ),
-        graphdb_query::query::executor::base::MultiShortestPathConfig {
+        graphdb_query::query::executor::algorithms::MultiShortestPathConfig {
             start_vids: vec![VertexId::from_string("alice")],
             direction: ExecEdgeDirection::Out,
             edge_types: Some(vec!["KNOWS".to_string()]),
@@ -127,7 +127,7 @@ fn test_multi_shortest_path_bidirectional_direction() {
             storage.clone(),
             Arc::new(ExpressionAnalysisContext::new()),
         ),
-        graphdb_query::query::executor::base::MultiShortestPathConfig {
+        graphdb_query::query::executor::algorithms::MultiShortestPathConfig {
             start_vids: vec![VertexId::from_string("alice")],
             direction: ExecEdgeDirection::Both,
             edge_types: None,
@@ -310,7 +310,7 @@ fn test_multi_shortest_path_empty_start() {
             storage.clone(),
             Arc::new(ExpressionAnalysisContext::new()),
         ),
-        graphdb_query::query::executor::base::MultiShortestPathConfig {
+        graphdb_query::query::executor::algorithms::MultiShortestPathConfig {
             start_vids: vec![],
             direction: ExecEdgeDirection::Out,
             edge_types: None,
@@ -334,7 +334,7 @@ fn test_multi_shortest_path_empty_end() {
             storage.clone(),
             Arc::new(ExpressionAnalysisContext::new()),
         ),
-        graphdb_query::query::executor::base::MultiShortestPathConfig {
+        graphdb_query::query::executor::algorithms::MultiShortestPathConfig {
             start_vids: vec![VertexId::from_string("alice")],
             direction: ExecEdgeDirection::Out,
             edge_types: None,

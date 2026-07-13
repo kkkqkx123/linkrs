@@ -283,4 +283,12 @@ pub trait Spillable {
     fn has_spilled(&self) -> bool {
         self.spilled_size() > 0
     }
+
+    /// Spill data if not already spilled, returning whether any data was spilled.
+    fn try_spill(&mut self) -> Result<bool, QueryError> {
+        if !self.has_spilled() {
+            self.spill_to_disk()?;
+        }
+        Ok(self.has_spilled())
+    }
 }
