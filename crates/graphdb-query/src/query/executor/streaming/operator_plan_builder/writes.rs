@@ -243,11 +243,10 @@ pub fn build_write_node(
                 .first()
                 .and_then(|u| u.edge_type.clone())
                 .unwrap_or_default();
-            let source =
-                PhysicalNode::Source(0, SourceSpec::Start, PhysicalProperties::single_streaming());
+            let source = super::single_start_source();
             Ok(PhysicalNode::Sink(
                 node.id(),
-                Box::new(source),
+                source,
                 SinkSpec::UpdateEdges {
                     storage: context.storage.clone(),
                     space_name: context.space_name.clone().unwrap_or_default(),
@@ -348,11 +347,7 @@ pub fn build_write_node(
 
         PlanNodeEnum::DeleteTags(delete_tags_node) => Ok(PhysicalNode::Sink(
             node.id(),
-            Box::new(PhysicalNode::Source(
-                0,
-                SourceSpec::Start,
-                PhysicalProperties::single_streaming(),
-            )),
+            super::single_start_source(),
             SinkSpec::DeleteTags {
                 storage: context.storage.clone(),
                 space_name: context.space_name.clone().unwrap_or_default(),
@@ -362,10 +357,6 @@ pub fn build_write_node(
             PhysicalProperties::single_streaming(),
         )),
 
-        _ => Err(QueryError::execution(format!(
-            "Internal routing error: node {} (id={}) was incorrectly routed to writes builder",
-            node.name(),
-            node.id()
-        ))),
+        _ => Err(super::internal_routing_error(node, "writes")),
     }
 }

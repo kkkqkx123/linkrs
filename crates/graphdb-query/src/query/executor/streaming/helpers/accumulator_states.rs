@@ -1,3 +1,4 @@
+use super::comparison::compare_values;
 use crate::core::types::operators::AggregateFunction;
 use crate::core::value::NullType;
 use crate::core::Value;
@@ -56,7 +57,7 @@ impl AggregateAccumulator {
                 match current {
                     None => *current = Some(value.clone()),
                     Some(c) => {
-                        if compare_values_for_minmax(value, c).is_lt() {
+                        if compare_values(value, c).is_lt() {
                             *current = Some(value.clone());
                         }
                     }
@@ -69,7 +70,7 @@ impl AggregateAccumulator {
                 match current {
                     None => *current = Some(value.clone()),
                     Some(c) => {
-                        if compare_values_for_minmax(value, c).is_gt() {
+                        if compare_values(value, c).is_gt() {
                             *current = Some(value.clone());
                         }
                     }
@@ -93,7 +94,7 @@ impl AggregateAccumulator {
                 (None, Some(v)) => *a = Some(v.clone()),
                 (Some(_), None) => {}
                 (Some(a_val), Some(b_val)) => {
-                    if compare_values_for_minmax(b_val, a_val).is_lt() {
+                    if compare_values(b_val, a_val).is_lt() {
                         *a = Some(b_val.clone());
                     }
                 }
@@ -103,7 +104,7 @@ impl AggregateAccumulator {
                 (None, Some(v)) => *a = Some(v.clone()),
                 (Some(_), None) => {}
                 (Some(a_val), Some(b_val)) => {
-                    if compare_values_for_minmax(b_val, a_val).is_gt() {
+                    if compare_values(b_val, a_val).is_gt() {
                         *a = Some(b_val.clone());
                     }
                 }
@@ -161,17 +162,7 @@ fn numeric_value(value: &Value) -> Option<f64> {
     }
 }
 
-fn compare_values_for_minmax(a: &Value, b: &Value) -> std::cmp::Ordering {
-    match (a, b) {
-        (Value::Int(x), Value::Int(y)) => x.cmp(y),
-        (Value::BigInt(x), Value::BigInt(y)) => x.cmp(y),
-        (Value::Float(x), Value::Float(y)) => x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
-        (Value::Double(x), Value::Double(y)) => {
-            x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal)
-        }
-        _ => a.to_string().cmp(&b.to_string()),
-    }
-}
+
 
 /// Serialize an accumulator state into a Value for inter-operator transfer.
 /// The partial aggregate output stores accumulator states as Value rows

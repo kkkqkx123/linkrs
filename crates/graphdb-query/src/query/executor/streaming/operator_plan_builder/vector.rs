@@ -4,9 +4,8 @@ use crate::core::types::expr::Expression;
 #[cfg(feature = "qdrant")]
 use crate::core::Value;
 use crate::query::executor::base::ExecutionContext;
-use crate::query::executor::streaming::operator_spec::{SourceSpec, VectorSpec};
+use crate::query::executor::streaming::operator_spec::VectorSpec;
 use crate::query::executor::streaming::physical_node::PhysicalNode;
-use crate::query::executor::streaming::physical_properties::PhysicalProperties;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 
 pub fn build_vector_node(
@@ -14,30 +13,20 @@ pub fn build_vector_node(
     context: &ExecutionContext,
 ) -> Result<PhysicalNode, QueryError> {
     match node {
-        PlanNodeEnum::VectorManage(manage_node) => Ok(PhysicalNode::Vector(
+        PlanNodeEnum::VectorManage(manage_node) => Ok(super::build_leaf_command(
             node.id(),
-            Box::new(PhysicalNode::Source(
-                0,
-                SourceSpec::Start,
-                PhysicalProperties::single_streaming(),
-            )),
             VectorSpec::VectorManage {
                 space_name: context.space_name.clone().unwrap_or_default(),
                 command: manage_node.clone(),
             },
-            PhysicalProperties::single_blocking(),
+            PhysicalNode::Vector,
         )),
 
         #[cfg(feature = "qdrant")]
         PlanNodeEnum::VectorSearch(search_node) => {
             let query_vec = vector_query_to_vec(&search_node.query);
-            Ok(PhysicalNode::Vector(
+            Ok(super::build_leaf_command(
                 node.id(),
-                Box::new(PhysicalNode::Source(
-                    0,
-                    SourceSpec::Start,
-                    PhysicalProperties::single_streaming(),
-                )),
                 VectorSpec::VectorSearch {
                     space_name: context.space_name.clone().unwrap_or_default(),
                     space_id: search_node.space_id,
@@ -47,18 +36,13 @@ pub fn build_vector_node(
                     tag_name: search_node.tag_name.clone(),
                     field_name: search_node.field_name.clone(),
                 },
-                PhysicalProperties::single_blocking(),
+                PhysicalNode::Vector,
             ))
         }
 
         #[cfg(feature = "qdrant")]
-        PlanNodeEnum::VectorLookup(lookup_node) => Ok(PhysicalNode::Vector(
+        PlanNodeEnum::VectorLookup(lookup_node) => Ok(super::build_leaf_command(
             node.id(),
-            Box::new(PhysicalNode::Source(
-                0,
-                SourceSpec::Start,
-                PhysicalProperties::single_streaming(),
-            )),
             VectorSpec::VectorLookup {
                 space_name: context.space_name.clone().unwrap_or_default(),
                 index_name: lookup_node.index_name.clone(),
@@ -66,19 +50,14 @@ pub fn build_vector_node(
                     lookup_node.query.query_data.clone(),
                 )),
             },
-            PhysicalProperties::single_blocking(),
+            PhysicalNode::Vector,
         )),
 
         #[cfg(feature = "qdrant")]
         PlanNodeEnum::VectorMatch(match_node) => {
             let query_vec = vector_query_to_vec(&match_node.query);
-            Ok(PhysicalNode::Vector(
+            Ok(super::build_leaf_command(
                 node.id(),
-                Box::new(PhysicalNode::Source(
-                    0,
-                    SourceSpec::Start,
-                    PhysicalProperties::single_streaming(),
-                )),
                 VectorSpec::VectorMatch {
                     space_name: context.space_name.clone().unwrap_or_default(),
                     pattern: match_node.pattern.clone(),
@@ -89,7 +68,7 @@ pub fn build_vector_node(
                     field_name: match_node.field_name.clone(),
                     space_id: match_node.space_id,
                 },
-                PhysicalProperties::single_blocking(),
+                PhysicalNode::Vector,
             ))
         }
 

@@ -8,7 +8,6 @@ use crate::query::executor::streaming::physical_properties::PhysicalProperties;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 
 /// Build a physical source plan for a scan node.
-#[allow(unused_variables)]
 pub fn build_scan_node(
     node: &PlanNodeEnum,
     context: &ExecutionContext,
@@ -112,10 +111,6 @@ pub fn build_scan_node(
             PhysicalProperties::single_streaming(),
         )),
 
-        _ => Err(QueryError::execution(format!(
-            "Internal routing error: node {} (id={}) was incorrectly routed to scans builder",
-            node.name(),
-            node.id()
-        ))),
+        _ => Err(super::internal_routing_error(node, "scans")),
     }
 }

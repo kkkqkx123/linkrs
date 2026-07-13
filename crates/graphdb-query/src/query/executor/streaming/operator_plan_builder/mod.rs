@@ -22,7 +22,7 @@ use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::BinaryOperator;
 use crate::query::executor::base::ExecutionContext;
-use crate::query::executor::streaming::operator_spec::JoinSpec;
+use crate::query::executor::streaming::operator_spec::{JoinSpec, SourceSpec};
 use crate::query::executor::streaming::physical_node::PhysicalNode;
 use crate::query::executor::streaming::physical_properties::PhysicalProperties;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
@@ -215,6 +215,36 @@ pub(super) fn contextual_to_expression(
     expr.get_expression().ok_or_else(|| {
         QueryError::execution("Failed to get expression from ContextualExpression".to_string())
     })
+}
+
+pub(super) fn single_start_source() -> Box<PhysicalNode> {
+    Box::new(PhysicalNode::Source(
+        0,
+        SourceSpec::Start,
+        PhysicalProperties::single_streaming(),
+    ))
+}
+
+pub(super) fn build_leaf_command<Spec>(
+    id: i64,
+    spec: Spec,
+    ctor: fn(i64, Box<PhysicalNode>, Spec, PhysicalProperties) -> PhysicalNode,
+) -> PhysicalNode {
+    ctor(
+        id,
+        single_start_source(),
+        spec,
+        PhysicalProperties::single_blocking(),
+    )
+}
+
+pub(super) fn internal_routing_error(node: &PlanNodeEnum, builder: &str) -> QueryError {
+    QueryError::execution(format!(
+        "Internal routing error: node {} (id={}) was incorrectly routed to {} builder",
+        node.name(),
+        node.id(),
+        builder
+    ))
 }
 
 fn build_join_core(

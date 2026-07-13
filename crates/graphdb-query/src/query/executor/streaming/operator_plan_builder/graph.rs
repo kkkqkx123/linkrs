@@ -257,11 +257,7 @@ pub fn build_graph_node(
             ))
         }
 
-        _ => Err(QueryError::execution(format!(
-            "Internal routing error: node {} (id={}) was incorrectly routed to graph builder",
-            node.name(),
-            node.id()
-        ))),
+        _ => Err(super::internal_routing_error(node, "graph")),
     }
 }
 

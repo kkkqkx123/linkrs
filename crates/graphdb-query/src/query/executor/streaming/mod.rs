@@ -10,7 +10,6 @@
 //! - ExecutionRuntime: Per-query runtime (cancel, memory, profile, resources)
 //! - ResultStream: Streaming result handle
 
-pub mod base;
 pub mod builder;
 mod partition_builder;
 pub mod chunk;

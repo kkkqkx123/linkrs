@@ -130,7 +130,7 @@ impl UnaryOperator {
                         let mut filtered_rows = Vec::new();
                         for row in chunk.rows {
                             let mut context =
-                                ValueRowContext::new_with_layout(row.clone(), layout.clone());
+                                ValueRowContext::new(row.clone(), layout.clone());
                             let keep = match ExpressionEvaluator::evaluate(predicate, &mut context)
                             {
                                 Ok(value) => match value {
@@ -177,7 +177,7 @@ impl UnaryOperator {
                     let mut projected_rows = Vec::new();
                     for row in chunk.rows {
                         let mut context =
-                            ValueRowContext::new_with_layout(row, input_layout.clone());
+                            ValueRowContext::new(row, input_layout.clone());
                         let mut projected_row = Vec::new();
                         for expr in output_expressions.iter() {
                             match ExpressionEvaluator::evaluate(expr, &mut context) {
@@ -253,7 +253,7 @@ impl UnaryOperator {
                         let mut new_row = row.clone();
                         for (_col_name, expr) in assignments.iter() {
                             let mut context =
-                                ValueRowContext::new_with_layout(row.clone(), layout.clone());
+                                ValueRowContext::new(row.clone(), layout.clone());
                             match ExpressionEvaluator::evaluate(expr, &mut context) {
                                 Ok(val) => new_row.push(val),
                                 Err(_) => {
@@ -342,7 +342,7 @@ impl UnaryOperator {
                     let mut result_rows = Vec::new();
                     for row in chunk.rows {
                         let mut new_row = row.clone();
-                        let mut ctx = ValueRowContext::new_with_layout(row.clone(), layout.clone());
+                        let mut ctx = ValueRowContext::new(row.clone(), layout.clone());
                         for (_prop_name, expr) in vertex_properties.iter() {
                             match ExpressionEvaluator::evaluate(expr, &mut ctx) {
                                 Ok(val) => new_row.push(val),

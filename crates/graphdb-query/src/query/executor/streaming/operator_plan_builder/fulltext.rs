@@ -2,9 +2,8 @@ use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::Value;
 use crate::query::executor::base::ExecutionContext;
-use crate::query::executor::streaming::operator_spec::{FulltextSpec, SourceSpec};
+use crate::query::executor::streaming::operator_spec::FulltextSpec;
 use crate::query::executor::streaming::physical_node::PhysicalNode;
-use crate::query::executor::streaming::physical_properties::PhysicalProperties;
 use crate::query::parser::ast::fulltext::FulltextQueryExpr;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 
@@ -13,30 +12,20 @@ pub fn build_fulltext_node(
     context: &ExecutionContext,
 ) -> Result<PhysicalNode, QueryError> {
     match node {
-        PlanNodeEnum::FulltextManage(manage_node) => Ok(PhysicalNode::Fulltext(
+        PlanNodeEnum::FulltextManage(manage_node) => Ok(super::build_leaf_command(
             node.id(),
-            Box::new(PhysicalNode::Source(
-                0,
-                SourceSpec::Start,
-                PhysicalProperties::single_streaming(),
-            )),
             FulltextSpec::FulltextManage {
                 space_name: context.space_name.clone().unwrap_or_default(),
                 command: manage_node.clone(),
             },
-            PhysicalProperties::single_blocking(),
+            PhysicalNode::Fulltext,
         )),
 
         PlanNodeEnum::FulltextSearch(search_node) => {
             let query_str = fulltext_query_to_string(&search_node.query);
             let space_id = context.current_space_id().unwrap_or(0);
-            Ok(PhysicalNode::Fulltext(
+            Ok(super::build_leaf_command(
                 node.id(),
-                Box::new(PhysicalNode::Source(
-                    0,
-                    SourceSpec::Start,
-                    PhysicalProperties::single_streaming(),
-                )),
                 FulltextSpec::FulltextSearch {
                     space_name: context.space_name.clone().unwrap_or_default(),
                     space_id,
@@ -45,19 +34,14 @@ pub fn build_fulltext_node(
                     tag_name: search_node.tag_name.clone(),
                     field_name: search_node.field_name.clone(),
                 },
-                PhysicalProperties::single_blocking(),
+                PhysicalNode::Fulltext,
             ))
         }
 
         PlanNodeEnum::FulltextLookup(lookup_node) => {
             let space_id = context.current_space_id().unwrap_or(0);
-            Ok(PhysicalNode::Fulltext(
+            Ok(super::build_leaf_command(
                 node.id(),
-                Box::new(PhysicalNode::Source(
-                    0,
-                    SourceSpec::Start,
-                    PhysicalProperties::single_streaming(),
-                )),
                 FulltextSpec::FulltextLookup {
                     space_name: context.space_name.clone().unwrap_or_default(),
                     space_id,
@@ -66,19 +50,14 @@ pub fn build_fulltext_node(
                     tag_name: lookup_node.tag_name.clone(),
                     field_name: lookup_node.field_name.clone(),
                 },
-                PhysicalProperties::single_blocking(),
+                PhysicalNode::Fulltext,
             ))
         }
 
         PlanNodeEnum::MatchFulltext(match_node) => {
             let condition_str = fulltext_match_to_string(&match_node.fulltext_condition);
-            Ok(PhysicalNode::Fulltext(
+            Ok(super::build_leaf_command(
                 node.id(),
-                Box::new(PhysicalNode::Source(
-                    0,
-                    SourceSpec::Start,
-                    PhysicalProperties::single_streaming(),
-                )),
                 FulltextSpec::MatchFulltext {
                     space_name: context.space_name.clone().unwrap_or_default(),
                     match_expr: Expression::Literal(Value::String(condition_str)),
@@ -86,7 +65,7 @@ pub fn build_fulltext_node(
                     tag_name: match_node.tag_name.clone(),
                     field_name: match_node.field_name.clone(),
                 },
-                PhysicalProperties::single_blocking(),
+                PhysicalNode::Fulltext,
             ))
         }
 

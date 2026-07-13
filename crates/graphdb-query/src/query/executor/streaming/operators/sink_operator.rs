@@ -274,7 +274,7 @@ impl SinkOperator {
 
                         for row in &chunk.rows {
                             let mut context =
-                                ValueRowContext::new_with_layout(row.clone(), layout.clone());
+                                ValueRowContext::new(row.clone(), layout.clone());
 
                             let vid = if let Some((_name, expr)) = vertex_properties.first() {
                                 let val = eval_expr(expr, &mut context)?;
@@ -334,7 +334,7 @@ impl SinkOperator {
 
                         for row in &chunk.rows {
                             let mut context =
-                                ValueRowContext::new_with_layout(row.clone(), layout.clone());
+                                ValueRowContext::new(row.clone(), layout.clone());
                             let src_val = context
                                 .get_variable(src_col)
                                 .unwrap_or(Value::Null(crate::core::NullType::Null));
@@ -386,7 +386,7 @@ impl SinkOperator {
 
                         for row in &chunk.rows {
                             let mut context =
-                                ValueRowContext::new_with_layout(row.clone(), layout.clone());
+                                ValueRowContext::new(row.clone(), layout.clone());
                             let vid_val = context
                                 .get_variable("vid")
                                 .or_else(|| row.first().cloned())
@@ -434,7 +434,7 @@ impl SinkOperator {
 
                         for row in &chunk.rows {
                             let mut context =
-                                ValueRowContext::new_with_layout(row.clone(), layout.clone());
+                                ValueRowContext::new(row.clone(), layout.clone());
                             let src_val = context
                                 .get_variable(src_col)
                                 .or_else(|| row.first().cloned())
@@ -491,7 +491,7 @@ impl SinkOperator {
 
                         for row in &chunk.rows {
                             let context =
-                                ValueRowContext::new_with_layout(row.clone(), layout.clone());
+                                ValueRowContext::new(row.clone(), layout.clone());
                             if let Some(vid_val) = context.get_variable(vertex_id_col) {
                                 if let Ok(vid) = VertexId::try_from(&vid_val) {
                                     StorageWriter::delete_vertex(&mut *writer, space_name, &vid)
@@ -529,7 +529,7 @@ impl SinkOperator {
 
                         for row in &chunk.rows {
                             let context =
-                                ValueRowContext::new_with_layout(row.clone(), layout.clone());
+                                ValueRowContext::new(row.clone(), layout.clone());
                             let src_val = context
                                 .get_variable(src_col)
                                 .unwrap_or(Value::Null(crate::core::NullType::Null));
@@ -582,7 +582,7 @@ impl SinkOperator {
 
                         for row in &chunk.rows {
                             let context =
-                                ValueRowContext::new_with_layout(row.clone(), layout.clone());
+                                ValueRowContext::new(row.clone(), layout.clone());
                             let src_val = context
                                 .get_variable(src_col)
                                 .unwrap_or(Value::Null(crate::core::NullType::Null));
@@ -634,7 +634,7 @@ impl SinkOperator {
 
                         for row in &chunk.rows {
                             let context =
-                                ValueRowContext::new_with_layout(row.clone(), layout.clone());
+                                ValueRowContext::new(row.clone(), layout.clone());
                             if let Some(vid_val) = context.get_variable(vertex_id_col) {
                                 if let Ok(vid) = VertexId::try_from(&vid_val) {
                                     StorageWriter::delete_vertex(&mut *writer, space_name, &vid)

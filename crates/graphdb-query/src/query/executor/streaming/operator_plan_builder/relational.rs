@@ -282,11 +282,7 @@ pub fn build_relational_node(
             ))
         }
 
-        _ => Err(QueryError::execution(format!(
-            "Internal routing error: node {} (id={}) was incorrectly routed to relational builder",
-            node.name(),
-            node.id()
-        ))),
+        _ => Err(super::internal_routing_error(node, "relational")),
     }
 }
 

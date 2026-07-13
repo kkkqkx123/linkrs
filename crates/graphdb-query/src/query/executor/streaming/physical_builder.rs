@@ -21,6 +21,30 @@ use crate::query::planning::plan::{PartitionedPhysicalNode, PlanNodeEnum};
 
 pub(crate) const PHYSICAL_GATHER_NODE_ID_START: i64 = i64::MIN + 100;
 
+fn allocate_gather_node_id(next_id: &mut i64) -> Result<i64, QueryError> {
+    let id = *next_id;
+    *next_id = next_id.checked_add(1).ok_or_else(|| {
+        QueryError::execution("Synthetic gather node id overflow".to_string())
+    })?;
+    Ok(id)
+}
+
+fn require_partition_local(
+    local_trees: &[StreamingExecutor],
+    context: &str,
+    plan_name: &str,
+) -> Result<(), QueryError> {
+    for executor in local_trees {
+        if !executor.is_partition_local() {
+            return Err(QueryError::execution(format!(
+                "{} local subtree '{}' is not partition-local",
+                context, plan_name
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Intermediate build result for the builder's recursive construction.
 /// - `Global`: a single executor tree (result of a global or exchange operator).
 /// - `Local`: a set of per-partition trees that have not yet been gathered.
@@ -45,15 +69,7 @@ pub fn build_partitioned_physical_node(
         PartitionedPhysicalNode::Local { logical_plan } => {
             let mut local_trees =
                 partition_builder::build_partitioned(logical_plan, context, partition_view)?;
-            if local_trees
-                .iter()
-                .any(|executor| !executor.is_partition_local())
-            {
-                return Err(QueryError::execution(format!(
-                    "Physical local subtree '{}' is not partition-local",
-                    logical_plan.name()
-                )));
-            }
+            require_partition_local(&local_trees, "Physical", logical_plan.name())?;
             for (partition_id, tree) in local_trees.iter_mut().enumerate() {
                 tree.set_partition_id(partition_id);
             }
@@ -97,14 +113,7 @@ pub fn build_partitioned_physical_node(
             };
             let local_trees =
                 partition_builder::build_partitioned(local_plan, context, partition_view)?;
-            for executor in &local_trees {
-                if !executor.is_partition_local() {
-                    return Err(QueryError::execution(format!(
-                        "AggregateSplit local subtree '{}' is not partition-local",
-                        local_plan.name()
-                    )));
-                }
-            }
+            require_partition_local(&local_trees, "AggregateSplit", local_plan.name())?;
 
             let group_by_expressions: Vec<Expression> = aggregate
                 .group_keys()
@@ -132,10 +141,7 @@ pub fn build_partitioned_physical_node(
                 })
                 .collect();
 
-            let gather_node_id = *next_gather_node_id;
-            *next_gather_node_id = next_gather_node_id.checked_add(1).ok_or_else(|| {
-                QueryError::execution("Synthetic gather node id overflow".to_string())
-            })?;
+            let gather_node_id = allocate_gather_node_id(next_gather_node_id)?;
             let gather = StreamingExecutor::Gather(
                 OperatorBase::new(gather_node_id).with_global(true),
                 partial_aggregates,
@@ -173,13 +179,7 @@ pub fn build_partitioned_physical_node(
             };
             let local_trees =
                 partition_builder::build_partitioned(input_node, context, partition_view)?;
-            for executor in &local_trees {
-                if !executor.is_partition_local() {
-                    return Err(QueryError::execution(
-                        "DistinctSplit local subtree is not partition-local".to_string(),
-                    ));
-                }
-            }
+            require_partition_local(&local_trees, "DistinctSplit", input_node.name())?;
 
             let memory_tracker = MemoryTracker::new(context.memory_budget.clone());
             let local_distincts: Vec<StreamingExecutor> = local_trees
@@ -196,10 +196,7 @@ pub fn build_partitioned_physical_node(
                 })
                 .collect();
 
-            let gather_node_id = *next_gather_node_id;
-            *next_gather_node_id = next_gather_node_id.checked_add(1).ok_or_else(|| {
-                QueryError::execution("Synthetic gather node id overflow".to_string())
-            })?;
+            let gather_node_id = allocate_gather_node_id(next_gather_node_id)?;
             let gather = StreamingExecutor::Gather(
                 OperatorBase::new(gather_node_id).with_global(true),
                 local_distincts,
@@ -242,13 +239,7 @@ pub fn build_partitioned_physical_node(
             };
             let local_trees =
                 partition_builder::build_partitioned(input_node, context, partition_view)?;
-            for executor in &local_trees {
-                if !executor.is_partition_local() {
-                    return Err(QueryError::execution(
-                        "TopNSplit local subtree is not partition-local".to_string(),
-                    ));
-                }
-            }
+            require_partition_local(&local_trees, "TopNSplit", input_node.name())?;
 
             let limit = topn_node.limit() as u32;
             let sort_items = topn_node.sort_items();
@@ -273,10 +264,7 @@ pub fn build_partitioned_physical_node(
                 })
                 .collect();
 
-            let gather_node_id = *next_gather_node_id;
-            *next_gather_node_id = next_gather_node_id.checked_add(1).ok_or_else(|| {
-                QueryError::execution("Synthetic gather node id overflow".to_string())
-            })?;
+            let gather_node_id = allocate_gather_node_id(next_gather_node_id)?;
             Ok(BuildOutput::Global(StreamingExecutor::Gather(
                 OperatorBase::new(gather_node_id).with_global(true),
                 local_topns,
@@ -439,10 +427,7 @@ pub fn local_to_global(
                     "Cannot gather empty local trees".to_string(),
                 ));
             }
-            let gather_node_id = *next_gather_node_id;
-            *next_gather_node_id = next_gather_node_id.checked_add(1).ok_or_else(|| {
-                QueryError::execution("Synthetic gather node id overflow".to_string())
-            })?;
+            let gather_node_id = allocate_gather_node_id(next_gather_node_id)?;
             Ok(StreamingExecutor::Gather(
                 OperatorBase::new(gather_node_id).with_global(true),
                 trees,

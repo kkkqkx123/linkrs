@@ -52,10 +52,10 @@ fn path_endpoint_pairs(
     target_vertices: &[Value],
     target_expression: Option<&Expression>,
 ) -> Result<Vec<(Value, Value)>, QueryError> {
-    let context = ValueRowContext::new_with_layout(row.to_vec(), layout.clone());
+    let context = ValueRowContext::new(row.to_vec(), layout.clone());
     let row_start = context.get_variable("vid").or_else(|| row.first().cloned());
     let row_target = if let Some(expression) = target_expression {
-        let mut expression_context = ValueRowContext::new_with_layout(row.to_vec(), layout);
+        let mut expression_context = ValueRowContext::new(row.to_vec(), layout);
         Some(
             ExpressionEvaluator::evaluate(expression, &mut expression_context).map_err(
                 |error| QueryError::execution(format!("Path target evaluation failed: {error}")),
@@ -366,7 +366,7 @@ fn expand_on_chunk(
 
     let mut out_rows = Vec::new();
     for row in &chunk.rows {
-        let context = ValueRowContext::new_with_layout(row.clone(), chunk.get_layout());
+        let context = ValueRowContext::new(row.clone(), chunk.get_layout());
         let vid_val = context
             .get_variable("vid")
             .or_else(|| row.first().cloned())
@@ -446,7 +446,7 @@ fn traverse_on_chunk(
 
     let mut out_rows = Vec::new();
     for row in &chunk.rows {
-        let context = ValueRowContext::new_with_layout(row.clone(), chunk.get_layout());
+        let context = ValueRowContext::new(row.clone(), chunk.get_layout());
         let vid_val = context
             .get_variable("vid")
             .or_else(|| row.first().cloned())
@@ -1077,7 +1077,7 @@ impl GraphOperator {
                         for row in &chunk.rows {
                             base.ensure_not_cancelled()?;
                             let context =
-                                ValueRowContext::new_with_layout(row.clone(), chunk.get_layout());
+                                ValueRowContext::new(row.clone(), chunk.get_layout());
                             let vid_val = context
                                 .get_variable("vid")
                                 .or_else(|| row.first().cloned())
@@ -1162,7 +1162,7 @@ impl GraphOperator {
                         for row in &chunk.rows {
                             base.ensure_not_cancelled()?;
                             let ctx =
-                                ValueRowContext::new_with_layout(row.clone(), chunk.get_layout());
+                                ValueRowContext::new(row.clone(), chunk.get_layout());
                             let vid_val = ctx
                                 .get_variable("vid")
                                 .or_else(|| row.first().cloned())
@@ -1368,7 +1368,7 @@ impl GraphOperator {
                         for row in &chunk.rows {
                             base.ensure_not_cancelled()?;
                             let ctx =
-                                ValueRowContext::new_with_layout(row.clone(), chunk.get_layout());
+                                ValueRowContext::new(row.clone(), chunk.get_layout());
                             let src_val = ctx
                                 .get_variable("vid")
                                 .or_else(|| row.first().cloned())
@@ -1563,7 +1563,7 @@ impl GraphOperator {
                         for row in &chunk.rows {
                             base.ensure_not_cancelled()?;
                             let ctx =
-                                ValueRowContext::new_with_layout(row.clone(), chunk.get_layout());
+                                ValueRowContext::new(row.clone(), chunk.get_layout());
                             let src_val = (!left_vertex_column.is_empty())
                                 .then(|| ctx.get_variable(left_vertex_column))
                                 .flatten()
@@ -1580,7 +1580,7 @@ impl GraphOperator {
                                 dst_values.push(value);
                             }
                             for expression in target_vertices.iter() {
-                                let mut expression_context = ValueRowContext::new_with_layout(
+                                let mut expression_context = ValueRowContext::new(
                                     row.clone(),
                                     chunk.get_layout(),
                                 );
@@ -1679,7 +1679,7 @@ impl GraphOperator {
                         for row in &chunk.rows {
                             base.ensure_not_cancelled()?;
                             let ctx =
-                                ValueRowContext::new_with_layout(row.clone(), chunk.get_layout());
+                                ValueRowContext::new(row.clone(), chunk.get_layout());
                             let vid_val = ctx
                                 .get_variable("vid")
                                 .or_else(|| row.first().cloned())

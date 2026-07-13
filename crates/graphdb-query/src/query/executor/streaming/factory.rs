@@ -51,20 +51,7 @@ impl StreamingQueryExecutor {
         engine.set_max_buffered_chunks(context.max_buffered_chunks);
         engine.register_executor(0, executor);
 
-        let execution_runtime = ExecutionRuntime::new(
-            QueryIdentity {
-                query_id: context.query_id,
-                session_id: None,
-                space_name: context.space_name.clone(),
-            },
-            context.memory_budget.clone(),
-            context.storage.clone(),
-            #[cfg(feature = "fulltext-search")]
-            context.fulltext_manager.clone(),
-            #[cfg(feature = "qdrant")]
-            context.vector_coordinator.clone(),
-        );
-        let runtime = Arc::new(execution_runtime);
+        let runtime = Arc::new(runtime_from_context(context));
 
         self.engine = Some(engine);
         self.runtime = Some(runtime);
@@ -94,20 +81,7 @@ impl StreamingQueryExecutor {
             )?,
         };
 
-        let execution_runtime = ExecutionRuntime::new(
-            QueryIdentity {
-                query_id: context.query_id,
-                session_id: None,
-                space_name: context.space_name.clone(),
-            },
-            context.memory_budget.clone(),
-            context.storage.clone(),
-            #[cfg(feature = "fulltext-search")]
-            context.fulltext_manager.clone(),
-            #[cfg(feature = "qdrant")]
-            context.vector_coordinator.clone(),
-        );
-        let runtime = Arc::new(execution_runtime);
+        let runtime = Arc::new(runtime_from_context(context));
         let mut engine = StreamingExecutionEngine::new();
         engine.set_max_workers(context.max_workers);
         engine.set_max_buffered_chunks(context.max_buffered_chunks);
@@ -184,6 +158,22 @@ impl Default for StreamingQueryExecutor {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn runtime_from_context(context: &ExecutionContext) -> ExecutionRuntime {
+    ExecutionRuntime::new(
+        QueryIdentity {
+            query_id: context.query_id,
+            session_id: None,
+            space_name: context.space_name.clone(),
+        },
+        context.memory_budget.clone(),
+        context.storage.clone(),
+        #[cfg(feature = "fulltext-search")]
+        context.fulltext_manager.clone(),
+        #[cfg(feature = "qdrant")]
+        context.vector_coordinator.clone(),
+    )
 }
 
 #[cfg(test)]

@@ -139,18 +139,6 @@ impl StreamingExecutor {
         }
     }
 
-    /// Configure P8 execution for nodes below this tree (deprecated — now
-    /// managed through the runtime's `MorselWorkerPool`).
-    pub fn configure_parallel_partitions(
-        &mut self,
-        _max_workers: usize,
-        _max_buffered_chunks: usize,
-    ) {
-        for child in self.children_mut() {
-            child.configure_parallel_partitions(_max_workers, _max_buffered_chunks);
-        }
-    }
-
     /// Return the plan node ID of this operator.
     pub fn plan_node_id(&self) -> i64 {
         self.base().plan_node_id
@@ -431,12 +419,7 @@ impl StreamingExecutor {
 
     /// Record output row count in profile for this operator.
     pub fn record_profile_rows(&self, count: u64) {
-        if let Some(rt) = &self.base().runtime {
-            let mut profile = rt.profile().lock();
-            if let Some(entry) = profile.operators.get_mut(&self.profile_key()) {
-                entry.output_rows += count;
-            }
-        }
+        self.base().record_profile_rows(count);
     }
 
     /// Record peak memory usage in profile for this operator.

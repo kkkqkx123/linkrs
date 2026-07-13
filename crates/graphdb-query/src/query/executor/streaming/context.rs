@@ -35,13 +35,6 @@ impl ValueRowContext {
         }
     }
 
-    /// Create a new context from a row and slot layout.
-    /// Alias that makes call sites where a layout is explicitly built read
-    /// naturally.
-    pub fn new_with_layout(row: Vec<Value>, layout: Arc<SlotLayout>) -> Self {
-        Self::new(row, layout)
-    }
-
     /// Create a new context by building a layout from column names.
     ///
     /// This is a convenience for sites that only have column-name strings

@@ -42,7 +42,7 @@ fn evaluate_join_key(
     let layout = Arc::new(SlotLayout::from_names(col_names));
     let mut key = Vec::with_capacity(key_expressions.len());
     for expr in key_expressions {
-        let mut context = ValueRowContext::new_with_layout(row.to_vec(), layout.clone());
+        let mut context = ValueRowContext::new(row.to_vec(), layout.clone());
         let value = ExpressionEvaluator::evaluate(expr, &mut context)
             .map_err(|e| QueryError::execution(format!("HashJoin key evaluation failed: {}", e)))?;
         key.push(value);
