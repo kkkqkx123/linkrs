@@ -9,7 +9,7 @@
 
 use crate::core::types::{ContextualExpression, EdgeDirection};
 use crate::query::parser::ast::{GoStmt, Stmt};
-use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
+use crate::query::planning::plan::core::nodes::base::plan_node_traits::{MultipleInputNode, PlanNode};
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
@@ -97,7 +97,7 @@ impl Planner for GoPlanner {
             (false, "v".to_string())
         };
 
-        // Create the tail node
+        // Create the tail node — this becomes the input to ExpandAllNode.
         let tail_node = if use_start_node {
             PlanNodeEnum::Start(StartNode::new())
         } else {
@@ -117,6 +117,7 @@ impl Planner for GoPlanner {
 
         // Create ExpandAllNode to traverse edges
         let mut expand_all_node = ExpandAllNode::new(space_id, edge_types.clone(), direction_str);
+        expand_all_node.add_input(tail_node);
 
         // Set step_limit based on GO statement steps
         let step_limit = match go_stmt.steps {
@@ -191,9 +192,10 @@ impl Planner for GoPlanner {
             project_node
         };
 
+        // tail_node was already set as ExpandAllNode's input above.
         let sub_plan = SubPlan {
             root: Some(root_node),
-            tail: Some(tail_node),
+            tail: None,
         };
 
         Ok(sub_plan)

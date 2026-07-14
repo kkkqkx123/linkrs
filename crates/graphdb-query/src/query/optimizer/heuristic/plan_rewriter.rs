@@ -10,6 +10,9 @@
 //! Better cache locality
 //! Compilers can perform in-line optimizations.
 
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+
 use crate::query::optimizer::heuristic::context::RewriteContext;
 use crate::query::optimizer::heuristic::result::RewriteResult;
 use crate::query::optimizer::heuristic::rule_enum::{RewriteRule as RewriteRuleEnum, RuleRegistry};
@@ -28,7 +31,10 @@ pub struct PlanRewriter {
     /// List of registered rules (static distribution)
     rules: Vec<RewriteRuleEnum>,
     /// The maximum number of iterations, to prevent an infinite loop.
-    max_iterations: usize,
+    /// Uses `AtomicUsize` for interior mutability so `optimize` can sync the
+    /// count from `OptimizerEngine::max_heuristic_iterations` without `&mut self`
+    /// while keeping `PlanRewriter` `Sync`.
+    max_iterations: AtomicUsize,
 }
 
 impl PlanRewriter {
@@ -36,7 +42,7 @@ impl PlanRewriter {
     pub fn new() -> Self {
         Self {
             rules: Vec::new(),
-            max_iterations: 100,
+            max_iterations: AtomicUsize::new(100),
         }
     }
 
@@ -44,14 +50,19 @@ impl PlanRewriter {
     pub fn from_registry(registry: RuleRegistry) -> Self {
         Self {
             rules: registry.into_vec(),
-            max_iterations: 100,
+            max_iterations: AtomicUsize::new(100),
         }
     }
 
-    /// Set the maximum number of iterations.
+    /// Set the maximum number of iterations (builder-style, consumes self).
     pub fn with_max_iterations(mut self, max: usize) -> Self {
-        self.max_iterations = max;
+        self.max_iterations = AtomicUsize::new(max);
         self
+    }
+
+    /// Set the maximum number of iterations (interior mutability via `AtomicUsize`).
+    pub fn set_max_iterations(&self, max: usize) {
+        self.max_iterations.store(max, Ordering::Relaxed);
     }
 
     /// Add rules
@@ -110,7 +121,7 @@ impl PlanRewriter {
         let mut changed = true;
         let mut iterations = 0;
 
-        while changed && iterations < self.max_iterations {
+        while changed && iterations < self.max_iterations.load(Ordering::Relaxed) {
             changed = false;
             iterations += 1;
 

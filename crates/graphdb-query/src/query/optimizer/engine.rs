@@ -329,7 +329,10 @@ impl OptimizerEngine {
         // Phase 1: Heuristic Optimization (Always Executed)
         if self.enable_heuristic {
             log::debug!("Starting Phase 1: Heuristic Optimization");
-            current_plan = self.apply_heuristic(current_plan)?;
+            current_plan = self.apply_heuristic_with_max_iterations(
+                current_plan,
+                self.max_heuristic_iterations,
+            )?;
             log::debug!("Phase 1 completed successfully");
         }
 
@@ -372,6 +375,19 @@ impl OptimizerEngine {
 
     /// Apply heuristic optimization rules
     fn apply_heuristic(&self, plan: ExecutionPlan) -> OptimizeResult<ExecutionPlan> {
+        self.heuristic_rewriter
+            .rewrite(plan)
+            .map_err(|e| OptimizeError::HeuristicFailed(e.to_string()))
+    }
+
+    /// Apply heuristic optimization rules with caller-supplied iteration limit.
+    fn apply_heuristic_with_max_iterations(
+        &self,
+        plan: ExecutionPlan,
+        max_iterations: usize,
+    ) -> OptimizeResult<ExecutionPlan> {
+        // Interior mutability via Cell: set_max_iterations does not need &mut self.
+        self.heuristic_rewriter.set_max_iterations(max_iterations);
         self.heuristic_rewriter
             .rewrite(plan)
             .map_err(|e| OptimizeError::HeuristicFailed(e.to_string()))

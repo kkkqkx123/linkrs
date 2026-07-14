@@ -192,7 +192,7 @@ impl crate::query::planning::plan::core::nodes::base::plan_node_traits::Multiple
 /// 1. src_vids - Direct vertex IDs specified in the query
 /// 2. input_var - Variable name to look up in ExecutionContext (for joining with previous results)
 /// 3. input nodes - Child plan nodes that provide input
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExpandAllNode {
     id: i64,
     deps: Vec<crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum>,
@@ -215,34 +215,6 @@ pub struct ExpandAllNode {
     column_types: Vec<crate::core::DataType>,
     /// Input variable name for getting input from ExecutionContext
     input_var: Option<String>,
-}
-
-impl Clone for ExpandAllNode {
-    fn clone(&self) -> Self {
-        use crate::query::planning::plan::core::node_id_generator::next_node_id;
-        Self {
-            id: next_node_id(),
-            deps: self.deps.clone(),
-            space_id: self.space_id,
-            edge_types: self.edge_types.clone(),
-            direction: self.direction.clone(),
-            any_edge_type: self.any_edge_type,
-            step_limit: self.step_limit,
-            step_limits: self.step_limits.clone(),
-            join_input: self.join_input,
-            sample: self.sample,
-            edge_props: self.edge_props.clone(),
-            vertex_props: self.vertex_props.clone(),
-            filter: self.filter.clone(),
-            filter_serializable: self.filter_serializable.clone(),
-            src_vids: self.src_vids.clone(),
-            include_empty_paths: self.include_empty_paths,
-            output_var: self.output_var.clone(),
-            col_names: self.col_names.clone(),
-            column_types: self.column_types.clone(),
-            input_var: self.input_var.clone(),
-        }
-    }
 }
 
 impl ExpandAllNode {

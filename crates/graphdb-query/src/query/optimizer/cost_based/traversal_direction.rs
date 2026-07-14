@@ -462,13 +462,19 @@ impl OptimizationStrategy for TraversalDirectionOptimizer {
                 .cloned()
                 .unwrap_or_default();
 
+            // Preserve the original direction — the optimizer may only change
+            // direction when the user did not specify one explicitly (Both),
+            // and even then must prove semantic equivalence.
+            let original_dir = expand_node.direction();
+            let explicit = TraversalDirection::from_edge_direction(&original_dir);
+
             // Create direction context
             let direction_context = DirectionContext {
                 edge_type,
-                start_nodes: 1,            // Default to 1 start node
-                explicit_direction: None,  // No explicit direction specified
-                allow_bidirectional: true, // Allow bidirectional by default
-                steps: 1,                  // Default to 1 step
+                start_nodes: 1,
+                explicit_direction: Some(explicit),
+                allow_bidirectional: false,
+                steps: 1,
             };
 
             // Use underlying optimizer to make decision

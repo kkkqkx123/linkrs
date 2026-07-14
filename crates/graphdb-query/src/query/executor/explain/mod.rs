@@ -12,6 +12,7 @@
 pub mod execution_stats_context;
 pub mod explain_executor;
 pub mod format;
+pub mod physical_plan_explain;
 pub mod profile_executor;
 
 // Re-export main types

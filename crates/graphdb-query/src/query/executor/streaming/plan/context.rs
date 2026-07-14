@@ -9,6 +9,7 @@
 
 use crate::core::error::QueryError;
 use crate::query::executor::base::ExecutionContext;
+use crate::query::planning::plan::PartitionSpec;
 use super::types::{FragmentIdAllocator, PhysicalOperatorIdAllocator};
 use crate::query::executor::streaming::parameters::ParameterSchema;
 use crate::query::executor::streaming::slot::SlotLayout;
@@ -71,6 +72,11 @@ pub struct PhysicalPlanBuildContext {
     /// Parameter schema for prepared-statement parameters.
     pub parameter_schema: ParameterSchema,
 
+    /// M3: optional partition spec for partitioned execution.
+    /// When set, the builder produces a PhysicalPlan with multiple source
+    /// fragments and exchange/gather fragments instead of a single linear chain.
+    pub partition_spec: Option<PartitionSpec>,
+
     // ── Allocators ──
     pub(crate) operator_id_alloc: PhysicalOperatorIdAllocator,
     pub(crate) fragment_id_alloc: FragmentIdAllocator,
@@ -97,6 +103,7 @@ impl PhysicalPlanBuildContext {
             },
             expected_output_layout: None,
             parameter_schema: ParameterSchema::default(),
+            partition_spec: None,
             operator_id_alloc: PhysicalOperatorIdAllocator::new(),
             fragment_id_alloc: FragmentIdAllocator::new(),
         }
@@ -110,6 +117,7 @@ impl PhysicalPlanBuildContext {
             config: PlanningConfig::default(),
             expected_output_layout: None,
             parameter_schema: ParameterSchema::default(),
+            partition_spec: None,
             operator_id_alloc: PhysicalOperatorIdAllocator::new(),
             fragment_id_alloc: FragmentIdAllocator::new(),
         }

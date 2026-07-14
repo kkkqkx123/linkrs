@@ -78,6 +78,8 @@ pub struct PlanCacheKey {
     /// Parameter type signature — prevents reuse when param types differ (M1.6).
     /// Does NOT include parameter values, only their declared types.
     param_type_signature: Option<u64>,
+    /// Index version at planning time — forces replan after index DDL (P2).
+    index_version: Option<u64>,
 }
 
 impl PlanCacheKey {
@@ -91,6 +93,7 @@ impl PlanCacheKey {
             space_name: None,
             schema_version: None,
             param_type_signature: None,
+            index_version: None,
         }
     }
 
@@ -104,7 +107,7 @@ impl PlanCacheKey {
         space_name: Option<String>,
         schema_version: Option<u64>,
     ) -> Self {
-        Self::from_query_with_full_context(query, space_name, schema_version, None)
+        Self::from_query_with_full_context(query, space_name, schema_version, None, None)
     }
 
     /// Create a key with all available context dimensions.
@@ -113,6 +116,7 @@ impl PlanCacheKey {
         space_name: Option<String>,
         schema_version: Option<u64>,
         param_type_signature: Option<u64>,
+        index_version: Option<u64>,
     ) -> Self {
         use std::hash::Hash;
 
@@ -123,6 +127,7 @@ impl PlanCacheKey {
         }
         schema_version.hash(&mut hasher);
         param_type_signature.hash(&mut hasher);
+        index_version.hash(&mut hasher);
         let hash = hasher.finish();
 
         Self {
@@ -132,6 +137,7 @@ impl PlanCacheKey {
             space_name,
             schema_version,
             param_type_signature,
+            index_version,
         }
     }
 
@@ -154,6 +160,7 @@ impl PlanCacheKey {
             space_name: None,
             schema_version: None,
             param_type_signature: None,
+            index_version: None,
         }
     }
 
@@ -377,24 +384,44 @@ impl QueryPlanCache {
     ///
     /// M1.6: param_type_signature is a hash of parameter *types* so that
     /// the same query with different param types gets a different cache key.
+    ///
+    /// P2: index_version forces replan after index DDL (use the same value
+    /// that was passed to `put_with_context` to ensure key matching).
     pub fn get_with_space(
         &self,
         query: &str,
         space_name: Option<String>,
         schema_version: Option<u64>,
     ) -> Option<Arc<CachedPlan>> {
-        self.get_with_full_context(query, space_name, schema_version, None)
+        self.get_with_full_context(query, space_name, schema_version, None, None)
     }
 
-    /// Full-context cache lookup with parameter type signature.
+    /// Look up with space, schema version, AND index version.
+    ///
+    /// P2: the index_version dimension ensures that a plan compiled with a
+    /// certain index state is not reused after index DDL.
+    pub fn get_with_full_space(
+        &self,
+        query: &str,
+        space_name: Option<String>,
+        schema_version: Option<u64>,
+        index_version: Option<u64>,
+    ) -> Option<Arc<CachedPlan>> {
+        self.get_with_full_context(query, space_name, schema_version, None, index_version)
+    }
+
+    /// Full-context cache lookup with parameter type signature and index version.
     pub fn get_with_full_context(
         &self,
         query: &str,
         space_name: Option<String>,
         schema_version: Option<u64>,
         param_type_signature: Option<u64>,
+        index_version: Option<u64>,
     ) -> Option<Arc<CachedPlan>> {
-        let key = PlanCacheKey::from_query_with_full_context(query, space_name, schema_version, param_type_signature);
+        let key = PlanCacheKey::from_query_with_full_context(
+            query, space_name, schema_version, param_type_signature, index_version,
+        );
 
         if let Some(plan) = self.cache.get(&key) {
             if plan.query_template != query {
@@ -440,7 +467,7 @@ impl QueryPlanCache {
     /// - `plan`: Arena-based physical plan
     /// - `param_positions`: Information about the positions of the parameters
     pub fn put(&self, query: &str, plan: Arc<PhysicalPlan>, param_positions: Vec<ParamPosition>) {
-        self.put_with_context(query, plan, param_positions, Vec::new(), None, None);
+        self.put_with_context(query, plan, param_positions, Vec::new(), None, None, None);
     }
 
     /// Put the plan in the cache with dependent tables.
@@ -451,16 +478,19 @@ impl QueryPlanCache {
         param_positions: Vec<ParamPosition>,
         dependent_tables: Vec<String>,
     ) {
-        self.put_with_context(query, plan, param_positions, dependent_tables, None, None);
+        self.put_with_context(query, plan, param_positions, dependent_tables, None, None, None);
     }
 
-    /// Put the plan with full context (space, schema version, tables).
+    /// Put the plan with full context (space, schema version, index version, tables).
     ///
     /// M0: space_name and schema_version are incorporated into the cache key
     /// to prevent cross-space reuse and stale plans after DDL.
     ///
     /// M1.6: `param_type_signature` is derived from the parameter type
     /// declarations (not values) and is included in the cache key.
+    ///
+    /// P2: index_version is incorporated into the cache key to force replan
+    /// after index DDL (CREATE/DROP index) even when schema_version is unchanged.
     ///
     /// M3: stores [`Arc<PhysicalPlan>`] — the immutable arena plan.
     pub fn put_with_context(
@@ -471,10 +501,13 @@ impl QueryPlanCache {
         dependent_tables: Vec<String>,
         space_name: Option<String>,
         schema_version: Option<u64>,
+        index_version: Option<u64>,
     ) {
         let query_bytes = query.len();
         let param_type_sig = Self::compute_param_type_signature(&param_positions);
-        let key = PlanCacheKey::from_query_with_full_context(query, space_name, schema_version, param_type_sig);
+        let key = PlanCacheKey::from_query_with_full_context(
+            query, space_name, schema_version, param_type_sig, index_version,
+        );
 
         let priority = if self.config.priority_config.enable_priority {
             self.calculate_priority(&plan)
@@ -593,8 +626,21 @@ impl QueryPlanCache {
     }
 
     /// Record execution with space context.
-    pub fn record_execution_with_space(&self, query: &str, execution_time_ms: f64, space_name: Option<String>, schema_version: Option<u64>) {
-        let key = PlanCacheKey::from_query_with_space(query, space_name, schema_version);
+    ///
+    /// P2: index_version must match the value used during `put_with_context` to
+    /// locate the cached plan; otherwise the keys will differ and the record
+    /// will miss.
+    pub fn record_execution_with_space(
+        &self,
+        query: &str,
+        execution_time_ms: f64,
+        space_name: Option<String>,
+        schema_version: Option<u64>,
+        index_version: Option<u64>,
+    ) {
+        let key = PlanCacheKey::from_query_with_full_context(
+            query, space_name, schema_version, None, index_version,
+        );
 
         if let Some(plan) = self.cache.get(&key) {
             let alpha = 0.1;
@@ -646,6 +692,7 @@ impl QueryPlanCache {
                 space_name: k.space_name.clone(),
                 schema_version: k.schema_version,
                 param_type_signature: k.param_type_signature,
+                index_version: k.index_version,
             })
             .collect();
         let removed = keys_to_remove.len();

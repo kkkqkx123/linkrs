@@ -255,13 +255,24 @@ impl PhysicalPlanValidator {
         }
     }
 
-    /// Each operator type has the correct number of children (as implied by
-    /// the fragment graph's operator list ordering).
+    /// Each fragment's input count matches the expected children of its
+    /// leaf (first) operator — the one that receives data from other fragments.
+    /// Operators further up the same fragment pipeline (e.g., Filter above
+    /// Scan) consume data from their sibling within the fragment, not from
+    /// external fragment inputs.
     fn check_operator_input_counts(plan: &PhysicalPlan, result: &mut ValidationResult) {
-        for op in &plan.operators {
-            let expected_children = match &op.spec {
-                OperatorKindSpec::Source(_) => 0,
-                OperatorKindSpec::Txn(_) => 0,
+        for fragment in plan.fragments.fragments() {
+            if fragment.operators.is_empty() {
+                continue;
+            }
+            // The first operator in the fragment pipeline is the leaf that
+            // receives external inputs. Check its expected children against
+            // the number of fragment inputs.
+            let leaf_op_id = fragment.operators[0];
+            let leaf_op = &plan.operators[leaf_op_id.0];
+
+            let expected_children = match &leaf_op.spec {
+                OperatorKindSpec::Source(_) | OperatorKindSpec::Txn(_) => 0,
                 OperatorKindSpec::Unary(_)
                 | OperatorKindSpec::Blocking(_)
                 | OperatorKindSpec::Graph(_)
@@ -274,26 +285,19 @@ impl PhysicalPlanValidator {
                     2
                 }
                 OperatorKindSpec::Exchange(_) => {
-                    // Variable children, verified separately.
                     continue;
                 }
             };
 
-            // Check the fragment that owns this operator: the number of
-            // fragment inputs matches the expected child count for the root.
-            for fragment in plan.fragments.fragments() {
-                if fragment.root_operator == op.operator_id {
-                    if fragment.inputs.len() != expected_children && expected_children > 0 {
-                        result.errors.push(format!(
-                            "Operator {:?} ({}) expects {} child(ren) but fragment {:?} has {} input(s)",
-                            op.operator_id,
-                            op.explain_name,
-                            expected_children,
-                            fragment.id,
-                            fragment.inputs.len()
-                        ));
-                    }
-                }
+            if fragment.inputs.len() != expected_children && expected_children > 0 {
+                result.errors.push(format!(
+                    "Fragment {:?} has {} input(s) but its leaf operator {:?} ({}) expects {} child(ren)",
+                    fragment.id,
+                    fragment.inputs.len(),
+                    leaf_op.operator_id,
+                    leaf_op.explain_name,
+                    expected_children
+                ));
             }
         }
     }

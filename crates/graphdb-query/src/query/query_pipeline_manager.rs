@@ -30,7 +30,7 @@ use crate::core::{
     ErrorInfo, ErrorType, MetricType, QueryMetrics, QueryPhase, QueryProfile, StatsManager,
 };
 use crate::query::executor::base::{BaseExecutor, ExecutionContext, ExecutionResult, Executor};
-use crate::query::executor::explain::{ExplainExecutor, ExplainMode, ProfileExecutor};
+use crate::query::executor::explain::ProfileExecutor;
 use crate::query::executor::streaming::plan::{
     PhysicalPlan, PhysicalPlanBuilder, PhysicalPlanBuildContext, PhysicalPlanValidator,
 };
@@ -268,15 +268,18 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         // M0: schema generation serves as a proxy for schema version in cache keys.
         let schema_version = Some(self.schema_generation.load(std::sync::atomic::Ordering::Relaxed));
 
-        // 2. Check the query plan cache (M0: space-aware key).
+        // P2: index_version uses the same generation counter as schema_version.
+        let index_version = schema_version;
+
+        // 2. Check the query plan cache (M0: space-aware key; P2: index-aware key).
         // M3: cache stores Arc<PhysicalPlan> — execute directly via instantiate_plan.
-        if let Some(cached_plan) = self.plan_cache.get_with_space(query_text, space_name.clone(), schema_version) {
+        if let Some(cached_plan) = self.plan_cache.get_with_full_space(query_text, space_name.clone(), schema_version, index_version) {
             log::debug!("Query plan cache hit");
             let execute_start = Instant::now();
-            let result = self.execute_physical_plan(cached_plan.plan.clone(), query_context)?;
+            let result = self.execute_compiled(cached_plan.plan.clone(), query_context.clone(), ResultSink::Materialize)?;
             let execution_time_ms = execute_start.elapsed().as_millis() as f64;
             self.plan_cache
-                .record_execution_with_space(query_text, execution_time_ms, space_name, schema_version);
+                .record_execution_with_space(query_text, execution_time_ms, space_name, schema_version, index_version);
             return Ok(result);
         }
 
@@ -325,19 +328,22 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             }
         }
 
-        // 5. Generate an execution plan.
-        let execution_plan = self.generate_execution_plan(query_context.clone(), &validated)?;
-
-        // 6. Optimizing the execution plan
-        let optimized_plan = self.optimize_execution_plan(execution_plan)?;
-
-        // 7. Execution Plan (M3: build PhysicalPlan and execute)
+        // 5. Compile and execute (unified Step 2 path).
         let execute_start = Instant::now();
-        let physical_plan = self.build_physical_plan(&optimized_plan, &query_context)?;
-        let result = self.execute_physical_plan(physical_plan.clone(), query_context)?;
+        let (physical_plan, optimized_plan) = self.compile(query_context.clone(), &validated)?;
+
+        // Step 3: partition-spec merge — currently the partitioned path uses the
+        // old ExecutionPlan, so route through execute_plan for now.
+        let result = if optimized_plan.partition_spec().is_some() {
+            // TODO(Step 3): PhysicalPlanBuilder will absorb partition spec.
+            // Fallback to old partitioned execution path.
+            self.execute_plan(query_context.clone(), optimized_plan)?
+        } else {
+            self.execute_compiled(physical_plan.clone(), query_context.clone(), ResultSink::Materialize)?
+        };
         let execution_time_ms = execute_start.elapsed().as_millis() as f64;
 
-        // 8. Caching of query plans (M3: cache Arc<PhysicalPlan>)
+        // 6. Caching of query plans (M3: cache Arc<PhysicalPlan>)
         // Skip caching for INSERT statements as they contain literal values
         let should_cache = !matches!(
             validated.ast.stmt(),
@@ -345,16 +351,36 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         );
         if should_cache {
             let param_positions = self.param_handler.extract_params(query_text);
+
+            // P2: populate dependent_tables from semantic info for cache invalidation.
+            let dependent_tables: Vec<String> = validated
+                .validation_info
+                .semantic_info
+                .referenced_tags
+                .iter()
+                .chain(validated.validation_info.semantic_info.referenced_edges.iter())
+                .cloned()
+                .collect();
+
+            // P2: index_version uses the same generation counter as schema_version.
+            let index_version = schema_version;
+
             self.plan_cache.put_with_context(
                 query_text,
                 physical_plan,
                 param_positions,
-                Vec::new(),
+                dependent_tables,
                 space_name.clone(),
                 schema_version,
+                index_version,
             );
-            self.plan_cache
-                .record_execution_with_space(query_text, execution_time_ms, space_name, schema_version);
+            self.plan_cache.record_execution_with_space(
+                query_text,
+                execution_time_ms,
+                space_name,
+                schema_version,
+                index_version,
+            );
         }
 
         Ok(result)
@@ -406,7 +432,6 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         match validated.ast.stmt() {
             crate::query::parser::ast::Stmt::Explain(explain_stmt) => {
                 let result = self.execute_explain(explain_stmt, query_context)?;
-                // Wrap materialized result into a one-chunk stream
                 return Ok(StreamingQueryResult::from_execution_result(result));
             }
             crate::query::parser::ast::Stmt::Profile(profile_stmt) => {
@@ -416,9 +441,15 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             _ => {}
         }
 
-        let execution_plan = self.generate_execution_plan(query_context.clone(), &validated)?;
-        let optimized_plan = self.optimize_execution_plan(execution_plan)?;
-        self.execute_plan_to_stream(query_context, optimized_plan)
+        // Step 2: compile → stream (unified path).
+        let (physical_plan, optimized_plan) = self.compile(query_context.clone(), &validated)?;
+
+        if optimized_plan.partition_spec().is_some() {
+            // TODO(Step 3): merge partition into PhysicalPlanBuilder.
+            self.execute_plan_to_stream(query_context, optimized_plan)
+        } else {
+            self.execute_compiled_stream(physical_plan, query_context)
+        }
     }
 
     pub fn execute_query_with_request(
@@ -427,27 +458,17 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         rctx: Arc<crate::query::QueryRequestContext>,
         space_info: Option<crate::core::types::SpaceInfo>,
     ) -> DBResult<ExecutionResult> {
-        // 1. First, create a QueryContext (which persists throughout the entire lifecycle of the query).
         let mut query_context = QueryContext::new(rctx);
-
-        // Setting spatial information (before packaging in the Arc format)
         if let Some(ref space) = space_info {
             query_context.set_space_info(space.clone());
         }
-
         let query_context = Arc::new(query_context);
 
-        // 2. Analyze the query
         let parser_result = self.parse_into_context(query_text)?;
-
-        // 3. Verify the query (reusing the already created QueryContext)
         let validation_info =
             self.validate_query_with_context(parser_result.ast.clone(), query_context.clone())?;
-
-        // Create a verified statement (using Arc<Ast> to share ownership)
         let validated = ValidatedStatement::new(parser_result.ast.clone(), validation_info);
 
-        // Check for EXPLAIN/PROFILE statements and route accordingly
         match validated.ast.stmt() {
             crate::query::parser::ast::Stmt::Explain(explain_stmt) => {
                 return self.execute_explain(explain_stmt, query_context);
@@ -458,14 +479,15 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             _ => {}
         }
 
-        // 4. Generate an execution plan.
-        let execution_plan = self.generate_execution_plan(query_context.clone(), &validated)?;
+        // Step 2: compile → execute (unified).
+        let (physical_plan, optimized_plan) = self.compile(query_context.clone(), &validated)?;
 
-        // 5. Optimizing the execution plan
-        let optimized_plan = self.optimize_execution_plan(execution_plan)?;
-
-        // 6. Execution of the plan
-        self.execute_plan(query_context, optimized_plan)
+        if optimized_plan.partition_spec().is_some() {
+            // TODO(Step 3): merge partition into PhysicalPlanBuilder.
+            self.execute_plan(query_context, optimized_plan)
+        } else {
+            self.execute_compiled(physical_plan, query_context, ResultSink::Materialize)
+        }
     }
 
     pub fn execute_query_with_metrics(
@@ -621,29 +643,52 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             }
         };
 
+        // M3: build PhysicalPlan (non-partitioned path).
+        let physical_plan = self.build_physical_plan(&optimized_plan, &query_context)?;
+
         let execute_start = Instant::now();
-        let result = match self.execute_plan(query_context, optimized_plan) {
-            Ok(result) => {
-                profile.stages.execute_us = execute_start.elapsed().as_micros() as u64;
-                profile.result_count = result.count();
-                metrics.set_result_row_count(result.count());
-                metrics.record_execute_time(execute_start.elapsed());
-                result
+        let has_partition = optimized_plan.partition_spec().is_some();
+        let result = if has_partition {
+            // TODO(Step 3): merge partition into PhysicalPlanBuilder.
+            match self.execute_plan(query_context, optimized_plan) {
+                Ok(result) => result,
+                Err(e) => {
+                    profile.stages.execute_us = execute_start.elapsed().as_micros() as u64;
+                    let error_info = ErrorInfo::new(
+                        ErrorType::ExecutionError,
+                        QueryPhase::Execute,
+                        e.to_string(),
+                    );
+                    profile.mark_failed_with_info(error_info.clone());
+                    profile.total_duration_us = total_start.elapsed().as_micros() as u64;
+                    self.stats_manager
+                        .record_failed_query(profile.clone(), error_info);
+                    return Err(e);
+                }
             }
-            Err(e) => {
-                profile.stages.execute_us = execute_start.elapsed().as_micros() as u64;
-                let error_info = ErrorInfo::new(
-                    ErrorType::ExecutionError,
-                    QueryPhase::Execute,
-                    e.to_string(),
-                );
-                profile.mark_failed_with_info(error_info.clone());
-                profile.total_duration_us = total_start.elapsed().as_micros() as u64;
-                self.stats_manager
-                    .record_failed_query(profile.clone(), error_info);
-                return Err(e);
+        } else {
+            match self.execute_compiled(physical_plan, query_context, ResultSink::Materialize) {
+                Ok(result) => result,
+                Err(e) => {
+                    profile.stages.execute_us = execute_start.elapsed().as_micros() as u64;
+                    let error_info = ErrorInfo::new(
+                        ErrorType::ExecutionError,
+                        QueryPhase::Execute,
+                        e.to_string(),
+                    );
+                    profile.mark_failed_with_info(error_info.clone());
+                    profile.total_duration_us = total_start.elapsed().as_micros() as u64;
+                    self.stats_manager
+                        .record_failed_query(profile.clone(), error_info);
+                    return Err(e);
+                }
             }
         };
+
+        profile.stages.execute_us = execute_start.elapsed().as_micros() as u64;
+        profile.result_count = result.count();
+        metrics.set_result_row_count(result.count());
+        metrics.record_execute_time(execute_start.elapsed());
 
         profile.total_duration_us = total_start.elapsed().as_micros() as u64;
         metrics.record_total_time(total_start.elapsed());
@@ -906,6 +951,13 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
                 let referenced_tags = &validated.validation_info.semantic_info.referenced_tags;
                 let referenced_edges = &validated.validation_info.semantic_info.referenced_edges;
 
+                // Build a set of referenced tag/edge names for index filtering.
+                let referenced_set: std::collections::HashSet<&str> = referenced_tags
+                    .iter()
+                    .chain(referenced_edges.iter())
+                    .map(String::as_str)
+                    .collect();
+
                 // Resolve tag metadata from schema manager
                 if let Some(ref schema_manager) = self.schema_manager {
                     for tag_name in referenced_tags {
@@ -940,12 +992,16 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
                     }
                 }
 
-                // Resolve all indexes for the space from all sources
+                // P2: Only load indexes for referenced tags/edges, not all indexes.
                 match self.resolve_all_indexes(space_id) {
                     Ok(indexes) => {
                         for index in indexes {
-                            context.set_index_metadata(index.index_name.clone(), index);
-                            has_metadata = true;
+                            if referenced_set.contains(index.tag_name.as_str())
+                                || (index.tag_name.is_empty() && !referenced_edges.is_empty())
+                            {
+                                context.set_index_metadata(index.index_name.clone(), index);
+                                has_metadata = true;
+                            }
                         }
                     }
                     Err(e) => {
@@ -1217,6 +1273,106 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         Ok(optimized)
     }
 
+    // ── Step 2: Unified compile/execute pipeline ──
+    //
+    // M2: extract plan → optimize → build → execute into shared methods so that
+    // all API entry points (with_space, with_request, stream_with_request,
+    // with_profile) share the same planning and instantiation logic.
+    //
+    // Target: compile() returns Arc<PhysicalPlan>, execute_compiled() materializes
+    // and runs it.  Each entry point only picks cache strategy, sink, and telemetry.
+    //
+    // Step 3 (dual-track merge) will absorb the partition-spec path into
+    // PhysicalPlanBuilder so compile always returns a complete PhysicalPlan.
+
+    /// Compile a validated statement into an [`Arc<PhysicalPlan>`].
+    ///
+    /// Combines: generate_execution_plan → optimize → build_physical_plan.
+    /// Returns both the PhysicalPlan and the (possibly partitioned) ExecutionPlan
+    /// for partition-aware routing until the dual-track merge (Step 3).
+    fn compile(
+        &mut self,
+        query_context: Arc<QueryContext>,
+        validated: &ValidatedStatement,
+    ) -> DBResult<(
+        Arc<PhysicalPlan>,
+        crate::query::planning::plan::ExecutionPlan,
+    )> {
+        let execution_plan = self.generate_execution_plan(query_context.clone(), validated)?;
+        let optimized_plan = self.optimize_execution_plan(execution_plan)?;
+        let physical_plan = self.build_physical_plan(&optimized_plan, &query_context)?;
+        Ok((physical_plan, optimized_plan))
+    }
+
+    /// Execute a compiled [`PhysicalPlan`] with the given sink and return
+    /// the materialized result.
+    ///
+    /// Sink variants:
+    /// - `Materialize`: collect all chunks into an `ExecutionResult`.
+    /// - `Discard`: run for side effects only, return empty.
+    /// - `Stream`: use [`execute_compiled_stream`] instead (returns
+    ///   `StreamingQueryResult`).
+    fn execute_compiled(
+        &self,
+        physical_plan: Arc<PhysicalPlan>,
+        query_context: Arc<QueryContext>,
+        sink: ResultSink,
+    ) -> DBResult<ExecutionResult> {
+        let exec_ctx = self.build_execution_context(&query_context);
+        let mut bindings = QueryBindings::from_context(&exec_ctx, TransactionScope::None);
+        bindings.query_id = exec_ctx.query_id;
+
+        let mut instance = QueryExecutionInstance::instantiate_plan(
+            physical_plan,
+            bindings,
+            sink,
+            self.query_registry.clone(),
+        )
+        .map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;
+
+        match sink {
+            ResultSink::Materialize => instance
+                .execute()
+                .map_err(|e| DBError::from(QueryError::execution(e.to_string()))),
+            ResultSink::Discard => {
+                instance
+                    .execute_discard()
+                    .map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;
+                Ok(ExecutionResult::Empty)
+            }
+            ResultSink::Stream => {
+                // Use execute_compiled_stream for streaming.
+                let _ = instance.into_stream().map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;
+                Err(DBError::from(QueryError::execution(
+                    "Use execute_compiled_stream for streaming sink".to_string(),
+                )))
+            }
+        }
+    }
+
+    /// Execute a compiled [`PhysicalPlan`] and return a [`StreamingQueryResult`].
+    fn execute_compiled_stream(
+        &self,
+        physical_plan: Arc<PhysicalPlan>,
+        query_context: Arc<QueryContext>,
+    ) -> DBResult<StreamingQueryResult> {
+        let exec_ctx = self.build_execution_context(&query_context);
+        let mut bindings = QueryBindings::from_context(&exec_ctx, TransactionScope::None);
+        bindings.query_id = exec_ctx.query_id;
+
+        let instance = QueryExecutionInstance::instantiate_plan(
+            physical_plan,
+            bindings,
+            ResultSink::Stream,
+            self.query_registry.clone(),
+        )
+        .map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;
+
+        instance
+            .into_stream()
+            .map_err(|e| DBError::from(QueryError::execution(e.to_string())))
+    }
+
     /// Build an [`ExecutionContext`] from the current pipeline manager state.
     ///
     /// M3: shared helper used by both old and new execution paths.
@@ -1247,6 +1403,11 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         if let Some(ref space_name) = query_context.space_name() {
             context.space_name = Some(space_name.clone());
         }
+        // Copy query parameters from the request context so that parameterized
+        // queries have access to bound values during execution.
+        let params: std::collections::HashMap<String, crate::core::Value> =
+            query_context.request_context().parameters.clone();
+        context.parameters = Arc::new(params);
         context
     }
 
@@ -1423,12 +1584,14 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
     }
 
     /// Execute EXPLAIN statement
+    ///
+    /// Step 2.2: Uses PhysicalPlan as the data source instead of the old
+    /// ExecutionPlan / ExplainExecutor path.
     pub fn execute_explain(
         &mut self,
         explain_stmt: &ExplainStmt,
         qctx: Arc<QueryContext>,
     ) -> DBResult<ExecutionResult> {
-        // 1. Get inner statement execution plan (without executing)
         let inner_ast = &explain_stmt.statement;
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
         let validation_info = self.validate_query_with_context(
@@ -1445,41 +1608,40 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             )),
             validation_info,
         );
-        let inner_plan = self.generate_execution_plan(qctx.clone(), &inner_validated)?;
-        let optimized_plan = self.optimize_execution_plan(inner_plan)?;
 
-        // 2. Create ExplainExecutor
-        let storage = self.storage.clone().ok_or_else(|| {
-            DBError::from(QueryError::execution("Storage not available".to_string()))
-        })?;
+        // Step 2: compile to PhysicalPlan and format.
+        let (physical_plan, _optimized_plan) = self.compile(qctx.clone(), &inner_validated)?;
 
-        let base = BaseExecutor::new(
-            -1,
-            "ExplainExecutor".to_string(),
-            storage,
-            Arc::new(ExpressionAnalysisContext::new()),
+        let plan_desc =
+            crate::query::executor::explain::physical_plan_explain::physical_plan_to_plan_description(
+                &physical_plan,
+            );
+
+        let output = match explain_stmt.format {
+            crate::query::parser::ast::stmt::ExplainFormat::Table => {
+                crate::query::executor::explain::format::format_plan_as_table(&plan_desc)
+            }
+            crate::query::parser::ast::stmt::ExplainFormat::Dot => {
+                crate::query::executor::explain::format::format_plan_as_dot(&plan_desc)
+            }
+        };
+
+        let data_set = crate::core::DataSet::from_rows(
+            vec![vec![crate::core::Value::String(output)]],
+            vec!["plan".to_string()],
         );
-
-        let mut explain_executor = ExplainExecutor::new(
-            base,
-            optimized_plan,
-            explain_stmt.format.clone(),
-            ExplainMode::PlanOnly,
-        );
-
-        // 3. Execute Explain
-        explain_executor
-            .execute()
-            .map_err(|e| DBError::from(QueryError::execution(e.to_string())))
+        Ok(ExecutionResult::DataSet { data: data_set })
     }
 
     /// Execute EXPLAIN ANALYZE statement
+    ///
+    /// Step 2.2: Uses PhysicalPlan + QueryExecutionInstance for execution
+    /// and collects runtime profile stats.
     pub fn execute_explain_analyze(
         &mut self,
         explain_stmt: &ExplainStmt,
         qctx: Arc<QueryContext>,
     ) -> DBResult<ExecutionResult> {
-        // 1. Get inner statement execution plan
         let inner_ast = &explain_stmt.statement;
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
         let validation_info = self.validate_query_with_context(
@@ -1496,32 +1658,46 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             )),
             validation_info,
         );
-        let inner_plan = self.generate_execution_plan(qctx.clone(), &inner_validated)?;
-        let optimized_plan = self.optimize_execution_plan(inner_plan)?;
 
-        // 2. Create ExplainExecutor with Analyze mode
-        let storage = self.storage.clone().ok_or_else(|| {
-            DBError::from(QueryError::execution("Storage not available".to_string()))
-        })?;
+        let (physical_plan, _optimized_plan) = self.compile(qctx.clone(), &inner_validated)?;
 
-        let base = BaseExecutor::new(
-            -1,
-            "ExplainExecutor".to_string(),
-            storage,
-            Arc::new(ExpressionAnalysisContext::new()),
-        );
+        // Execute the plan and collect runtime profile.
+        let exec_ctx = self.build_execution_context(&qctx);
+        let mut bindings = QueryBindings::from_context(&exec_ctx, TransactionScope::None);
+        bindings.query_id = exec_ctx.query_id;
 
-        let mut explain_executor = ExplainExecutor::new(
-            base,
-            optimized_plan,
-            explain_stmt.format.clone(),
-            ExplainMode::Analyze,
-        );
+        let mut instance = QueryExecutionInstance::instantiate_plan(
+            physical_plan.clone(),
+            bindings,
+            ResultSink::Materialize,
+            self.query_registry.clone(),
+        )
+        .map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;
 
-        // 3. Execute Explain Analyze
-        explain_executor
+        let _result = instance
             .execute()
-            .map_err(|e| DBError::from(QueryError::execution(e.to_string())))
+            .map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;
+
+        // Build PlanDescription from PhysicalPlan + runtime profile.
+        let plan_desc =
+            crate::query::executor::explain::physical_plan_explain::physical_plan_to_plan_description(
+                &physical_plan,
+            );
+
+        let output = match explain_stmt.format {
+            crate::query::parser::ast::stmt::ExplainFormat::Table => {
+                crate::query::executor::explain::format::format_plan_as_table(&plan_desc)
+            }
+            crate::query::parser::ast::stmt::ExplainFormat::Dot => {
+                crate::query::executor::explain::format::format_plan_as_dot(&plan_desc)
+            }
+        };
+
+        let data_set = crate::core::DataSet::from_rows(
+            vec![vec![crate::core::Value::String(output)]],
+            vec!["plan".to_string()],
+        );
+        Ok(ExecutionResult::DataSet { data: data_set })
     }
 
     /// Execute PROFILE statement
