@@ -333,7 +333,6 @@ pub enum GraphSpec {
         edge_types: Vec<String>,
         direction: EdgeDirection,
         max_depth: usize,
-        allow_cycles: bool,
         allow_loops: bool,
     },
     AllPaths {
@@ -675,7 +674,6 @@ pub enum RecursiveFragmentSpec {
         edge_types: Vec<String>,
         direction: EdgeDirection,
         max_depth: usize,
-        allow_cycles: bool,
         allow_loops: bool,
     },
     /// Enumerate all paths between start and target vertices.

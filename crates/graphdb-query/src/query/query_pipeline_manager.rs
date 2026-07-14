@@ -92,6 +92,13 @@ pub struct QueryPipelineManager<S: StorageClient + 'static> {
     query_registry: Option<Arc<QueryRegistry>>,
 }
 
+/// Monotonically increasing transaction ID counter.
+fn next_transaction_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT_TXN_ID: AtomicU64 = AtomicU64::new(1);
+    NEXT_TXN_ID.fetch_add(1, Ordering::Relaxed)
+}
+
 impl<S: StorageClient + 'static> QueryPipelineManager<S> {
     /// Create using the specified optimizer engine.
     ///
@@ -276,7 +283,12 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         if let Some(cached_plan) = self.plan_cache.get_with_full_space(query_text, space_name.clone(), schema_version, index_version) {
             log::debug!("Query plan cache hit");
             let execute_start = Instant::now();
-            let result = self.execute_compiled(cached_plan.plan.clone(), query_context.clone(), ResultSink::Materialize)?;
+            let txn_scope = if cached_plan.is_dml {
+                TransactionScope::auto_commit(crate::core::types::TransactionId::new(next_transaction_id()))
+            } else {
+                TransactionScope::None
+            };
+            let result = self.execute_compiled_with_scope(cached_plan.plan.clone(), query_context.clone(), ResultSink::Materialize, txn_scope)?;
             let execution_time_ms = execute_start.elapsed().as_millis() as f64;
             self.plan_cache
                 .record_execution_with_space(query_text, execution_time_ms, space_name, schema_version, index_version);
@@ -305,6 +317,13 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         }
 
         // M0.3: Detect DDL/schema changes — invalidate cache and bump generation.
+        let is_dml = matches!(
+            validated.ast.stmt(),
+            crate::query::parser::ast::Stmt::Insert(_)
+                | crate::query::parser::ast::Stmt::Update(_)
+                | crate::query::parser::ast::Stmt::Delete(_)
+                | crate::query::parser::ast::Stmt::Merge(_)
+        );
         let is_ddl = matches!(
             validated.ast.stmt(),
             crate::query::parser::ast::Stmt::Create(_)
@@ -339,7 +358,12 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             // Fallback to old partitioned execution path.
             self.execute_plan(query_context.clone(), optimized_plan)?
         } else {
-            self.execute_compiled(physical_plan.clone(), query_context.clone(), ResultSink::Materialize)?
+            let txn_scope = if is_dml {
+                TransactionScope::auto_commit(crate::core::types::TransactionId::new(next_transaction_id()))
+            } else {
+                TransactionScope::None
+            };
+            self.execute_compiled_with_scope(physical_plan.clone(), query_context.clone(), ResultSink::Materialize, txn_scope)?
         };
         let execution_time_ms = execute_start.elapsed().as_millis() as f64;
 
@@ -373,6 +397,7 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
                 space_name.clone(),
                 schema_version,
                 index_version,
+                is_dml,
             );
             self.plan_cache.record_execution_with_space(
                 query_text,
@@ -1318,8 +1343,18 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         query_context: Arc<QueryContext>,
         sink: ResultSink,
     ) -> DBResult<ExecutionResult> {
+        self.execute_compiled_with_scope(physical_plan, query_context, sink, TransactionScope::None)
+    }
+
+    fn execute_compiled_with_scope(
+        &self,
+        physical_plan: Arc<PhysicalPlan>,
+        query_context: Arc<QueryContext>,
+        sink: ResultSink,
+        transaction_scope: TransactionScope,
+    ) -> DBResult<ExecutionResult> {
         let exec_ctx = self.build_execution_context(&query_context);
-        let mut bindings = QueryBindings::from_context(&exec_ctx, TransactionScope::None);
+        let mut bindings = QueryBindings::from_context(&exec_ctx, transaction_scope);
         bindings.query_id = exec_ctx.query_id;
 
         let mut instance = QueryExecutionInstance::instantiate_plan(
@@ -1356,8 +1391,17 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         physical_plan: Arc<PhysicalPlan>,
         query_context: Arc<QueryContext>,
     ) -> DBResult<StreamingQueryResult> {
+        self.execute_compiled_stream_with_scope(physical_plan, query_context, TransactionScope::None)
+    }
+
+    fn execute_compiled_stream_with_scope(
+        &self,
+        physical_plan: Arc<PhysicalPlan>,
+        query_context: Arc<QueryContext>,
+        transaction_scope: TransactionScope,
+    ) -> DBResult<StreamingQueryResult> {
         let exec_ctx = self.build_execution_context(&query_context);
-        let mut bindings = QueryBindings::from_context(&exec_ctx, TransactionScope::None);
+        let mut bindings = QueryBindings::from_context(&exec_ctx, transaction_scope);
         bindings.query_id = exec_ctx.query_id;
 
         let instance = QueryExecutionInstance::instantiate_plan(

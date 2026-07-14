@@ -8,7 +8,6 @@
 //! [`build_plan_node`] performs one exhaustive dispatch so build failures are
 //! never mistaken for an unsupported node.
 
-pub mod capability_matrix;
 pub mod control;
 pub mod ddl;
 pub mod fulltext;

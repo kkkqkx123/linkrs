@@ -262,7 +262,6 @@ pub enum GraphOperator {
         edge_types: Vec<String>,
         direction: EdgeDirection,
         max_depth: usize,
-        allow_cycles: bool,
         allow_loops: bool,
         frontier: Vec<Vec<Value>>,
         visited: VisitedSet,
@@ -461,7 +460,6 @@ impl GraphOperator {
                 edge_types,
                 direction,
                 max_depth,
-                allow_cycles,
                 allow_loops,
             } => Self::BFSShortest {
                 storage: storage.clone(),
@@ -470,7 +468,6 @@ impl GraphOperator {
                 edge_types: edge_types.clone(),
                 direction: *direction,
                 max_depth: *max_depth,
-                allow_cycles: *allow_cycles,
                 allow_loops: *allow_loops,
                 frontier: Vec::new(),
                 visited: VisitedSet::new(),

@@ -20,7 +20,7 @@ use std::sync::mpsc;
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 
-use super::chunk::{ColumnInfo, DataChunk, Schema};
+use super::chunk::DataChunk;
 use super::plan::types::OutputContract;
 use super::runtime::ExecutionRuntime;
 use super::stream::ResultStream;

@@ -244,6 +244,8 @@ pub struct CachedPlan {
     pub current_ttl: Duration,
     /// Dependent tables (for invalidation)
     pub dependent_tables: Vec<String>,
+    /// Whether the plan performs DML (requires a write transaction scope).
+    pub is_dml: bool,
 }
 
 impl CachedPlan {
@@ -467,7 +469,7 @@ impl QueryPlanCache {
     /// - `plan`: Arena-based physical plan
     /// - `param_positions`: Information about the positions of the parameters
     pub fn put(&self, query: &str, plan: Arc<PhysicalPlan>, param_positions: Vec<ParamPosition>) {
-        self.put_with_context(query, plan, param_positions, Vec::new(), None, None, None);
+        self.put_with_context(query, plan, param_positions, Vec::new(), None, None, None, false);
     }
 
     /// Put the plan in the cache with dependent tables.
@@ -478,7 +480,7 @@ impl QueryPlanCache {
         param_positions: Vec<ParamPosition>,
         dependent_tables: Vec<String>,
     ) {
-        self.put_with_context(query, plan, param_positions, dependent_tables, None, None, None);
+        self.put_with_context(query, plan, param_positions, dependent_tables, None, None, None, false);
     }
 
     /// Put the plan with full context (space, schema version, index version, tables).
@@ -502,6 +504,7 @@ impl QueryPlanCache {
         space_name: Option<String>,
         schema_version: Option<u64>,
         index_version: Option<u64>,
+        is_dml: bool,
     ) {
         let query_bytes = query.len();
         let param_type_sig = Self::compute_param_type_signature(&param_positions);
@@ -533,6 +536,7 @@ impl QueryPlanCache {
             estimated_compute_cost,
             current_ttl,
             dependent_tables,
+            is_dml,
         });
 
         let is_update = self.cache.contains_key(&key);

@@ -179,7 +179,6 @@ pub fn build_graph_node(
                     edge_types,
                     direction,
                     max_depth: node.steps(),
-                    allow_cycles: node.with_cycle(),
                     allow_loops: node.with_loop(),
                 },
                 PhysicalProperties::single_streaming(),
@@ -309,7 +308,6 @@ pub fn build_recursive_fragment_node(
                         crate::core::EdgeDirection::Both
                     },
                     max_depth: bfs_node.steps(),
-                    allow_cycles: bfs_node.with_cycle(),
                     allow_loops: bfs_node.with_loop(),
                 },
                 PhysicalProperties::single_streaming(),
@@ -452,7 +450,6 @@ mod tests {
                     edge_types,
                     direction,
                     max_depth,
-                    allow_cycles,
                     allow_loops,
                     ..
                 },
@@ -462,7 +459,6 @@ mod tests {
                 assert_eq!(edge_types, vec!["LIKES"]);
                 assert_eq!(direction, crate::core::EdgeDirection::In);
                 assert_eq!(max_depth, 12);
-                assert!(allow_cycles);
                 assert!(allow_loops);
             }
             other => panic!("unexpected physical node: {other:?}"),

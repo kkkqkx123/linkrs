@@ -42,7 +42,6 @@ pub enum RecursiveFragmentOperator {
         edge_types: Vec<String>,
         direction: EdgeDirection,
         max_depth: usize,
-        allow_cycles: bool,
         allow_loops: bool,
     },
     AllPaths {
@@ -103,7 +102,6 @@ impl RecursiveFragmentOperator {
                 edge_types,
                 direction,
                 max_depth,
-                allow_cycles,
                 allow_loops,
             } => Self::BFSShortest {
                 storage,
@@ -111,7 +109,6 @@ impl RecursiveFragmentOperator {
                 edge_types: edge_types.clone(),
                 direction: *direction,
                 max_depth: *max_depth,
-                allow_cycles: *allow_cycles,
                 allow_loops: *allow_loops,
             },
             RecursiveFragmentSpec::AllPaths {
@@ -319,7 +316,6 @@ impl RecursiveFragmentOperator {
                 edge_types,
                 direction: _direction,
                 max_depth,
-                allow_cycles,
                 allow_loops,
             } => {
                 let chunk = input.advance()?;
@@ -467,7 +463,11 @@ impl RecursiveFragmentOperator {
         base: &mut OperatorBase,
         input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
-        input.stop()
+        if base.lifecycle.can_close() {
+            input.stop()?;
+            base.lifecycle.mark_stopped();
+        }
+        Ok(())
     }
 
     pub fn bind_runtime(&mut self, runtime: &super::super::runtime::ExecutionRuntime) {
