@@ -17,7 +17,7 @@ use graphdb_query::query::executor::algorithms::{
     AlgorithmContext, AlgorithmStats, MultiShortestPathExecutor, SubgraphConfig, SubgraphExecutor,
 };
 use graphdb_query::query::executor::base::{EdgeDirection as ExecEdgeDirection, Executor};
-use graphdb_query::query::validator::context::ExpressionAnalysisContext;
+use graphdb_query::core::types::expr::expression_context::ExpressionAnalysisContext;
 use std::collections::HashMap;
 use std::sync::Arc;
 

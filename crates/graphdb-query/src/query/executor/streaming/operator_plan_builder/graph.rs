@@ -424,7 +424,7 @@ mod tests {
     use crate::query::planning::plan::core::nodes::traversal::path_algorithms::{
         AllPathsNode, BFSShortestNode, ShortestPathNode,
     };
-    use crate::query::validator::context::ExpressionAnalysisContext;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
     fn context() -> ExecutionContext {
         ExecutionContext::new(Arc::new(ExpressionAnalysisContext::new()))

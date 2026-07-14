@@ -215,7 +215,7 @@ mod tests {
     use super::*;
     use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use crate::query::planning::plan::core::nodes::join::join_node::HashLeftJoinNode;
-    use crate::query::validator::context::expression_context::ExpressionAnalysisContext;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use std::sync::Arc;
 
     #[test]

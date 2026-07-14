@@ -51,7 +51,7 @@ mod tests {
     use crate::query::parser::ast::{Ast, Span};
     use crate::query::planning::plan::core::nodes::StartNode;
     use crate::query::planning::plan::core::PlanNodeEnum;
-    use crate::query::validator::context::ExpressionAnalysisContext;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::query::validator::ValidatedStatement;
     use crate::query::QueryRequestContext;
     use std::collections::HashMap;

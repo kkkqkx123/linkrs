@@ -10,7 +10,7 @@ use crate::query::optimizer::analysis::{
 };
 use crate::query::optimizer::cost::{CostCalculator, CostModelConfig, SelectivityEstimator};
 use crate::query::optimizer::stats::StatisticsManager;
-use crate::query::validator::context::ExpressionAnalysisContext;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
 /// Optimization Context
 ///

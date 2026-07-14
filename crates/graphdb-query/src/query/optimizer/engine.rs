@@ -43,7 +43,7 @@ use crate::query::optimizer::{
     SubqueryUnnestingOptimizer,
 };
 use crate::query::planning::plan::ExecutionPlan;
-use crate::query::validator::context::ExpressionAnalysisContext;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
 /// Optimizer engine
 ///

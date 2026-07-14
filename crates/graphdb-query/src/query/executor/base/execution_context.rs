@@ -8,7 +8,7 @@ use crate::core::Value;
 use crate::query::executor::expression::functions::global_registry_ref;
 use crate::query::executor::expression::functions::OwnedFunctionRef;
 use crate::query::executor::streaming::pool::SharedScheduler;
-use crate::query::validator::context::ExpressionAnalysisContext;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 #[cfg(feature = "fulltext-search")]
 use crate::search::manager::FulltextIndexManager;
 #[cfg(feature = "fulltext-search")]

@@ -628,7 +628,7 @@ mod tests {
     use crate::core::types::expr::Expression;
     use crate::query::parser::ast::stmt::InsertStmt;
     use crate::query::parser::ast::Span;
-    use crate::query::validator::context::expression_context::ExpressionAnalysisContext;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::query::QueryRequestContext;
     use std::sync::Arc;
 

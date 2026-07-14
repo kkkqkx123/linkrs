@@ -103,7 +103,7 @@ mod tests {
     use crate::query::parser::ast::{OrderByItem, Span};
     use crate::query::planning::plan::core::nodes::StartNode;
     use crate::query::planning::plan::core::PlanNodeEnum;
-    use crate::query::validator::context::ExpressionAnalysisContext;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use std::sync::Arc;
 
     #[test]

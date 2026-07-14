@@ -5,7 +5,7 @@ use crate::query::parser::ast::stmt::{Ast, Stmt};
 use crate::query::parser::parsing::expr_parser::ExprParser;
 use crate::query::parser::parsing::parse_context::ParseContext;
 use crate::query::parser::parsing::stmt_parser::StmtParser;
-use crate::query::validator::context::ExpressionAnalysisContext;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
 /// Parser analysis results, including the AST (Statement + Expression Context).
 ///

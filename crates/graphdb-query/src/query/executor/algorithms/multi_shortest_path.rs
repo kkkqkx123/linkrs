@@ -501,7 +501,7 @@ mod tests {
     use crate::core::types::VertexId;
     use crate::core::{Path, Vertex};
     use crate::query::executor::base::ExecutorConfig;
-    use crate::query::validator::context::ExpressionAnalysisContext;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::storage::MockStorage;
 
     #[test]

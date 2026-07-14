@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::core::types::SerializableExpression;
 use crate::core::YieldColumn;
 use crate::define_plan_node_with_deps;
-use crate::query::validator::context::ExpressionAnalysisContext;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
 define_plan_node_with_deps! {
     pub struct ProjectNode {

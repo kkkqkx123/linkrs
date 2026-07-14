@@ -366,7 +366,7 @@ mod tests {
     use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use crate::query::planning::plan::core::nodes::operation::project_node::ProjectNode;
-    use crate::query::validator::context::ExpressionAnalysisContext;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use std::sync::Arc;
 
     #[test]

@@ -9,7 +9,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::query::planning::plan::PlanNodeEnum;
-use crate::query::validator::context::ExpressionAnalysisContext;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
 /// Rewrite the context
 ///

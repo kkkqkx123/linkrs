@@ -37,7 +37,7 @@ use crate::query::optimizer::OptimizerEngine;
 use crate::query::parser::ast::stmt::{ExplainStmt, ProfileStmt};
 use crate::query::parser::Parser;
 use crate::query::planning::{ParameterizedQueryHandler, PlanCacheConfig, QueryPlanCache};
-use crate::query::validator::context::ExpressionAnalysisContext;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::query::validator::{ValidatedStatement, ValidationInfo};
 use crate::query::QueryContext;
 use crate::query::QueryRequestContext;

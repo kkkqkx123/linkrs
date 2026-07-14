@@ -285,7 +285,7 @@ mod tests {
     use crate::core::types::operators::{AggregateFunction, BinaryOperator};
     use crate::core::types::DataType;
     use crate::core::Expression;
-    use crate::query::validator::context::ExpressionAnalysisContext;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use std::sync::Arc;
 
     #[test]

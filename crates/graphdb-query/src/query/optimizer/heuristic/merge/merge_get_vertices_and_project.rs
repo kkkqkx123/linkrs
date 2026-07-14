@@ -148,7 +148,7 @@ mod tests {
     #[test]
     fn test_merge_get_vertices_and_project() {
         use crate::core::types::expr::ExpressionMeta;
-        use crate::query::validator::context::ExpressionAnalysisContext;
+        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
         use std::sync::Arc;
 
         // Create the starting node.

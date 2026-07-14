@@ -524,7 +524,7 @@ mod tests {
     use crate::core::types::expr::contextual::ContextualExpression;
     use crate::core::Expression;
     use crate::core::Value;
-    use crate::query::validator::context::expression_context::ExpressionAnalysisContext;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
     fn create_contextual_expr(expr: Expression) -> ContextualExpression {
         let ctx = std::sync::Arc::new(ExpressionAnalysisContext::new());

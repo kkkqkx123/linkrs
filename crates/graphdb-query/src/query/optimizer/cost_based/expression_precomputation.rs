@@ -408,7 +408,7 @@ mod tests {
     use crate::core::types::expr::Expression;
     use crate::core::value::Value;
     use crate::query::optimizer::stats::StatisticsManager;
-    use crate::query::validator::context::ExpressionAnalysisContext;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
     fn create_test_optimizer() -> ExpressionPrecomputationOptimizer {
         let stats_manager = Arc::new(StatisticsManager::new());

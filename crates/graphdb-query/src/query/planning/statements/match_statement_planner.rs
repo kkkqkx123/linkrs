@@ -28,7 +28,7 @@ use crate::query::planning::statements::clauses::{
     OrderByClausePlanner, PaginationPlanner, ReturnClausePlanner, WhereClausePlanner,
 };
 use crate::query::planning::statements::statement_planner::{ClausePlanner, StatementPlanner};
-use crate::query::validator::context::ExpressionAnalysisContext;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::query::validator::structs::CypherClauseKind;
 use crate::query::validator::ValidationInfo;
 use crate::query::QueryContext;

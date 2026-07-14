@@ -16,7 +16,7 @@ use crate::query::planning::plan::core::{
 };
 use crate::query::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
-use crate::query::validator::context::ExpressionAnalysisContext;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::query::QueryContext;
 use std::sync::Arc;
 

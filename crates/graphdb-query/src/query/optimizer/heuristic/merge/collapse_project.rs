@@ -12,7 +12,7 @@ use crate::query::optimizer::heuristic::rule::{MergeRule, RewriteRule};
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::query::planning::plan::core::nodes::operation::project_node::ProjectNode;
-use crate::query::validator::context::ExpressionAnalysisContext;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use std::sync::Arc;
 
 /// Rules for combining multiple projection operations

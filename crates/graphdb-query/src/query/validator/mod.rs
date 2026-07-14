@@ -11,9 +11,6 @@
 // Error types
 pub mod error;
 
-// Context module
-pub mod context;
-
 // Data Structures Module
 pub mod structs;
 

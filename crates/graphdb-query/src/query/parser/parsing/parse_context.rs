@@ -7,7 +7,7 @@ use crate::query::parser::lexing::Lexer;
 use crate::query::parser::ParseErrors;
 use crate::query::parser::Token;
 use crate::query::parser::TokenKind;
-use crate::query::validator::context::ExpressionAnalysisContext;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
 pub struct ParseContext<'a> {
     lexer: Lexer<'a>,

@@ -170,7 +170,7 @@ mod tests {
     #[test]
     fn test_can_push_down() {
         let rule = PushFilterDownGetNbrsRule::new();
-        use crate::query::validator::context::ExpressionAnalysisContext;
+        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
         use std::sync::Arc;
 
         let start = StartNode::new();

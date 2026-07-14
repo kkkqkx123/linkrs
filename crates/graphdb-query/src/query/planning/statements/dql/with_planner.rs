@@ -112,7 +112,7 @@ impl Planner for WithPlanner {
         // Handle recursive CTE
         if with_stmt.recursive {
             // For recursive CTE, create a loop node for iterative expansion
-            let expr_ctx = crate::query::validator::context::ExpressionAnalysisContext::new();
+            let expr_ctx = crate::core::types::expr::expression_context::ExpressionAnalysisContext::new();
             let expr_id =
                 expr_ctx.register_expression(crate::core::types::ExpressionMeta::with_span(
                     crate::core::Expression::literal(true),

@@ -593,7 +593,7 @@ mod tests {
     use crate::core::types::expr::Expression;
     use crate::core::types::expr::ExpressionMeta;
     use crate::core::Value;
-    use crate::query::validator::context::ExpressionAnalysisContext;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use std::sync::Arc;
 
     #[test]

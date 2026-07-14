@@ -25,7 +25,7 @@ use crate::core::types::expr::ExpressionMeta;
 use crate::core::types::expr::PropertyContainsChecker;
 use crate::core::types::operators::BinaryOperator;
 use crate::core::Expression;
-use crate::query::validator::context::ExpressionAnalysisContext;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use std::sync::Arc;
 
 /// Check whether the expression contains the specified attribute name.

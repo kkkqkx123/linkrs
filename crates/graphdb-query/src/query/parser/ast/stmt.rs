@@ -14,7 +14,7 @@ pub use super::vector::{
 use crate::core::types::expr::analysis_utils::collect_variables_from_contextual;
 use crate::core::types::expr::contextual::ContextualExpression;
 use crate::core::types::PropertyDef;
-use crate::query::validator::context::ExpressionAnalysisContext;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
 /// AST Packaging Type – Contains the context of statements and expressions
 ///

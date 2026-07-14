@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use crate::core::Expression;
-use crate::query::validator::context::ExpressionAnalysisContext;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use parking_lot::RwLock;
 
 /// Universal Actuator Configuration

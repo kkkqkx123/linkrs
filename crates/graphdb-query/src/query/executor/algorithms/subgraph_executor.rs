@@ -13,7 +13,7 @@ use crate::query::executor::base::{
     BaseExecutor, DBResult as ExecDBResult, EdgeDirection, ExecutionResult,
     Executor as BaseExecutorTrait, ExecutorStats, HasStorage,
 };
-use crate::query::validator::context::ExpressionAnalysisContext;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::query::DataSet;
 use crate::storage::StorageClient;
 use parking_lot::RwLock;

@@ -8,7 +8,7 @@ mod expression_strategy_tests {
     use crate::core::types::expr::ExpressionMeta;
     use crate::core::types::YieldColumn;
     use crate::core::value::Value;
-    use crate::query::validator::context::expression_context::ExpressionAnalysisContext;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::query::validator::strategies::expression_strategy::ExpressionValidationStrategy;
     use crate::query::validator::structs::*;
     use std::collections::HashMap;

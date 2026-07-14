@@ -45,7 +45,7 @@ use crate::query::planning::plan::core::nodes::join::join_node::{
 };
 use crate::query::planning::plan::core::nodes::operation::project_node::ProjectNode;
 use crate::query::planning::plan::PlanNodeEnum;
-use crate::query::validator::context::ExpressionAnalysisContext;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use std::sync::Arc;
 
 /// Rules for pushing projection operations down to JOIN

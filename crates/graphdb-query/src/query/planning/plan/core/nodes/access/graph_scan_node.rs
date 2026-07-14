@@ -8,7 +8,7 @@ use crate::query::planning::plan::core::common::{EdgeProp, TagProp};
 use crate::query::planning::plan::core::node_id_generator::next_node_id;
 use crate::query::planning::plan::core::nodes::access::index_scan::{IndexLimit, ScanType};
 use crate::query::planning::plan::core::nodes::PlanNodeEnum;
-use crate::query::validator::context::ExpressionAnalysisContext;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
 define_plan_node! {
     pub struct GetVerticesNode {

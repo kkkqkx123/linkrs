@@ -32,7 +32,7 @@ use crate::query::optimizer::analysis::BatchPlanAnalysis;
 use crate::query::optimizer::stats::StatisticsManager;
 use crate::query::planning::plan::core::nodes::PlanNodeEnum;
 use crate::query::planning::plan::core::nodes::{HashInnerJoinNode, PatternApplyNode};
-use crate::query::validator::context::ExpressionAnalysisContext;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
 /// Decentralized decision-making using subqueries
 #[derive(Debug, Clone, PartialEq)]

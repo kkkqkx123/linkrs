@@ -12,7 +12,7 @@ use crate::define_plan_node;
 use crate::define_plan_node_with_deps;
 use crate::query::planning::plan::core::node_id_generator::next_node_id;
 use crate::query::planning::plan::core::nodes::base::plan_node_category::PlanNodeCategory;
-use crate::query::validator::context::ExpressionAnalysisContext;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
 define_plan_node! {
     pub struct ExpandNode {

@@ -13,7 +13,7 @@ use crate::query::optimizer::analysis::{
 use crate::query::planning::plan::core::nodes::{
     FilterNode, GetVerticesNode, PlanNodeEnum, ProjectNode,
 };
-use crate::query::validator::context::ExpressionAnalysisContext;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
 /// Create an expression context for testing purposes.
 fn create_test_context(expr: Expression) -> crate::core::types::ContextualExpression {

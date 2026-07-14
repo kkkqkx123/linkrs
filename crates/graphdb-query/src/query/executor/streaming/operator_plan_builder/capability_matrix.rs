@@ -7,7 +7,7 @@ use crate::query::executor::base::ExecutionContext;
 use crate::query::executor::build_error::PlanBuildError;
 use crate::query::executor::streaming::operator_plan_builder;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
-use crate::query::validator::context::ExpressionAnalysisContext;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
 /// Unsupported nodes (PassThrough) produce UnsupportedNode errors.
 #[test]

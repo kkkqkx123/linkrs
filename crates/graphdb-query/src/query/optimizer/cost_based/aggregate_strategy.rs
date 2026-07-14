@@ -736,7 +736,7 @@ mod tests {
         // Test with simple expressions
         use crate::core::types::expr::Expression;
         use crate::core::value::Value;
-        use crate::query::validator::context::ExpressionAnalysisContext;
+        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
         let ctx = ExpressionAnalysisContext::new();
         let expr = Expression::Literal(Value::Int(42));

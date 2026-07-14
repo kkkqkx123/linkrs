@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::core::types::{ContextualExpression, SerializableExpression};
 use crate::define_plan_node_with_deps;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
-use crate::query::validator::context::ExpressionAnalysisContext;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
 define_plan_node_with_deps! {
     pub struct FilterNode {

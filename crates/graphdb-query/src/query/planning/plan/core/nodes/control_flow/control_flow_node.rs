@@ -12,7 +12,7 @@ use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnu
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
     PlanNode, PlanNodeClonable,
 };
-use crate::query::validator::context::ExpressionAnalysisContext;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
 define_plan_node! {
     pub struct ArgumentNode {

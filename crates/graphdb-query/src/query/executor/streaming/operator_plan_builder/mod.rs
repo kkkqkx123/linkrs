@@ -396,7 +396,7 @@ mod tests {
     use super::*;
     use crate::query::executor::build_error::PlanBuildError;
     use crate::query::planning::plan::core::nodes::operation::sort_node::LimitNode;
-    use crate::query::validator::context::ExpressionAnalysisContext;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
     #[test]
     fn domain_build_errors_are_not_replaced_by_unsupported_errors() {
