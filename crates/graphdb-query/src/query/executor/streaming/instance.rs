@@ -34,6 +34,8 @@ use crate::core::Value;
 use crate::query::executor::base::{ExecutionResult, MemoryBudget};
 use crate::storage::StorageClient;
 
+use super::parameters::{ParameterFrame, ParameterSchema};
+use super::query_registry::{QueryGuard, QueryId, QueryMetadata, QueryRegistry};
 use super::transaction_scope::TransactionScope;
 
 // ── QueryBindings ───────────────────────────────────────────────────────────
@@ -46,10 +48,15 @@ use super::transaction_scope::TransactionScope;
 ///
 /// Multiple concurrent executions of the same plan each have their own
 /// `QueryBindings`, ensuring no mutable state is shared across instances.
+///
+/// M1.4: carries a [`ParameterFrame`] for slot-based parameter access at
+/// execution time, built during validation from the plan's parameter schema.
 #[derive(Clone)]
 pub struct QueryBindings {
-    /// Prepared-statement parameter values.
+    /// Prepared-statement parameter values (name → value map for validation).
     pub parameters: Arc<HashMap<String, Value>>,
+    /// M1.4: slot-indexed parameter frame for hot-path access.
+    pub parameter_frame: Option<ParameterFrame>,
     /// Target space name.
     pub space_name: Option<String>,
     /// Storage client for this execution.
@@ -83,6 +90,7 @@ impl QueryBindings {
     ) -> Self {
         Self {
             parameters: context.parameters.clone(),
+            parameter_frame: None,
             space_name: context.space_name.clone(),
             storage: context.storage.clone(),
             memory_budget: context.memory_budget.clone(),
@@ -97,6 +105,25 @@ impl QueryBindings {
             #[cfg(feature = "qdrant")]
             vector_coordinator: context.vector_coordinator.clone(),
         }
+    }
+
+    /// Build a [`ParameterFrame`] from the plan's parameter schema and the
+    /// binding values.  Called after validation during materialization.
+    ///
+    /// M1.4: produces a slot-indexed frame that operators can read without
+    /// string-based lookup.
+    pub fn build_parameter_frame(&mut self, schema: &ParameterSchema) {
+        let mut values = Vec::with_capacity(schema.params.len());
+        for param in &schema.params {
+            let value = self
+                .parameters
+                .get(&param.name)
+                .cloned()
+                .or_else(|| param.default.clone())
+                .unwrap_or(crate::core::Value::Null(Default::default()));
+            values.push(value);
+        }
+        self.parameter_frame = Some(ParameterFrame::new(values));
     }
 }
 
@@ -124,12 +151,17 @@ pub enum ResultSink {
 /// delivery state for exactly one query invocation.  Multiple concurrent
 /// executions of the same plan produce separate `QueryExecutionInstance`
 /// values.
+///
+/// M2.8: optionally holds a [`QueryGuard`] that unregisters the query
+/// from the [`QueryRegistry`] on drop, ensuring no leaked entries.
 pub struct QueryExecutionInstance {
     plan: Arc<PhysicalPlan>,
     _bindings: QueryBindings,
     runtime: Arc<ExecutionRuntime>,
     engine: Option<StreamingExecutionEngine>,
     sink: ResultSink,
+    /// M2.8: guard that unregisters from the query registry on drop.
+    _registry_guard: Option<QueryGuard>,
 }
 
 impl QueryExecutionInstance {
@@ -140,19 +172,43 @@ impl QueryExecutionInstance {
     ///
     /// This is the sole production path.  The old [`PhysicalNode`]-based
     /// [`instantiate`](Self::instantiate) exists only for the transition.
+    ///
+    /// M2.8: when a [`QueryRegistry`] is provided, the query is registered
+    /// with a unique non-zero ID and the guard is stored in the instance.
     pub fn instantiate_plan(
         plan: Arc<PhysicalPlan>,
         bindings: QueryBindings,
         sink: ResultSink,
+        registry: Option<Arc<QueryRegistry>>,
     ) -> Result<Self, QueryError> {
         // Phase 1: validate the plan (structural + binding).
         PhysicalPlanValidator::validate(&plan)?;
 
         // Phase 2: materialize arena plan → executor tree via materializer.
-        let (executor, runtime) =
+        let (executor, mut runtime) =
             PhysicalPlanMaterializer::materialize(&plan, &bindings)?;
 
-        // Phase 3: set up the engine.
+        // Phase 3: register with query registry (M2.8).
+        let registry_guard = registry.as_ref().map(|reg| {
+            let meta = QueryMetadata {
+                query_id: QueryId(0), // will be overwritten by registry
+                session_id: None,
+                user_name: None,
+                space_name: bindings.space_name.clone(),
+                query_text: None,
+                start_time: std::time::Instant::now(),
+            };
+            let (qid, _token) = reg.register(meta);
+            runtime.assign_query_id(qid.as_u64());
+            // Arc::get_mut is safe here because runtime was just created
+            // and has no other Arc references.
+            if let Some(rt) = Arc::get_mut(&mut runtime) {
+                rt.set_query_registry(reg.clone(), qid);
+            }
+            QueryGuard::new(reg.clone(), qid)
+        });
+
+        // Phase 4: set up the engine.
         let mut engine = StreamingExecutionEngine::new();
         engine.set_max_workers(bindings.max_workers);
         engine.set_max_buffered_chunks(bindings.max_buffered_chunks);
@@ -165,6 +221,7 @@ impl QueryExecutionInstance {
             runtime,
             engine: Some(engine),
             sink,
+            _registry_guard: registry_guard,
         })
     }
 
@@ -209,6 +266,7 @@ impl QueryExecutionInstance {
             runtime,
             engine: Some(engine),
             sink,
+            _registry_guard: None,
         })
     }
 

@@ -527,6 +527,9 @@ impl StreamingExecutionEngine {
     /// Formal P8 parallelism is intentionally attached to the Gather-based
     /// partitioned root. This compatibility helper has no Gather semantics
     /// and therefore remains serial.
+    ///
+    /// M0.7: if the main execution loop succeeds but close fails, the close
+    /// error is returned instead of being silently logged.
     fn execute_partitions(&mut self) -> Result<Vec<DataChunk>, QueryError> {
         let mut all_chunks = Vec::new();
         for executor in &mut self.partition_executors {
@@ -538,15 +541,19 @@ impl StreamingExecutionEngine {
                 Ok(())
             })();
             let close_err = executor.close_tree().err();
-            if let Some(e) = &close_err {
-                log::error!("Executor close error during partition execution: {e}");
-            }
+            // M0.7: propagate close error when main loop succeeded.
             loop_result?;
+            if let Some(e) = close_err {
+                return Err(e);
+            }
         }
         Ok(all_chunks)
     }
 
     /// Execute a single root executor.
+    ///
+    /// M0.7: if the main execution loop succeeds but close fails, the close
+    /// error is returned instead of being silently logged.
     fn execute_single(&mut self) -> Result<Vec<DataChunk>, QueryError> {
         let mut output_chunks = Vec::new();
 
@@ -563,10 +570,11 @@ impl StreamingExecutionEngine {
             Ok(())
         })();
         let close_err = executor.close_tree().err();
-        if let Some(e) = &close_err {
-            log::error!("Executor close error during single execution: {e}");
-        }
+        // M0.7: propagate close error when main loop succeeded.
         loop_result?;
+        if let Some(e) = close_err {
+            return Err(e);
+        }
 
         Ok(output_chunks)
     }

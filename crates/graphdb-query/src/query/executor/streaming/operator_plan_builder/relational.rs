@@ -9,7 +9,7 @@ use crate::query::executor::build_error::PlanBuildError;
 use crate::query::executor::streaming::executor::SortDirection;
 use crate::query::executor::streaming::operators::spec::{BlockingSpec, UnarySpec};
 use crate::query::executor::streaming::plan::node::PhysicalNode;
-use crate::query::executor::streaming::plan::properties::PhysicalProperties;
+use crate::query::executor::streaming::plan::properties::{PhysicalProperties, SPILL_DEFAULT_THRESHOLD};
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 
@@ -80,7 +80,7 @@ pub fn build_relational_node(
                     sort_expressions,
                     sort_directions,
                 },
-                PhysicalProperties::single_blocking(),
+                PhysicalProperties::single_blocking_spillable(SPILL_DEFAULT_THRESHOLD),
             ))
         }
 
@@ -119,7 +119,7 @@ pub fn build_relational_node(
                     aggregate_functions,
                     output_col_names: agg_node.col_names().to_vec(),
                 },
-                PhysicalProperties::single_blocking(),
+                PhysicalProperties::single_blocking_with_budget(),
             ))
         }
 
@@ -130,7 +130,7 @@ pub fn build_relational_node(
                 node.id(),
                 Box::new(input_phys),
                 BlockingSpec::Distinct,
-                PhysicalProperties::single_blocking(),
+                PhysicalProperties::single_blocking_with_budget(),
             ))
         }
 
@@ -147,7 +147,7 @@ pub fn build_relational_node(
                     sort_expressions,
                     sort_directions,
                 },
-                PhysicalProperties::single_blocking(),
+                PhysicalProperties::single_blocking_with_budget(),
             ))
         }
 
@@ -222,7 +222,7 @@ pub fn build_relational_node(
                 node.id(),
                 Box::new(input_phys),
                 BlockingSpec::Materialize,
-                PhysicalProperties::single_blocking(),
+                PhysicalProperties::single_blocking_with_budget(),
             ))
         }
 
@@ -233,7 +233,7 @@ pub fn build_relational_node(
                 node.id(),
                 Box::new(input_phys),
                 BlockingSpec::DataCollect,
-                PhysicalProperties::single_blocking(),
+                PhysicalProperties::single_blocking_with_budget(),
             ))
         }
 
@@ -281,7 +281,7 @@ pub fn build_relational_node(
                     order_by_exprs,
                     order_by_directions,
                 },
-                PhysicalProperties::single_blocking(),
+                PhysicalProperties::single_blocking_with_budget(),
             ))
         }
 

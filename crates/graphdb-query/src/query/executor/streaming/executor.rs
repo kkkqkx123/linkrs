@@ -865,6 +865,7 @@ mod tests {
                 limit: None,
                 partition_range: None,
                 col_names: vec![],
+                projected_properties: vec![],
                 cursor: None,
             },
         );

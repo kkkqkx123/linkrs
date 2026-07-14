@@ -51,13 +51,24 @@ pub struct PhysicalPlanMaterializer;
 
 impl PhysicalPlanMaterializer {
     /// Materialize a physical plan into an executable operator tree.
+    ///
+    /// M1.4: validates bindings and builds the [`ParameterFrame`] for
+    /// slot-based parameter access during execution.
     pub fn materialize(
         plan: &PhysicalPlan,
         bindings: &QueryBindings,
     ) -> Result<(StreamingExecutor, Arc<ExecutionRuntime>), QueryError> {
         Self::validate_bindings(plan, bindings)?;
 
-        let runtime = Self::create_runtime(bindings);
+        // M1.4: build the parameter frame — this requires a mutable bindings
+        // clone to set the frame.  We clone because the caller's bindings
+        // are immutable past this point.
+        let mut mutable_bindings = bindings.clone();
+        if !plan.parameter_schema.is_empty() {
+            mutable_bindings.build_parameter_frame(&plan.parameter_schema);
+        }
+
+        let runtime = Self::create_runtime(&mutable_bindings);
 
         let topo_order = Self::topological_order(&plan.fragments)?;
 
@@ -74,7 +85,7 @@ impl PhysicalPlanMaterializer {
                 plan,
                 &mut fragment_roots,
                 &runtime,
-                bindings,
+                &mutable_bindings,
             )?;
             fragment_roots.insert(fid, executor);
         }
@@ -343,22 +354,83 @@ impl PhysicalPlanMaterializer {
 
     // ── Binding validation ──
 
+    /// Validate bindings against the plan's parameter schema.
+    ///
+    /// M1.3: checks for missing required params, unknown params, and type
+    /// compatibility.  Returns an error description listing all violations.
     fn validate_bindings(plan: &PhysicalPlan, bindings: &QueryBindings) -> Result<(), QueryError> {
-        for param in &plan.parameter_schema.params {
+        let schema = &plan.parameter_schema;
+        if schema.is_empty() {
+            return Ok(());
+        }
+
+        let mut errors: Vec<String> = Vec::new();
+
+        // Check missing required params.
+        for param in &schema.params {
             if !bindings.parameters.contains_key(&param.name) {
-                return Err(QueryError::execution(format!(
-                    "Missing required parameter: {}",
-                    param.name
-                )));
+                errors.push(format!("Missing required parameter: {}", param.name));
             }
         }
-        Ok(())
+
+        // Check unknown params (present in bindings but not in schema).
+        for (name, _value) in bindings.parameters.iter() {
+            if schema.slot(name).is_none() {
+                errors.push(format!("Unknown parameter: {}", name));
+            }
+        }
+
+        // Check type compatibility for params present in both.
+        for param in &schema.params {
+            if let Some(value) = bindings.parameters.get(&param.name) {
+                if let Some(ref expected_type) = param.value_type {
+                    if !Self::type_compatible(value, expected_type) {
+                        errors.push(format!(
+                            "Parameter '{}': expected type {:?}, got value {:?}",
+                            param.name, expected_type, value
+                        ));
+                    }
+                }
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(QueryError::execution(errors.join("; ")))
+        }
+    }
+
+    /// Rough type compatibility check for parameter values.
+    /// M1.3: ensures the runtime value is semantically assignable to the
+    /// declared parameter type.
+    fn type_compatible(value: &crate::core::Value, expected_type: &crate::core::DataType) -> bool {
+        use crate::core::DataType;
+        use crate::core::Value;
+        match (value, expected_type) {
+            (Value::Null(_), _) => true,
+            (Value::Bool(_), DataType::Bool) => true,
+            (Value::Int(_), DataType::Int | DataType::BigInt) => true,
+            (Value::BigInt(_), DataType::BigInt | DataType::Int) => true,
+            (Value::Float(_), DataType::Float | DataType::Double) => true,
+            (Value::Double(_), DataType::Double | DataType::Float) => true,
+            (Value::String(_), DataType::String) => true,
+            (Value::Date(_), DataType::Date) => true,
+            (Value::Time(_), DataType::Time) => true,
+            (Value::DateTime(_), DataType::DateTime) => true,
+            _ => false,
+        }
     }
 
     // ── Runtime creation ──
 
+    /// Create an [`ExecutionRuntime`] from bindings.
+    ///
+    /// M2: injects transaction scope and session controller into the runtime
+    /// so that operators can check write permissions and transaction commands
+    /// can drive real state transitions.
     fn create_runtime(bindings: &QueryBindings) -> Arc<ExecutionRuntime> {
-        let runtime = ExecutionRuntime::new(
+        let mut runtime = ExecutionRuntime::new(
             crate::query::executor::streaming::runtime::QueryIdentity {
                 query_id: bindings.query_id,
                 session_id: None,
@@ -371,6 +443,17 @@ impl PhysicalPlanMaterializer {
             #[cfg(feature = "qdrant")]
             bindings.vector_coordinator.clone(),
         );
+
+        // M2: inject transaction scope.
+        match bindings.transaction {
+            crate::query::executor::streaming::transaction_scope::TransactionScope::None => {
+                // DDL / admin commands may run without a txn scope, but DML will
+                // be rejected at the operator level (see SinkOperator::check_write_permission).
+            }
+            ref scope => {
+                runtime.set_transaction_scope(scope.clone());
+            }
+        }
 
         // M6: shared scheduler takes priority.
         if let Some(ref ss) = bindings.shared_scheduler {

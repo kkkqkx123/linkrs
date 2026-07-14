@@ -33,7 +33,7 @@ pub fn build_control_node(
                 Box::new(left_phys),
                 Box::new(right_phys),
                 SetSpec::Minus,
-                PhysicalProperties::single_blocking(),
+                PhysicalProperties::single_blocking_with_budget(),
             ))
         }
 
@@ -45,7 +45,7 @@ pub fn build_control_node(
                 Box::new(left_phys),
                 Box::new(right_phys),
                 SetSpec::Intersect,
-                PhysicalProperties::single_blocking(),
+                PhysicalProperties::single_blocking_with_budget(),
             ))
         }
 

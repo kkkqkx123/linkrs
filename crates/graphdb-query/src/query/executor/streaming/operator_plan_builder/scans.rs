@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use std::collections::HashSet;
+
 use crate::core::value::NullType;
 use crate::core::Value;
 use crate::query::executor::base::ExecutionContext;
@@ -25,12 +27,14 @@ pub fn build_scan_node(
                 .limit()
                 .and_then(|value| (value >= 0).then_some(value as usize));
             let col_names = scan_node.col_names().to_vec();
+            let projected_properties = extract_projected_properties(&col_names);
             Ok(PhysicalNode::Source(
                 node.id(),
                 SourceSpec::StorageScanVertices {
                     space_name: context.space_name.clone().unwrap_or_default(),
                     limit,
                     col_names,
+                    projected_properties,
                 },
                 PhysicalProperties::single_streaming(),
             ))
@@ -194,3 +198,32 @@ pub fn build_scan_node(
         _ => Err(super::internal_routing_error(node, "scans")),
     }
 }
+
+/// Extract property names from `col_names` for projection pushdown.
+///
+/// When the projection-pushdown optimizer rewrites `col_names` from a
+/// single vertex-variable name (`["p"]`) to a list of property aliases
+/// (`["p.name", "p.age"]`), this function extracts just the property names
+/// (`["name", "age"]`) so the scan can load only those columns.
+///
+/// Heuristic: if any name contains a dot OR there are multiple names, we
+/// treat them as projected property references.  A single undotted name is
+/// assumed to be a vertex variable (no projection).
+fn extract_projected_properties(col_names: &[String]) -> Vec<String> {
+    if col_names.len() == 1 && !col_names[0].contains('.') {
+        return Vec::new();
+    }
+    let mut seen = HashSet::new();
+    col_names
+        .iter()
+        .filter_map(|name| {
+            let prop = name.rsplit_once('.').map(|(_, p)| p).unwrap_or(name);
+            if seen.insert(prop.to_string()) {
+                Some(prop.to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+

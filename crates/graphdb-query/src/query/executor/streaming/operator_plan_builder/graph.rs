@@ -412,7 +412,7 @@ fn build_binary_path_input(
         Box::new(super::build_plan_node(left, context)?),
         Box::new(super::build_plan_node(right, context)?),
         JoinSpec::CrossJoin,
-        PhysicalProperties::single_blocking(),
+        PhysicalProperties::single_blocking_with_budget(),
     ))
 }
 

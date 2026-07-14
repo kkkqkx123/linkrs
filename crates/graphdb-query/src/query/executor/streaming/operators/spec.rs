@@ -88,6 +88,7 @@ pub enum SourceSpec {
         space_name: String,
         limit: Option<usize>,
         col_names: Vec<String>,
+        projected_properties: Vec<String>,
     },
     ScanEdges {
         rows: Vec<Vec<Value>>,

@@ -29,8 +29,13 @@ use crate::core::metadata::SchemaManager;
 use crate::core::{
     ErrorInfo, ErrorType, MetricType, QueryMetrics, QueryPhase, QueryProfile, StatsManager,
 };
-use crate::query::executor::base::{BaseExecutor, ExecutionResult, Executor};
+use crate::query::executor::base::{BaseExecutor, ExecutionContext, ExecutionResult, Executor};
 use crate::query::executor::explain::{ExplainExecutor, ExplainMode, ProfileExecutor};
+use crate::query::executor::streaming::plan::{
+    PhysicalPlan, PhysicalPlanBuilder, PhysicalPlanBuildContext, PhysicalPlanValidator,
+};
+use crate::query::executor::streaming::instance::{QueryBindings, QueryExecutionInstance, ResultSink};
+use crate::query::executor::streaming::transaction_scope::TransactionScope;
 use crate::query::executor::streaming::{StreamingQueryExecutor, StreamingQueryResult};
 use crate::query::metadata::MetadataContext;
 use crate::query::optimizer::OptimizerEngine;
@@ -48,8 +53,11 @@ use crate::storage::StorageClient;
 use crate::sync::vector_sync::VectorSyncCoordinator;
 use crate::sync::SyncManager;
 use parking_lot::RwLock;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Instant;
+
+use crate::query::executor::streaming::query_registry::QueryRegistry;
 
 /// Query Pipeline Manager
 ///
@@ -76,6 +84,12 @@ pub struct QueryPipelineManager<S: StorageClient + 'static> {
     storage: Option<Arc<RwLock<S>>>,
     /// Sync manager for admin operations
     sync_manager: Option<Arc<SyncManager>>,
+    /// Schema generation counter — incremented on DDL to invalidate caches.
+    /// Used as a proxy for schema version in cache keys (M0).
+    schema_generation: Arc<AtomicU64>,
+    /// M2.8: Process-level query registry for unique non-zero query IDs,
+    /// KILL QUERY, deadline, and client-disconnect cancellation.
+    query_registry: Option<Arc<QueryRegistry>>,
 }
 
 impl<S: StorageClient + 'static> QueryPipelineManager<S> {
@@ -113,7 +127,16 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             vector_coordinator: None,
             storage: Some(storage),
             sync_manager: None,
+            schema_generation: Arc::new(AtomicU64::new(0)),
+            query_registry: None,
         }
+    }
+
+    /// Set the process-level query registry for query ID allocation and
+    /// unified cancellation (M2.8).
+    pub fn with_query_registry(mut self, registry: Arc<QueryRegistry>) -> Self {
+        self.query_registry = Some(registry);
+        self
     }
 
     /// Create using the specified optimizer engine and planning cache configuration.
@@ -153,6 +176,8 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             vector_coordinator: None,
             storage: Some(storage),
             sync_manager: None,
+            schema_generation: Arc::new(AtomicU64::new(0)),
+            query_registry: None,
         }
     }
 
@@ -226,8 +251,9 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
 
         // Setting spatial information on BOTH rctx and query_context
         // (planner reads from rctx.space_name, executor uses query_context.space_info)
-        if let Some(ref space) = space_info {
-            rctx.space_name = Some(space.space_name.clone());
+        let space_name = space_info.as_ref().map(|s| s.space_name.clone());
+        if let Some(ref name) = space_name {
+            rctx.space_name = Some(name.clone());
         }
 
         let rctx = Arc::new(rctx);
@@ -239,14 +265,18 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
 
         let query_context = Arc::new(query_context);
 
-        // 2. Check the query plan cache.
-        if let Some(cached_plan) = self.plan_cache.get(query_text) {
+        // M0: schema generation serves as a proxy for schema version in cache keys.
+        let schema_version = Some(self.schema_generation.load(std::sync::atomic::Ordering::Relaxed));
+
+        // 2. Check the query plan cache (M0: space-aware key).
+        // M3: cache stores Arc<PhysicalPlan> — execute directly via instantiate_plan.
+        if let Some(cached_plan) = self.plan_cache.get_with_space(query_text, space_name.clone(), schema_version) {
             log::debug!("Query plan cache hit");
             let execute_start = Instant::now();
-            let result = self.execute_plan(query_context, cached_plan.plan.clone())?;
+            let result = self.execute_physical_plan(cached_plan.plan.clone(), query_context)?;
             let execution_time_ms = execute_start.elapsed().as_millis() as f64;
             self.plan_cache
-                .record_execution(query_text, execution_time_ms);
+                .record_execution_with_space(query_text, execution_time_ms, space_name, schema_version);
             return Ok(result);
         }
 
@@ -271,18 +301,43 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             _ => {}
         }
 
+        // M0.3: Detect DDL/schema changes — invalidate cache and bump generation.
+        let is_ddl = matches!(
+            validated.ast.stmt(),
+            crate::query::parser::ast::Stmt::Create(_)
+                | crate::query::parser::ast::Stmt::Drop(_)
+                | crate::query::parser::ast::Stmt::Alter(_)
+                | crate::query::parser::ast::Stmt::ClearSpace(_)
+                | crate::query::parser::ast::Stmt::CreateFulltextIndex(_)
+                | crate::query::parser::ast::Stmt::DropFulltextIndex(_)
+                | crate::query::parser::ast::Stmt::AlterFulltextIndex(_)
+                | crate::query::parser::ast::Stmt::CreateVectorIndex(_)
+                | crate::query::parser::ast::Stmt::DropVectorIndex(_)
+        );
+        if is_ddl {
+            self.schema_generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // Invalidate all cached plans for this space
+            if let Some(ref name) = space_name {
+                let removed = self.plan_cache.invalidate_space(name);
+                if removed > 0 {
+                    log::info!("Invalidated {} cached plans for space '{}' after DDL", removed, name);
+                }
+            }
+        }
+
         // 5. Generate an execution plan.
         let execution_plan = self.generate_execution_plan(query_context.clone(), &validated)?;
 
         // 6. Optimizing the execution plan
         let optimized_plan = self.optimize_execution_plan(execution_plan)?;
 
-        // 7. Execution Plan
+        // 7. Execution Plan (M3: build PhysicalPlan and execute)
         let execute_start = Instant::now();
-        let result = self.execute_plan(query_context, optimized_plan.clone())?;
+        let physical_plan = self.build_physical_plan(&optimized_plan, &query_context)?;
+        let result = self.execute_physical_plan(physical_plan.clone(), query_context)?;
         let execution_time_ms = execute_start.elapsed().as_millis() as f64;
 
-        // 8. Caching of query plans
+        // 8. Caching of query plans (M3: cache Arc<PhysicalPlan>)
         // Skip caching for INSERT statements as they contain literal values
         let should_cache = !matches!(
             validated.ast.stmt(),
@@ -290,10 +345,16 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         );
         if should_cache {
             let param_positions = self.param_handler.extract_params(query_text);
+            self.plan_cache.put_with_context(
+                query_text,
+                physical_plan,
+                param_positions,
+                Vec::new(),
+                space_name.clone(),
+                schema_version,
+            );
             self.plan_cache
-                .put(query_text, optimized_plan, param_positions);
-            self.plan_cache
-                .record_execution(query_text, execution_time_ms);
+                .record_execution_with_space(query_text, execution_time_ms, space_name, schema_version);
         }
 
         Ok(result)
@@ -1156,138 +1217,187 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         Ok(optimized)
     }
 
+    /// Build an [`ExecutionContext`] from the current pipeline manager state.
+    ///
+    /// M3: shared helper used by both old and new execution paths.
+    fn build_execution_context(&self, query_context: &QueryContext) -> ExecutionContext {
+        let mut context = ExecutionContext::default();
+        context.max_workers = self
+            .optimizer_engine
+            .partitioning_config()
+            .max_workers
+            .max(1);
+        context.max_buffered_chunks = self
+            .optimizer_engine
+            .partitioning_config()
+            .max_buffered_chunks
+            .max(1);
+        if let Some(ref storage) = self.storage {
+            let dyn_storage: Arc<RwLock<dyn StorageClient>> = storage.clone();
+            context.storage = Some(dyn_storage);
+        }
+        #[cfg(feature = "fulltext-search")]
+        {
+            context.fulltext_manager = self.fulltext_manager.clone();
+        }
+        #[cfg(feature = "qdrant")]
+        {
+            context.vector_coordinator = self.vector_coordinator.clone();
+        }
+        if let Some(ref space_name) = query_context.space_name() {
+            context.space_name = Some(space_name.clone());
+        }
+        context
+    }
+
+    /// Build a [`PhysicalPlan`] from an [`ExecutionPlan`]'s root node.
+    ///
+    /// M3: converts the logical/physical PlanNodeEnum tree into an arena-based
+    /// PhysicalPlan using the existing domain-specific builders.
+    fn build_physical_plan(
+        &self,
+        plan: &crate::query::planning::plan::ExecutionPlan,
+        query_context: &QueryContext,
+    ) -> DBResult<Arc<PhysicalPlan>> {
+        let root_node = plan.root.as_ref().ok_or_else(|| {
+            DBError::from(QueryError::execution("Empty execution plan".to_string()))
+        })?;
+
+        let exec_ctx = self.build_execution_context(query_context);
+        let mut build_ctx = PhysicalPlanBuildContext::from_execution_context(&exec_ctx);
+        let physical_plan = PhysicalPlanBuilder::build(root_node, &mut build_ctx, &exec_ctx)
+            .map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;
+
+        // Validate structural integrity before caching/executing.
+        PhysicalPlanValidator::validate(&physical_plan)
+            .map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;
+
+        Ok(Arc::new(physical_plan))
+    }
+
+    /// Execute a cached [`PhysicalPlan`] with the current execution context.
+    ///
+    /// M3: uses [`QueryExecutionInstance::instantiate_plan`] as the sole
+    /// production entry point for non-partitioned plans.
+    fn execute_physical_plan(
+        &self,
+        physical_plan: Arc<PhysicalPlan>,
+        query_context: Arc<QueryContext>,
+    ) -> DBResult<ExecutionResult> {
+        let exec_ctx = self.build_execution_context(&query_context);
+        let mut bindings = QueryBindings::from_context(&exec_ctx, TransactionScope::None);
+        bindings.query_id = exec_ctx.query_id;
+
+        let mut instance = QueryExecutionInstance::instantiate_plan(
+            physical_plan,
+            bindings,
+            ResultSink::Materialize,
+            self.query_registry.clone(),
+        )
+        .map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;
+
+        instance
+            .execute()
+            .map_err(|e| DBError::from(QueryError::execution(e.to_string())))
+    }
+
     #[allow(clippy::field_reassign_with_default)]
     fn execute_plan(
         &mut self,
         query_context: Arc<QueryContext>,
         plan: crate::query::planning::plan::ExecutionPlan,
     ) -> DBResult<ExecutionResult> {
-        // Unified execution path: all queries use StreamingExecutor
+        // M3: convert to arena PhysicalPlan and execute via QueryExecutionInstance.
+        let has_partition = plan.partition_spec().is_some();
 
-        log::debug!("Executing with StreamingExecutor");
+        if !has_partition {
+            let physical_plan = self.build_physical_plan(&plan, &query_context)?;
+            return self.execute_physical_plan(physical_plan, query_context);
+        }
 
-        // Get the root plan node
+        // Fallback to old partitioned path until M3.5 merges partition builder.
+        log::debug!("Executing with StreamingExecutor (partitioned fallback)");
+
         let root_node = plan.root.as_ref().ok_or_else(|| {
             DBError::from(QueryError::execution("Empty execution plan".to_string()))
         })?;
 
-        // Create streaming executor from plan
         let mut executor = StreamingQueryExecutor::new();
+        let context = self.build_execution_context(&query_context);
+        let partition_spec = plan.partition_spec().unwrap();
+        let physical_plan = crate::query::planning::plan::PartitionedPhysicalPlan::from_logical(
+            root_node.clone(),
+            partition_spec.clone(),
+        );
+        executor
+            .from_partitioned_physical_plan(&physical_plan, &context)
+            .map_err(|e| {
+                DBError::from(QueryError::execution(format!(
+                    "Failed to create streaming executor: {}",
+                    e
+                )))
+            })?;
 
-        let mut context = crate::query::executor::base::ExecutionContext::default();
-        context.max_workers = self
-            .optimizer_engine
-            .partitioning_config()
-            .max_workers
-            .max(1);
-        context.max_buffered_chunks = self
-            .optimizer_engine
-            .partitioning_config()
-            .max_buffered_chunks
-            .max(1);
-        if let Some(ref storage) = self.storage {
-            let dyn_storage: Arc<RwLock<dyn StorageClient>> = storage.clone();
-            context.storage = Some(dyn_storage);
-        }
-        #[cfg(feature = "fulltext-search")]
-        {
-            context.fulltext_manager = self.fulltext_manager.clone();
-        }
-        #[cfg(feature = "qdrant")]
-        {
-            context.vector_coordinator = self.vector_coordinator.clone();
-        }
-        // Propagate space name from query context to execution context
-        if let Some(ref space_name) = query_context.space_name() {
-            context.space_name = Some(space_name.clone());
-        }
-
-        let build_result = if let Some(partition_spec) = plan.partition_spec() {
-            let physical_plan = crate::query::planning::plan::PartitionedPhysicalPlan::from_logical(
-                root_node.clone(),
-                partition_spec.clone(),
-            );
-            executor.from_partitioned_physical_plan(&physical_plan, &context)
-        } else {
-            executor.from_plan_node(root_node, &context)
-        };
-        build_result.map_err(|e| {
-            DBError::from(QueryError::execution(format!(
-                "Failed to create streaming executor: {}",
-                e
-            )))
-        })?;
-
-        let result = executor.execute().map_err(|e| {
+        executor.execute().map_err(|e| {
             DBError::from(QueryError::execution(format!(
                 "Streaming execution failed: {:?}",
                 e
             )))
-        })?;
-        Ok(result)
+        })
     }
 
     /// Execute a plan and return a [`StreamingQueryResult`] for chunk-at-a-time consumption.
     ///
-    /// Unlike [`execute_plan`] which materialises everything into an `ExecutionResult`,
-    /// this method returns a thread-safe streaming handle that lets the caller pull
-    /// chunks one at a time.  Useful for SSE / gRPC streaming endpoints.
+    /// M3: uses arena-based execution via [`QueryExecutionInstance`].
     #[allow(clippy::field_reassign_with_default)]
     pub fn execute_plan_to_stream(
         &mut self,
         query_context: Arc<QueryContext>,
         plan: crate::query::planning::plan::ExecutionPlan,
     ) -> DBResult<StreamingQueryResult> {
-        log::debug!("Executing with StreamingExecutor (stream)");
+        let has_partition = plan.partition_spec().is_some();
+
+        if !has_partition {
+            let physical_plan = self.build_physical_plan(&plan, &query_context)?;
+            let exec_ctx = self.build_execution_context(&query_context);
+            let mut bindings = QueryBindings::from_context(&exec_ctx, TransactionScope::None);
+            bindings.query_id = exec_ctx.query_id;
+
+            let instance = QueryExecutionInstance::instantiate_plan(
+                physical_plan,
+                bindings,
+                ResultSink::Stream,
+                self.query_registry.clone(),
+            )
+            .map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;
+
+            return instance
+                .into_stream()
+                .map_err(|e| DBError::from(QueryError::execution(e.to_string())));
+        }
+
+        // Fallback to old partitioned path.
+        log::debug!("Executing with StreamingExecutor (stream, partitioned fallback)");
 
         let root_node = plan.root.as_ref().ok_or_else(|| {
             DBError::from(QueryError::execution("Empty execution plan".to_string()))
         })?;
 
         let mut executor = StreamingQueryExecutor::new();
-
-        let mut context = crate::query::executor::base::ExecutionContext::default();
-        context.max_workers = self
-            .optimizer_engine
-            .partitioning_config()
-            .max_workers
-            .max(1);
-        context.max_buffered_chunks = self
-            .optimizer_engine
-            .partitioning_config()
-            .max_buffered_chunks
-            .max(1);
-        if let Some(ref storage) = self.storage {
-            let dyn_storage: Arc<RwLock<dyn StorageClient>> = storage.clone();
-            context.storage = Some(dyn_storage);
-        }
-        #[cfg(feature = "fulltext-search")]
-        {
-            context.fulltext_manager = self.fulltext_manager.clone();
-        }
-        #[cfg(feature = "qdrant")]
-        {
-            context.vector_coordinator = self.vector_coordinator.clone();
-        }
-        if let Some(ref space_name) = query_context.space_name() {
-            context.space_name = Some(space_name.clone());
-        }
-
-        let build_result = if let Some(partition_spec) = plan.partition_spec() {
-            let physical_plan = crate::query::planning::plan::PartitionedPhysicalPlan::from_logical(
-                root_node.clone(),
-                partition_spec.clone(),
-            );
-            executor.from_partitioned_physical_plan(&physical_plan, &context)
-        } else {
-            executor.from_plan_node(root_node, &context)
-        };
-        build_result.map_err(|e| {
-            DBError::from(QueryError::execution(format!(
-                "Failed to create streaming executor: {}",
-                e
-            )))
-        })?;
+        let context = self.build_execution_context(&query_context);
+        let partition_spec = plan.partition_spec().unwrap();
+        let physical_plan = crate::query::planning::plan::PartitionedPhysicalPlan::from_logical(
+            root_node.clone(),
+            partition_spec.clone(),
+        );
+        executor
+            .from_partitioned_physical_plan(&physical_plan, &context)
+            .map_err(|e| {
+                DBError::from(QueryError::execution(format!(
+                    "Failed to create streaming executor: {}",
+                    e
+                )))
+            })?;
 
         let runtime = executor.runtime().cloned().ok_or_else(|| {
             DBError::from(QueryError::execution(
@@ -1304,8 +1414,6 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
 
         let result = StreamingQueryResult::new(stream, runtime);
 
-        // Pre-populate column names from the plan root so that they are
-        // available even when the query returns zero rows.
         let col_names = root_node.col_names().to_vec();
         if !col_names.is_empty() {
             result.set_fallback_column_names(col_names);

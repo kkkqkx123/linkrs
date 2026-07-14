@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::core::stats::StatsManager;
-use crate::query::planning::plan::ExecutionPlan;
+use crate::query::executor::streaming::plan::PhysicalPlan;
 
 use super::config::{CachePriority, PlanCacheConfig};
 use super::stats::PlanCacheStats;
@@ -54,6 +54,14 @@ use crate::query::planning::plan::execution_plan::PartitionSpec;
 /// `fingerprint == None`, which will *not* match entries that were stored
 /// with a fingerprint — effectively isolating partitioned plans from the
 /// cache until the caller can provide the current layout version.
+///
+/// **M0**: Cache key now includes optional `space_name` and `schema_version`
+/// to prevent cross-space plan reuse and stale plans after schema changes.
+///
+/// **M1.6**: Cache key includes optional `param_type_signature` so that the
+/// same query text with different parameter type signatures produces a
+/// different key, but different parameter *values* do not (allowing cached
+/// plan reuse across executions with different values of the same types).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PlanCacheKey {
     /// Query the hash value of the text
@@ -63,6 +71,13 @@ pub struct PlanCacheKey {
     /// Partition layout fingerprint.  `Some` when the cached plan holds a
     /// `PartitionSpec`; absent for single-tree plans.
     partition_fingerprint: Option<u64>,
+    /// Space/catalog identity — prevents cross-space plan reuse (M0).
+    space_name: Option<String>,
+    /// Schema version at planning time — forces replan after DDL (M0).
+    schema_version: Option<u64>,
+    /// Parameter type signature — prevents reuse when param types differ (M1.6).
+    /// Does NOT include parameter values, only their declared types.
+    param_type_signature: Option<u64>,
 }
 
 impl PlanCacheKey {
@@ -73,6 +88,50 @@ impl PlanCacheKey {
             hash,
             query_text: query.to_string(),
             partition_fingerprint: None,
+            space_name: None,
+            schema_version: None,
+            param_type_signature: None,
+        }
+    }
+
+    /// Create a key scoped to a specific space and schema version.
+    ///
+    /// M1.6: `param_type_signature` is a hash of the parameter types (not
+    /// values) so the same query with different param values but same types
+    /// reuses the cached plan.
+    pub fn from_query_with_space(
+        query: &str,
+        space_name: Option<String>,
+        schema_version: Option<u64>,
+    ) -> Self {
+        Self::from_query_with_full_context(query, space_name, schema_version, None)
+    }
+
+    /// Create a key with all available context dimensions.
+    pub fn from_query_with_full_context(
+        query: &str,
+        space_name: Option<String>,
+        schema_version: Option<u64>,
+        param_type_signature: Option<u64>,
+    ) -> Self {
+        use std::hash::Hash;
+
+        let mut hasher = Self::hasher();
+        query.hash(&mut hasher);
+        if let Some(ref name) = space_name {
+            name.hash(&mut hasher);
+        }
+        schema_version.hash(&mut hasher);
+        param_type_signature.hash(&mut hasher);
+        let hash = hasher.finish();
+
+        Self {
+            hash,
+            query_text: query.to_string(),
+            partition_fingerprint: None,
+            space_name,
+            schema_version,
+            param_type_signature,
         }
     }
 
@@ -92,6 +151,9 @@ impl PlanCacheKey {
             hash,
             query_text: query.to_string(),
             partition_fingerprint: Some(fp),
+            space_name: None,
+            schema_version: None,
+            param_type_signature: None,
         }
     }
 
@@ -130,15 +192,29 @@ impl PlanCacheKey {
     pub fn has_partition_fingerprint(&self) -> bool {
         self.partition_fingerprint.is_some()
     }
+
+    /// Return the space name, if any.
+    pub fn space_name(&self) -> Option<&str> {
+        self.space_name.as_deref()
+    }
+
+    /// Return the schema version, if any.
+    pub fn schema_version(&self) -> Option<u64> {
+        self.schema_version
+    }
 }
 
 /// Cached query plan entries
+///
+/// M3: stores [`Arc<PhysicalPlan>`] instead of [`ExecutionPlan`] so that the
+/// cached plan is an immutable, verifiable arena plan that can be shared
+/// across concurrent executions without re-building.
 #[derive(Debug, Clone)]
 pub struct CachedPlan {
     /// Query template (parameterized form)
     pub query_template: String,
-    /// implementation plan
-    pub plan: ExecutionPlan,
+    /// Immutable arena-based physical plan (M3).
+    pub plan: Arc<PhysicalPlan>,
     /// Parameter location information (for parameter binding)
     pub param_positions: Vec<ParamPosition>,
     /// Creation time
@@ -198,31 +274,16 @@ impl CachedPlan {
         total
     }
 
-    /// Estimate memory usage for execution plan
-    fn estimate_plan_memory(&self, plan: &ExecutionPlan) -> usize {
-        let base_size = std::mem::size_of::<ExecutionPlan>();
-        let format_size = plan.format.len();
+    /// Estimate memory usage for the physical plan.
+    ///
+    /// M3: uses [`PhysicalPlan::operator_count`] and spec sizes for estimation.
+    fn estimate_plan_memory(&self, plan: &PhysicalPlan) -> usize {
+        let base_size = std::mem::size_of::<PhysicalPlan>();
+        let op_count = plan.operator_count();
+        let fragment_count = plan.fragment_count();
+        let per_op_estimate = 256; // rough estimate per operator spec
 
-        let root_size = if let Some(ref root) = plan.root {
-            self.estimate_node_memory(root)
-        } else {
-            0
-        };
-
-        base_size + format_size + root_size
-    }
-
-    /// Estimate memory usage for plan node
-    fn estimate_node_memory(&self, node: &crate::query::planning::plan::PlanNodeEnum) -> usize {
-        let base_size = std::mem::size_of::<crate::query::planning::plan::PlanNodeEnum>();
-
-        let children_size: usize = node
-            .children()
-            .iter()
-            .map(|child| self.estimate_node_memory(child))
-            .sum();
-
-        base_size + children_size
+        base_size + (op_count * per_op_estimate) + (fragment_count * 64)
     }
 
     /// Calculate cache value score (for eviction decisions)
@@ -306,7 +367,34 @@ impl QueryPlanCache {
     /// - `Some(Arc<CachedPlan>)`: Cached plan
     /// - `None`: No results were found, or there was a hash collision.
     pub fn get(&self, query: &str) -> Option<Arc<CachedPlan>> {
-        let key = PlanCacheKey::from_query(query);
+        self.get_with_space(query, None, None)
+    }
+
+    /// Look up a cached plan with space, schema, and parameter type context.
+    ///
+    /// M0: space_name and schema_version are incorporated into the cache key
+    /// to prevent cross-space plan reuse and stale plans after DDL.
+    ///
+    /// M1.6: param_type_signature is a hash of parameter *types* so that
+    /// the same query with different param types gets a different cache key.
+    pub fn get_with_space(
+        &self,
+        query: &str,
+        space_name: Option<String>,
+        schema_version: Option<u64>,
+    ) -> Option<Arc<CachedPlan>> {
+        self.get_with_full_context(query, space_name, schema_version, None)
+    }
+
+    /// Full-context cache lookup with parameter type signature.
+    pub fn get_with_full_context(
+        &self,
+        query: &str,
+        space_name: Option<String>,
+        schema_version: Option<u64>,
+        param_type_signature: Option<u64>,
+    ) -> Option<Arc<CachedPlan>> {
+        let key = PlanCacheKey::from_query_with_full_context(query, space_name, schema_version, param_type_signature);
 
         if let Some(plan) = self.cache.get(&key) {
             if plan.query_template != query {
@@ -345,30 +433,48 @@ impl QueryPlanCache {
 
     /// Put the plan in the cache.
     ///
+    /// M3: stores an [`Arc<PhysicalPlan>`] instead of the legacy [`ExecutionPlan`].
+    ///
     /// # Parameters
     /// - `query`: Query text
-    /// - `plan`: Execution plan
+    /// - `plan`: Arena-based physical plan
     /// - `param_positions`: Information about the positions of the parameters
-    pub fn put(&self, query: &str, plan: ExecutionPlan, param_positions: Vec<ParamPosition>) {
-        self.put_with_tables(query, plan, param_positions, Vec::new());
+    pub fn put(&self, query: &str, plan: Arc<PhysicalPlan>, param_positions: Vec<ParamPosition>) {
+        self.put_with_context(query, plan, param_positions, Vec::new(), None, None);
     }
 
     /// Put the plan in the cache with dependent tables.
     pub fn put_with_tables(
         &self,
         query: &str,
-        plan: ExecutionPlan,
+        plan: Arc<PhysicalPlan>,
         param_positions: Vec<ParamPosition>,
         dependent_tables: Vec<String>,
     ) {
-        // Use a partition-aware key when the plan carries a physical layout
-        // so that layout changes (re-index, layout version bump) yield a
-        // cache miss and force the planner to produce a fresh plan.
+        self.put_with_context(query, plan, param_positions, dependent_tables, None, None);
+    }
+
+    /// Put the plan with full context (space, schema version, tables).
+    ///
+    /// M0: space_name and schema_version are incorporated into the cache key
+    /// to prevent cross-space reuse and stale plans after DDL.
+    ///
+    /// M1.6: `param_type_signature` is derived from the parameter type
+    /// declarations (not values) and is included in the cache key.
+    ///
+    /// M3: stores [`Arc<PhysicalPlan>`] — the immutable arena plan.
+    pub fn put_with_context(
+        &self,
+        query: &str,
+        plan: Arc<PhysicalPlan>,
+        param_positions: Vec<ParamPosition>,
+        dependent_tables: Vec<String>,
+        space_name: Option<String>,
+        schema_version: Option<u64>,
+    ) {
         let query_bytes = query.len();
-        let key = plan
-            .partition_spec()
-            .map(|spec| PlanCacheKey::from_query_with_partition(query, spec))
-            .unwrap_or_else(|| PlanCacheKey::from_query(query));
+        let param_type_sig = Self::compute_param_type_signature(&param_positions);
+        let key = PlanCacheKey::from_query_with_full_context(query, space_name, schema_version, param_type_sig);
 
         let priority = if self.config.priority_config.enable_priority {
             self.calculate_priority(&plan)
@@ -408,8 +514,10 @@ impl QueryPlanCache {
         self.stats.memory.update(current_memory, current_entries);
     }
 
-    /// Calculate priority based on query characteristics
-    fn calculate_priority(&self, plan: &ExecutionPlan) -> CachePriority {
+    /// Calculate priority based on query characteristics.
+    ///
+    /// M3: uses operator count from the arena [`PhysicalPlan`].
+    fn calculate_priority(&self, plan: &PhysicalPlan) -> CachePriority {
         let complexity = self.calculate_complexity_score(plan);
 
         if complexity > 1000 {
@@ -421,141 +529,17 @@ impl QueryPlanCache {
         }
     }
 
-    /// Calculate complexity score for a plan based on actual plan structure
-    fn calculate_complexity_score(&self, plan: &ExecutionPlan) -> u32 {
-        let mut score = 0u32;
-
-        if let Some(ref root) = plan.root {
-            score += self.node_complexity_score(root);
-        }
-
-        score += (plan.format.len() / 100) as u32;
-
-        score
+    /// Calculate complexity score from the arena [`PhysicalPlan`].
+    ///
+    /// M3: uses operator count and fragment count as a proxy for complexity.
+    fn calculate_complexity_score(&self, plan: &PhysicalPlan) -> u32 {
+        let op_count = plan.operator_count() as u32;
+        let frag_count = plan.fragment_count() as u32;
+        (op_count * 20).max(frag_count * 10)
     }
 
-    /// Calculate complexity score for a plan node
-    fn node_complexity_score(&self, node: &crate::query::planning::plan::PlanNodeEnum) -> u32 {
-        use crate::query::planning::plan::PlanNodeEnum;
-
-        let mut score = match node {
-            // Access nodes
-            PlanNodeEnum::Start(_) => 0,
-            PlanNodeEnum::GetVertices(_) => 10,
-            PlanNodeEnum::GetEdges(_) => 10,
-            PlanNodeEnum::GetNeighbors(_) => 15,
-            PlanNodeEnum::ScanVertices(_) => 15,
-            PlanNodeEnum::ScanEdges(_) => 15,
-            PlanNodeEnum::EdgeIndexScan(_) => 20,
-            PlanNodeEnum::IndexScan(_) => 20,
-
-            // Operation nodes
-            PlanNodeEnum::Project(_) => 10,
-            PlanNodeEnum::Filter(_) => 20,
-            PlanNodeEnum::Sort(_) => 30,
-            PlanNodeEnum::Limit(_) => 5,
-            PlanNodeEnum::TopN(_) => 35,
-            PlanNodeEnum::Sample(_) => 15,
-            PlanNodeEnum::Dedup(_) => 20,
-            PlanNodeEnum::Aggregate(_) => 40,
-            PlanNodeEnum::Window(_) => 35,
-
-            // Join nodes
-            PlanNodeEnum::InnerJoin(_) => 50,
-            PlanNodeEnum::LeftJoin(_) => 50,
-            PlanNodeEnum::RightJoin(_) => 50,
-            PlanNodeEnum::CrossJoin(_) => 45,
-            PlanNodeEnum::HashInnerJoin(_) => 55,
-            PlanNodeEnum::HashLeftJoin(_) => 55,
-            PlanNodeEnum::FullOuterJoin(_) => 60,
-            PlanNodeEnum::SemiJoin(_) => 40,
-
-            // Traversal nodes
-            PlanNodeEnum::Expand(_) => 25,
-            PlanNodeEnum::ExpandAll(_) => 30,
-            PlanNodeEnum::Traverse(_) => 35,
-            PlanNodeEnum::AppendVertices(_) => 20,
-            PlanNodeEnum::BiExpand(_) => 30,
-            PlanNodeEnum::BiTraverse(_) => 35,
-
-            // Control flow nodes
-            PlanNodeEnum::Argument(_) => 5,
-            PlanNodeEnum::Loop(_) => 50,
-            PlanNodeEnum::PassThrough(_) => 5,
-            PlanNodeEnum::Select(_) => 25,
-
-            // Transaction nodes
-            PlanNodeEnum::BeginTransaction(_) => 10,
-            PlanNodeEnum::Commit(_) => 10,
-            PlanNodeEnum::Rollback(_) => 10,
-
-            // Data processing nodes
-            PlanNodeEnum::DataCollect(_) => 15,
-            PlanNodeEnum::Remove(_) => 15,
-            PlanNodeEnum::PatternApply(_) => 35,
-            PlanNodeEnum::RollUpApply(_) => 35,
-            PlanNodeEnum::Union(_) => 25,
-            PlanNodeEnum::Minus(_) => 30,
-            PlanNodeEnum::Intersect(_) => 30,
-            PlanNodeEnum::Unwind(_) => 15,
-            PlanNodeEnum::Materialize(_) => 20,
-            PlanNodeEnum::Assign(_) => 10,
-            PlanNodeEnum::Apply(_) => 30,
-
-            // Algorithm nodes
-            PlanNodeEnum::MultiShortestPath(_) => 60,
-            PlanNodeEnum::BFSShortest(_) => 50,
-            PlanNodeEnum::AllPaths(_) => 55,
-            PlanNodeEnum::ShortestPath(_) => 55,
-
-            // Management nodes
-            PlanNodeEnum::SpaceManage(_) => 10,
-            PlanNodeEnum::TagManage(_) => 10,
-            PlanNodeEnum::EdgeManage(_) => 10,
-            PlanNodeEnum::IndexManage(_) => 10,
-            PlanNodeEnum::UserManage(_) => 10,
-            PlanNodeEnum::FulltextManage(_) => 10,
-            PlanNodeEnum::VectorManage(_) => 10,
-
-            // Data modification nodes
-            PlanNodeEnum::InsertVertices(_) => 25,
-            PlanNodeEnum::InsertEdges(_) => 25,
-            PlanNodeEnum::DeleteVertices(_) => 20,
-            PlanNodeEnum::DeleteEdges(_) => 20,
-            PlanNodeEnum::DeleteTags(_) => 20,
-            PlanNodeEnum::DeleteIndex(_) => 15,
-            PlanNodeEnum::PipeDeleteVertices(_) => 25,
-            PlanNodeEnum::PipeDeleteEdges(_) => 25,
-            PlanNodeEnum::Update(_) => 25,
-            PlanNodeEnum::UpdateVertices(_) => 25,
-            PlanNodeEnum::UpdateEdges(_) => 25,
-
-            // Stats nodes
-            PlanNodeEnum::ShowStats(_) => 10,
-
-            // Full-text search nodes
-            PlanNodeEnum::FulltextSearch(_) => 30,
-            PlanNodeEnum::FulltextLookup(_) => 25,
-            PlanNodeEnum::MatchFulltext(_) => 30,
-
-            // Vector search nodes
-            #[cfg(feature = "qdrant")]
-            PlanNodeEnum::VectorSearch(_) => 35,
-            #[cfg(feature = "qdrant")]
-            PlanNodeEnum::VectorLookup(_) => 30,
-            #[cfg(feature = "qdrant")]
-            PlanNodeEnum::VectorMatch(_) => 35,
-        };
-
-        for child in node.children() {
-            score += self.node_complexity_score(child);
-        }
-
-        score
-    }
-
-    /// Estimate compute cost in milliseconds
-    fn estimate_compute_cost(&self, plan: &ExecutionPlan) -> u64 {
+    /// Estimate compute cost in milliseconds.
+    fn estimate_compute_cost(&self, plan: &PhysicalPlan) -> u64 {
         let complexity = self.calculate_complexity_score(plan);
         (complexity as u64 * 10).max(100)
     }
@@ -568,6 +552,24 @@ impl QueryPlanCache {
             .sum()
     }
 
+    /// Compute a parameter type signature from param positions.
+    ///
+    /// M1.6: produces a hash of the parameter *types* (not values) so that
+    /// plans with different param type declarations get different cache keys.
+    fn compute_param_type_signature(params: &[ParamPosition]) -> Option<u64> {
+        if params.is_empty() {
+            return None;
+        }
+        use std::hash::Hash;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for p in params {
+            p.index.hash(&mut hasher);
+            p.name.hash(&mut hasher);
+            p.expected_type.hash(&mut hasher);
+        }
+        Some(hasher.finish())
+    }
+
     /// Record the statistics on the execution of the plan.
     ///
     /// # Parameter
@@ -575,6 +577,24 @@ impl QueryPlanCache {
     /// - `execution_time_ms`: Execution time (in milliseconds)
     pub fn record_execution(&self, query: &str, execution_time_ms: f64) {
         let key = PlanCacheKey::from_query(query);
+
+        if let Some(plan) = self.cache.get(&key) {
+            let alpha = 0.1;
+            let new_avg = plan.avg_execution_time_ms * (1.0 - alpha) + execution_time_ms * alpha;
+
+            let updated_plan = Arc::new(CachedPlan {
+                execution_count: plan.execution_count + 1,
+                avg_execution_time_ms: new_avg,
+                ..(*plan).clone()
+            });
+
+            self.cache.insert(key, updated_plan);
+        }
+    }
+
+    /// Record execution with space context.
+    pub fn record_execution_with_space(&self, query: &str, execution_time_ms: f64, space_name: Option<String>, schema_version: Option<u64>) {
+        let key = PlanCacheKey::from_query_with_space(query, space_name, schema_version);
 
         if let Some(plan) = self.cache.get(&key) {
             let alpha = 0.1;
@@ -606,6 +626,36 @@ impl QueryPlanCache {
             self.update_stats();
         }
 
+        removed
+    }
+
+    /// Invalidate all cache entries for a given space.
+    ///
+    /// M0: called after DDL/index/schema changes to force replanning.
+    /// Iterates all entries and removes those matching the space name.
+    pub fn invalidate_space(&self, space_name: &str) -> usize {
+        // Collect keys to remove while iterating (can't mutate during iter).
+        let keys_to_remove: Vec<PlanCacheKey> = self
+            .cache
+            .iter()
+            .filter(|(k, _)| k.space_name.as_deref() == Some(space_name))
+            .map(|(k, _)| PlanCacheKey {
+                hash: k.hash,
+                query_text: k.query_text.clone(),
+                partition_fingerprint: k.partition_fingerprint,
+                space_name: k.space_name.clone(),
+                schema_version: k.schema_version,
+                param_type_signature: k.param_type_signature,
+            })
+            .collect();
+        let removed = keys_to_remove.len();
+        for key in &keys_to_remove {
+            self.cache.remove(key);
+        }
+        if removed > 0 {
+            self.stats.counters.record_eviction();
+            self.update_stats();
+        }
         removed
     }
 

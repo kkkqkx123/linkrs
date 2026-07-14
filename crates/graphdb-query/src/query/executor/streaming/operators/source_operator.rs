@@ -78,6 +78,10 @@ pub enum SourceOperator {
         limit: Option<usize>,
         partition_range: Option<std::ops::Range<i64>>,
         col_names: Vec<String>,
+        /// Optional property names to project. When non-empty, only these
+        /// properties are retained in the loaded Vertex objects, reducing
+        /// memory and boxing overhead.
+        projected_properties: Vec<String>,
         /// Cursor kept inline for practical lifetime management.
         cursor: Option<Box<dyn VertexCursor>>,
     },
@@ -182,12 +186,14 @@ impl SourceOperator {
                 space_name,
                 limit,
                 col_names,
+                projected_properties,
             } => Self::StorageScanVertices {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 limit: *limit,
                 partition_range: None,
                 col_names: col_names.clone(),
+                projected_properties: projected_properties.clone(),
                 cursor: None,
             },
             super::spec::SourceSpec::ScanEdges { rows, col_names } => {
@@ -317,7 +323,7 @@ impl SourceOperator {
                     col_names: col_names.clone(),
                 }));
             }
-            Self::StorageScanVertices { storage, space_name, limit, partition_range, col_names, cursor } => {
+            Self::StorageScanVertices { storage, space_name, limit, partition_range, col_names, projected_properties, cursor } => {
                 let storage_ref = storage.as_ref().ok_or_else(|| {
                     QueryError::execution("StorageScanVertices requires storage".to_string())
                 })?;
@@ -333,6 +339,7 @@ impl SourceOperator {
                     buffer: Vec::new(),
                     current_index: 0,
                     col_names: col_names.clone(),
+                    projected_properties: projected_properties.clone(),
                 }));
             }
             Self::StorageScanEdges { storage, space_name, limit, edge_type, partition_range, col_names, cursor } => {
@@ -439,7 +446,7 @@ impl SourceOperator {
             Self::ScanVertices { buffer, current_index, col_names, .. }
             | Self::ScanEdges { buffer, current_index, col_names, .. } =>
                 next_buffer_chunk(base, buffer, current_index, col_names),
-            Self::StorageScanVertices { space_name, cursor, col_names, .. } => loop {
+            Self::StorageScanVertices { space_name, cursor, col_names, projected_properties, .. } => loop {
                 base.ensure_not_cancelled()?;
                 let mut cur = match cursor.take() {
                     Some(c) => c,
@@ -451,7 +458,14 @@ impl SourceOperator {
                 if batch.is_empty() {
                     return Ok(None);
                 }
-                let rows = batch.into_iter().map(make_vertex_row).collect::<Vec<_>>();
+                let rows = if projected_properties.is_empty() {
+                    batch.into_iter().map(make_vertex_row).collect::<Vec<_>>()
+                } else {
+                    batch.into_iter().map(|mut v| {
+                        v.properties.retain(|key, _| projected_properties.contains(key));
+                        make_vertex_row(v)
+                    }).collect::<Vec<_>>()
+                };
                 if !rows.is_empty() {
                     let reservation = reserve_memory(base, &rows)?;
                     let mut chunk = DataChunk::new_with_layout(

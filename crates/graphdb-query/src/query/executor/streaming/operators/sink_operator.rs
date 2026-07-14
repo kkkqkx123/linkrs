@@ -218,16 +218,25 @@ impl SinkOperator {
         }
     }
 
-    /// Check that the transaction scope (if set) allows writes.
+    /// Check that the transaction scope allows writes.
+    ///
+    /// M0.4: requires a transaction scope for DML operations.  Absent scope
+    /// is rejected to prevent unbounded writes outside any transaction.
     fn check_write_permission(base: &OperatorBase) -> Result<(), QueryError> {
-        if let Some(rt) = &base.runtime {
-            if let Some(scope) = rt.transaction_scope() {
-                if !scope.allows_write() {
-                    return Err(QueryError::execution(
-                        "Write operation not allowed in current transaction scope".to_string(),
-                    ));
-                }
-            }
+        let rt = base.runtime.as_ref().ok_or_else(|| {
+            QueryError::execution(
+                "DML requires an execution runtime with transaction scope".to_string(),
+            )
+        })?;
+        let scope = rt.transaction_scope().ok_or_else(|| {
+            QueryError::execution(
+                "DML requires a transaction scope — no transaction is active".to_string(),
+            )
+        })?;
+        if !scope.allows_write() {
+            return Err(QueryError::execution(
+                "Write operation not allowed in current transaction scope".to_string(),
+            ));
         }
         Ok(())
     }

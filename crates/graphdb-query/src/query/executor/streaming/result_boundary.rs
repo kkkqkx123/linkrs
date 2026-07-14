@@ -17,6 +17,7 @@
 
 use std::fmt;
 use std::sync::mpsc;
+use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 
 use super::chunk::{ColumnInfo, DataChunk, Schema};
@@ -53,13 +54,15 @@ pub enum ResultBoundary {
         runtime: Arc<ExecutionRuntime>,
     },
 
-    /// Chunk-by-chunk callback stream.
+    /// Chunk-by-chunk callback stream with bounded channel.
     ///
-    /// Each produced chunk is delivered through the channel.
-    /// The receiver can apply back-pressure by blocking on receive.
+    /// Each produced chunk is delivered through a bounded [`SyncSender`];
+    /// capacity is set at creation time.  The sender is dropped after
+    /// finish() so that the receiver can terminate its iteration loop.
+    /// M0.5-M0.6: bounded channel with capacity; sender dropped on finish.
     ChunkStreamSink {
         output: OutputContract,
-        sender: mpsc::Sender<ChunkOrDone>,
+        sender: Option<SyncSender<ChunkOrDone>>,
         runtime: Arc<ExecutionRuntime>,
     },
 
@@ -127,17 +130,22 @@ impl ResultBoundary {
         }
     }
 
-    /// Create a [`ChunkStreamSink`] with an unbounded channel.
+    /// Create a [`ChunkStreamSink`] with a bounded channel.
+    ///
+    /// `capacity` limits the number of chunks buffered in the channel
+    /// before back-pressure is applied to the producer.  M0.6: capacity
+    /// is now enforced via [`mpsc::sync_channel`].
     pub fn chunk_stream(
         output: OutputContract,
-        _capacity: usize,
+        capacity: usize,
         runtime: Arc<ExecutionRuntime>,
     ) -> (Self, mpsc::Receiver<ChunkOrDone>) {
-        let (sender, receiver) = mpsc::channel();
+        let cap = capacity.max(1);
+        let (sender, receiver) = mpsc::sync_channel(cap);
         (
             Self::ChunkStreamSink {
                 output,
-                sender,
+                sender: Some(sender),
                 runtime,
             },
             receiver,
@@ -180,18 +188,21 @@ impl ResultBoundary {
                 sender, runtime, ..
             } => {
                 if runtime.is_cancelled() {
-                    let _ = sender.send(ChunkOrDone::Error(
-                        runtime
-                            .cancel_token_v2()
-                            .reason()
-                            .map(|r| r.to_string())
-                            .unwrap_or_else(|| "Query cancelled".to_string()),
-                    ));
+                    if let Some(s) = sender {
+                        let _ = s.send(ChunkOrDone::Error(
+                            runtime
+                                .cancel_token_v2()
+                                .reason()
+                                .map(|r| r.to_string())
+                                .unwrap_or_else(|| "Query cancelled".to_string()),
+                        ));
+                    }
                     return Err(QueryError::execution("Query cancelled"));
                 }
-                sender
-                    .send(ChunkOrDone::Chunk(chunk))
-                    .map_err(|_| QueryError::execution("Result channel closed"))?;
+                if let Some(s) = sender {
+                    s.send(ChunkOrDone::Chunk(chunk))
+                        .map_err(|_| QueryError::execution("Result channel closed"))?;
+                }
                 Ok(())
             }
             Self::DiscardSink { .. } => {
@@ -201,11 +212,17 @@ impl ResultBoundary {
         }
     }
 
-    /// Signal that the stream is complete.
+    /// Signal that the stream is complete and drop the sender.
+    ///
+    /// M0.5: sender is taken and dropped so the receiver can terminate
+    /// its iteration without requiring the caller to explicitly drop the
+    /// boundary.
     pub fn finish(&mut self) {
         match self {
             Self::ChunkStreamSink { sender, .. } => {
-                let _ = sender.send(ChunkOrDone::Done);
+                if let Some(s) = sender.take() {
+                    let _ = s.send(ChunkOrDone::Done);
+                }
             }
             Self::DataSetSink { .. }
             | Self::PullHandle { .. }
@@ -219,7 +236,9 @@ impl ResultBoundary {
     pub fn fail(&mut self, error: QueryError) {
         match self {
             Self::ChunkStreamSink { sender, .. } => {
-                let _ = sender.send(ChunkOrDone::Error(error.to_string()));
+                if let Some(s) = sender.take() {
+                    let _ = s.send(ChunkOrDone::Error(error.to_string()));
+                }
             }
             Self::PullHandle { runtime, .. } => {
                 runtime.cancel();

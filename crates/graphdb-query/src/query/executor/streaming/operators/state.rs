@@ -33,6 +33,7 @@ pub enum SourceState {
         buffer: Vec<Vec<Value>>,
         current_index: usize,
         col_names: Vec<String>,
+        projected_properties: Vec<String>,
     },
     ScanEdges {
         current_index: usize,
@@ -84,13 +85,14 @@ impl SourceState {
                 current_index: 0,
                 col_names: col_names.clone(),
             },
-            SourceSpec::StorageScanVertices { col_names, .. } => SourceState::StorageScanVertices {
+            SourceSpec::StorageScanVertices { col_names, projected_properties, .. } => SourceState::StorageScanVertices {
                 partition_id: 0,
                 partition_range: None,
                 cursor: None,
                 buffer: Vec::new(),
                 current_index: 0,
                 col_names: col_names.clone(),
+                projected_properties: projected_properties.clone(),
             },
             SourceSpec::ScanEdges { rows: _, col_names } => SourceState::ScanEdges {
                 current_index: 0,

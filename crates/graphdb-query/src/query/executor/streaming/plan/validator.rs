@@ -15,7 +15,7 @@ use crate::core::error::QueryError;
 use super::types::{
     FragmentId, OperatorKindSpec, PhysicalOperatorId, PhysicalPlan,
 };
-use super::properties::{Ordering, PipelineKind};
+use super::properties::{MemoryPolicy, Ordering, PipelineKind};
 
 /// The two validation tiers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +85,12 @@ impl PhysicalPlanValidator {
         Self::check_memory_policy(plan, &mut result);
         Self::check_root_output_contract(plan, &mut result);
         Self::check_capability_set(plan, &mut result);
+
+            // M3.6: Additional structural integrity checks.
+        Self::check_fragment_kind_matches(plan, &mut result);
+        Self::check_root_fragment_kind(plan, &mut result);
+        Self::check_unreferenced_operators(plan, &mut result);
+        Self::check_operator_spec_consistency(plan, &mut result);
 
         if tier == ValidationTier::Full {
             // Binding-dependent checks.
@@ -366,17 +372,19 @@ impl PhysicalPlanValidator {
         }
     }
 
-    /// Blocking operators must have a memory policy.
+    /// Blocking operators must have a memory policy (RequiresBudget or Spillable).
     fn check_memory_policy(plan: &PhysicalPlan, result: &mut ValidationResult) {
         for op in &plan.operators {
             if op.properties.pipeline_kind == PipelineKind::Blocking {
-                let has_threshold = op.properties.memory_policy.spill_threshold.is_some();
-                if !has_threshold {
-                    result.warnings.push(format!(
-                        "Blocking operator {:?} ({}) has no memory policy set \
-                         (should be RequiresBudget or Spillable)",
-                        op.operator_id, op.explain_name
-                    ));
+                match &op.properties.memory_policy {
+                    MemoryPolicy::None => {
+                        result.warnings.push(format!(
+                            "Blocking operator {:?} ({}) has no memory policy set \
+                             (should be RequiresBudget or Spillable)",
+                            op.operator_id, op.explain_name
+                        ));
+                    }
+                    MemoryPolicy::RequiresBudget | MemoryPolicy::Spillable { .. } => {}
                 }
             }
         }
@@ -408,6 +416,114 @@ impl PhysicalPlanValidator {
             result.warnings.push(
                 "Plan declares no required capabilities".to_string(),
             );
+        }
+    }
+
+    // ── M3.6: Additional structural integrity checks ──
+
+    /// Fragment kind should be consistent with the root operator type.
+    ///
+    /// A Source fragment should have a Source operator as its root.
+    /// A Terminal fragment should have a terminal operator (Ddl, Sink, Txn).
+    fn check_fragment_kind_matches(plan: &PhysicalPlan, result: &mut ValidationResult) {
+        for fragment in plan.fragments.fragments() {
+            let root_op = match plan.operator(fragment.root_operator) {
+                Some(op) => op,
+                None => continue,
+            };
+            let is_terminal = matches!(
+                &root_op.spec,
+                OperatorKindSpec::Sink(_) | OperatorKindSpec::Ddl(_) | OperatorKindSpec::Txn(_)
+            );
+            match fragment.kind {
+                super::types::FragmentKind::Source => {
+                    if !matches!(&root_op.spec, OperatorKindSpec::Source(_)) {
+                        result.warnings.push(format!(
+                            "Fragment {:?} has kind Source but root operator is {:?}",
+                            fragment.id, root_op.explain_name
+                        ));
+                    }
+                }
+                super::types::FragmentKind::Terminal => {
+                    if !is_terminal {
+                        result.warnings.push(format!(
+                            "Fragment {:?} has kind Terminal but root operator is {:?}",
+                            fragment.id, root_op.explain_name
+                        ));
+                    }
+                }
+                super::types::FragmentKind::Blocking => {
+                    if !matches!(&root_op.spec, OperatorKindSpec::Blocking(_)) {
+                        result.warnings.push(format!(
+                            "Fragment {:?} has kind Blocking but root operator is {:?}",
+                            fragment.id, root_op.explain_name
+                        ));
+                    }
+                }
+                super::types::FragmentKind::Exchange => {
+                    if !matches!(&root_op.spec, OperatorKindSpec::Exchange(_)) {
+                        result.warnings.push(format!(
+                            "Fragment {:?} has kind Exchange but root operator is {:?}",
+                            fragment.id, root_op.explain_name
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Check that the root fragment kind is appropriate.
+    fn check_root_fragment_kind(plan: &PhysicalPlan, result: &mut ValidationResult) {
+        if let Some(root_frag) = plan.fragments.get(plan.root_fragment) {
+            match root_frag.kind {
+                super::types::FragmentKind::Source | super::types::FragmentKind::Streaming => {
+                    result.warnings.push(format!(
+                        "Root fragment {:?} has kind {:?}, expected Terminal or Result",
+                        root_frag.id, root_frag.kind
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Every operator in the arena must belong to at least one fragment.
+    fn check_unreferenced_operators(plan: &PhysicalPlan, result: &mut ValidationResult) {
+        let mut referenced: std::collections::HashSet<PhysicalOperatorId> =
+            std::collections::HashSet::new();
+        for fragment in plan.fragments.fragments() {
+            for &op_id in &fragment.operators {
+                referenced.insert(op_id);
+            }
+        }
+        for op in &plan.operators {
+            if !referenced.contains(&op.operator_id) {
+                result.warnings.push(format!(
+                    "Operator {:?} ({}) exists in the arena but is not referenced by any fragment",
+                    op.operator_id, op.explain_name
+                ));
+            }
+        }
+    }
+
+    /// Check operator spec internal consistency.
+    ///
+    /// M3.6: validations that catch spec-level errors before execution.
+    fn check_operator_spec_consistency(plan: &PhysicalPlan, result: &mut ValidationResult) {
+        for op in &plan.operators {
+            // Check that Source operators are not in fragments with inputs.
+            if let OperatorKindSpec::Source(_) = &op.spec {
+                for fragment in plan.fragments.fragments() {
+                    if fragment.root_operator == op.operator_id && !fragment.inputs.is_empty() {
+                        // Source operators should be leaf fragments.
+                        result.warnings.push(format!(
+                            "Source operator {:?} ({}) is root of fragment {:?} which has inputs",
+                            op.operator_id, op.explain_name, fragment.id
+                        ));
+                    }
+                }
+            }
         }
     }
 

@@ -52,11 +52,22 @@ impl Default for Parallelism {
 }
 
 /// Memory policy for blocking/spill-capable operators.
-#[derive(Debug, Clone)]
-#[derive(Default)]
-pub struct MemoryPolicy {
-    pub spill_threshold: Option<u64>,
+///
+/// - `None`: no memory tracking (streaming operators that don't accumulate).
+/// - `RequiresBudget`: operator tracks memory via `MemoryTracker` but does NOT
+///   spill. When budget is exceeded, returns `ResourceExhausted`.
+/// - `Spillable`: operator can spill to disk when budget is exceeded.
+///   `threshold` is a plan-level trigger hint in bytes.
+#[derive(Debug, Clone, Default)]
+pub enum MemoryPolicy {
+    #[default]
+    None,
+    RequiresBudget,
+    Spillable { threshold: u64 },
 }
+
+/// Default spill threshold for operators with full external spill support.
+pub const SPILL_DEFAULT_THRESHOLD: u64 = 64 * 1024 * 1024; // 64 MB
 
 
 /// Physical plan properties attached to each node's output.
@@ -92,7 +103,7 @@ impl PhysicalProperties {
             Ordering::None,
             PipelineKind::Streaming,
             Parallelism::default(),
-            MemoryPolicy::default(),
+            MemoryPolicy::None,
         )
     }
 
@@ -102,7 +113,29 @@ impl PhysicalProperties {
             Ordering::None,
             PipelineKind::Blocking,
             Parallelism::default(),
-            MemoryPolicy::default(),
+            MemoryPolicy::None,
+        )
+    }
+
+    /// Blocking operator that tracks memory but does not spill.
+    pub fn single_blocking_with_budget() -> Self {
+        Self::new(
+            Distribution::Single,
+            Ordering::None,
+            PipelineKind::Blocking,
+            Parallelism::default(),
+            MemoryPolicy::RequiresBudget,
+        )
+    }
+
+    /// Blocking operator with full external spill support.
+    pub fn single_blocking_spillable(threshold: u64) -> Self {
+        Self::new(
+            Distribution::Single,
+            Ordering::None,
+            PipelineKind::Blocking,
+            Parallelism::default(),
+            MemoryPolicy::Spillable { threshold },
         )
     }
 
@@ -112,7 +145,7 @@ impl PhysicalProperties {
             ordering,
             PipelineKind::Blocking,
             Parallelism::default(),
-            MemoryPolicy::default(),
+            MemoryPolicy::None,
         )
     }
 }

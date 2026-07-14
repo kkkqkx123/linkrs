@@ -298,7 +298,7 @@ fn build_join_core(
         Box::new(left_phys),
         Box::new(right_phys),
         join_spec,
-        PhysicalProperties::single_blocking(),
+        PhysicalProperties::single_blocking_with_budget(),
     ))
 }
 
@@ -315,7 +315,7 @@ fn build_join_with_keys(
         Box::new(left_phys),
         Box::new(right_phys),
         (config.make_spec)(condition),
-        PhysicalProperties::single_blocking(),
+        PhysicalProperties::single_blocking_with_budget(),
     ))
 }
 
