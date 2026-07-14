@@ -259,6 +259,7 @@ impl PhysicalPlanValidator {
                 OperatorKindSpec::Unary(_)
                 | OperatorKindSpec::Blocking(_)
                 | OperatorKindSpec::Graph(_)
+                | OperatorKindSpec::RecursiveFragment(_)
                 | OperatorKindSpec::Sink(_)
                 | OperatorKindSpec::Ddl(_)
                 | OperatorKindSpec::Fulltext(_)

@@ -21,6 +21,7 @@ use super::operators::fulltext_operator::FulltextOperator;
 use super::operators::gather_operator::GatherOperator;
 use super::operators::graph_operator::GraphOperator;
 use super::operators::join_operator::JoinOperator;
+use super::operators::recursive_fragment_operator::RecursiveFragmentOperator;
 use super::operators::set_operator::SetOperator;
 use super::operators::shuffle_join_operator::HashShuffleJoinOperator;
 use super::operators::sink_operator::SinkOperator;
@@ -44,7 +45,7 @@ pub enum FullOuterJoinPhase {
     EmitUnmatchedRight,
 }
 
-/// StreamingExecutor: 14-variant dispatch enum over domain-specific operators.
+/// StreamingExecutor: 15-variant dispatch enum over domain-specific operators.
 ///
 /// Each variant holds an OperatorBase (shared fields), zero or more child
 /// executors, and a domain-specific operator enum that implements the
@@ -77,6 +78,9 @@ pub enum StreamingExecutor {
     ),
     Blocking(OperatorBase, Box<StreamingExecutor>, BlockingOperator),
     Graph(OperatorBase, Box<StreamingExecutor>, GraphOperator),
+    /// M7: Recursive fragment for variable-length path traversal,
+    /// BFS, shortest-path, and multi-round graph algorithms.
+    RecursiveFragment(OperatorBase, Box<StreamingExecutor>, RecursiveFragmentOperator),
     Sink(OperatorBase, Box<StreamingExecutor>, SinkOperator),
     Ddl(OperatorBase, Box<StreamingExecutor>, DdlOperator),
     Fulltext(OperatorBase, Box<StreamingExecutor>, FulltextOperator),
@@ -107,6 +111,7 @@ macro_rules! dispatch {
             Self::Apply(base, left, right, op) => op.$method(base, left, right),
             Self::Blocking(base, child, op) => op.$method(base, child),
             Self::Graph(base, child, op) => op.$method(base, child),
+            Self::RecursiveFragment(base, child, op) => op.$method(base, child),
             Self::Sink(base, child, op) => op.$method(base, child),
             Self::Ddl(base, child, op) => op.$method(base, child),
             Self::Fulltext(base, child, op) => op.$method(base, child),
@@ -123,6 +128,10 @@ impl StreamingExecutor {
     /// Recursively set the runtime on this operator and all children.
     pub fn set_runtime(&mut self, rt: Option<Arc<ExecutionRuntime>>) {
         if let (Self::Graph(_, _, operator), Some(runtime)) = (&mut *self, rt.as_ref()) {
+            operator.bind_runtime(runtime);
+        }
+        if let (Self::RecursiveFragment(_, _, operator), Some(runtime)) = (&mut *self, rt.as_ref())
+        {
             operator.bind_runtime(runtime);
         }
         self.base_mut().runtime = rt.clone();
@@ -203,7 +212,7 @@ impl StreamingExecutor {
                         | BlockingOperator::TopN { .. }
                 ) && input.is_partition_local()
             }
-            Self::HashShuffleJoin(..) | Self::Exchange(..) => false,
+            Self::HashShuffleJoin(..) | Self::Exchange(..) | Self::RecursiveFragment(..) => false,
             _ => false,
         }
     }
@@ -304,6 +313,12 @@ impl StreamingExecutor {
                 GraphOperator::MultiShortestPath { .. } => "MultiShortestPath",
                 GraphOperator::Subgraph { .. } => "Subgraph",
             },
+            RecursiveFragment(_, _, op) => match op {
+                RecursiveFragmentOperator::ShortestPath { .. } => "RecursiveShortestPath",
+                RecursiveFragmentOperator::MultiShortestPath { .. } => "RecursiveMultiShortestPath",
+                RecursiveFragmentOperator::BFSShortest { .. } => "RecursiveBFSShortest",
+                RecursiveFragmentOperator::AllPaths { .. } => "RecursiveAllPaths",
+            },
             Sink(_, _, op) => match op {
                 SinkOperator::InsertVertices { .. } => "InsertVertices",
                 SinkOperator::InsertEdges { .. } => "InsertEdges",
@@ -345,6 +360,10 @@ impl StreamingExecutor {
             Exchange(_, _, op) => match &op.state {
                 ExchangeState::Concatenate { .. } => "Exchange(Concatenate)",
                 ExchangeState::MergeSort { .. } => "Exchange(MergeSort)",
+                ExchangeState::RepartitionHash { .. } => "Exchange(RepartitionHash)",
+                ExchangeState::Broadcast { .. } => "Exchange(Broadcast)",
+                ExchangeState::Barrier { .. } => "Exchange(Barrier)",
+                ExchangeState::Materialize { .. } => "Exchange(Materialize)",
             },
             HashShuffleJoin(_, _, _, op) => match op.join_kind {
                 super::operators::shuffle_join_operator::HashJoinKind::Inner => {
@@ -395,6 +414,7 @@ impl StreamingExecutor {
             Self::Unary(_, child, _)
             | Self::Blocking(_, child, _)
             | Self::Graph(_, child, _)
+            | Self::RecursiveFragment(_, child, _)
             | Self::Sink(_, child, _)
             | Self::Ddl(_, child, _)
             | Self::Fulltext(_, child, _)
@@ -452,7 +472,7 @@ impl StreamingExecutor {
                 base
             }
             Self::Blocking(base, _, _) => base,
-            Self::Graph(base, _, _) => base,
+            Self::Graph(base, _, _) | Self::RecursiveFragment(base, _, _) => base,
             Self::Sink(base, _, _) => base,
             Self::Ddl(base, _, _) | Self::Fulltext(base, _, _) | Self::Vector(base, _, _) => base,
             Self::Txn(base, _, _) => base,
@@ -470,7 +490,7 @@ impl StreamingExecutor {
                 base
             }
             Self::Blocking(base, _, _) => base,
-            Self::Graph(base, _, _) => base,
+            Self::Graph(base, _, _) | Self::RecursiveFragment(base, _, _) => base,
             Self::Sink(base, _, _) => base,
             Self::Ddl(base, _, _) | Self::Fulltext(base, _, _) | Self::Vector(base, _, _) => base,
             Self::Txn(base, _, _) => base,
@@ -486,6 +506,7 @@ impl StreamingExecutor {
             Self::Unary(_, input, _)
             | Self::Blocking(_, input, _)
             | Self::Graph(_, input, _)
+            | Self::RecursiveFragment(_, input, _)
             | Self::Sink(_, input, _)
             | Self::Txn(_, input, _) => vec![input.as_mut()],
             Self::Join(_, left, right, _)
@@ -511,6 +532,7 @@ impl StreamingExecutor {
             Self::Source(..)
             | Self::Unary(..)
             | Self::Graph(..)
+            | Self::RecursiveFragment(..)
             | Self::Sink(..)
             | Self::Txn(..)
             | Self::Apply(..)
@@ -659,6 +681,7 @@ impl Spillable for StreamingExecutor {
             Self::Source(..)
             | Self::Unary(..)
             | Self::Graph(..)
+            | Self::RecursiveFragment(..)
             | Self::Sink(..)
             | Self::Ddl(..)
             | Self::Fulltext(..)

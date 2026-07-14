@@ -3,15 +3,23 @@
 //! A DataChunk represents a fixed-size batch of rows processed in streaming mode.
 //! Typical size: 1024 rows (~4MB)
 //!
-//! # Ownership & Memory Accounting Rules
+//! # Ownership & Memory Accounting Rules (M4)
 //!
-//! - **`rows`**: Owned `Vec<Vec<Value>>`. Deep-cloned on `Clone`.
+//! - **`rows`**: Owned `Vec<Vec<Value>>`. Deep-cloned on `Clone` (transitional).
 //! - **`schema`**: `Arc<Schema>` — shared reference, cheap `Arc::clone` on `Clone`.
 //! - **`layout`**: `Arc<SlotLayout>` — always present; shared reference, cheap on `Clone`.
-//! - **`memory_reservation`**: `Option<MemoryReservation>` — **ownership stays with
-//!   the original chunk on `Clone`**; the clone gets `memory_reservation: None`.
+//! - **`memory_reservation`**: `Option<MemoryReservation>` / `Option<MemoryPoolReservation>` —
+//!   ownership stays with the original chunk on `Clone`; the clone gets `None`.
 //!   Use `take_memory_reservation()` to transfer ownership explicitly.
-//!   The reserved bytes are released when the `MemoryReservation` is dropped.
+//!
+//! ## Clone removal (M4)
+//!
+//! `Clone` is provided for migration only.  New code should use one of:
+//! - **`deep_copy(pool)`**: creates a new chunk with rows deep-copied into the
+//!   given memory pool.  Properly accounts the new memory.
+//! - **`view()`**: creates a zero-copy [`ChunkView`] borrowing the parent chunk.
+//! - **`slice(range)`**: moves a subset of rows into a new chunk (efficient,
+//!   uses `std::mem::take` per row).
 //!
 //! # Construction Paths
 //!
@@ -42,6 +50,8 @@ pub struct DataChunk {
     pub memory_reservation: Option<MemoryReservation>,
 }
 
+// M4 transitional: Clone loses memory accounting.
+// Use `deep_copy(pool)` or `slice()` instead of clone for new code.
 impl Clone for DataChunk {
     fn clone(&self) -> Self {
         Self {
@@ -329,6 +339,62 @@ impl DataChunk {
                 }
             })
             .collect()
+    }
+
+    // ── M4: view, slice ──
+
+    /// Create a zero-copy view into this chunk's rows.
+    pub fn view(&self) -> ChunkView<'_> {
+        ChunkView {
+            rows: &self.rows,
+            layout: &self.layout,
+        }
+    }
+
+    /// Move a range of rows [start, end) into a new chunk.
+    ///
+    /// Uses `std::mem::take` to avoid cloning.  The source rows at
+    /// those indices are replaced with empty `Vec`s.
+    ///
+    /// Panics if `end > self.rows.len()`.
+    pub fn slice(&mut self, start: usize, end: usize) -> Self {
+        assert!(end <= self.rows.len(), "slice end out of bounds");
+        let layout = Arc::clone(&self.layout);
+        let schema = Arc::clone(&self.schema);
+        let mut selected = Vec::with_capacity(end - start);
+        for i in start..end {
+            selected.push(std::mem::take(&mut self.rows[i]));
+        }
+        Self {
+            rows: selected,
+            schema,
+            layout,
+            memory_reservation: self.memory_reservation.take(),
+        }
+    }
+}
+
+/// A zero-copy view into a slice of rows within a [`DataChunk`].
+///
+/// Created by [`DataChunk::view`].  The view borrows the parent chunk
+/// and does not own its data.
+#[derive(Debug)]
+pub struct ChunkView<'a> {
+    pub(crate) rows: &'a [Vec<crate::core::Value>],
+    pub(crate) layout: &'a SlotLayout,
+}
+
+impl ChunkView<'_> {
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    pub fn row(&self, idx: usize) -> Option<&[crate::core::Value]> {
+        self.rows.get(idx).map(|r| r.as_slice())
     }
 }
 

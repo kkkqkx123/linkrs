@@ -376,6 +376,51 @@ pub enum ExchangeState {
         limit: Option<usize>,
         emitted: usize,
     },
+    /// Hash-based repartition: buffer input rows, rehash by key, route to
+    /// output buckets.  Each bucket is pulled sequentially.
+    RepartitionHash {
+        /// Number of output buckets / partitions.
+        num_partitions: usize,
+        /// Buffered input rows for each partition bucket.
+        /// Indexed by hash(keys) % num_partitions.
+        buckets: Vec<Vec<Vec<Value>>>,
+        /// Current bucket being drained.
+        current_bucket: usize,
+        /// Current row index within `current_bucket`.
+        current_row: usize,
+        /// Hash expressions (from spec, cloned for state).
+        hash_expressions: Vec<Expression>,
+        /// Column names of the data flowing through.
+        col_names: Option<Vec<String>>,
+    },
+    /// Broadcast: replicates every input chunk across N output channels.
+    Broadcast {
+        /// Number of consumers / output channels.
+        num_consumers: usize,
+        /// Buffered chunks from upstream (all consumed before broadcast).
+        buffered_chunks: Vec<DataChunk>,
+        /// Current position within the broadcast output sequence.
+        /// Cycles through consumers for each row/chunk.
+        current_consumer: usize,
+        /// Current chunk index being broadcast.
+        chunk_index: usize,
+        /// Next row index within the current chunk.
+        row_index: usize,
+    },
+    /// Barrier: collect input-fragment completion signals, then pass through.
+    Barrier {
+        /// Whether the barrier has been passed.
+        passed: bool,
+    },
+    /// Materialize: fully consume child output before producing it.
+    Materialize {
+        /// All rows collected from children.
+        rows: Vec<Vec<Value>>,
+        /// Current position in the materialized output.
+        position: usize,
+        /// Column names.
+        col_names: Option<Vec<String>>,
+    },
 }
 
 /// Internal merge cursor state for Exchange merge-sort.
@@ -511,6 +556,36 @@ impl VectorState {
             super::spec::VectorSpec::VectorSearch { .. } => VectorState::VectorSearch,
             super::spec::VectorSpec::VectorLookup { .. } => VectorState::VectorLookup,
             super::spec::VectorSpec::VectorMatch { .. } => VectorState::VectorMatch,
+        }
+    }
+}
+
+// ── RecursiveFragment state (M7) ─────────────────────────────────────────────
+
+/// Mutable execution state for recursive fragment operators.
+#[derive(Debug)]
+pub enum RecursiveFragmentState {
+    ShortestPath,
+    MultiShortestPath,
+    BFSShortest,
+    AllPaths,
+}
+
+impl RecursiveFragmentState {
+    pub fn from_spec(spec: &super::spec::RecursiveFragmentSpec) -> Self {
+        match spec {
+            super::spec::RecursiveFragmentSpec::ShortestPath { .. } => {
+                RecursiveFragmentState::ShortestPath
+            }
+            super::spec::RecursiveFragmentSpec::MultiShortestPath { .. } => {
+                RecursiveFragmentState::MultiShortestPath
+            }
+            super::spec::RecursiveFragmentSpec::BFSShortest { .. } => {
+                RecursiveFragmentState::BFSShortest
+            }
+            super::spec::RecursiveFragmentSpec::AllPaths { .. } => {
+                RecursiveFragmentState::AllPaths
+            }
         }
     }
 }

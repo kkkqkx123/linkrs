@@ -26,6 +26,7 @@ use super::super::operators::exchange_operator::ExchangeOperator;
 use super::super::operators::fulltext_operator::FulltextOperator;
 use super::super::operators::graph_operator::GraphOperator;
 use super::super::operators::join_operator::JoinOperator;
+use super::super::operators::recursive_fragment_operator::RecursiveFragmentOperator;
 use super::super::operators::set_operator::SetOperator;
 use super::super::operators::sink_operator::SinkOperator;
 use super::super::operators::source_operator::SourceOperator;
@@ -165,6 +166,18 @@ impl PhysicalPlanMaterializer {
                     let op = GraphOperator::from_spec(graph_spec, storage, space_name);
                     StreamingExecutor::Graph(base, Box::new(child), op)
                 }
+                OperatorKindSpec::RecursiveFragment(rf_spec) => {
+                    let child = pop_stack_or_err(&mut stack)?;
+                    let storage = runtime.storage.clone();
+                    let space_name = runtime
+                        .query_id()
+                        .space_name
+                        .clone()
+                        .unwrap_or_default();
+                    let op =
+                        RecursiveFragmentOperator::from_spec(rf_spec, storage, space_name);
+                    StreamingExecutor::RecursiveFragment(base, Box::new(child), op)
+                }
                 OperatorKindSpec::Sink(sink_spec) => {
                     let child = pop_stack_or_err(&mut stack)?;
                     let storage = runtime.storage.clone();
@@ -247,6 +260,7 @@ impl PhysicalPlanMaterializer {
                 StreamingExecutor::Unary(_, child, _)
                 | StreamingExecutor::Blocking(_, child, _)
                 | StreamingExecutor::Graph(_, child, _)
+                | StreamingExecutor::RecursiveFragment(_, child, _)
                 | StreamingExecutor::Sink(_, child, _)
                 | StreamingExecutor::Ddl(_, child, _)
                 | StreamingExecutor::Fulltext(_, child, _)
@@ -258,6 +272,7 @@ impl PhysicalPlanMaterializer {
                         StreamingExecutor::Unary(_, c, _)
                         | StreamingExecutor::Blocking(_, c, _)
                         | StreamingExecutor::Graph(_, c, _)
+                        | StreamingExecutor::RecursiveFragment(_, c, _)
                         | StreamingExecutor::Sink(_, c, _)
                         | StreamingExecutor::Ddl(_, c, _)
                         | StreamingExecutor::Fulltext(_, c, _)
@@ -357,7 +372,10 @@ impl PhysicalPlanMaterializer {
             bindings.vector_coordinator.clone(),
         );
 
-        if bindings.max_workers > 1 {
+        // M6: shared scheduler takes priority.
+        if let Some(ref ss) = bindings.shared_scheduler {
+            runtime.set_shared_scheduler(Some(ss.clone()));
+        } else if bindings.max_workers > 1 {
             let pool = crate::query::executor::streaming::pool::MorselWorkerPool::new(
                 bindings.max_workers,
             );

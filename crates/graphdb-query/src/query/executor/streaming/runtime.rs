@@ -219,8 +219,17 @@ pub struct ExecutionRuntime {
     query_registry: Option<Arc<QueryRegistry>>,
     /// M2: Query ID allocated by the registry.
     registry_query_id: Option<QueryId>,
-    /// Query-level morsel worker pool for dynamic partition execution.
-    /// Created when `max_workers > 1`; `None` means serial fallback.
+    /// M6: Engine-level shared scheduler for dynamic partition execution.
+    /// When set, all queries share the same worker pool instead of creating
+    /// per-query threads.  Falls back to serial if neither this nor the
+    /// per-query `worker_pool` is set.
+    /// Behind a `parking_lot::Mutex` because it's written via `&self` (internal
+    /// mutability pattern used throughout [`ExecutionRuntime`]).
+    shared_scheduler: parking_lot::Mutex<Option<Arc<super::pool::SharedScheduler>>>,
+    /// Query-level morsel worker pool for dynamic partition execution
+    /// (legacy, kept for backward compat during M6 migration).
+    /// Created when `max_workers > 1` and no `shared_scheduler` is set;
+    /// `None` means serial fallback.
     /// Behind a Mutex so the engine can set the pool after construction.
     pub worker_pool: Arc<parking_lot::Mutex<Option<Arc<dyn TaskScheduler>>>>,
     /// Per-partition output channel capacity for parallel exchange/gather.
@@ -275,6 +284,7 @@ impl ExecutionRuntime {
             transaction_scope: None,
             query_registry: None,
             registry_query_id: None,
+            shared_scheduler: parking_lot::Mutex::new(None),
             worker_pool: Arc::new(parking_lot::Mutex::new(None)),
             max_buffered_chunks: AtomicUsize::new(10),
             spill_manager: Arc::new(parking_lot::Mutex::new(None)),
@@ -487,14 +497,49 @@ impl ExecutionRuntime {
         self.resource_owner.lock().release_all();
     }
 
-    /// Set the morsel worker pool for this query. When configured, Gather and
-    /// Exchange operators use the pool's bounded workers for parallel partition
-    /// execution with dynamic morsel-style task assignment.
+    /// Set the morsel worker pool for this query.
     ///
-    /// Uses `&self` (internal mutability) so callers can configure the pool
-    /// through an `Arc<ExecutionRuntime>`.
+    /// When a shared scheduler is available via
+    /// [`set_shared_scheduler`](Self::set_shared_scheduler), this call is
+    /// ignored — the shared scheduler's pool is used instead.  Legacy support:
+    /// creates a per-query pool when no shared scheduler is configured.
     pub fn set_worker_pool(&self, pool: Option<super::pool::MorselWorkerPool>) {
+        if self.shared_scheduler.lock().is_some() {
+            return;
+        }
         *self.worker_pool.lock() = pool.map(|p| Arc::new(p) as Arc<dyn TaskScheduler>);
+    }
+
+    /// Set the engine-level shared scheduler for this query (M6).
+    ///
+    /// When set, all parallel execution uses the shared worker pool instead
+    /// of per-query threads.  The scheduler's `Arc<dyn TaskScheduler>` is
+    /// injected into `worker_pool` so existing consumer code paths
+    /// (Exchange / Gather operators) continue to work unchanged.
+    ///
+    /// Takes priority over any per-query pool that may have been set.
+    pub fn set_shared_scheduler(&self, scheduler: Option<Arc<super::pool::SharedScheduler>>) {
+        *self.shared_scheduler.lock() = scheduler.clone();
+        if let Some(ref ss) = scheduler {
+            ss.apply_to_runtime(self);
+        }
+    }
+
+    /// Raw injection — set the worker pool from an `Arc<dyn TaskScheduler>`.
+    /// Used internally by [`SharedScheduler::apply_to_runtime`].
+    pub(crate) fn set_shared_scheduler_raw(&self, pool: Option<Arc<dyn TaskScheduler>>) {
+        *self.worker_pool.lock() = pool;
+    }
+
+    /// Return the shared scheduler, if set.
+    pub fn get_shared_scheduler(&self) -> Option<Arc<super::pool::SharedScheduler>> {
+        self.shared_scheduler.lock().clone()
+    }
+
+    /// Return the effective worker pool — either from the shared scheduler,
+    /// or from the legacy per-query pool, or `None` for serial fallback.
+    pub fn effective_worker_pool(&self) -> Option<Arc<dyn TaskScheduler>> {
+        self.worker_pool.lock().clone()
     }
 
     /// Set the spill manager for this query execution.

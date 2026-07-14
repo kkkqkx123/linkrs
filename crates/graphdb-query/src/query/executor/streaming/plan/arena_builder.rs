@@ -45,6 +45,9 @@ impl PhysicalPlanBuilder {
         let output = OutputContract {
             output_layout: root_op.output_layout.clone(),
             always_produces_row: false,
+            nullability: Vec::new(),
+            ordering: Vec::new(),
+            streamable: true,
         };
 
         let plan = PhysicalPlan {
@@ -271,6 +274,7 @@ mod tests {
             max_buffered_chunks: 4,
             query_id: 1,
             transaction: TransactionScope::None,
+            shared_scheduler: None,
             #[cfg(feature = "fulltext-search")]
             fulltext_manager: None,
             #[cfg(feature = "qdrant")]

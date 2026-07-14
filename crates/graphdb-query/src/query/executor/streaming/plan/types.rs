@@ -19,8 +19,8 @@ use std::collections::HashMap;
 use std::fmt;
 
 use super::super::operators::spec::{
-    ApplySpec, BlockingSpec, DdlSpec, ExchangeSpec, FulltextSpec, GraphSpec, JoinSpec, SetSpec,
-    SinkSpec, SourceSpec, TxnSpec, UnarySpec, VectorSpec,
+    ApplySpec, BlockingSpec, DdlSpec, ExchangeSpec, FulltextSpec, GraphSpec, JoinSpec,
+    RecursiveFragmentSpec, SetSpec, SinkSpec, SourceSpec, TxnSpec, UnarySpec, VectorSpec,
 };
 use super::properties::PhysicalProperties;
 use super::super::parameters::ParameterSchema;
@@ -73,10 +73,19 @@ impl fmt::Display for FragmentId {
 
 // ── Output contract ─────────────────────────────────────────────────────────
 
+/// Sort ordering for a single column in the result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SortOrder {
+    Ascending,
+    Descending,
+}
+
 /// Describes the result shape that a plan (or fragment) delivers.
 ///
 /// This is the immutable contract stored in the cached plan, not bound to
-/// any particular sink or delivery mechanism.
+/// any particular sink or delivery mechanism.  Extended in M4 with
+/// nullability and ordering metadata so that consumers can inspect the
+/// schema without receiving data.
 #[derive(Debug, Clone)]
 pub struct OutputContract {
     /// The slot layout of the result columns.
@@ -84,6 +93,17 @@ pub struct OutputContract {
     /// Whether at least one row is always produced (e.g., aggregate without
     /// group-by produces one row even from empty input).
     pub always_produces_row: bool,
+    /// Per-column nullability (true = column may contain NULL).
+    /// Length matches `output_layout.len()` when set.
+    pub nullability: Vec<bool>,
+    /// Per-column ordering guarantee (empty = unspecified).
+    /// When non-empty, length matches `output_layout.len()`; columns not
+    /// participating in the ordering are marked `None`.
+    pub ordering: Vec<Option<SortOrder>>,
+    /// Whether the result supports streaming (true) or requires
+    /// materialisation (false, e.g. for blocking aggregators without
+    /// spill).
+    pub streamable: bool,
 }
 
 // ── Plan compatibility (cache validation) ───────────────────────────────────
@@ -218,6 +238,7 @@ pub enum OperatorKindSpec {
     Blocking(BlockingSpec),
     Join(JoinSpec),
     Graph(GraphSpec),
+    RecursiveFragment(RecursiveFragmentSpec),
     Sink(SinkSpec),
     Set(SetSpec),
     Apply(ApplySpec),

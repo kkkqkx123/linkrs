@@ -67,11 +67,12 @@ pub fn build_plan_node(
         | PlanNodeEnum::ExpandAll(_)
         | PlanNodeEnum::Traverse(_)
         | PlanNodeEnum::BiExpand(_)
-        | PlanNodeEnum::BiTraverse(_)
-        | PlanNodeEnum::MultiShortestPath(_)
+        | PlanNodeEnum::BiTraverse(_) => graph::build_graph_node(node, context),
+
+        PlanNodeEnum::MultiShortestPath(_)
         | PlanNodeEnum::BFSShortest(_)
         | PlanNodeEnum::AllPaths(_)
-        | PlanNodeEnum::ShortestPath(_) => graph::build_graph_node(node, context),
+        | PlanNodeEnum::ShortestPath(_) => graph::build_recursive_fragment_node(node, context),
 
         PlanNodeEnum::Union(_)
         | PlanNodeEnum::Minus(_)

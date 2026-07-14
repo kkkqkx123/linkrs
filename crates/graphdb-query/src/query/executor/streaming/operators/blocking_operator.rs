@@ -6,7 +6,7 @@ use crate::core::types::expr::Expression;
 use crate::core::types::operators::AggregateFunction;
 use crate::core::value::NullType;
 use crate::core::Value;
-use crate::query::executor::streaming::spill::{SpilledFile, SpillManager, SpillReader};
+use crate::query::executor::streaming::spill::{SpilledFile, SpilledRun, SpillManager, SpillReader, RunReader};
 use crate::query::executor::base::MemoryTracker;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
@@ -25,10 +25,39 @@ use crate::query::executor::streaming::slot::SlotLayout;
 
 #[derive(Debug)]
 pub struct SortState {
-    pub all_rows: Vec<Vec<Value>>,
-    pub row_iter: Option<std::vec::IntoIter<Vec<Value>>>,
     pub col_names: Vec<String>,
+    /// In-memory buffer for rows being accumulated.
+    pub all_rows: Vec<Vec<Value>>,
+    /// Iterator over the final sorted output (in-memory path, no spill).
+    pub row_iter: Option<std::vec::IntoIter<Vec<Value>>>,
+    /// Legacy spill files (unsorted spill, kept for backward compat).
     pub spill_files: Vec<SpilledFile>,
+    /// Sorted runs on disk for external merge sort.
+    pub runs: Vec<SpilledRun>,
+    /// Whether any run was spilled to disk.
+    pub has_spilled: bool,
+    /// Merge state for k-way merge of sorted runs.
+    pub merge_state: Option<MergeState>,
+}
+
+/// State for the k-way merge of sorted spill runs.
+#[derive(Debug)]
+pub struct MergeState {
+    /// Row buffers for each active run, indexed by run position.
+    pub run_buffers: Vec<RunBuffer>,
+    /// Column names of the output schema.
+    pub col_names: Vec<String>,
+}
+
+/// Buffer for a single run in the merge.
+#[derive(Debug)]
+pub struct RunBuffer {
+    /// Rows read from the run (in order).
+    pub rows: Vec<Vec<Value>>,
+    /// Current index into `rows`.
+    pub index: usize,
+    /// Run reader (reused to fetch next batch).
+    pub reader: RunReader,
 }
 
 #[derive(Debug)]
@@ -149,6 +178,193 @@ fn drain_spill_files(
         }
     }
     Ok(all)
+}
+
+/// Sort the in-memory buffer and write it as a versioned sorted run file.
+///
+/// Returns the number of rows written.
+fn spill_sorted_run(
+    buffer: &mut Vec<Vec<Value>>,
+    col_names: &[String],
+    sort_expressions: &[Expression],
+    sort_directions: &[SortDirection],
+    sm: &SpillManager,
+    tracker: &mut MemoryTracker,
+    runs: &mut Vec<SpilledRun>,
+) -> Result<u64, QueryError> {
+    if buffer.is_empty() {
+        return Ok(0);
+    }
+
+    // Sort the buffer using sort expressions
+    sort_rows(buffer, col_names, sort_expressions, sort_directions);
+
+    // Compute schema fingerprint from col_names
+    let fp = compute_schema_fingerprint(col_names);
+
+    // Check disk quota before writing
+    let estimated_bytes = estimate_run_size(buffer, col_names);
+    sm.disk_quota().try_reserve(estimated_bytes)?;
+
+    let mut writer = sm.create_run_writer(fp)?;
+    writer.write_rows(buffer)?;
+    let run = writer.finalize()?;
+
+    let count = buffer.len() as u64;
+    buffer.clear();
+    tracker.reset();
+    runs.push(run);
+    Ok(count)
+}
+
+/// Sort a buffer of rows in-place using the given sort expressions.
+fn sort_rows(
+    buffer: &mut Vec<Vec<Value>>,
+    col_names: &[String],
+    sort_expressions: &[Expression],
+    sort_directions: &[SortDirection],
+) {
+    if sort_expressions.is_empty() {
+        return;
+    }
+    buffer.sort_by(|a, b| {
+        for (idx, expr) in sort_expressions.iter().enumerate() {
+            let direction = sort_directions
+                .get(idx)
+                .copied()
+                .unwrap_or(SortDirection::Ascending);
+
+            let mut ctx_a = ValueRowContext::from_names(a.clone(), col_names.to_vec());
+            let mut ctx_b = ValueRowContext::from_names(b.clone(), col_names.to_vec());
+
+            let val_a = ExpressionEvaluator::evaluate(expr, &mut ctx_a)
+                .unwrap_or(Value::Null(NullType::Null));
+            let val_b = ExpressionEvaluator::evaluate(expr, &mut ctx_b)
+                .unwrap_or(Value::Null(NullType::Null));
+
+            let cmp = compare_values(&val_a, &val_b);
+
+            let final_cmp = match direction {
+                SortDirection::Ascending => cmp,
+                SortDirection::Descending => cmp.reverse(),
+            };
+
+            if final_cmp != std::cmp::Ordering::Equal {
+                return final_cmp;
+            }
+        }
+        std::cmp::Ordering::Equal
+    });
+}
+
+/// Compute a schema fingerprint from column names.
+fn compute_schema_fingerprint(col_names: &[String]) -> u64 {
+    use std::hash::Hasher;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for name in col_names {
+        hasher.write(name.as_bytes());
+        hasher.write_u8(0);
+    }
+    hasher.finish()
+}
+
+/// Rough estimate of the on-disk size of a sorted run for quota checking.
+fn estimate_run_size(buffer: &[Vec<Value>], _col_names: &[String]) -> u64 {
+    // Rough overhead: 40 bytes header + per-row overhead (8 bytes length + postcard encoding)
+    let per_row_overhead: u64 = 8; // length prefix
+    let data_bytes: u64 = buffer
+        .iter()
+        .map(|r| {
+            r.iter()
+                .map(|v| v.estimated_size() as u64 + 1) // +1 for tag byte
+                .sum::<u64>()
+        })
+        .sum();
+    40 + data_bytes + per_row_overhead * buffer.len() as u64
+}
+
+/// Find the index of the minimum row across all active run buffers during merge.
+/// Returns `None` if all runs are exhausted.
+fn find_min_run(
+    run_buffers: &[RunBuffer],
+    col_names: &[String],
+    sort_expressions: &[Expression],
+    sort_directions: &[SortDirection],
+) -> Option<usize> {
+    let mut best_idx: Option<usize> = None;
+    let mut best_row: Option<&[Value]> = None;
+
+    for (i, buf) in run_buffers.iter().enumerate() {
+        if buf.index < buf.rows.len() {
+            let row = &buf.rows[buf.index];
+            if best_idx.is_none() {
+                best_idx = Some(i);
+                best_row = Some(row);
+            } else if let Some(best) = best_row {
+                let cmp = compare_two_rows_for_merge(
+                    row, best, col_names,
+                    sort_expressions, sort_directions,
+                );
+                if cmp == std::cmp::Ordering::Less {
+                    best_idx = Some(i);
+                    best_row = Some(row);
+                }
+            }
+        }
+    }
+    best_idx
+}
+
+/// Compare two rows using sort expressions (for merge).
+fn compare_two_rows_for_merge(
+    a: &[Value],
+    b: &[Value],
+    col_names: &[String],
+    sort_expressions: &[Expression],
+    sort_directions: &[SortDirection],
+) -> std::cmp::Ordering {
+    for (idx, expr) in sort_expressions.iter().enumerate() {
+        let direction = sort_directions
+            .get(idx)
+            .copied()
+            .unwrap_or(SortDirection::Ascending);
+
+        let mut ctx_a = ValueRowContext::from_names(a.to_vec(), col_names.to_vec());
+        let mut ctx_b = ValueRowContext::from_names(b.to_vec(), col_names.to_vec());
+
+        let val_a =
+            ExpressionEvaluator::evaluate(expr, &mut ctx_a).unwrap_or(Value::Null(NullType::Null));
+        let val_b =
+            ExpressionEvaluator::evaluate(expr, &mut ctx_b).unwrap_or(Value::Null(NullType::Null));
+
+        let cmp = compare_values(&val_a, &val_b);
+
+        let final_cmp = match direction {
+            SortDirection::Ascending => cmp,
+            SortDirection::Descending => cmp.reverse(),
+        };
+
+        if final_cmp != std::cmp::Ordering::Equal {
+            return final_cmp;
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
+/// Refill a run buffer with the next batch of rows.
+fn refill_run_buffer(
+    buf: &mut RunBuffer,
+    batch_size: usize,
+) -> Result<(), QueryError> {
+    buf.rows.clear();
+    buf.index = 0;
+    for _ in 0..batch_size {
+        match buf.reader.read_row()? {
+            Some(row) => buf.rows.push(row),
+            None => break,
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -395,10 +611,13 @@ impl BlockingOperator {
         match self {
             Self::Sort { state, .. } => {
                 *state = Some(SortState {
+                    col_names: vec![],
                     all_rows: vec![],
                     row_iter: None,
-                    col_names: vec![],
                     spill_files: vec![],
+                    runs: vec![],
+                    has_spilled: false,
+                    merge_state: None,
                 });
             }
             Self::Aggregate { state, .. } => {
@@ -500,78 +719,128 @@ impl BlockingOperator {
                 state,
                 ..
             } => {
-                let state = state.as_mut().unwrap();
-                if state.row_iter.is_none() {
+                let st = state.as_mut().unwrap();
+
+                // Phase 1: accumulate input
+                if st.merge_state.is_none() && st.row_iter.is_none() {
                     while let Some(chunk) = input.advance()? {
                         base.ensure_not_cancelled()?;
-                        if state.col_names.is_empty() {
-                            state.col_names = chunk.col_names();
+                        if st.col_names.is_empty() {
+                            st.col_names = chunk.col_names();
                         }
                         for row in chunk.rows {
                             if let Err(e) = memory_tracker.try_reserve_row(&row) {
+                                // Memory budget exceeded — spill as a sorted run
                                 if let Some(sm) = base.spill_manager() {
-                                    spill_buffer(&mut state.all_rows, &sm, &mut state.spill_files, memory_tracker)?;
+                                    spill_sorted_run(
+                                        &mut st.all_rows, &st.col_names,
+                                        sort_expressions, sort_directions,
+                                        &sm, memory_tracker, &mut st.runs,
+                                    )?;
+                                    st.has_spilled = true;
                                     memory_tracker.try_reserve_row(&row)?;
                                 } else {
                                     return Err(e);
                                 }
                             }
-                            state.all_rows.push(row);
+                            st.all_rows.push(row);
                         }
                     }
 
-                    if !state.spill_files.is_empty() {
+                    // Drain legacy spill files if any (backward compat)
+                    if !st.spill_files.is_empty() {
                         if let Some(sm) = base.spill_manager() {
-                            let spilled = drain_spill_files(&mut state.spill_files, &sm)?;
-                            let mut combined = spilled;
-                            combined.append(&mut state.all_rows);
-                            state.all_rows = combined;
+                            let spilled = drain_spill_files(&mut st.spill_files, &sm)?;
+                            st.all_rows.extend(spilled);
                         }
                     }
 
-                    if !sort_expressions.is_empty() {
-                        state.all_rows.sort_by(|a, b| {
-                            for (idx, expr) in sort_expressions.iter().enumerate() {
-                                let direction = sort_directions
-                                    .get(idx)
-                                    .copied()
-                                    .unwrap_or(SortDirection::Ascending);
-
-                                let mut ctx_a =
-                                    ValueRowContext::from_names(a.clone(), state.col_names.clone());
-                                let mut ctx_b =
-                                    ValueRowContext::from_names(b.clone(), state.col_names.clone());
-
-                                let val_a = ExpressionEvaluator::evaluate(expr, &mut ctx_a)
-                                    .unwrap_or(Value::Null(NullType::Null));
-                                let val_b = ExpressionEvaluator::evaluate(expr, &mut ctx_b)
-                                    .unwrap_or(Value::Null(NullType::Null));
-
-                                let cmp = compare_values(&val_a, &val_b);
-
-                                let final_cmp = match direction {
-                                    SortDirection::Ascending => cmp,
-                                    SortDirection::Descending => cmp.reverse(),
-                                };
-
-                                if final_cmp != std::cmp::Ordering::Equal {
-                                    return final_cmp;
-                                }
+                    // If we spilled to disk, write remaining in-memory as final run and start merge
+                    if st.has_spilled {
+                        if !st.all_rows.is_empty() {
+                            if let Some(sm) = base.spill_manager() {
+                                spill_sorted_run(
+                                    &mut st.all_rows, &st.col_names,
+                                    sort_expressions, sort_directions,
+                                    &sm, memory_tracker, &mut st.runs,
+                                )?;
                             }
-                            std::cmp::Ordering::Equal
-                        });
-                    }
+                        }
 
-                    let all_rows_copy = std::mem::take(&mut state.all_rows);
-                    state.row_iter = Some(all_rows_copy.into_iter());
+                        // Initialize merge state: open all runs and refill buffers
+                        let mut run_buffers = Vec::with_capacity(st.runs.len());
+                        for run in &st.runs {
+                            let reader = RunReader::open(run)?;
+                            run_buffers.push(RunBuffer {
+                                rows: Vec::new(),
+                                index: 0,
+                                reader,
+                            });
+                        }
+
+                        // Refill initial batch from each run
+                        for buf in &mut run_buffers {
+                            refill_run_buffer(buf, 1024)?;
+                        }
+
+                        st.merge_state = Some(MergeState {
+                            run_buffers,
+                            col_names: st.col_names.clone(),
+                        });
+                    } else {
+                        // No spill: sort in-memory at once
+                        if !sort_expressions.is_empty() {
+                            sort_rows(&mut st.all_rows, &st.col_names, sort_expressions, sort_directions);
+                        }
+                        let taken = std::mem::take(&mut st.all_rows);
+                        st.row_iter = Some(taken.into_iter());
+                    }
                 }
 
-                if let Some(iter) = &mut state.row_iter {
+                // Phase 2: produce output
+                if let Some(ref mut merge) = st.merge_state {
+                    // Merge path: k-way merge of sorted runs
+                    let batch_size = 1024;
+                    let mut out_rows = Vec::with_capacity(batch_size);
+
+                    while out_rows.len() < batch_size {
+                        base.ensure_not_cancelled()?;
+                        let min_idx = find_min_run(
+                            &merge.run_buffers,
+                            &merge.col_names,
+                            sort_expressions,
+                            sort_directions,
+                        );
+
+                        match min_idx {
+                            None => break, // all runs exhausted
+                            Some(idx) => {
+                                let buf = &mut merge.run_buffers[idx];
+                                let row = buf.rows[buf.index].clone();
+                                out_rows.push(row);
+                                buf.index += 1;
+
+                                // Refill batch when current buffer is consumed
+                                if buf.index >= buf.rows.len() {
+                                    refill_run_buffer(buf, 1024)?;
+                                }
+                            }
+                        }
+                    }
+
+                    if out_rows.is_empty() {
+                        Ok(None)
+                    } else {
+                        let result_layout = Arc::new(SlotLayout::from_names(&merge.col_names));
+                        Ok(Some(DataChunk::new_with_layout(out_rows, result_layout)))
+                    }
+                } else if let Some(ref mut iter) = st.row_iter {
+                    // In-memory path
                     let chunk_rows: Vec<Vec<Value>> = iter.by_ref().take(1024).collect();
                     if chunk_rows.is_empty() {
                         Ok(None)
                     } else {
-                        let result_layout = Arc::new(SlotLayout::from_names(&state.col_names));
+                        let result_layout = Arc::new(SlotLayout::from_names(&st.col_names));
                         Ok(Some(DataChunk::new_with_layout(chunk_rows, result_layout)))
                     }
                 } else {
@@ -1541,6 +1810,15 @@ impl BlockingOperator {
                 ..
             } => {
                 if base.lifecycle.can_close() {
+                    // Clean up spill files
+                    if let Some(ref s) = state {
+                        for run in &s.runs {
+                            let _ = std::fs::remove_file(&run.path);
+                        }
+                        for sf in &s.spill_files {
+                            let _ = std::fs::remove_file(&sf.path);
+                        }
+                    }
                     memory_tracker.reset();
                     *state = None;
                     input.close()?;
@@ -1697,8 +1975,27 @@ impl BlockingOperator {
     /// Spill operator state to disk using the given manager.
     pub fn spill_with_manager(&mut self, sm: &SpillManager) -> Result<(), QueryError> {
         match self {
-            Self::Sort { state, memory_tracker, .. } => {
+            Self::Sort {
+                state,
+                memory_tracker,
+                sort_expressions,
+                sort_directions,
+                ..
+            } => {
                 if let Some(ref mut s) = state {
+                    if !s.all_rows.is_empty() {
+                        spill_sorted_run(
+                            &mut s.all_rows,
+                            &s.col_names,
+                            sort_expressions,
+                            sort_directions,
+                            sm,
+                            memory_tracker,
+                            &mut s.runs,
+                        )?;
+                        s.has_spilled = true;
+                    }
+                    // Also spill legacy files if any
                     spill_buffer(&mut s.all_rows, sm, &mut s.spill_files, memory_tracker)?;
                 }
                 Ok(())
@@ -1811,7 +2108,13 @@ impl BlockingOperator {
             };
         }
         match self {
-            Self::Sort { state, .. } => sum_spill!(state),
+            Self::Sort { state, .. } => {
+                let base = sum_spill!(state);
+                let run_bytes: u64 = state.as_ref().map_or(0, |s| {
+                    s.runs.iter().map(|r| r.byte_size).sum::<u64>()
+                });
+                base + run_bytes
+            }
             Self::Aggregate { state, .. } => sum_spill!(state),
             Self::GroupBy { state, .. } => sum_spill!(state),
             Self::WindowFunction { state, .. } => sum_spill!(state),
@@ -2041,5 +2344,292 @@ fn value_to_partial_accumulator(
             }
         }
         _ => None,
+    }
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::value::NullType;
+    use crate::query::executor::base::MemoryBudget;
+    use crate::query::executor::streaming::spill::{RunReader, SpillConfig, SpillManager};
+
+    fn sample_rows(n: usize) -> Vec<Vec<Value>> {
+        (0..n)
+            .map(|i| {
+                vec![
+                    Value::BigInt(i as i64),
+                    Value::String(format!("val_{}", i)),
+                    Value::Null(NullType::Null),
+                    Value::Bool(i % 2 == 0),
+                ]
+            })
+            .collect()
+    }
+
+    fn integer_rows(values: &[i64]) -> Vec<Vec<Value>> {
+        values.iter().map(|&v| vec![Value::BigInt(v)]).collect()
+    }
+
+    // ── sort_rows tests ──────────────────────────────────────────────────
+
+    fn make_sort_expr(col_name: &str) -> Expression {
+        Expression::variable(col_name.to_string())
+    }
+
+    #[test]
+    fn test_sort_rows_ascending() {
+        let mut rows = integer_rows(&[3, 1, 4, 1, 5, 9, 2, 6]);
+        let col_names = vec!["val".to_string()];
+        let exprs = vec![make_sort_expr("val")];
+        let dirs = vec![SortDirection::Ascending];
+
+        sort_rows(&mut rows, &col_names, &exprs, &dirs);
+
+        let vals: Vec<i64> = rows.iter().map(|r| match &r[0] {
+            Value::BigInt(n) => *n,
+            _ => panic!("expected BigInt"),
+        }).collect();
+        assert_eq!(vals, vec![1, 1, 2, 3, 4, 5, 6, 9]);
+    }
+
+    #[test]
+    fn test_sort_rows_descending() {
+        let mut rows = integer_rows(&[3, 1, 4, 1, 5, 9, 2, 6]);
+        let col_names = vec!["val".to_string()];
+        let exprs = vec![make_sort_expr("val")];
+        let dirs = vec![SortDirection::Descending];
+
+        sort_rows(&mut rows, &col_names, &exprs, &dirs);
+
+        let vals: Vec<i64> = rows.iter().map(|r| match &r[0] {
+            Value::BigInt(n) => *n,
+            _ => panic!("expected BigInt"),
+        }).collect();
+        assert_eq!(vals, vec![9, 6, 5, 4, 3, 2, 1, 1]);
+    }
+
+    #[test]
+    fn test_sort_rows_empty() {
+        let mut rows: Vec<Vec<Value>> = vec![];
+        let col_names = vec!["val".to_string()];
+        sort_rows(&mut rows, &col_names, &[], &[]);
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn test_sort_rows_single_row() {
+        let mut rows = integer_rows(&[42]);
+        let col_names = vec!["val".to_string()];
+        let exprs = vec![make_sort_expr("val")];
+        let dirs = vec![SortDirection::Ascending];
+        sort_rows(&mut rows, &col_names, &exprs, &dirs);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][0], Value::BigInt(42));
+    }
+
+    #[test]
+    fn test_sort_rows_null_ordering() {
+        // NULL comes last in ascending order (cf compare_values)
+        let mut rows = vec![
+            vec![Value::BigInt(3)],
+            vec![Value::Null(NullType::Null)],
+            vec![Value::BigInt(1)],
+            vec![Value::BigInt(2)],
+        ];
+        let col_names = vec!["val".to_string()];
+        let exprs = vec![make_sort_expr("val")];
+        let dirs = vec![SortDirection::Ascending];
+
+        sort_rows(&mut rows, &col_names, &exprs, &dirs);
+
+        assert_eq!(rows[0][0], Value::BigInt(1));
+        assert_eq!(rows[1][0], Value::BigInt(2));
+        assert_eq!(rows[2][0], Value::BigInt(3));
+        assert_eq!(rows[3][0], Value::Null(NullType::Null));
+    }
+
+    // ── spill_sorted_run tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_spill_sorted_run_basic() {
+        let manager = SpillManager::new(SpillConfig::default(), 301)
+            .expect("spill manager");
+        let mut buffer = integer_rows(&[3, 1, 4, 1, 5]);
+        let col_names = vec!["val".to_string()];
+        let exprs = vec![make_sort_expr("val")];
+        let dirs = vec![SortDirection::Ascending];
+        let budget = MemoryBudget::new(1024 * 1024);
+        let mut tracker = MemoryTracker::new(budget);
+        let mut runs: Vec<SpilledRun> = vec![];
+
+        let count = spill_sorted_run(
+            &mut buffer, &col_names, &exprs, &dirs,
+            &manager, &mut tracker, &mut runs,
+        ).expect("spill");
+
+        assert_eq!(count, 5);
+        assert_eq!(runs.len(), 1);
+        assert!(buffer.is_empty());
+
+        // Verify the run is sorted when read back
+        let mut reader = RunReader::open(&runs[0]).expect("open run");
+        let read_rows = reader.read_all().expect("read all");
+        let vals: Vec<i64> = read_rows.iter().map(|r| match &r[0] {
+            Value::BigInt(n) => *n,
+            _ => panic!("expected BigInt"),
+        }).collect();
+        assert_eq!(vals, vec![1, 1, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_spill_sorted_run_empty_buffer() {
+        let manager = SpillManager::new(SpillConfig::default(), 302)
+            .expect("spill manager");
+        let mut buffer: Vec<Vec<Value>> = vec![];
+        let col_names = vec!["val".to_string()];
+        let budget = MemoryBudget::new(1024 * 1024);
+        let mut tracker = MemoryTracker::new(budget);
+        let mut runs: Vec<SpilledRun> = vec![];
+
+        let count = spill_sorted_run(
+            &mut buffer, &col_names, &[], &[],
+            &manager, &mut tracker, &mut runs,
+        ).expect("spill");
+
+        assert_eq!(count, 0);
+        assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn test_multi_run_merge_correctness() {
+        // Simulate multiple sorted runs being merged
+        let manager = SpillManager::new(SpillConfig::default(), 303)
+            .expect("spill manager");
+        let col_names = vec!["val".to_string()];
+        let exprs = vec![make_sort_expr("val")];
+        let dirs = vec![SortDirection::Ascending];
+        let budget = MemoryBudget::new(10); // very small
+        let mut tracker = MemoryTracker::new(budget);
+
+        // Write three sorted runs with interleaved ranges
+        let mut runs: Vec<SpilledRun> = vec![];
+
+        // Run 1: [1, 4, 7]
+        let mut b1 = integer_rows(&[1, 4, 7]);
+        spill_sorted_run(&mut b1, &col_names, &exprs, &dirs, &manager, &mut tracker, &mut runs).unwrap();
+
+        // Run 2: [2, 5, 8]
+        let mut b2 = integer_rows(&[2, 5, 8]);
+        spill_sorted_run(&mut b2, &col_names, &exprs, &dirs, &manager, &mut tracker, &mut runs).unwrap();
+
+        // Run 3: [3, 6, 9]
+        let mut b3 = integer_rows(&[3, 6, 9]);
+        spill_sorted_run(&mut b3, &col_names, &exprs, &dirs, &manager, &mut tracker, &mut runs).unwrap();
+
+        // Now merge all runs
+        let mut run_buffers: Vec<RunBuffer> = Vec::with_capacity(runs.len());
+        for run in &runs {
+            let reader = RunReader::open(run).expect("open run");
+            run_buffers.push(RunBuffer { rows: vec![], index: 0, reader });
+        }
+        for buf in &mut run_buffers {
+            refill_run_buffer(buf, 1024).unwrap();
+        }
+
+        let mut merged: Vec<i64> = Vec::new();
+        loop {
+            let min_idx = find_min_run(&run_buffers, &col_names, &exprs, &dirs);
+            match min_idx {
+                None => break,
+                Some(idx) => {
+                    let buf = &mut run_buffers[idx];
+                    if let Value::BigInt(n) = buf.rows[buf.index][0] {
+                        merged.push(n);
+                    }
+                    buf.index += 1;
+                    if buf.index >= buf.rows.len() {
+                        refill_run_buffer(buf, 1024).unwrap();
+                    }
+                }
+            }
+        }
+
+        assert_eq!(merged, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    }
+
+    #[test]
+    fn test_sort_rows_multi_column() {
+        // Multi-column sort: first by even/odd parity, then by value
+        let mut rows = vec![
+            vec![Value::BigInt(3), Value::BigInt(30)],
+            vec![Value::BigInt(1), Value::BigInt(10)],
+            vec![Value::BigInt(2), Value::BigInt(20)],
+            vec![Value::BigInt(4), Value::BigInt(40)],
+        ];
+        // Column "odd" = val % 2, then sort by val
+        // Expression: col[0] % 2, then col[0]
+        let expr_first = Expression::variable("a");
+        let expr_second = Expression::variable("a");
+        let col_names = vec!["a".to_string(), "b".to_string()];
+        let exprs = vec![expr_first, expr_second];
+        let dirs = vec![SortDirection::Ascending, SortDirection::Ascending];
+
+        sort_rows(&mut rows, &col_names, &exprs, &dirs);
+
+        // All even values first, then odd values, sorted within each group
+        let vals: Vec<i64> = rows.iter().map(|r| match r[0] {
+            Value::BigInt(n) => n,
+            _ => panic!("expected BigInt"),
+        }).collect();
+        // Note: sort by row[0] then by row[0] again (same column), so this is just
+        // sorting by row[0] ascending
+        assert_eq!(vals, vec![1, 2, 3, 4]);
+    }
+
+    // ── compare_two_rows_for_merge tests ─────────────────────────────────
+
+    #[test]
+    fn test_compare_rows_ascending() {
+        let col_names = vec!["val".to_string()];
+        let exprs = vec![make_sort_expr("val")];
+        let dirs = vec![SortDirection::Ascending];
+
+        let a = vec![Value::BigInt(1)];
+        let b = vec![Value::BigInt(2)];
+
+        assert_eq!(
+            compare_two_rows_for_merge(&a, &b, &col_names, &exprs, &dirs),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            compare_two_rows_for_merge(&b, &a, &col_names, &exprs, &dirs),
+            std::cmp::Ordering::Greater
+        );
+        assert_eq!(
+            compare_two_rows_for_merge(&a, &a, &col_names, &exprs, &dirs),
+            std::cmp::Ordering::Equal
+        );
+    }
+
+    #[test]
+    fn test_compare_rows_descending() {
+        let col_names = vec!["val".to_string()];
+        let exprs = vec![make_sort_expr("val")];
+        let dirs = vec![SortDirection::Descending];
+
+        let a = vec![Value::BigInt(1)];
+        let b = vec![Value::BigInt(2)];
+
+        assert_eq!(
+            compare_two_rows_for_merge(&a, &b, &col_names, &exprs, &dirs),
+            std::cmp::Ordering::Greater
+        );
+        assert_eq!(
+            compare_two_rows_for_merge(&b, &a, &col_names, &exprs, &dirs),
+            std::cmp::Ordering::Less
+        );
     }
 }

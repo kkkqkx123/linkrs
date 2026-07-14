@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use super::super::runtime::{ExecutionRuntime, OperatorProfileKey};
 use super::super::spill::SpillManager;
-use super::super::state::{GlobalState, GlobalStateKey, StateArenaSet};
+use super::super::state::{GlobalState, GlobalStateKey, LocalState, LocalStateKey, StateArenaSet, TaskId};
 use crate::query::executor::streaming::plan::types::PhysicalOperatorId;
 
 /// Explicit operator lifecycle state machine.
@@ -141,6 +141,41 @@ impl OperatorBase {
         let Some(rt) = self.runtime.as_ref() else { return };
         let key = self.state_key();
         rt.state_arena.lock().global.insert(key, state);
+    }
+
+    // ── Local state access (per-task) ──
+
+    /// Return the [`LocalStateKey`] for this operator + task.
+    pub fn local_state_key(&self, task_id: TaskId) -> LocalStateKey {
+        LocalStateKey(PhysicalOperatorId(self.state_index), task_id)
+    }
+
+    /// Insert a [`LocalState`] into the arena for a given task.
+    pub fn insert_local_state(&mut self, task_id: TaskId, state: LocalState) {
+        let Some(rt) = self.runtime.as_ref() else { return };
+        let key = self.local_state_key(task_id);
+        rt.state_arena.lock().local.insert(key, state);
+    }
+
+    /// Take a [`LocalState`] out of the arena (for cleanup).
+    pub fn take_local_state(&mut self, task_id: TaskId) -> Option<LocalState> {
+        let rt = self.runtime.as_ref()?;
+        let key = self.local_state_key(task_id);
+        rt.state_arena.lock().local.remove(&key)
+    }
+
+    /// Access local state for a given task via a closure.
+    ///
+    /// The closure receives `Option<&mut LocalState>` scoped within the
+    /// state arena lock.  Returns the closure's result.
+    pub fn with_local_state<T, F>(&self, task_id: TaskId, f: F) -> Option<T>
+    where
+        F: FnOnce(&mut LocalState) -> T,
+    {
+        let rt = self.runtime.as_ref()?;
+        let key = self.local_state_key(task_id);
+        let mut arena = rt.state_arena.lock();
+        arena.local.get_mut(&key).map(f)
     }
 
     pub fn with_chunk_size(mut self, chunk_size: usize) -> Self {

@@ -70,6 +70,7 @@ pub fn is_parallel_safe(tree: &StreamingExecutor) -> bool {
         // are excluded as a conservative default — they may hold non-Send
         // FFI handles or driver connections.
         StreamingExecutor::Graph(..)
+        | StreamingExecutor::RecursiveFragment(..)
         | StreamingExecutor::Sink(..)
         | StreamingExecutor::Ddl(..)
         | StreamingExecutor::Fulltext(..)

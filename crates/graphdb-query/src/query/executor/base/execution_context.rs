@@ -7,6 +7,7 @@ use super::MemoryBudget;
 use crate::core::Value;
 use crate::query::executor::expression::functions::global_registry_ref;
 use crate::query::executor::expression::functions::OwnedFunctionRef;
+use crate::query::executor::streaming::pool::SharedScheduler;
 use crate::query::validator::context::ExpressionAnalysisContext;
 #[cfg(feature = "fulltext-search")]
 use crate::search::manager::FulltextIndexManager;
@@ -40,6 +41,8 @@ pub struct ExecutionContext {
     pub chunk_size: usize,
     /// Maximum buffered chunks before back-pressure.
     pub max_buffered_chunks: usize,
+    /// M6: Engine-level shared scheduler.
+    pub shared_scheduler: Option<Arc<SharedScheduler>>,
 }
 
 impl ExecutionContext {
@@ -65,6 +68,7 @@ impl ExecutionContext {
             query_id: 0,
             chunk_size: Self::DEFAULT_CHUNK_SIZE,
             max_buffered_chunks: Self::DEFAULT_MAX_BUFFERED_CHUNKS,
+            shared_scheduler: None,
         }
     }
 
@@ -90,6 +94,7 @@ impl ExecutionContext {
             query_id: 0,
             chunk_size: Self::DEFAULT_CHUNK_SIZE,
             max_buffered_chunks: Self::DEFAULT_MAX_BUFFERED_CHUNKS,
+            shared_scheduler: None,
         }
     }
 
@@ -114,6 +119,7 @@ impl ExecutionContext {
             query_id: 0,
             chunk_size: Self::DEFAULT_CHUNK_SIZE,
             max_buffered_chunks: Self::DEFAULT_MAX_BUFFERED_CHUNKS,
+            shared_scheduler: None,
         }
     }
 
@@ -148,6 +154,7 @@ impl ExecutionContext {
             query_id: 0,
             chunk_size: Self::DEFAULT_CHUNK_SIZE,
             max_buffered_chunks: Self::DEFAULT_MAX_BUFFERED_CHUNKS,
+            shared_scheduler: None,
         }
     }
 
@@ -217,6 +224,7 @@ impl Default for ExecutionContext {
             query_id: 0,
             chunk_size: Self::DEFAULT_CHUNK_SIZE,
             max_buffered_chunks: Self::DEFAULT_MAX_BUFFERED_CHUNKS,
+            shared_scheduler: None,
         }
     }
 }

@@ -1,7 +1,7 @@
 use crate::core::types::expr::Expression;
 use crate::query::executor::base::ExecutionContext;
 use crate::query::executor::build_error::PlanBuildError;
-use crate::query::executor::streaming::operators::spec::{GraphSpec, JoinSpec};
+use crate::query::executor::streaming::operators::spec::{GraphSpec, JoinSpec, RecursiveFragmentSpec};
 use crate::query::executor::streaming::plan::node::PhysicalNode;
 use crate::query::executor::streaming::plan::properties::PhysicalProperties;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
@@ -242,18 +242,162 @@ pub fn build_graph_node(
             ))
         }
 
-        PlanNodeEnum::MultiShortestPath(_node) => {
-            Err(PlanBuildError::unsupported(
-                "MultiShortestPath",
+        _ => Err(super::internal_routing_error(node, "graph")),
+    }
+}
+
+/// Build a `RecursiveFragment` physical node for recursive graph algorithms
+/// (ShortestPath, BFSShortest, AllPaths, MultiShortestPath).
+///
+/// M7: These were previously blocked as unsupported or handled inside the
+/// monolithic `GraphOperator`.  The new `RecursiveFragmentSpec` provides a
+/// well-typed spec and a dedicated operator that reuses the same underlying
+/// BFS / DFS algorithms via `graph_operator` helpers.
+pub fn build_recursive_fragment_node(
+    node: &PlanNodeEnum,
+    context: &ExecutionContext,
+) -> Result<PhysicalNode, PlanBuildError> {
+    match node {
+        PlanNodeEnum::ShortestPath(sp_node) => {
+            if sp_node.weight_expression().is_some() || sp_node.heuristic_expression().is_some() {
+                return Err(PlanBuildError::capability(
+                    "weighted_shortest_path",
+                    "Weighted shortest path is not supported by the streaming executor",
+                ));
+            }
+            let input_phys = build_binary_path_input(
                 node.id(),
-                "MultiShortestPath execution is not yet implemented: the planner node \
-                 now carries edge_types, direction, and target_vertex_ids, but \
-                 the executor spec is not wired. Full support requires weighted path \
-                 and RecursiveFragmentSpec integration.",
+                sp_node.left_input(),
+                sp_node.right_input(),
+                context,
+            )?;
+            let edge_types = sp_node.edge_types().to_vec();
+            Ok(PhysicalNode::RecursiveFragment(
+                node.id(),
+                Box::new(input_phys),
+                RecursiveFragmentSpec::ShortestPath {
+                    edge_types: edge_types.clone(),
+                    direction: if sp_node.no_reverse() {
+                        crate::core::EdgeDirection::Out
+                    } else {
+                        crate::core::EdgeDirection::Both
+                    },
+                    max_depth: sp_node.max_step(),
+                    start_vertices: sp_node.start_vertex_ids().to_vec(),
+                    target_vertices: sp_node.end_vertex_ids().to_vec(),
+                },
+                PhysicalProperties::single_streaming(),
             ))
         }
 
-        _ => Err(super::internal_routing_error(node, "graph")),
+        PlanNodeEnum::BFSShortest(bfs_node) => {
+            let input_phys = build_binary_path_input(
+                node.id(),
+                bfs_node.left_input(),
+                bfs_node.right_input(),
+                context,
+            )?;
+            let edge_types = bfs_node.edge_types().to_vec();
+            Ok(PhysicalNode::RecursiveFragment(
+                node.id(),
+                Box::new(input_phys),
+                RecursiveFragmentSpec::BFSShortest {
+                    edge_types,
+                    direction: if bfs_node.reverse() {
+                        crate::core::EdgeDirection::In
+                    } else {
+                        crate::core::EdgeDirection::Both
+                    },
+                    max_depth: bfs_node.steps(),
+                    allow_cycles: bfs_node.with_cycle(),
+                    allow_loops: bfs_node.with_loop(),
+                },
+                PhysicalProperties::single_streaming(),
+            ))
+        }
+
+        PlanNodeEnum::AllPaths(ap_node) => {
+            if ap_node.max_hop() < ap_node.min_hop() {
+                return Err(PlanBuildError::missing_value(
+                    "AllPaths",
+                    node.id(),
+                    "max_hop",
+                    "AllPaths max hop must not be smaller than min hop",
+                ));
+            }
+            let offset = usize::try_from(ap_node.offset()).map_err(|_| {
+                PlanBuildError::missing_value(
+                    "AllPaths", node.id(), "offset", "AllPaths offset must be non-negative",
+                )
+            })?;
+            let limit = if ap_node.limit() < 0 {
+                None
+            } else {
+                Some(usize::try_from(ap_node.limit()).map_err(|_| {
+                    PlanBuildError::missing_value(
+                        "AllPaths", node.id(), "limit", "AllPaths limit does not fit in usize",
+                    )
+                })?)
+            };
+            let input_phys = build_binary_path_input(
+                node.id(),
+                ap_node.left_input(),
+                ap_node.right_input(),
+                context,
+            )?;
+            let edge_types = ap_node.edge_types().to_vec();
+            Ok(PhysicalNode::RecursiveFragment(
+                node.id(),
+                Box::new(input_phys),
+                RecursiveFragmentSpec::AllPaths {
+                    edge_types,
+                    direction: crate::core::EdgeDirection::Both,
+                    min_depth: ap_node.min_hop(),
+                    max_depth: ap_node.max_hop(),
+                    acyclic: ap_node.is_acyclic(),
+                    limit,
+                    offset,
+                    start_vertices: ap_node
+                        .start_vertex_ids()
+                        .iter()
+                        .copied()
+                        .map(crate::core::Value::from)
+                        .collect(),
+                    target_vertices: ap_node
+                        .end_vertex_ids()
+                        .iter()
+                        .copied()
+                        .map(crate::core::Value::from)
+                        .collect(),
+                },
+                PhysicalProperties::single_streaming(),
+            ))
+        }
+
+        PlanNodeEnum::MultiShortestPath(ms_node) => {
+            let input_phys = build_binary_path_input(
+                node.id(),
+                ms_node.left_input(),
+                ms_node.right_input(),
+                context,
+            )?;
+            let edge_types = ms_node.edge_types().to_vec();
+            Ok(PhysicalNode::RecursiveFragment(
+                node.id(),
+                Box::new(input_phys),
+                RecursiveFragmentSpec::MultiShortestPath {
+                    edge_types,
+                    direction: ms_node.direction(),
+                    max_depth: ms_node.steps(),
+                    left_vertex_column: ms_node.left_vid_var().to_string(),
+                    right_vertex_column: ms_node.right_vid_var().to_string(),
+                    single_shortest: ms_node.single_shortest(),
+                },
+                PhysicalProperties::single_streaming(),
+            ))
+        }
+
+        _ => Err(super::internal_routing_error(node, "recursive_fragment")),
     }
 }
 

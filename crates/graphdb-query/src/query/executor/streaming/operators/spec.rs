@@ -416,9 +416,9 @@ pub enum SinkSpec {
 
 /// Immutable config for exchange (gather / merge / repartition) operators.
 ///
-/// Phase 4: explicit Exchange node replaces ad-hoc Gather coordination.
-/// Workers in the query-level `MorselWorkerPool` execute partition tasks
-/// dynamically via a shared morsel queue.
+/// M6: extended with RepartitionHash, Broadcast, Barrier, Materialize.
+/// Workers in the shared engine-level scheduler execute partition tasks
+/// dynamically via a morsel-style shared atomic counter.
 #[derive(Debug, Clone)]
 pub enum ExchangeSpec {
     /// Concatenate N partition outputs in partition order.
@@ -428,6 +428,47 @@ pub enum ExchangeSpec {
         sort_expressions: Vec<Expression>,
         sort_directions: Vec<SortDirection>,
         limit: Option<usize>,
+    },
+    /// Hash-based repartition: partition rows by hash of keys into N buckets.
+    ///
+    /// Each child produces output for one partition; the operator collects,
+    /// rehashes, and routes rows to the correct output bucket.  Used by hash
+    /// join and hash aggregate to align partition boundaries.
+    RepartitionHash {
+        /// Number of output buckets / partitions.
+        num_partitions: usize,
+        /// Expressions whose hash determines the output partition.
+        hash_expressions: Vec<Expression>,
+        /// Column names / slot layout of the input rows.
+        input_layout: Option<SlotLayout>,
+        /// Column names / slot layout of the output rows.
+        output_layout: Option<SlotLayout>,
+    },
+    /// Broadcast: replicate every input row to all consumers.
+    ///
+    /// Used to distribute a small build-side to all probe-side partitions.
+    /// The input chunk is shallow-copied (Arc-like) or deep-cloned for each
+    /// consumer depending on size.
+    Broadcast {
+        /// Number of output channels.
+        num_consumers: usize,
+    },
+    /// Barrier: wait for all input fragments to complete before producing
+    /// any output row.
+    ///
+    /// Used to sequence blocking stages (e.g. wait for build side before
+    /// probe).  No data rearrangement; the first input's layout passes
+    /// through.
+    Barrier,
+    /// Materialize: force an upstream fragment to fully materialise before
+    /// the consumer fragment starts.
+    ///
+    /// Used for explicit spooling / break-fanout patterns and to isolate
+    /// lifecycle across fragment boundaries.  Behaves like Concatenate but
+    /// signals a pipeline break to the scheduler and validator.
+    Materialize {
+        /// Expected number of child inputs (all must be consumed).
+        child_count: usize,
     },
 }
 
@@ -597,4 +638,55 @@ pub enum TxnSpec {
     BeginTransaction,
     Commit,
     Rollback,
+}
+
+// ── RecursiveFragment spec (M7) ──────────────────────────────────────────────
+
+/// Immutable config for recursive fragment operators.
+///
+/// Variable-length path traversal, BFS, shortest-path, and multi-round
+/// graph algorithms use this explicit recursive fragment spec.
+///
+/// Frontier, visited-set, path-predecessor, and result-queue allocations
+/// are all accounted against the query memory pool.  Each round and
+/// batch-expansion checks the cancellation token.
+#[derive(Debug, Clone)]
+pub enum RecursiveFragmentSpec {
+    /// Bidirectional BFS shortest path between start and target vertices.
+    ShortestPath {
+        edge_types: Vec<String>,
+        direction: EdgeDirection,
+        max_depth: usize,
+        start_vertices: Vec<Value>,
+        target_vertices: Vec<Value>,
+    },
+    /// Multi-source multi-target shortest path via bidirectional BFS.
+    MultiShortestPath {
+        edge_types: Vec<String>,
+        direction: EdgeDirection,
+        max_depth: usize,
+        left_vertex_column: String,
+        right_vertex_column: String,
+        single_shortest: bool,
+    },
+    /// BFS traversal with configurable depth and cycle policies.
+    BFSShortest {
+        edge_types: Vec<String>,
+        direction: EdgeDirection,
+        max_depth: usize,
+        allow_cycles: bool,
+        allow_loops: bool,
+    },
+    /// Enumerate all paths between start and target vertices.
+    AllPaths {
+        edge_types: Vec<String>,
+        direction: EdgeDirection,
+        min_depth: usize,
+        max_depth: usize,
+        acyclic: bool,
+        limit: Option<usize>,
+        offset: usize,
+        start_vertices: Vec<Value>,
+        target_vertices: Vec<Value>,
+    },
 }

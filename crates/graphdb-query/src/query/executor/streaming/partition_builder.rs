@@ -62,6 +62,7 @@ fn set_partition_on_source(
         StreamingExecutor::Unary(_, input, _)
         | StreamingExecutor::Blocking(_, input, _)
         | StreamingExecutor::Graph(_, input, _)
+        | StreamingExecutor::RecursiveFragment(_, input, _)
         | StreamingExecutor::Sink(_, input, _)
         | StreamingExecutor::Ddl(_, input, _)
         | StreamingExecutor::Fulltext(_, input, _)

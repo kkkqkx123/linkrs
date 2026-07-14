@@ -21,7 +21,8 @@ use std::sync::Arc;
 use super::super::executor::StreamingExecutor;
 use super::super::operators::base::OperatorBase;
 use super::super::operators::spec::{
-    ApplySpec, DdlSpec, FulltextSpec, GraphSpec, SetSpec, SinkSpec, TxnSpec, VectorSpec,
+    ApplySpec, DdlSpec, FulltextSpec, GraphSpec, RecursiveFragmentSpec, SetSpec, SinkSpec,
+    TxnSpec, VectorSpec,
 };
 use super::super::operators::spec::{BlockingSpec, ExchangeSpec, JoinSpec, SourceSpec, UnarySpec};
 use super::super::operators::apply_operator::ApplyOperator;
@@ -31,6 +32,7 @@ use super::super::operators::exchange_operator::ExchangeOperator;
 use super::super::operators::fulltext_operator::FulltextOperator;
 use super::super::operators::graph_operator::GraphOperator;
 use super::super::operators::join_operator::JoinOperator;
+use super::super::operators::recursive_fragment_operator::RecursiveFragmentOperator;
 use super::super::operators::set_operator::SetOperator;
 use super::super::operators::sink_operator::SinkOperator;
 use super::super::operators::source_operator::SourceOperator;
@@ -79,6 +81,13 @@ pub enum PhysicalNode {
         PhysicalNodeId,
         Box<PhysicalNode>,
         GraphSpec,
+        PhysicalProperties,
+    ),
+    /// RecursiveFragment: variable-length path, BFS, shortest-path, all-paths.
+    RecursiveFragment(
+        PhysicalNodeId,
+        Box<PhysicalNode>,
+        RecursiveFragmentSpec,
         PhysicalProperties,
     ),
     Sink(
@@ -192,6 +201,19 @@ impl PhysicalNode {
                     GraphOperator::from_spec(spec, storage, space_name),
                 )
             }
+            Self::RecursiveFragment(node_id, child, spec, _) => {
+                let child_exec = child.materialize(runtime.clone(), memory_budget, chunk_size);
+                let storage = runtime.as_ref().and_then(|rt| rt.storage.clone());
+                let space_name = runtime
+                    .as_ref()
+                    .and_then(|rt| rt.query_id().space_name)
+                    .unwrap_or_default();
+                StreamingExecutor::RecursiveFragment(
+                    OperatorBase::new(*node_id),
+                    Box::new(child_exec),
+                    RecursiveFragmentOperator::from_spec(spec, storage, space_name),
+                )
+            }
             Self::Sink(node_id, child, spec, _) => {
                 let child_exec = child.materialize(runtime.clone(), memory_budget, chunk_size);
                 let storage = runtime.as_ref().and_then(|rt| rt.storage.clone());
@@ -300,6 +322,7 @@ impl PhysicalNode {
             Self::Unary(_, child, _, _)
             | Self::Blocking(_, child, _, _)
             | Self::Graph(_, child, _, _)
+            | Self::RecursiveFragment(_, child, _, _)
             | Self::Sink(_, child, _, _)
             | Self::Ddl(_, child, _, _)
             | Self::Fulltext(_, child, _, _)

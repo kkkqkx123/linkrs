@@ -69,12 +69,14 @@ impl StreamingExecutionEngine {
     /// Set the maximum number of worker threads for intra-query parallelism.
     ///
     /// Values below one are normalised to the serial fallback.
-    /// When a runtime is already attached, this creates a `MorselWorkerPool`
-    /// and attaches it to the runtime so that Gather/Exchange operators can
-    /// use it during execution.
+    /// When a runtime is already attached and no shared scheduler is
+    /// configured, this creates a per-query `MorselWorkerPool`.
     pub fn set_max_workers(&mut self, max_workers: usize) {
         self.max_workers = max_workers.max(1);
         if let Some(rt) = &self.runtime {
+            if rt.get_shared_scheduler().is_some() {
+                return;
+            }
             if self.max_workers > 1 {
                 let pool = MorselWorkerPool::new(self.max_workers);
                 rt.set_worker_pool(Some(pool));
@@ -335,6 +337,7 @@ impl StreamingExecutionEngine {
             StreamingExecutor::Unary(_, input, _)
             | StreamingExecutor::Blocking(_, input, _)
             | StreamingExecutor::Graph(_, input, _)
+            | StreamingExecutor::RecursiveFragment(_, input, _)
             | StreamingExecutor::Sink(_, input, _)
             | StreamingExecutor::Ddl(_, input, _)
             | StreamingExecutor::Fulltext(_, input, _)
@@ -377,7 +380,8 @@ impl StreamingExecutionEngine {
 
     /// Attach an execution runtime (for cancellation, profiling, memory tracking).
     /// Also propagates the runtime recursively into all operators.
-    /// If `max_workers > 1`, creates a `MorselWorkerPool` and attaches it.
+    /// If `max_workers > 1` and no shared scheduler is configured, creates
+    /// a per-query `MorselWorkerPool`.
     pub fn set_runtime(&mut self, runtime: Arc<ExecutionRuntime>) {
         if let Some(ref mut executor) = self.root_executor {
             executor.set_runtime(Some(runtime.clone()));
@@ -385,7 +389,7 @@ impl StreamingExecutionEngine {
         for executor in &mut self.partition_executors {
             executor.set_runtime(Some(runtime.clone()));
         }
-        if self.max_workers > 1 {
+        if self.max_workers > 1 && runtime.get_shared_scheduler().is_none() {
             let pool = MorselWorkerPool::new(self.max_workers);
             runtime.set_worker_pool(Some(pool));
         }
@@ -745,7 +749,7 @@ mod tests {
 
     fn partitioned_scan_executor(
         rows: Vec<Vec<Value>>,
-        partition_id: usize,
+        _partition_id: usize,
         col_names: Vec<String>,
     ) -> StreamingExecutor {
         StreamingExecutor::Source(

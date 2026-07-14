@@ -66,6 +66,9 @@ pub struct QueryBindings {
     pub query_id: u64,
     /// Transaction scope for this execution.
     pub transaction: TransactionScope,
+    /// M6: Engine-level shared scheduler.  When set, all queries share the
+    /// same worker pool instead of creating per-query threads.
+    pub shared_scheduler: Option<Arc<super::pool::SharedScheduler>>,
     #[cfg(feature = "fulltext-search")]
     pub fulltext_manager: Option<Arc<crate::search::manager::FulltextIndexManager>>,
     #[cfg(feature = "qdrant")]
@@ -88,6 +91,7 @@ impl QueryBindings {
             max_buffered_chunks: context.max_buffered_chunks,
             query_id: context.query_id,
             transaction,
+            shared_scheduler: context.shared_scheduler.clone(),
             #[cfg(feature = "fulltext-search")]
             fulltext_manager: context.fulltext_manager.clone(),
             #[cfg(feature = "qdrant")]
@@ -300,7 +304,10 @@ impl QueryExecutionInstance {
             bindings.vector_coordinator.clone(),
         );
 
-        if let Some(pool) = scheduler {
+        // M6: shared scheduler takes priority.
+        if let Some(ref ss) = bindings.shared_scheduler {
+            runtime.set_shared_scheduler(Some(ss.clone()));
+        } else if let Some(pool) = scheduler {
             runtime.set_worker_pool(Some(pool));
         } else if bindings.max_workers > 1 {
             let pool = MorselWorkerPool::new(bindings.max_workers);

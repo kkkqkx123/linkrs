@@ -1,23 +1,20 @@
 //! Typed GlobalState / LocalState arenas for per-execution operator state.
 //!
-//! Per the P2 spec (Section 5.2):
+//! Per the M4 spec:
 //! - **GlobalState**: hash build, global aggregate, sort runs, exchange,
-//!   result collector  — addressed by [`PhysicalOperatorId`].
-//! - **LocalState**: cursor, probe cursor, chunk buffer, partial aggregate
-//!   — addressed by `(PhysicalOperatorId, TaskId)`.
+//!   result collector — addressed by [`PhysicalOperatorId`].
+//! - **LocalState**: scan cursor, probe state, partial accumulator,
+//!   expression workspace — addressed by `(PhysicalOperatorId, TaskId)`.
 //!
 //! State is kept separate from specs so that [`PhysicalPlan`] and
 //! [`OperatorSpec`] remain immutable and cacheable.  State is allocated
 //! once per execution instance and indexed via typed arenas rather than
 //! inline fields, avoiding `dyn Any` downcast patterns.
 
-use std::collections::HashMap;
-
 use super::operators::state::{
     BlockingState, ExchangeState, FulltextState, GraphState, JoinState, SetState, SinkState,
     SourceState, TxnState, UnaryState, VectorState,
 };
-use crate::core::Value;
 
 /// A task identifier within a fragment execution.
 pub type TaskId = usize;
@@ -45,19 +42,26 @@ pub enum GlobalState {
 /// Local (per-task) operator state — each task or partition gets its own
 /// copy.  Lives for the duration of a single task execution.
 ///
-/// Examples: scan cursor, probe cursor, partial aggregate accumulator,
-/// chunk buffer.
+/// Typed per domain, matching the variant structure of [`GlobalState`].
+/// The runtime accesses the correct variant via [`PhysicalOperatorId`]
+/// + [`TaskId`] lookup — no `dyn Any` downcasts.
+///
+/// Examples: scan cursor position, probe cursor, partial aggregate
+/// accumulator, chunk buffer.
 #[derive(Debug)]
-#[derive(Default)]
-pub struct LocalState {
-    /// Scan cursor position (source operators).
-    pub cursor_position: Option<usize>,
-    /// Chunk buffer for blocking operators (accumulated input).
-    pub chunk_buffer: Option<Vec<crate::query::executor::streaming::chunk::DataChunk>>,
-    /// Row buffer for intermediate results.
-    pub row_buffer: Option<Vec<Vec<Value>>>,
+pub enum LocalState {
+    Source(SourceState),
+    Unary(UnaryState),
+    Blocking(BlockingState),
+    Join(JoinState),
+    Graph(GraphState),
+    Sink(SinkState),
+    Set(SetState),
+    Exchange(ExchangeState),
+    Fulltext(FulltextState),
+    Vector(VectorState),
+    Txn(TxnState),
 }
-
 
 // ── Index key types ─────────────────────────────────────────────────────────
 
@@ -80,13 +84,13 @@ pub struct LocalStateKey(
 /// instance and populated during operator tree materialization.
 #[derive(Debug, Default)]
 pub struct GlobalStateArena {
-    states: HashMap<GlobalStateKey, GlobalState>,
+    states: std::collections::HashMap<GlobalStateKey, GlobalState>,
 }
 
 impl GlobalStateArena {
     pub fn new() -> Self {
         Self {
-            states: HashMap::new(),
+            states: std::collections::HashMap::new(),
         }
     }
 
@@ -133,13 +137,13 @@ impl GlobalStateArena {
 /// execution instance, with one entry per (operator, task) pair.
 #[derive(Debug, Default)]
 pub struct LocalStateArena {
-    states: HashMap<LocalStateKey, LocalState>,
+    states: std::collections::HashMap<LocalStateKey, LocalState>,
 }
 
 impl LocalStateArena {
     pub fn new() -> Self {
         Self {
-            states: HashMap::new(),
+            states: std::collections::HashMap::new(),
         }
     }
 

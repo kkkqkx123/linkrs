@@ -36,6 +36,62 @@ pub trait TaskScheduler: Send + Sync + std::fmt::Debug {
     fn max_workers(&self) -> usize;
 }
 
+/// Engine-level shared scheduler (M6).
+///
+/// Created once at database startup and reused across all queries.  Each
+/// query receives an `Arc` reference through its bindings.  Workers are
+/// created once and persist across query boundaries, eliminating the
+/// per-query thread overhead of the old `MorselWorkerPool` pattern.
+///
+/// Query teardown does not join or shut down the shared workers — only
+/// engine shutdown calls [`SharedScheduler::shutdown`].
+#[derive(Debug)]
+pub struct SharedScheduler {
+    pool: Arc<MorselWorkerPool>,
+}
+
+impl SharedScheduler {
+    /// Create a new shared scheduler with `max_workers` persistent threads.
+    ///
+    /// At least one worker is always created.  Pass `0` to use the default
+    /// (typically number of CPU cores, minimum 1).
+    pub fn new(max_workers: usize) -> Self {
+        Self {
+            pool: Arc::new(MorselWorkerPool::new(max_workers.max(1))),
+        }
+    }
+
+    /// Inject this scheduler into the given runtime.
+    ///
+    /// This makes the runtime's worker pool point to the shared scheduler's
+    /// underlying [`MorselWorkerPool`], so that all Exchange/Gather operators
+    /// in that query use the shared worker threads.
+    pub fn apply_to_runtime(&self, runtime: &super::runtime::ExecutionRuntime) {
+        runtime.set_shared_scheduler_raw(Some(self.pool.clone() as Arc<dyn TaskScheduler>));
+    }
+
+    /// Number of workers in this scheduler.
+    pub fn max_workers(&self) -> usize {
+        self.pool.max_workers()
+    }
+
+    /// Shut down all workers and wait for them to exit.
+    ///
+    /// Called during engine shutdown.  After this, no further batches can
+    /// be submitted.  Must only be called once no more queries need the
+    /// scheduler.
+    pub fn shutdown(&mut self) {
+        // Arc::get_mut only succeeds when no other references exist.
+        // During orderly shutdown this should be the case because all
+        // queries have completed.
+        if let Some(pool) = Arc::get_mut(&mut self.pool) {
+            pool.shutdown();
+        }
+        // If other references remain, workers will exit when their
+        // stop flag or channel closure is detected (via detach on drop).
+    }
+}
+
 #[derive(Debug)]
 pub struct BufferedChunk {
     pub(crate) chunk: DataChunk,

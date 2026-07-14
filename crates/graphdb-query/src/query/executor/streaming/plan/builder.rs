@@ -466,6 +466,7 @@ fn replace_single_input(
         StreamingExecutor::Unary(_, child, _)
         | StreamingExecutor::Blocking(_, child, _)
         | StreamingExecutor::Graph(_, child, _)
+        | StreamingExecutor::RecursiveFragment(_, child, _)
         | StreamingExecutor::Sink(_, child, _)
         | StreamingExecutor::Ddl(_, child, _)
         | StreamingExecutor::Fulltext(_, child, _)

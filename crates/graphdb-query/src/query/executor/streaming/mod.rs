@@ -21,6 +21,7 @@ pub mod factory;
 pub mod helpers;
 pub mod instance;
 pub mod join_helpers;
+pub mod memory_pool;
 pub mod operator_plan_builder;
 pub mod operators;
 pub mod parallel_safety;
@@ -28,6 +29,7 @@ pub mod partition;
 pub mod plan;
 pub mod pool;
 pub mod parameters;
+pub mod result_boundary;
 pub mod result_utils;
 pub mod runtime;
 pub mod slot;
@@ -39,7 +41,7 @@ pub mod query_registry;
 pub mod transaction_scope;
 
 pub use builder::StreamingExecutorBuilder;
-pub use chunk::DataChunk;
+pub use chunk::{ChunkView, DataChunk};
 pub use context::BorrowedRowContext;
 pub use engine::StreamingExecutionEngine;
 pub use executor::StreamingExecutor;
@@ -63,13 +65,17 @@ pub use stream_result::StreamingQueryResult;
 pub use plan::types::{
     CapabilitySet, FragmentGraph, FragmentId, FragmentKind, FragmentSpec, LogicalNodeId,
     OperatorKindSpec, OutputContract, PhysicalOperatorId, PhysicalOperatorIdAllocator,
-    PhysicalOperatorSpec, PhysicalPlan, PlanCompatibility,
+    PhysicalOperatorSpec, PhysicalPlan, PlanCompatibility, SortOrder,
 };
 pub use plan::context::PhysicalPlanBuildContext;
 pub use plan::validator::{PhysicalPlanValidator, ValidationResult, ValidationTier};
 
 // ── Spill types ──
-pub use spill::{RowBuffer, SpillConfig, SpilledFile, SpillManager, SpillReader, SpillWriter};
+pub use spill::{
+    cleanup_orphan_spill_dirs, hash_row_partition, DiskQuota, HashPartitionConfig,
+    HashPartitionSpiller, RowBuffer, RunHeader, RunReader, RunWriter, SpillConfig, SpilledFile,
+    SpilledRun, SpillManager, SpillReader, SpillWriter,
+};
 
 // ── P2: New types ──
 pub use instance::{QueryBindings, QueryExecutionInstance, ResultSink};
@@ -84,3 +90,16 @@ pub use transaction_scope::{
     CancelReason, SessionTransactionController, TransactionCommandResult, TransactionId,
     TransactionScope, TransactionState,
 };
+
+// ── M4: Result boundary types ──
+pub use result_boundary::{
+    ChunkOrDone, ResultBoundary, ResultBoundaryGuard,
+};
+
+// ── M4: Memory pool types ──
+pub use memory_pool::{
+    DatabaseMemoryPool, FragmentPool, MemoryPoolError, MemoryPoolReservation, OperatorPool,
+    PoolHandle, PooledChunk, QueryPool, TaskPool,
+};
+
+
