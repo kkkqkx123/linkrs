@@ -48,7 +48,6 @@ impl StreamingExecutorBuilder {
         Ok(StreamingExecutor::Source(
             OperatorBase::new(0),
             SourceOperator::ScanVertices {
-                partition_id: 0,
                 buffer: rows,
                 current_index: 0,
                 col_names,
@@ -99,10 +98,11 @@ impl StreamingExecutorBuilder {
         col_names: Vec<String>,
         partition_id: usize,
     ) -> Result<StreamingExecutor, QueryError> {
+        let mut base = OperatorBase::new(0);
+        base.partition_id = Some(partition_id);
         Ok(StreamingExecutor::Source(
-            OperatorBase::new(0),
+            base,
             SourceOperator::ScanVertices {
-                partition_id,
                 buffer: rows,
                 current_index: 0,
                 col_names,

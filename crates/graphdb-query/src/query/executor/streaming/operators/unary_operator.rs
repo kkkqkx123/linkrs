@@ -5,6 +5,7 @@ use crate::core::types::expr::Expression;
 use crate::core::Value;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
+use crate::query::executor::streaming::context::BorrowedRowContext;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::executor::ValueRowContext;
 use crate::query::executor::streaming::operators::base::OperatorBase;
@@ -125,12 +126,13 @@ impl UnaryOperator {
         match self {
             Self::Filter { predicate } => loop {
                 match input.advance()? {
-                    Some(chunk) => {
+                    Some(mut chunk) => {
                         let layout = chunk.get_layout();
-                        let mut filtered_rows = Vec::new();
-                        for row in chunk.rows {
+                        let mut selected = Vec::new();
+                        for i in 0..chunk.len() {
+                            let row = &chunk.rows[i];
                             let mut context =
-                                ValueRowContext::new(row.clone(), layout.clone());
+                                BorrowedRowContext::new(row, layout.clone());
                             let keep = match ExpressionEvaluator::evaluate(predicate, &mut context)
                             {
                                 Ok(value) => match value {
@@ -151,11 +153,11 @@ impl UnaryOperator {
                                 }
                             };
                             if keep {
-                                filtered_rows.push(row);
+                                selected.push(i);
                             }
                         }
-                        if !filtered_rows.is_empty() {
-                            return Ok(Some(DataChunk::new_with_layout(filtered_rows, layout)));
+                        if !selected.is_empty() {
+                            return Ok(Some(chunk.take_indices(&selected)));
                         }
                     }
                     None => return Ok(None),

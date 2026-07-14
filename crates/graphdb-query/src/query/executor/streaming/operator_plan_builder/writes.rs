@@ -23,6 +23,14 @@ fn contextual_to_value(
     }
 }
 
+fn require_space_name(context: &ExecutionContext) -> Result<String, QueryError> {
+    context.space_name.clone().ok_or_else(|| {
+        QueryError::execution(
+            "Space name is required for data modification operations".to_string(),
+        )
+    })
+}
+
 pub fn build_write_node(
     node: &PlanNodeEnum,
     context: &ExecutionContext,
@@ -53,7 +61,7 @@ pub fn build_write_node(
                 rows.push(row);
             }
             let source = PhysicalNode::Source(
-                0,
+                super::SYNTHETIC_START_NODE_ID,
                 SourceSpec::ScanVertices {
                     rows,
                     col_names: scan_col_names,
@@ -64,8 +72,7 @@ pub fn build_write_node(
                 node.id(),
                 Box::new(source),
                 SinkSpec::InsertVertices {
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
+                    space_name: require_space_name(context)?,
                     vertex_properties,
                     tags: insert_node.tag_names(),
                 },
@@ -94,7 +101,7 @@ pub fn build_write_node(
                 .map(|prop| (prop.clone(), Expression::Variable(prop.clone())))
                 .collect();
             let source = PhysicalNode::Source(
-                0,
+                super::SYNTHETIC_START_NODE_ID,
                 SourceSpec::ScanVertices {
                     rows,
                     col_names: scan_col_names,
@@ -105,8 +112,7 @@ pub fn build_write_node(
                 node.id(),
                 Box::new(source),
                 SinkSpec::InsertEdges {
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
+                    space_name: require_space_name(context)?,
                     src_col: "src".to_string(),
                     dst_col: "dst".to_string(),
                     edge_type: insert_node.edge_name().to_string(),
@@ -126,7 +132,7 @@ pub fn build_write_node(
                 }
             }
             let source = PhysicalNode::Source(
-                0,
+                super::SYNTHETIC_START_NODE_ID,
                 SourceSpec::ScanVertices {
                     rows,
                     col_names: vec!["vid".to_string()],
@@ -137,8 +143,7 @@ pub fn build_write_node(
                 node.id(),
                 Box::new(source),
                 SinkSpec::UpdateVertices {
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
+                    space_name: require_space_name(context)?,
                     updates,
                 },
                 PhysicalProperties::single_streaming(),
@@ -159,7 +164,7 @@ pub fn build_write_node(
                         .constant_value()
                         .unwrap_or(Value::Null(crate::core::NullType::Null))];
                     let source = PhysicalNode::Source(
-                        0,
+                        super::SYNTHETIC_START_NODE_ID,
                         SourceSpec::ScanVertices {
                             rows: vec![row],
                             col_names: vec!["vid".to_string()],
@@ -170,8 +175,7 @@ pub fn build_write_node(
                         node.id(),
                         Box::new(source),
                         SinkSpec::UpdateVertices {
-                            storage: context.storage.clone(),
-                            space_name: context.space_name.clone().unwrap_or_default(),
+                            space_name: require_space_name(context)?,
                             updates,
                         },
                         PhysicalProperties::single_streaming(),
@@ -194,7 +198,7 @@ pub fn build_write_node(
                             .unwrap_or(Value::Null(crate::core::NullType::Null)),
                     ];
                     let source = PhysicalNode::Source(
-                        0,
+                        super::SYNTHETIC_START_NODE_ID,
                         SourceSpec::ScanVertices {
                             rows: vec![row],
                             col_names: vec!["src".to_string(), "dst".to_string()],
@@ -205,8 +209,7 @@ pub fn build_write_node(
                         node.id(),
                         Box::new(source),
                         SinkSpec::UpdateEdges {
-                            storage: context.storage.clone(),
-                            space_name: context.space_name.clone().unwrap_or_default(),
+                            space_name: require_space_name(context)?,
                             src_col: "src".to_string(),
                             dst_col: "dst".to_string(),
                             edge_type: einfo.edge_type.clone().unwrap_or_default(),
@@ -248,8 +251,7 @@ pub fn build_write_node(
                 node.id(),
                 source,
                 SinkSpec::UpdateEdges {
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
+                    space_name: require_space_name(context)?,
                     src_col,
                     dst_col,
                     edge_type,
@@ -266,7 +268,7 @@ pub fn build_write_node(
                 .map(|id| contextual_to_value(id).map(|value| vec![value]))
                 .collect::<Result<Vec<_>, _>>()?;
             let source = PhysicalNode::Source(
-                0,
+                super::SYNTHETIC_START_NODE_ID,
                 SourceSpec::ScanVertices {
                     rows,
                     col_names: vec!["vid".to_string()],
@@ -277,8 +279,7 @@ pub fn build_write_node(
                 node.id(),
                 Box::new(source),
                 SinkSpec::DeleteVertices {
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
+                    space_name: require_space_name(context)?,
                     vertex_id_col: "vid".to_string(),
                 },
                 PhysicalProperties::single_streaming(),
@@ -294,7 +295,7 @@ pub fn build_write_node(
                 })
                 .collect::<Result<Vec<_>, QueryError>>()?;
             let source = PhysicalNode::Source(
-                0,
+                super::SYNTHETIC_START_NODE_ID,
                 SourceSpec::ScanVertices {
                     rows,
                     col_names: vec!["src".to_string(), "dst".to_string()],
@@ -305,8 +306,7 @@ pub fn build_write_node(
                 node.id(),
                 Box::new(source),
                 SinkSpec::DeleteEdges {
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
+                    space_name: require_space_name(context)?,
                     src_col: "src".to_string(),
                     dst_col: "dst".to_string(),
                 },
@@ -321,8 +321,7 @@ pub fn build_write_node(
                 node.id(),
                 Box::new(input_phys),
                 SinkSpec::PipeDeleteVertices {
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
+                    space_name: require_space_name(context)?,
                     vertex_id_col: "vid".to_string(),
                 },
                 PhysicalProperties::single_streaming(),
@@ -336,8 +335,7 @@ pub fn build_write_node(
                 node.id(),
                 Box::new(input_phys),
                 SinkSpec::PipeDeleteEdges {
-                    storage: context.storage.clone(),
-                    space_name: context.space_name.clone().unwrap_or_default(),
+                    space_name: require_space_name(context)?,
                     src_col: "src".to_string(),
                     dst_col: "dst".to_string(),
                 },
@@ -349,8 +347,7 @@ pub fn build_write_node(
             node.id(),
             super::single_start_source(),
             SinkSpec::DeleteTags {
-                storage: context.storage.clone(),
-                space_name: context.space_name.clone().unwrap_or_default(),
+                space_name: require_space_name(context)?,
                 tag_names: delete_tags_node.tag_names().to_vec(),
                 vertex_ids: None,
             },

@@ -407,8 +407,11 @@ impl MorselWorkerPool {
                 };
                 match batch {
                     Ok(batch) => {
-                        // Catch panics in worker execution so a panicked
-                        // worker reports the error instead of poisoning state.
+                        // Clone channels/stop before moving batch into catch_unwind
+                        // so we can propagate the panic as a query error.
+                        let error_tx = batch.error_tx.clone();
+                        let stop = batch.stop.clone();
+
                         let result =
                             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                 Self::process_batch(batch, &stopper)
@@ -422,6 +425,8 @@ impl MorselWorkerPool {
                                 "Worker panicked".to_string()
                             };
                             log::error!("Morsel worker panicked: {msg}");
+                            stop.store(true, Ordering::Relaxed);
+                            let _ = error_tx.send((usize::MAX, QueryError::execution(msg)));
                             return;
                         }
                     }

@@ -109,29 +109,30 @@ fn eval_expr(expr: &Expression, context: &mut ValueRowContext) -> Result<Value, 
 }
 
 impl SinkOperator {
-    pub fn from_spec(spec: &super::spec::SinkSpec) -> Self {
+    pub fn from_spec(
+        spec: &super::spec::SinkSpec,
+        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+    ) -> Self {
         match spec {
             super::spec::SinkSpec::InsertVertices {
-                storage,
                 space_name,
                 vertex_properties,
                 tags,
             } => Self::InsertVertices {
-                storage: storage.clone(),
+                storage,
                 space_name: space_name.clone(),
                 vertex_properties: vertex_properties.clone(),
                 tags: tags.clone(),
                 rows_inserted: 0,
             },
             super::spec::SinkSpec::InsertEdges {
-                storage,
                 space_name,
                 src_col,
                 dst_col,
                 edge_type,
                 edge_properties,
             } => Self::InsertEdges {
-                storage: storage.clone(),
+                storage,
                 space_name: space_name.clone(),
                 src_col: src_col.clone(),
                 dst_col: dst_col.clone(),
@@ -140,24 +141,22 @@ impl SinkOperator {
                 rows_inserted: 0,
             },
             super::spec::SinkSpec::UpdateVertices {
-                storage,
                 space_name,
                 updates,
             } => Self::UpdateVertices {
-                storage: storage.clone(),
+                storage,
                 space_name: space_name.clone(),
                 updates: updates.clone(),
                 rows_updated: 0,
             },
             super::spec::SinkSpec::UpdateEdges {
-                storage,
                 space_name,
                 src_col,
                 dst_col,
                 edge_type,
                 updates,
             } => Self::UpdateEdges {
-                storage: storage.clone(),
+                storage,
                 space_name: space_name.clone(),
                 src_col: src_col.clone(),
                 dst_col: dst_col.clone(),
@@ -166,56 +165,51 @@ impl SinkOperator {
                 rows_updated: 0,
             },
             super::spec::SinkSpec::DeleteVertices {
-                storage,
                 space_name,
                 vertex_id_col,
             } => Self::DeleteVertices {
-                storage: storage.clone(),
+                storage,
                 space_name: space_name.clone(),
                 vertex_id_col: vertex_id_col.clone(),
                 rows_deleted: 0,
             },
             super::spec::SinkSpec::DeleteEdges {
-                storage,
                 space_name,
                 src_col,
                 dst_col,
             } => Self::DeleteEdges {
-                storage: storage.clone(),
+                storage,
                 space_name: space_name.clone(),
                 src_col: src_col.clone(),
                 dst_col: dst_col.clone(),
                 rows_deleted: 0,
             },
             super::spec::SinkSpec::PipeDeleteVertices {
-                storage,
                 space_name,
                 vertex_id_col,
             } => Self::PipeDeleteVertices {
-                storage: storage.clone(),
+                storage,
                 space_name: space_name.clone(),
                 vertex_id_col: vertex_id_col.clone(),
                 rows_deleted: 0,
             },
             super::spec::SinkSpec::PipeDeleteEdges {
-                storage,
                 space_name,
                 src_col,
                 dst_col,
             } => Self::PipeDeleteEdges {
-                storage: storage.clone(),
+                storage,
                 space_name: space_name.clone(),
                 src_col: src_col.clone(),
                 dst_col: dst_col.clone(),
                 rows_deleted: 0,
             },
             super::spec::SinkSpec::DeleteTags {
-                storage,
                 space_name,
                 tag_names,
                 vertex_ids,
             } => Self::DeleteTags {
-                storage: storage.clone(),
+                storage,
                 space_name: space_name.clone(),
                 tag_names: tag_names.clone(),
                 vertex_ids: vertex_ids.clone(),

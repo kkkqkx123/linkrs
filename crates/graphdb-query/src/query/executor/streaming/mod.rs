@@ -38,6 +38,7 @@ pub mod transaction_scope;
 
 pub use builder::StreamingExecutorBuilder;
 pub use chunk::DataChunk;
+pub use context::BorrowedRowContext;
 pub use engine::StreamingExecutionEngine;
 pub use executor::StreamingExecutor;
 pub use factory::StreamingQueryExecutor;

@@ -114,43 +114,51 @@ pub fn build_plan_node(
 
         // Binary/join operators
         PlanNodeEnum::InnerJoin(join_node) => build_join_with_keys(
-            node.id(),
-            join_node.left_input(),
-            join_node.right_input(),
-            join_node.hash_keys(),
-            join_node.probe_keys(),
-            join_node.right_input().col_names(),
-            |c| JoinSpec::InnerJoin { join_condition: c },
+            JoinConfig {
+                node_id: node.id(),
+                left_plan: join_node.left_input(),
+                right_plan: join_node.right_input(),
+                hash_keys: join_node.hash_keys(),
+                probe_keys: join_node.probe_keys(),
+                right_col_names: join_node.right_input().col_names(),
+                make_spec: Box::new(|c| JoinSpec::InnerJoin { join_condition: c }),
+            },
             context,
         ),
         PlanNodeEnum::HashInnerJoin(join_node) => build_join_with_keys(
-            node.id(),
-            join_node.left_input(),
-            join_node.right_input(),
-            join_node.hash_keys(),
-            join_node.probe_keys(),
-            join_node.right_input().col_names(),
-            |c| JoinSpec::InnerJoin { join_condition: c },
+            JoinConfig {
+                node_id: node.id(),
+                left_plan: join_node.left_input(),
+                right_plan: join_node.right_input(),
+                hash_keys: join_node.hash_keys(),
+                probe_keys: join_node.probe_keys(),
+                right_col_names: join_node.right_input().col_names(),
+                make_spec: Box::new(|c| JoinSpec::InnerJoin { join_condition: c }),
+            },
             context,
         ),
         PlanNodeEnum::LeftJoin(join_node) => build_join_with_keys(
-            node.id(),
-            join_node.left_input(),
-            join_node.right_input(),
-            join_node.hash_keys(),
-            join_node.probe_keys(),
-            join_node.right_input().col_names(),
-            |c| JoinSpec::LeftJoin { join_condition: c },
+            JoinConfig {
+                node_id: node.id(),
+                left_plan: join_node.left_input(),
+                right_plan: join_node.right_input(),
+                hash_keys: join_node.hash_keys(),
+                probe_keys: join_node.probe_keys(),
+                right_col_names: join_node.right_input().col_names(),
+                make_spec: Box::new(|c| JoinSpec::LeftJoin { join_condition: c }),
+            },
             context,
         ),
         PlanNodeEnum::HashLeftJoin(join_node) => build_join_with_keys(
-            node.id(),
-            join_node.left_input(),
-            join_node.right_input(),
-            join_node.hash_keys(),
-            join_node.probe_keys(),
-            join_node.right_input().col_names(),
-            |c| JoinSpec::LeftJoin { join_condition: c },
+            JoinConfig {
+                node_id: node.id(),
+                left_plan: join_node.left_input(),
+                right_plan: join_node.right_input(),
+                hash_keys: join_node.hash_keys(),
+                probe_keys: join_node.probe_keys(),
+                right_col_names: join_node.right_input().col_names(),
+                make_spec: Box::new(|c| JoinSpec::LeftJoin { join_condition: c }),
+            },
             context,
         ),
         PlanNodeEnum::CrossJoin(join_node) => build_join_core(
@@ -161,33 +169,39 @@ pub fn build_plan_node(
             context,
         ),
         PlanNodeEnum::RightJoin(join_node) => build_join_with_keys(
-            node.id(),
-            join_node.left_input(),
-            join_node.right_input(),
-            join_node.hash_keys(),
-            join_node.probe_keys(),
-            join_node.right_input().col_names(),
-            |c| JoinSpec::RightJoin { join_condition: c },
+            JoinConfig {
+                node_id: node.id(),
+                left_plan: join_node.left_input(),
+                right_plan: join_node.right_input(),
+                hash_keys: join_node.hash_keys(),
+                probe_keys: join_node.probe_keys(),
+                right_col_names: join_node.right_input().col_names(),
+                make_spec: Box::new(|c| JoinSpec::RightJoin { join_condition: c }),
+            },
             context,
         ),
         PlanNodeEnum::FullOuterJoin(join_node) => build_join_with_keys(
-            node.id(),
-            join_node.left_input(),
-            join_node.right_input(),
-            join_node.hash_keys(),
-            join_node.probe_keys(),
-            join_node.right_input().col_names(),
-            |c| JoinSpec::FullOuterJoin { join_condition: c },
+            JoinConfig {
+                node_id: node.id(),
+                left_plan: join_node.left_input(),
+                right_plan: join_node.right_input(),
+                hash_keys: join_node.hash_keys(),
+                probe_keys: join_node.probe_keys(),
+                right_col_names: join_node.right_input().col_names(),
+                make_spec: Box::new(|c| JoinSpec::FullOuterJoin { join_condition: c }),
+            },
             context,
         ),
         PlanNodeEnum::SemiJoin(join_node) => build_join_with_keys(
-            node.id(),
-            join_node.left_input(),
-            join_node.right_input(),
-            join_node.hash_keys(),
-            join_node.probe_keys(),
-            join_node.right_input().col_names(),
-            |c| JoinSpec::SemiJoin { join_condition: c },
+            JoinConfig {
+                node_id: node.id(),
+                left_plan: join_node.left_input(),
+                right_plan: join_node.right_input(),
+                hash_keys: join_node.hash_keys(),
+                probe_keys: join_node.probe_keys(),
+                right_col_names: join_node.right_input().col_names(),
+                make_spec: Box::new(|c| JoinSpec::SemiJoin { join_condition: c }),
+            },
             context,
         ),
 
@@ -270,26 +284,31 @@ fn build_join_core(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_join_with_keys(
-    node_id: i64,
-    left_plan: &PlanNodeEnum,
-    right_plan: &PlanNodeEnum,
-    hash_keys: &[crate::core::types::expr::ContextualExpression],
-    probe_keys: &[crate::core::types::expr::ContextualExpression],
-    right_col_names: &[String],
-    make_spec: impl FnOnce(Option<Expression>) -> JoinSpec,
+    config: JoinConfig,
     context: &ExecutionContext,
 ) -> Result<PhysicalNode, QueryError> {
-    let left_phys = build_plan_node(left_plan, context)?;
-    let right_phys = build_plan_node(right_plan, context)?;
-    let condition = join_condition_from_keys(hash_keys, probe_keys, right_col_names)?;
+    let left_phys = build_plan_node(config.left_plan, context)?;
+    let right_phys = build_plan_node(config.right_plan, context)?;
+    let condition = join_condition_from_keys(config.hash_keys, config.probe_keys, config.right_col_names)?;
     Ok(PhysicalNode::Join(
-        node_id,
+        config.node_id,
         Box::new(left_phys),
         Box::new(right_phys),
-        make_spec(condition),
+        (config.make_spec)(condition),
         PhysicalProperties::single_blocking(),
     ))
+}
+
+struct JoinConfig<'a> {
+    node_id: i64,
+    left_plan: &'a PlanNodeEnum,
+    right_plan: &'a PlanNodeEnum,
+    hash_keys: &'a [crate::core::types::expr::ContextualExpression],
+    probe_keys: &'a [crate::core::types::expr::ContextualExpression],
+    right_col_names: &'a [String],
+    make_spec: Box<dyn FnOnce(Option<Expression>) -> JoinSpec + 'a>,
 }
 
 pub(super) fn join_condition_from_keys(

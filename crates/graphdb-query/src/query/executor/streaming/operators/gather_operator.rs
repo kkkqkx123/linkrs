@@ -133,13 +133,11 @@ impl GatherOperator {
         }
 
         // Serial fallback: open children normally.
-        let mut opened_children = 0;
-        for child in children.iter_mut() {
+        for (opened_children, child) in children.iter_mut().enumerate() {
             if let Err(error) = child.open() {
                 let close_error = close_children(&mut children[..opened_children]);
                 return Err(close_error.unwrap_or(error));
             }
-            opened_children += 1;
         }
         base.lifecycle.mark_opened();
         Ok(())
@@ -474,7 +472,6 @@ mod tests {
         StreamingExecutor::Source(
             OperatorBase::new(1),
             SourceOperator::ScanVertices {
-                partition_id: 0,
                 buffer: values
                     .iter()
                     .map(|value| vec![Value::BigInt(*value)])

@@ -20,6 +20,8 @@ use crate::query::executor::traversal::graph_reader::TraversalGraphReader;
 use crate::query::executor::traversal::runtime::TraversalRuntime;
 use crate::storage::StorageClient;
 
+use super::visited_set::VisitedSet;
+
 // ── Helper struct ──
 
 struct BidirBfsConfig<'a> {
@@ -433,7 +435,7 @@ fn traverse_on_chunk(
     chunk: DataChunk,
     reader: &dyn StorageClient,
     config: &TraversalConfig,
-    visited: &mut HashSet<String>,
+    visited: &mut VisitedSet,
     cancel_token: Option<Arc<AtomicBool>>,
 ) -> Result<Option<DataChunk>, QueryError> {
     let col_names = chunk.col_names();
@@ -465,11 +467,10 @@ fn traverse_on_chunk(
             }
 
             while let Some(event) = runtime.next_event() {
-                let nid_str = format!("{:?}", event.vertex.vid());
-                if visited.contains(&nid_str) {
+                let nid = event.vertex.vid();
+                if !visited.insert(*nid) {
                     continue;
                 }
-                visited.insert(nid_str);
 
                 let mut out_row = row.clone();
                 out_row.push(Value::Vertex(Box::new(event.vertex)));
@@ -536,7 +537,7 @@ pub enum GraphOperator {
         min_depth: u32,
         max_depth: u32,
         filter_expr: Option<Expression>,
-        visited: HashSet<String>,
+        visited: VisitedSet,
     },
     TraverseAll {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
@@ -546,7 +547,7 @@ pub enum GraphOperator {
         min_depth: u32,
         max_depth: u32,
         filter_expr: Option<Expression>,
-        visited: HashSet<String>,
+        visited: VisitedSet,
     },
     BiExpand {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
@@ -561,7 +562,7 @@ pub enum GraphOperator {
         direction: EdgeDirection,
         min_depth: u32,
         max_depth: u32,
-        visited: HashSet<String>,
+        visited: VisitedSet,
     },
     ShortestPath {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
@@ -583,7 +584,7 @@ pub enum GraphOperator {
         allow_cycles: bool,
         allow_loops: bool,
         frontier: Vec<Vec<Value>>,
-        visited: HashSet<String>,
+        visited: VisitedSet,
     },
     AllPaths {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
@@ -732,7 +733,7 @@ impl GraphOperator {
                 min_depth: *min_depth,
                 max_depth: *max_depth,
                 filter_expr: filter_expr.clone(),
-                visited: std::collections::HashSet::new(),
+                visited: VisitedSet::new(),
             },
             super::spec::GraphSpec::BiExpand {
                 edge_types,
@@ -755,7 +756,7 @@ impl GraphOperator {
                 direction: *direction,
                 min_depth: *min_depth,
                 max_depth: *max_depth,
-                visited: std::collections::HashSet::new(),
+                visited: VisitedSet::new(),
             },
             super::spec::GraphSpec::ShortestPath {
                 target_vertex,
@@ -791,7 +792,7 @@ impl GraphOperator {
                 allow_cycles: *allow_cycles,
                 allow_loops: *allow_loops,
                 frontier: Vec::new(),
-                visited: std::collections::HashSet::new(),
+                visited: VisitedSet::new(),
             },
             super::spec::GraphSpec::AllPaths {
                 target_vertex,
@@ -1169,7 +1170,7 @@ impl GraphOperator {
                                 .unwrap_or(Value::Null(crate::core::NullType::Null));
                             if let Ok(vid) = VertexId::try_from(&vid_val) {
                                 let mut frontier = vec![(vid, 0u32)];
-                                let mut local_visited = HashSet::new();
+                                let mut local_visited = VisitedSet::new();
                                 local_visited.insert(vid);
 
                                 while let Some((current, depth)) = frontier.pop() {
@@ -1192,14 +1193,12 @@ impl GraphOperator {
                                             } else {
                                                 *e.src()
                                             };
-                                            let nid_str = format!("{:?}", nid);
-                                            if visited.contains(&nid_str)
-                                                || local_visited.contains(&nid)
+                                            if local_visited.contains(&nid)
+                                                || !visited.insert(nid)
                                             {
                                                 continue;
                                             }
                                             local_visited.insert(nid);
-                                            visited.insert(nid_str);
 
                                             if depth + 1 >= *min_depth {
                                                 if let Ok(Some(vertex)) =

@@ -244,6 +244,12 @@ pub struct RowBuffer {
     total_bytes_in_files: u64,
 }
 
+impl Default for RowBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RowBuffer {
     pub fn new() -> Self {
         Self {

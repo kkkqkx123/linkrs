@@ -194,10 +194,11 @@ impl PhysicalNode {
             }
             Self::Sink(node_id, child, spec, _) => {
                 let child_exec = child.materialize(runtime.clone(), memory_budget, chunk_size);
+                let storage = runtime.as_ref().and_then(|rt| rt.storage.clone());
                 StreamingExecutor::Sink(
                     OperatorBase::new(*node_id),
                     Box::new(child_exec),
-                    SinkOperator::from_spec(spec),
+                    SinkOperator::from_spec(spec, storage),
                 )
             }
             Self::Set(node_id, left, right, spec, _) => {

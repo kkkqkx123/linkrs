@@ -4,6 +4,8 @@
 //! tree into [`BuildOutput`] — either a single global executor or a set of
 //! per-partition local trees — which the caller gathers into a final root.
 
+use std::sync::Arc;
+
 use super::super::builder::StreamingExecutorBuilder;
 use super::super::executor::StreamingExecutor;
 use super::super::operators::base::OperatorBase;
@@ -13,6 +15,7 @@ use super::super::operators::gather_operator::GatherOperator;
 use super::super::operators::shuffle_join_operator::{HashJoinKind, HashShuffleJoinOperator};
 use super::super::partition::PartitionView;
 use super::super::partition_builder;
+use super::super::runtime::ExecutionRuntime;
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::AggregateFunction;
@@ -44,7 +47,7 @@ fn require_partition_local(
 /// - `Global`: a single executor tree (result of a global or exchange operator).
 /// - `Local`: a set of per-partition trees that have not yet been gathered.
 pub(crate) enum BuildOutput {
-    Global(StreamingExecutor),
+    Global(Box<StreamingExecutor>),
     Local(Vec<StreamingExecutor>),
 }
 
@@ -54,16 +57,20 @@ pub(crate) enum BuildOutput {
 /// produce per-partition trees; `GlobalUnary`, `GlobalBinary`,
 /// `AggregateSplit`, `DistinctSplit`, `TopNSplit` and `HashJoinExchange`
 /// produce a single global tree.
+///
+/// When `runtime` is `Some`, all materialized executors share that runtime.
+/// When `None`, each materialization creates its own (legacy path).
 pub(crate) fn build_partitioned_physical_node(
     node: &PartitionedPhysicalNode,
     context: &ExecutionContext,
     partition_view: &PartitionView,
     synthetic_id_alloc: &mut SyntheticNodeIdAllocator,
+    runtime: Option<Arc<ExecutionRuntime>>,
 ) -> Result<BuildOutput, QueryError> {
     match node {
         PartitionedPhysicalNode::Local { logical_plan } => {
             let mut local_trees =
-                partition_builder::build_partitioned(logical_plan, context, partition_view)?;
+                partition_builder::build_partitioned(logical_plan, context, partition_view, runtime)?;
             require_partition_local(&local_trees, "Physical", logical_plan.name())?;
             for (partition_id, tree) in local_trees.iter_mut().enumerate() {
                 tree.set_partition_id(partition_id);
@@ -79,12 +86,19 @@ pub(crate) fn build_partitioned_physical_node(
                 context,
                 partition_view,
                 synthetic_id_alloc,
+                runtime.clone(),
             )?;
             let input = local_to_global(input, synthetic_id_alloc)?;
-            let mut global = StreamingExecutorBuilder::from_plan_node(logical_plan, context)?;
+            let physical = StreamingExecutorBuilder::from_plan_node_physical(logical_plan, context)?;
+            let mut global = StreamingExecutorBuilder::materialize_physical(
+                &physical,
+                runtime.clone(),
+                &context.memory_budget,
+                context.chunk_size,
+            );
             global.set_global();
-            replace_single_input(&mut global, input)?;
-            Ok(BuildOutput::Global(global))
+             replace_single_input(&mut global, input)?;
+            Ok(BuildOutput::Global(Box::new(global)))
         }
         PartitionedPhysicalNode::AggregateSplit {
             logical_plan,
@@ -107,7 +121,7 @@ pub(crate) fn build_partitioned_physical_node(
                 }
             };
             let local_trees =
-                partition_builder::build_partitioned(local_plan, context, partition_view)?;
+                partition_builder::build_partitioned(local_plan, context, partition_view, runtime.clone())?;
             require_partition_local(&local_trees, "AggregateSplit", local_plan.name())?;
 
             let group_by_expressions: Vec<Expression> = aggregate
@@ -159,7 +173,7 @@ pub(crate) fn build_partitioned_physical_node(
                 },
             );
             replace_single_input(&mut final_aggregate, gather)?;
-            Ok(BuildOutput::Global(final_aggregate))
+            Ok(BuildOutput::Global(Box::new(final_aggregate)))
         }
         PartitionedPhysicalNode::DistinctSplit {
             logical_plan,
@@ -174,7 +188,7 @@ pub(crate) fn build_partitioned_physical_node(
                 }
             };
             let local_trees =
-                partition_builder::build_partitioned(input_node, context, partition_view)?;
+                partition_builder::build_partitioned(input_node, context, partition_view, runtime.clone())?;
             require_partition_local(&local_trees, "DistinctSplit", input_node.name())?;
 
             let memory_tracker = MemoryTracker::new(context.memory_budget.clone());
@@ -212,7 +226,7 @@ pub(crate) fn build_partitioned_physical_node(
                 },
             );
             replace_single_input(&mut global_distinct, gather)?;
-            Ok(BuildOutput::Global(global_distinct))
+            Ok(BuildOutput::Global(Box::new(global_distinct)))
         }
         PartitionedPhysicalNode::TopNSplit {
             logical_plan,
@@ -235,7 +249,7 @@ pub(crate) fn build_partitioned_physical_node(
                 }
             };
             let local_trees =
-                partition_builder::build_partitioned(input_node, context, partition_view)?;
+                partition_builder::build_partitioned(input_node, context, partition_view, runtime.clone())?;
             require_partition_local(&local_trees, "TopNSplit", input_node.name())?;
 
             let limit = topn_node.limit() as u32;
@@ -262,11 +276,11 @@ pub(crate) fn build_partitioned_physical_node(
                 .collect();
 
             let gather_node_id = allocate_gather_node_id(synthetic_id_alloc);
-            Ok(BuildOutput::Global(StreamingExecutor::Gather(
+            Ok(BuildOutput::Global(Box::new(StreamingExecutor::Gather(
                 OperatorBase::new(gather_node_id).with_global(true),
                 local_topns,
                 GatherOperator::merge_sort(sort_expressions, sort_directions, Some(limit as usize)),
-            )))
+            ))))
         }
         PartitionedPhysicalNode::HashJoinExchange {
             logical_plan,
@@ -281,12 +295,14 @@ pub(crate) fn build_partitioned_physical_node(
                         context,
                         partition_view,
                         synthetic_id_alloc,
+                        runtime.clone(),
                     )?;
                     let right_output = build_partitioned_physical_node(
                         right,
                         context,
                         partition_view,
                         synthetic_id_alloc,
+                        runtime.clone(),
                     )?;
                     match (left_output, right_output) {
                         (BuildOutput::Local(left_trees), BuildOutput::Local(right_trees)) => {
@@ -381,7 +397,7 @@ pub(crate) fn build_partitioned_physical_node(
                 right_input,
                 operator,
             );
-            Ok(BuildOutput::Global(join_executor))
+            Ok(BuildOutput::Global(Box::new(join_executor)))
         }
         PartitionedPhysicalNode::GlobalBinary {
             logical_plan,
@@ -393,6 +409,7 @@ pub(crate) fn build_partitioned_physical_node(
                 context,
                 partition_view,
                 synthetic_id_alloc,
+                runtime.clone(),
             )?;
             let left = local_to_global(left, synthetic_id_alloc)?;
             let right = build_partitioned_physical_node(
@@ -400,12 +417,19 @@ pub(crate) fn build_partitioned_physical_node(
                 context,
                 partition_view,
                 synthetic_id_alloc,
+                runtime.clone(),
             )?;
             let right = local_to_global(right, synthetic_id_alloc)?;
-            let mut global = StreamingExecutorBuilder::from_plan_node(logical_plan, context)?;
+            let physical = StreamingExecutorBuilder::from_plan_node_physical(logical_plan, context)?;
+            let mut global = StreamingExecutorBuilder::materialize_physical(
+                &physical,
+                runtime,
+                &context.memory_budget,
+                context.chunk_size,
+            );
             global.set_global();
             replace_binary_inputs(&mut global, left, right)?;
-            Ok(BuildOutput::Global(global))
+            Ok(BuildOutput::Global(Box::new(global)))
         }
     }
 }
@@ -417,7 +441,7 @@ pub(crate) fn local_to_global(
     synthetic_id_alloc: &mut SyntheticNodeIdAllocator,
 ) -> Result<StreamingExecutor, QueryError> {
     match output {
-        BuildOutput::Global(executor) => Ok(executor),
+        BuildOutput::Global(executor) => Ok(*executor),
         BuildOutput::Local(trees) => {
             if trees.is_empty() {
                 return Err(QueryError::execution(

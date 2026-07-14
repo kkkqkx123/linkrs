@@ -9,15 +9,10 @@
 //! Phase 2 pilot: Source, Filter, Project, Limit, Sort, HashJoin.
 //! Remaining operators will be migrated in follow-up phases.
 
-use std::sync::Arc;
-
-use parking_lot::RwLock;
-
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::AggregateFunction;
 use crate::core::{EdgeDirection, Value};
 use crate::query::executor::streaming::executor::SortDirection;
-use crate::storage::StorageClient;
 
 // ── Source spec ──────────────────────────────────────────────────────────────
 
@@ -285,13 +280,11 @@ pub enum GraphSpec {
 #[derive(Debug, Clone)]
 pub enum SinkSpec {
     InsertVertices {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         vertex_properties: Vec<(String, Expression)>,
         tags: Vec<String>,
     },
     InsertEdges {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         src_col: String,
         dst_col: String,
@@ -299,12 +292,10 @@ pub enum SinkSpec {
         edge_properties: Vec<(String, Expression)>,
     },
     UpdateVertices {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         updates: Vec<(String, Expression)>,
     },
     UpdateEdges {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         src_col: String,
         dst_col: String,
@@ -312,29 +303,24 @@ pub enum SinkSpec {
         updates: Vec<(String, Expression)>,
     },
     DeleteVertices {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         vertex_id_col: String,
     },
     DeleteEdges {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         src_col: String,
         dst_col: String,
     },
     PipeDeleteVertices {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         vertex_id_col: String,
     },
     PipeDeleteEdges {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         src_col: String,
         dst_col: String,
     },
     DeleteTags {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         tag_names: Vec<String>,
         vertex_ids: Option<Vec<Value>>,
@@ -400,6 +386,12 @@ pub enum ApplyKind {
     All,
 }
 
+/// Migrate action kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MigrateAction {
+    MigrateSpace,
+}
+
 // ── DDL spec ─────────────────────────────────────────────────────────────────
 
 /// Immutable config for DDL operators.
@@ -435,7 +427,7 @@ pub enum DdlSpec {
     },
     Migrate {
         space_name: String,
-        action: String,
+        action: MigrateAction,
         migration_data: Option<String>,
     },
 }

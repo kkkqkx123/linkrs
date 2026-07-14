@@ -103,7 +103,7 @@ impl ExchangeOperator {
     pub fn next(
         &mut self,
         base: &mut OperatorBase,
-        children: &mut Vec<StreamingExecutor>,
+        children: &mut [StreamingExecutor],
     ) -> Result<Option<DataChunk>, QueryError> {
         base.ensure_not_cancelled()?;
         match &mut self.state {
@@ -171,7 +171,7 @@ impl ExchangeOperator {
     pub fn stop(
         &mut self,
         _base: &mut OperatorBase,
-        children: &mut Vec<StreamingExecutor>,
+        children: &mut [StreamingExecutor],
     ) -> Result<(), QueryError> {
         if let Some(handle) = self.handle.as_mut() {
             return handle.stop_and_join();
@@ -182,7 +182,7 @@ impl ExchangeOperator {
     pub fn close(
         &mut self,
         base: &mut OperatorBase,
-        children: &mut Vec<StreamingExecutor>,
+        children: &mut [StreamingExecutor],
     ) -> Result<(), QueryError> {
         if let Some(handle) = self.handle.as_mut() {
             let _ = handle.stop_and_join();
@@ -201,7 +201,7 @@ fn input_count(serial: &[StreamingExecutor], handle: &Option<PartitionHandle>) -
 }
 
 fn advance_input(
-    children: &mut Vec<StreamingExecutor>,
+    children: &mut [StreamingExecutor],
     handle: &mut Option<PartitionHandle>,
     index: usize,
 ) -> Result<Option<DataChunk>, QueryError> {
@@ -216,7 +216,7 @@ fn advance_input(
 
 fn next_merge_row(
     base: &OperatorBase,
-    children: &mut Vec<StreamingExecutor>,
+    children: &mut [StreamingExecutor],
     handle: &mut Option<PartitionHandle>,
     sort_expressions: &[Expression],
     sort_directions: &[SortDirection],
@@ -286,7 +286,7 @@ fn next_merge_row(
 
 fn fill_input(
     index: usize,
-    children: &mut Vec<StreamingExecutor>,
+    children: &mut [StreamingExecutor],
     handle: &mut Option<PartitionHandle>,
     inputs: &mut [MergeInputState],
     col_names: &mut Option<Vec<String>>,

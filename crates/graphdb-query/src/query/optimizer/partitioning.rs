@@ -149,7 +149,7 @@ impl PartitioningPlanner {
             scans.push(scan);
         }
         for child in node.children() {
-            Self::collect_vertex_scans(&child, scans);
+            Self::collect_vertex_scans(child, scans);
         }
     }
 

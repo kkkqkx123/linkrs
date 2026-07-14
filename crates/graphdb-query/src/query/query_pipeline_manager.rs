@@ -1156,6 +1156,7 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         Ok(optimized)
     }
 
+    #[allow(clippy::field_reassign_with_default)]
     fn execute_plan(
         &mut self,
         query_context: Arc<QueryContext>,
@@ -1231,6 +1232,7 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
     /// Unlike [`execute_plan`] which materialises everything into an `ExecutionResult`,
     /// this method returns a thread-safe streaming handle that lets the caller pull
     /// chunks one at a time.  Useful for SSE / gRPC streaming endpoints.
+    #[allow(clippy::field_reassign_with_default)]
     pub fn execute_plan_to_stream(
         &mut self,
         query_context: Arc<QueryContext>,

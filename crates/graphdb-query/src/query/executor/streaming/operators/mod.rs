@@ -19,3 +19,4 @@ pub mod source_operator;
 pub mod txn_operator;
 pub mod unary_operator;
 pub mod vector_operator;
+pub mod visited_set;

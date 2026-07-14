@@ -616,7 +616,6 @@ mod tests {
         StreamingExecutor::Source(
             OperatorBase::new(0),
             SourceOperator::ScanVertices {
-                partition_id: 0,
                 buffer: rows,
                 current_index: 0,
                 col_names,
@@ -751,7 +750,6 @@ mod tests {
         StreamingExecutor::Source(
             OperatorBase::new(0),
             SourceOperator::ScanVertices {
-                partition_id,
                 buffer: rows,
                 current_index: 0,
                 col_names,

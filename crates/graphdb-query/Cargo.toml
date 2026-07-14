@@ -21,6 +21,7 @@ regex.workspace = true
 rand.workspace = true
 rayon.workspace = true
 dashmap.workspace = true
+bitvec.workspace = true
 futures.workspace = true
 tokio.workspace = true
 moka.workspace = true

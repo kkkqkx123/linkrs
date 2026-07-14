@@ -4,7 +4,7 @@
 //! The selection of the algorithm was completed during the Planner phase; this module only contains the planning nodes related to the specific algorithm.
 
 use crate::core::types::{ContextualExpression, VertexId};
-use crate::core::Value;
+use crate::core::{EdgeDirection, Value};
 use crate::define_binary_input_node;
 use crate::query::planning::plan::core::node_id_generator::next_node_id;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
@@ -17,6 +17,9 @@ define_binary_input_node! {
         right_vid_var: String,
         termination_var: String,
         single_shortest: bool,
+        edge_types: Vec<String>,
+        direction: EdgeDirection,
+        target_vertex_ids: Vec<Value>,
     }
     enum: MultiShortestPath
     input: BinaryInputNode
@@ -36,6 +39,9 @@ impl MultiShortestPathNode {
             right_vid_var: String::new(),
             termination_var: String::new(),
             single_shortest: false,
+            edge_types: Vec::new(),
+            direction: EdgeDirection::Both,
+            target_vertex_ids: Vec::new(),
             output_var: None,
             col_names: vec!["path".to_string()],
             column_types: vec![],
@@ -62,12 +68,36 @@ impl MultiShortestPathNode {
         self.single_shortest
     }
 
+    pub fn edge_types(&self) -> &[String] {
+        &self.edge_types
+    }
+
+    pub fn direction(&self) -> EdgeDirection {
+        self.direction
+    }
+
+    pub fn target_vertex_ids(&self) -> &[Value] {
+        &self.target_vertex_ids
+    }
+
     pub fn set_left_vid_var(&mut self, var: &str) {
         self.left_vid_var = var.to_string();
     }
 
     pub fn set_right_vid_var(&mut self, var: &str) {
         self.right_vid_var = var.to_string();
+    }
+
+    pub fn set_edge_types(&mut self, edge_types: Vec<String>) {
+        self.edge_types = edge_types;
+    }
+
+    pub fn set_direction(&mut self, direction: EdgeDirection) {
+        self.direction = direction;
+    }
+
+    pub fn set_target_vertex_ids(&mut self, ids: Vec<Value>) {
+        self.target_vertex_ids = ids;
     }
 
     pub fn accept<V>(&self, visitor: &mut V) -> V::Result

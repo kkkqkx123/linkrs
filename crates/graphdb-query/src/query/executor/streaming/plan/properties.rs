@@ -53,17 +53,11 @@ impl Default for Parallelism {
 
 /// Memory policy for blocking/spill-capable operators.
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct MemoryPolicy {
     pub spill_threshold: Option<u64>,
 }
 
-impl Default for MemoryPolicy {
-    fn default() -> Self {
-        Self {
-            spill_threshold: None,
-        }
-    }
-}
 
 /// Physical plan properties attached to each node's output.
 #[derive(Debug, Clone)]

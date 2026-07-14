@@ -15,11 +15,13 @@ use crate::query::executor::base::ExecutionResult;
 /// `Arc<Mutex<>>` so it can be shared across async tasks or API boundaries.
 use std::sync::atomic::{AtomicBool, Ordering};
 
+type DropCallback = Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>;
+
 #[derive(Clone)]
 pub struct StreamingQueryResult {
     inner: Arc<Mutex<StreamState>>,
     runtime: Arc<ExecutionRuntime>,
-    on_drop: Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>,
+    on_drop: DropCallback,
     dropped: Arc<AtomicBool>,
 }
 
@@ -287,7 +289,6 @@ mod tests {
         let scan = StreamingExecutor::Source(
             OperatorBase::new(0),
             SourceOperator::ScanVertices {
-                partition_id: 0,
                 buffer,
                 current_index: 0,
                 col_names: vec!["id".to_string()],

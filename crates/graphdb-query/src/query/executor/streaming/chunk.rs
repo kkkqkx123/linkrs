@@ -275,6 +275,61 @@ impl DataChunk {
         }
         Some(self.rows.iter().map(|row| row[slot].clone()).collect())
     }
+
+    /// Borrow an entire column as `Vec<&Value>` — no per-value cloning.
+    ///
+    /// Useful when the caller only needs to inspect column values (e.g.
+    /// hash‑key extraction, sort‑key comparison) without taking ownership.
+    pub fn column_ref(&self, slot: SlotId) -> Option<Vec<&Value>> {
+        if slot >= self.layout.len() {
+            return None;
+        }
+        Some(self.rows.iter().map(|row| &row[slot]).collect())
+    }
+
+    /// Create a new chunk containing only rows at the given `indices`.
+    ///
+    /// The layout and schema are shared (cheap `Arc::clone`); rows are
+    /// moved out of `self` one by one.  This is more efficient than
+    /// filtering row‑by‑row in a loop because the schema/layout copy is
+    /// amortised over all selected rows.
+    ///
+    /// Panics if any index is out of bounds.
+    pub fn take_indices(&mut self, indices: &[usize]) -> Self {
+        let layout = Arc::clone(&self.layout);
+        let schema = Arc::clone(&self.schema);
+        let mut selected = Vec::with_capacity(indices.len());
+        for &i in indices {
+            selected.push(std::mem::take(&mut self.rows[i]));
+        }
+        Self {
+            rows: selected,
+            schema,
+            layout,
+            memory_reservation: self.memory_reservation.take(),
+        }
+    }
+
+    /// Return a selection vector: indices of rows that satisfy `pred`.
+    ///
+    /// Avoids cloning rows during predicate evaluation; the caller can
+    /// pass the resulting indices to `take_indices` or `select`.
+    pub fn filter_indices<F>(&self, layout: Arc<SlotLayout>, mut pred: F) -> Vec<usize>
+    where
+        F: FnMut(&[Value], &SlotLayout) -> bool,
+    {
+        self.rows
+            .iter()
+            .enumerate()
+            .filter_map(|(i, row)| {
+                if pred(row, &layout) {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]

@@ -58,6 +58,7 @@ pub struct HashShuffleJoinOperator {
 }
 
 impl HashShuffleJoinOperator {
+#[allow(clippy::too_many_arguments)]
     pub fn new(
         join_kind: HashJoinKind,
         left_key_expressions: Vec<Expression>,
@@ -282,8 +283,7 @@ impl HashShuffleJoinOperator {
                     evaluate_join_key(left_row, left_layout, &self.left_key_expressions)?;
                 if let Some(matching_indices) = hash.get(&probe_key) {
                     let start_offset = bucket.current_match_offset.unwrap_or(0);
-                    for i in start_offset..matching_indices.len() {
-                        let &right_idx = &matching_indices[i];
+                    for (i, &right_idx) in matching_indices.iter().enumerate().skip(start_offset) {
                         let right_row = &bucket.right_rows[right_idx];
                         if Self::check_condition(
                             &self.join_condition,
@@ -292,18 +292,18 @@ impl HashShuffleJoinOperator {
                             &self.left_schema,
                             &self.right_schema,
                         )? {
-                            let mut joined = left_row.clone();
-                            joined.extend(right_row.clone());
-                            chunk_rows.push(joined);
-                            if chunk_rows.len() >= CHUNK_SIZE {
-                                let layout = build_combined_layout_from_schemas(
-                                    &self.left_schema,
-                                    &self.right_schema,
-                                );
-                                bucket.current_match_offset = Some(i + 1);
-                                return Ok(Some(DataChunk::new_with_layout(chunk_rows, layout)));
-                            }
+        let mut joined = left_row.clone();
+                        joined.extend(right_row.clone());
+                        chunk_rows.push(joined);
+                        if chunk_rows.len() >= CHUNK_SIZE {
+                            let layout = build_combined_layout_from_schemas(
+                                &self.left_schema,
+                                &self.right_schema,
+                            );
+                            bucket.current_match_offset = Some(i + 1);
+                            return Ok(Some(DataChunk::new_with_layout(chunk_rows, layout)));
                         }
+                    }
                     }
                     // All match indices processed for this left row.
                     bucket.current_match_offset = None;

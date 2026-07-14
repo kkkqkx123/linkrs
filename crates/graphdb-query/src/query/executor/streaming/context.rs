@@ -70,6 +70,48 @@ impl ExpressionContext for ValueRowContext {
     }
 }
 
+/// A light-weight expression context that borrows the row data instead
+/// of cloning it.  Use this in hot paths (e.g. Filter) where the
+/// expression only reads from the row and does not take ownership.
+///
+/// Individual values returned by `get_variable` are still cloned (that
+/// is inherent in the `ExpressionContext` trait), but the `Vec<Value>`
+/// wrapper itself is not — saving one allocation per row.
+pub struct BorrowedRowContext<'a> {
+    row: &'a [Value],
+    variables: HashMap<String, Value>,
+    layout: Arc<SlotLayout>,
+}
+
+impl<'a> BorrowedRowContext<'a> {
+    pub fn new(row: &'a [Value], layout: Arc<SlotLayout>) -> Self {
+        Self {
+            row,
+            variables: HashMap::new(),
+            layout,
+        }
+    }
+}
+
+impl ExpressionContext for BorrowedRowContext<'_> {
+    fn get_variable(&self, name: &str) -> Option<Value> {
+        if let Some(value) = self.variables.get(name) {
+            return Some(value.clone());
+        }
+        self.layout
+            .slot_id(name)
+            .and_then(|slot_id| self.row.get(slot_id).cloned())
+    }
+
+    fn get_variable_by_slot(&self, slot: SlotId) -> Option<Value> {
+        self.row.get(slot).cloned()
+    }
+
+    fn set_variable(&mut self, name: String, value: Value) {
+        self.variables.insert(name, value);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

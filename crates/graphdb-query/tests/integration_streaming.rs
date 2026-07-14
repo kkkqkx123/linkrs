@@ -24,7 +24,6 @@ fn create_simple_scan(size: usize) -> StreamingExecutor {
     StreamingExecutor::Source(
         OperatorBase::new(0),
         SourceOperator::ScanVertices {
-            partition_id: 0,
             buffer,
             current_index: 0,
             col_names: vec![],
@@ -36,7 +35,6 @@ fn create_scan_with_data(data: Vec<Vec<Value>>) -> StreamingExecutor {
     StreamingExecutor::Source(
         OperatorBase::new(0),
         SourceOperator::ScanVertices {
-            partition_id: 0,
             buffer: data,
             current_index: 0,
             col_names: vec![],

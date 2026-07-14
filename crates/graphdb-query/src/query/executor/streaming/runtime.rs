@@ -7,6 +7,7 @@ use parking_lot::Mutex;
 
 use parking_lot::RwLock;
 
+use super::state::StateArenaSet;
 use crate::core::error::QueryError;
 use super::spill::SpillManager;
 use crate::query::executor::base::MemoryBudget;
@@ -221,6 +222,12 @@ pub struct ExecutionRuntime {
     pub fulltext_manager: Option<Arc<crate::search::manager::FulltextIndexManager>>,
     #[cfg(feature = "qdrant")]
     pub vector_coordinator: Option<Arc<crate::sync::VectorSyncCoordinator>>,
+    /// Per-execution operator state arena (global + local).
+    ///
+    /// Operators create/read/update their typed state here during
+    /// `open()` / `next()` / `close()`, indexed by [`PhysicalOperatorId`]
+    /// stored in [`OperatorBase::state_index`](super::operators::base::OperatorBase).
+    pub state_arena: Mutex<StateArenaSet>,
 }
 
 impl ExecutionRuntime {
@@ -251,6 +258,7 @@ impl ExecutionRuntime {
             fulltext_manager,
             #[cfg(feature = "qdrant")]
             vector_coordinator,
+            state_arena: Mutex::new(StateArenaSet::new()),
         }
     }
 

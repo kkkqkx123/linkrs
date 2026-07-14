@@ -1,6 +1,5 @@
 //! Transaction scope for query execution instances.
 //!
-//! Per the P2 spec (Section 5.3):
 //! - Session-level `SessionTransactionController` holds explicit transaction
 //!   handles.
 //! - `QueryExecutionInstance::TransactionScope` borrows an explicit transaction
@@ -37,6 +36,7 @@ impl std::fmt::Display for TransactionId {
 ///   committed (or rolled back) when execution completes.
 /// - `None`: no transaction is active (read-only queries, DDL, etc.).
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub enum TransactionScope {
     /// Running inside a session-level explicit transaction.
     Explicit {
@@ -51,6 +51,7 @@ pub enum TransactionScope {
         committed: bool,
     },
     /// No transaction scope.
+    #[default]
     None,
 }
 
@@ -96,11 +97,6 @@ impl TransactionScope {
     }
 }
 
-impl Default for TransactionScope {
-    fn default() -> Self {
-        Self::None
-    }
-}
 
 // ── SessionTransactionController ────────────────────────────────────────────
 

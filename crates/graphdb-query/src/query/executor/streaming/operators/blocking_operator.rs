@@ -1461,7 +1461,7 @@ impl BlockingOperator {
                                     let partial_value = row.get(acc_col_idx);
                                     if let Some(val) = partial_value {
                                         let partial_acc = value_to_partial_accumulator(
-                                            &func,
+                                            func,
                                             val,
                                         );
                                         if let Some(other) = partial_acc {

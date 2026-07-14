@@ -75,6 +75,10 @@ impl StreamingQueryExecutor {
         physical_plan: &PartitionedPhysicalPlan,
         context: &ExecutionContext,
     ) -> Result<(), QueryError> {
+        // Create the runtime FIRST so the entire builder chain shares
+        // one instance — no orphan runtimes from sub-builders.
+        let runtime = Arc::new(runtime_from_context(context));
+
         let partition_view = PartitionView::from(physical_plan.partition_spec());
         let mut synthetic_id_alloc = SyntheticNodeIdAllocator::new();
         let root = super::plan::builder::build_partitioned_physical_node(
@@ -82,17 +86,17 @@ impl StreamingQueryExecutor {
             context,
             &partition_view,
             &mut synthetic_id_alloc,
+            Some(runtime.clone()),
         )?;
 
         let root = match root {
-            BuildOutput::Global(executor) => executor,
+            BuildOutput::Global(executor) => *executor,
             BuildOutput::Local(trees) => super::plan::builder::local_to_global(
                 BuildOutput::Local(trees),
                 &mut synthetic_id_alloc,
             )?,
         };
 
-        let runtime = Arc::new(runtime_from_context(context));
         let mut engine = StreamingExecutionEngine::new();
         engine.set_max_workers(context.max_workers);
         engine.set_max_buffered_chunks(context.max_buffered_chunks);

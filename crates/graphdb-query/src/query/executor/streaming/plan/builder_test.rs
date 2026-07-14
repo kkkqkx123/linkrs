@@ -7,13 +7,12 @@ use crate::query::planning::plan::PartitionSpec;
 
 fn scan_executor(
     rows: Vec<Vec<Value>>,
-    partition_id: usize,
+    _partition_id: usize,
     col_names: Vec<String>,
 ) -> StreamingExecutor {
     StreamingExecutor::Source(
         OperatorBase::new(0),
         SourceOperator::ScanVertices {
-            partition_id,
             buffer: rows,
             current_index: 0,
             col_names,

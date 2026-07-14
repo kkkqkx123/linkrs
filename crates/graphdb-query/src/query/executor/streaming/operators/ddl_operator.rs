@@ -15,6 +15,7 @@ use crate::core::{NullType, Value};
 use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::operators::base::OperatorBase;
+use crate::query::executor::streaming::operators::spec::MigrateAction;
 use crate::query::planning::plan::core::nodes::management::manage_node_enums::{
     EdgeManageNode, IndexManageNode, SpaceManageNode, TagManageNode, UserManageNode,
 };
@@ -149,7 +150,7 @@ pub enum DdlOperator {
     Migrate {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
-        action: String,
+        action: MigrateAction,
         migration_data: Option<String>,
         emitted: bool,
     },
@@ -233,7 +234,7 @@ impl DdlOperator {
             } => DdlOperator::Migrate {
                 storage,
                 space_name: space_name.clone(),
-                action: action.clone(),
+                action: *action,
                 migration_data: migration_data.clone(),
                 emitted: false,
             },
@@ -1149,8 +1150,8 @@ impl DdlOperator {
                 if !base.lifecycle.is_opened() {
                     return Ok(None);
                 }
-                let result = match action.as_str() {
-                    "migrate_space" | "migrate" | "migrate_vertex" | "migrate_edge" => {
+                let result = match action {
+                    MigrateAction::MigrateSpace => {
                         if let Some(lock) = storage {
                             let writer = lock.write();
                             let res = writer.save_to_disk().map_err(|e| {
@@ -1172,10 +1173,6 @@ impl DdlOperator {
                             )))
                         }
                     }
-                    _ => Err(QueryError::execution(format!(
-                        "Unsupported migrate action: {}",
-                        action
-                    ))),
                 };
                 base.lifecycle.mark_closed();
                 result

@@ -239,14 +239,11 @@ pub fn build_graph_node(
         }
 
         PlanNodeEnum::MultiShortestPath(_node) => {
-            // MultiShortestPath is structurally incomplete — the planner
-            // node does not carry edge_types, direction, or target vertices,
-            // and the executor spec would silently produce wrong results.
-            // Full support requires a planner that emits the missing fields.
             Err(QueryError::execution(
-                "MultiShortestPath is not supported: planner must provide edge_types, \
-                 direction, and target vertex columns, but current planner node (id={}) \
-                 lacks these required fields".to_string()
+                "MultiShortestPath execution is not yet implemented: the planner node \
+                 (id={}) now carries edge_types, direction, and target_vertex_ids, but \
+                 the executor spec is not wired. Full support requires weighted path \
+                 and RecursiveFragmentSpec integration.".to_string()
             ))
         }
 

@@ -185,7 +185,6 @@ mod tests {
             StreamingExecutor::Source(
                 OperatorBase::new(1),
                 SourceOperator::ScanVertices {
-                    partition_id: 0,
                     buffer: vec![vec![Value::BigInt(1)]],
                     current_index: 0,
                     col_names: vec!["id".to_string()],

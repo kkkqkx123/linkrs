@@ -48,6 +48,7 @@ pub enum GlobalState {
 /// Examples: scan cursor, probe cursor, partial aggregate accumulator,
 /// chunk buffer.
 #[derive(Debug)]
+#[derive(Default)]
 pub struct LocalState {
     /// Scan cursor position (source operators).
     pub cursor_position: Option<usize>,
@@ -57,15 +58,6 @@ pub struct LocalState {
     pub row_buffer: Option<Vec<Vec<Value>>>,
 }
 
-impl Default for LocalState {
-    fn default() -> Self {
-        Self {
-            cursor_position: None,
-            chunk_buffer: None,
-            row_buffer: None,
-        }
-    }
-}
 
 // ── Index key types ─────────────────────────────────────────────────────────
 

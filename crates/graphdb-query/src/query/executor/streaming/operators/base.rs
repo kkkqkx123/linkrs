@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use super::super::runtime::{ExecutionRuntime, OperatorProfileKey};
 use super::super::spill::SpillManager;
+use super::super::state::{GlobalState, GlobalStateKey, StateArenaSet};
+use crate::query::executor::streaming::plan::types::PhysicalOperatorId;
 
 /// Explicit operator lifecycle state machine.
 ///
@@ -89,6 +91,13 @@ pub struct OperatorBase {
     /// Source operators use this value directly; unary/blocking operators
     /// pass through whatever they receive from their child.
     pub chunk_size: usize,
+    /// Index into the [`StateArenaSet`] on [`ExecutionRuntime`] for this
+    /// operator's mutable runtime state.
+    ///
+    /// Assigned during materialization.  The operator creates its typed
+    /// state variant at this index during `open()`, then reads/updates it
+    /// during `next()` and cleans up during `close()`.
+    pub state_index: usize,
 }
 
 impl OperatorBase {
@@ -100,7 +109,38 @@ impl OperatorBase {
             is_global: false,
             partition_id: None,
             chunk_size: 1024,
+            state_index: 0,
         }
+    }
+
+    /// Lock and return the operator state arena from the runtime.
+    ///
+    /// Panics if no runtime is attached.
+    pub fn state_arena(&self) -> parking_lot::MutexGuard<'_, StateArenaSet> {
+        self.runtime.as_ref().expect("runtime required")
+            .state_arena.lock()
+    }
+
+    /// Return the [`GlobalStateKey`] for this operator's slot.
+    pub fn state_key(&self) -> GlobalStateKey {
+        GlobalStateKey(PhysicalOperatorId(self.state_index))
+    }
+
+    /// Take the [`GlobalState`] out of the arena (for cleanup).
+    pub fn take_state(&mut self) -> Option<GlobalState> {
+        let rt = self.runtime.as_ref()?;
+        let key = self.state_key();
+        rt.state_arena.lock().global.remove(&key)
+    }
+
+    /// Insert a [`GlobalState`] into this operator's slot in the runtime arena.
+    ///
+    /// No-op when no runtime is attached (e.g. in unit tests that construct
+    /// executor trees directly without an [`ExecutionRuntime`]).
+    pub fn insert_state(&mut self, state: GlobalState) {
+        let Some(rt) = self.runtime.as_ref() else { return };
+        let key = self.state_key();
+        rt.state_arena.lock().global.insert(key, state);
     }
 
     pub fn with_chunk_size(mut self, chunk_size: usize) -> Self {

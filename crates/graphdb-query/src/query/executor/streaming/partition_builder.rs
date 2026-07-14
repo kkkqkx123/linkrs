@@ -4,10 +4,12 @@
 //! recursively setting partition information on source operators.
 
 use std::ops::Range;
+use std::sync::Arc;
 
 use super::executor::StreamingExecutor;
 use super::operators::source_operator::SourceOperator;
 use super::partition::PartitionView;
+use super::runtime::ExecutionRuntime;
 use crate::core::error::QueryError;
 use crate::query::executor::base::ExecutionContext;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
@@ -19,15 +21,27 @@ use super::builder::StreamingExecutorBuilder;
 /// Each tree is identical except for the source operator's partition
 /// configuration (partition_id, partition_range).  This enables
 /// sequential or parallel processing of partition data.
+///
+/// When `runtime` is `Some`, it is shared by all built executors and
+/// the caller is responsible for propagation.  When `None`, each
+/// executor creates its own runtime (legacy path).
 pub(super) fn build_partitioned(
     node: &PlanNodeEnum,
     context: &ExecutionContext,
     partition_view: &PartitionView,
+    runtime: Option<Arc<ExecutionRuntime>>,
 ) -> Result<Vec<StreamingExecutor>, QueryError> {
+    let physical = StreamingExecutorBuilder::from_plan_node_physical(node, context)?;
     let mut executors = Vec::with_capacity(partition_view.partition_count);
     for partition_id in 0..partition_view.partition_count {
         let partition_range = partition_view.get_range(partition_id);
-        let mut executor = StreamingExecutorBuilder::from_plan_node(node, context)?;
+        let rt = runtime.clone();
+        let mut executor = StreamingExecutorBuilder::materialize_physical(
+            &physical,
+            rt,
+            &context.memory_budget,
+            context.chunk_size,
+        );
         set_partition_on_source(&mut executor, partition_id, partition_range)?;
         executors.push(executor);
     }
@@ -79,32 +93,20 @@ fn set_partition_on_source(
 }
 
 /// Set partition info on a source operator.
+///
+/// `partition_id` is set on the [`OperatorBase`] by
+/// [`StreamingExecutor::set_partition_id`] before calling this function.
+/// This function only sets `partition_range` on storage-backed scans.
 fn set_partition_on_source_op(
     source: &mut SourceOperator,
-    pid: usize,
+    _pid: usize,
     prange: Option<Range<i64>>,
 ) {
     match source {
-        SourceOperator::ScanVertices { partition_id, .. } => {
-            *partition_id = pid;
-        }
-        SourceOperator::ScanEdges { partition_id, .. } => {
-            *partition_id = pid;
-        }
-        SourceOperator::StorageScanVertices {
-            partition_id,
-            partition_range,
-            ..
-        } => {
-            *partition_id = pid;
+        SourceOperator::StorageScanVertices { partition_range, .. } => {
             *partition_range = prange;
         }
-        SourceOperator::StorageScanEdges {
-            partition_id,
-            partition_range,
-            ..
-        } => {
-            *partition_id = pid;
+        SourceOperator::StorageScanEdges { partition_range, .. } => {
             *partition_range = prange;
         }
         _ => {}

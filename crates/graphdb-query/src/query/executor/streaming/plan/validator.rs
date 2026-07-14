@@ -233,18 +233,17 @@ impl PhysicalPlanValidator {
                 }
                 crate::query::executor::streaming::plan::types::OperatorKindSpec::Blocking(
                     spec,
-                ) => {
+                )
                     if matches!(
                         spec,
                         crate::query::executor::streaming::operators::spec::BlockingSpec::Sort { .. }
                     ) && matches!(op.properties.ordering, Ordering::None)
-                    {
+                    => {
                         result.warnings.push(format!(
                             "Sort operator {:?} declares no output ordering",
                             op.operator_id
                         ));
                     }
-                }
                 _ => {}
             }
         }
