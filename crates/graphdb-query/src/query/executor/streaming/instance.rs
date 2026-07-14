@@ -21,6 +21,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use super::engine::StreamingExecutionEngine;
+use super::plan::materializer::PhysicalPlanMaterializer;
 use super::plan::types::PhysicalPlan;
 use super::plan::validator::PhysicalPlanValidator;
 use super::pool::MorselWorkerPool;
@@ -128,6 +129,41 @@ pub struct QueryExecutionInstance {
 }
 
 impl QueryExecutionInstance {
+    /// Instantiate from a [`PhysicalPlan`] arena (production path).
+    ///
+    /// Uses [`PhysicalPlanMaterializer`] to convert the arena plan into an
+    /// operator tree, then wraps it with runtime, engine, and sink.
+    ///
+    /// This is the sole production path.  The old [`PhysicalNode`]-based
+    /// [`instantiate`](Self::instantiate) exists only for the transition.
+    pub fn instantiate_plan(
+        plan: Arc<PhysicalPlan>,
+        bindings: QueryBindings,
+        sink: ResultSink,
+    ) -> Result<Self, QueryError> {
+        // Phase 1: validate the plan (structural + binding).
+        PhysicalPlanValidator::validate(&plan)?;
+
+        // Phase 2: materialize arena plan → executor tree via materializer.
+        let (executor, runtime) =
+            PhysicalPlanMaterializer::materialize(&plan, &bindings)?;
+
+        // Phase 3: set up the engine.
+        let mut engine = StreamingExecutionEngine::new();
+        engine.set_max_workers(bindings.max_workers);
+        engine.set_max_buffered_chunks(bindings.max_buffered_chunks);
+        engine.set_runtime(runtime.clone());
+        engine.register_executor(0, executor);
+
+        Ok(Self {
+            plan,
+            _bindings: bindings,
+            runtime,
+            engine: Some(engine),
+            sink,
+        })
+    }
+
     /// Instantiate from a [`PhysicalNode`] tree (transition path).
     ///
     /// Takes an already-built `PhysicalNode` and wraps it with plan metadata,

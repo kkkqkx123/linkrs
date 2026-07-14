@@ -8,6 +8,7 @@
 //! [`build_plan_node`] performs one exhaustive dispatch so build failures are
 //! never mistaken for an unsupported node.
 
+pub mod capability_matrix;
 pub mod control;
 pub mod ddl;
 pub mod fulltext;
@@ -18,10 +19,10 @@ pub mod txn;
 pub mod vector;
 pub mod writes;
 
-use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::BinaryOperator;
 use crate::query::executor::base::ExecutionContext;
+use crate::query::executor::build_error::PlanBuildError;
 use crate::query::executor::streaming::operators::spec::{JoinSpec, SourceSpec};
 use crate::query::executor::streaming::plan::node::PhysicalNode;
 use crate::query::executor::streaming::plan::properties::PhysicalProperties;
@@ -30,11 +31,12 @@ use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnu
 /// Build a physical operator plan for any planner node.
 ///
 /// Every known node type is handled by one of the domain-specific sub-modules.
-/// Truly unsupported types (Loop, PassThrough, Select) produce an error.
+/// Truly unsupported types (Loop, PassThrough, Select) produce a structured
+/// [`PlanBuildError::UnsupportedNode`] error.
 pub fn build_plan_node(
     node: &PlanNodeEnum,
     context: &ExecutionContext,
-) -> Result<PhysicalNode, QueryError> {
+) -> Result<PhysicalNode, PlanBuildError> {
     match node {
         PlanNodeEnum::Start(_)
         | PlanNodeEnum::Argument(_)
@@ -205,18 +207,26 @@ pub fn build_plan_node(
             context,
         ),
 
-        // ── Unsupported ──────────────────────────────────
-        PlanNodeEnum::Loop(_) => Err(QueryError::execution(
-            "Loop plan nodes are not supported".to_string(),
+        // Unsupported: these node types have no physical executor implementation.
+        PlanNodeEnum::Loop(_) => Err(PlanBuildError::unsupported(
+            node.name(),
+            node.id(),
+            "Loop plan nodes are not supported",
         )),
-        PlanNodeEnum::PassThrough(_) => Err(QueryError::execution(
-            "PassThrough plan nodes are not supported".to_string(),
+        PlanNodeEnum::PassThrough(_) => Err(PlanBuildError::unsupported(
+            node.name(),
+            node.id(),
+            "PassThrough plan nodes are not supported",
         )),
-        PlanNodeEnum::Select(_) => Err(QueryError::execution(
-            "Select plan nodes are not supported".to_string(),
+        PlanNodeEnum::Select(_) => Err(PlanBuildError::unsupported(
+            node.name(),
+            node.id(),
+            "Select plan nodes are not supported",
         )),
-        PlanNodeEnum::AppendVertices(_) => Err(QueryError::execution(
-            "AppendVertices plan nodes are not supported".to_string(),
+        PlanNodeEnum::AppendVertices(_) => Err(PlanBuildError::unsupported(
+            node.name(),
+            node.id(),
+            "AppendVertices plan nodes are not supported",
         )),
     }
 }
@@ -225,9 +235,14 @@ pub fn build_plan_node(
 
 pub(super) fn contextual_to_expression(
     expr: &crate::core::types::expr::ContextualExpression,
-) -> Result<Expression, QueryError> {
+) -> Result<Expression, PlanBuildError> {
     expr.get_expression().ok_or_else(|| {
-        QueryError::execution("Failed to get expression from ContextualExpression".to_string())
+        PlanBuildError::expression(
+            "ContextualExpression",
+            0,
+            format!("{:?}", expr),
+            "Failed to get expression from ContextualExpression",
+        )
     })
 }
 
@@ -257,13 +272,15 @@ pub(super) fn build_leaf_command<Spec>(
     )
 }
 
-pub(super) fn internal_routing_error(node: &PlanNodeEnum, builder: &str) -> QueryError {
-    QueryError::execution(format!(
-        "Internal routing error: node {} (id={}) was incorrectly routed to {} builder",
+pub(super) fn internal_routing_error(node: &PlanNodeEnum, builder: &str) -> PlanBuildError {
+    PlanBuildError::unsupported(
         node.name(),
         node.id(),
-        builder
-    ))
+        format!(
+            "Internal routing error: node was incorrectly routed to {} builder",
+            builder
+        ),
+    )
 }
 
 fn build_join_core(
@@ -272,7 +289,7 @@ fn build_join_core(
     right_plan: &PlanNodeEnum,
     join_spec: JoinSpec,
     context: &ExecutionContext,
-) -> Result<PhysicalNode, QueryError> {
+) -> Result<PhysicalNode, PlanBuildError> {
     let left_phys = build_plan_node(left_plan, context)?;
     let right_phys = build_plan_node(right_plan, context)?;
     Ok(PhysicalNode::Join(
@@ -288,7 +305,7 @@ fn build_join_core(
 fn build_join_with_keys(
     config: JoinConfig,
     context: &ExecutionContext,
-) -> Result<PhysicalNode, QueryError> {
+) -> Result<PhysicalNode, PlanBuildError> {
     let left_phys = build_plan_node(config.left_plan, context)?;
     let right_phys = build_plan_node(config.right_plan, context)?;
     let condition = join_condition_from_keys(config.hash_keys, config.probe_keys, config.right_col_names)?;
@@ -315,15 +332,25 @@ pub(super) fn join_condition_from_keys(
     hash_keys: &[crate::core::types::expr::ContextualExpression],
     probe_keys: &[crate::core::types::expr::ContextualExpression],
     _right_col_names: &[String],
-) -> Result<Option<Expression>, QueryError> {
+) -> Result<Option<Expression>, PlanBuildError> {
     if hash_keys.is_empty() || probe_keys.is_empty() || hash_keys.len() != probe_keys.len() {
         return Ok(None);
     }
     let left_first = hash_keys[0].get_expression().ok_or_else(|| {
-        QueryError::execution("Failed to resolve hash key expression".to_string())
+        PlanBuildError::expression(
+            "JoinCondition",
+            0,
+            format!("{:?}", hash_keys[0]),
+            "Failed to resolve hash key expression",
+        )
     })?;
     let right_first = probe_keys[0].get_expression().ok_or_else(|| {
-        QueryError::execution("Failed to resolve probe key expression".to_string())
+        PlanBuildError::expression(
+            "JoinCondition",
+            0,
+            format!("{:?}", probe_keys[0]),
+            "Failed to resolve probe key expression",
+        )
     })?;
     let mut condition = Expression::Binary {
         left: Box::new(left_first),
@@ -332,10 +359,20 @@ pub(super) fn join_condition_from_keys(
     };
     for i in 1..hash_keys.len() {
         let left = hash_keys[i].get_expression().ok_or_else(|| {
-            QueryError::execution("Failed to resolve hash key expression".to_string())
+            PlanBuildError::expression(
+                "JoinCondition",
+                0,
+                format!("{:?}", hash_keys[i]),
+                "Failed to resolve hash key expression",
+            )
         })?;
         let right = probe_keys[i].get_expression().ok_or_else(|| {
-            QueryError::execution("Failed to resolve probe key expression".to_string())
+            PlanBuildError::expression(
+                "JoinCondition",
+                0,
+                format!("{:?}", probe_keys[i]),
+                "Failed to resolve probe key expression",
+            )
         })?;
         let eq = Expression::Binary {
             left: Box::new(left),
@@ -356,6 +393,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::query::executor::build_error::PlanBuildError;
     use crate::query::planning::plan::core::nodes::operation::sort_node::LimitNode;
     use crate::query::validator::context::ExpressionAnalysisContext;
 
@@ -366,6 +404,10 @@ mod tests {
         let context = ExecutionContext::new(Arc::new(ExpressionAnalysisContext::new()));
         let error = build_plan_node(&PlanNodeEnum::Limit(limit), &context)
             .expect_err("negative limit offset must fail physical planning");
+        match &error {
+            PlanBuildError::MissingRequiredValue { .. } => {}
+            _ => panic!("expected MissingRequiredValue, got: {error}"),
+        }
         let message = error.to_string();
         assert!(message.contains("Limit offset must fit in u32"));
         assert!(!message.contains("not supported"));

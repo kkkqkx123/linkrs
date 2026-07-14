@@ -1,7 +1,7 @@
-use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::Value;
 use crate::query::executor::base::ExecutionContext;
+use crate::query::executor::build_error::PlanBuildError;
 use crate::query::executor::streaming::operators::spec::FulltextSpec;
 use crate::query::executor::streaming::plan::node::PhysicalNode;
 use crate::query::parser::ast::fulltext::FulltextQueryExpr;
@@ -10,7 +10,7 @@ use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnu
 pub fn build_fulltext_node(
     node: &PlanNodeEnum,
     context: &ExecutionContext,
-) -> Result<PhysicalNode, QueryError> {
+) -> Result<PhysicalNode, PlanBuildError> {
     match node {
         PlanNodeEnum::FulltextManage(manage_node) => Ok(super::build_leaf_command(
             node.id(),
@@ -69,10 +69,14 @@ pub fn build_fulltext_node(
             ))
         }
 
-        _ => Err(QueryError::execution(format!(
-            "operator_plan_builder::fulltext does not handle node type: {}",
-            node.name()
-        ))),
+        _ => Err(PlanBuildError::unsupported(
+            node.name(),
+            node.id(),
+            format!(
+                "operator_plan_builder::fulltext does not handle node type: {}",
+                node.name()
+            ),
+        )),
     }
 }
 

@@ -9,10 +9,68 @@
 //! Phase 2 pilot: Source, Filter, Project, Limit, Sort, HashJoin.
 //! Remaining operators will be migrated in follow-up phases.
 
+use std::sync::Arc;
+
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::AggregateFunction;
 use crate::core::{EdgeDirection, Value};
 use crate::query::executor::streaming::executor::SortDirection;
+use crate::query::executor::streaming::slot::SlotLayout;
+
+// ── Capability-unavailable sentinel ──────────────────────────────────────────
+
+/// Returned by builders when a required storage/index capability is not
+/// available, instead of silently producing empty results.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Capability {
+    IndexScan { index_id: u64 },
+    IndexCursor,
+    PropertyBatchRead,
+}
+
+// ── Bound index predicate types ─────────────────────────────────────────────
+
+/// A predicate that has been validated and bound to an index schema.
+///
+/// Created at plan-build time from the logical plan's `IndexLimit` / filter.
+#[derive(Debug, Clone)]
+pub enum BoundIndexPredicate {
+    /// Exact equality: `column = value`
+    Equal {
+        column: String,
+        value: Value,
+    },
+    /// Range scan: `column BETWEEN begin AND end`
+    Range {
+        column: String,
+        begin: Value,
+        end: Value,
+        include_begin: bool,
+        include_end: bool,
+    },
+    /// Prefix scan (for string columns): `column STARTS WITH prefix`
+    Prefix {
+        column: String,
+        prefix: Value,
+    },
+    /// Full scan (no predicate, all entries)
+    Full,
+}
+
+/// Describes which columns the index should return.
+///
+/// A covering index can satisfy the projection directly; a non-covering
+/// index requires back-to-table fetches.
+#[derive(Debug, Clone)]
+pub enum IndexProjection {
+    /// Return only the row ID (back-to-table required).
+    RowIdOnly,
+    /// Return specific columns from the index (covering if the index
+    /// includes all of them).
+    Columns(Vec<String>),
+    /// Return all indexed columns.
+    AllColumns,
+}
 
 // ── Source spec ──────────────────────────────────────────────────────────────
 
@@ -60,24 +118,51 @@ pub enum SourceSpec {
         space_name: String,
         edge_type: Option<String>,
     },
+    /// Index scan with typed predicate and projection.
+    ///
+    /// The predicate and projection are validated at build time against
+    /// the index schema.  Stale row IDs are skipped, not treated as EOF.
     IndexScan {
         space_name: String,
-        index_name: Option<String>,
-        index_value: Option<Value>,
+        index_name: String,
+        index_id: u64,
+        predicate: BoundIndexPredicate,
+        projection: IndexProjection,
+        residual_filter: Option<crate::core::types::expr::Expression>,
+        output_layout: Arc<SlotLayout>,
     },
+    /// Produces one singleton row from which correlated apply can pull.
     Argument,
+    /// Unary property retrieval: reads properties from the input entity IDs.
+    ///
+    /// Unlike the source-variant GetProp (which is a zero-input stub),
+    /// this unary variant takes an input child and produces one output
+    /// row per input row with additional property columns.
     GetProp {
         space_name: String,
-        vertex_ids: Option<Vec<Value>>,
-        edge_ids: Option<Vec<Value>>,
+        /// Slot number of the entity (vertex or edge) column in the input chunk.
+        entity_slot: usize,
+        /// Property names to read.
         prop_names: Vec<String>,
+        /// Whether the entity is a vertex or edge.
+        is_vertex: bool,
+        /// Output layout (input columns + new property columns).
+        output_layout: Arc<SlotLayout>,
     },
+    /// Alias for `IndexScan` — kept for backward compat; new code should
+    /// use `IndexScan` directly.  Both variants are identical in semantics.
     LookupIndex {
         space_name: String,
         index_name: String,
-        index_condition: Option<(String, Value)>,
-        limit: Option<usize>,
+        index_id: u64,
+        predicate: BoundIndexPredicate,
+        projection: IndexProjection,
+        residual_filter: Option<crate::core::types::expr::Expression>,
+        output_layout: Arc<SlotLayout>,
     },
+    /// Produces one zero-column row on first `next()`, then `None`.
+    /// Used as the seed for command-type operators (DDL, DML, etc.)
+    /// that require a source but have no real input.
     Start,
 }
 
@@ -504,9 +589,12 @@ pub enum VectorSpec {
 // ── Txn spec ─────────────────────────────────────────────────────────────────
 
 /// Immutable config for transaction operators.
+///
+/// The actual transaction state transitions are performed by the
+/// [`SessionTransactionController`] at execution time.
 #[derive(Debug, Clone)]
 pub enum TxnSpec {
-    BeginTransaction { transaction_id: Option<String> },
-    Commit { transaction_id: Option<String> },
-    Rollback { transaction_id: Option<String> },
+    BeginTransaction,
+    Commit,
+    Rollback,
 }

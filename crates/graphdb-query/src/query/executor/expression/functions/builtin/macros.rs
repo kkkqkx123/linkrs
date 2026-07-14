@@ -1,10 +1,10 @@
 //! Module for defining built-in function macros
 //!
-//! Provide macros for reducing the amount of样板 code, used for defining function enumerations and for executing functions.
+//! Macros for reducing boilerplate in function enumeration and execution.
 
 /// Macro for defining an enumeration of built-in functions
 ///
-/// 自动生成 name(), arity(), is_variadic(), description(), execute() 方法
+/// Auto-generate name(), arity(), is_variadic(), description(), execute()
 #[macro_export]
 macro_rules! define_function_enum {
     (

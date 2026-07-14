@@ -27,6 +27,7 @@ pub mod parallel_safety;
 pub mod partition;
 pub mod plan;
 pub mod pool;
+pub mod parameters;
 pub mod result_utils;
 pub mod runtime;
 pub mod slot;
@@ -34,6 +35,7 @@ pub mod spill;
 pub mod state;
 pub mod stream;
 pub mod stream_result;
+pub mod query_registry;
 pub mod transaction_scope;
 
 pub use builder::StreamingExecutorBuilder;
@@ -75,6 +77,10 @@ pub use state::{
     GlobalState, GlobalStateArena, GlobalStateKey, LocalState, LocalStateArena, LocalStateKey,
     StateArenaSet, TaskId,
 };
+pub use query_registry::{
+    CancelToken, QueryGuard, QueryId, QueryMetadata, QueryRegistry,
+};
 pub use transaction_scope::{
-    SessionTransactionController, TransactionCommandResult, TransactionId, TransactionScope,
+    CancelReason, SessionTransactionController, TransactionCommandResult, TransactionId,
+    TransactionScope, TransactionState,
 };

@@ -7,8 +7,12 @@ use parking_lot::Mutex;
 
 use parking_lot::RwLock;
 
+use super::query_registry::{CancelToken, QueryId, QueryRegistry};
+use super::slot::SlotLayout;
 use super::state::StateArenaSet;
+use super::transaction_scope::{CancelReason, SessionTransactionController, TransactionScope};
 use crate::core::error::QueryError;
+use crate::core::Value;
 use super::spill::SpillManager;
 use crate::query::executor::base::MemoryBudget;
 use crate::query::executor::streaming::pool::TaskScheduler;
@@ -187,15 +191,16 @@ impl ResourceOwner {
 /// lifecycle, and query-registration so that operators do not each
 /// carry ad-hoc context.
 ///
-/// Phase 1: engine-level cancel checking and basic profile tracking.
-/// Future phases add per-operator cancel checking, spill, and full
-/// instrumentation.
+/// Phase 2 (M2): unified cancellation via [`CancelToken`] replaces the
+/// legacy `AtomicBool`.  Both coexist during migration.
 #[derive(Debug)]
 pub struct ExecutionRuntime {
     /// Query identity (behind Mutex for write-once from the API layer).
     query_id: parking_lot::Mutex<QueryIdentity>,
-    /// Set to `true` when the query should be cancelled.
+    /// Legacy cancel flag (AtomicBool).  Replaced by `cancel_token_v2`.
     cancel_token: Arc<AtomicBool>,
+    /// M2: typed cancellation token with reason tracking.
+    cancel_token_v2: CancelToken,
     /// Optional deadline; the query is cancelled after this instant.
     deadline: Option<Instant>,
     /// Per-query memory budget for blocking operators.
@@ -206,6 +211,14 @@ pub struct ExecutionRuntime {
     resource_owner: Arc<Mutex<ResourceOwner>>,
     /// Optional reference to the global QueryManager for KILL QUERY.
     query_manager: Option<Arc<QueryManager>>,
+    /// M2: Session-level transaction controller for transaction commands.
+    session_controller: Option<Arc<SessionTransactionController>>,
+    /// M2: Transaction scope for this execution (set by bindings).
+    transaction_scope: Option<TransactionScope>,
+    /// M2: Optional reference to the [`QueryRegistry`] for KILL QUERY.
+    query_registry: Option<Arc<QueryRegistry>>,
+    /// M2: Query ID allocated by the registry.
+    registry_query_id: Option<QueryId>,
     /// Query-level morsel worker pool for dynamic partition execution.
     /// Created when `max_workers > 1`; `None` means serial fallback.
     /// Behind a Mutex so the engine can set the pool after construction.
@@ -228,6 +241,13 @@ pub struct ExecutionRuntime {
     /// `open()` / `next()` / `close()`, indexed by [`PhysicalOperatorId`]
     /// stored in [`OperatorBase::state_index`](super::operators::base::OperatorBase).
     pub state_arena: Mutex<StateArenaSet>,
+
+    /// Correlation frame for [`Argument`](super::operators::source_operator::SourceOperator::Argument)
+    /// sources inside Apply right subtrees.
+    ///
+    /// `Apply` sets this before pulling from its right child; `Argument`
+    /// reads the current row and layout to produce output.
+    correlation_frame: Mutex<Option<(Arc<SlotLayout>, Vec<Value>)>>,
 }
 
 impl ExecutionRuntime {
@@ -245,11 +265,16 @@ impl ExecutionRuntime {
         Self {
             query_id: parking_lot::Mutex::new(query_id),
             cancel_token: Arc::new(AtomicBool::new(false)),
+            cancel_token_v2: CancelToken::new(),
             deadline: None,
             memory_budget,
             profile: Arc::new(Mutex::new(ProfileCollector::new())),
             resource_owner: Arc::new(Mutex::new(ResourceOwner::new())),
             query_manager: None,
+            session_controller: None,
+            transaction_scope: None,
+            query_registry: None,
+            registry_query_id: None,
             worker_pool: Arc::new(parking_lot::Mutex::new(None)),
             max_buffered_chunks: AtomicUsize::new(10),
             spill_manager: Arc::new(parking_lot::Mutex::new(None)),
@@ -259,6 +284,7 @@ impl ExecutionRuntime {
             #[cfg(feature = "qdrant")]
             vector_coordinator,
             state_arena: Mutex::new(StateArenaSet::new()),
+            correlation_frame: Mutex::new(None),
         }
     }
 
@@ -320,36 +346,99 @@ impl ExecutionRuntime {
         Some(QueryFinishGuard::new(qm, id.query_id as i64))
     }
 
+    // ── M2: QueryRegistry integration ──
+
+    /// Attach a [`QueryRegistry`] and the allocated [`QueryId`].
+    pub fn set_query_registry(&mut self, registry: Arc<QueryRegistry>, qid: QueryId) {
+        self.query_registry = Some(registry);
+        self.registry_query_id = Some(qid);
+    }
+
+    /// Return the registry-allocated query ID, if set.
+    pub fn registry_query_id(&self) -> Option<QueryId> {
+        self.registry_query_id
+    }
+
+    /// Set the session-level transaction controller for transaction commands.
+    pub fn set_session_controller(&mut self, ctrl: Arc<SessionTransactionController>) {
+        self.session_controller = Some(ctrl);
+    }
+
+    /// Return the session-level transaction controller, if set.
+    pub fn session_controller(&self) -> Option<&Arc<SessionTransactionController>> {
+        self.session_controller.as_ref()
+    }
+
+    /// Set the transaction scope for this execution.
+    pub fn set_transaction_scope(&mut self, scope: TransactionScope) {
+        self.transaction_scope = Some(scope);
+    }
+
+    /// Return the current transaction scope, if any.
+    pub fn transaction_scope(&self) -> Option<&TransactionScope> {
+        self.transaction_scope.as_ref()
+    }
+
+    /// Return the typed [`CancelToken`] for cooperative cancellation.
+    pub fn cancel_token_v2(&self) -> CancelToken {
+        self.cancel_token_v2.clone()
+    }
+
     // ── Cancellation ──
 
-    /// Token used to signal cancellation (shared with operators and I/O).
+    /// Legacy token used to signal cancellation (shared with operators and I/O).
     pub fn cancel_token(&self) -> Arc<AtomicBool> {
         self.cancel_token.clone()
     }
 
-    /// Check whether the query has been cancelled.
+    /// Check whether the query has been cancelled (checks both legacy and v2).
     pub fn is_cancelled(&self) -> bool {
         self.cancel_token.load(Ordering::Relaxed)
+            || self.cancel_token_v2.is_cancelled()
             || self.deadline.is_some_and(|d| Instant::now() >= d)
     }
 
     /// Return an error if the query has been cancelled.
     pub fn ensure_not_cancelled(&self) -> Result<(), QueryError> {
         if self.is_cancelled() {
-            Err(QueryError::execution("Query cancelled".to_string()))
+            let reason = self.cancel_token_v2.reason()
+                .map(|r| r.to_string())
+                .unwrap_or_else(|| "Query cancelled".to_string());
+            Err(QueryError::execution(reason))
         } else {
             Ok(())
         }
     }
 
-    /// Cancel this query (set the cancel token).
+    /// Cancel this query with a typed reason.
     ///
-    /// Also marks the query as Killed in the attached QueryManager.
-    pub fn cancel(&self) {
+    /// Sets both the legacy `AtomicBool` and the M2 [`CancelToken`].
+    /// Also marks the query as Killed in the attached QueryManager and
+    /// cancels the registry entry (if configured).
+    pub fn cancel_with_reason(&self, reason: CancelReason) {
         self.cancel_token.store(true, Ordering::Relaxed);
+        self.cancel_token_v2.cancel(reason.clone());
         if let Some(ref qm) = self.query_manager {
             let id = self.query_id();
             let _ = qm.kill_query(id.query_id as i64);
+        }
+        if let (Some(ref reg), Some(qid)) = (&self.query_registry, self.registry_query_id) {
+            reg.cancel(qid, reason);
+        }
+    }
+
+    /// Legacy cancel (no typed reason).  Delegates to [`cancel_with_reason`]
+    /// with [`CancelReason::UserKill`].
+    pub fn cancel(&self) {
+        self.cancel_with_reason(CancelReason::UserKill);
+    }
+
+    /// Enable deadline-based cancellation.
+    pub fn cancel_on_deadline(&self) {
+        if let Some(deadline) = self.deadline {
+            if Instant::now() >= deadline {
+                self.cancel_with_reason(CancelReason::Deadline);
+            }
         }
     }
 
@@ -425,6 +514,27 @@ impl ExecutionRuntime {
     pub fn set_max_buffered_chunks(&self, chunks: usize) {
         self.max_buffered_chunks
             .store(chunks.max(1), Ordering::Relaxed);
+    }
+
+    // ── Correlation frame (for Argument / Apply) ──
+
+    /// Set the correlation row that [`Argument`] sources will read.
+    ///
+    /// Called by `ApplyOperator` before pulling from the right subtree.
+    pub fn set_correlation_frame(&self, layout: Arc<SlotLayout>, row: Vec<Value>) {
+        *self.correlation_frame.lock() = Some((layout, row));
+    }
+
+    /// Take the current correlation frame, if any.
+    ///
+    /// Called by `SourceOperator::Argument` on each `next()` call.
+    pub fn take_correlation_frame(&self) -> Option<(Arc<SlotLayout>, Vec<Value>)> {
+        self.correlation_frame.lock().take()
+    }
+
+    /// Clear the correlation frame (used after right subtree evaluation).
+    pub fn clear_correlation_frame(&self) {
+        *self.correlation_frame.lock() = None;
     }
 }
 

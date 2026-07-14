@@ -1,6 +1,7 @@
 // Re-export all executor modules
 pub mod algorithms;
 pub mod base;
+pub mod build_error;
 pub mod explain;
 pub mod expression;
 pub mod streaming;

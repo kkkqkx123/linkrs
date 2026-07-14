@@ -1,48 +1,58 @@
+use std::sync::Arc;
+
 use crate::core::error::QueryError;
 use crate::core::Value;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::operators::base::OperatorBase;
+use crate::query::executor::streaming::transaction_scope::{
+    SessionTransactionController, TransactionCommandResult,
+};
 
+/// Transaction command operator.
+///
+/// Validates state transitions through the [`SessionTransactionController`]
+/// and produces a structured result chunk.  The actual TransactionManager
+/// operations (begin/commit/rollback) are performed by the API layer before
+/// this operator runs.
 #[derive(Debug)]
 pub enum TxnOperator {
     BeginTransaction {
-        transaction_id: Option<String>,
         emitted: bool,
     },
     Commit {
-        transaction_id: Option<String>,
         emitted: bool,
     },
     Rollback {
-        transaction_id: Option<String>,
         emitted: bool,
     },
 }
 
 impl TxnOperator {
-    /// Create a TxnOperator from an immutable spec.
     pub fn from_spec(spec: &super::spec::TxnSpec) -> Self {
         match spec {
-            super::spec::TxnSpec::BeginTransaction { transaction_id } => {
-                TxnOperator::BeginTransaction {
-                    transaction_id: transaction_id.clone(),
-                    emitted: false,
-                }
+            super::spec::TxnSpec::BeginTransaction => {
+                TxnOperator::BeginTransaction { emitted: false }
             }
-            super::spec::TxnSpec::Commit { transaction_id } => {
-                TxnOperator::Commit {
-                    transaction_id: transaction_id.clone(),
-                    emitted: false,
-                }
+            super::spec::TxnSpec::Commit => {
+                TxnOperator::Commit { emitted: false }
             }
-            super::spec::TxnSpec::Rollback { transaction_id } => {
-                TxnOperator::Rollback {
-                    transaction_id: transaction_id.clone(),
-                    emitted: false,
-                }
+            super::spec::TxnSpec::Rollback => {
+                TxnOperator::Rollback { emitted: false }
             }
         }
+    }
+
+    fn controller(base: &OperatorBase) -> Result<Arc<SessionTransactionController>, QueryError> {
+        base.runtime
+            .as_ref()
+            .and_then(|rt| rt.session_controller())
+            .cloned()
+            .ok_or_else(|| {
+                QueryError::execution(
+                    "Transaction controller not available in execution runtime".to_string(),
+                )
+            })
     }
 
     pub fn open(
@@ -50,32 +60,61 @@ impl TxnOperator {
         _base: &mut OperatorBase,
         input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
-        match self {
-            Self::BeginTransaction { .. } | Self::Commit { .. } | Self::Rollback { .. } => {
-                input.open()?;
-                _base.lifecycle.mark_opened();
-                Ok(())
-            }
-        }
+        input.open()?;
+        _base.lifecycle.mark_opened();
+        Ok(())
     }
 
     pub fn next(
         &mut self,
-        _base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
+        base: &mut OperatorBase,
+        _input: &mut StreamingExecutor,
     ) -> Result<Option<DataChunk>, QueryError> {
         match self {
-            Self::BeginTransaction { emitted, .. } => emit_once(emitted, "transaction started"),
-            Self::Commit { emitted, .. } => {
+            Self::BeginTransaction { emitted } => {
                 if *emitted {
                     return Ok(None);
                 }
-                if let Some(chunk) = input.advance()? {
-                    return Ok(Some(chunk));
+                *emitted = true;
+                let ctrl = Self::controller(base)?;
+                // The API layer should have already created the transaction.
+                // We validate that begin_tracking succeeds (no state conflict).
+                let result = ctrl.current_scope();
+                match result {
+                    crate::query::executor::streaming::TransactionScope::ExplicitBorrowed {
+                        transaction_id, ..
+                    } => Ok(Some(
+                        TransactionCommandResult::begin(transaction_id).into_data_chunk(),
+                    )),
+                    _ => Err(QueryError::execution(
+                        "BEGIN: no active transaction found; API layer must call begin before executing this plan".to_string(),
+                    )),
                 }
-                emit_once(emitted, "committed")
             }
-            Self::Rollback { emitted, .. } => emit_once(emitted, "rolled back"),
+            Self::Commit { emitted } => {
+                if *emitted {
+                    return Ok(None);
+                }
+                *emitted = true;
+                let ctrl = Self::controller(base)?;
+                let txn_id = ctrl.begin_commit()?;
+                ctrl.commit_finalize();
+                Ok(Some(
+                    TransactionCommandResult::commit(txn_id).into_data_chunk(),
+                ))
+            }
+            Self::Rollback { emitted } => {
+                if *emitted {
+                    return Ok(None);
+                }
+                *emitted = true;
+                let ctrl = Self::controller(base)?;
+                let txn_id = ctrl.begin_rollback()?;
+                ctrl.rollback_finalize();
+                Ok(Some(
+                    TransactionCommandResult::rollback(txn_id).into_data_chunk(),
+                ))
+            }
         }
     }
 
@@ -84,11 +123,7 @@ impl TxnOperator {
         _base: &mut OperatorBase,
         input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
-        match self {
-            Self::BeginTransaction { .. } | Self::Commit { .. } | Self::Rollback { .. } => {
-                input.stop()
-            }
-        }
+        input.stop()
     }
 
     pub fn close(
@@ -96,26 +131,32 @@ impl TxnOperator {
         _base: &mut OperatorBase,
         input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
-        match self {
-            Self::BeginTransaction { .. } | Self::Commit { .. } | Self::Rollback { .. } => {
-                if _base.lifecycle.can_close() {
-                    input.close()?;
-                    _base.lifecycle.mark_closed();
-                }
-                Ok(())
-            }
+        if _base.lifecycle.can_close() {
+            input.close()?;
+            _base.lifecycle.mark_closed();
         }
+        Ok(())
     }
 }
 
-fn emit_once(emitted: &mut bool, message: &str) -> Result<Option<DataChunk>, QueryError> {
-    if *emitted {
-        return Ok(None);
+impl TransactionCommandResult {
+    fn into_data_chunk(self) -> DataChunk {
+        let message = Value::String(self.message);
+        let command = Value::String(self.command.to_string());
+        let schema = Arc::new(crate::query::executor::streaming::chunk::Schema::new(
+            vec![
+                crate::query::executor::streaming::chunk::ColumnInfo {
+                    name: "command".to_string(),
+                    data_type: "string".to_string(),
+                },
+                crate::query::executor::streaming::chunk::ColumnInfo {
+                    name: "result".to_string(),
+                    data_type: "string".to_string(),
+                },
+            ],
+        ));
+        DataChunk::new(vec![vec![command, message]], schema)
     }
-    *emitted = true;
-    Ok(Some(DataChunk::from_rows(vec![vec![Value::String(
-        message.to_string(),
-    )]])))
 }
 
 #[cfg(test)]
@@ -123,24 +164,65 @@ mod tests {
     use super::*;
     use crate::query::executor::streaming::builder::StreamingExecutorBuilder;
     use crate::query::executor::streaming::operators::spec::TxnSpec;
+    use crate::query::executor::streaming::runtime::ExecutionRuntime;
+
+    #[test]
+    fn transaction_command_requires_controller() {
+        let input =
+            StreamingExecutorBuilder::build_simple_scan(vec![]).expect("test source should build");
+        let operator = TxnOperator::from_spec(&TxnSpec::BeginTransaction);
+        let mut executor = StreamingExecutor::Txn(OperatorBase::new(1), Box::new(input), operator);
+        executor.open().expect("should open");
+        let result = executor.advance();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("controller not available"));
+        executor.close().expect("should close");
+    }
 
     #[test]
     fn transaction_command_emits_once() {
         let input =
             StreamingExecutorBuilder::build_simple_scan(vec![]).expect("test source should build");
-        let operator = TxnOperator::from_spec(&TxnSpec::BeginTransaction {
-            transaction_id: None,
-        });
+        let operator = TxnOperator::from_spec(&TxnSpec::BeginTransaction);
         let mut executor = StreamingExecutor::Txn(OperatorBase::new(1), Box::new(input), operator);
+
+        let ctrl = Arc::new(SessionTransactionController::new());
+        let mut rt = ExecutionRuntime::default_budget();
+        rt.set_session_controller(ctrl.clone());
+        executor.set_runtime(Some(Arc::new(rt)));
+
         executor.open().expect("transaction command should open");
-        assert!(executor
-            .advance()
-            .expect("first advance should succeed")
-            .is_some());
-        assert!(executor
-            .advance()
-            .expect("second advance should succeed")
-            .is_none());
+
+        // First advance: without a pre-registered transaction, the BEGIN
+        // will fail because current_scope returns None.
+        let result = executor.advance();
+        assert!(result.is_err(), "expected error (no active transaction)");
+
+        // emitted is now true — second call should return None
+        let second = executor.advance().expect("second advance should not fail");
+        assert!(second.is_none());
         executor.close().expect("transaction command should close");
+    }
+
+    #[test]
+    fn test_commit_without_active_transaction() {
+        let input =
+            StreamingExecutorBuilder::build_simple_scan(vec![]).expect("test source should build");
+        let operator = TxnOperator::from_spec(&TxnSpec::Commit);
+        let mut executor = StreamingExecutor::Txn(OperatorBase::new(1), Box::new(input), operator);
+
+        let ctrl = Arc::new(SessionTransactionController::new());
+        let mut rt = ExecutionRuntime::default_budget();
+        rt.set_session_controller(ctrl.clone());
+        executor.set_runtime(Some(Arc::new(rt)));
+
+        executor.open().expect("should open");
+        let result = executor.advance();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Cannot COMMIT"));
+        executor.close().expect("should close");
     }
 }

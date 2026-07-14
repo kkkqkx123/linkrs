@@ -10,6 +10,7 @@
 use crate::core::error::QueryError;
 use crate::query::executor::base::ExecutionContext;
 use super::types::{FragmentIdAllocator, PhysicalOperatorIdAllocator};
+use crate::query::executor::streaming::parameters::ParameterSchema;
 use crate::query::executor::streaming::slot::SlotLayout;
 
 /// Schema identifier for catalog lookups during plan building.
@@ -67,6 +68,9 @@ pub struct PhysicalPlanBuildContext {
     /// The output slot layout expected by the parent (if known at build time).
     pub expected_output_layout: Option<SlotLayout>,
 
+    /// Parameter schema for prepared-statement parameters.
+    pub parameter_schema: ParameterSchema,
+
     // ── Allocators ──
     pub(crate) operator_id_alloc: PhysicalOperatorIdAllocator,
     pub(crate) fragment_id_alloc: FragmentIdAllocator,
@@ -92,6 +96,7 @@ impl PhysicalPlanBuildContext {
                 ..PlanningConfig::default()
             },
             expected_output_layout: None,
+            parameter_schema: ParameterSchema::default(),
             operator_id_alloc: PhysicalOperatorIdAllocator::new(),
             fragment_id_alloc: FragmentIdAllocator::new(),
         }
@@ -104,6 +109,7 @@ impl PhysicalPlanBuildContext {
             statistics: StatisticsSnapshot::default(),
             config: PlanningConfig::default(),
             expected_output_layout: None,
+            parameter_schema: ParameterSchema::default(),
             operator_id_alloc: PhysicalOperatorIdAllocator::new(),
             fragment_id_alloc: FragmentIdAllocator::new(),
         }

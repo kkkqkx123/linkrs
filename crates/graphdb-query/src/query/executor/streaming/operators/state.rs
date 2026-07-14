@@ -63,9 +63,17 @@ pub enum SourceState {
         position: usize,
     },
     Argument,
-    GetProp,
-    LookupIndex,
-    Start,
+    GetProp {
+        entity_slot: usize,
+        prop_names: Vec<String>,
+    },
+    LookupIndex {
+        resolved_ids: Vec<Value>,
+        position: usize,
+    },
+    Start {
+        emitted: bool,
+    },
 }
 
 impl SourceState {
@@ -107,9 +115,15 @@ impl SourceState {
                 position: 0,
             },
             SourceSpec::Argument => SourceState::Argument,
-            SourceSpec::GetProp { .. } => SourceState::GetProp,
-            SourceSpec::LookupIndex { .. } => SourceState::LookupIndex,
-            SourceSpec::Start => SourceState::Start,
+            SourceSpec::GetProp { entity_slot, prop_names, .. } => SourceState::GetProp {
+                entity_slot: *entity_slot,
+                prop_names: prop_names.clone(),
+            },
+            SourceSpec::LookupIndex { .. } => SourceState::LookupIndex {
+                resolved_ids: Vec::new(),
+                position: 0,
+            },
+            SourceSpec::Start => SourceState::Start { emitted: false },
         }
     }
 }
@@ -514,9 +528,9 @@ pub enum TxnState {
 impl TxnState {
     pub fn from_spec(spec: &super::spec::TxnSpec) -> Self {
         match spec {
-            super::spec::TxnSpec::BeginTransaction { .. } => TxnState::BeginTransaction,
-            super::spec::TxnSpec::Commit { .. } => TxnState::Commit,
-            super::spec::TxnSpec::Rollback { .. } => TxnState::Rollback,
+            super::spec::TxnSpec::BeginTransaction => TxnState::BeginTransaction,
+            super::spec::TxnSpec::Commit => TxnState::Commit,
+            super::spec::TxnSpec::Rollback => TxnState::Rollback,
         }
     }
 }

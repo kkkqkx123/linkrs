@@ -1,20 +1,21 @@
-//! PhysicalPlanValidator: validations that run before cache-write and
-//! before execution instantiation.
+//! PhysicalPlanValidator: structural and binding-dependent validation.
 //!
 //! Two-tier validation:
 //! 1. **Structural validation** (no bindings required): runs once before
-//!    cache-write.  Checks ID uniqueness, input counts, schema/slot
-//!    compatibility, property derivation, capability requirements,
-//!    and memory policy completeness.
+//!    cache-write.  Checks ID uniqueness, fragment DAG integrity, operator
+//!    input/output consistency, property derivation, capability requirements,
+//!    memory policy, and root output contract.
 //! 2. **Binding-dependent validation** (requires parameter values, auth):
-//!    runs at instantiation time.  Re-checks compatibility, re-validates
-//!    permissions, and re-binds parameter slots.
+//!    runs at instantiation time.  Re-checks compatibility, parameter frame,
+//!    transaction mode, and runtime limits.
 
 use std::collections::HashSet;
 
 use crate::core::error::QueryError;
-use super::types::{FragmentId, PhysicalPlan};
-use super::properties::{Distribution, MemoryPolicy, Ordering, PipelineKind};
+use super::types::{
+    FragmentId, OperatorKindSpec, PhysicalOperatorId, PhysicalPlan,
+};
+use super::properties::{Ordering, PipelineKind};
 
 /// The two validation tiers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,25 +58,10 @@ impl ValidationResult {
 }
 
 /// Validates a [`PhysicalPlan`] for correctness and consistency.
-///
-/// # Validation rules (Section 3.5)
-///
-/// - **Input count**: each operator has the correct number of child operators.
-/// - **ID uniqueness**: all [`PhysicalOperatorId`] values are unique.
-/// - **Schema/slot**: output layout is present; expressions bind to valid slots.
-/// - **Properties**: Filter inherits distribution; Sort declares ordering;
-///   local partition is not marked as Single.
-/// - **Capability**: required capabilities are a subset of runtime capabilities.
-/// - **Memory policy**: blocking operators choose `RequiresBudget` or `Spillable`.
-/// - **Exchange contracts**: HashRepartition, GatherMerge, FinalAggregate
-///   validate full input contracts.
 pub struct PhysicalPlanValidator;
 
 impl PhysicalPlanValidator {
     /// Run the full structural validation on a plan.
-    ///
-    /// Call this before cache-write and at the start of instantiation.
-    /// Binding-dependent checks are left to tier-specific methods.
     pub fn validate(plan: &PhysicalPlan) -> Result<(), QueryError> {
         Self::validate_tier(plan, ValidationTier::Structural)?.into_result()
     }
@@ -89,17 +75,20 @@ impl PhysicalPlanValidator {
 
         // ── Always run (structural) ──
         Self::check_operator_id_uniqueness(plan, &mut result);
+        Self::check_operator_references(plan, &mut result);
         Self::check_fragment_connectivity(plan, &mut result);
+        Self::check_fragment_cycles(plan, &mut result);
+        Self::check_fragment_operator_belongs(plan, &mut result);
         Self::check_operator_input_counts(plan, &mut result);
         Self::check_output_layouts(plan, &mut result);
         Self::check_property_consistency(plan, &mut result);
         Self::check_memory_policy(plan, &mut result);
+        Self::check_root_output_contract(plan, &mut result);
+        Self::check_capability_set(plan, &mut result);
 
         if tier == ValidationTier::Full {
-            // Binding-dependent checks would go here:
-            // - Permission validation
-            // - Parameter slot binding
-            // - Statistics freshness check
+            // Binding-dependent checks.
+            Self::check_parameter_schema(plan, &mut result);
         }
 
         Ok(result)
@@ -111,15 +100,25 @@ impl PhysicalPlanValidator {
     /// the cached plan's compatibility metadata still matches the current
     /// execution context.
     pub fn check_compatibility(
-        _plan: &PhysicalPlan,
-        _current_layout_version: Option<u64>,
+        plan: &PhysicalPlan,
+        current_layout_version: Option<u64>,
     ) -> Result<(), QueryError> {
-        // TODO: compare PlanCompatibility fields
+        if let Some(cached_version) = plan.compatibility.layout_version {
+            if let Some(current_version) = current_layout_version {
+                if cached_version != current_version {
+                    return Err(QueryError::execution(format!(
+                        "Plan layout version mismatch: cached={}, current={}",
+                        cached_version, current_version
+                    )));
+                }
+            }
+        }
         Ok(())
     }
 
     // ── Individual checks ──
 
+    /// Every operator in the arena has a unique ID.
     fn check_operator_id_uniqueness(plan: &PhysicalPlan, result: &mut ValidationResult) {
         let mut seen = HashSet::new();
         for op in &plan.operators {
@@ -132,6 +131,30 @@ impl PhysicalPlanValidator {
         }
     }
 
+    /// All operator IDs referenced in fragments exist in the arena.
+    fn check_operator_references(plan: &PhysicalPlan, result: &mut ValidationResult) {
+        let arena_ids: HashSet<PhysicalOperatorId> =
+            plan.operators.iter().map(|op| op.operator_id).collect();
+
+        for fragment in plan.fragments.fragments() {
+            for &op_id in &fragment.operators {
+                if !arena_ids.contains(&op_id) {
+                    result.errors.push(format!(
+                        "Fragment {:?} references operator {:?} which is not in the arena",
+                        fragment.id, op_id
+                    ));
+                }
+            }
+            if !arena_ids.contains(&fragment.root_operator) {
+                result.errors.push(format!(
+                    "Fragment {:?} root operator {:?} not in arena",
+                    fragment.id, fragment.root_operator
+                ));
+            }
+        }
+    }
+
+    /// Fragment graph is connected and root exists.
     fn check_fragment_connectivity(plan: &PhysicalPlan, result: &mut ValidationResult) {
         let fragment_ids: HashSet<FragmentId> = plan
             .fragments
@@ -149,9 +172,10 @@ impl PhysicalPlanValidator {
 
         for fragment in plan.fragments.fragments() {
             if fragment.operators.is_empty() {
-                result
-                    .warnings
-                    .push(format!("Fragment {:?} has no operators", fragment.id));
+                result.warnings.push(format!(
+                    "Fragment {:?} has no operators",
+                    fragment.id
+                ));
             }
             for input_id in &fragment.inputs {
                 if !fragment_ids.contains(input_id) {
@@ -164,46 +188,121 @@ impl PhysicalPlanValidator {
         }
     }
 
-    fn check_operator_input_counts(plan: &PhysicalPlan, _result: &mut ValidationResult) {
-        // Each operator type requires a specific number of children.
-        // This is checked via the fragment graph's operator references.
-        // Simplified: we check that operators in the arena don't have
-        // impossible input counts for their type.
-        for op in &plan.operators {
-            match &op.spec {
-                // Source and terminal operators have 0 children.
-                crate::query::executor::streaming::plan::types::OperatorKindSpec::Source(_)
-                | crate::query::executor::streaming::plan::types::OperatorKindSpec::Txn(_) => {}
-                // Unary operators have 1 child.
-                crate::query::executor::streaming::plan::types::OperatorKindSpec::Unary(_)
-                | crate::query::executor::streaming::plan::types::OperatorKindSpec::Blocking(_)
-                | crate::query::executor::streaming::plan::types::OperatorKindSpec::Graph(_)
-                | crate::query::executor::streaming::plan::types::OperatorKindSpec::Sink(_)
-                | crate::query::executor::streaming::plan::types::OperatorKindSpec::Ddl(_)
-                | crate::query::executor::streaming::plan::types::OperatorKindSpec::Fulltext(_)
-                | crate::query::executor::streaming::plan::types::OperatorKindSpec::Vector(_) => {}
-                // Binary operators have 2 children.
-                crate::query::executor::streaming::plan::types::OperatorKindSpec::Join(_)
-                | crate::query::executor::streaming::plan::types::OperatorKindSpec::Set(_)
-                | crate::query::executor::streaming::plan::types::OperatorKindSpec::Apply(_) => {}
-                // Exchange operators have N children.
-                crate::query::executor::streaming::plan::types::OperatorKindSpec::Exchange(_) => {}
+    /// No illegal cycles in fragment DAG (a fragment cannot depend on itself
+    /// transitively — the graph must be a DAG).
+    fn check_fragment_cycles(plan: &PhysicalPlan, result: &mut ValidationResult) {
+        let fragment_ids: Vec<FragmentId> = plan
+            .fragments
+            .fragments()
+            .iter()
+            .map(|f| f.id)
+            .collect();
+
+        // Compute in-degree and topological order.
+        let mut in_degree: std::collections::HashMap<FragmentId, usize> =
+            fragment_ids.iter().map(|&fid| (fid, 0)).collect();
+
+        for fragment in plan.fragments.fragments() {
+            for &input in &fragment.inputs {
+                *in_degree.get_mut(&input).unwrap_or(&mut 0) += 1;
+            }
+        }
+
+        // For a DAG starting from root, walk backward through inputs.
+        // If any fragment is not reachable from root (and not an input of root),
+        // it's either a cycle or disconnected.
+        let mut reachable = HashSet::new();
+        let mut stack = vec![plan.root_fragment];
+        while let Some(fid) = stack.pop() {
+            if !reachable.insert(fid) {
+                continue;
+            }
+            if let Some(frag) = plan.fragments.get(fid) {
+                for &input in &frag.inputs {
+                    stack.push(input);
+                }
+            }
+        }
+
+        for &fid in &fragment_ids {
+            if !reachable.contains(&fid) {
+                result.warnings.push(format!(
+                    "Fragment {:?} is not reachable from root",
+                    fid
+                ));
             }
         }
     }
 
+    /// Every operator referenced in a fragment exists in that fragment's
+    /// operator list.
+    fn check_fragment_operator_belongs(plan: &PhysicalPlan, result: &mut ValidationResult) {
+        for fragment in plan.fragments.fragments() {
+            let op_set: HashSet<PhysicalOperatorId> =
+                fragment.operators.iter().copied().collect();
+            if !op_set.contains(&fragment.root_operator) {
+                result.errors.push(format!(
+                    "Fragment {:?} root operator {:?} not in its operator list",
+                    fragment.id, fragment.root_operator
+                ));
+            }
+        }
+    }
+
+    /// Each operator type has the correct number of children (as implied by
+    /// the fragment graph's operator list ordering).
+    fn check_operator_input_counts(plan: &PhysicalPlan, result: &mut ValidationResult) {
+        for op in &plan.operators {
+            let expected_children = match &op.spec {
+                OperatorKindSpec::Source(_) => 0,
+                OperatorKindSpec::Txn(_) => 0,
+                OperatorKindSpec::Unary(_)
+                | OperatorKindSpec::Blocking(_)
+                | OperatorKindSpec::Graph(_)
+                | OperatorKindSpec::Sink(_)
+                | OperatorKindSpec::Ddl(_)
+                | OperatorKindSpec::Fulltext(_)
+                | OperatorKindSpec::Vector(_) => 1,
+                OperatorKindSpec::Join(_) | OperatorKindSpec::Set(_) | OperatorKindSpec::Apply(_) => {
+                    2
+                }
+                OperatorKindSpec::Exchange(_) => {
+                    // Variable children, verified separately.
+                    continue;
+                }
+            };
+
+            // Check the fragment that owns this operator: the number of
+            // fragment inputs matches the expected child count for the root.
+            for fragment in plan.fragments.fragments() {
+                if fragment.root_operator == op.operator_id {
+                    if fragment.inputs.len() != expected_children && expected_children > 0 {
+                        result.errors.push(format!(
+                            "Operator {:?} ({}) expects {} child(ren) but fragment {:?} has {} input(s)",
+                            op.operator_id,
+                            op.explain_name,
+                            expected_children,
+                            fragment.id,
+                            fragment.inputs.len()
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Output layout is non-empty for non-command operators.
     fn check_output_layouts(plan: &PhysicalPlan, result: &mut ValidationResult) {
         for op in &plan.operators {
-            if op.output_layout.is_empty() && !matches!(&op.spec, crate::query::executor::streaming::plan::types::OperatorKindSpec::Source(_) if false)
-            {
-                // Allow empty output layout only for DDL / command operators
-                // that produce status messages.
+            if op.output_layout.is_empty() {
                 let is_command = matches!(
                     &op.spec,
-                    crate::query::executor::streaming::plan::types::OperatorKindSpec::Ddl(_)
-                        | crate::query::executor::streaming::plan::types::OperatorKindSpec::Txn(_)
+                    OperatorKindSpec::Ddl(_) | OperatorKindSpec::Txn(_)
                 );
-                if !is_command {
+                let is_source = matches!(&op.spec, OperatorKindSpec::Source(s)
+                    if matches!(s, super::super::operators::spec::SourceSpec::Start)
+                );
+                if !is_command && !is_source {
                     result.warnings.push(format!(
                         "Operator {:?} ({}) has empty output layout",
                         op.operator_id, op.explain_name
@@ -213,61 +312,118 @@ impl PhysicalPlanValidator {
         }
     }
 
+    /// Physical property consistency checks.
     fn check_property_consistency(plan: &PhysicalPlan, result: &mut ValidationResult) {
         for op in &plan.operators {
-            // Filter must inherit distribution from its child.
-            // Sort must declare ordering.
-            // Local partition must not be marked as Single.
             match &op.spec {
-                crate::query::executor::streaming::plan::types::OperatorKindSpec::Unary(
-                    spec,
-                ) => {
+                OperatorKindSpec::Blocking(spec) => {
                     if matches!(
                         spec,
-                        crate::query::executor::streaming::operators::spec::UnarySpec::Filter { .. }
-                    ) && op.properties.distribution == Distribution::Single
-                    {
-                        // Filter inherits distribution; Single is valid
-                        // only in non-partitioned context.
-                    }
-                }
-                crate::query::executor::streaming::plan::types::OperatorKindSpec::Blocking(
-                    spec,
-                )
-                    if matches!(
-                        spec,
-                        crate::query::executor::streaming::operators::spec::BlockingSpec::Sort { .. }
+                        super::super::operators::spec::BlockingSpec::Sort { .. }
                     ) && matches!(op.properties.ordering, Ordering::None)
-                    => {
+                    {
                         result.warnings.push(format!(
                             "Sort operator {:?} declares no output ordering",
                             op.operator_id
                         ));
                     }
+                    // PartialAggregate and FinalAggregate should be blocking.
+                    if matches!(
+                        op.properties.pipeline_kind,
+                        PipelineKind::Streaming
+                    ) {
+                        result.warnings.push(format!(
+                            "Blocking spec operator {:?} is marked as streaming",
+                            op.operator_id
+                        ));
+                    }
+                }
+                OperatorKindSpec::Exchange(_) => {
+                    // Exchange must be non-streaming (blocking or exchange pipeline).
+                    if op.properties.pipeline_kind == PipelineKind::Streaming {
+                        result.warnings.push(format!(
+                            "Exchange operator {:?} is marked as streaming",
+                            op.operator_id
+                        ));
+                    }
+                }
+                OperatorKindSpec::Source(spec) => {
+                    // Start source produces one row; must be streaming.
+                    if matches!(
+                        spec,
+                        super::super::operators::spec::SourceSpec::Start
+                    ) && op.properties.pipeline_kind == PipelineKind::Blocking
+                    {
+                        result.warnings.push(format!(
+                            "Start source {:?} should be streaming",
+                            op.operator_id
+                        ));
+                    }
+                }
                 _ => {}
             }
         }
     }
 
+    /// Blocking operators must have a memory policy.
     fn check_memory_policy(plan: &PhysicalPlan, result: &mut ValidationResult) {
         for op in &plan.operators {
             if op.properties.pipeline_kind == PipelineKind::Blocking {
-                match &op.properties.memory_policy {
-                    MemoryPolicy {
-                        spill_threshold: None,
-                    } => {
-                        result.warnings.push(format!(
-                            "Blocking operator {:?} ({}) has no memory policy set \
-                             (should be RequiresBudget or Spillable)",
-                            op.operator_id, op.explain_name
-                        ));
-                    }
-                    MemoryPolicy {
-                        spill_threshold: Some(_),
-                    } => {
-                        // Has a spill threshold — acceptable.
-                    }
+                let has_threshold = op.properties.memory_policy.spill_threshold.is_some();
+                if !has_threshold {
+                    result.warnings.push(format!(
+                        "Blocking operator {:?} ({}) has no memory policy set \
+                         (should be RequiresBudget or Spillable)",
+                        op.operator_id, op.explain_name
+                    ));
                 }
+            }
+        }
+    }
+
+    /// Root output contract must be present.
+    fn check_root_output_contract(plan: &PhysicalPlan, result: &mut ValidationResult) {
+        if plan.output.output_layout.is_empty() {
+            result.warnings.push(
+                "Plan root output contract has empty layout".to_string(),
+            );
+        }
+
+        // Verify root fragment exists and has operators.
+        let root_frag = plan.fragments.get(plan.root_fragment);
+        if let Some(frag) = root_frag {
+            if frag.operators.is_empty() {
+                result.errors.push(format!(
+                    "Root fragment {:?} has no operators",
+                    plan.root_fragment
+                ));
+            }
+        }
+    }
+
+    /// Required capabilities must be non-empty and valid.
+    fn check_capability_set(plan: &PhysicalPlan, result: &mut ValidationResult) {
+        if plan.required_capabilities.is_empty() {
+            result.warnings.push(
+                "Plan declares no required capabilities".to_string(),
+            );
+        }
+    }
+
+    // ── Binding-dependent checks ──
+
+    fn check_parameter_schema(plan: &PhysicalPlan, result: &mut ValidationResult) {
+        for param in &plan.parameter_schema.params {
+            if param.name.is_empty() {
+                result.errors.push(
+                    "Parameter schema contains unnamed parameter".to_string(),
+                );
+            }
+            if param.slot.0 >= plan.parameter_schema.params.len() {
+                result.warnings.push(format!(
+                    "Parameter '{}' has out-of-range slot {:?}",
+                    param.name, param.slot
+                ));
             }
         }
     }

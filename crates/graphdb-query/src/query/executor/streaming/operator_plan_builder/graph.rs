@@ -1,6 +1,6 @@
-use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::query::executor::base::ExecutionContext;
+use crate::query::executor::build_error::PlanBuildError;
 use crate::query::executor::streaming::operators::spec::{GraphSpec, JoinSpec};
 use crate::query::executor::streaming::plan::node::PhysicalNode;
 use crate::query::executor::streaming::plan::properties::PhysicalProperties;
@@ -12,13 +12,13 @@ use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
 pub fn build_graph_node(
     node: &PlanNodeEnum,
     context: &ExecutionContext,
-) -> Result<PhysicalNode, QueryError> {
+) -> Result<PhysicalNode, PlanBuildError> {
     match node {
         PlanNodeEnum::Expand(expand_node) => {
             let input_plan = expand_node
                 .inputs()
                 .first()
-                .ok_or_else(|| QueryError::execution("Expand requires an input".to_string()))?;
+                .ok_or_else(|| PlanBuildError::missing_value("Expand", node.id(), "input", "Expand requires an input"))?;
             let input_phys = super::build_plan_node(input_plan, context)?;
             let edge_types = expand_node.edge_types().to_vec();
             let direction = expand_node.direction();
@@ -42,7 +42,7 @@ pub fn build_graph_node(
             let input_plan = expand_all_node
                 .inputs()
                 .first()
-                .ok_or_else(|| QueryError::execution("ExpandAll requires an input".to_string()))?;
+                .ok_or_else(|| PlanBuildError::missing_value("ExpandAll", node.id(), "input", "ExpandAll requires an input"))?;
             let input_phys = super::build_plan_node(input_plan, context)?;
             let edge_types = expand_all_node.edge_types().to_vec();
             let direction = match expand_all_node.direction().to_lowercase().as_str() {
@@ -130,8 +130,9 @@ pub fn build_graph_node(
 
         PlanNodeEnum::ShortestPath(node) => {
             if node.weight_expression().is_some() || node.heuristic_expression().is_some() {
-                return Err(QueryError::execution(
-                    "Weighted shortest path is not supported by the streaming executor".to_string(),
+                return Err(PlanBuildError::capability(
+                    "weighted_shortest_path",
+                    "Weighted shortest path is not supported by the streaming executor",
                 ));
             }
             let input_phys =
@@ -187,18 +188,21 @@ pub fn build_graph_node(
 
         PlanNodeEnum::AllPaths(node) => {
             if node.max_hop() < node.min_hop() {
-                return Err(QueryError::execution(
-                    "AllPaths max hop must not be smaller than min hop".to_string(),
+                return Err(PlanBuildError::missing_value(
+                    "AllPaths",
+                    node.id(),
+                    "max_hop",
+                    "AllPaths max hop must not be smaller than min hop",
                 ));
             }
             let offset = usize::try_from(node.offset()).map_err(|_| {
-                QueryError::execution("AllPaths offset must be non-negative".to_string())
+                PlanBuildError::missing_value("AllPaths", node.id(), "offset", "AllPaths offset must be non-negative")
             })?;
             let limit = if node.limit() < 0 {
                 None
             } else {
                 Some(usize::try_from(node.limit()).map_err(|_| {
-                    QueryError::execution("AllPaths limit does not fit in usize".to_string())
+                    PlanBuildError::missing_value("AllPaths", node.id(), "limit", "AllPaths limit does not fit in usize")
                 })?)
             };
             let input_phys =
@@ -239,11 +243,13 @@ pub fn build_graph_node(
         }
 
         PlanNodeEnum::MultiShortestPath(_node) => {
-            Err(QueryError::execution(
+            Err(PlanBuildError::unsupported(
+                "MultiShortestPath",
+                node.id(),
                 "MultiShortestPath execution is not yet implemented: the planner node \
-                 (id={}) now carries edge_types, direction, and target_vertex_ids, but \
+                 now carries edge_types, direction, and target_vertex_ids, but \
                  the executor spec is not wired. Full support requires weighted path \
-                 and RecursiveFragmentSpec integration.".to_string()
+                 and RecursiveFragmentSpec integration.",
             ))
         }
 
@@ -256,7 +262,7 @@ fn build_binary_path_input(
     left: &PlanNodeEnum,
     right: &PlanNodeEnum,
     context: &ExecutionContext,
-) -> Result<PhysicalNode, QueryError> {
+) -> Result<PhysicalNode, PlanBuildError> {
     Ok(PhysicalNode::Join(
         node_id,
         Box::new(super::build_plan_node(left, context)?),

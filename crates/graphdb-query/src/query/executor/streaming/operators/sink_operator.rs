@@ -218,6 +218,20 @@ impl SinkOperator {
         }
     }
 
+    /// Check that the transaction scope (if set) allows writes.
+    fn check_write_permission(base: &OperatorBase) -> Result<(), QueryError> {
+        if let Some(rt) = &base.runtime {
+            if let Some(scope) = rt.transaction_scope() {
+                if !scope.allows_write() {
+                    return Err(QueryError::execution(
+                        "Write operation not allowed in current transaction scope".to_string(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn open(
         &mut self,
         base: &mut OperatorBase,
@@ -233,6 +247,7 @@ impl SinkOperator {
             | SinkOperator::PipeDeleteVertices { .. }
             | SinkOperator::PipeDeleteEdges { .. }
             | SinkOperator::DeleteTags { .. } => {
+                Self::check_write_permission(base)?;
                 input.open()?;
                 base.lifecycle.mark_opened();
                 Ok(())

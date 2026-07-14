@@ -6,7 +6,7 @@ use crate::core::types::{
 };
 use crate::core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
 use crate::storage::cursor::{
-    EdgeCursor, ScanOptions, VecEdgeCursor, VecVertexCursor, VertexCursor,
+    EdgeCursor, IndexCursor, ScanOptions, VecEdgeCursor, VecVertexCursor, VertexCursor,
 };
 use crate::storage::engine::background_freeze::FreezeStats;
 use crate::storage::engine::graph_storage::context::ExportedEdgeSnapshotRecord;
@@ -212,6 +212,22 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
             edges.truncate(limit);
         }
         Ok(Box::new(VecEdgeCursor::new(edges)))
+    }
+
+    /// Create an index cursor for the given index and predicate.
+    ///
+    /// The default implementation returns a capability error.  Storage
+    /// engines with native index cursor support should override this
+    /// to return a lazy cursor.
+    fn create_index_cursor(
+        &self,
+        _space: &str,
+        _index_id: u64,
+        _predicate: &dyn std::fmt::Debug,
+    ) -> Result<Box<dyn IndexCursor<Row = crate::core::Value>>, StorageError> {
+        Err(StorageError::storage_error(
+            "IndexCursor not implemented by this storage engine",
+        ))
     }
 }
 

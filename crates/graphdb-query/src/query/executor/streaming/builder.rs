@@ -22,6 +22,7 @@ impl StreamingExecutorBuilder {
         context: &ExecutionContext,
     ) -> Result<PhysicalNode, QueryError> {
         super::operator_plan_builder::build_plan_node(node, context)
+            .map_err(|e| QueryError::execution(e.to_string()))
     }
 
     /// Build a `StreamingExecutor` from a PhysicalNode tree with fresh state.

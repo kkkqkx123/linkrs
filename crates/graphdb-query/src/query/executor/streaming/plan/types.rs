@@ -23,6 +23,7 @@ use super::super::operators::spec::{
     SinkSpec, SourceSpec, TxnSpec, UnarySpec, VectorSpec,
 };
 use super::properties::PhysicalProperties;
+use super::super::parameters::ParameterSchema;
 use super::super::slot::SlotLayout;
 
 // ── Identity types ──────────────────────────────────────────────────────────
@@ -250,6 +251,8 @@ pub struct PhysicalPlan {
     pub compatibility: PlanCompatibility,
     /// Capabilities that the runtime must support.
     pub required_capabilities: CapabilitySet,
+    /// Parameter schema for this plan (empty if no parameters).
+    pub parameter_schema: ParameterSchema,
 }
 
 impl PhysicalPlan {

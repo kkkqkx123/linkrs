@@ -402,7 +402,7 @@ impl ExpressionEvaluator {
             }
         };
 
-        // 检查转换结果是否为 Null(BadData)
+        // Check if conversion result is Null(BadData)
         if let Value::Null(NullType::BadData) = result {
             Err(ExpressionError::type_error(format!(
                 "Unable to convert {:?} to {:?}.",

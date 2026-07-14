@@ -1,9 +1,9 @@
-use crate::core::error::QueryError;
 #[cfg(feature = "qdrant")]
 use crate::core::types::expr::Expression;
 #[cfg(feature = "qdrant")]
 use crate::core::Value;
 use crate::query::executor::base::ExecutionContext;
+use crate::query::executor::build_error::PlanBuildError;
 use crate::query::executor::streaming::operators::spec::VectorSpec;
 use crate::query::executor::streaming::plan::node::PhysicalNode;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
@@ -11,7 +11,7 @@ use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnu
 pub fn build_vector_node(
     node: &PlanNodeEnum,
     context: &ExecutionContext,
-) -> Result<PhysicalNode, QueryError> {
+) -> Result<PhysicalNode, PlanBuildError> {
     match node {
         PlanNodeEnum::VectorManage(manage_node) => Ok(super::build_leaf_command(
             node.id(),
@@ -72,10 +72,14 @@ pub fn build_vector_node(
             ))
         }
 
-        _ => Err(QueryError::execution(format!(
-            "operator_plan_builder::vector does not handle node type: {}",
-            node.name()
-        ))),
+        _ => Err(PlanBuildError::unsupported(
+            node.name(),
+            node.id(),
+            format!(
+                "operator_plan_builder::vector does not handle node type: {}",
+                node.name()
+            ),
+        )),
     }
 }
 

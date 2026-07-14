@@ -1,7 +1,7 @@
-use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::Value;
 use crate::query::executor::base::ExecutionContext;
+use crate::query::executor::build_error::PlanBuildError;
 use crate::query::executor::streaming::operators::spec::SinkSpec;
 use crate::query::executor::streaming::operators::spec::SourceSpec;
 use crate::query::executor::streaming::plan::node::PhysicalNode;
@@ -11,22 +11,28 @@ use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInp
 
 fn contextual_to_value(
     expr: &crate::core::types::expr::ContextualExpression,
-) -> Result<Value, QueryError> {
+) -> Result<Value, PlanBuildError> {
     if let Some(value) = expr.constant_value() {
         return Ok(value);
     }
     match expr.get_expression() {
         Some(Expression::Literal(value)) => Ok(value),
-            _ => Err(QueryError::execution(
-                "Standalone data modification requires constant values, got expression".to_string()
+            _ => Err(PlanBuildError::expression(
+                "ContextualExpression",
+                0,
+                format!("{:?}", expr),
+                "Standalone data modification requires constant values, got expression",
             )),
     }
 }
 
-fn require_space_name(context: &ExecutionContext) -> Result<String, QueryError> {
+fn require_space_name(context: &ExecutionContext) -> Result<String, PlanBuildError> {
     context.space_name.clone().ok_or_else(|| {
-        QueryError::execution(
-            "Space name is required for data modification operations".to_string(),
+        PlanBuildError::missing_value(
+            "DataModification",
+            0,
+            "space_name",
+            "Space name is required for data modification operations",
         )
     })
 }
@@ -34,7 +40,7 @@ fn require_space_name(context: &ExecutionContext) -> Result<String, QueryError> 
 pub fn build_write_node(
     node: &PlanNodeEnum,
     context: &ExecutionContext,
-) -> Result<PhysicalNode, QueryError> {
+) -> Result<PhysicalNode, PlanBuildError> {
     match node {
         PlanNodeEnum::InsertVertices(insert_node) => {
             let mut rows = Vec::new();
@@ -293,7 +299,7 @@ pub fn build_write_node(
                 .map(|(src, dst, _rank)| {
                     Ok(vec![contextual_to_value(src)?, contextual_to_value(dst)?])
                 })
-                .collect::<Result<Vec<_>, QueryError>>()?;
+                .collect::<Result<Vec<_>, PlanBuildError>>()?;
             let source = PhysicalNode::Source(
                 super::SYNTHETIC_START_NODE_ID,
                 SourceSpec::ScanVertices {

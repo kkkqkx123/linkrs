@@ -678,7 +678,8 @@ mod tests {
         runtime.cancel();
         let result = engine.execute();
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("cancelled"));
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("killed") || err.contains("cancelled"));
     }
 
     #[test]

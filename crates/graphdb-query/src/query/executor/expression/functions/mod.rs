@@ -4,8 +4,8 @@
 //!
 //! ## Module Structure
 //!
-//! - `signature.rs` - 类型签名系统
-//! - `registry.rs` - 函数注册表
+//! - `signature.rs` - type signature system
+//! - `registry.rs` - function registry
 //! - `builtin/` – Implementation of built-in functions
 //!
 //! ## How to use it

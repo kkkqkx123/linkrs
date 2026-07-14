@@ -1,9 +1,9 @@
 # GraphDB Executor 架构设计
 
-> 日期：2026-07-13  
-> 修订：2026-07-13，根据现有实现差距评审澄清结果、事务、调度、状态和缓存边界。
+> 日期：2026-07-14
+> 修订：2026-07-14，补充计划能力闭包、参数绑定、数据访问、事务、取消、spill 和迁移约束。
 > 范围：`graphdb-query` 查询规划结果到查询执行、结果输出的完整边界。
-> 定位：本文是 executor 的唯一目标架构规范；未完成事项及实施顺序见 `executor_remaining_work.md`。
+> 定位：本文是 executor 的唯一目标架构规范；代码现状见 `executor_current_gap_analysis.md`，实施顺序见 `executor_remaining_work.md`。
 
 ## 一、设计目标
 
@@ -163,6 +163,17 @@ Physical properties 是正确性契约，不是装饰元数据。
 
 `PhysicalPlanValidator` 在实例化前验证输入数量、slot/schema、properties、feature capability、事务模式、内存策略和 ID 唯一性。
 
+### 4.1 计划能力闭包
+
+planner、physical builder 和 executor 必须形成能力闭包：每一种可生成的 `PhysicalOperatorSpec` 都必须存在完整、经过契约测试的实例化和执行语义。未完成能力只能采用以下两种状态之一：
+
+1. planner 不生成该 spec，并返回 `UnsupportedFeature` 或 `CapabilityUnavailable`；
+2. feature capability 未启用，validator 在实例化前拒绝计划。
+
+禁止使用 `Ok(None)`、空字符串、空 key、默认方向、空 target、虚假成功消息或无操作实现表示“暂未实现”。`None` 只能表达规范明确允许缺省的字段，不能同时承担 unresolved、unsupported 和 empty 三种语义。
+
+项目维护一份由测试生成或静态枚举驱动的 capability matrix，至少覆盖：logical node、physical spec、required feature、transaction mode、parallel mode、spill mode 和对应 executor。新增 logical/physical variant 时，穷尽匹配和 capability 测试必须同时失败，直到实现闭包完成。
+
 ## 五、执行实例与状态
 
 ### 5.1 QueryExecutionInstance
@@ -182,6 +193,8 @@ QueryExecutionInstance
 ```
 
 `QueryBindings` 保存本次执行的参数、space/data source 解析、权限和 session variables。相同物理计划的多个实例之间不能共享任何可变状态。
+
+参数表达式在 build 阶段编译为 `ParameterSlot`，不能在热路径按名称查找。实例化执行以下步骤：校验参数是否齐全、拒绝未知参数、按声明类型转换、写入不可变 `ParameterFrame`，再把 frame 共享给所有 task。literal 仍属于 plan；prepared parameter value 只属于 binding。缺失、重复、类型不兼容或超出范围必须在 operator open 前失败。
 
 并行 scheduler 是数据库引擎级共享服务，负责全局线程上限和查询间公平性。查询实例只持有可取消、可等待的 task group；关闭查询必须等待该 task group 退出，但不能销毁或 join 共享 worker 线程。
 
@@ -231,6 +244,16 @@ New -> Opening -> Open -> Exhausted
 - 可 spill，并定义临时文件 owner、格式和 cleanup。
 
 优先实现一种可复用的外排 Sort 或 hash partition spill 基础设施，再由 Aggregate 和 Join 复用。
+
+spill 是算子算法的一部分，而不是把内存容器序列化后清空。每个 `Spillable` 算子必须定义写出、读取/归并、取消、校验和恢复内存 reservation 的完整状态机：
+
+- external sort 生成有序 run，最终执行 k-way merge；
+- hash aggregate/join 对输入按稳定 hash seed 和 partition count 分区，逐分区装载和处理；
+- set operator 保存可重建的 typed row/key，而不是调试字符串；
+- 临时文件由 query resource owner 持有，成功、失败、取消、客户端断连和进程启动清理均有明确策略；
+- 磁盘空间不足、文件损坏和反序列化失败保留结构化错误，不得退化为缺行结果。
+
+声明为 `Spillable` 的 operator 必须具备端到端测试；否则其 `MemoryPolicy` 必须是 `RequiresBudget`，达到预算后确定性报错。
 
 ### 6.3 渐进列式化
 
@@ -302,6 +325,16 @@ Begin、Commit、Rollback 可作为 terminal command spec，但实际状态迁�
 
 显式事务可跨越多个查询，因此实际 transaction handle 由 session 级 `SessionTransactionController` 持有；每个 `QueryExecutionInstance` 的 `TransactionScope` 只借用并校验该 handle。自动提交事务由 scope 创建并拥有。查询结束不得自动提交或销毁仍由 session 持有的显式事务，但语句失败必须按既定策略标记事务失败或回滚到语句保存点。
 
+正式事务状态机为：
+
+```text
+NoTransaction -> Active -> Committing -> Committed
+                      |  -> RollingBack -> RolledBack
+                      `  -> Failed -> RollingBack / RollbackOnly
+```
+
+BEGIN、COMMIT、ROLLBACK command 只能调用 session controller 和 transaction manager 完成状态迁移，结果行在迁移成功后生成。DML/DDL 不直接提交事务；它们只通过 scope 获取 snapshot/transaction handle。自动提交语句仅在根 fragment、外部索引同步和结果边界均成功后提交；执行失败、取消或 sink 失败时回滚。显式事务中的语句失败按 transaction manager 能力使用 statement savepoint，无法隔离时将事务标为 rollback-only。
+
 ### 8.3 DML 与 DDL
 
 DML sink 消费输入 chunk，使用 instance transaction 写入，不直接持有 storage。DDL 使用强类型 command，并明确事务能力、schema invalidation 和 plan cache invalidation。
@@ -339,6 +372,8 @@ EXPLAIN 输出完整 immutable plan、slot layout、physical properties、fragme
 
 deadline、KILL QUERY、客户端断连和内存超限进入同一取消传播路径。
 
+每次执行必须先从进程级 `QueryRegistry` 获得非零且唯一的 `QueryId`，再创建 runtime 和 task group。`QueryContext::mark_killed`、服务端 KILL、deadline、sink disconnect 和 worker failure 都只调用同一个 `CancellationSource`。取消是原因携带的单调状态，首个原因获胜；operator、cursor、Exchange 和 scheduler 只持有只读 token。查询从 registry 移除前必须完成 task wait、operator close、transaction finalize 和 resource cleanup。
+
 ## 十、模块边界
 
 推荐按职责组织：
@@ -361,7 +396,31 @@ deadline、KILL QUERY、客户端断连和内存超限进入同一取消传播�
 
 公开 facade 可以保持稳定，但内部只能委托给同一 plan/instance/driver 路径。
 
-## 十一、架构完成标准
+## 十一、正式实现与迁移约束
+
+目标架构通过逐段替换落地，但不提供查询级 silent fallback：
+
+1. 新旧实现可以在代码中暂时并存，但一个 request 在 plan build 前必须确定唯一执行路径；
+2. 新路径 build、validate、instantiate 或 execute 失败时直接返回原始结构化错误，禁止自动转交旧 executor；
+3. 每次切换必须先有 old/new differential test，再切 production facade，最后删除旧入口和临时 adapter；
+4. `PhysicalPlan` 成为 cache 和 EXPLAIN 的事实来源后，禁止继续缓存或解释另一种 plan；
+5. transaction、DML 和 DDL 不允许灰度到缺少真实 transaction handle 的路径；
+6. 删除旧路径是每个里程碑的完成条件，不把永久双轨当作兼容方案。
+
+数据访问算子的最低正式契约如下：
+
+| 算子 | open | next | close |
+|---|---|---|---|
+| `Start` | 创建单例 seed state | 仅一次返回含零列一行的 chunk | 释放 seed state |
+| `Argument` | 绑定 correlated input frame | 按 frame 生命周期返回输入行 | 解除 frame 引用 |
+| `StorageScan` | 从 transaction snapshot 打开 cursor | 按 chunk/morsel 拉取，空批次仅在 cursor exhausted 时结束 | 关闭 cursor |
+| `IndexScan` | 绑定 typed predicate 并打开 index cursor | 流式返回 row id 或 covering row，跳过 stale id 后继续扫描 | 关闭 index cursor |
+| `GetProp` | 校验 entity slot 和 property projection | 批量读取并保持输入行基数与 null 语义 | 释放 batch workspace |
+| `LookupIndex` | 解析 index id、range 和 projection | 返回 covering data 或批量回表结果 | 关闭 cursor |
+
+这些算子不能通过预先收集全部 ID 实现“流式”接口；storage API 缺少 cursor/batch 能力时，应先扩展 storage contract，再接入 production executor。
+
+## 十二、架构完成标准
 
 以下条件同时满足，才视为目标架构完成：
 

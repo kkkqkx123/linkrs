@@ -1,11 +1,11 @@
 //! Build physical plans for relational nodes.
 //! into PhysicalNode trees.
 
-use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::AggregateFunction;
 use crate::core::Value;
 use crate::query::executor::base::ExecutionContext;
+use crate::query::executor::build_error::PlanBuildError;
 use crate::query::executor::streaming::executor::SortDirection;
 use crate::query::executor::streaming::operators::spec::{BlockingSpec, UnarySpec};
 use crate::query::executor::streaming::plan::node::PhysicalNode;
@@ -17,7 +17,7 @@ use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInp
 pub fn build_relational_node(
     node: &PlanNodeEnum,
     context: &ExecutionContext,
-) -> Result<PhysicalNode, QueryError> {
+) -> Result<PhysicalNode, PlanBuildError> {
     match node {
         PlanNodeEnum::Filter(filter_node) => {
             let input_plan = filter_node.input();
@@ -54,9 +54,9 @@ pub fn build_relational_node(
             let count = limit_node.count();
             let offset = limit_node.offset();
             let offset = u32::try_from(offset)
-                .map_err(|_| QueryError::execution("Limit offset must fit in u32".to_string()))?;
+                .map_err(|_| PlanBuildError::missing_value("Limit", node.id(), "offset", "Limit offset must fit in u32"))?;
             let limit = u32::try_from(count)
-                .map_err(|_| QueryError::execution("Limit count must fit in u32".to_string()))?;
+                .map_err(|_| PlanBuildError::missing_value("Limit", node.id(), "count", "Limit count must fit in u32"))?;
             Ok(PhysicalNode::Unary(
                 node.id(),
                 Box::new(input_phys),
@@ -157,8 +157,11 @@ pub fn build_relational_node(
             let count = if sample_node.count() > 0 {
                 sample_node.count() as u64
             } else {
-                return Err(QueryError::execution(
-                    "Sample count must be positive".to_string(),
+                return Err(PlanBuildError::missing_value(
+                    "Sample",
+                    node.id(),
+                    "count",
+                    "Sample count must be positive",
                 ));
             };
             Ok(PhysicalNode::Unary(
@@ -290,7 +293,7 @@ pub fn build_relational_node(
 
 fn yield_columns_to_expressions(
     columns: &[crate::core::YieldColumn],
-) -> Result<Vec<Expression>, QueryError> {
+) -> Result<Vec<Expression>, PlanBuildError> {
     columns
         .iter()
         .map(|col| super::contextual_to_expression(&col.expression))
@@ -299,7 +302,7 @@ fn yield_columns_to_expressions(
 
 pub fn sort_items_to_expressions(
     items: &[crate::query::planning::plan::core::nodes::operation::sort_node::SortItem],
-) -> Result<(Vec<Expression>, Vec<SortDirection>), QueryError> {
+) -> Result<(Vec<Expression>, Vec<SortDirection>), PlanBuildError> {
     let mut expressions = Vec::new();
     let mut directions = Vec::new();
     for item in items {

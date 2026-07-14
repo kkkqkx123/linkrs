@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
+use super::spec::BoundIndexPredicate;
 use super::state::SourceState;
 use super::super::state::GlobalState;
 use crate::core::error::QueryError;
@@ -129,27 +130,33 @@ pub enum SourceOperator {
         edge_type: Option<String>,
         cursor: Option<Box<dyn EdgeCursor>>,
     },
-    /// Resolve vertex IDs via index lookup.
+    /// Index scan with typed predicate and projection.
     IndexScan {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
-        index_name: Option<String>,
-        index_value: Option<Value>,
+        index_name: String,
+        index_id: u64,
+        predicate: BoundIndexPredicate,
+        output_layout: Arc<SlotLayout>,
     },
     Argument,
+    /// Property retrieval (zero-input source, will migrate to Unary in M2).
     GetProp {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
-        vertex_ids: Option<Vec<Value>>,
-        edge_ids: Option<Vec<Value>>,
+        entity_slot: usize,
         prop_names: Vec<String>,
+        is_vertex: bool,
+        output_layout: Arc<SlotLayout>,
     },
+    /// Alias for IndexScan (same semantics, kept for transitional compat).
     LookupIndex {
         storage: Option<Arc<RwLock<dyn StorageClient>>>,
         space_name: String,
         index_name: String,
-        index_condition: Option<(String, Value)>,
-        limit: Option<usize>,
+        index_id: u64,
+        predicate: BoundIndexPredicate,
+        output_layout: Arc<SlotLayout>,
     },
     Start,
 }
@@ -248,37 +255,47 @@ impl SourceOperator {
             super::spec::SourceSpec::IndexScan {
                 space_name,
                 index_name,
-                index_value,
+                index_id,
+                predicate,
+                output_layout,
+                ..
             } => Self::IndexScan {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 index_name: index_name.clone(),
-                index_value: index_value.clone(),
+                index_id: *index_id,
+                predicate: predicate.clone(),
+                output_layout: output_layout.clone(),
             },
             super::spec::SourceSpec::Argument => Self::Argument,
             super::spec::SourceSpec::GetProp {
                 space_name,
-                vertex_ids,
-                edge_ids,
+                entity_slot,
                 prop_names,
+                is_vertex,
+                output_layout,
             } => Self::GetProp {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
-                vertex_ids: vertex_ids.clone(),
-                edge_ids: edge_ids.clone(),
+                entity_slot: *entity_slot,
                 prop_names: prop_names.clone(),
+                is_vertex: *is_vertex,
+                output_layout: output_layout.clone(),
             },
             super::spec::SourceSpec::LookupIndex {
                 space_name,
                 index_name,
-                index_condition,
-                limit,
+                index_id,
+                predicate,
+                output_layout,
+                ..
             } => Self::LookupIndex {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 index_name: index_name.clone(),
-                index_condition: index_condition.clone(),
-                limit: *limit,
+                index_id: *index_id,
+                predicate: predicate.clone(),
+                output_layout: output_layout.clone(),
             },
             super::spec::SourceSpec::Start => Self::Start,
         }
@@ -397,14 +414,20 @@ impl SourceOperator {
             Self::Argument => {
                 base.insert_state(GlobalState::Source(SourceState::Argument));
             }
-            Self::GetProp { .. } => {
-                base.insert_state(GlobalState::Source(SourceState::GetProp));
+            Self::GetProp { entity_slot, prop_names, .. } => {
+                base.insert_state(GlobalState::Source(SourceState::GetProp {
+                    entity_slot: *entity_slot,
+                    prop_names: prop_names.clone(),
+                }));
             }
             Self::LookupIndex { .. } => {
-                base.insert_state(GlobalState::Source(SourceState::LookupIndex));
+                base.insert_state(GlobalState::Source(SourceState::LookupIndex {
+                    resolved_ids: Vec::new(),
+                    position: 0,
+                }));
             }
             Self::Start => {
-                base.insert_state(GlobalState::Source(SourceState::Start));
+                base.insert_state(GlobalState::Source(SourceState::Start { emitted: false }));
             }
         }
         base.lifecycle.mark_opened();
@@ -647,7 +670,97 @@ impl SourceOperator {
                     }
                 }
             }
-            Self::GetProp { .. } | Self::LookupIndex { .. } => Ok(None),
+            Self::GetProp { .. } => {
+                // GetProp is not yet implemented as a source operator.
+                // The M1 plan specifies it should be a Unary operator that
+                // reads entity IDs from its input child.
+                // Until the unary migration is complete (M2), this variant
+                // returns a capability-unavailable error.
+                Err(QueryError::execution(
+                    "GetProp is not available as a source operator; \
+                     use the unary GetProp (coming in M2)".to_string(),
+                ))
+            }
+            Self::LookupIndex {
+                storage,
+                space_name,
+                index_name,
+                predicate,
+                output_layout,
+                ..
+            } => {
+                // LookupIndex is semantically identical to IndexScan.
+                let storage_ref = storage.as_ref().ok_or_else(|| {
+                    QueryError::execution("LookupIndex requires storage".to_string())
+                })?;
+                let (ids, pos) = {
+                    let mut arena = base.state_arena();
+                    let s = arena.global.get_mut(&base.state_key());
+                    match s {
+                        Some(GlobalState::Source(SourceState::LookupIndex {
+                            resolved_ids,
+                            position,
+                        })) => {
+                            if resolved_ids.is_empty() && *position == 0 {
+                                let guard = storage_ref.read();
+                                match &predicate {
+                                    BoundIndexPredicate::Equal { column: _, value } => {
+                                        guard
+                                            .lookup_index(space_name, index_name, value)
+                                            .unwrap_or_default()
+                                            .clone_into(resolved_ids);
+                                    }
+                                    _ => {
+                                        let vertices = guard
+                                            .scan_vertices(space_name)
+                                            .unwrap_or_default();
+                                        *resolved_ids = vertices
+                                            .into_iter()
+                                            .map(|v| Value::Vertex(Box::new(v)))
+                                            .collect();
+                                    }
+                                }
+                            }
+                            (resolved_ids.clone(), *position)
+                        }
+                        _ => return Ok(None),
+                    }
+                };
+                if pos >= ids.len() {
+                    return Ok(None);
+                }
+                let end = (pos + base.chunk_size).min(ids.len());
+                {
+                    let mut arena = base.state_arena();
+                    let s = arena.global.get_mut(&base.state_key());
+                    if let Some(GlobalState::Source(SourceState::LookupIndex {
+                        position,
+                        ..
+                    })) = s
+                    {
+                        *position = end;
+                    }
+                }
+                let guard = storage_ref.read();
+                let mut rows = Vec::new();
+                for id_val in &ids[pos..end] {
+                    if let Ok(vid) = VertexId::try_from(id_val) {
+                        if let Ok(Some(vertex)) = guard.get_vertex(space_name, &vid) {
+                            rows.push(make_vertex_row(vertex));
+                        }
+                    }
+                }
+                if !rows.is_empty() {
+                    let reservation = reserve_memory(base, &rows)?;
+                    let mut chunk = DataChunk::new_with_layout(rows, output_layout.clone());
+                    if let Some(r) = reservation {
+                        chunk = chunk.with_memory_reservation(r);
+                    }
+                    Ok(Some(chunk))
+                } else {
+                    Ok(None)
+                }
+            }
             Self::EdgeIndexScan { space_name, cursor, .. } => loop {
                 base.ensure_not_cancelled()?;
                 let mut cur = match cursor.take() {
@@ -672,7 +785,14 @@ impl SourceOperator {
                 }
                 *cursor = Some(cur);
             },
-            Self::IndexScan { storage, space_name, index_name, index_value } => {
+            Self::IndexScan {
+                storage,
+                space_name,
+                index_name,
+                predicate,
+                output_layout,
+                ..
+            } => {
                 let storage_ref = storage.as_ref().ok_or_else(|| {
                     QueryError::execution("IndexScan requires storage".to_string())
                 })?;
@@ -684,14 +804,25 @@ impl SourceOperator {
                     };
                     if resolved_ids.is_empty() && *position == 0 {
                         let guard = storage_ref.read();
-                        *resolved_ids = match (index_name.as_ref(), index_value.as_ref()) {
-                            (Some(name), Some(value)) => guard
-                                .lookup_index(space_name, name, value)
-                                .map_err(|error| {
-                                    storage_error("IndexScan", "lookup index", space_name, error)
-                                })?,
-                            _ => Vec::new(),
-                        };
+                        match predicate {
+                            BoundIndexPredicate::Equal { column: _, value } => {
+                                *resolved_ids = guard
+                                    .lookup_index(space_name, index_name, value)
+                                    .map_err(|error| {
+                                        storage_error("IndexScan", "lookup index", space_name, error)
+                                    })?;
+                            }
+                            _ => {
+                                let vertices = guard.scan_vertices(space_name)
+                                    .map_err(|error| {
+                                        storage_error("IndexScan", "scan vertices", space_name, error)
+                                    })?;
+                                *resolved_ids = vertices
+                                    .into_iter()
+                                    .map(|v| Value::Vertex(Box::new(v)))
+                                    .collect();
+                            }
+                        }
                     }
                     (resolved_ids.clone(), *position)
                 };
@@ -712,18 +843,27 @@ impl SourceOperator {
                 let mut rows = Vec::new();
                 for id_val in batch {
                     if let Ok(vid) = VertexId::try_from(id_val) {
-                        if let Some(vertex) =
-                            guard.get_vertex(space_name, &vid).map_err(|error| {
-                                storage_error("IndexScan", "get vertex", space_name, error)
-                            })?
-                        {
-                            rows.push(make_vertex_row(vertex));
+                        match guard.get_vertex(space_name, &vid) {
+                            Ok(Some(vertex)) => {
+                                rows.push(make_vertex_row(vertex));
+                            }
+                            Ok(None) => {
+                                // Stale row ID: skip silently
+                            }
+                            Err(error) => {
+                                return Err(storage_error(
+                                    "IndexScan",
+                                    "get vertex",
+                                    space_name,
+                                    error,
+                                ));
+                            }
                         }
                     }
                 }
                 if !rows.is_empty() {
                     let reservation = reserve_memory(base, &rows)?;
-                    let mut chunk = DataChunk::from_rows(rows);
+                    let mut chunk = DataChunk::new_with_layout(rows, output_layout.clone());
                     if let Some(r) = reservation {
                         chunk = chunk.with_memory_reservation(r);
                     }
@@ -732,7 +872,34 @@ impl SourceOperator {
                     Ok(None)
                 }
             }
-            Self::Argument | Self::Start => Ok(None),
+            Self::Start => {
+                let mut arena = base.state_arena();
+                let s = arena.global.get_mut(&base.state_key());
+                let emitted = match s {
+                    Some(GlobalState::Source(SourceState::Start { ref mut emitted })) => emitted,
+                    _ => return Ok(None),
+                };
+                if *emitted {
+                    return Ok(None);
+                }
+                *emitted = true;
+                let layout = Arc::new(SlotLayout::from_names(&[]));
+                let chunk = DataChunk::new_with_layout(vec![Vec::new()], layout);
+                Ok(Some(chunk))
+            }
+            Self::Argument => {
+                let rt = base.runtime.as_ref().ok_or_else(|| {
+                    QueryError::execution("Argument requires a runtime with correlation frame")
+                })?;
+                let frame = rt.take_correlation_frame();
+                match frame {
+                    Some((layout, row)) => {
+                        let chunk = DataChunk::new_with_layout(vec![row], layout);
+                        Ok(Some(chunk))
+                    }
+                    None => Ok(None),
+                }
+            }
         }
     }
 

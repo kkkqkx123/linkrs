@@ -18,6 +18,8 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
+use crate::core::types::storage_ids::VertexId;
+use crate::core::value::NullType;
 use crate::core::StorageError;
 use crate::storage::StorageClient;
 
@@ -121,6 +123,66 @@ pub trait EdgeCursor: Send + std::fmt::Debug {
     fn next_batch(&mut self, batch_size: usize) -> Result<Vec<crate::core::Edge>, StorageError>;
 }
 
+/// A cursor that yields index entries (row IDs or covering rows) in batches.
+///
+/// Bound to a transaction snapshot at creation time.  Supports equality,
+/// range, and prefix predicates as available in the storage engine.
+/// Unsupported predicate types return an error at open time, not at runtime.
+pub trait IndexCursor: Send + std::fmt::Debug {
+    /// The type of row identifier this cursor yields.
+    type Row: Send;
+
+    /// Read the next batch of index entries (at most `batch_size`).
+    ///
+    /// Returns an empty `Vec` when exhausted.
+    /// Stale or deleted row IDs are counted but skipped — they do not
+    /// cause premature exhaustion.
+    fn next_batch(&mut self, batch_size: usize) -> Result<Vec<Self::Row>, StorageError>;
+
+    /// Return the total number of rows that matched the index predicate
+    /// at cursor creation time (before stale filtering).
+    fn estimated_match_count(&self) -> Option<u64> {
+        None
+    }
+
+    /// Number of stale rows skipped so far (for diagnostics).
+    fn stale_skipped(&self) -> u64 {
+        0
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Property batch reader
+// ---------------------------------------------------------------------------
+
+/// A batch reader that reads properties for multiple entities at once.
+///
+/// Unlike row-at-a-time `get_vertex` / `get_edge`, this allows the storage
+/// layer to amortise lookup overhead across many entities.
+pub trait PropertyBatchReader: Send + std::fmt::Debug {
+    /// Read a set of named properties for a batch of vertices.
+    ///
+    /// Returns one `Vec<Value>` per vertex in input order.
+    /// Missing entities produce an all-null row (or error, depending on the
+    /// `missing_policy` configuration at spec level).  Missing properties
+    /// produce `Value::Null` for that slot.
+    fn read_vertex_props(
+        &self,
+        ids: &[VertexId],
+        prop_names: &[String],
+    ) -> Result<Vec<Vec<crate::core::Value>>, StorageError>;
+
+    /// Read a set of named properties for a batch of edges.
+    ///
+    /// Edges are identified by (src, dst, edge_type, rank).
+    /// Returns one `Vec<Value>` per edge in input order.
+    fn read_edge_props(
+        &self,
+        edges: &[(VertexId, VertexId, String, i64)],
+        prop_names: &[String],
+    ) -> Result<Vec<Vec<crate::core::Value>>, StorageError>;
+}
+
 // ---------------------------------------------------------------------------
 // Default (Vec-backed) implementations
 // ---------------------------------------------------------------------------
@@ -216,4 +278,110 @@ pub fn open_edge_scan(
 ) -> Result<Box<dyn EdgeCursor>, StorageError> {
     let reader = storage.read();
     reader.create_edge_cursor(space, options)
+}
+
+/// Open a property batch reader through a storage client.
+///
+/// Returns a reader bound to the current transaction snapshot.
+pub fn open_property_batch_reader(
+    storage: &Arc<RwLock<dyn StorageClient>>,
+) -> Box<dyn PropertyBatchReader> {
+    Box::new(DefaultPropertyBatchReader::new(storage.clone()))
+}
+
+/// Open an index scan cursor through a storage client.
+///
+/// Returns a cursor that yields row IDs for the given index and predicate.
+/// When the index is covering, the cursor yields full rows directly.
+///
+/// # Note
+/// This is a placeholder.  Storage engines should override
+/// `StorageReader::create_index_cursor` when they support native index
+/// cursors.  The default implementation returns a capability error.
+pub fn open_index_cursor(
+    storage: &Arc<RwLock<dyn StorageClient>>,
+    space: &str,
+    index_id: u64,
+    predicate: &dyn std::fmt::Debug,
+) -> Result<Box<dyn IndexCursor<Row = crate::core::Value>>, StorageError> {
+    let reader = storage.read();
+    reader.create_index_cursor(space, index_id, predicate)
+}
+
+// ---------------------------------------------------------------------------
+// Default (Vec-backed) PropertyBatchReader implementation
+// ---------------------------------------------------------------------------
+
+/// Default property batch reader that performs sequential `get_vertex` /
+/// `get_edge` calls through the storage client.
+#[derive(Debug)]
+pub struct DefaultPropertyBatchReader {
+    storage: Arc<RwLock<dyn StorageClient>>,
+}
+
+impl DefaultPropertyBatchReader {
+    pub fn new(storage: Arc<RwLock<dyn StorageClient>>) -> Self {
+        Self { storage }
+    }
+}
+
+impl PropertyBatchReader for DefaultPropertyBatchReader {
+    fn read_vertex_props(
+        &self,
+        ids: &[VertexId],
+        prop_names: &[String],
+    ) -> Result<Vec<Vec<crate::core::Value>>, StorageError> {
+        let guard = self.storage.read();
+        let mut results = Vec::with_capacity(ids.len());
+        for id in ids {
+            match guard.get_vertex("", id) {
+                Ok(Some(vertex)) => {
+                    let props = prop_names
+                        .iter()
+                        .map(|name| {
+                            vertex
+                                .get_property_any(name)
+                                .cloned()
+                                .unwrap_or(crate::core::Value::Null(NullType::Null))
+                        })
+                        .collect();
+                    results.push(props);
+                }
+                Ok(None) => {
+                    results.push(vec![crate::core::Value::Null(NullType::Null); prop_names.len()]);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(results)
+    }
+
+    fn read_edge_props(
+        &self,
+        edges: &[(VertexId, VertexId, String, i64)],
+        prop_names: &[String],
+    ) -> Result<Vec<Vec<crate::core::Value>>, StorageError> {
+        let guard = self.storage.read();
+        let mut results = Vec::with_capacity(edges.len());
+        for (src, dst, edge_type, rank) in edges {
+            match guard.get_edge("", src, dst, edge_type, *rank) {
+                Ok(Some(edge)) => {
+                    let props = prop_names
+                        .iter()
+                        .map(|name| {
+                            edge.get_property(name)
+                                .cloned()
+                                .unwrap_or(crate::core::Value::Null(NullType::Null))
+                        })
+                        .collect();
+                    results.push(props);
+                }
+                Ok(None) => {
+                    results.push(vec![crate::core::Value::Null(NullType::Null); prop_names.len()]);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(results)
+    }
 }
