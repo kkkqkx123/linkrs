@@ -29,17 +29,22 @@ mod test_mock;
 
 pub use client::{
     CatalogStore, GraphStore, QueryStorage, StorageAdmin, StorageAuthOps, StorageClient,
-    StorageGcOps, StorageMaintenance, StorageOperationContext, StorageOperationContextOps,
-    StoragePersistenceOps, StorageReader, StorageRecoveryOps, StorageSchemaContextOps,
-    StorageSchemaOps, StorageSnapshotOps, StorageStats, StorageSyncContextOps, StorageWriter,
+    StorageCommitOps, StorageGcOps, StorageMaintenance, StorageOperationContext,
+    StorageOperationContextOps, StoragePersistenceOps, StorageReader, StorageRecoveryOps,
+    StorageSchemaContextOps, StorageSchemaOps, StorageSnapshotOps, StorageStats,
+    StorageSyncContextOps, StorageWriter,
 };
 pub use cursor::{
-    open_edge_scan, open_vertex_scan, EdgeCursor, ScanOptions, ScanTarget, VecEdgeCursor,
-    VecVertexCursor, VertexCursor,
+    open_edge_scan, open_index_cursor, open_property_batch_reader, open_vertex_scan, EdgeCursor,
+    IndexCursor, IndexPredicate, IndexScanPlan, PropertyBatchReader, ScanOptions, ScanTarget,
+    VecEdgeCursor, VecVertexCursor, VertexCursor,
 };
 pub use engine::config::PropertyGraphConfig;
 pub use engine::graph_storage::GraphStorage;
-pub use engine::persistence_coordinator::{CheckpointStats, PersistenceDiagnostics, SnapshotStats};
+pub use engine::persistence_coordinator::{
+    CatalogLockDiagnostic, CheckpointStats, PersistenceDiagnostics, PersistenceFaultPoint,
+    SnapshotStats,
+};
 pub use engine::sync_wrapper::SyncWrapper;
 pub use engine::transaction::UndoTarget;
 pub use metrics::MetricsStorage;

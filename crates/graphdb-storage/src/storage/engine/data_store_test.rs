@@ -149,4 +149,46 @@ mod tests {
             .verify_invariants()
             .expect("concurrent partition creation should preserve invariants");
     }
+
+    #[test]
+    fn thirty_two_thread_schema_and_data_mix_has_no_lock_cycle() {
+        let catalog = Arc::new(GraphDataStore::new());
+        for index in 0..16 {
+            let name = format!("Node{}", index);
+            catalog
+                .register_vertex_type(name.clone(), None, |label| Ok(vertex_table(label, &name)))
+                .expect("initial schema registration should succeed");
+        }
+
+        let barrier = Arc::new(std::sync::Barrier::new(32));
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        for worker_id in 0..32 {
+            let catalog = catalog.clone();
+            let barrier = barrier.clone();
+            let done_tx = done_tx.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                if worker_id < 16 {
+                    let label = worker_id as u32;
+                    catalog
+                        .with_vertex_table_mut(label, |table| {
+                            let _ = table.total_count();
+                            Ok(())
+                        })
+                        .expect("data operation should complete");
+                } else {
+                    let name = format!("Node{}", worker_id - 16);
+                    assert!(catalog.vertex_label_id_for_name(&name).is_some());
+                }
+                done_tx.send(()).expect("watchdog channel should be open");
+            });
+        }
+        drop(done_tx);
+
+        for _ in 0..32 {
+            done_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("schema/data mix must not deadlock");
+        }
+    }
 }

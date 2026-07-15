@@ -29,25 +29,26 @@ impl GraphStorageContext {
         let mut last_compacted_vertices = self.persistent.last_compacted_vertices.lock();
         last_compacted_vertices.clear();
 
-        let vertex_labels: Vec<LabelId>;
-        {
-            let mut vertex_tables = self.persistent.data_store.write_vertex_tables();
-            vertex_labels = vertex_tables.keys().copied().collect();
-
-            for &label_id in &vertex_labels {
-                let table = vertex_tables.get_mut(&label_id).expect("label must exist");
-                match table.compact_with_ts_collect(ts) {
-                    Ok(removed) => {
-                        if !removed.is_empty() {
-                            last_compacted_vertices.push((label_id, removed));
+        let vertex_labels = self
+            .persistent
+            .data_store
+            .with_vertex_tables_mut(|vertex_tables| {
+                let labels: Vec<LabelId> = vertex_tables.keys().copied().collect();
+                for &label_id in &labels {
+                    let table = vertex_tables.get_mut(&label_id).expect("label must exist");
+                    match table.compact_with_ts_collect(ts) {
+                        Ok(removed) => {
+                            if !removed.is_empty() {
+                                last_compacted_vertices.push((label_id, removed));
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("Failed to compact vertex table {}: {}", label_id, e);
                         }
                     }
-                    Err(e) => {
-                        log::error!("Failed to compact vertex table {}: {}", label_id, e);
-                    }
                 }
-            }
-        }
+                Ok(labels)
+            })?;
 
         for &label_id in &vertex_labels {
             self.mark_vertex_modified(label_id);
@@ -63,35 +64,36 @@ impl GraphStorageContext {
             total_vertices_removed
         );
 
-        let edge_keys: Vec<EdgeTableKey>;
         let mut total_edges_removed = 0usize;
-        {
-            let mut edge_tables = self.persistent.data_store.write_edge_tables();
-            edge_keys = edge_tables.keys().copied().collect();
+        let edge_keys = self
+            .persistent
+            .data_store
+            .with_edge_tables_mut(|edge_tables| {
+                let keys: Vec<EdgeTableKey> = edge_tables.keys().copied().collect();
+                if config.enable_structure_compaction {
+                    for &key in &keys {
+                        let table = edge_tables.get_mut(&key).expect("edge key must exist");
+                        let removed = table.compact_and_freeze(
+                            ts,
+                            config,
+                            crate::storage::edge::CompactionMode::Standard,
+                        );
+                        total_edges_removed += removed;
+                    }
 
-            if config.enable_structure_compaction {
-                for &key in &edge_keys {
-                    let table = edge_tables.get_mut(&key).expect("edge key must exist");
-                    let removed = table.compact_and_freeze(
-                        ts,
-                        config,
-                        crate::storage::edge::CompactionMode::Standard,
+                    log::info!(
+                        "Compacted CSR structures: {} edges removed",
+                        total_edges_removed
                     );
-                    total_edges_removed += removed;
+                } else {
+                    for &key in &keys {
+                        let table = edge_tables.get_mut(&key).expect("edge key must exist");
+                        table.freeze_csr_only(ts);
+                        table.compact_properties(ts);
+                    }
                 }
-
-                log::info!(
-                    "Compacted CSR structures: {} edges removed",
-                    total_edges_removed
-                );
-            } else {
-                for &key in &edge_keys {
-                    let table = edge_tables.get_mut(&key).expect("edge key must exist");
-                    table.freeze_csr_only(ts);
-                    table.compact_properties(ts);
-                }
-            }
-        }
+                Ok(keys)
+            })?;
 
         for &key in &edge_keys {
             self.mark_edge_modified(key.edge_label);
@@ -130,8 +132,7 @@ impl GraphStorageContext {
             }
         }
 
-        {
-            let mut edge_tables = self.persistent.data_store.write_edge_tables();
+        self.persistent.data_store.with_edge_tables_mut(|edge_tables| {
             let mut adaptive_merged = 0usize;
             let mut lsm_merged = 0usize;
 
@@ -197,7 +198,8 @@ impl GraphStorageContext {
                     lsm_merged
                 );
             }
-        }
+            Ok(())
+        })?;
 
         // Log freeze configuration for monitoring
         if let Some(ref manager) = self.runtime.background_freeze_manager {

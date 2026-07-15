@@ -46,6 +46,19 @@ impl KeyBuilder {
         ByteKey(key)
     }
 
+    /// Build the prefix shared by all rows with one indexed property value.
+    pub fn build_vertex_index_value_prefix(
+        space_id: u64,
+        index_name: &str,
+        prop_value: &Value,
+    ) -> Result<ByteKey, StorageError> {
+        let prop_value_bytes = serialize_value(prop_value)?;
+        let mut key = Self::build_vertex_index_prefix(space_id, index_name).0;
+        key.extend_from_slice(&(prop_value_bytes.len() as u32).to_le_bytes());
+        key.extend_from_slice(&prop_value_bytes);
+        Ok(ByteKey(key))
+    }
+
     // ========================================================================
     // Vertex Reverse Index Keys
     // ========================================================================

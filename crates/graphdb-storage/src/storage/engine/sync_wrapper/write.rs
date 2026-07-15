@@ -12,6 +12,7 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
                 error
             );
         }
+        self.commit_auto_transaction()?;
         Ok(result)
     }
 
@@ -28,6 +29,7 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
                 error
             );
         }
+        self.commit_auto_transaction()?;
         Ok(())
     }
 
@@ -44,6 +46,7 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
                 error
             );
         }
+        self.commit_auto_transaction()?;
         Ok(())
     }
 
@@ -60,6 +63,7 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
                 error
             );
         }
+        self.commit_auto_transaction()?;
         Ok(())
     }
 
@@ -75,6 +79,7 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
                 error
             );
         }
+        self.commit_auto_transaction()?;
         Ok(results)
     }
 
@@ -84,7 +89,9 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
         vertex_id: &VertexId,
         tag_names: &[String],
     ) -> Result<usize, StorageError> {
-        self.inner.delete_tags(space, vertex_id, tag_names)
+        let result = self.inner.delete_tags(space, vertex_id, tag_names)?;
+        self.commit_auto_transaction()?;
+        Ok(result)
     }
 
     fn insert_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
@@ -94,7 +101,9 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
                 log::error!("Index event delivery deferred after edge insert: {}", error);
             }
         }
-        result
+        result?;
+        self.commit_auto_transaction()?;
+        Ok(())
     }
 
     fn update_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
@@ -114,7 +123,9 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
                 );
             }
         }
-        result
+        result?;
+        self.commit_auto_transaction()?;
+        Ok(())
     }
 
     fn delete_edge(
@@ -131,7 +142,9 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
                 log::error!("Index event delivery deferred after edge delete: {}", error);
             }
         }
-        result
+        result?;
+        self.commit_auto_transaction()?;
+        Ok(())
     }
 
     fn batch_insert_edges(&mut self, space: &str, edges: Vec<Edge>) -> Result<(), StorageError> {
@@ -141,7 +154,9 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
                 log::error!("Index event delivery deferred after edge batch: {}", error);
             }
         }
-        result
+        result?;
+        self.commit_auto_transaction()?;
+        Ok(())
     }
 
     fn insert_vertex_data(
@@ -149,11 +164,15 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
         space: &str,
         info: &InsertVertexInfo,
     ) -> Result<bool, StorageError> {
-        self.inner.insert_vertex_data(space, info)
+        let result = self.inner.insert_vertex_data(space, info)?;
+        self.commit_auto_transaction()?;
+        Ok(result)
     }
 
     fn delete_vertex_data(&mut self, space: &str, vertex_id: &str) -> Result<bool, StorageError> {
-        self.inner.delete_vertex_data(space, vertex_id)
+        let result = self.inner.delete_vertex_data(space, vertex_id)?;
+        self.commit_auto_transaction()?;
+        Ok(result)
     }
 
     fn insert_edge_data(
@@ -161,7 +180,9 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
         space: &str,
         info: &InsertEdgeInfo,
     ) -> Result<bool, StorageError> {
-        self.inner.insert_edge_data(space, info)
+        let result = self.inner.insert_edge_data(space, info)?;
+        self.commit_auto_transaction()?;
+        Ok(result)
     }
 
     fn delete_edge_data(
@@ -171,7 +192,9 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
         dst: &str,
         rank: i64,
     ) -> Result<bool, StorageError> {
-        self.inner.delete_edge_data(space, src, dst, rank)
+        let result = self.inner.delete_edge_data(space, src, dst, rank)?;
+        self.commit_auto_transaction()?;
+        Ok(result)
     }
 
     fn update_data(
@@ -180,6 +203,8 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
         space_id: u64,
         info: &UpdateInfo,
     ) -> Result<bool, StorageError> {
-        self.inner.update_data(space, space_id, info)
+        let result = self.inner.update_data(space, space_id, info)?;
+        self.commit_auto_transaction()?;
+        Ok(result)
     }
 }

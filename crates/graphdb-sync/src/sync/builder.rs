@@ -74,7 +74,7 @@ impl SyncManagerBuilder {
         }
 
         if let Some(path) = self.outbox_path {
-            manager = manager.with_outbox(path)?;
+            manager.configure_outbox(path)?;
         }
 
         Ok(manager)

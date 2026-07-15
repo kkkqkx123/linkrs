@@ -25,9 +25,9 @@ impl<S: StorageClient + 'static> SyncWrapper<S> {
                 .on_edge_insert(txn_id, space_id, edge)
                 .map_err(|e| StorageError::db_error(format!("Failed to sync edge insert: {}", e)))
         } else {
-            sync_manager
-                .on_edge_insert_direct_sync(space_id, edge)
-                .map_err(|e| StorageError::db_error(format!("Failed to sync edge insert: {}", e)))
+            Err(StorageError::db_error(
+                "Synchronized writes require an operation transaction context".to_string(),
+            ))
         }
     }
 
@@ -56,9 +56,9 @@ impl<S: StorageClient + 'static> SyncWrapper<S> {
                 .on_edge_delete(txn_id, space_id, &src_value, &dst_value, edge_type)
                 .map_err(|e| StorageError::db_error(format!("Failed to sync edge delete: {}", e)))
         } else {
-            sync_manager
-                .on_edge_delete_direct_sync(space_id, &src_value, &dst_value, edge_type)
-                .map_err(|e| StorageError::db_error(format!("Failed to sync edge delete: {}", e)))
+            Err(StorageError::db_error(
+                "Synchronized writes require an operation transaction context".to_string(),
+            ))
         }
     }
 
@@ -86,11 +86,9 @@ impl<S: StorageClient + 'static> SyncWrapper<S> {
                         StorageError::db_error(format!("Failed to sync edge insert: {}", e))
                     })?;
             } else {
-                sync_manager
-                    .on_edge_insert_direct_sync(space_id, edge)
-                    .map_err(|e| {
-                        StorageError::db_error(format!("Failed to sync edge insert: {}", e))
-                    })?;
+                return Err(StorageError::db_error(
+                    "Synchronized writes require an operation transaction context".to_string(),
+                ));
             }
         }
 

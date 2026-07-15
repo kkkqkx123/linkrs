@@ -3,9 +3,12 @@
 //! Unified WAL (Write-Ahead Log) manager that properly integrates with LocalWalWriter.
 //! This module provides a single source of truth for LSN management and WAL operations.
 
+use crate::core::types::{CommitLsn, TransactionId};
 use crate::core::wal::types::WalOpType;
+use crate::core::wal::OutboxIntent;
 use crate::core::{StorageError, StorageResult};
 use crate::transaction::wal::writer::WalWriter;
+use crate::transaction::wal::TransactionWalEntry;
 use crate::transaction::wal::{LocalWalWriter, Lsn, WalConfig};
 use parking_lot::RwLock;
 use postcard::to_allocvec;
@@ -91,6 +94,28 @@ impl WalManager {
             .map_err(|e| StorageError::wal_error(format!("Failed to append WAL entry: {:?}", e)))?;
 
         Ok(())
+    }
+
+    pub fn append_transaction(
+        &self,
+        transaction_id: TransactionId,
+        entries: Vec<TransactionWalEntry>,
+        intents: &[OutboxIntent],
+    ) -> StorageResult<CommitLsn> {
+        let Some(writer) = self.local_writer.as_ref() else {
+            return Err(StorageError::wal_error(
+                "WAL writer is not initialized".to_string(),
+            ));
+        };
+        writer
+            .write()
+            .append_transaction_batch(transaction_id, entries, intents)
+            .map_err(|error| {
+                StorageError::wal_error(format!(
+                    "Failed to append committed WAL transaction: {}",
+                    error
+                ))
+            })
     }
 
     pub fn set_checkpoint_seq(&self, seq: u64) -> StorageResult<()> {

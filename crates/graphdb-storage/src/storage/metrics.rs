@@ -9,10 +9,10 @@ use crate::core::types::{
 };
 use crate::core::{Edge, EdgeDirection, RoleType, StorageError, Value, Vertex};
 use crate::storage::{
-    StorageAdmin, StorageAuthOps, StorageClient, StorageGcOps, StorageOperationContext,
-    StorageOperationContextOps, StoragePersistenceOps, StorageReader, StorageRecoveryOps,
-    StorageSchemaContextOps, StorageSchemaOps, StorageSnapshotOps, StorageStats,
-    StorageSyncContextOps, StorageWriter,
+    StorageAdmin, StorageAuthOps, StorageClient, StorageCommitOps, StorageGcOps,
+    StorageOperationContext, StorageOperationContextOps, StoragePersistenceOps, StorageReader,
+    StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps, StorageSnapshotOps,
+    StorageStats, StorageSyncContextOps, StorageWriter,
 };
 use crate::sync::SyncManager;
 
@@ -334,6 +334,30 @@ impl<S: StorageClient> StorageOperationContextOps for MetricsStorage<S> {
 
     fn operation_context(&self) -> Option<Arc<StorageOperationContext>> {
         self.inner.operation_context()
+    }
+}
+
+impl<S: StorageClient> StorageCommitOps for MetricsStorage<S> {
+    fn commit_staged_writes(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+        intents: &[crate::core::wal::OutboxIntent],
+    ) -> crate::core::StorageResult<crate::core::types::CommitLsn> {
+        self.inner.commit_staged_writes(transaction_id, intents)
+    }
+
+    fn abort_staged_writes(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+    ) -> crate::core::StorageResult<()> {
+        self.inner.abort_staged_writes(transaction_id)
+    }
+
+    fn recover_outbox_projection(
+        &self,
+        sync_manager: &crate::sync::SyncManager,
+    ) -> crate::core::StorageResult<usize> {
+        self.inner.recover_outbox_projection(sync_manager)
     }
 }
 

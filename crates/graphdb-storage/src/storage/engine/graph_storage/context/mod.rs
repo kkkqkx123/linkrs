@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
@@ -83,6 +83,13 @@ struct GraphStoragePersistent {
     persistence: Option<Arc<RwLock<PersistenceCoordinator>>>,
     layout: GraphStorageLayout,
     stats_manager: Option<Arc<StatsManager>>,
+    next_auto_transaction_id: Arc<AtomicU64>,
+    staged_wal: Arc<
+        dashmap::DashMap<
+            crate::core::types::TransactionId,
+            Vec<crate::transaction::wal::TransactionWalEntry>,
+        >,
+    >,
 }
 
 impl GraphStoragePersistent {
@@ -135,6 +142,8 @@ impl GraphStoragePersistent {
             persistence: None,
             layout: GraphStorageLayout::new(),
             stats_manager: None,
+            next_auto_transaction_id: Arc::new(AtomicU64::new(1 << 63)),
+            staged_wal: Arc::new(dashmap::DashMap::new()),
         }
     }
 
@@ -176,6 +185,8 @@ impl GraphStoragePersistent {
             persistence: Some(persistence),
             layout: GraphStorageLayout::new_with_path(path),
             stats_manager: None,
+            next_auto_transaction_id: Arc::new(AtomicU64::new(1 << 63)),
+            staged_wal: Arc::new(dashmap::DashMap::new()),
         })
     }
 }

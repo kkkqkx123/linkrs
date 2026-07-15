@@ -28,11 +28,17 @@
 //! 3. Checkpoints are created periodically or on demand
 //! 4. Snapshots are user-triggered for full backups
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use parking_lot::RwLock;
+
+use graphdb_sync::sync::checkpoint_manifest::{
+    CheckpointManifest, CheckpointManifestManager, IndexManifestRef, OutboxSnapshotRef,
+    StorageSnapshotRef,
+};
 
 use crate::core::types::Timestamp;
 use crate::core::{StorageError, StorageResult};
@@ -45,6 +51,16 @@ pub enum PersistenceState {
     Idle,
     Checkpointing,
     Snapshotting,
+}
+
+/// Controlled failure points used by recovery tests and operational drills.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PersistenceFaultPoint {
+    DiskSpace,
+    CheckpointMetadataWrite,
+    CheckpointRename,
+    CheckpointDirectoryFsync,
+    RecoveryScan,
 }
 
 struct PersistenceStateGuard<'a> {
@@ -64,7 +80,7 @@ struct CheckpointFileEntry {
     checksum: u32,
 }
 
-const CHECKPOINT_FORMAT_VERSION: u32 = 1;
+const CHECKPOINT_FORMAT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone)]
 pub struct CheckpointInfo {
@@ -139,6 +155,7 @@ pub struct PersistenceCoordinator {
     wal_manager: Option<Arc<RwLock<WalManager>>>,
     checkpoint_manager: RwLock<CheckpointManager>,
     snapshot_manager: Option<Arc<SnapshotManager>>,
+    manifest_manager: CheckpointManifestManager,
     last_checkpoint_time: RwLock<Instant>,
     last_flush_time: RwLock<Instant>,
     last_checkpoint_lsn: RwLock<Lsn>,
@@ -147,6 +164,7 @@ pub struct PersistenceCoordinator {
     last_checkpoint_error: RwLock<Option<String>>,
     last_snapshot_error: RwLock<Option<String>>,
     state: RwLock<PersistenceState>,
+    fault_points: Arc<RwLock<HashSet<PersistenceFaultPoint>>>,
 }
 
 impl PersistenceCoordinator {
@@ -199,11 +217,18 @@ impl PersistenceCoordinator {
             None
         };
 
+        let manifest_dir = config.checkpoint_dir.join("manifests");
+        let manifest_manager = CheckpointManifestManager::new(&manifest_dir);
+        manifest_manager.init().map_err(|error| {
+            StorageError::db_error(format!("Failed to init manifest manager: {}", error))
+        })?;
+
         Ok(Self {
             config,
             wal_manager,
             checkpoint_manager: RwLock::new(checkpoint_manager),
             snapshot_manager,
+            manifest_manager,
             last_checkpoint_time: RwLock::new(Instant::now()),
             last_flush_time: RwLock::new(Instant::now()),
             last_checkpoint_lsn: RwLock::new(Lsn::ZERO),
@@ -212,7 +237,27 @@ impl PersistenceCoordinator {
             last_checkpoint_error: RwLock::new(None),
             last_snapshot_error: RwLock::new(None),
             state: RwLock::new(PersistenceState::Idle),
+            fault_points: Arc::new(RwLock::new(HashSet::new())),
         })
+    }
+
+    /// Enable a deterministic failure at a persistence boundary.
+    pub fn inject_failure(&self, point: PersistenceFaultPoint) {
+        self.fault_points.write().insert(point);
+    }
+
+    pub fn clear_injected_failures(&self) {
+        self.fault_points.write().clear();
+    }
+
+    fn fail_if_injected(&self, point: PersistenceFaultPoint) -> StorageResult<()> {
+        if self.fault_points.read().contains(&point) {
+            return Err(StorageError::io_error(format!(
+                "injected persistence failure at {:?}",
+                point
+            )));
+        }
+        Ok(())
     }
 
     pub fn wal_manager(&self) -> Option<Arc<RwLock<WalManager>>> {
@@ -394,13 +439,17 @@ impl PersistenceCoordinator {
                 checkpoint.seq
             )));
         }
+        self.fail_if_injected(PersistenceFaultPoint::DiskSpace)?;
         std::fs::create_dir(&temporary_dir)?;
 
         let data = flush_data(&temporary_dir, timestamp)?;
         let files = Self::collect_checkpoint_files(&temporary_dir)?;
+        self.fail_if_injected(PersistenceFaultPoint::CheckpointMetadataWrite)?;
         self.save_checkpoint_metadata(&temporary_dir, &checkpoint, &data, &files)?;
         Self::sync_tree(&temporary_dir)?;
+        self.fail_if_injected(PersistenceFaultPoint::CheckpointRename)?;
         std::fs::rename(&temporary_dir, &checkpoint_dir)?;
+        self.fail_if_injected(PersistenceFaultPoint::CheckpointDirectoryFsync)?;
         Self::sync_directory(&self.config.checkpoint_dir)?;
 
         {
@@ -410,12 +459,13 @@ impl PersistenceCoordinator {
             })?;
         }
 
+        // Publication order is part of the recovery protocol:
+        // checkpoint files -> directory fsync -> manager metadata -> WAL
+        // boundary -> snapshot -> outbox marker (the wrapper performs the
+        // last step). Retention only deletes points after all references are
+        // collected, so a failed later step never exposes partial data.
         if let Some(ref wal) = self.wal_manager {
             wal.read().set_checkpoint_seq(checkpoint.seq)?;
-        }
-
-        if let Some(ref wal) = self.wal_manager {
-            wal.read().truncate(wal_lsn)?;
         }
 
         self.mark_checkpointed(wal_lsn);
@@ -452,6 +502,16 @@ impl PersistenceCoordinator {
         } else {
             false
         };
+
+        self.publish_checkpoint_manifest(&checkpoint, &data, &checkpoint_dir, wal_lsn)?;
+
+        if let Some(ref wal) = self.wal_manager {
+            let safe_lsn = self.manifest_manager.latest_safe_lsn().map_err(|error| {
+                StorageError::db_error(format!("Failed to get safe LSN: {}", error))
+            })?;
+            let safe_wal_lsn = Lsn::new(safe_lsn.get());
+            wal.read().truncate(safe_wal_lsn)?;
+        }
 
         let stats = CheckpointStats {
             checkpoint_id: checkpoint.seq,
@@ -593,6 +653,7 @@ impl PersistenceCoordinator {
         &self,
         load_data: impl FnOnce(&Path) -> StorageResult<()>,
     ) -> StorageResult<Option<CheckpointInfo>> {
+        self.fail_if_injected(PersistenceFaultPoint::RecoveryScan)?;
         let checkpoints_dir = &self.config.checkpoint_dir;
 
         if !checkpoints_dir.exists() {
@@ -832,10 +893,15 @@ impl PersistenceCoordinator {
                     .count()
             })
             .unwrap_or(0);
+        let manifest_safe_lsn = self
+            .manifest_manager
+            .latest_safe_lsn()
+            .map(|lsn| Lsn::new(lsn.get()))
+            .unwrap_or_else(|_| *self.last_checkpoint_lsn.read());
         PersistenceDiagnostics {
             state: *self.state.read(),
             checkpoint_sequence: self.checkpoint_manager.read().current_seq(),
-            safe_lsn: *self.last_checkpoint_lsn.read(),
+            safe_lsn: manifest_safe_lsn,
             last_checkpoint_error: self.last_checkpoint_error.read().clone(),
             last_snapshot_error: self.last_snapshot_error.read().clone(),
             temporary_checkpoint_count,
@@ -843,6 +909,7 @@ impl PersistenceCoordinator {
             catalog_lock_wait_nanos: 0,
             catalog_lock_hold_nanos: 0,
             catalog_lock_contentions: 0,
+            catalog_lock_by_operation: Vec::new(),
         }
     }
 
@@ -851,7 +918,7 @@ impl PersistenceCoordinator {
         *self.last_flush_time.write() = Instant::now();
     }
 
-    pub fn mark_checkpointed(&self, lsn: Lsn) {
+    pub     fn mark_checkpointed(&self, lsn: Lsn) {
         if let Some(ref wal) = self.wal_manager {
             let _ = wal.read().set_current_lsn(lsn);
         }
@@ -859,6 +926,73 @@ impl PersistenceCoordinator {
         *self.last_checkpoint_time.write() = Instant::now();
         *self.last_flush_lsn.write() = lsn;
         *self.last_flush_time.write() = Instant::now();
+    }
+
+    /// Publish a combined checkpoint manifest that atomically references the
+    /// storage snapshot, outbox snapshot (if provided), and index manifests.
+    ///
+    /// This implements the Phase 3 requirement for atomic checkpoint manifest
+    /// publication. The manifest is written to a temporary file, synced, then
+    /// atomically renamed. Only after successful publication is WAL truncated
+    /// to the common safe LSN.
+    fn publish_checkpoint_manifest(
+        &self,
+        checkpoint: &crate::transaction::wal::Checkpoint,
+        data: &CheckpointData,
+        checkpoint_dir: &Path,
+        wal_lsn: Lsn,
+    ) -> StorageResult<()> {
+        let storage_snapshot_ref = StorageSnapshotRef {
+            path: checkpoint_dir.to_path_buf(),
+            size_bytes: data.data_size,
+            checksum: crc32fast::hash(
+                &std::fs::read(checkpoint_dir.join("checkpoint.meta"))
+                    .unwrap_or_default(),
+            ),
+            checkpoint_seq: checkpoint.seq,
+            vertex_count: data.vertex_count,
+            edge_count: data.edge_count,
+        };
+
+        let storage_lsn = graphdb_core::core::types::CommitLsn::new(wal_lsn.into());
+
+        let manifest = CheckpointManifest::new(
+            checkpoint.seq,
+            storage_lsn,
+            storage_snapshot_ref,
+            None,
+            Vec::new(),
+        );
+
+        self.manifest_manager
+            .publish(&manifest)
+            .map_err(|error| {
+                StorageError::db_error(format!("Failed to publish manifest: {}", error))
+            })?;
+
+        log::info!(
+            "Published checkpoint manifest {} with safe LSN {}",
+            checkpoint.seq,
+            manifest.safe_lsn
+        );
+
+        Ok(())
+    }
+
+    /// Get the latest safe LSN from the published manifest.
+    pub fn latest_safe_lsn(&self) -> StorageResult<graphdb_core::core::types::CommitLsn> {
+        self.manifest_manager
+            .latest_safe_lsn()
+            .map_err(|error| StorageError::db_error(error))
+    }
+
+    /// Load the latest published checkpoint manifest.
+    pub fn load_latest_manifest(
+        &self,
+    ) -> StorageResult<Option<CheckpointManifest>> {
+        self.manifest_manager
+            .load_latest()
+            .map_err(|error| StorageError::db_error(error))
     }
 }
 
@@ -892,6 +1026,17 @@ pub struct PersistenceDiagnostics {
     pub catalog_lock_hold_nanos: u64,
     /// Number of catalog acquisitions that observed measurable contention.
     pub catalog_lock_contentions: u64,
+    /// Lock metrics split by catalog operation type.
+    pub catalog_lock_by_operation: Vec<CatalogLockDiagnostic>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogLockDiagnostic {
+    pub operation: String,
+    pub acquisitions: u64,
+    pub wait_nanos: u64,
+    pub hold_nanos: u64,
+    pub contentions: u64,
 }
 
 #[cfg(test)]
@@ -1164,5 +1309,62 @@ mod tests {
         assert!(!config.checkpoint_dir.join("checkpoint_1").exists());
         assert!(!config.checkpoint_dir.join("checkpoint_2").exists());
         assert!(config.checkpoint_dir.join("checkpoint_3").exists());
+    }
+
+    #[test]
+    fn checkpoint_retention_keeps_latest() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let config = PersistenceConfig {
+            enable_snapshots: false,
+            enable_wal: false,
+            ..PersistenceConfig::for_work_dir(temp_dir.path())
+        };
+        let coordinator = PersistenceCoordinator::new(config.clone()).expect("coordinator");
+        for sequence in 1..=3 {
+            coordinator
+                .create_checkpoint(
+                    |temporary_dir, _| {
+                        std::fs::write(temporary_dir.join("table.data"), b"data")?;
+                        Ok(CheckpointData {
+                            vertex_count: sequence as u64,
+                            edge_count: 0,
+                            data_size: 4,
+                        })
+                    },
+                    sequence,
+                )
+                .expect("checkpoint should publish");
+        }
+
+        assert_eq!(coordinator.cleanup_old_checkpoints(1).expect("cleanup"), 2);
+        assert!(config.checkpoint_dir.join("checkpoint_3").exists());
+    }
+
+    #[test]
+    fn injected_checkpoint_boundary_failure_is_diagnosable_and_not_published() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let config = PersistenceConfig {
+            enable_snapshots: false,
+            enable_wal: false,
+            ..PersistenceConfig::for_work_dir(temp_dir.path())
+        };
+        let coordinator = PersistenceCoordinator::new(config.clone()).expect("coordinator");
+        coordinator.inject_failure(PersistenceFaultPoint::CheckpointRename);
+        let result = coordinator.create_checkpoint(
+            |temporary_dir, _| {
+                std::fs::write(temporary_dir.join("table.data"), b"data")?;
+                Ok(CheckpointData {
+                    vertex_count: 1,
+                    edge_count: 0,
+                    data_size: 4,
+                })
+            },
+            1,
+        );
+        assert!(result.is_err());
+        assert_eq!(*coordinator.state.read(), PersistenceState::Idle);
+        assert!(!config.checkpoint_dir.join("checkpoint_1").exists());
+        assert!(config.checkpoint_dir.join("checkpoint_1.tmp").exists());
+        assert!(coordinator.diagnostics().last_checkpoint_error.is_some());
     }
 }

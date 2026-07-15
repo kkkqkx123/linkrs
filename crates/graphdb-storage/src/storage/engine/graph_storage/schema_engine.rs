@@ -94,20 +94,24 @@ pub fn create_edge_type(
         return Err(StorageError::storage_not_open());
     }
 
-    {
-        let vertex_tables = ctx.data_store().read_vertex_tables();
-        if !vertex_tables.contains_key(&src_label) {
-            return Err(StorageError::label_not_found(format!(
-                "source label {}",
-                src_label
-            )));
-        }
-        if !vertex_tables.contains_key(&dst_label) {
-            return Err(StorageError::label_not_found(format!(
-                "destination label {}",
-                dst_label
-            )));
-        }
+    let (source_exists, destination_exists) =
+        ctx.data_store().with_vertex_tables(|vertex_tables| {
+            (
+                vertex_tables.contains_key(&src_label),
+                vertex_tables.contains_key(&dst_label),
+            )
+        });
+    if !source_exists {
+        return Err(StorageError::label_not_found(format!(
+            "source label {}",
+            src_label
+        )));
+    }
+    if !destination_exists {
+        return Err(StorageError::label_not_found(format!(
+            "destination label {}",
+            dst_label
+        )));
     }
 
     ctx.data_store()
@@ -745,7 +749,7 @@ mod tests {
         // Check initial version is 1
         let initial_version = ctx
             .data_store()
-            .read_vertex_tables()
+            .test_read_vertex_tables()
             .get(&0)
             .unwrap()
             .schema()
@@ -761,7 +765,7 @@ mod tests {
 
         let updated_version = ctx
             .data_store()
-            .read_vertex_tables()
+            .test_read_vertex_tables()
             .get(&0)
             .unwrap()
             .schema()
@@ -784,7 +788,7 @@ mod tests {
 
         let v1 = ctx
             .data_store()
-            .read_vertex_tables()
+            .test_read_vertex_tables()
             .get(&0)
             .unwrap()
             .schema()
@@ -795,7 +799,7 @@ mod tests {
 
         let v2 = ctx
             .data_store()
-            .read_vertex_tables()
+            .test_read_vertex_tables()
             .get(&0)
             .unwrap()
             .schema()
@@ -812,7 +816,7 @@ mod tests {
 
         let v1 = ctx
             .data_store()
-            .read_vertex_tables()
+            .test_read_vertex_tables()
             .get(&0)
             .unwrap()
             .schema()
@@ -823,7 +827,7 @@ mod tests {
 
         let v2 = ctx
             .data_store()
-            .read_vertex_tables()
+            .test_read_vertex_tables()
             .get(&0)
             .unwrap()
             .schema()
@@ -847,7 +851,7 @@ mod tests {
 
             let actual_version = ctx
                 .data_store()
-                .read_vertex_tables()
+                .test_read_vertex_tables()
                 .get(&0)
                 .unwrap()
                 .schema()
@@ -878,7 +882,7 @@ mod tests {
         // Check initial version is 1
         let initial_version = ctx
             .data_store()
-            .read_edge_tables()
+            .test_read_edge_tables()
             .values()
             .next()
             .unwrap()
@@ -894,7 +898,7 @@ mod tests {
 
         let updated_version = ctx
             .data_store()
-            .read_edge_tables()
+            .test_read_edge_tables()
             .values()
             .next()
             .unwrap()
@@ -927,7 +931,7 @@ mod tests {
 
         let v1 = ctx
             .data_store()
-            .read_edge_tables()
+            .test_read_edge_tables()
             .values()
             .next()
             .unwrap()
@@ -939,7 +943,7 @@ mod tests {
 
         let v2 = ctx
             .data_store()
-            .read_edge_tables()
+            .test_read_edge_tables()
             .values()
             .next()
             .unwrap()
@@ -973,7 +977,7 @@ mod tests {
 
         let v1 = ctx
             .data_store()
-            .read_edge_tables()
+            .test_read_edge_tables()
             .values()
             .next()
             .unwrap()
@@ -985,7 +989,7 @@ mod tests {
 
         let v2 = ctx
             .data_store()
-            .read_edge_tables()
+            .test_read_edge_tables()
             .values()
             .next()
             .unwrap()
@@ -1023,7 +1027,7 @@ mod tests {
 
             let actual_version = ctx
                 .data_store()
-                .read_edge_tables()
+                .test_read_edge_tables()
                 .values()
                 .next()
                 .unwrap()

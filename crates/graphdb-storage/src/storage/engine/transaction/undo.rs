@@ -30,10 +30,10 @@ impl UndoTarget for GraphStorageContext {
     }
 
     fn delete_vertex(&self, vertex: VertexIdentifier, ts: Timestamp) -> UndoLogResult<()> {
-        {
-            let mut vertex_tables = self.data_store().write_vertex_tables();
-            TransactionOps::delete_vertex(&mut vertex_tables, vertex.label, vertex.vid, ts)?;
-        }
+        self.data_store()
+            .with_vertex_tables_mut_result(|vertex_tables| {
+                TransactionOps::delete_vertex(vertex_tables, vertex.label, vertex.vid, ts)
+            })?;
         self.mark_vertex_modified(vertex.label);
         Ok(())
     }
@@ -47,16 +47,17 @@ impl UndoTarget for GraphStorageContext {
             edge_label: edge_ctx.edge_id.edge_label,
             rank: edge_ctx.edge_id.rank,
         };
-        {
-            let mut edge_tables = self.data_store().write_edge_tables();
-            TransactionOps::delete_edge(
-                &mut edge_tables,
-                params,
-                edge_ctx.oe_offset,
-                edge_ctx.ie_offset,
-                edge_ctx.timestamp,
-            )?;
-        }
+        self.data_store()
+            .with_edge_tables_mut_result(|edge_tables| {
+                TransactionOps::delete_edge(
+                    edge_tables,
+                    params,
+                    edge_ctx.oe_offset,
+                    edge_ctx.ie_offset,
+                    edge_ctx.timestamp,
+                )?;
+                Ok(())
+            })?;
         self.mark_edge_modified(edge_ctx.edge_id.edge_label);
         Ok(())
     }
@@ -68,17 +69,17 @@ impl UndoTarget for GraphStorageContext {
         value: PropertyValue,
         ts: Timestamp,
     ) -> UndoLogResult<()> {
-        {
-            let mut vertex_tables = self.data_store().write_vertex_tables();
-            TransactionOps::update_vertex_property_undo(
-                &mut vertex_tables,
-                vertex.label,
-                vertex.vid,
-                col_id,
-                value,
-                ts,
-            )?;
-        }
+        self.data_store()
+            .with_vertex_tables_mut_result(|vertex_tables| {
+                TransactionOps::update_vertex_property_undo(
+                    vertex_tables,
+                    vertex.label,
+                    vertex.vid,
+                    col_id,
+                    value,
+                    ts,
+                )
+            })?;
         self.mark_vertex_modified(vertex.label);
         Ok(())
     }
@@ -100,27 +101,27 @@ impl UndoTarget for GraphStorageContext {
             edge_label: edge_id.edge_label,
             rank: edge_id.rank,
         };
-        {
-            let mut edge_tables = self.data_store().write_edge_tables();
-            TransactionOps::update_edge_property_undo(
-                &mut edge_tables,
-                params,
-                oe_offset,
-                ie_offset,
-                col_id.0 as u16,
-                value,
-                ts,
-            )?;
-        }
+        self.data_store()
+            .with_edge_tables_mut_result(|edge_tables| {
+                TransactionOps::update_edge_property_undo(
+                    edge_tables,
+                    params,
+                    oe_offset,
+                    ie_offset,
+                    col_id.0 as u16,
+                    value,
+                    ts,
+                )
+            })?;
         self.mark_edge_modified(edge_id.edge_label);
         Ok(())
     }
 
     fn revert_delete_vertex(&self, vertex: VertexIdentifier, ts: Timestamp) -> UndoLogResult<()> {
-        {
-            let mut vertex_tables = self.data_store().write_vertex_tables();
-            TransactionOps::revert_delete_vertex(&mut vertex_tables, vertex.label, vertex.vid, ts)?;
-        }
+        self.data_store()
+            .with_vertex_tables_mut_result(|vertex_tables| {
+                TransactionOps::revert_delete_vertex(vertex_tables, vertex.label, vertex.vid, ts)
+            })?;
         self.mark_vertex_modified(vertex.label);
         Ok(())
     }
@@ -134,16 +135,16 @@ impl UndoTarget for GraphStorageContext {
             dst_vid: edge_ctx.edge_id.dst_vid.as_int64().unwrap_or(0) as u32,
             rank: edge_ctx.edge_id.rank,
         };
-        {
-            let mut edge_tables = self.data_store().write_edge_tables();
-            TransactionOps::revert_delete_edge(
-                &mut edge_tables,
-                params,
-                edge_ctx.oe_offset,
-                edge_ctx.ie_offset,
-                edge_ctx.timestamp,
-            )?;
-        }
+        self.data_store()
+            .with_edge_tables_mut_result(|edge_tables| {
+                TransactionOps::revert_delete_edge(
+                    edge_tables,
+                    params,
+                    edge_ctx.oe_offset,
+                    edge_ctx.ie_offset,
+                    edge_ctx.timestamp,
+                )
+            })?;
         self.mark_edge_modified(edge_ctx.edge_id.edge_label);
         Ok(())
     }
@@ -227,18 +228,19 @@ impl UndoTarget for GraphStorageContext {
         edge_label: &str,
     ) -> UndoLogResult<()> {
         let (src_label_id, dst_label_id) = {
-            let vertex_tables = self.data_store().read_vertex_tables();
-            let src = vertex_tables
-                .values()
-                .find(|table| table.label_name() == src_label)
-                .map(|table| table.label())
-                .ok_or(UndoLogError::LabelNotFound(0))?;
-            let dst = vertex_tables
-                .values()
-                .find(|table| table.label_name() == dst_label)
-                .map(|table| table.label())
-                .ok_or(UndoLogError::LabelNotFound(0))?;
-            (src, dst)
+            self.data_store().with_vertex_tables(|vertex_tables| {
+                let src = vertex_tables
+                    .values()
+                    .find(|table| table.label_name() == src_label)
+                    .map(|table| table.label())
+                    .ok_or(UndoLogError::LabelNotFound(0))?;
+                let dst = vertex_tables
+                    .values()
+                    .find(|table| table.label_name() == dst_label)
+                    .map(|table| table.label())
+                    .ok_or(UndoLogError::LabelNotFound(0))?;
+                Ok((src, dst))
+            })?
         };
         let edge_label_id = self
             .data_store()

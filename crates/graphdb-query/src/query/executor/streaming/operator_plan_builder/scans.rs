@@ -102,13 +102,20 @@ pub fn build_scan_node(
 
         PlanNodeEnum::IndexScan(scan_node) => {
             let index_name = scan_node.index_name().to_string();
-            if scan_node.scan_limits().is_empty() && scan_node.filter().is_none() {
-                return Err(PlanBuildError::missing_value(
-                    "IndexScan",
-                    node.id(),
-                    "scan_limits",
+            if scan_node.scan_limits().is_empty() {
+                return Err(PlanBuildError::capability(
+                    "typed_index_predicate",
                     format!(
-                        "IndexScan '{}' requires at least one typed predicate (scan_limits or filter)",
+                        "IndexScan '{}' cannot execute a residual filter without a typed scan limit",
+                        index_name
+                    ),
+                ));
+            }
+            if scan_node.filter().is_some() {
+                return Err(PlanBuildError::capability(
+                    "index_residual_filter",
+                    format!(
+                        "IndexScan '{}' has a residual filter that is not pushed into the native index cursor",
                         index_name
                     ),
                 ));

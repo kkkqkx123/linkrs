@@ -17,6 +17,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use crate::core::types::storage_ids::VertexId;
+use crate::core::types::Timestamp;
 use crate::core::value::NullType;
 use crate::core::StorageError;
 use crate::storage::StorageClient;
@@ -63,6 +64,8 @@ pub struct ScanOptions {
     pub edge_type: Option<String>,
     /// Optional property projection pushed into the physical scan.
     pub projection: Option<Vec<String>>,
+    /// Read timestamp captured by the caller.
+    pub read_timestamp: Option<Timestamp>,
 }
 
 impl ScanOptions {
@@ -107,6 +110,11 @@ impl ScanOptions {
         self
     }
 
+    pub fn with_read_timestamp(mut self, read_timestamp: Timestamp) -> Self {
+        self.read_timestamp = Some(read_timestamp);
+        self
+    }
+
     pub fn batch_size(&self) -> usize {
         if self.batch_size == 0 {
             Self::DEFAULT_BATCH_SIZE
@@ -114,6 +122,53 @@ impl ScanOptions {
             self.batch_size
         }
     }
+}
+
+/// Predicate understood by native index cursors.
+#[derive(Debug, Clone, PartialEq)]
+pub enum IndexPredicate {
+    Equal(crate::core::Value),
+    Range {
+        lower: Option<crate::core::Value>,
+        upper: Option<crate::core::Value>,
+        include_lower: bool,
+        include_upper: bool,
+    },
+    StringPrefix(String),
+    All,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum PartitionSelector {
+    #[default]
+    All,
+    Shards(Vec<u32>),
+    KeyRange {
+        lower: Vec<u8>,
+        upper: Vec<u8>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum IndexRow {
+    RowId(crate::core::wal::EntityRef),
+    Covering {
+        entity_ref: crate::core::wal::EntityRef,
+        columns: Vec<(String, crate::core::Value)>,
+    },
+}
+
+/// Immutable physical index scan contract.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexScanPlan {
+    pub space: String,
+    pub index_id: u64,
+    pub predicate: IndexPredicate,
+    pub projection: Option<Vec<String>>,
+    pub partition: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: usize,
+    pub read_timestamp: Timestamp,
 }
 
 // ---------------------------------------------------------------------------
@@ -161,6 +216,15 @@ pub trait IndexCursor: Send + std::fmt::Debug {
     /// Number of stale rows skipped so far (for diagnostics).
     fn stale_skipped(&self) -> u64 {
         0
+    }
+
+    /// Whether the cursor has reached the end of its physical scan.
+    ///
+    /// A batch may be empty even before exhaustion when all entries in that
+    /// batch are invisible or stale, so callers that need to continue over
+    /// such entries must inspect this flag.
+    fn is_exhausted(&self) -> bool {
+        true
     }
 }
 
@@ -299,10 +363,12 @@ pub fn open_edge_scan<S: crate::storage::StorageReader + ?Sized>(
 pub fn open_property_batch_reader(
     storage: &Arc<RwLock<dyn StorageClient>>,
     space: impl Into<String>,
+    read_timestamp: Timestamp,
 ) -> Box<dyn PropertyBatchReader> {
     Box::new(DefaultPropertyBatchReader::new(
         storage.clone(),
         space.into(),
+        read_timestamp,
     ))
 }
 
@@ -315,14 +381,12 @@ pub fn open_property_batch_reader(
 /// This is a placeholder.  Storage engines should override
 /// `StorageReader::create_index_cursor` when they support native index
 /// cursors.  The default implementation returns a capability error.
-pub fn open_index_cursor(
-    storage: &Arc<RwLock<dyn StorageClient>>,
-    space: &str,
-    index_id: u64,
-    predicate: &dyn std::fmt::Debug,
+pub fn open_index_cursor<S: crate::storage::StorageReader + ?Sized>(
+    storage: &Arc<RwLock<S>>,
+    plan: &IndexScanPlan,
 ) -> Result<Box<dyn IndexCursor<Row = crate::core::Value>>, StorageError> {
     let reader = storage.read();
-    reader.create_index_cursor(space, index_id, predicate)
+    reader.create_index_cursor(plan)
 }
 
 // ---------------------------------------------------------------------------
@@ -335,13 +399,19 @@ pub fn open_index_cursor(
 pub struct DefaultPropertyBatchReader {
     storage: Arc<RwLock<dyn StorageClient>>,
     space: String,
+    read_timestamp: Timestamp,
 }
 
 impl DefaultPropertyBatchReader {
-    pub fn new(storage: Arc<RwLock<dyn StorageClient>>, space: impl Into<String>) -> Self {
+    pub fn new(
+        storage: Arc<RwLock<dyn StorageClient>>,
+        space: impl Into<String>,
+        read_timestamp: Timestamp,
+    ) -> Self {
         Self {
             storage,
             space: space.into(),
+            read_timestamp,
         }
     }
 }
@@ -353,6 +423,7 @@ impl PropertyBatchReader for DefaultPropertyBatchReader {
         prop_names: &[String],
     ) -> Result<Vec<Vec<crate::core::Value>>, StorageError> {
         let guard = self.storage.read();
+        validate_property_reader_context(&*guard, self.read_timestamp)?;
         let mut results = Vec::with_capacity(ids.len());
         for id in ids {
             match guard.get_vertex(&self.space, id) {
@@ -386,6 +457,7 @@ impl PropertyBatchReader for DefaultPropertyBatchReader {
         prop_names: &[String],
     ) -> Result<Vec<Vec<crate::core::Value>>, StorageError> {
         let guard = self.storage.read();
+        validate_property_reader_context(&*guard, self.read_timestamp)?;
         let mut results = Vec::with_capacity(edges.len());
         for (src, dst, edge_type, rank) in edges {
             match guard.get_edge(&self.space, src, dst, edge_type, *rank) {
@@ -411,4 +483,22 @@ impl PropertyBatchReader for DefaultPropertyBatchReader {
         }
         Ok(results)
     }
+}
+
+fn validate_property_reader_context(
+    storage: &dyn StorageClient,
+    read_timestamp: Timestamp,
+) -> Result<(), StorageError> {
+    let context = storage.operation_context().ok_or_else(|| {
+        StorageError::invalid_operation(
+            "property batch reader requires a storage operation context".to_string(),
+        )
+    })?;
+    if context.read_timestamp != read_timestamp {
+        return Err(StorageError::invalid_operation(format!(
+            "property batch reader timestamp {} does not match storage snapshot {}",
+            read_timestamp, context.read_timestamp
+        )));
+    }
+    Ok(())
 }

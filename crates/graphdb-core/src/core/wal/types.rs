@@ -115,6 +115,9 @@ pub enum WalOpType {
     DropSpace = 18,
     ClearSpace = 19,
     AlterSpaceComment = 20,
+    OutboxIntent = 21,
+    TransactionCommit = 22,
+    TransactionAbort = 23,
 }
 
 impl TryFrom<u8> for WalOpType {
@@ -143,6 +146,9 @@ impl TryFrom<u8> for WalOpType {
             18 => Ok(WalOpType::DropSpace),
             19 => Ok(WalOpType::ClearSpace),
             20 => Ok(WalOpType::AlterSpaceComment),
+            21 => Ok(WalOpType::OutboxIntent),
+            22 => Ok(WalOpType::TransactionCommit),
+            23 => Ok(WalOpType::TransactionAbort),
             _ => Err(WalError::InvalidOpType(value)),
         }
     }
@@ -172,6 +178,9 @@ impl fmt::Display for WalOpType {
             WalOpType::DropSpace => write!(f, "DropSpace"),
             WalOpType::ClearSpace => write!(f, "ClearSpace"),
             WalOpType::AlterSpaceComment => write!(f, "AlterSpaceComment"),
+            WalOpType::OutboxIntent => write!(f, "OutboxIntent"),
+            WalOpType::TransactionCommit => write!(f, "TransactionCommit"),
+            WalOpType::TransactionAbort => write!(f, "TransactionAbort"),
         }
     }
 }

@@ -129,13 +129,20 @@ impl CheckpointManager {
             if let Some((key, value)) = line.split_once('=') {
                 match key.trim() {
                     "seq" => {
-                        self.current_seq = value.trim().parse().unwrap_or(0);
+                        self.current_seq = value.trim().parse().map_err(|error| {
+                            WalError::IoError(format!("invalid checkpoint sequence: {}", error))
+                        })?;
                     }
                     "timestamp" => {
-                        self.last_checkpoint_ts = value.trim().parse().unwrap_or(0);
+                        self.last_checkpoint_ts = value.trim().parse().map_err(|error| {
+                            WalError::IoError(format!("invalid checkpoint timestamp: {}", error))
+                        })?;
                     }
                     "lsn" => {
-                        self.last_checkpoint_lsn = Lsn::new(value.trim().parse().unwrap_or(0));
+                        self.last_checkpoint_lsn =
+                            Lsn::new(value.trim().parse().map_err(|error| {
+                                WalError::IoError(format!("invalid checkpoint LSN: {}", error))
+                            })?);
                     }
                     _ => {}
                 }

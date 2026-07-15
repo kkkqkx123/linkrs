@@ -82,17 +82,9 @@ impl<S: StorageClient + 'static> SyncWrapper<S> {
                         StorageError::db_error(format!("Failed to sync vertex insert: {}", e))
                     })?;
             } else {
-                sync_manager
-                    .on_vertex_change_direct_sync(
-                        space_id,
-                        &tag.name,
-                        &vid_value,
-                        &props,
-                        ChangeType::Insert,
-                    )
-                    .map_err(|e| {
-                        StorageError::db_error(format!("Failed to sync vertex insert: {}", e))
-                    })?;
+                return Err(StorageError::db_error(
+                    "Synchronized writes require an operation transaction context".to_string(),
+                ));
             }
         }
 
@@ -138,17 +130,9 @@ impl<S: StorageClient + 'static> SyncWrapper<S> {
                         StorageError::db_error(format!("Failed to sync vertex update: {}", e))
                     })?;
             } else {
-                sync_manager
-                    .on_vertex_change_direct_sync(
-                        space_id,
-                        &tag.name,
-                        &vid_value,
-                        &changed_props,
-                        ChangeType::Update,
-                    )
-                    .map_err(|e| {
-                        StorageError::db_error(format!("Failed to sync vertex update: {}", e))
-                    })?;
+                return Err(StorageError::db_error(
+                    "Synchronized writes require an operation transaction context".to_string(),
+                ));
             }
         }
 
@@ -198,17 +182,9 @@ impl<S: StorageClient + 'static> SyncWrapper<S> {
                         StorageError::db_error(format!("Failed to sync vertex delete: {}", e))
                     })?;
             } else {
-                sync_manager
-                    .on_vertex_change_direct_sync(
-                        space_id,
-                        &tag.name,
-                        &id_value,
-                        &props,
-                        ChangeType::Delete,
-                    )
-                    .map_err(|e| {
-                        StorageError::db_error(format!("Failed to sync vertex delete: {}", e))
-                    })?;
+                return Err(StorageError::db_error(
+                    "Synchronized writes require an operation transaction context".to_string(),
+                ));
             }
         }
 
@@ -258,17 +234,9 @@ impl<S: StorageClient + 'static> SyncWrapper<S> {
                             StorageError::db_error(format!("Failed to sync vertex insert: {}", e))
                         })?;
                 } else {
-                    sync_manager
-                        .on_vertex_change_direct_sync(
-                            space_id,
-                            &tag.name,
-                            &vid_value,
-                            &props,
-                            ChangeType::Insert,
-                        )
-                        .map_err(|e| {
-                            StorageError::db_error(format!("Failed to sync vertex insert: {}", e))
-                        })?;
+                    return Err(StorageError::db_error(
+                        "Synchronized writes require an operation transaction context".to_string(),
+                    ));
                 }
             }
         }

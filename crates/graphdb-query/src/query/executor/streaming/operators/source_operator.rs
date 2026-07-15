@@ -4,17 +4,19 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use super::super::state::GlobalState;
-use super::spec::BoundIndexPredicate;
+use super::spec::{BoundIndexPredicate, IndexProjection};
 use super::state::SourceState;
 use crate::core::error::QueryError;
 use crate::core::types::storage_ids::VertexId;
+use crate::core::types::MAX_TIMESTAMP;
 use crate::core::{EdgeDirection, Value};
 use crate::query::executor::base::{MemoryBudget, MemoryReservation};
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::slot::SlotLayout;
 use crate::storage::cursor::{
-    open_edge_scan, open_vertex_scan, EdgeCursor, ScanOptions, VecEdgeCursor, VertexCursor,
+    open_edge_scan, open_index_cursor, open_vertex_scan, EdgeCursor, IndexCursor, IndexPredicate,
+    IndexScanPlan, ScanOptions, VecEdgeCursor, VertexCursor,
 };
 use crate::storage::QueryStorage;
 
@@ -59,8 +61,8 @@ fn storage_error(
 /// Source operator with arena-based state for counters.
 ///
 /// Heavy mutable resources (cursors) are kept inline for practical lifetime
-/// management; simple counters (current_index, position, resolved_ids, etc.)
-/// live in the `SourceState` arena on [`OperatorBase`].
+/// management; simple counters and state machines live in the `SourceState`
+/// arena on [`OperatorBase`].
 #[derive(Debug)]
 pub enum SourceOperator {
     /// Buffered vertex scan — rows come from the spec.
@@ -139,7 +141,9 @@ pub enum SourceOperator {
         index_name: String,
         index_id: u64,
         predicate: BoundIndexPredicate,
+        projection: IndexProjection,
         output_layout: Arc<SlotLayout>,
+        cursor: Option<Box<dyn IndexCursor<Row = Value>>>,
     },
     Argument,
     /// Property retrieval (zero-input source, will migrate to Unary in M2).
@@ -158,7 +162,9 @@ pub enum SourceOperator {
         index_name: String,
         index_id: u64,
         predicate: BoundIndexPredicate,
+        projection: IndexProjection,
         output_layout: Arc<SlotLayout>,
+        cursor: Option<Box<dyn IndexCursor<Row = Value>>>,
     },
     Start,
 }
@@ -257,6 +263,7 @@ impl SourceOperator {
                 index_name,
                 index_id,
                 predicate,
+                projection,
                 output_layout,
                 ..
             } => Self::IndexScan {
@@ -265,7 +272,9 @@ impl SourceOperator {
                 index_name: index_name.clone(),
                 index_id: *index_id,
                 predicate: predicate.clone(),
+                projection: projection.clone(),
                 output_layout: output_layout.clone(),
+                cursor: None,
             },
             super::spec::SourceSpec::Argument => Self::Argument,
             super::spec::SourceSpec::GetProp {
@@ -287,6 +296,7 @@ impl SourceOperator {
                 index_name,
                 index_id,
                 predicate,
+                projection,
                 output_layout,
                 ..
             } => Self::LookupIndex {
@@ -295,7 +305,9 @@ impl SourceOperator {
                 index_name: index_name.clone(),
                 index_id: *index_id,
                 predicate: predicate.clone(),
+                projection: projection.clone(),
                 output_layout: output_layout.clone(),
+                cursor: None,
             },
             super::spec::SourceSpec::Start => Self::Start,
         }
@@ -449,36 +461,35 @@ impl SourceOperator {
                     state: NeighborScanState::Init,
                 }));
             }
-            Self::EdgeIndexScan {
+            Self::EdgeIndexScan { space_name, .. } => {
+                return Err(QueryError::execution(format!(
+                    "EdgeIndexScan is not supported by storage for space '{}'",
+                    space_name
+                )));
+            }
+            Self::IndexScan {
                 storage,
                 space_name,
-                edge_type,
+                index_id,
+                predicate,
+                projection,
                 cursor,
+                ..
             } => {
-                if let Some(storage_ref) = storage {
-                    *cursor = Some(
-                        open_edge_scan(
-                            storage_ref,
-                            space_name,
-                            &ScanOptions {
-                                edge_type: edge_type.clone(),
-                                ..ScanOptions::default()
-                            },
-                        )
-                        .map_err(|error| {
-                            storage_error("EdgeIndexScan", "open cursor", space_name, error)
-                        })?,
-                    );
-                }
-                base.insert_state(GlobalState::Source(SourceState::EdgeIndexScan {
-                    cursor: None,
-                }));
-            }
-            Self::IndexScan { .. } => {
-                base.insert_state(GlobalState::Source(SourceState::IndexScan {
-                    resolved_ids: Vec::new(),
-                    position: 0,
-                }));
+                let storage_ref = storage.as_ref().ok_or_else(|| {
+                    QueryError::execution("IndexScan requires storage".to_string())
+                })?;
+                let plan = build_index_scan_plan(
+                    storage_ref,
+                    space_name,
+                    *index_id,
+                    predicate,
+                    projection,
+                )?;
+                *cursor = Some(open_index_cursor(storage_ref, &plan).map_err(|error| {
+                    storage_error("IndexScan", "open cursor", space_name, error)
+                })?);
+                base.insert_state(GlobalState::Source(SourceState::IndexScan { cursor: None }));
             }
             Self::Argument => {
                 base.insert_state(GlobalState::Source(SourceState::Argument));
@@ -493,10 +504,30 @@ impl SourceOperator {
                     prop_names: prop_names.clone(),
                 }));
             }
-            Self::LookupIndex { .. } => {
+            Self::LookupIndex {
+                storage,
+                space_name,
+                index_id,
+                predicate,
+                projection,
+                cursor,
+                ..
+            } => {
+                let storage_ref = storage.as_ref().ok_or_else(|| {
+                    QueryError::execution("LookupIndex requires storage".to_string())
+                })?;
+                let plan = build_index_scan_plan(
+                    storage_ref,
+                    space_name,
+                    *index_id,
+                    predicate,
+                    projection,
+                )?;
+                *cursor = Some(open_index_cursor(storage_ref, &plan).map_err(|error| {
+                    storage_error("LookupIndex", "open cursor", space_name, error)
+                })?);
                 base.insert_state(GlobalState::Source(SourceState::LookupIndex {
-                    resolved_ids: Vec::new(),
-                    position: 0,
+                    cursor: None,
                 }));
             }
             Self::Start => {
@@ -814,203 +845,39 @@ impl SourceOperator {
             Self::LookupIndex {
                 storage,
                 space_name,
-                index_name,
-                predicate,
                 output_layout,
+                cursor,
                 ..
-            } => {
-                // LookupIndex is semantically identical to IndexScan.
-                let storage_ref = storage.as_ref().ok_or_else(|| {
+            } => next_index_chunk(
+                storage.as_ref().ok_or_else(|| {
                     QueryError::execution("LookupIndex requires storage".to_string())
-                })?;
-                let (ids, pos) = {
-                    let mut arena = base.state_arena();
-                    let s = arena.global.get_mut(&base.state_key());
-                    match s {
-                        Some(GlobalState::Source(SourceState::LookupIndex {
-                            resolved_ids,
-                            position,
-                        })) => {
-                            if resolved_ids.is_empty() && *position == 0 {
-                                let guard = storage_ref.read();
-                                match &predicate {
-                                    BoundIndexPredicate::Equal { column: _, value } => {
-                                        guard
-                                            .lookup_index(space_name, index_name, value)
-                                            .unwrap_or_default()
-                                            .clone_into(resolved_ids);
-                                    }
-                                    _ => {
-                                        let vertices =
-                                            guard.scan_vertices(space_name).unwrap_or_default();
-                                        *resolved_ids = vertices
-                                            .into_iter()
-                                            .map(|v| Value::Vertex(Box::new(v)))
-                                            .collect();
-                                    }
-                                }
-                            }
-                            (resolved_ids.clone(), *position)
-                        }
-                        _ => return Ok(None),
-                    }
-                };
-                if pos >= ids.len() {
-                    return Ok(None);
-                }
-                let end = (pos + base.chunk_size).min(ids.len());
-                {
-                    let mut arena = base.state_arena();
-                    let s = arena.global.get_mut(&base.state_key());
-                    if let Some(GlobalState::Source(SourceState::LookupIndex {
-                        position, ..
-                    })) = s
-                    {
-                        *position = end;
-                    }
-                }
-                let guard = storage_ref.read();
-                let mut rows = Vec::new();
-                for id_val in &ids[pos..end] {
-                    if let Ok(vid) = VertexId::try_from(id_val) {
-                        if let Ok(Some(vertex)) = guard.get_vertex(space_name, &vid) {
-                            rows.push(make_vertex_row(vertex));
-                        }
-                    }
-                }
-                if !rows.is_empty() {
-                    let reservation = reserve_memory(base, &rows)?;
-                    let mut chunk = DataChunk::new_with_layout(rows, output_layout.clone());
-                    if let Some(r) = reservation {
-                        chunk = chunk.with_memory_reservation(r);
-                    }
-                    Ok(Some(chunk))
-                } else {
-                    Ok(None)
-                }
-            }
-            Self::EdgeIndexScan {
-                space_name, cursor, ..
-            } => loop {
-                base.ensure_not_cancelled()?;
-                let mut cur = match cursor.take() {
-                    Some(c) => c,
-                    None => return Ok(None),
-                };
-                let batch = cur.next_batch(base.chunk_size).map_err(|error| {
-                    storage_error("EdgeIndexScan", "read cursor", space_name, error)
-                })?;
-                if batch.is_empty() {
-                    return Ok(None);
-                }
-                let rows = batch.into_iter().map(make_edge_row).collect::<Vec<_>>();
-                if !rows.is_empty() {
-                    let reservation = reserve_memory(base, &rows)?;
-                    let mut chunk = DataChunk::from_rows(rows);
-                    if let Some(r) = reservation {
-                        chunk = chunk.with_memory_reservation(r);
-                    }
-                    *cursor = Some(cur);
-                    return Ok(Some(chunk));
-                }
-                *cursor = Some(cur);
-            },
+                })?,
+                space_name,
+                cursor,
+                output_layout,
+                base,
+                "LookupIndex",
+            ),
+            Self::EdgeIndexScan { space_name, .. } => Err(QueryError::execution(format!(
+                "EdgeIndexScan is not supported by storage for space '{}'",
+                space_name
+            ))),
             Self::IndexScan {
                 storage,
                 space_name,
-                index_name,
-                predicate,
                 output_layout,
+                cursor,
                 ..
-            } => {
-                let storage_ref = storage.as_ref().ok_or_else(|| {
+            } => next_index_chunk(
+                storage.as_ref().ok_or_else(|| {
                     QueryError::execution("IndexScan requires storage".to_string())
-                })?;
-                let (resolved_ids, position) = {
-                    let mut arena = base.state_arena();
-                    let s = arena.global.get_mut(&base.state_key()).unwrap();
-                    let GlobalState::Source(SourceState::IndexScan {
-                        resolved_ids,
-                        position,
-                    }) = s
-                    else {
-                        return Ok(None);
-                    };
-                    if resolved_ids.is_empty() && *position == 0 {
-                        let guard = storage_ref.read();
-                        match predicate {
-                            BoundIndexPredicate::Equal { column: _, value } => {
-                                *resolved_ids = guard
-                                    .lookup_index(space_name, index_name, value)
-                                    .map_err(|error| {
-                                    storage_error("IndexScan", "lookup index", space_name, error)
-                                })?;
-                            }
-                            _ => {
-                                let vertices =
-                                    guard.scan_vertices(space_name).map_err(|error| {
-                                        storage_error(
-                                            "IndexScan",
-                                            "scan vertices",
-                                            space_name,
-                                            error,
-                                        )
-                                    })?;
-                                *resolved_ids = vertices
-                                    .into_iter()
-                                    .map(|v| Value::Vertex(Box::new(v)))
-                                    .collect();
-                            }
-                        }
-                    }
-                    (resolved_ids.clone(), *position)
-                };
-                if position >= resolved_ids.len() {
-                    return Ok(None);
-                }
-                let end = (position + base.chunk_size).min(resolved_ids.len());
-                {
-                    let mut arena = base.state_arena();
-                    let s = arena.global.get_mut(&base.state_key()).unwrap();
-                    let GlobalState::Source(SourceState::IndexScan { position: p, .. }) = s else {
-                        return Ok(None);
-                    };
-                    *p = end;
-                }
-                let guard = storage_ref.read();
-                let batch = &resolved_ids[position..end];
-                let mut rows = Vec::new();
-                for id_val in batch {
-                    if let Ok(vid) = VertexId::try_from(id_val) {
-                        match guard.get_vertex(space_name, &vid) {
-                            Ok(Some(vertex)) => {
-                                rows.push(make_vertex_row(vertex));
-                            }
-                            Ok(None) => {
-                                // Stale row ID: skip silently
-                            }
-                            Err(error) => {
-                                return Err(storage_error(
-                                    "IndexScan",
-                                    "get vertex",
-                                    space_name,
-                                    error,
-                                ));
-                            }
-                        }
-                    }
-                }
-                if !rows.is_empty() {
-                    let reservation = reserve_memory(base, &rows)?;
-                    let mut chunk = DataChunk::new_with_layout(rows, output_layout.clone());
-                    if let Some(r) = reservation {
-                        chunk = chunk.with_memory_reservation(r);
-                    }
-                    Ok(Some(chunk))
-                } else {
-                    Ok(None)
-                }
-            }
+                })?,
+                space_name,
+                cursor,
+                output_layout,
+                base,
+                "IndexScan",
+            ),
             Self::Start => {
                 let mut arena = base.state_arena();
                 let s = arena.global.get_mut(&base.state_key());
@@ -1051,6 +918,122 @@ impl SourceOperator {
         base.take_state();
         base.lifecycle.mark_closed();
         Ok(())
+    }
+}
+
+fn build_index_scan_plan(
+    storage: &Arc<RwLock<dyn QueryStorage>>,
+    space_name: &str,
+    index_id: u64,
+    predicate: &BoundIndexPredicate,
+    projection: &IndexProjection,
+) -> Result<IndexScanPlan, QueryError> {
+    let physical_predicate = match predicate {
+        BoundIndexPredicate::Equal { value, .. } => IndexPredicate::Equal(value.clone()),
+        BoundIndexPredicate::Range {
+            begin,
+            end,
+            include_begin,
+            include_end,
+            ..
+        } => IndexPredicate::Range {
+            lower: Some(begin.clone()),
+            upper: Some(end.clone()),
+            include_lower: *include_begin,
+            include_upper: *include_end,
+        },
+        BoundIndexPredicate::Prefix { prefix, .. } => {
+            let Value::String(prefix) = prefix else {
+                return Err(QueryError::execution(
+                    "String prefix index scans require a string prefix value".to_string(),
+                ));
+            };
+            IndexPredicate::StringPrefix(prefix.clone())
+        }
+        BoundIndexPredicate::Full => IndexPredicate::All,
+    };
+
+    let projection = match projection {
+        IndexProjection::RowIdOnly => None,
+        IndexProjection::Columns(columns) => Some(columns.clone()),
+        IndexProjection::AllColumns => None,
+    };
+    let read_timestamp = storage
+        .read()
+        .operation_context()
+        .map(|context| context.read_timestamp)
+        .unwrap_or(MAX_TIMESTAMP);
+
+    Ok(IndexScanPlan {
+        space: space_name.to_string(),
+        index_id,
+        predicate: physical_predicate,
+        projection,
+        partition: None,
+        limit: None,
+        offset: 0,
+        read_timestamp,
+    })
+}
+
+fn next_index_chunk(
+    storage: &Arc<RwLock<dyn QueryStorage>>,
+    space_name: &str,
+    cursor: &mut Option<Box<dyn IndexCursor<Row = Value>>>,
+    output_layout: &Arc<SlotLayout>,
+    base: &mut OperatorBase,
+    source: &str,
+) -> Result<Option<DataChunk>, QueryError> {
+    loop {
+        base.ensure_not_cancelled()?;
+        let mut index_cursor = match cursor.take() {
+            Some(cursor) => cursor,
+            None => return Ok(None),
+        };
+        let ids = index_cursor
+            .next_batch(base.chunk_size)
+            .map_err(|error| storage_error(source, "read cursor", space_name, error))?;
+        let exhausted = index_cursor.is_exhausted();
+        let mut rows = Vec::with_capacity(ids.len());
+
+        if !ids.is_empty() {
+            let guard = storage.read();
+            for id_value in ids {
+                if let Value::Vertex(vertex) = &id_value {
+                    rows.push(make_vertex_row((**vertex).clone()));
+                    continue;
+                }
+
+                let Ok(vertex_id) = VertexId::try_from(&id_value) else {
+                    continue;
+                };
+                match guard.get_vertex(space_name, &vertex_id) {
+                    Ok(Some(vertex)) => rows.push(make_vertex_row(vertex)),
+                    Ok(None) => {}
+                    Err(error) => {
+                        return Err(storage_error(
+                            source,
+                            "get indexed vertex",
+                            space_name,
+                            error,
+                        ));
+                    }
+                }
+            }
+        }
+
+        *cursor = Some(index_cursor);
+        if !rows.is_empty() {
+            let reservation = reserve_memory(base, &rows)?;
+            let mut chunk = DataChunk::new_with_layout(rows, output_layout.clone());
+            if let Some(reservation) = reservation {
+                chunk = chunk.with_memory_reservation(reservation);
+            }
+            return Ok(Some(chunk));
+        }
+        if exhausted {
+            return Ok(None);
+        }
     }
 }
 

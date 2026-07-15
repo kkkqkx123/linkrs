@@ -55,38 +55,41 @@ impl GraphStorageContext {
 
     pub fn export_snapshot(&self, ts: Timestamp) -> StorageResult<Vec<ExportedEdgeSnapshotRecord>> {
         use crate::storage::edge::edge_table::EdgeSnapshotHandle;
-        let mut edge_tables = self.persistent.data_store.write_edge_tables();
-        let mut results = Vec::with_capacity(edge_tables.len());
-        let mut handles: Vec<EdgeSnapshotHandle<'_>> = Vec::new();
-        for (
-            EdgeTableKey {
-                src_label,
-                dst_label,
-                edge_label,
-            },
-            table,
-        ) in edge_tables.iter_mut()
-        {
-            let handle = table.snapshot_handle(ts);
-            log::debug!(
-                "Exporting snapshot at ts={} for edge table {}/{}/{}",
-                handle.timestamp(),
-                src_label,
-                dst_label,
-                edge_label
-            );
-            let snapshot = handle.export()?;
-            results.push(ExportedEdgeSnapshotRecord {
-                src_label: *src_label,
-                dst_label: *dst_label,
-                edge_label: *edge_label,
-                snapshot,
-            });
-            handles.push(handle);
-        }
-        for handle in handles {
-            handle.release();
-        }
-        Ok(results)
+        self.persistent
+            .data_store
+            .with_edge_tables_mut(|edge_tables| {
+                let mut results = Vec::with_capacity(edge_tables.len());
+                let mut handles: Vec<EdgeSnapshotHandle<'_>> = Vec::new();
+                for (
+                    EdgeTableKey {
+                        src_label,
+                        dst_label,
+                        edge_label,
+                    },
+                    table,
+                ) in edge_tables.iter_mut()
+                {
+                    let handle = table.snapshot_handle(ts);
+                    log::debug!(
+                        "Exporting snapshot at ts={} for edge table {}/{}/{}",
+                        handle.timestamp(),
+                        src_label,
+                        dst_label,
+                        edge_label
+                    );
+                    let snapshot = handle.export()?;
+                    results.push(ExportedEdgeSnapshotRecord {
+                        src_label: *src_label,
+                        dst_label: *dst_label,
+                        edge_label: *edge_label,
+                        snapshot,
+                    });
+                    handles.push(handle);
+                }
+                for handle in handles {
+                    handle.release();
+                }
+                Ok(results)
+            })
     }
 }

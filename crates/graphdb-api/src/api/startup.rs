@@ -16,7 +16,9 @@ use vector_client::VectorManager;
 use crate::api::server::{GraphService, HttpServer};
 use crate::config::Config;
 use crate::core::error::DBResult;
-use crate::storage::{GraphStorage, MetricsStorage, SyncWrapper};
+use crate::storage::{
+    GraphStorage, MetricsStorage, StorageCommitOps, StoragePersistenceOps, SyncWrapper,
+};
 use crate::transaction::{TransactionManager, TransactionManagerConfig};
 
 /// Start the service using the user configuration directory.
@@ -242,7 +244,7 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
     };
 
     if let Some(manager) = sync_manager.as_mut().and_then(Arc::get_mut) {
-        let outbox_path = PathBuf::from(config.storage_path()).join("outbox/events.json");
+        let outbox_path = PathBuf::from(config.storage_path()).join("outbox/outbox.sqlite");
         if let Err(error) = manager.configure_outbox(outbox_path) {
             return Err(crate::core::DBError::storage(format!(
                 "Failed to initialize sync outbox: {}",
@@ -252,6 +254,23 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
         if let Err(error) = manager.retry_outbox_sync() {
             error!("Initial outbox delivery will be retried later: {}", error);
         }
+        let recovered = inner_storage
+            .recover_outbox_projection(manager)
+            .map_err(|error| {
+                crate::core::DBError::storage(format!(
+                    "Failed to recover the SQLite outbox projection: {}",
+                    error
+                ))
+            })?;
+        if recovered > 0 {
+            info!("Recovered {} outbox intents from committed WAL", recovered);
+        }
+    }
+
+    if let Some(manager) = sync_manager.as_ref() {
+        manager.start().await.map_err(|error| {
+            crate::core::DBError::storage(format!("Failed to start sync manager: {}", error))
+        })?;
     }
 
     let storage = if let Some(ref sync_manager) = sync_manager {
@@ -277,6 +296,7 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
     if let Some(ref sync_manager) = sync_manager {
         transaction_manager = transaction_manager.with_sync_manager(sync_manager.clone());
     }
+    transaction_manager = transaction_manager.with_commit_sink(storage.clone());
     let transaction_manager = Arc::new(transaction_manager);
     info!("Transaction manager initialized with StatsManager");
 

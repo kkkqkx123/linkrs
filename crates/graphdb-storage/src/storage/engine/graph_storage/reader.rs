@@ -393,11 +393,15 @@ pub(crate) fn scan_edges_by_type(
     // different tables whose internal IDs may collide, so we fall back to
     // get_external_id_any for those (best-effort).
     if src_label_id == 0 && dst_label_id == 0 {
-        let edge_tables = ctx.data_store().read_edge_tables();
-        for table in edge_tables.values().filter(|t| t.label() == edge_label_id) {
-            let tbl_src = table.src_label();
-            let tbl_dst = table.dst_label();
-            for record in table.scan(ts) {
+        let table_records = ctx.data_store().with_edge_tables(|edge_tables| {
+            edge_tables
+                .values()
+                .filter(|table| table.label() == edge_label_id)
+                .map(|table| (table.src_label(), table.dst_label(), table.scan(ts)))
+                .collect::<Vec<_>>()
+        });
+        for (tbl_src, tbl_dst, records) in table_records {
+            for record in records {
                 let src_internal = record.src_vid.as_int64().unwrap_or(0) as u32;
                 let dst_internal = record.dst_vid.as_int64().unwrap_or(0) as u32;
 
@@ -502,11 +506,12 @@ pub(crate) fn count_vertices_by_tag(
         StorageError::not_found(format!("Tag {} not found in space {}", tag, space))
     })?;
 
-    let vertex_tables = ctx.data_store().read_vertex_tables();
-    let count = vertex_tables
-        .get(&tag_info.tag_id)
-        .map(|t| t.total_count() as u64)
-        .unwrap_or(0);
+    let count = ctx.data_store().with_vertex_tables(|vertex_tables| {
+        vertex_tables
+            .get(&tag_info.tag_id)
+            .map(|t| t.total_count() as u64)
+            .unwrap_or(0)
+    });
     Ok(count)
 }
 
@@ -537,12 +542,13 @@ pub(crate) fn count_edges_by_type(
     };
 
     if src_label_id == 0 && dst_label_id == 0 {
-        let edge_tables = ctx.data_store().read_edge_tables();
-        let count: u64 = edge_tables
-            .values()
-            .filter(|t| t.label() == edge_label_id)
-            .map(|t| t.edge_count())
-            .sum();
+        let count = ctx.data_store().with_edge_tables(|edge_tables| {
+            edge_tables
+                .values()
+                .filter(|t| t.label() == edge_label_id)
+                .map(|t| t.edge_count())
+                .sum()
+        });
         return Ok(count);
     }
 
@@ -551,8 +557,9 @@ pub(crate) fn count_edges_by_type(
         dst_label_id,
         edge_label_id,
     );
-    let edge_tables = ctx.data_store().read_edge_tables();
-    let count = edge_tables.get(&key).map(|t| t.edge_count()).unwrap_or(0);
+    let count = ctx
+        .data_store()
+        .with_edge_tables(|edge_tables| edge_tables.get(&key).map(|t| t.edge_count()).unwrap_or(0));
     Ok(count)
 }
 

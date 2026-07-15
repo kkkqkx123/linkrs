@@ -14,6 +14,7 @@ use crate::core::wal::types::{
     ArchiveMode, Lsn, RecordType, WalCompression, WalConfig, WalError, WalFileHeader, WalHeader,
     WalOpType, WalResult, WalStats, WAL_FILE_HEADER_SIZE, WAL_HEADER_SIZE, WAL_MAX_RECORD_SIZE,
 };
+use crate::transaction::wal::parser::{LocalWalParser, WalParser};
 
 /// Local file-based WAL writer
 pub struct LocalWalWriter {
@@ -737,6 +738,55 @@ impl LocalWalWriter {
         Ok(true)
     }
 
+    pub fn append_transaction_batch(
+        &mut self,
+        transaction_id: crate::core::types::TransactionId,
+        mut entries: Vec<crate::transaction::wal::TransactionWalEntry>,
+        intents: &[crate::core::wal::OutboxIntent],
+    ) -> WalResult<crate::core::types::CommitLsn> {
+        for (expected, intent) in intents.iter().enumerate() {
+            intent.validate().map_err(WalError::InvalidOperation)?;
+            if intent.transaction_id != transaction_id {
+                return Err(WalError::InvalidOperation(format!(
+                    "Intent transaction {} does not match batch transaction {}",
+                    intent.transaction_id, transaction_id
+                )));
+            }
+            if intent.intent_sequence as usize != expected {
+                return Err(WalError::InvalidOperation(format!(
+                    "Intent sequence is not contiguous: expected {}, got {}",
+                    expected, intent.intent_sequence
+                )));
+            }
+            entries.push(crate::transaction::wal::TransactionWalEntry {
+                op_type: WalOpType::OutboxIntent,
+                timestamp: 0,
+                payload: postcard::to_allocvec(intent)?,
+            });
+        }
+        let commit = crate::core::wal::TransactionCommit {
+            wire_version: crate::core::wal::WAL_SYNC_WIRE_VERSION,
+            transaction_id,
+            intent_count: u32::try_from(intents.len()).map_err(|_| {
+                WalError::InvalidOperation("Intent count exceeds u32 range".to_string())
+            })?,
+            batch_checksum: crate::transaction::wal::commit::batch_checksum(&entries),
+        };
+        entries.push(crate::transaction::wal::TransactionWalEntry {
+            op_type: WalOpType::TransactionCommit,
+            timestamp: 0,
+            payload: postcard::to_allocvec(&commit)?,
+        });
+        let entry_refs = entries
+            .iter()
+            .map(|entry| (entry.op_type, entry.timestamp, entry.payload.as_slice()))
+            .collect::<Vec<_>>();
+        self.append_batch(&entry_refs)?;
+        Ok(crate::core::types::CommitLsn::new(
+            self.current_lsn().as_u64(),
+        ))
+    }
+
     /// Decompress payload (public helper)
     pub fn decompress_payload(payload: &[u8], compression: WalCompression) -> WalResult<Vec<u8>> {
         compression_mod::decompress_payload(payload, compression)
@@ -827,6 +877,17 @@ impl WalWriter for LocalWalWriter {
             .create(true)
             .truncate(true)
             .open(&path)?;
+
+        // A new WAL segment continues the logical LSN range of existing
+        // segments. Without this fence, reopening a writer resets LSN to zero
+        // and recovery can reorder records from different files.
+        if self.current_lsn.load(Ordering::SeqCst) == 0 {
+            let mut parser = LocalWalParser::new();
+            if parser.open(&self.wal_uri).is_ok() {
+                self.current_lsn
+                    .store(parser.last_lsn().as_u64(), Ordering::SeqCst);
+            }
+        }
 
         file.set_len(self.config.truncate_size as u64)?;
 
@@ -931,7 +992,15 @@ impl Drop for LocalWalWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transaction::wal::SyncPolicy;
+    use crate::core::types::{
+        IdempotencyKey, IndexGeneration, OrderingKey, TargetId, TransactionId, VertexId,
+    };
+    use crate::core::wal::{
+        EntityRef, IndexMutation, IndexOperation, OutboxIntent, WAL_SYNC_WIRE_VERSION,
+    };
+    use crate::transaction::wal::{
+        collect_committed_transactions, LocalWalParser, SyncPolicy, TransactionWalEntry, WalParser,
+    };
     use tempfile::TempDir;
 
     #[test]
@@ -971,6 +1040,57 @@ mod tests {
 
         assert!(writer.file_used() > WAL_FILE_HEADER_SIZE);
         writer.close();
+    }
+
+    #[test]
+    fn transaction_batch_returns_commit_record_end_lsn() {
+        let temp_dir = TempDir::new().expect("temporary directory should be created");
+        let wal_path = temp_dir.path().to_string_lossy().to_string();
+        let mut writer = LocalWalWriter::new(&wal_path, 0);
+        writer.open().expect("WAL should open");
+        let transaction_id = TransactionId::new(9);
+        let intent = OutboxIntent {
+            wire_version: WAL_SYNC_WIRE_VERSION,
+            transaction_id,
+            intent_sequence: 0,
+            mutation: IndexMutation {
+                wire_version: WAL_SYNC_WIRE_VERSION,
+                target: TargetId::new("fulltext").expect("target should be valid"),
+                index_id: 1,
+                index_generation: IndexGeneration::new(1),
+                entity_ref: EntityRef::Vertex(VertexId::from_int64(1)),
+                operation: IndexOperation::Upsert,
+                document_or_vector: vec![1],
+                idempotency_key: IdempotencyKey::new("txn-9:0")
+                    .expect("idempotency key should be valid"),
+                ordering_key: OrderingKey::new("index-1:vertex-1")
+                    .expect("ordering key should be valid"),
+            },
+        };
+        let commit_lsn = writer
+            .append_transaction_batch(
+                transaction_id,
+                vec![TransactionWalEntry {
+                    op_type: WalOpType::InsertVertex,
+                    timestamp: 3,
+                    payload: vec![4, 5, 6],
+                }],
+                &[intent],
+            )
+            .expect("transaction batch should append");
+        assert_eq!(commit_lsn.get(), writer.current_lsn().as_u64());
+        assert_eq!(commit_lsn.get(), writer.last_synced_lsn().as_u64());
+        writer.close();
+
+        let mut parser = LocalWalParser::new();
+        parser.open(&wal_path).expect("WAL should parse");
+        let transactions = collect_committed_transactions(&parser.parse_all_entries())
+            .expect("committed transaction should validate");
+        assert_eq!(transactions.len(), 1);
+        assert_eq!(transactions[0].transaction_id, transaction_id);
+        assert_eq!(transactions[0].commit_lsn, commit_lsn);
+        assert_eq!(transactions[0].redo_entries.len(), 1);
+        assert_eq!(transactions[0].intents.len(), 1);
     }
 
     #[test]

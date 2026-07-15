@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use crate::core::types::expr::Expression;
 use crate::core::Value;
 use crate::query::executor::base::MemoryTracker;
-use crate::storage::cursor::{EdgeCursor, VertexCursor};
+use crate::storage::cursor::{EdgeCursor, IndexCursor, VertexCursor};
 
 use super::super::chunk::DataChunk;
 use super::super::executor::SortDirection;
@@ -60,8 +60,7 @@ pub enum SourceState {
         cursor: Option<Box<dyn EdgeCursor>>,
     },
     IndexScan {
-        resolved_ids: Vec<Value>,
-        position: usize,
+        cursor: Option<Box<dyn IndexCursor<Row = Value>>>,
     },
     Argument,
     GetProp {
@@ -69,8 +68,7 @@ pub enum SourceState {
         prop_names: Vec<String>,
     },
     LookupIndex {
-        resolved_ids: Vec<Value>,
-        position: usize,
+        cursor: Option<Box<dyn IndexCursor<Row = Value>>>,
     },
     Start {
         emitted: bool,
@@ -116,10 +114,7 @@ impl SourceState {
                 state: NeighborScanState::Init,
             },
             SourceSpec::EdgeIndexScan { .. } => SourceState::EdgeIndexScan { cursor: None },
-            SourceSpec::IndexScan { .. } => SourceState::IndexScan {
-                resolved_ids: Vec::new(),
-                position: 0,
-            },
+            SourceSpec::IndexScan { .. } => SourceState::IndexScan { cursor: None },
             SourceSpec::Argument => SourceState::Argument,
             SourceSpec::GetProp {
                 entity_slot,
@@ -129,10 +124,7 @@ impl SourceState {
                 entity_slot: *entity_slot,
                 prop_names: prop_names.clone(),
             },
-            SourceSpec::LookupIndex { .. } => SourceState::LookupIndex {
-                resolved_ids: Vec::new(),
-                position: 0,
-            },
+            SourceSpec::LookupIndex { .. } => SourceState::LookupIndex { cursor: None },
             SourceSpec::Start => SourceState::Start { emitted: false },
         }
     }

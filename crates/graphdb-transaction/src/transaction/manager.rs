@@ -14,6 +14,7 @@ use super::context::TransactionContext;
 use super::error::TransactionError;
 use super::monitor::TransactionMonitor;
 use super::mvcc::{VersionManager, VersionManagerConfig};
+use super::participant::TransactionCommitSink;
 use super::rollback::UndoLogRollback;
 use super::types::*;
 use super::undo_log::UndoTarget;
@@ -43,6 +44,7 @@ pub struct TransactionManager {
     cleaner: TransactionCleaner,
     /// Optional sync manager for index cleanup and commit coordination
     sync_manager: Option<Arc<SyncManager>>,
+    commit_sink: Option<Arc<dyn TransactionCommitSink>>,
 }
 
 impl TransactionManager {
@@ -64,6 +66,7 @@ impl TransactionManager {
             monitor,
             cleaner,
             sync_manager: None,
+            commit_sink: None,
         }
     }
 
@@ -88,6 +91,7 @@ impl TransactionManager {
             monitor,
             cleaner,
             sync_manager: None,
+            commit_sink: None,
         }
     }
 
@@ -112,6 +116,7 @@ impl TransactionManager {
             monitor,
             cleaner,
             sync_manager: None,
+            commit_sink: None,
         }
     }
 
@@ -128,6 +133,11 @@ impl TransactionManager {
     /// Attach a sync manager so transaction completion can clean up index buffers.
     pub fn with_sync_manager(mut self, sync_manager: Arc<SyncManager>) -> Self {
         self.set_sync_manager(sync_manager);
+        self
+    }
+
+    pub fn with_commit_sink(mut self, commit_sink: Arc<dyn TransactionCommitSink>) -> Self {
+        self.commit_sink = Some(commit_sink);
         self
     }
 
@@ -441,7 +451,14 @@ impl TransactionManager {
 
         context.transition_to(TransactionState::Committing)?;
 
-        if let Some(ref sync_manager) = self.sync_manager {
+        if let Some(ref commit_sink) = self.commit_sink {
+            commit_sink.commit_transaction(txn_id).map_err(|error| {
+                TransactionError::internal(format!(
+                    "Failed to persist transaction {}: {}",
+                    txn_id, error
+                ))
+            })?;
+        } else if let Some(ref sync_manager) = self.sync_manager {
             if let Err(e) = sync_manager.commit_transaction_sync(txn_id) {
                 log::error!(
                     "Sync commit failed for transaction {}; local commit will complete and the outbox will retry: {}",
@@ -564,7 +581,14 @@ impl TransactionManager {
     ) -> Result<(), TransactionError> {
         context.transition_to(TransactionState::Aborting)?;
 
-        if let Some(ref sync_manager) = self.sync_manager {
+        if let Some(ref commit_sink) = self.commit_sink {
+            commit_sink.abort_transaction(context.id).map_err(|error| {
+                TransactionError::rollback_failed(format!(
+                    "Failed to discard transaction {} persistence state: {}",
+                    context.id, error
+                ))
+            })?;
+        } else if let Some(ref sync_manager) = self.sync_manager {
             if let Err(e) = sync_manager.rollback_transaction_sync(context.id) {
                 log::warn!(
                     "Sync rollback failed for transaction {}, aborting transaction: {}",
@@ -657,12 +681,7 @@ impl TransactionManager {
         name: Option<String>,
     ) -> Result<SavepointId, TransactionError> {
         let context = self.get_context(txn_id)?;
-        let sync_sequence = self
-            .sync_manager
-            .as_ref()
-            .map(|manager| manager.sync_sequence(txn_id))
-            .unwrap_or(0);
-        Ok(context.create_savepoint(name, sync_sequence))
+        Ok(context.create_savepoint(name, 0))
     }
 
     /// Get savepoint info
@@ -745,9 +764,58 @@ impl TransactionManager {
 mod tests {
     use super::*;
     use crate::core::types::{
-        ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, VertexIdentifier,
+        ColumnId, CommitLsn, EdgeDeletionContext, EdgeIdentifier, EdgeKey, VertexIdentifier,
     };
     use crate::transaction::undo_log::{PropertyValue, UndoLogResult, UndoTarget};
+    use std::sync::atomic::AtomicUsize;
+
+    #[derive(Default)]
+    struct RecordingSink {
+        commits: AtomicUsize,
+        aborts: AtomicUsize,
+    }
+
+    impl TransactionCommitSink for RecordingSink {
+        fn commit_transaction(&self, _transaction_id: TransactionId) -> Result<CommitLsn, String> {
+            self.commits.fetch_add(1, Ordering::SeqCst);
+            Ok(CommitLsn::new(7))
+        }
+
+        fn abort_transaction(&self, _transaction_id: TransactionId) -> Result<(), String> {
+            self.aborts.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn explicit_commit_uses_storage_commit_sink_once() {
+        let sink = Arc::new(RecordingSink::default());
+        let manager = TransactionManager::new(TransactionManagerConfig::default())
+            .with_commit_sink(sink.clone());
+        let txn_id = manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .expect("transaction should begin");
+        manager
+            .commit_transaction(txn_id)
+            .expect("transaction should commit");
+        assert_eq!(sink.commits.load(Ordering::SeqCst), 1);
+        assert_eq!(sink.aborts.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn explicit_abort_uses_storage_commit_sink_once() {
+        let sink = Arc::new(RecordingSink::default());
+        let manager = TransactionManager::new(TransactionManagerConfig::default())
+            .with_commit_sink(sink.clone());
+        let txn_id = manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .expect("transaction should begin");
+        manager
+            .abort_transaction(txn_id)
+            .expect("transaction should abort");
+        assert_eq!(sink.commits.load(Ordering::SeqCst), 0);
+        assert_eq!(sink.aborts.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn test_transaction_manager_basic() {

@@ -323,6 +323,12 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
         &self.forward_index
     }
 
+    pub(crate) fn forward_index_handle(
+        &self,
+    ) -> Arc<RwLock<BTreeMap<SecondaryIndexKey, IndexEntry>>> {
+        self.forward_index.clone()
+    }
+
     pub fn reverse_index(&self) -> &Arc<RwLock<BTreeMap<SecondaryIndexKey, IndexEntry>>> {
         &self.reverse_index
     }

@@ -25,7 +25,9 @@ pub(crate) mod generic_index_manager;
 pub(crate) mod index_data_manager;
 pub(crate) mod index_gc_manager;
 pub(crate) mod key_codec;
+pub mod manifest;
 pub(crate) mod vertex_index_manager;
 
 pub use index_data_manager::{GcStats, IndexDataManagerImpl, IndexGcOps, VertexIndexOps};
 pub use index_gc_manager::{IndexGcConfig, IndexGcManager};
+pub use manifest::{IndexManifest, IndexShard};

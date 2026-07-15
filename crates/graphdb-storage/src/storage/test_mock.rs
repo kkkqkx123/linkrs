@@ -261,6 +261,7 @@ impl StorageOperationContextOps for MockStorage {
             read_timestamp: 1,
             write_timestamp: Some(1),
             read_only: false,
+            auto_commit: true,
         })
     }
 
@@ -272,6 +273,30 @@ impl StorageOperationContextOps for MockStorage {
 
     fn operation_context(&self) -> Option<Arc<StorageOperationContext>> {
         self.operation_context.clone()
+    }
+}
+
+impl crate::storage::StorageCommitOps for MockStorage {
+    fn commit_staged_writes(
+        &self,
+        _transaction_id: crate::core::types::TransactionId,
+        _intents: &[crate::core::wal::OutboxIntent],
+    ) -> crate::core::StorageResult<crate::core::types::CommitLsn> {
+        Ok(crate::core::types::CommitLsn::ZERO)
+    }
+
+    fn abort_staged_writes(
+        &self,
+        _transaction_id: crate::core::types::TransactionId,
+    ) -> crate::core::StorageResult<()> {
+        Ok(())
+    }
+
+    fn recover_outbox_projection(
+        &self,
+        _sync_manager: &crate::sync::SyncManager,
+    ) -> crate::core::StorageResult<usize> {
+        Ok(0)
     }
 }
 

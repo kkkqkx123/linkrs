@@ -1,6 +1,7 @@
 use crate::core::stats::StatsManager;
 use crate::core::types::{LabelId, TableId, Timestamp};
 use crate::storage::StorageOperationContext;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use super::{GraphStorageContext, WriteTimestampLease};
@@ -37,12 +38,18 @@ impl GraphStorageContext {
 
     pub fn with_auto_commit_context(&self) -> Self {
         let timestamp = self.persistent.version_manager.next_write_timestamp();
+        let transaction_id = crate::core::types::TransactionId::new(
+            self.persistent
+                .next_auto_transaction_id
+                .fetch_add(1, Ordering::SeqCst),
+        );
         let mut bound = self.clone();
         bound.operation_context = Some(Arc::new(StorageOperationContext {
-            transaction_id: None,
+            transaction_id: Some(transaction_id),
             read_timestamp: timestamp,
             write_timestamp: Some(timestamp),
             read_only: false,
+            auto_commit: true,
         }));
         bound.write_timestamp_lease = Some(Arc::new(WriteTimestampLease {
             version_manager: self.persistent.version_manager.clone(),
@@ -84,37 +91,35 @@ impl GraphStorageContext {
     }
 
     pub(crate) fn storage_size(&self) -> usize {
-        let mut total = 0usize;
-        {
-            let vertex_tables = self.persistent.data_store.read_vertex_tables();
-            for table in vertex_tables.values() {
-                total += table.memory_size();
-            }
-        }
-        {
-            let edge_tables = self.persistent.data_store.read_edge_tables();
-            for table in edge_tables.values() {
-                total += table.memory_size();
-            }
-        }
-        total
+        let vertices = self.persistent.data_store.with_vertex_tables(|tables| {
+            tables
+                .values()
+                .map(|table| table.memory_size())
+                .sum::<usize>()
+        });
+        let edges = self.persistent.data_store.with_edge_tables(|tables| {
+            tables
+                .values()
+                .map(|table| table.memory_size())
+                .sum::<usize>()
+        });
+        vertices + edges
     }
 
     pub(crate) fn used_storage_size(&self) -> usize {
-        let mut total = 0usize;
-        {
-            let vertex_tables = self.persistent.data_store.read_vertex_tables();
-            for table in vertex_tables.values() {
-                total += table.used_memory_size();
-            }
-        }
-        {
-            let edge_tables = self.persistent.data_store.read_edge_tables();
-            for table in edge_tables.values() {
-                total += table.used_memory_size();
-            }
-        }
-        total
+        let vertices = self.persistent.data_store.with_vertex_tables(|tables| {
+            tables
+                .values()
+                .map(|table| table.used_memory_size())
+                .sum::<usize>()
+        });
+        let edges = self.persistent.data_store.with_edge_tables(|tables| {
+            tables
+                .values()
+                .map(|table| table.used_memory_size())
+                .sum::<usize>()
+        });
+        vertices + edges
     }
 
     pub(crate) fn is_open_flag(&self) -> &std::sync::atomic::AtomicBool {
@@ -189,6 +194,28 @@ impl GraphStorageContext {
         timestamp: Timestamp,
         redo: &T,
     ) -> crate::core::StorageResult<()> {
+        if let Some(transaction_id) = self
+            .operation_context
+            .as_ref()
+            .and_then(|operation| operation.transaction_id)
+        {
+            let payload = postcard::to_allocvec(redo).map_err(|error| {
+                crate::core::StorageError::serialize_error(format!(
+                    "Failed to serialize staged WAL redo: {}",
+                    error
+                ))
+            })?;
+            self.persistent
+                .staged_wal
+                .entry(transaction_id)
+                .or_default()
+                .push(crate::transaction::wal::TransactionWalEntry {
+                    op_type,
+                    timestamp,
+                    payload,
+                });
+            return Ok(());
+        }
         if let Some(persistence) = self.persistent.persistence.as_ref() {
             let wal_manager = {
                 let coordinator = persistence.read();
@@ -200,6 +227,36 @@ impl GraphStorageContext {
         }
 
         Ok(())
+    }
+
+    pub(crate) fn commit_staged_writes(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+        intents: &[crate::core::wal::OutboxIntent],
+    ) -> crate::core::StorageResult<crate::core::types::CommitLsn> {
+        let entries = self
+            .persistent
+            .staged_wal
+            .get(&transaction_id)
+            .map(|entries| entries.clone())
+            .unwrap_or_default();
+        let commit_lsn = if let Some(persistence) = self.persistent.persistence.as_ref() {
+            let wal_manager = persistence.read().wal_manager().ok_or_else(|| {
+                crate::core::StorageError::wal_error("WAL manager is not initialized".to_string())
+            })?;
+            let result = wal_manager
+                .read()
+                .append_transaction(transaction_id, entries, intents)?;
+            result
+        } else {
+            crate::core::types::CommitLsn::ZERO
+        };
+        self.persistent.staged_wal.remove(&transaction_id);
+        Ok(commit_lsn)
+    }
+
+    pub(crate) fn abort_staged_writes(&self, transaction_id: crate::core::types::TransactionId) {
+        self.persistent.staged_wal.remove(&transaction_id);
     }
 
     pub(crate) fn defer_edge_insert(

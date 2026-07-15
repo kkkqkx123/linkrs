@@ -1,12 +1,16 @@
 pub mod batch;
 pub mod builder;
+pub mod checkpoint_manifest;
 pub mod circuit_breaker;
 #[cfg(feature = "fulltext-search")]
 pub mod coordinator;
 pub mod dead_letter_queue;
 pub mod manager;
 mod outbox;
+pub mod outbox_recovery;
+pub mod receiver;
 pub mod retry;
+pub mod sqlite_outbox;
 pub mod types;
 pub mod vector_error;
 #[cfg(feature = "qdrant")]
@@ -26,9 +30,22 @@ pub use coordinator::{
     SyncCoordinatorError,
 };
 pub use dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
-pub use manager::{EdgeProps, EdgeRef, SyncError, SyncManager};
-pub use outbox::OutboxStats;
+pub use manager::{EdgeProps, EdgeRef, OutboxConsumerConfig, SyncError, SyncManager};
+pub use outbox::{OutboxEvent, OutboxPayload, OutboxStats};
+pub use outbox_recovery::{
+    find_latest_snapshot, live_database_exists, restore_snapshot_sync, verify_live_database,
+};
+pub use receiver::{ApplyReceipt, LateArrivalResult};
+#[cfg(feature = "fulltext-search")]
+pub use receiver::FulltextReceiver;
+#[cfg(feature = "qdrant")]
+pub use receiver::VectorReceiver;
 pub use retry::{with_retry, RetryConfig};
+pub use sqlite_outbox::{ClaimedEvent, OutboxSnapshot, SqliteOutbox};
+pub use checkpoint_manifest::{
+    CheckpointManifest, CheckpointManifestManager, IndexManifestRef, OutboxSnapshotRef,
+    StorageSnapshotRef,
+};
 pub use types::{IndexOpKey, IndexOperation};
 
 #[cfg(feature = "qdrant")]

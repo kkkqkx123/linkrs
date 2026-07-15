@@ -19,6 +19,7 @@ pub mod space;
 pub mod space_name_validation;
 pub mod span;
 pub mod storage_ids;
+pub mod sync_protocol;
 pub mod table_tracker;
 pub mod tag;
 pub mod transaction_config;
@@ -249,6 +250,9 @@ pub use self::storage_ids::{
     ColumnId, EdgeDeletionContext, EdgeDeletionContextParams, EdgeId, EdgeIdentifier, EdgeKey,
     EdgeLocation, EdgeOperationContext, EdgePropertyUpdateContext, LabelId, Timestamp,
     TransactionId, VertexId, VertexIdentifier, INVALID_EDGE_ID, INVALID_TIMESTAMP, MAX_TIMESTAMP,
+};
+pub use self::sync_protocol::{
+    CommitLsn, IdempotencyKey, IndexGeneration, LeaseEpoch, ManifestEpoch, OrderingKey, TargetId,
 };
 pub use self::table_tracker::{TableId, TableTracker, TableTrackerConfig, TableType};
 pub use self::transaction_config::{DurabilityLevel, TransactionIsolationLevel};

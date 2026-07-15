@@ -16,19 +16,66 @@ fn load_schema_and_index_metadata(ctx: &GraphStorageContext) -> StorageResult<()
     if let Some(path) = ctx.work_dir().as_ref() {
         let paths = StoragePaths::new(path.clone());
 
-        let schema_path = paths.schema_file();
-        if schema_path.exists() {
-            ctx.schema_manager().load_schema(&schema_path)?;
+        let latest_checkpoint = latest_published_checkpoint_dir(path)?;
+        let schema_paths = latest_checkpoint
+            .as_ref()
+            .map(|checkpoint| StoragePaths::new(checkpoint).schema_file())
+            .into_iter()
+            .chain(std::iter::once(paths.schema_file()));
+        for schema_path in schema_paths {
+            if schema_path.exists() {
+                ctx.schema_manager().load_schema(&schema_path)?;
+                break;
+            }
         }
 
-        let index_meta_path = paths.index_meta_file();
-        if index_meta_path.exists() {
-            ctx.index_metadata_manager()
-                .load_indexes(&index_meta_path)?;
+        let index_paths = latest_checkpoint
+            .as_ref()
+            .map(|checkpoint| StoragePaths::new(checkpoint).index_meta_file())
+            .into_iter()
+            .chain(std::iter::once(paths.index_meta_file()));
+        for index_path in index_paths {
+            if index_path.exists() {
+                ctx.index_metadata_manager().load_indexes(&index_path)?;
+                break;
+            }
         }
     }
 
     Ok(())
+}
+
+fn latest_published_checkpoint_dir(work_dir: &Path) -> StorageResult<Option<PathBuf>> {
+    let checkpoint_root = work_dir.join("checkpoint");
+    if !checkpoint_root.exists() {
+        return Ok(None);
+    }
+
+    let mut latest = None;
+    for entry in std::fs::read_dir(checkpoint_root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_dir() || !path.join("checkpoint.meta").is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Some(sequence) = name
+            .strip_prefix("checkpoint_")
+            .and_then(|value| value.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        if latest
+            .as_ref()
+            .is_none_or(|(current, _): &(u64, PathBuf)| sequence > *current)
+        {
+            latest = Some((sequence, path));
+        }
+    }
+
+    Ok(latest.map(|(_, path)| path))
 }
 
 fn restore_full_state_from_disk(ctx: &GraphStorageContext) -> StorageResult<()> {
@@ -146,6 +193,16 @@ pub(crate) fn create_checkpoint(
 
     let result = persistence.read().create_checkpoint(
         |checkpoint_dir, _timestamp| {
+            let checkpoint_paths = StoragePaths::new(checkpoint_dir);
+            std::fs::create_dir_all(checkpoint_paths.schema_dir())?;
+            graph
+                .schema_manager()
+                .save_schema(&checkpoint_paths.schema_file())?;
+            std::fs::create_dir_all(checkpoint_paths.index_meta_dir())?;
+            graph
+                .index_metadata_manager()
+                .save_indexes(&checkpoint_paths.index_meta_file())?;
+
             let data_dir = StoragePaths::new(checkpoint_dir).data_dir();
             std::fs::create_dir_all(&data_dir)?;
 
@@ -208,6 +265,21 @@ pub(crate) fn persistence_diagnostics(
         diagnostics.catalog_lock_wait_nanos = catalog.wait_nanos;
         diagnostics.catalog_lock_hold_nanos = catalog.hold_nanos;
         diagnostics.catalog_lock_contentions = catalog.contended;
+        diagnostics.catalog_lock_by_operation =
+            crate::storage::engine::data_store::CatalogLockOperation::all()
+                .into_iter()
+                .enumerate()
+                .map(|(index, operation)| {
+                    let metric = catalog.by_operation[index];
+                    crate::storage::engine::persistence_coordinator::CatalogLockDiagnostic {
+                        operation: operation.name().to_string(),
+                        acquisitions: metric.acquisitions,
+                        wait_nanos: metric.wait_nanos,
+                        hold_nanos: metric.hold_nanos,
+                        contentions: metric.contended,
+                    }
+                })
+                .collect();
         diagnostics
     })
 }
@@ -531,6 +603,7 @@ fn read_checkpoint_metadata(dir: &Path) -> StorageResult<CheckpointInfo> {
     let mut checkpoint_id: Option<u64> = None;
     let mut lsn: Option<u64> = None;
     let mut timestamp: Option<u32> = None;
+    let mut format_version: Option<u32> = None;
 
     for line in reader.lines() {
         let line = line?;
@@ -543,6 +616,14 @@ fn read_checkpoint_metadata(dir: &Path) -> StorageResult<CheckpointInfo> {
         }
 
         match parts[0] {
+            "format_version" => {
+                format_version = Some(parts[1].parse().map_err(|e| {
+                    StorageError::deserialize_error(format!(
+                        "Invalid checkpoint format version: {}",
+                        e
+                    ))
+                })?);
+            }
             "checkpoint_id" => {
                 checkpoint_id = Some(parts[1].parse().map_err(|e| {
                     StorageError::deserialize_error(format!(
@@ -577,6 +658,12 @@ fn read_checkpoint_metadata(dir: &Path) -> StorageResult<CheckpointInfo> {
     let lsn = lsn.ok_or_else(|| {
         StorageError::deserialize_error("Missing wal_lsn in checkpoint metadata".to_string())
     })?;
+    if format_version != Some(2) {
+        return Err(StorageError::deserialize_error(format!(
+            "Unsupported checkpoint format version: {:?}",
+            format_version
+        )));
+    }
 
     Ok(CheckpointInfo {
         checkpoint_id,
@@ -643,6 +730,7 @@ mod tests {
 
         let metadata_path = checkpoint_path.join("checkpoint.meta");
         let mut file = fs::File::create(metadata_path)?;
+        writeln!(file, "format_version=2")?;
         writeln!(file, "checkpoint_id={}", checkpoint_id)?;
         writeln!(file, "wal_lsn={}", wal_lsn.as_u64())?;
 

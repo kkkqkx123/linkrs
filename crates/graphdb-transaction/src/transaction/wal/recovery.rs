@@ -135,7 +135,37 @@ impl RecoveryManager {
         wal_result: &RecoveryResult,
         applier: &dyn RecoveryApplier,
     ) -> StorageResult<()> {
-        self.replay_parsed_entries(&wal_result.all_entries, applier)
+        // Legacy schema/data records predate the transactional sync envelope
+        // and are already durable individually. Keep replaying that format
+        // until the DDL path is migrated to the same commit sink. A WAL that
+        // contains any sync envelope record must use the strict committed
+        // transaction parser so an incomplete tail is never applied.
+        let has_sync_envelope = wal_result.all_entries.iter().any(|entry| {
+            matches!(
+                WalOpType::try_from(entry.header.op_type),
+                Ok(WalOpType::OutboxIntent
+                    | WalOpType::TransactionCommit
+                    | WalOpType::TransactionAbort)
+            )
+        });
+        if !has_sync_envelope {
+            self.replay_parsed_entries(&wal_result.all_entries, applier)?;
+            self.stats.last_lsn = wal_result.last_lsn;
+            return Ok(());
+        }
+        let transactions =
+            crate::transaction::wal::collect_committed_transactions(&wal_result.all_entries)
+                .map_err(|error| {
+                    StorageError::wal_error(format!(
+                        "Failed to validate committed WAL batches: {}",
+                        error
+                    ))
+                })?;
+        for transaction in transactions {
+            self.replay_parsed_entries(&transaction.redo_entries, applier)?;
+            self.stats.last_lsn = crate::transaction::wal::Lsn::new(transaction.commit_lsn.get());
+        }
+        Ok(())
     }
 
     /// Replay parsed WAL entries (new format)
@@ -326,6 +356,9 @@ impl RecoveryManager {
                         }
                     }
                 }
+                WalOpType::OutboxIntent
+                | WalOpType::TransactionCommit
+                | WalOpType::TransactionAbort => {}
                 WalOpType::AddVertexProp => match self.deserialize_add_vertex_prop(payload) {
                     Ok(redo) => {
                         applier.replay_add_vertex_prop(&redo, ts)?;
@@ -542,7 +575,9 @@ mod tests {
     use super::*;
     use crate::transaction::wal::writer::LocalWalWriter;
     use crate::transaction::wal::writer::WalWriter;
-    use crate::transaction::wal::{InsertVertexRedo, LabelId, Timestamp, VertexId, WalOpType};
+    use crate::transaction::wal::{
+        InsertVertexRedo, LabelId, Timestamp, TransactionWalEntry, VertexId, WalOpType,
+    };
     use postcard::to_allocvec;
     use std::path::Path;
     use std::sync::{Arc, Mutex};
@@ -642,17 +677,20 @@ mod tests {
 
         let payload =
             to_allocvec(&redo).map_err(|e| StorageError::serialize_error(e.to_string()))?;
-        writer
-            .append_entry(WalOpType::InsertVertex, timestamp, &payload)
+        let lsn = writer
+            .append_transaction_batch(
+                crate::core::types::TransactionId::new(u64::from(timestamp)),
+                vec![TransactionWalEntry {
+                    op_type: WalOpType::InsertVertex,
+                    timestamp,
+                    payload,
+                }],
+                &[],
+            )
             .map_err(|e| StorageError::wal_error(format!("Failed to append WAL: {:?}", e)))?;
-
-        let lsn = writer.current_lsn();
-        writer
-            .sync()
-            .map_err(|e| StorageError::wal_error(format!("Failed to sync WAL: {:?}", e)))?;
         writer.close();
 
-        Ok(lsn)
+        Ok(Lsn::new(lsn.get()))
     }
 
     #[test]
@@ -674,10 +712,17 @@ mod tests {
             properties: vec![("name".to_string(), b"Alice".to_vec())],
         };
         let first_payload = to_allocvec(&first_redo).expect("Failed to serialize first redo");
-        writer
-            .append_entry(WalOpType::InsertVertex, 1, &first_payload)
-            .expect("Failed to append first WAL entry");
-        let first_lsn = writer.current_lsn();
+        let first_lsn = writer
+            .append_transaction_batch(
+                crate::core::types::TransactionId::new(1),
+                vec![TransactionWalEntry {
+                    op_type: WalOpType::InsertVertex,
+                    timestamp: 1,
+                    payload: first_payload,
+                }],
+                &[],
+            )
+            .expect("Failed to append first WAL transaction");
 
         let second_redo = InsertVertexRedo {
             label: 1,
@@ -685,10 +730,17 @@ mod tests {
             properties: vec![("name".to_string(), b"Bob".to_vec())],
         };
         let second_payload = to_allocvec(&second_redo).expect("Failed to serialize second redo");
-        writer
-            .append_entry(WalOpType::InsertVertex, 2, &second_payload)
-            .expect("Failed to append second WAL entry");
-        let second_lsn = writer.current_lsn();
+        let second_lsn = writer
+            .append_transaction_batch(
+                crate::core::types::TransactionId::new(2),
+                vec![TransactionWalEntry {
+                    op_type: WalOpType::InsertVertex,
+                    timestamp: 2,
+                    payload: second_payload,
+                }],
+                &[],
+            )
+            .expect("Failed to append second WAL transaction");
         writer.close();
 
         let mut manager = RecoveryManager::new(RecoveryConfig {
@@ -697,7 +749,7 @@ mod tests {
             recovery_mode: WalRecoveryMode::default(),
             parallel_recovery: false,
             verify_checksum: true,
-            start_lsn: Some(first_lsn),
+            start_lsn: Some(Lsn::new(first_lsn.get())),
         });
 
         let applier = RecordingApplier::default();
@@ -710,7 +762,7 @@ mod tests {
         assert_eq!(replayed[0].0, 1);
         assert_eq!(replayed[0].1, VertexId::from_int64(1002));
         assert_eq!(stats.wal_entries_replayed, 1);
-        assert_eq!(stats.last_lsn, second_lsn);
+        assert_eq!(stats.last_lsn, Lsn::new(second_lsn.get()));
     }
 
     #[test]
@@ -742,5 +794,50 @@ mod tests {
         assert!(applier.replayed_vertices().is_empty());
         assert_eq!(stats.wal_entries_replayed, 0);
         assert_eq!(stats.last_lsn, last_lsn);
+    }
+
+    #[test]
+    fn recovery_ignores_uncommitted_tail() {
+        let temp_dir = TempDir::new().expect("temporary directory should be created");
+        let wal_dir = temp_dir.path().join("wal");
+        let data_dir = temp_dir.path().join("data");
+        std::fs::create_dir_all(&wal_dir).expect("WAL directory should be created");
+        std::fs::create_dir_all(&data_dir).expect("data directory should be created");
+        write_insert_vertex_wal(&wal_dir, 1, 1, 1001, "committed")
+            .expect("committed WAL should be written");
+
+        let wal_uri = wal_dir.to_string_lossy().to_string();
+        let mut writer = LocalWalWriter::new(&wal_uri, 0);
+        writer.open().expect("WAL should reopen");
+        let redo = InsertVertexRedo {
+            label: 1,
+            vid: VertexId::from_int64(1002),
+            properties: vec![("name".to_string(), b"uncommitted".to_vec())],
+        };
+        writer
+            .append_entry(
+                WalOpType::InsertVertex,
+                2,
+                &to_allocvec(&redo).expect("redo should serialize"),
+            )
+            .expect("uncommitted redo should append");
+        writer.sync().expect("uncommitted tail should reach disk");
+        writer.close();
+
+        let mut manager = RecoveryManager::new(RecoveryConfig {
+            wal_dir,
+            data_dir,
+            recovery_mode: WalRecoveryMode::default(),
+            parallel_recovery: false,
+            verify_checksum: true,
+            start_lsn: None,
+        });
+        let applier = RecordingApplier::default();
+        manager
+            .recover_with_applier(&applier)
+            .expect("recovery should succeed");
+        let replayed = applier.replayed_vertices();
+        assert_eq!(replayed.len(), 1);
+        assert_eq!(replayed[0].1, VertexId::from_int64(1001));
     }
 }

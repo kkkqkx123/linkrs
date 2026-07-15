@@ -36,6 +36,11 @@ impl SyncApi {
         self.sync_manager.get_unrecovered_dlq_size()
     }
 
+    /// Get durable outbox delivery statistics.
+    pub fn outbox_stats(&self) -> crate::sync::OutboxStats {
+        self.sync_manager.outbox_stats()
+    }
+
     /// Get vector coordinator
     #[cfg(feature = "qdrant")]
     pub fn vector_coordinator(&self) -> Option<&Arc<crate::sync::VectorSyncCoordinator>> {

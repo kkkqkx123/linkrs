@@ -26,59 +26,61 @@ impl GraphStorageContext {
             .as_ref()
             .map(|m| FreezeGuard::new(m.clone()));
 
-        {
-            let mut edge_tables = self.persistent.data_store.write_edge_tables();
-            for table in edge_tables.values_mut() {
-                let delta_edges = table.delta_edge_count();
-                let delta_memory = table.used_memory_size() as u64;
+        self.persistent
+            .data_store
+            .with_edge_tables_mut(|edge_tables| {
+                for table in edge_tables.values_mut() {
+                    let delta_edges = table.delta_edge_count();
+                    let delta_memory = table.used_memory_size() as u64;
 
-                if let Some(ref manager) = self.runtime.background_freeze_manager {
-                    manager.record_delta_size(delta_edges);
+                    if let Some(ref manager) = self.runtime.background_freeze_manager {
+                        manager.record_delta_size(delta_edges);
 
-                    let input = crate::storage::engine::config::FreezeDecisionInput {
-                        delta_edge_count: delta_edges,
-                        delta_memory_bytes: delta_memory,
-                        segment_count: 0,
-                        oldest_segment_age: 0,
-                        deletion_ratio: 0.0,
-                    };
+                        let input = crate::storage::engine::config::FreezeDecisionInput {
+                            delta_edge_count: delta_edges,
+                            delta_memory_bytes: delta_memory,
+                            segment_count: 0,
+                            oldest_segment_age: 0,
+                            deletion_ratio: 0.0,
+                        };
 
-                    if manager.should_freeze_with_stats(&input) {
-                        let decision = manager.get_freeze_decision_with_stats(&input);
-                        freeze_reasons.insert(decision.freeze_reason);
-                        log::debug!(
-                            "Freeze triggered ({} strategy): {}",
-                            manager.strategy_name(),
-                            decision.summary()
-                        );
+                        if manager.should_freeze_with_stats(&input) {
+                            let decision = manager.get_freeze_decision_with_stats(&input);
+                            freeze_reasons.insert(decision.freeze_reason);
+                            log::debug!(
+                                "Freeze triggered ({} strategy): {}",
+                                manager.strategy_name(),
+                                decision.summary()
+                            );
 
-                        let frozen = table.compact_and_freeze(
-                            ts,
-                            &config,
-                            crate::storage::edge::edge_table::CompactionMode::Standard,
-                        );
-                        total_frozen += frozen as u64;
-                        any_frozen = true;
-                    } else if log::log_enabled!(log::Level::Debug) {
-                        log::debug!(
-                            "Skip freeze ({} strategy): {}",
-                            manager.strategy_name(),
-                            manager.get_reason(&input)
-                        );
-                    }
-                } else {
-                    if delta_edges >= self.persistent.config.freeze.delta_edge_threshold {
-                        let frozen = table.compact_and_freeze(
-                            ts,
-                            &config,
-                            crate::storage::edge::edge_table::CompactionMode::Standard,
-                        );
-                        total_frozen += frozen as u64;
-                        any_frozen = true;
+                            let frozen = table.compact_and_freeze(
+                                ts,
+                                &config,
+                                crate::storage::edge::edge_table::CompactionMode::Standard,
+                            );
+                            total_frozen += frozen as u64;
+                            any_frozen = true;
+                        } else if log::log_enabled!(log::Level::Debug) {
+                            log::debug!(
+                                "Skip freeze ({} strategy): {}",
+                                manager.strategy_name(),
+                                manager.get_reason(&input)
+                            );
+                        }
+                    } else {
+                        if delta_edges >= self.persistent.config.freeze.delta_edge_threshold {
+                            let frozen = table.compact_and_freeze(
+                                ts,
+                                &config,
+                                crate::storage::edge::edge_table::CompactionMode::Standard,
+                            );
+                            total_frozen += frozen as u64;
+                            any_frozen = true;
+                        }
                     }
                 }
-            }
-        }
+                Ok(())
+            })?;
 
         if any_frozen {
             // Record freeze via guard (automatically logged on drop)

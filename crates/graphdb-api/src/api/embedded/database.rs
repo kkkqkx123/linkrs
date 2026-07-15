@@ -8,7 +8,7 @@ use crate::api::embedded::result::QueryResult;
 use crate::api::embedded::session::{GraphDatabaseInner, Session};
 use crate::core::{StatsManager, Value};
 use crate::search::{FulltextConfig, FulltextIndexManager, SyncFailurePolicy};
-use crate::storage::{GraphStorage, StorageClient};
+use crate::storage::{GraphStorage, StorageClient, StoragePersistenceOps};
 use crate::sync::{SyncConfig, SyncManager};
 use crate::transaction::wal::SyncPolicy;
 use crate::transaction::{TransactionManager, TransactionManagerConfig};
@@ -261,7 +261,7 @@ impl GraphDatabase<GraphStorage> {
             (config.path(), sync_manager.as_mut().and_then(Arc::get_mut))
         {
             manager
-                .configure_outbox(path.join("outbox/events.json"))
+                .configure_outbox(path.join("outbox/outbox.sqlite"))
                 .map_err(|error| CoreError::StorageError(error.to_string()))?;
             let _ = manager.retry_outbox_sync();
         }

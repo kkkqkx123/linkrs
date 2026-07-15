@@ -31,11 +31,15 @@ impl GraphStorageContext {
         fs::create_dir_all(&vertex_dir)?;
 
         {
-            let vertex_tables = self.persistent.data_store.read_vertex_tables();
-            for (label_id, table) in &*vertex_tables {
-                let table_dir = vertex_dir.join(format!("label_{}", label_id));
-                table.flush(&table_dir, compression)?;
-            }
+            self.persistent
+                .data_store
+                .with_vertex_tables(|vertex_tables| {
+                    for (label_id, table) in vertex_tables {
+                        let table_dir = vertex_dir.join(format!("label_{}", label_id));
+                        table.flush(&table_dir, compression)?;
+                    }
+                    Ok::<(), crate::core::StorageError>(())
+                })?;
         }
 
         let edge_dir = data_dir.join("edges");
@@ -43,21 +47,25 @@ impl GraphStorageContext {
 
         {
             let ts = self.get_read_timestamp();
-            let mut edge_tables = self.persistent.data_store.write_edge_tables();
-            for (
-                EdgeTableKey {
-                    src_label,
-                    dst_label,
-                    edge_label,
-                },
-                table,
-            ) in edge_tables.iter_mut()
-            {
-                let table_dir =
-                    edge_dir.join(format!("{}_{}_{}", src_label, dst_label, edge_label));
-                table.maybe_compact_for_flush(ts, 2.0);
-                table.flush(&table_dir, compression)?;
-            }
+            self.persistent
+                .data_store
+                .with_edge_tables_mut(|edge_tables| {
+                    for (
+                        EdgeTableKey {
+                            src_label,
+                            dst_label,
+                            edge_label,
+                        },
+                        table,
+                    ) in edge_tables.iter_mut()
+                    {
+                        let table_dir =
+                            edge_dir.join(format!("{}_{}_{}", src_label, dst_label, edge_label));
+                        table.maybe_compact_for_flush(ts, 2.0);
+                        table.flush(&table_dir, compression)?;
+                    }
+                    Ok::<(), crate::core::StorageError>(())
+                })?;
         }
 
         let index_dir = data_dir.join("indexes");
@@ -84,55 +92,65 @@ impl GraphStorageContext {
 
         let vertex_dir = checkpoint_paths.vertices_dir();
         if vertex_dir.exists() {
-            let mut vertex_tables = self.persistent.data_store.write_vertex_tables();
-            for entry in fs::read_dir(&vertex_dir)? {
-                let entry = entry?;
-                let path = entry.path();
-                if path.is_dir() {
-                    if let Some(dir_name) = path.file_name() {
-                        if let Some(name_str) = dir_name.to_str() {
-                            if let Some(label_str) = name_str.strip_prefix("label_") {
-                                if let Ok(label_id) = label_str.parse::<LabelId>() {
-                                    if let Some(table) = vertex_tables.get_mut(&label_id) {
-                                        table.load(&path)?;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        let edge_dir = checkpoint_paths.edges_dir();
-        if edge_dir.exists() {
-            let mut edge_tables = self.persistent.data_store.write_edge_tables();
-            for entry in fs::read_dir(&edge_dir)? {
-                let entry = entry?;
-                let path = entry.path();
-                if path.is_dir() {
-                    if let Some(dir_name) = path.file_name() {
-                        if let Some(name_str) = dir_name.to_str() {
-                            let parts: Vec<&str> = name_str.splitn(3, '_').collect();
-                            if parts.len() == 3 {
-                                if let (Ok(src_label), Ok(dst_label), Ok(edge_label)) = (
-                                    parts[0].parse::<LabelId>(),
-                                    parts[1].parse::<LabelId>(),
-                                    parts[2].parse::<LabelId>(),
-                                ) {
-                                    let key = EdgeTableKey::new(src_label, dst_label, edge_label);
-                                    if let Some(table) = edge_tables.get_mut(&key) {
-                                        table.load(&path)?;
-                                        if let Some(stats) = &self.persistent.stats_manager {
-                                            table.set_stats_manager(stats.clone());
+            self.persistent
+                .data_store
+                .with_vertex_tables_mut(|vertex_tables| {
+                    for entry in fs::read_dir(&vertex_dir)? {
+                        let entry = entry?;
+                        let path = entry.path();
+                        if path.is_dir() {
+                            if let Some(dir_name) = path.file_name() {
+                                if let Some(name_str) = dir_name.to_str() {
+                                    if let Some(label_str) = name_str.strip_prefix("label_") {
+                                        if let Ok(label_id) = label_str.parse::<LabelId>() {
+                                            if let Some(table) = vertex_tables.get_mut(&label_id) {
+                                                table.load(&path)?;
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
                     }
-                }
-            }
+                    Ok::<(), crate::core::StorageError>(())
+                })?;
+        }
+
+        let edge_dir = checkpoint_paths.edges_dir();
+        if edge_dir.exists() {
+            self.persistent
+                .data_store
+                .with_edge_tables_mut(|edge_tables| {
+                    for entry in fs::read_dir(&edge_dir)? {
+                        let entry = entry?;
+                        let path = entry.path();
+                        if path.is_dir() {
+                            if let Some(dir_name) = path.file_name() {
+                                if let Some(name_str) = dir_name.to_str() {
+                                    let parts: Vec<&str> = name_str.splitn(3, '_').collect();
+                                    if parts.len() == 3 {
+                                        if let (Ok(src_label), Ok(dst_label), Ok(edge_label)) = (
+                                            parts[0].parse::<LabelId>(),
+                                            parts[1].parse::<LabelId>(),
+                                            parts[2].parse::<LabelId>(),
+                                        ) {
+                                            let key =
+                                                EdgeTableKey::new(src_label, dst_label, edge_label);
+                                            if let Some(table) = edge_tables.get_mut(&key) {
+                                                table.load(&path)?;
+                                                if let Some(stats) = &self.persistent.stats_manager
+                                                {
+                                                    table.set_stats_manager(stats.clone());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Ok::<(), crate::core::StorageError>(())
+                })?;
         }
 
         let index_dir = checkpoint_paths.indexes_dir();

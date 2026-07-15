@@ -41,6 +41,7 @@ pub mod insert_transaction;
 pub mod manager;
 pub mod monitor;
 pub mod mvcc;
+pub mod participant;
 pub mod read_transaction;
 pub mod rollback;
 pub mod snapshot_tracker;
@@ -74,6 +75,7 @@ pub use insert_transaction::{
 };
 pub use manager::TransactionManager;
 pub use monitor::TransactionMonitor;
+pub use participant::TransactionCommitSink;
 pub use read_transaction::{
     ReadTarget, ReadTransaction, ReadTransactionError, ReadTransactionResult, VertexRecord,
     RELEASED_TIMESTAMP,

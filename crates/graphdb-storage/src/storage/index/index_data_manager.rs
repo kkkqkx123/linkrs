@@ -8,6 +8,7 @@
 
 use crate::core::types::{Index, Timestamp, MAX_TIMESTAMP};
 use crate::core::{StorageError, StorageResult, Value};
+use crate::storage::cursor::IndexScanPlan;
 use crate::storage::index::vertex_index_manager::VertexIndexManager;
 use std::path::Path;
 
@@ -116,6 +117,16 @@ impl IndexDataManagerImpl {
         let path = path.as_ref();
         self.vertex_manager.load(path.join("vertex_index"))?;
         Ok(())
+    }
+
+    pub fn open_tag_index_cursor(
+        &self,
+        space_id: u64,
+        index: &Index,
+        plan: &IndexScanPlan,
+    ) -> StorageResult<crate::storage::index::vertex_index_manager::VertexIndexCursor> {
+        self.vertex_manager
+            .open_tag_index_cursor(space_id, index, plan)
     }
 }
 

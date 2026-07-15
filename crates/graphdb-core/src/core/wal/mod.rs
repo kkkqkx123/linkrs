@@ -4,6 +4,7 @@
 //! These types are shared between the transaction layer and storage engine.
 
 pub mod redo;
+pub mod sync;
 pub mod traits;
 pub mod types;
 
@@ -13,6 +14,10 @@ pub use redo::{
     DeleteEdgeTypeRedo, DeleteVertexPropRedo, DeleteVertexRedo, DeleteVertexTypeRedo,
     DropSpaceRedo, InsertEdgeRedo, InsertVertexRedo, RenameEdgePropRedo, RenameVertexPropRedo,
     UpdateEdgePropRedo, UpdateVertexPropRedo,
+};
+pub use sync::{
+    EntityRef, IndexMutation, IndexOperation, LifecycleMutation, OutboxIntent, TransactionAbort,
+    TransactionCommit, WAL_SYNC_WIRE_VERSION,
 };
 pub use traits::{RecoveryApplier, WalWriter};
 pub use types::{

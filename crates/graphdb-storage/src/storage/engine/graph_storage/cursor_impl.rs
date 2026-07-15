@@ -7,7 +7,7 @@ use crate::core::vertex_edge_path::Tag;
 use crate::core::{Edge, StorageError, StorageResult, Value, Vertex};
 use crate::storage::cursor::{EdgeCursor, ScanOptions, VertexCursor};
 use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
-use crate::storage::edge::{EdgeRecord, EdgeStore, Nbr};
+use crate::storage::edge::{EdgeStore, Nbr};
 use crate::storage::engine::data_store::EdgeTableKey;
 
 use super::context::GraphStorageContext;
@@ -58,7 +58,9 @@ impl GraphVertexCursor {
         space: String,
         options: &ScanOptions,
     ) -> StorageResult<Self> {
-        let ts = ctx.get_read_timestamp();
+        let ts = options
+            .read_timestamp
+            .unwrap_or_else(|| ctx.get_read_timestamp());
         if options
             .vertex_id_range
             .as_ref()
@@ -77,15 +79,14 @@ impl GraphVertexCursor {
                 .collect(),
         };
 
-        let max_internal_id = {
-            let tables = ctx.data_store().read_vertex_tables();
+        let max_internal_id = ctx.data_store().with_vertex_tables(|tables| {
             tags.labels
                 .iter()
                 .filter_map(|label_id| tables.get(label_id))
                 .map(|t| t.total_count() as u32)
                 .max()
                 .unwrap_or(0)
-        };
+        });
 
         Ok(Self {
             ctx,
@@ -112,71 +113,75 @@ impl VertexCursor for GraphVertexCursor {
 
         let batch_size = batch_size.max(1);
         let ts = self.ts;
-        let tables = self.ctx.data_store().read_vertex_tables();
-        let mut batch = Vec::new();
+        let data_store = self.ctx.data_store().clone();
+        let tags = &self.tags;
+        let id_range = &self.id_range;
+        let projection = &self.projection;
+        let batch = data_store.with_vertex_tables(|tables| {
+            let mut batch = Vec::new();
+            while batch.len() < batch_size && self.current_internal_id < self.max_internal_id {
+                let internal_id = self.current_internal_id;
+                self.current_internal_id += 1;
 
-        while batch.len() < batch_size && self.current_internal_id < self.max_internal_id {
-            let internal_id = self.current_internal_id;
-            self.current_internal_id += 1;
-
-            if let Some(ref range) = self.id_range {
-                if !((range.start as u32)..(range.end as u32)).contains(&internal_id) {
-                    continue;
+                if let Some(range) = id_range {
+                    if !((range.start as u32)..(range.end as u32)).contains(&internal_id) {
+                        continue;
+                    }
                 }
-            }
 
-            let mut merged_vid = None;
-            let mut merged_tags: Vec<Tag> = Vec::new();
-            let mut all_properties: HashMap<String, Value> = HashMap::new();
+                let mut merged_vid = None;
+                let mut merged_tags: Vec<Tag> = Vec::new();
+                let mut all_properties: HashMap<String, Value> = HashMap::new();
 
-            for label_id in &self.tags.labels {
-                if let Some(table) = tables.get(label_id) {
-                    if let Some(record) = table.get_by_internal_id(internal_id, ts) {
-                        if merged_vid.is_none() {
-                            merged_vid = Some(record.vid);
+                for label_id in &tags.labels {
+                    if let Some(table) = tables.get(label_id) {
+                        if let Some(record) = table.get_by_internal_id(internal_id, ts) {
+                            if merged_vid.is_none() {
+                                merged_vid = Some(record.vid);
+                            }
+                            let tag_name = tags
+                                .names
+                                .get(label_id)
+                                .map(|s| s.as_str())
+                                .unwrap_or("unknown");
+                            let props: HashMap<String, Value> = record
+                                .properties
+                                .iter()
+                                .filter(|(name, _)| {
+                                    projection.as_ref().is_none_or(|projection| {
+                                        projection.iter().any(|p| p == name)
+                                    })
+                                })
+                                .cloned()
+                                .collect();
+                            merged_tags.push(Tag::new(tag_name.to_string(), props.clone()));
+                            all_properties.extend(props);
                         }
-                        let tag_name = self
-                            .tags
-                            .names
-                            .get(label_id)
-                            .map(|s| s.as_str())
-                            .unwrap_or("unknown");
-                        let props: HashMap<String, Value> = record
-                            .properties
-                            .iter()
-                            .filter(|(name, _)| {
-                                self.projection
-                                    .as_ref()
-                                    .is_none_or(|projection| projection.iter().any(|p| p == name))
-                            })
-                            .cloned()
-                            .collect();
-                        merged_tags.push(Tag::new(tag_name.to_string(), props.clone()));
-                        all_properties.extend(props);
                     }
                 }
-            }
 
-            if let Some(vid) = merged_vid {
-                if self.offset_remaining > 0 {
-                    self.offset_remaining -= 1;
-                    continue;
-                }
-                batch.push(Vertex {
-                    vid,
-                    id: internal_id as i64,
-                    tags: merged_tags,
-                    properties: all_properties,
-                });
-                self.emitted += 1;
-                if let Some(limit) = self.limit {
-                    if self.emitted >= limit {
-                        self.exhausted = true;
-                        break;
+                if let Some(vid) = merged_vid {
+                    if self.offset_remaining > 0 {
+                        self.offset_remaining -= 1;
+                        continue;
+                    }
+                    batch.push(Vertex {
+                        vid,
+                        id: internal_id as i64,
+                        tags: merged_tags,
+                        properties: all_properties,
+                    });
+                    self.emitted += 1;
+                    if let Some(limit) = self.limit {
+                        if self.emitted >= limit {
+                            self.exhausted = true;
+                            break;
+                        }
                     }
                 }
             }
-        }
+            batch
+        });
 
         if self.current_internal_id >= self.max_internal_id {
             self.exhausted = true;
@@ -267,7 +272,9 @@ impl GraphEdgeCursor {
         space: &str,
         options: &ScanOptions,
     ) -> StorageResult<Self> {
-        let ts = ctx.get_read_timestamp();
+        let ts = options
+            .read_timestamp
+            .unwrap_or_else(|| ctx.get_read_timestamp());
         let targets = if let Some(ref et) = options.edge_type {
             vec![build_target(&ctx, space, et)?]
         } else {
@@ -302,7 +309,7 @@ impl EdgeCursor for GraphEdgeCursor {
         }
 
         let batch_size = batch_size.max(1);
-        let mut batch = Vec::new();
+        let mut candidates = Vec::new();
 
         let ctx = &*self.ctx;
         let ts = self.ts;
@@ -317,55 +324,36 @@ impl EdgeCursor for GraphEdgeCursor {
         let offset_remaining = &mut self.offset_remaining;
         let exhausted = &mut self.exhausted;
 
-        let edge_tables = ctx.data_store().read_edge_tables();
+        let data_store = ctx.data_store().clone();
+        data_store.with_edge_tables(|edge_tables| {
+            'outer: while candidates.len() < batch_size {
+                if *target_idx >= targets.len() {
+                    *exhausted = true;
+                    break 'outer;
+                }
 
-        'outer: while batch.len() < batch_size {
-            if *target_idx >= targets.len() {
-                *exhausted = true;
-                break 'outer;
-            }
+                let target = &targets[*target_idx];
 
-            let target = &targets[*target_idx];
-
-            if *table_idx >= target.tables.len() {
-                *target_idx += 1;
-                *table_idx = 0;
-                *table_state = TableScanState::new();
-                continue 'outer;
-            }
-
-            let td = &target.tables[*table_idx];
-            let store = match edge_tables.get(&td.key) {
-                Some(EdgeStore::TimeTravel(s)) => s,
-                _ => {
-                    *table_idx += 1;
+                if *table_idx >= target.tables.len() {
+                    *target_idx += 1;
+                    *table_idx = 0;
                     *table_state = TableScanState::new();
-                    continue;
+                    continue 'outer;
                 }
-            };
 
-            match table_state.phase {
-                TablePhase::Mutable => {
-                    scan_mutable(ScanArgs {
-                        ctx,
-                        store,
-                        target,
-                        td,
-                        ts,
-                        src_id_range,
-                        projection,
-                        limit,
-                        emitted,
-                        offset_remaining,
-                        state: table_state,
-                        batch: &mut batch,
-                        batch_size,
-                    });
-                }
-                TablePhase::Segment(seg_idx) => {
-                    scan_segments(
-                        ScanArgs {
-                            ctx,
+                let td = &target.tables[*table_idx];
+                let store = match edge_tables.get(&td.key) {
+                    Some(EdgeStore::TimeTravel(s)) => s,
+                    _ => {
+                        *table_idx += 1;
+                        *table_state = TableScanState::new();
+                        continue;
+                    }
+                };
+
+                match table_state.phase {
+                    TablePhase::Mutable => {
+                        scan_mutable(ScanArgs {
                             store,
                             target,
                             td,
@@ -376,30 +364,50 @@ impl EdgeCursor for GraphEdgeCursor {
                             emitted,
                             offset_remaining,
                             state: table_state,
-                            batch: &mut batch,
+                            batch: &mut candidates,
                             batch_size,
-                        },
-                        seg_idx,
-                    );
+                        });
+                    }
+                    TablePhase::Segment(seg_idx) => {
+                        scan_segments(
+                            ScanArgs {
+                                store,
+                                target,
+                                td,
+                                ts,
+                                src_id_range,
+                                projection,
+                                limit,
+                                emitted,
+                                offset_remaining,
+                                state: table_state,
+                                batch: &mut candidates,
+                                batch_size,
+                            },
+                            seg_idx,
+                        );
+                    }
+                    TablePhase::Done => {
+                        *table_idx += 1;
+                        *table_state = TableScanState::new();
+                        continue;
+                    }
                 }
-                TablePhase::Done => {
-                    *table_idx += 1;
-                    *table_state = TableScanState::new();
-                    continue;
+
+                if limit.is_some_and(|l| *emitted >= l) {
+                    *exhausted = true;
                 }
             }
+        });
 
-            if limit.is_some_and(|l| *emitted >= l) {
-                *exhausted = true;
-            }
-        }
-
-        Ok(batch)
+        Ok(candidates
+            .into_iter()
+            .map(|candidate| materialize_edge(ctx, candidate, ts))
+            .collect())
     }
 }
 
 struct ScanArgs<'a> {
-    ctx: &'a GraphStorageContext,
     store: &'a TimeTravelEdgeStore,
     target: &'a TargetDef,
     td: &'a TableDef,
@@ -410,7 +418,7 @@ struct ScanArgs<'a> {
     emitted: &'a mut usize,
     offset_remaining: &'a mut usize,
     state: &'a mut TableScanState,
-    batch: &'a mut Vec<Edge>,
+    batch: &'a mut Vec<EdgeCandidate>,
     batch_size: usize,
 }
 
@@ -452,16 +460,14 @@ fn scan_mutable(args: ScanArgs) {
             continue;
         }
 
-        let edge = build_edge(
-            args.ctx,
-            args.store,
-            args.target,
-            args.td,
-            &src_vid,
+        let edge = build_edge_candidate(EdgeBuildArgs {
+            store: args.store,
+            target: args.target,
+            td: args.td,
+            src_vid: &src_vid,
             nbr,
-            args.ts,
-            args.projection,
-        );
+            projection: args.projection,
+        });
         args.batch.push(edge);
         *args.emitted += 1;
 
@@ -520,16 +526,14 @@ fn scan_segments(args: ScanArgs, seg_idx: usize) {
             edge.prop_offset,
             edge.timestamp,
         );
-        let edge = build_edge(
-            args.ctx,
-            args.store,
-            args.target,
-            args.td,
-            &src_vid,
+        let edge = build_edge_candidate(EdgeBuildArgs {
+            store: args.store,
+            target: args.target,
+            td: args.td,
+            src_vid: &src_vid,
             nbr,
-            args.ts,
-            args.projection,
-        );
+            projection: args.projection,
+        });
 
         if *args.offset_remaining > 0 {
             *args.offset_remaining -= 1;
@@ -560,41 +564,66 @@ fn scan_segments(args: ScanArgs, seg_idx: usize) {
 // Edge construction
 // ---------------------------------------------------------------------------
 
-#[allow(clippy::too_many_arguments)]
-fn build_edge(
-    ctx: &GraphStorageContext,
-    store: &TimeTravelEdgeStore,
-    target: &TargetDef,
-    td: &TableDef,
-    src_vid: &VertexId,
+struct EdgeBuildArgs<'a> {
+    store: &'a TimeTravelEdgeStore,
+    target: &'a TargetDef,
+    td: &'a TableDef,
+    src_vid: &'a VertexId,
     nbr: Nbr,
-    ts: Timestamp,
-    projection: &Option<Vec<String>>,
-) -> Edge {
-    let src_internal = src_vid.as_int64().unwrap_or(0) as u32;
-    let (dst_vid, rank) = decode_endpoint(nbr.neighbor);
-    let properties = properties_for(store, nbr.prop_offset, projection);
+    projection: &'a Option<Vec<String>>,
+}
 
-    let record = EdgeRecord {
-        src_vid: VertexId::from_int64(src_internal as i64),
+struct EdgeCandidate {
+    edge_type_name: String,
+    src_label: LabelId,
+    dst_label: LabelId,
+    src_vid: VertexId,
+    dst_vid: VertexId,
+    rank: i64,
+    props: HashMap<String, Value>,
+}
+
+fn build_edge_candidate(args: EdgeBuildArgs<'_>) -> EdgeCandidate {
+    let src_internal = args.src_vid.as_int64().unwrap_or(0) as u32;
+    let (dst_vid, rank) = decode_endpoint(args.nbr.neighbor);
+    let properties = properties_for(args.store, args.nbr.prop_offset, args.projection);
+
+    let src_vid = VertexId::from_int64(src_internal as i64);
+    let props: HashMap<String, Value> = properties.into_iter().collect();
+    EdgeCandidate {
+        edge_type_name: args.target.edge_type_name.clone(),
+        src_label: args.td.tbl_src,
+        dst_label: args.td.tbl_dst,
+        src_vid,
         dst_vid,
         rank,
-        properties,
-    };
+        props,
+    }
+}
 
-    let src_internal = record.src_vid.as_int64().unwrap_or(0) as u32;
-    let dst_internal = record.dst_vid.as_int64().unwrap_or(0) as u32;
-
-    let src_external = resolve_vertex_id(ctx, src_internal, td.tbl_src, &record.src_vid, ts);
-    let dst_external = resolve_vertex_id(ctx, dst_internal, td.tbl_dst, &record.dst_vid, ts);
-
-    let props: HashMap<String, Value> = record.properties.into_iter().collect();
+fn materialize_edge(ctx: &GraphStorageContext, candidate: EdgeCandidate, ts: Timestamp) -> Edge {
+    let src_internal = candidate.src_vid.as_int64().unwrap_or(0) as u32;
+    let dst_internal = candidate.dst_vid.as_int64().unwrap_or(0) as u32;
+    let src_external = resolve_vertex_id(
+        ctx,
+        src_internal,
+        candidate.src_label,
+        &candidate.src_vid,
+        ts,
+    );
+    let dst_external = resolve_vertex_id(
+        ctx,
+        dst_internal,
+        candidate.dst_label,
+        &candidate.dst_vid,
+        ts,
+    );
     Edge {
         src: make_vid(&src_external),
         dst: make_vid(&dst_external),
-        edge_type: target.edge_type_name.clone(),
-        ranking: record.rank,
-        props,
+        edge_type: candidate.edge_type_name,
+        ranking: candidate.rank,
+        props: candidate.props,
     }
 }
 
@@ -690,16 +719,17 @@ fn build_target(
     let dst_label_id = endpoint_label_id(ctx, space, &edge_info.dst_tag_name)?.unwrap_or(0);
 
     let tables = if src_label_id == 0 && dst_label_id == 0 {
-        let edge_tables = ctx.data_store().read_edge_tables();
-        edge_tables
-            .iter()
-            .filter(|(_, store)| store.label() == edge_label_id)
-            .map(|(key, store)| TableDef {
-                key: *key,
-                tbl_src: store.src_label(),
-                tbl_dst: store.dst_label(),
-            })
-            .collect()
+        ctx.data_store().with_edge_tables(|edge_tables| {
+            edge_tables
+                .iter()
+                .filter(|(_, store)| store.label() == edge_label_id)
+                .map(|(key, store)| TableDef {
+                    key: *key,
+                    tbl_src: store.src_label(),
+                    tbl_dst: store.dst_label(),
+                })
+                .collect()
+        })
     } else {
         let key = EdgeTableKey::new(src_label_id, dst_label_id, edge_label_id);
         vec![TableDef {

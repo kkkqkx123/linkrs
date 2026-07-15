@@ -30,7 +30,7 @@ use crate::core::types::{
     PropertyDef, SpaceInfo, TagInfo, Timestamp, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
 };
 use crate::core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
-use crate::storage::cursor::{EdgeCursor, ScanOptions, VertexCursor};
+use crate::storage::cursor::{EdgeCursor, IndexCursor, IndexScanPlan, ScanOptions, VertexCursor};
 use crate::storage::engine::background_freeze::{BackgroundFreezeManager, FreezeStats};
 use crate::storage::engine::graph_storage::context::ExportedEdgeSnapshotRecord;
 use crate::storage::engine::PersistenceConfig;
@@ -56,6 +56,20 @@ impl std::fmt::Debug for GraphStorage {
 }
 
 impl GraphStorage {
+    fn commit_auto_if_needed(&self) -> StorageResult<()> {
+        let Some(context) = self.ctx.operation_context() else {
+            return Ok(());
+        };
+        if !context.auto_commit || context.read_only {
+            return Ok(());
+        }
+        let transaction_id = context.transaction_id.ok_or_else(|| {
+            StorageError::db_error("Auto-commit storage context has no transaction ID".to_string())
+        })?;
+        self.ctx.commit_staged_writes(transaction_id, &[])?;
+        Ok(())
+    }
+
     pub fn new() -> StorageResult<Self> {
         Ok(Self {
             ctx: Arc::new(GraphStorageContext::new()),
@@ -358,16 +372,17 @@ impl StorageReader for GraphStorage {
         let tag_info = self.ctx.schema_manager().get_tag(space, tag)?;
         let tag_info = tag_info.ok_or_else(|| StorageError::label_not_found(tag.to_string()))?;
 
-        let vertex_tables = self.ctx.data_store().read_vertex_tables();
-        let table = vertex_tables
-            .get(&tag_info.tag_id)
-            .ok_or_else(|| StorageError::label_not_found(tag.to_string()))?;
-
-        let version_history = table.version_history_ref();
-        let guard = version_history
-            .lock()
-            .map_err(|_| StorageError::db_error("Failed to lock version_history"))?;
-        Ok(Some(guard.clone()))
+        let history = self.ctx.data_store().with_vertex_tables(|vertex_tables| {
+            let table = vertex_tables
+                .get(&tag_info.tag_id)
+                .ok_or_else(|| StorageError::label_not_found(tag.to_string()))?;
+            let version_history = table.version_history_ref();
+            let guard = version_history
+                .lock()
+                .map_err(|_| StorageError::db_error("Failed to lock version_history"))?;
+            Ok::<_, StorageError>(guard.clone())
+        })?;
+        Ok(Some(history))
     }
 
     fn get_edge_version_history(
@@ -380,11 +395,15 @@ impl StorageReader for GraphStorage {
             edge_info.ok_or_else(|| StorageError::label_not_found(edge_type.to_string()))?;
 
         let keys = {
-            let edge_label_index = self.ctx.data_store().read_edge_label_index();
-            edge_label_index
-                .get(&edge_info.edge_type_id)
-                .ok_or_else(|| StorageError::label_not_found(edge_type.to_string()))?
-                .clone()
+            self.ctx
+                .data_store()
+                .catalog_read_snapshot()
+                .with_edge_label_index(|edge_label_index| {
+                    edge_label_index
+                        .get(&edge_info.edge_type_id)
+                        .cloned()
+                        .ok_or_else(|| StorageError::label_not_found(edge_type.to_string()))
+                })?
         };
 
         if keys.is_empty() {
@@ -393,16 +412,17 @@ impl StorageReader for GraphStorage {
 
         let key = &keys[0];
 
-        let edge_tables = self.ctx.data_store().read_edge_tables();
-        let table = edge_tables
-            .get(key)
-            .ok_or_else(|| StorageError::label_not_found(edge_type.to_string()))?;
-
-        let version_history = table.version_history_ref();
-        let guard = version_history
-            .lock()
-            .map_err(|_| StorageError::db_error("Failed to lock version_history"))?;
-        Ok(Some(guard.clone()))
+        let history = self.ctx.data_store().with_edge_tables(|edge_tables| {
+            let table = edge_tables
+                .get(key)
+                .ok_or_else(|| StorageError::label_not_found(edge_type.to_string()))?;
+            let version_history = table.version_history_ref();
+            let guard = version_history
+                .lock()
+                .map_err(|_| StorageError::db_error("Failed to lock version_history"))?;
+            Ok::<_, StorageError>(guard.clone())
+        })?;
+        Ok(Some(history))
     }
 
     fn get_vertex_schema_changes(
@@ -490,6 +510,35 @@ impl StorageReader for GraphStorage {
         let cursor = cursor_impl::GraphEdgeCursor::new(self.ctx.clone(), space, options)?;
         Ok(Box::new(cursor))
     }
+
+    fn create_index_cursor(
+        &self,
+        plan: &IndexScanPlan,
+    ) -> Result<Box<dyn IndexCursor<Row = Value>>, StorageError> {
+        let indexes = self.list_tag_indexes(&plan.space)?;
+        let index_id = i32::try_from(plan.index_id).map_err(|_| {
+            StorageError::not_found(format!(
+                "Index {} is outside metadata ID range",
+                plan.index_id
+            ))
+        })?;
+        let index = indexes
+            .into_iter()
+            .find(|index| index.id == index_id)
+            .ok_or_else(|| {
+                StorageError::not_found(format!(
+                    "Index {} not found in space {}",
+                    plan.index_id, plan.space
+                ))
+            })?;
+        let space_id = self.ctx.schema_manager().get_space_id(&plan.space)?;
+        let cursor = self
+            .ctx
+            .index_data_manager()
+            .read()
+            .open_tag_index_cursor(space_id, &index, plan)?;
+        Ok(Box::new(cursor))
+    }
 }
 
 impl GraphStorage {
@@ -523,19 +572,24 @@ impl GraphStorage {
 
 impl StorageWriter for GraphStorage {
     fn insert_vertex(&mut self, space: &str, vertex: Vertex) -> Result<VertexId, StorageError> {
-        writer::insert_vertex(&self.ctx, space, vertex)
+        let result = writer::insert_vertex(&self.ctx, space, vertex)?;
+        self.commit_auto_if_needed()?;
+        Ok(result)
     }
 
     fn update_vertex(&mut self, space: &str, vertex: Vertex) -> Result<(), StorageError> {
-        writer::update_vertex(&self.ctx, space, vertex)
+        writer::update_vertex(&self.ctx, space, vertex)?;
+        self.commit_auto_if_needed()
     }
 
     fn delete_vertex(&mut self, space: &str, id: &VertexId) -> Result<(), StorageError> {
-        writer::delete_vertex(&self.ctx, space, id)
+        writer::delete_vertex(&self.ctx, space, id)?;
+        self.commit_auto_if_needed()
     }
 
     fn delete_vertex_with_edges(&mut self, space: &str, id: &VertexId) -> Result<(), StorageError> {
-        writer::delete_vertex_with_edges(&self.ctx, space, id)
+        writer::delete_vertex_with_edges(&self.ctx, space, id)?;
+        self.commit_auto_if_needed()
     }
 
     fn batch_insert_vertices(
@@ -543,7 +597,9 @@ impl StorageWriter for GraphStorage {
         space: &str,
         vertices: Vec<Vertex>,
     ) -> Result<Vec<VertexId>, StorageError> {
-        writer::batch_insert_vertices(&self.ctx, space, vertices)
+        let result = writer::batch_insert_vertices(&self.ctx, space, vertices)?;
+        self.commit_auto_if_needed()?;
+        Ok(result)
     }
 
     fn delete_tags(
@@ -552,15 +608,19 @@ impl StorageWriter for GraphStorage {
         vertex_id: &VertexId,
         tag_names: &[String],
     ) -> Result<usize, StorageError> {
-        writer::delete_tags(&self.ctx, space, vertex_id, tag_names)
+        let result = writer::delete_tags(&self.ctx, space, vertex_id, tag_names)?;
+        self.commit_auto_if_needed()?;
+        Ok(result)
     }
 
     fn insert_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
-        writer::insert_edge(&self.ctx, space, edge)
+        writer::insert_edge(&self.ctx, space, edge)?;
+        self.commit_auto_if_needed()
     }
 
     fn update_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
-        writer::update_edge(&self.ctx, space, edge)
+        writer::update_edge(&self.ctx, space, edge)?;
+        self.commit_auto_if_needed()
     }
 
     fn delete_edge(
@@ -571,11 +631,13 @@ impl StorageWriter for GraphStorage {
         edge_type: &str,
         rank: i64,
     ) -> Result<(), StorageError> {
-        writer::delete_edge(&self.ctx, space, src, dst, edge_type, rank)
+        writer::delete_edge(&self.ctx, space, src, dst, edge_type, rank)?;
+        self.commit_auto_if_needed()
     }
 
     fn batch_insert_edges(&mut self, space: &str, edges: Vec<Edge>) -> Result<(), StorageError> {
-        writer::batch_insert_edges(&self.ctx, space, edges)
+        writer::batch_insert_edges(&self.ctx, space, edges)?;
+        self.commit_auto_if_needed()
     }
 
     fn insert_vertex_data(
@@ -583,7 +645,9 @@ impl StorageWriter for GraphStorage {
         space: &str,
         info: &InsertVertexInfo,
     ) -> Result<bool, StorageError> {
-        writer::insert_vertex_data(&self.ctx, space, info)
+        let result = writer::insert_vertex_data(&self.ctx, space, info)?;
+        self.commit_auto_if_needed()?;
+        Ok(result)
     }
 
     fn insert_edge_data(
@@ -591,11 +655,15 @@ impl StorageWriter for GraphStorage {
         space: &str,
         info: &InsertEdgeInfo,
     ) -> Result<bool, StorageError> {
-        writer::insert_edge_data(&self.ctx, space, info)
+        let result = writer::insert_edge_data(&self.ctx, space, info)?;
+        self.commit_auto_if_needed()?;
+        Ok(result)
     }
 
     fn delete_vertex_data(&mut self, space: &str, vertex_id: &str) -> Result<bool, StorageError> {
-        writer::delete_vertex_data(&self.ctx, space, vertex_id)
+        let result = writer::delete_vertex_data(&self.ctx, space, vertex_id)?;
+        self.commit_auto_if_needed()?;
+        Ok(result)
     }
 
     fn delete_edge_data(
@@ -605,7 +673,9 @@ impl StorageWriter for GraphStorage {
         dst: &str,
         rank: i64,
     ) -> Result<bool, StorageError> {
-        writer::delete_edge_data(&self.ctx, space, src, dst, rank)
+        let result = writer::delete_edge_data(&self.ctx, space, src, dst, rank)?;
+        self.commit_auto_if_needed()?;
+        Ok(result)
     }
 
     fn update_data(
@@ -614,7 +684,9 @@ impl StorageWriter for GraphStorage {
         space_id: u64,
         info: &UpdateInfo,
     ) -> Result<bool, StorageError> {
-        writer::update_data(&self.ctx, space, space_id, info)
+        let result = writer::update_data(&self.ctx, space, space_id, info)?;
+        self.commit_auto_if_needed()?;
+        Ok(result)
     }
 }
 
@@ -850,6 +922,124 @@ impl StorageOperationContextOps for GraphStorage {
 
     fn operation_context(&self) -> Option<Arc<StorageOperationContext>> {
         self.ctx.operation_context()
+    }
+}
+
+impl crate::storage::StorageCommitOps for GraphStorage {
+    fn commit_staged_writes(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+        intents: &[crate::core::wal::OutboxIntent],
+    ) -> StorageResult<crate::core::types::CommitLsn> {
+        self.ctx.commit_staged_writes(transaction_id, intents)
+    }
+
+    fn abort_staged_writes(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+    ) -> StorageResult<()> {
+        self.ctx.abort_staged_writes(transaction_id);
+        Ok(())
+    }
+
+    fn recover_outbox_projection(
+        &self,
+        sync_manager: &crate::sync::SyncManager,
+    ) -> StorageResult<usize> {
+        use crate::transaction::wal::{collect_committed_transactions, LocalWalParser, WalParser};
+        use graphdb_core::core::types::CommitLsn;
+        use graphdb_sync::sync::outbox_recovery::{find_latest_snapshot, restore_snapshot_sync};
+        let Some(paths) = self.ctx.storage_paths() else {
+            return Ok(0);
+        };
+        if !paths.wal_dir().exists() {
+            return Ok(0);
+        }
+
+        // Determine outbox database path and snapshot directory
+        let outbox_dir = paths.root().join("sync");
+        let outbox_db = outbox_dir.join("outbox.sqlite");
+        let snapshot_dir = paths.outbox_snapshot_dir();
+
+        // Step 1: Recover outbox database from snapshot if needed (sync only)
+        let snapshot_lsn = if !outbox_db.exists() && snapshot_dir.exists() {
+            match find_latest_snapshot(&snapshot_dir) {
+                Some(snapshot) => {
+                    log::info!(
+                        "Restoring outbox from snapshot at LSN {}",
+                        snapshot.materialized_lsn
+                    );
+                    if let Err(e) = restore_snapshot_sync(&snapshot, &outbox_db) {
+                        log::warn!("Failed to restore outbox snapshot: {} (will replay all)", e);
+                        None
+                    } else {
+                        Some(snapshot.materialized_lsn)
+                    }
+                }
+                None => {
+                    log::warn!("No valid outbox snapshot found, will replay all from WAL");
+                    None
+                }
+            }
+        } else if outbox_db.exists() {
+            // Database exists, find latest snapshot as optimization reference
+            find_latest_snapshot(&snapshot_dir).map(|s| s.materialized_lsn)
+        } else {
+            None
+        };
+
+        // Step 2: Parse committed WAL transactions
+        let mut parser = LocalWalParser::new();
+        parser
+            .open(&paths.wal_dir().to_string_lossy())
+            .map_err(|error| {
+                StorageError::wal_error(format!(
+                    "Failed to parse WAL for outbox recovery: {}",
+                    error
+                ))
+            })?;
+        let transactions =
+            collect_committed_transactions(&parser.parse_all_entries()).map_err(|error| {
+                StorageError::wal_error(format!(
+                    "Failed to validate WAL for outbox recovery: {}",
+                    error
+                ))
+            })?;
+
+        // Step 3: Materialize only intents after the snapshot LSN
+        let mut recovered = 0usize;
+        for transaction in transactions {
+            if transaction.intents.is_empty() {
+                continue;
+            }
+            // Skip transactions already covered by the restored snapshot
+            if let Some(snapshot_lsn) = snapshot_lsn {
+                if transaction.commit_lsn <= snapshot_lsn {
+                    continue;
+                }
+            }
+            sync_manager
+                .materialize_committed_transaction(
+                    transaction.transaction_id,
+                    transaction.commit_lsn,
+                    &transaction.intents,
+                )
+                .map_err(|error| {
+                    StorageError::db_error(format!(
+                        "Failed to recover outbox transaction {}: {}",
+                        transaction.transaction_id, error
+                    ))
+                })?;
+            recovered = recovered.saturating_add(transaction.intents.len());
+        }
+
+        log::info!(
+            "Outbox projection recovery complete: {} intents replayed (snapshot_lsn={:?})",
+            recovered,
+            snapshot_lsn
+        );
+
+        Ok(recovered)
     }
 }
 

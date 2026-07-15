@@ -5,7 +5,7 @@ use crate::core::types::{
     PropertyDef, SpaceInfo, TagInfo, Timestamp, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
 };
 use crate::core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
-use crate::storage::cursor::{EdgeCursor, IndexCursor, ScanOptions, VertexCursor};
+use crate::storage::cursor::{EdgeCursor, IndexCursor, IndexScanPlan, ScanOptions, VertexCursor};
 use crate::storage::engine::background_freeze::FreezeStats;
 use crate::storage::engine::graph_storage::context::ExportedEdgeSnapshotRecord;
 use crate::storage::schema::{LabelVersionHistory, PropertyChange};
@@ -197,9 +197,7 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
     /// to return a lazy cursor.
     fn create_index_cursor(
         &self,
-        _space: &str,
-        _index_id: u64,
-        _predicate: &dyn std::fmt::Debug,
+        _plan: &IndexScanPlan,
     ) -> Result<Box<dyn IndexCursor<Row = crate::core::Value>>, StorageError> {
         Err(StorageError::not_supported(
             "Native index cursor is not supported by this storage engine",
@@ -393,6 +391,7 @@ pub struct StorageOperationContext {
     pub read_timestamp: Timestamp,
     pub write_timestamp: Option<Timestamp>,
     pub read_only: bool,
+    pub auto_commit: bool,
 }
 
 impl StorageOperationContext {
@@ -406,8 +405,24 @@ impl StorageOperationContext {
             read_timestamp: timestamp,
             write_timestamp: (!read_only).then_some(timestamp),
             read_only,
+            auto_commit: false,
         }
     }
+}
+
+pub trait StorageCommitOps: Send + Sync + std::fmt::Debug {
+    fn commit_staged_writes(
+        &self,
+        transaction_id: TransactionId,
+        intents: &[crate::core::wal::OutboxIntent],
+    ) -> StorageResult<crate::core::types::CommitLsn>;
+
+    fn abort_staged_writes(&self, transaction_id: TransactionId) -> StorageResult<()>;
+
+    fn recover_outbox_projection(
+        &self,
+        sync_manager: &crate::sync::SyncManager,
+    ) -> StorageResult<usize>;
 }
 
 /// Creates an immutable storage handle bound to a single operation context.
@@ -460,6 +475,7 @@ pub trait GraphStore:
     StorageReader
     + StorageWriter
     + StorageOperationContextOps
+    + StorageCommitOps
     + UndoTarget
     + Send
     + Sync
@@ -471,6 +487,7 @@ impl<T> GraphStore for T where
     T: StorageReader
         + StorageWriter
         + StorageOperationContextOps
+        + StorageCommitOps
         + UndoTarget
         + Send
         + Sync
@@ -507,6 +524,7 @@ pub trait StorageClient:
     + StorageSchemaOps
     + StorageSchemaContextOps
     + StorageOperationContextOps
+    + StorageCommitOps
     + StorageAuthOps
     + StorageAdmin
     + StoragePersistenceOps
@@ -525,6 +543,7 @@ impl<T> StorageClient for T where
         + StorageSchemaOps
         + StorageSchemaContextOps
         + StorageOperationContextOps
+        + StorageCommitOps
         + StorageAuthOps
         + StorageAdmin
         + StoragePersistenceOps

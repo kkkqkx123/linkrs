@@ -7,9 +7,10 @@ use crate::core::metadata::SchemaManager;
 use crate::core::types::{EdgeTypeInfo, TagInfo, VertexId};
 use crate::core::{Edge, StorageError, Value, Vertex};
 use crate::storage::{
-    StorageAdmin, StorageAuthOps, StorageClient, StorageGcOps, StorageOperationContext,
-    StorageOperationContextOps, StoragePersistenceOps, StorageReader, StorageRecoveryOps,
-    StorageSchemaContextOps, StorageSchemaOps, StorageSnapshotOps, StorageSyncContextOps,
+    StorageAdmin, StorageAuthOps, StorageClient, StorageCommitOps, StorageGcOps,
+    StorageOperationContext, StorageOperationContextOps, StoragePersistenceOps, StorageReader,
+    StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps, StorageSnapshotOps,
+    StorageSyncContextOps,
 };
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -20,6 +21,7 @@ pub struct SyncWrapper<S: StorageClient + Debug> {
     inner: S,
     sync_manager: Option<Arc<crate::sync::SyncManager>>,
     enabled: bool,
+    auto_commit_owner: bool,
 }
 
 impl<S: StorageClient> SyncWrapper<S> {
@@ -29,6 +31,7 @@ impl<S: StorageClient> SyncWrapper<S> {
             inner: storage,
             sync_manager: None,
             enabled: false,
+            auto_commit_owner: false,
         }
     }
 
@@ -38,6 +41,7 @@ impl<S: StorageClient> SyncWrapper<S> {
             inner: storage,
             sync_manager: Some(sync_manager),
             enabled: true,
+            auto_commit_owner: false,
         }
     }
 
@@ -73,6 +77,117 @@ impl<S: StorageClient> SyncWrapper<S> {
         self.inner
             .operation_context()
             .and_then(|ctx| ctx.transaction_id)
+    }
+
+    fn commit_transaction_fact(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+    ) -> Result<crate::core::types::CommitLsn, StorageError> {
+        let intents = match self.sync_manager.as_ref() {
+            Some(manager) => manager
+                .transaction_intents(transaction_id)
+                .map_err(|error| {
+                    StorageError::db_error(format!(
+                        "Failed to build transaction index intents: {}",
+                        error
+                    ))
+                })?,
+            None => Vec::new(),
+        };
+        let commit_lsn = match self.inner.commit_staged_writes(transaction_id, &intents) {
+            Ok(commit_lsn) => commit_lsn,
+            Err(error) => {
+                // A failed durability fence must not leave redo or target
+                // intents attached to an auto-commit transaction that the
+                // caller is allowed to retry.
+                let _ = self.inner.abort_staged_writes(transaction_id);
+                if let Some(manager) = self.sync_manager.as_ref() {
+                    let _ = manager.rollback_transaction_sync(transaction_id);
+                }
+                return Err(error);
+            }
+        };
+        if let Some(manager) = self.sync_manager.as_ref() {
+            if let Err(error) =
+                manager.materialize_committed_transaction(transaction_id, commit_lsn, &intents)
+            {
+                log::error!(
+                    "Committed transaction {} at {} but outbox materialization is pending recovery: {}",
+                    transaction_id,
+                    commit_lsn,
+                    error
+                );
+            }
+            if let Err(error) = manager.rollback_transaction_sync(transaction_id) {
+                log::warn!(
+                    "Committed transaction {} at {} but staging cleanup failed: {}",
+                    transaction_id,
+                    commit_lsn,
+                    error
+                );
+            }
+            manager.clear_staged_transaction(transaction_id);
+            if let Err(error) = manager.retry_outbox_sync() {
+                log::debug!(
+                    "Committed transaction {} at {}; target delivery will retry: {}",
+                    transaction_id,
+                    commit_lsn,
+                    error
+                );
+            }
+        }
+        Ok(commit_lsn)
+    }
+
+    fn commit_auto_transaction(
+        &self,
+    ) -> Result<Option<crate::core::types::CommitLsn>, StorageError> {
+        let Some(context) = self.inner.operation_context() else {
+            return Ok(None);
+        };
+        if (!self.auto_commit_owner && !context.auto_commit) || context.read_only {
+            return Ok(None);
+        }
+        let transaction_id = context.transaction_id.ok_or_else(|| {
+            StorageError::db_error("Auto-commit write has no transaction ID".to_string())
+        })?;
+        self.commit_transaction_fact(transaction_id).map(Some)
+    }
+
+    fn abort_transaction_fact(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+    ) -> Result<(), StorageError> {
+        self.inner.abort_staged_writes(transaction_id)?;
+        if let Some(manager) = self.sync_manager.as_ref() {
+            manager
+                .rollback_transaction_sync(transaction_id)
+                .map_err(|error| {
+                    StorageError::db_error(format!(
+                        "Failed to discard transaction index intents: {}",
+                        error
+                    ))
+                })?;
+        }
+        Ok(())
+    }
+}
+
+impl<S: StorageClient + 'static> crate::transaction::TransactionCommitSink for SyncWrapper<S> {
+    fn commit_transaction(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+    ) -> Result<crate::core::types::CommitLsn, String> {
+        self.commit_transaction_fact(transaction_id)
+            .map_err(|error| error.to_string())
+    }
+
+    fn abort_transaction(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+    ) -> Result<(), String> {
+        self.abort_transaction_fact(transaction_id)
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -249,6 +364,20 @@ macro_rules! forward_storage_methods {
     };
 }
 
+macro_rules! forward_auto_commit_methods {
+    ($field:ident; $(fn $name:ident(&mut self $(, $arg:ident : $ty:ty)* $(,)?) -> $ret:ty;)+) => {
+        $(
+            fn $name(&mut self, $($arg: $ty),*) -> $ret {
+                let result = self.$field.$name($($arg),*);
+                if result.is_ok() {
+                    self.commit_auto_transaction()?;
+                }
+                result
+            }
+        )+
+    };
+}
+
 impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
     forward_storage_methods!(inner;
         fn get_vertex(&self, space: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError>;
@@ -385,7 +514,7 @@ impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
 }
 
 impl<S: StorageClient + 'static> StorageSchemaOps for SyncWrapper<S> {
-    forward_storage_methods!(inner;
+    forward_auto_commit_methods!(inner;
         fn create_space(&mut self, space: &mut crate::core::types::SpaceInfo) -> Result<bool, StorageError>;
         fn drop_space(&mut self, space: &str) -> Result<bool, StorageError>;
         fn clear_space(&mut self, space: &str) -> Result<bool, StorageError>;
@@ -487,18 +616,7 @@ impl<S: StorageClient + 'static> StoragePersistenceOps for SyncWrapper<S> {
     fn create_checkpoint(
         &self,
     ) -> crate::core::StorageResult<Option<crate::storage::CheckpointStats>> {
-        let result = self.inner.create_checkpoint()?;
-        if let (Some(stats), Some(manager)) = (&result, &self.sync_manager) {
-            let safe_lsn = self
-                .inner
-                .persistence_diagnostics()
-                .map(|diagnostics| diagnostics.safe_lsn.as_u64())
-                .unwrap_or(0);
-            manager
-                .mark_outbox_checkpoint(stats.checkpoint_id, safe_lsn)
-                .map_err(|error| StorageError::db_error(error.to_string()))?;
-        }
-        Ok(result)
+        self.inner.create_checkpoint()
     }
 
     fn auto_checkpoint_if_needed(
@@ -521,10 +639,20 @@ impl<S: StorageClient + StorageSchemaContextOps + 'static> StorageSchemaContextO
 
 impl<S: StorageClient + 'static> StorageOperationContextOps for SyncWrapper<S> {
     fn bind_auto_commit_context(&self) -> Self {
+        let inner = self.inner.bind_auto_commit_context();
+        let inner = match inner.operation_context() {
+            Some(context) => {
+                let mut delegated = (*context).clone();
+                delegated.auto_commit = false;
+                inner.bind_operation_context(delegated)
+            }
+            None => inner,
+        };
         Self {
-            inner: self.inner.bind_auto_commit_context(),
+            inner,
             sync_manager: self.sync_manager.clone(),
             enabled: self.enabled,
+            auto_commit_owner: true,
         }
     }
 
@@ -533,11 +661,36 @@ impl<S: StorageClient + 'static> StorageOperationContextOps for SyncWrapper<S> {
             inner: self.inner.bind_operation_context(context),
             sync_manager: self.sync_manager.clone(),
             enabled: self.enabled,
+            auto_commit_owner: false,
         }
     }
 
     fn operation_context(&self) -> Option<Arc<StorageOperationContext>> {
         self.inner.operation_context()
+    }
+}
+
+impl<S: StorageClient + 'static> StorageCommitOps for SyncWrapper<S> {
+    fn commit_staged_writes(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+        intents: &[crate::core::wal::OutboxIntent],
+    ) -> crate::core::StorageResult<crate::core::types::CommitLsn> {
+        self.inner.commit_staged_writes(transaction_id, intents)
+    }
+
+    fn abort_staged_writes(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+    ) -> crate::core::StorageResult<()> {
+        self.inner.abort_staged_writes(transaction_id)
+    }
+
+    fn recover_outbox_projection(
+        &self,
+        sync_manager: &crate::sync::SyncManager,
+    ) -> crate::core::StorageResult<usize> {
+        self.inner.recover_outbox_projection(sync_manager)
     }
 }
 

@@ -46,6 +46,10 @@ impl StoragePaths {
         self.root.join("indexes")
     }
 
+    pub fn outbox_snapshot_dir(&self) -> PathBuf {
+        self.root.join("outbox_snapshots")
+    }
+
     pub fn version_file(&self) -> PathBuf {
         self.data_dir().join("version")
     }

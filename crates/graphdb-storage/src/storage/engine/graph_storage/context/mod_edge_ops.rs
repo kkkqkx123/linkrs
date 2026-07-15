@@ -25,39 +25,45 @@ impl GraphStorageContext {
             return Err(StorageError::storage_not_open());
         }
 
-        let vertex_tables = self.persistent.data_store.read_vertex_tables();
-
-        let src_internal = helpers::resolve_internal_id(
-            self,
-            &vertex_tables,
-            params.src_label,
-            params.src_id,
-            params.ts,
-        )
-        .ok_or(StorageError::vertex_not_found())?;
-
-        let dst_internal = helpers::resolve_internal_id(
-            self,
-            &vertex_tables,
-            params.dst_label,
-            params.dst_id,
-            params.ts,
-        )
-        .ok_or(StorageError::vertex_not_found())?;
-
-        let actual_src_label = if params.src_label == 0 {
-            helpers::resolve_internal_id_label(&vertex_tables, &params.src_id, params.ts)
-                .ok_or(StorageError::vertex_not_found())?
-        } else {
-            params.src_label
-        };
-        let actual_dst_label = if params.dst_label == 0 {
-            helpers::resolve_internal_id_label(&vertex_tables, &params.dst_id, params.ts)
-                .ok_or(StorageError::vertex_not_found())?
-        } else {
-            params.dst_label
-        };
-        drop(vertex_tables);
+        let (src_internal, dst_internal, actual_src_label, actual_dst_label) =
+            self.persistent.data_store.with_vertex_tables(
+                |vertex_tables| -> StorageResult<(u32, u32, LabelId, LabelId)> {
+                    let src_internal = helpers::resolve_internal_id(
+                        self,
+                        vertex_tables,
+                        params.src_label,
+                        params.src_id,
+                        params.ts,
+                    )
+                    .ok_or(StorageError::vertex_not_found())?;
+                    let dst_internal = helpers::resolve_internal_id(
+                        self,
+                        vertex_tables,
+                        params.dst_label,
+                        params.dst_id,
+                        params.ts,
+                    )
+                    .ok_or(StorageError::vertex_not_found())?;
+                    let actual_src_label = if params.src_label == 0 {
+                        helpers::resolve_internal_id_label(vertex_tables, &params.src_id, params.ts)
+                            .ok_or(StorageError::vertex_not_found())?
+                    } else {
+                        params.src_label
+                    };
+                    let actual_dst_label = if params.dst_label == 0 {
+                        helpers::resolve_internal_id_label(vertex_tables, &params.dst_id, params.ts)
+                            .ok_or(StorageError::vertex_not_found())?
+                    } else {
+                        params.dst_label
+                    };
+                    Ok((
+                        src_internal,
+                        dst_internal,
+                        actual_src_label,
+                        actual_dst_label,
+                    ))
+                },
+            )?;
 
         let key = EdgeTableKey::new(actual_src_label, actual_dst_label, params.edge_label);
         let template_key = EdgeTableKey::new(0, 0, params.edge_label);
@@ -123,36 +129,40 @@ impl GraphStorageContext {
             return None;
         }
 
-        let vertex_tables = self.persistent.data_store.read_vertex_tables();
-
-        let src_internal = helpers::resolve_internal_id(
-            self,
-            &vertex_tables,
-            params.src_label,
-            params.src_id,
-            ts,
+        let (src_internal, dst_internal, key) = self.persistent.data_store.with_vertex_tables(
+            |vertex_tables| -> Option<(u32, u32, EdgeTableKey)> {
+                let src_internal = helpers::resolve_internal_id(
+                    self,
+                    vertex_tables,
+                    params.src_label,
+                    params.src_id,
+                    ts,
+                )?;
+                let dst_internal = helpers::resolve_internal_id(
+                    self,
+                    vertex_tables,
+                    params.dst_label,
+                    params.dst_id,
+                    ts,
+                )?;
+                let key = Self::resolve_edge_table_key(EdgeLabelLookupCtx {
+                    vertex_tables,
+                    src_id: &params.src_id,
+                    src_label: params.src_label,
+                    dst_id: &params.dst_id,
+                    dst_label: params.dst_label,
+                    edge_label: params.edge_label,
+                    ts,
+                });
+                Some((src_internal, dst_internal, key))
+            },
         )?;
 
-        let dst_internal = helpers::resolve_internal_id(
-            self,
-            &vertex_tables,
-            params.dst_label,
-            params.dst_id,
-            ts,
-        )?;
-        let key = Self::resolve_edge_table_key(EdgeLabelLookupCtx {
-            vertex_tables: &vertex_tables,
-            src_id: &params.src_id,
-            src_label: params.src_label,
-            dst_id: &params.dst_id,
-            dst_label: params.dst_label,
-            edge_label: params.edge_label,
-            ts,
-        });
-        let edge_tables = self.persistent.data_store.read_edge_tables();
-        let edge_table = edge_tables.get(&key)?;
-
-        edge_table.get_edge(src_internal, dst_internal, params.rank, ts)
+        self.persistent.data_store.with_edge_tables(|edge_tables| {
+            edge_tables.get(&key).and_then(|edge_table| {
+                edge_table.get_edge(src_internal, dst_internal, params.rank, ts)
+            })
+        })
     }
 
     pub fn delete_edge(&self, params: &EdgeOperationParams, ts: Timestamp) -> StorageResult<bool> {
@@ -160,47 +170,52 @@ impl GraphStorageContext {
             return Err(StorageError::storage_not_open());
         }
 
-        let vertex_tables = self.persistent.data_store.read_vertex_tables();
-
-        let src_internal =
-            helpers::resolve_internal_id(self, &vertex_tables, params.src_label, params.src_id, ts)
+        let (src_internal, dst_internal, key) = self.persistent.data_store.with_vertex_tables(
+            |vertex_tables| -> StorageResult<(u32, u32, EdgeTableKey)> {
+                let src_internal = helpers::resolve_internal_id(
+                    self,
+                    vertex_tables,
+                    params.src_label,
+                    params.src_id,
+                    ts,
+                )
                 .or_else(|| {
-                    helpers::resolve_internal_id_any(
-                        &vertex_tables,
-                        params.src_label,
-                        params.src_id,
-                    )
+                    helpers::resolve_internal_id_any(vertex_tables, params.src_label, params.src_id)
                 })
                 .ok_or(StorageError::vertex_not_found())?;
-
-        let dst_internal =
-            helpers::resolve_internal_id(self, &vertex_tables, params.dst_label, params.dst_id, ts)
+                let dst_internal = helpers::resolve_internal_id(
+                    self,
+                    vertex_tables,
+                    params.dst_label,
+                    params.dst_id,
+                    ts,
+                )
                 .or_else(|| {
-                    helpers::resolve_internal_id_any(
-                        &vertex_tables,
-                        params.dst_label,
-                        params.dst_id,
-                    )
+                    helpers::resolve_internal_id_any(vertex_tables, params.dst_label, params.dst_id)
                 })
                 .ok_or(StorageError::vertex_not_found())?;
+                let key = Self::resolve_edge_table_key(EdgeLabelLookupCtx {
+                    vertex_tables,
+                    src_id: &params.src_id,
+                    src_label: params.src_label,
+                    dst_id: &params.dst_id,
+                    dst_label: params.dst_label,
+                    edge_label: params.edge_label,
+                    ts,
+                });
+                Ok((src_internal, dst_internal, key))
+            },
+        )?;
 
-        let key = Self::resolve_edge_table_key(EdgeLabelLookupCtx {
-            vertex_tables: &vertex_tables,
-            src_id: &params.src_id,
-            src_label: params.src_label,
-            dst_id: &params.dst_id,
-            dst_label: params.dst_label,
-            edge_label: params.edge_label,
-            ts,
-        });
-        drop(vertex_tables);
-
-        let mut edge_tables = self.persistent.data_store.write_edge_tables();
-        let edge_table = edge_tables.get_mut(&key).ok_or_else(|| {
-            StorageError::label_not_found(format!("edge label {}", params.edge_label))
-        })?;
-
-        let deleted = edge_table.delete_edge(src_internal, dst_internal, params.rank, ts)?;
+        let deleted = self
+            .persistent
+            .data_store
+            .with_edge_tables_mut(|edge_tables| {
+                let edge_table = edge_tables.get_mut(&key).ok_or_else(|| {
+                    StorageError::label_not_found(format!("edge label {}", params.edge_label))
+                })?;
+                edge_table.delete_edge(src_internal, dst_internal, params.rank, ts)
+            })?;
         if deleted {
             self.mark_edge_modified(params.edge_label);
         }
@@ -220,24 +235,31 @@ impl GraphStorageContext {
             return None;
         }
 
-        let vertex_tables = self.persistent.data_store.read_vertex_tables();
-        let src_internal =
-            helpers::resolve_internal_id(self, &vertex_tables, src_label, src_id, ts)?;
-        let actual_src = if src_label == 0 {
-            helpers::resolve_internal_id_label(&vertex_tables, &src_id, ts).unwrap_or(src_label)
-        } else {
-            src_label
-        };
-        drop(vertex_tables);
+        let (src_internal, actual_src) =
+            self.persistent
+                .data_store
+                .with_vertex_tables(|vertex_tables| {
+                    let src_internal =
+                        helpers::resolve_internal_id(self, vertex_tables, src_label, src_id, ts)?;
+                    let actual_src = if src_label == 0 {
+                        helpers::resolve_internal_id_label(vertex_tables, &src_id, ts)
+                            .unwrap_or(src_label)
+                    } else {
+                        src_label
+                    };
+                    Some((src_internal, actual_src))
+                })?;
 
-        let edge_tables = self.persistent.data_store.read_edge_tables();
-        let mut records = Vec::new();
-        for table in edge_tables
-            .values()
-            .filter(|t| t.label() == edge_label && t.src_label() == actual_src)
-        {
-            records.extend(table.out_edges(src_internal, ts));
-        }
+        let records = self.persistent.data_store.with_edge_tables(|edge_tables| {
+            let mut records = Vec::new();
+            for table in edge_tables
+                .values()
+                .filter(|t| t.label() == edge_label && t.src_label() == actual_src)
+            {
+                records.extend(table.out_edges(src_internal, ts));
+            }
+            records
+        });
         Some(records)
     }
 
@@ -253,24 +275,31 @@ impl GraphStorageContext {
             return None;
         }
 
-        let vertex_tables = self.persistent.data_store.read_vertex_tables();
-        let dst_internal =
-            helpers::resolve_internal_id(self, &vertex_tables, dst_label, dst_id, ts)?;
-        let actual_dst = if dst_label == 0 {
-            helpers::resolve_internal_id_label(&vertex_tables, &dst_id, ts).unwrap_or(dst_label)
-        } else {
-            dst_label
-        };
-        drop(vertex_tables);
+        let (dst_internal, actual_dst) =
+            self.persistent
+                .data_store
+                .with_vertex_tables(|vertex_tables| {
+                    let dst_internal =
+                        helpers::resolve_internal_id(self, vertex_tables, dst_label, dst_id, ts)?;
+                    let actual_dst = if dst_label == 0 {
+                        helpers::resolve_internal_id_label(vertex_tables, &dst_id, ts)
+                            .unwrap_or(dst_label)
+                    } else {
+                        dst_label
+                    };
+                    Some((dst_internal, actual_dst))
+                })?;
 
-        let edge_tables = self.persistent.data_store.read_edge_tables();
-        let mut records = Vec::new();
-        for table in edge_tables
-            .values()
-            .filter(|t| t.label() == edge_label && t.dst_label() == actual_dst)
-        {
-            records.extend(table.in_edges(dst_internal, ts));
-        }
+        let records = self.persistent.data_store.with_edge_tables(|edge_tables| {
+            let mut records = Vec::new();
+            for table in edge_tables
+                .values()
+                .filter(|t| t.label() == edge_label && t.dst_label() == actual_dst)
+            {
+                records.extend(table.in_edges(dst_internal, ts));
+            }
+            records
+        });
         Some(records)
     }
 }
