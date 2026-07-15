@@ -6,7 +6,7 @@ pub mod state;
 
 pub mod algorithms;
 pub mod apply_operator;
-pub mod blocking_operator;
+pub mod blocking;
 pub mod ddl_operator;
 pub mod exchange_operator;
 pub mod fulltext_operator;

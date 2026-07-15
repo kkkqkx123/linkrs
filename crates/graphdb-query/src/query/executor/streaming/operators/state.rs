@@ -187,9 +187,7 @@ impl UnaryState {
 }
 
 // ── Blocking state ───────────────────────────────────────────────────────────
-
-/// Re-export state structs from blocking_operator for use here.
-pub use super::blocking_operator::{
+pub use super::blocking::{
     AggregateState, DataCollectState, DistinctState, FinalAggregateState, GroupByState,
     MaterializeState, PartialAggregateState, RollUpApplyState, SortState, TopNState,
     WindowFunctionState, WindowState,

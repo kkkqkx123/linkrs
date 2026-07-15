@@ -10,7 +10,7 @@ use super::super::builder::StreamingExecutorBuilder;
 use super::super::executor::StreamingExecutor;
 use super::super::operators::base::OperatorBase;
 use super::super::operator_plan_builder::relational;
-use super::super::operators::blocking_operator::BlockingOperator;
+use super::super::operators::blocking::BlockingOperator;
 use super::super::operators::gather_operator::GatherOperator;
 use super::super::operators::shuffle_join_operator::{HashJoinKind, HashShuffleJoinOperator};
 use super::super::partition::PartitionView;

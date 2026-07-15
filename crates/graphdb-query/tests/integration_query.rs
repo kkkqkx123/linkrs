@@ -6,7 +6,7 @@
 //! - query::planner - execution plan generation
 //! - query::optimizer - plan optimization, rule application
 //! - query::executor - executor scheduling, result return
-//! - query::query_pipeline_manager - full query pipeline
+//! - query::pipeline - full query pipeline
 
 #![allow(clippy::arc_with_non_send_sync)]
 
@@ -19,7 +19,7 @@ use graphdb_query::core::StatsManager;
 use graphdb_query::query::optimizer::OptimizerEngine;
 use graphdb_query::query::parser::Parser;
 use graphdb_query::query::planning::PlannerConfig;
-use graphdb_query::query::query_pipeline_manager::QueryPipelineManager;
+use graphdb_query::query::pipeline::QueryPipelineManager;
 use graphdb_query::query::validator::validator_trait::StatementType;
 use graphdb_query::query::validator::Validator;
 use graphdb_query::query::QueryContext;

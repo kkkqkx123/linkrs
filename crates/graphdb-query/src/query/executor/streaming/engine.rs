@@ -12,7 +12,7 @@ use std::sync::Arc;
 use super::chunk::DataChunk;
 use super::executor::{SortDirection, StreamingExecutor};
 use super::operators::base::OperatorBase;
-use super::operators::blocking_operator::BlockingOperator;
+use super::operators::blocking::BlockingOperator;
 use super::operators::gather_operator::GatherOperator;
 use super::runtime::ExecutionRuntime;
 use super::stream::ResultStream;

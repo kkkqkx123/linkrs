@@ -6,7 +6,7 @@ use crate::common::TestResult;
 use graphdb_query::core::error::DBError;
 use graphdb_query::core::Value;
 use graphdb_query::query::executor::base::ExecutionResult;
-use graphdb_query::query::query_pipeline_manager::QueryPipelineManager;
+use graphdb_query::query::pipeline::QueryPipelineManager;
 use parking_lot::RwLock;
 use std::sync::Arc;
 

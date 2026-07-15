@@ -483,7 +483,7 @@ fn test_update_divide_by_zero() {
     use crate::common::TestStorage;
     use graphdb_query::core::stats::StatsManager;
     use graphdb_query::query::optimizer::OptimizerEngine;
-    use graphdb_query::query::query_pipeline_manager::QueryPipelineManager;
+    use graphdb_query::query::pipeline::QueryPipelineManager;
     use graphdb_query::storage::{StorageReader, StorageSchemaContextOps};
     use std::sync::Arc;
 

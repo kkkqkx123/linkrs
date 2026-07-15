@@ -17,7 +17,7 @@ pub mod optimizer;
 pub mod parser;
 pub mod planning;
 pub mod query_manager;
-pub mod query_pipeline_manager;
+pub mod pipeline;
 pub mod validator;
 
 // Re-export DataSet for convenience
@@ -27,7 +27,7 @@ pub use crate::core::{DBResult, QueryError};
 // Re-export execution result from executor module
 pub use executor::base::ExecutionResult;
 // Re-export QueryPipelineManager
-pub use query_pipeline_manager::QueryPipelineManager;
+pub use pipeline::QueryPipelineManager;
 // Re-export context types from context module
 pub use context::{QueryContext, QueryContextBuilder, QueryExecutionManager, QueryRequestContext};
 // Re-export QueryManager

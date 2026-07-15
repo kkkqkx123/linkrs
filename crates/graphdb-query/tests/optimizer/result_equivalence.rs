@@ -6,7 +6,7 @@
 use graphdb_query::core::stats::StatsManager;
 use graphdb_query::query::executor::base::ExecutionResult;
 use graphdb_query::query::optimizer::OptimizerEngine;
-use graphdb_query::query::query_pipeline_manager::QueryPipelineManager;
+use graphdb_query::query::pipeline::QueryPipelineManager;
 use std::sync::Arc;
 
 /// Test that query results are equivalent with and without optimization

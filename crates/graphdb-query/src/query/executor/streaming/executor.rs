@@ -14,7 +14,7 @@ pub use super::operators::base::OperatorBase;
 use super::operators::state::ExchangeState;
 
 use super::operators::apply_operator::ApplyOperator;
-use super::operators::blocking_operator::BlockingOperator;
+use super::operators::blocking::BlockingOperator;
 use super::operators::ddl_operator::DdlOperator;
 use super::operators::exchange_operator::ExchangeOperator;
 use super::operators::fulltext_operator::FulltextOperator;

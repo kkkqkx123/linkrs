@@ -26,7 +26,7 @@ use super::super::operators::spec::{
 };
 use super::super::operators::spec::{BlockingSpec, ExchangeSpec, JoinSpec, SourceSpec, UnarySpec};
 use super::super::operators::apply_operator::ApplyOperator;
-use super::super::operators::blocking_operator::BlockingOperator;
+use super::super::operators::blocking::BlockingOperator;
 use super::super::operators::ddl_operator::DdlOperator;
 use super::super::operators::exchange_operator::ExchangeOperator;
 use super::super::operators::fulltext_operator::FulltextOperator;
