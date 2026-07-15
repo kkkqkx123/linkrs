@@ -11,12 +11,12 @@ use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::context::ValueRowContext;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::operators::base::OperatorBase;
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 
-use super::super::algorithms::{BidirBfsConfig, bidir_bfs_shortest_path, path_endpoint_pairs};
+use super::super::algorithms::{bidir_bfs_shortest_path, path_endpoint_pairs, BidirBfsConfig};
 
 pub(super) fn handle_shortest_path(
-    storage: &Option<Arc<RwLock<dyn StorageClient>>>,
+    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     space_name: &str,
     target_vertex: &Option<Expression>,
     edge_types: &[String],
@@ -51,16 +51,14 @@ pub(super) fn handle_shortest_path(
                     else {
                         continue;
                     };
-                    let et_ref: Option<&[String]> = if edge_types.is_empty()
-                        || edge_types.contains(&"both".to_string())
-                    {
-                        None
-                    } else {
-                        Some(edge_types)
-                    };
+                    let et_ref: Option<&[String]> =
+                        if edge_types.is_empty() || edge_types.contains(&"both".to_string()) {
+                            None
+                        } else {
+                            Some(edge_types)
+                        };
 
-                    let cancel_token =
-                        base.runtime.as_ref().map(|rt| rt.cancel_token());
+                    let cancel_token = base.runtime.as_ref().map(|rt| rt.cancel_token());
                     let paths = bidir_bfs_shortest_path(
                         &*reader,
                         &src_vid,
@@ -109,7 +107,7 @@ pub(super) fn handle_shortest_path(
 }
 
 pub(super) fn handle_bfs_shortest(
-    storage: &Option<Arc<RwLock<dyn StorageClient>>>,
+    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     space_name: &str,
     edge_types: &[String],
     max_depth: usize,
@@ -141,16 +139,14 @@ pub(super) fn handle_bfs_shortest(
                 if let (Ok(src_vid), Ok(dst_vid)) =
                     (VertexId::try_from(&src_val), VertexId::try_from(&dst_val))
                 {
-                    let et_ref: Option<&[String]> = if edge_types.is_empty()
-                        || edge_types.contains(&"both".to_string())
-                    {
-                        None
-                    } else {
-                        Some(edge_types)
-                    };
+                    let et_ref: Option<&[String]> =
+                        if edge_types.is_empty() || edge_types.contains(&"both".to_string()) {
+                            None
+                        } else {
+                            Some(edge_types)
+                        };
 
-                    let cancel_token =
-                        base.runtime.as_ref().map(|rt| rt.cancel_token());
+                    let cancel_token = base.runtime.as_ref().map(|rt| rt.cancel_token());
                     let paths = bidir_bfs_shortest_path(
                         &*reader,
                         &src_vid,

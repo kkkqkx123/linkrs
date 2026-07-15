@@ -94,13 +94,14 @@ impl PoolInner {
         }
         loop {
             let current = self.used.load(Ordering::Relaxed);
-            let new_total = current.checked_add(bytes).ok_or_else(|| {
-                MemoryPoolError::ExceededLimit {
-                    requested: bytes,
-                    available: self.max_bytes.saturating_sub(current),
-                    pool_name: "pool (overflow)",
-                }
-            })?;
+            let new_total =
+                current
+                    .checked_add(bytes)
+                    .ok_or_else(|| MemoryPoolError::ExceededLimit {
+                        requested: bytes,
+                        available: self.max_bytes.saturating_sub(current),
+                        pool_name: "pool (overflow)",
+                    })?;
             if new_total > self.max_bytes {
                 return Err(MemoryPoolError::ExceededLimit {
                     requested: bytes,
@@ -331,7 +332,10 @@ pub struct QueryPool {
 
 impl QueryPool {
     /// Create a fragment pool from this query pool.
-    pub fn new_fragment_pool(&self, requested_bytes: usize) -> Result<FragmentPool, MemoryPoolError> {
+    pub fn new_fragment_pool(
+        &self,
+        requested_bytes: usize,
+    ) -> Result<FragmentPool, MemoryPoolError> {
         let reservation = self.handle.reserve(requested_bytes)?;
         Ok(FragmentPool {
             query: self.clone(),
@@ -502,13 +506,20 @@ mod tests {
     #[test]
     fn test_database_pool_admission() {
         let db = DatabaseMemoryPool::new(1024, 400);
-        let _qp = db.new_query_pool(500).expect("first query admitted (capped to 400)");
+        let _qp = db
+            .new_query_pool(500)
+            .expect("first query admitted (capped to 400)");
         // 400 used from DB (capped by max_query_bytes)
         // 624 remaining in DB
-        let _qp2 = db.new_query_pool(700).expect("second query admitted (capped to 400, 800 <= 1024)");
+        let _qp2 = db
+            .new_query_pool(700)
+            .expect("second query admitted (capped to 400, 800 <= 1024)");
         // To exceed global limit, we need both query pools active and a third
         let result = db.new_query_pool(400);
-        assert!(result.is_err(), "third query should exceed global limit (1200 > 1024)");
+        assert!(
+            result.is_err(),
+            "third query should exceed global limit (1200 > 1024)"
+        );
     }
 
     #[test]

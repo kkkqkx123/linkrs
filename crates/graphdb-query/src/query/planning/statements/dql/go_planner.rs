@@ -7,12 +7,14 @@
 //! Improving the handling of JOIN operations
 //! - Add support for attribute projection.
 
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::core::types::{ContextualExpression, EdgeDirection};
 use crate::query::parser::ast::{GoStmt, Stmt};
-use crate::query::planning::plan::core::nodes::base::plan_node_traits::{MultipleInputNode, PlanNode};
+use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
+    MultipleInputNode, PlanNode,
+};
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::query::QueryContext;
 use std::sync::Arc;
 

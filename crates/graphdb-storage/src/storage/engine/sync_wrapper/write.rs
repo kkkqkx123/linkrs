@@ -1,12 +1,17 @@
 use super::SyncWrapper;
 use crate::core::types::{InsertEdgeInfo, InsertVertexInfo, UpdateInfo, VertexId};
 use crate::core::{Edge, StorageError, Vertex};
-use crate::storage::{StorageClient, StorageTransactionContextOps, StorageWriter};
+use crate::storage::{StorageClient, StorageWriter};
 
-impl<S: StorageClient + StorageTransactionContextOps + 'static> StorageWriter for SyncWrapper<S> {
+impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
     fn insert_vertex(&mut self, space: &str, vertex: Vertex) -> Result<VertexId, StorageError> {
         let result = self.inner.insert_vertex(space, vertex.clone())?;
-        self.sync_insert_vertex(space, &vertex)?;
+        if let Err(error) = self.sync_insert_vertex(space, &vertex) {
+            log::error!(
+                "Index event delivery deferred after vertex insert: {}",
+                error
+            );
+        }
         Ok(result)
     }
 
@@ -17,7 +22,12 @@ impl<S: StorageClient + StorageTransactionContextOps + 'static> StorageWriter fo
             .ok_or_else(|| StorageError::node_not_found(vertex.vid))?;
 
         self.inner.update_vertex(space, vertex.clone())?;
-        self.sync_update_vertex(space, &old_vertex, &vertex)?;
+        if let Err(error) = self.sync_update_vertex(space, &old_vertex, &vertex) {
+            log::error!(
+                "Index event delivery deferred after vertex update: {}",
+                error
+            );
+        }
         Ok(())
     }
 
@@ -28,7 +38,12 @@ impl<S: StorageClient + StorageTransactionContextOps + 'static> StorageWriter fo
             .ok_or_else(|| StorageError::node_not_found(*id))?;
 
         StorageWriter::delete_vertex(&mut self.inner, space, id)?;
-        self.sync_delete_vertex(space, id, &vertex)?;
+        if let Err(error) = self.sync_delete_vertex(space, id, &vertex) {
+            log::error!(
+                "Index event delivery deferred after vertex delete: {}",
+                error
+            );
+        }
         Ok(())
     }
 
@@ -39,7 +54,12 @@ impl<S: StorageClient + StorageTransactionContextOps + 'static> StorageWriter fo
             .ok_or_else(|| StorageError::node_not_found(*id))?;
 
         StorageWriter::delete_vertex_with_edges(&mut self.inner, space, id)?;
-        self.sync_delete_vertex(space, id, &vertex)?;
+        if let Err(error) = self.sync_delete_vertex(space, id, &vertex) {
+            log::error!(
+                "Index event delivery deferred after vertex delete: {}",
+                error
+            );
+        }
         Ok(())
     }
 
@@ -49,7 +69,12 @@ impl<S: StorageClient + StorageTransactionContextOps + 'static> StorageWriter fo
         vertices: Vec<Vertex>,
     ) -> Result<Vec<VertexId>, StorageError> {
         let results = self.inner.batch_insert_vertices(space, vertices.clone())?;
-        self.sync_batch_insert_vertices(space, &vertices)?;
+        if let Err(error) = self.sync_batch_insert_vertices(space, &vertices) {
+            log::error!(
+                "Index event delivery deferred after vertex batch: {}",
+                error
+            );
+        }
         Ok(results)
     }
 
@@ -65,7 +90,9 @@ impl<S: StorageClient + StorageTransactionContextOps + 'static> StorageWriter fo
     fn insert_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
         let result = self.inner.insert_edge(space, edge.clone());
         if result.is_ok() {
-            self.sync_insert_edge(space, &edge)?;
+            if let Err(error) = self.sync_insert_edge(space, &edge) {
+                log::error!("Index event delivery deferred after edge insert: {}", error);
+            }
         }
         result
     }
@@ -73,8 +100,19 @@ impl<S: StorageClient + StorageTransactionContextOps + 'static> StorageWriter fo
     fn update_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
         let result = self.inner.update_edge(space, edge.clone());
         if result.is_ok() {
-            self.sync_delete_edge(space, &edge.src, &edge.dst, &edge.edge_type)?;
-            self.sync_insert_edge(space, &edge)?;
+            if let Err(error) = self.sync_delete_edge(space, &edge.src, &edge.dst, &edge.edge_type)
+            {
+                log::error!(
+                    "Index event delivery deferred after edge update delete: {}",
+                    error
+                );
+            }
+            if let Err(error) = self.sync_insert_edge(space, &edge) {
+                log::error!(
+                    "Index event delivery deferred after edge update insert: {}",
+                    error
+                );
+            }
         }
         result
     }
@@ -89,7 +127,9 @@ impl<S: StorageClient + StorageTransactionContextOps + 'static> StorageWriter fo
     ) -> Result<(), StorageError> {
         let result = StorageWriter::delete_edge(&mut self.inner, space, src, dst, edge_type, rank);
         if result.is_ok() {
-            self.sync_delete_edge(space, src, dst, edge_type)?;
+            if let Err(error) = self.sync_delete_edge(space, src, dst, edge_type) {
+                log::error!("Index event delivery deferred after edge delete: {}", error);
+            }
         }
         result
     }
@@ -97,7 +137,9 @@ impl<S: StorageClient + StorageTransactionContextOps + 'static> StorageWriter fo
     fn batch_insert_edges(&mut self, space: &str, edges: Vec<Edge>) -> Result<(), StorageError> {
         let result = self.inner.batch_insert_edges(space, edges.clone());
         if result.is_ok() {
-            self.sync_batch_insert_edges(space, &edges)?;
+            if let Err(error) = self.sync_batch_insert_edges(space, &edges) {
+                log::error!("Index event delivery deferred after edge batch: {}", error);
+            }
         }
         result
     }

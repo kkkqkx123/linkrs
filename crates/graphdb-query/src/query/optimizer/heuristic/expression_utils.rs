@@ -21,11 +21,11 @@
 //! `core::types::expression::common_utils`，本模块仅保留重写专用的函数。
 
 use crate::core::types::expr::contextual::ContextualExpression;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::core::types::expr::ExpressionMeta;
 use crate::core::types::expr::PropertyContainsChecker;
 use crate::core::types::operators::BinaryOperator;
 use crate::core::Expression;
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use std::sync::Arc;
 
 /// Check whether the expression contains the specified attribute name.

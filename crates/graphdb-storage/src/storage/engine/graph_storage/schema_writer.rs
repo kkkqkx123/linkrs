@@ -28,7 +28,7 @@ fn append_schema_redo<T: serde::Serialize>(
 ) -> StorageResult<()> {
     let timestamp = ctx.get_write_timestamp();
     let result = ctx.append_wal_redo(op_type, timestamp, redo);
-    ctx.version_manager().release_insert_timestamp(timestamp);
+    ctx.release_write_timestamp(timestamp);
     result
 }
 
@@ -71,13 +71,13 @@ pub(crate) fn drop_space(ctx: &GraphStorageContext, space: &str) -> StorageResul
         },
     )?;
 
-    for tag in tags {
-        let storage_name = vertex_type_storage_name(space_id, &tag.tag_name);
-        ctx.drop_vertex_type(&storage_name)?;
-    }
     for et in edge_types {
         let storage_name = edge_type_storage_name(space_id, &et.edge_type_name);
         ctx.drop_edge_type(&storage_name)?;
+    }
+    for tag in tags {
+        let storage_name = vertex_type_storage_name(space_id, &tag.tag_name);
+        ctx.drop_vertex_type(&storage_name)?;
     }
 
     ctx.schema_manager().drop_space(space)
@@ -99,13 +99,13 @@ pub(crate) fn clear_space(ctx: &GraphStorageContext, space: &str) -> StorageResu
         },
     )?;
 
-    for tag in tags {
-        let storage_name = vertex_type_storage_name(space_id, &tag.tag_name);
-        ctx.drop_vertex_type(&storage_name)?;
-    }
     for et in edge_types {
         let storage_name = edge_type_storage_name(space_id, &et.edge_type_name);
         ctx.drop_edge_type(&storage_name)?;
+    }
+    for tag in tags {
+        let storage_name = vertex_type_storage_name(space_id, &tag.tag_name);
+        ctx.drop_vertex_type(&storage_name)?;
     }
 
     ctx.schema_manager().clear_space(space)

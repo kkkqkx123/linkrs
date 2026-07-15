@@ -17,12 +17,12 @@ fn contextual_to_value(
     }
     match expr.get_expression() {
         Some(Expression::Literal(value)) => Ok(value),
-            _ => Err(PlanBuildError::expression(
-                "ContextualExpression",
-                0,
-                format!("{:?}", expr),
-                "Standalone data modification requires constant values, got expression",
-            )),
+        _ => Err(PlanBuildError::expression(
+            "ContextualExpression",
+            0,
+            format!("{:?}", expr),
+            "Standalone data modification requires constant values, got expression",
+        )),
     }
 }
 

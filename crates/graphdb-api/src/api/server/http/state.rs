@@ -1,6 +1,6 @@
 use crate::api::server::HttpServer;
 use crate::storage::{
-    StorageClient, StorageSchemaContextOps, StorageSyncContextOps, StorageTransactionContextOps,
+    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 use std::sync::Arc;
 
@@ -9,7 +9,7 @@ pub struct AppState<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + 'static,
 > {
@@ -20,7 +20,7 @@ impl<
         S: StorageClient
             + StorageSchemaContextOps
             + StorageSyncContextOps
-            + StorageTransactionContextOps
+            + StorageOperationContextOps
             + Clone
             + 'static,
     > AppState<S>

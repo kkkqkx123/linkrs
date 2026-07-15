@@ -17,15 +17,9 @@ use crate::query::executor::streaming::transaction_scope::{
 /// this operator runs.
 #[derive(Debug)]
 pub enum TxnOperator {
-    BeginTransaction {
-        emitted: bool,
-    },
-    Commit {
-        emitted: bool,
-    },
-    Rollback {
-        emitted: bool,
-    },
+    BeginTransaction { emitted: bool },
+    Commit { emitted: bool },
+    Rollback { emitted: bool },
 }
 
 impl TxnOperator {
@@ -34,12 +28,8 @@ impl TxnOperator {
             super::spec::TxnSpec::BeginTransaction => {
                 TxnOperator::BeginTransaction { emitted: false }
             }
-            super::spec::TxnSpec::Commit => {
-                TxnOperator::Commit { emitted: false }
-            }
-            super::spec::TxnSpec::Rollback => {
-                TxnOperator::Rollback { emitted: false }
-            }
+            super::spec::TxnSpec::Commit => TxnOperator::Commit { emitted: false },
+            super::spec::TxnSpec::Rollback => TxnOperator::Rollback { emitted: false },
         }
     }
 
@@ -143,18 +133,16 @@ impl TransactionCommandResult {
     fn into_data_chunk(self) -> DataChunk {
         let message = Value::String(self.message);
         let command = Value::String(self.command.to_string());
-        let schema = Arc::new(crate::query::executor::streaming::chunk::Schema::new(
-            vec![
-                crate::query::executor::streaming::chunk::ColumnInfo {
-                    name: "command".to_string(),
-                    data_type: "string".to_string(),
-                },
-                crate::query::executor::streaming::chunk::ColumnInfo {
-                    name: "result".to_string(),
-                    data_type: "string".to_string(),
-                },
-            ],
-        ));
+        let schema = Arc::new(crate::query::executor::streaming::chunk::Schema::new(vec![
+            crate::query::executor::streaming::chunk::ColumnInfo {
+                name: "command".to_string(),
+                data_type: "string".to_string(),
+            },
+            crate::query::executor::streaming::chunk::ColumnInfo {
+                name: "result".to_string(),
+                data_type: "string".to_string(),
+            },
+        ]));
         DataChunk::new(vec![vec![command, message]], schema)
     }
 }

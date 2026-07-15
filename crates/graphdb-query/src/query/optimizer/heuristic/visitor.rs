@@ -360,13 +360,13 @@ impl<'a> PlanNodeVisitor for ChildRewriteVisitor<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::core::types::expr::ExpressionMeta;
     use crate::core::Expression;
     use crate::core::Value;
     use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use crate::query::planning::plan::core::nodes::operation::project_node::ProjectNode;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use std::sync::Arc;
 
     #[test]

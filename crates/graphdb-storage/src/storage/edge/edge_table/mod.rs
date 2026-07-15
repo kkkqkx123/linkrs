@@ -83,12 +83,6 @@ impl EdgeStore {
         }
     }
 
-    pub fn label_name(&self) -> &str {
-        match self {
-            EdgeStore::TimeTravel(s) => s.label_name(),
-        }
-    }
-
     pub fn src_label(&self) -> super::LabelId {
         match self {
             EdgeStore::TimeTravel(s) => s.src_label(),

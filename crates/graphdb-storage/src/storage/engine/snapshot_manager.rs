@@ -51,7 +51,7 @@ const VERSION_FILE: &str = "VERSION";
 const METADATA_INDEX_FILE: &str = "metadata.json";
 
 /// Snapshot information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SnapshotInfo {
     /// Unique snapshot ID (timestamp)
     pub id: u64,
@@ -120,7 +120,7 @@ impl Default for RetentionPolicy {
 }
 
 /// Snapshot metadata index
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 struct SnapshotMetadataIndex {
     /// Format version
     version: u32,
@@ -148,8 +148,8 @@ pub struct SnapshotManager {
 
 /// Parameters for creating a snapshot
 pub struct CreateSnapshotParams {
-    /// Data directory to snapshot
-    pub data_dir: PathBuf,
+    /// Immutable checkpoint directory to snapshot.
+    pub source_dir: PathBuf,
     /// Unique snapshot ID
     pub snapshot_id: u64,
     /// Number of vertices
@@ -191,10 +191,43 @@ impl SnapshotManager {
 
     /// Initialize snapshot manager
     fn init(&mut self) -> StorageResult<()> {
-        self.write_version_file()?;
+        let version_path = self.snapshots_dir.join(VERSION_FILE);
+        if version_path.exists() {
+            let version = fs::read_to_string(&version_path)?
+                .trim()
+                .parse::<u32>()
+                .map_err(|error| {
+                    StorageError::deserialize_error(format!(
+                        "Invalid snapshot format version: {}",
+                        error
+                    ))
+                })?;
+            if version != SNAPSHOT_FORMAT_VERSION {
+                return Err(StorageError::deserialize_error(format!(
+                    "Unsupported snapshot format version {}",
+                    version
+                )));
+            }
+        } else {
+            self.write_version_file()?;
+        }
 
+        self.cleanup_deleting_directories()?;
         self.load_metadata_index()?;
 
+        Ok(())
+    }
+
+    fn cleanup_deleting_directories(&self) -> StorageResult<()> {
+        for entry in fs::read_dir(&self.snapshots_dir)? {
+            let path = entry?.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if name.starts_with(".snapshot_deleting_") && path.is_dir() {
+                fs::remove_dir_all(path)?;
+            }
+        }
         Ok(())
     }
 
@@ -209,19 +242,66 @@ impl SnapshotManager {
     /// Load metadata index from disk
     fn load_metadata_index(&self) -> StorageResult<()> {
         let index_path = self.snapshots_dir.join(METADATA_INDEX_FILE);
+        let indexed = if index_path.exists() {
+            let content = fs::read_to_string(&index_path).map_err(|e| {
+                StorageError::io_error(format!("Failed to read metadata index: {}", e))
+            })?;
+            let index: SnapshotMetadataIndex = serde_json::from_str(&content).map_err(|e| {
+                StorageError::deserialize_error(format!("Invalid metadata index: {}", e))
+            })?;
+            if index.version != 0 && index.version != SNAPSHOT_FORMAT_VERSION {
+                return Err(StorageError::deserialize_error(format!(
+                    "Unsupported snapshot metadata version {}",
+                    index.version
+                )));
+            }
+            index
+        } else {
+            SnapshotMetadataIndex::default()
+        };
 
-        if !index_path.exists() {
-            return Ok(());
+        // Always reconcile the index with immutable snapshot directories. This
+        // closes the crash window between directory publication and index save.
+        let mut snapshots = BTreeMap::new();
+        for entry in fs::read_dir(&self.snapshots_dir)? {
+            let path = entry?.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if !path.is_dir() || !name.starts_with("snapshot_") {
+                continue;
+            }
+            let meta_path = path.join(SNAPSHOT_META_FILE);
+            if !meta_path.is_file() {
+                continue;
+            }
+            let meta = fs::read_to_string(&meta_path)?;
+            let info: SnapshotInfo = serde_json::from_str(&meta).map_err(|error| {
+                StorageError::deserialize_error(format!(
+                    "Invalid snapshot metadata in {}: {}",
+                    path.display(),
+                    error
+                ))
+            })?;
+            snapshots.insert(info.id, info);
         }
 
-        let content = fs::read_to_string(&index_path)
-            .map_err(|e| StorageError::io_error(format!("Failed to read metadata index: {}", e)))?;
-
-        let index: SnapshotMetadataIndex = serde_json::from_str(&content).map_err(|e| {
-            StorageError::deserialize_error(format!("Invalid metadata index: {}", e))
-        })?;
-
-        *self.metadata_index.write() = index;
+        let reconciled = SnapshotMetadataIndex {
+            version: SNAPSHOT_FORMAT_VERSION,
+            current_id: (indexed.current_id != 0)
+                .then_some(indexed.current_id)
+                .filter(|id| snapshots.contains_key(id))
+                .or_else(|| snapshots.keys().next_back().copied())
+                .unwrap_or(0),
+            snapshots,
+        };
+        let changed = indexed.version != reconciled.version
+            || indexed.current_id != reconciled.current_id
+            || indexed.snapshots != reconciled.snapshots;
+        *self.metadata_index.write() = reconciled;
+        if changed || !index_path.exists() {
+            self.save_metadata_index()?;
+        }
 
         Ok(())
     }
@@ -235,9 +315,13 @@ impl SnapshotManager {
             StorageError::serialize_error(format!("Failed to serialize metadata: {}", e))
         })?;
 
-        fs::write(&index_path, content).map_err(|e| {
+        let temporary = index_path.with_extension("json.tmp");
+        fs::write(&temporary, content).map_err(|e| {
             StorageError::io_error(format!("Failed to write metadata index: {}", e))
         })?;
+        fs::File::open(&temporary)?.sync_all()?;
+        fs::rename(&temporary, &index_path)?;
+        fs::File::open(&self.snapshots_dir)?.sync_all()?;
 
         Ok(())
     }
@@ -253,6 +337,13 @@ impl SnapshotManager {
     /// This copies all data files to a new snapshot directory.
     pub fn create_snapshot(&self, params: CreateSnapshotParams) -> StorageResult<SnapshotInfo> {
         let now = SystemTime::now();
+
+        if !params.source_dir.is_dir() {
+            return Err(StorageError::not_found(format!(
+                "Snapshot source directory does not exist: {}",
+                params.source_dir.display()
+            )));
+        }
 
         if let Some(last_time) = *self.last_snapshot_time.read() {
             let elapsed = now
@@ -275,29 +366,49 @@ impl SnapshotManager {
             )));
         }
 
-        fs::create_dir_all(&snapshot_dir)
-            .map_err(|e| StorageError::io_error(format!("Failed to create snapshot dir: {}", e)))?;
-
         let temp_dir = self
             .work_dir
             .join(format!("snapshot_temp_{}", params.snapshot_id));
+        if temp_dir.exists() {
+            fs::remove_dir_all(&temp_dir)?;
+        }
         fs::create_dir_all(&temp_dir)
             .map_err(|e| StorageError::io_error(format!("Failed to create temp dir: {}", e)))?;
 
-        let result = self.create_snapshot_internal(&params, &snapshot_dir, &temp_dir);
-
-        let _ = fs::remove_dir_all(&temp_dir);
-
-        if let Err(e) = result {
-            let _ = fs::remove_dir_all(&snapshot_dir);
-            return Err(e);
+        let info = match self.create_snapshot_internal(&params, &temp_dir, &temp_dir) {
+            Ok(info) => info,
+            Err(error) => {
+                let _ = fs::remove_dir_all(&temp_dir);
+                return Err(error);
+            }
+        };
+        if params.options.sync {
+            self.sync_directory(&temp_dir)?;
         }
+        fs::rename(&temp_dir, &snapshot_dir).map_err(|error| {
+            if error.raw_os_error() == Some(18) {
+                StorageError::io_error(
+                    "Snapshot work directory and snapshot directory must be on the same filesystem",
+                )
+            } else {
+                StorageError::io_error(format!("Failed to publish snapshot: {}", error))
+            }
+        })?;
+        fs::File::open(&self.snapshots_dir)?.sync_all()?;
+
+        {
+            let mut index = self.metadata_index.write();
+            index.snapshots.insert(params.snapshot_id, info.clone());
+            index.current_id = params.snapshot_id;
+            index.version = SNAPSHOT_FORMAT_VERSION;
+        }
+        self.save_metadata_index()?;
 
         *self.last_snapshot_time.write() = Some(now);
 
         self.cleanup_old_snapshots()?;
 
-        result
+        Ok(info)
     }
 
     fn create_snapshot_internal(
@@ -308,7 +419,7 @@ impl SnapshotManager {
     ) -> StorageResult<SnapshotInfo> {
         let mut size_bytes = 0u64;
 
-        self.copy_directory(&params.data_dir, snapshot_dir, &mut size_bytes)?;
+        self.copy_directory(&params.source_dir, snapshot_dir, &mut size_bytes)?;
 
         let info = SnapshotInfo {
             id: params.snapshot_id,
@@ -333,19 +444,6 @@ impl SnapshotManager {
         })?;
         fs::write(&meta_path, meta_content)
             .map_err(|e| StorageError::io_error(format!("Failed to write snapshot meta: {}", e)))?;
-
-        {
-            let mut index = self.metadata_index.write();
-            index.snapshots.insert(params.snapshot_id, info.clone());
-            index.current_id = params.snapshot_id;
-            index.version = SNAPSHOT_FORMAT_VERSION;
-        }
-
-        self.save_metadata_index()?;
-
-        if params.options.sync {
-            self.sync_directory(snapshot_dir)?;
-        }
 
         Ok(info)
     }
@@ -400,16 +498,20 @@ impl SnapshotManager {
             if file_type.is_dir() {
                 self.sync_directory(&path)?;
             } else if file_type.is_file() {
-                let file = fs::OpenOptions::new()
-                    .write(true)
-                    .open(&path)
-                    .map_err(|e| {
-                        StorageError::io_error(format!("Failed to open file for sync: {}", e))
-                    })?;
+                let file = fs::File::open(&path).map_err(|e| {
+                    StorageError::io_error(format!("Failed to open file for sync: {}", e))
+                })?;
                 file.sync_all()
                     .map_err(|e| StorageError::io_error(format!("Failed to sync file: {}", e)))?;
             }
         }
+
+        fs::File::open(dir)
+            .map_err(|e| {
+                StorageError::io_error(format!("Failed to open directory for sync: {}", e))
+            })?
+            .sync_all()
+            .map_err(|e| StorageError::io_error(format!("Failed to sync directory: {}", e)))?;
 
         Ok(())
     }
@@ -435,9 +537,12 @@ impl SnapshotManager {
 
     /// Delete a snapshot
     pub fn delete_snapshot(&self, snapshot_id: u64) -> StorageResult<()> {
-        let mut index = self.metadata_index.write();
-
-        if !index.snapshots.contains_key(&snapshot_id) {
+        if !self
+            .metadata_index
+            .read()
+            .snapshots
+            .contains_key(&snapshot_id)
+        {
             return Err(StorageError::not_found(format!(
                 "Snapshot {} not found",
                 snapshot_id
@@ -445,12 +550,16 @@ impl SnapshotManager {
         }
 
         let snapshot_dir = self.get_snapshot_dir(snapshot_id);
+        let deleting_dir = self
+            .snapshots_dir
+            .join(format!(".snapshot_deleting_{}", snapshot_id));
         if snapshot_dir.exists() {
-            fs::remove_dir_all(&snapshot_dir).map_err(|e| {
-                StorageError::io_error(format!("Failed to delete snapshot dir: {}", e))
+            fs::rename(&snapshot_dir, &deleting_dir).map_err(|e| {
+                StorageError::io_error(format!("Failed to stage snapshot deletion: {}", e))
             })?;
         }
 
+        let mut index = self.metadata_index.write();
         index.snapshots.remove(&snapshot_id);
 
         if index.current_id == snapshot_id {
@@ -460,6 +569,13 @@ impl SnapshotManager {
         drop(index);
 
         self.save_metadata_index()?;
+
+        if deleting_dir.exists() {
+            fs::remove_dir_all(&deleting_dir).map_err(|e| {
+                StorageError::io_error(format!("Failed to delete snapshot dir: {}", e))
+            })?;
+        }
+        fs::File::open(&self.snapshots_dir)?.sync_all()?;
 
         Ok(())
     }
@@ -478,25 +594,23 @@ impl SnapshotManager {
             let index = self.metadata_index.read();
             let snapshots: Vec<_> = index.snapshots.iter().collect();
 
-            if snapshots.len() <= self.retention_policy.max_snapshots {
-                return Ok(0);
-            }
-
             for (id, info) in snapshots.iter() {
                 if self.retention_policy.max_age_seconds > 0
                     && now - info.created_at > self.retention_policy.max_age_seconds
+                    && **id != index.current_id
                 {
                     to_delete.push(**id);
                 }
             }
 
-            let excess_count = snapshots.len() - self.retention_policy.max_snapshots;
+            let keep = self.retention_policy.max_snapshots.max(1);
+            let excess_count = snapshots.len().saturating_sub(keep);
             if to_delete.len() < excess_count {
                 let mut sorted_ids: Vec<_> = index.snapshots.keys().copied().collect();
                 sorted_ids.sort();
 
                 for &id in sorted_ids.iter().take(excess_count - to_delete.len()) {
-                    if !to_delete.contains(&id) {
+                    if id != index.current_id && !to_delete.contains(&id) {
                         to_delete.push(id);
                     }
                 }
@@ -526,6 +640,16 @@ impl SnapshotManager {
         self.metadata_index.read().snapshots.len()
     }
 
+    /// Checkpoint sequences that remain referenced by published snapshots.
+    pub fn retained_checkpoint_sequences(&self) -> std::collections::BTreeSet<u64> {
+        self.metadata_index
+            .read()
+            .snapshots
+            .values()
+            .map(|snapshot| snapshot.checkpoint_seq)
+            .collect()
+    }
+
     /// Verify snapshot integrity
     pub fn verify_snapshot(&self, snapshot_id: u64) -> StorageResult<bool> {
         let info = self.get_snapshot(snapshot_id).ok_or_else(|| {
@@ -549,8 +673,49 @@ impl SnapshotManager {
         let loaded_info: SnapshotInfo = serde_json::from_str(&content).map_err(|e| {
             StorageError::deserialize_error(format!("Invalid snapshot meta: {}", e))
         })?;
+        if loaded_info.id != info.id
+            || loaded_info.checkpoint_seq != info.checkpoint_seq
+            || loaded_info.wal_lsn != info.wal_lsn
+        {
+            return Ok(false);
+        }
 
-        Ok(loaded_info.id == info.id)
+        let checkpoint_meta = snapshot_dir.join("checkpoint.meta");
+        if checkpoint_meta.exists() {
+            let content = fs::read_to_string(checkpoint_meta)?;
+            for line in content.lines().filter(|line| line.starts_with("file=")) {
+                let fields: Vec<_> = line[5..].rsplitn(3, '|').collect();
+                if fields.len() != 3 {
+                    return Ok(false);
+                }
+                let checksum = match fields[0].parse::<u32>() {
+                    Ok(value) => value,
+                    Err(_) => return Ok(false),
+                };
+                let size = match fields[1].parse::<u64>() {
+                    Ok(value) => value,
+                    Err(_) => return Ok(false),
+                };
+                let relative = PathBuf::from(fields[2]);
+                if relative.is_absolute()
+                    || relative
+                        .components()
+                        .any(|component| component == std::path::Component::ParentDir)
+                {
+                    return Ok(false);
+                }
+                let path = snapshot_dir.join(relative);
+                let bytes = match fs::read(path) {
+                    Ok(bytes) => bytes,
+                    Err(_) => return Ok(false),
+                };
+                if bytes.len() as u64 != size || crc32fast::hash(&bytes) != checksum {
+                    return Ok(false);
+                }
+            }
+        }
+
+        Ok(true)
     }
 }
 
@@ -587,7 +752,7 @@ mod tests {
 
         let info = manager
             .create_snapshot(CreateSnapshotParams {
-                data_dir: data_dir.to_path_buf(),
+                source_dir: data_dir.to_path_buf(),
                 snapshot_id: 1,
                 vertex_count: 100,
                 edge_count: 50,
@@ -618,7 +783,7 @@ mod tests {
 
         manager
             .create_snapshot(CreateSnapshotParams {
-                data_dir: data_dir.to_path_buf(),
+                source_dir: data_dir.to_path_buf(),
                 snapshot_id: 1,
                 vertex_count: 100,
                 edge_count: 50,
@@ -653,7 +818,7 @@ mod tests {
         for i in 1..=3 {
             manager
                 .create_snapshot(CreateSnapshotParams {
-                    data_dir: data_dir.to_path_buf(),
+                    source_dir: data_dir.to_path_buf(),
                     snapshot_id: i,
                     vertex_count: 100,
                     edge_count: 50,
@@ -665,5 +830,132 @@ mod tests {
         }
 
         assert_eq!(manager.snapshot_count(), 3);
+    }
+
+    #[test]
+    fn missing_snapshot_source_does_not_publish_directory() {
+        let temp_dir = TempDir::new().expect("temporary directory");
+        let snapshots_dir = temp_dir.path().join("snapshots");
+        let work_dir = temp_dir.path().join("work");
+        let manager = SnapshotManager::new(&snapshots_dir, &work_dir).expect("manager");
+        let result = manager.create_snapshot(CreateSnapshotParams {
+            source_dir: temp_dir.path().join("missing-checkpoint"),
+            snapshot_id: 9,
+            vertex_count: 0,
+            edge_count: 0,
+            checkpoint_seq: 9,
+            wal_lsn: 0,
+            options: SnapshotOptions::default(),
+        });
+        assert!(result.is_err());
+        assert!(!snapshots_dir.join("snapshot_0000000009").exists());
+    }
+
+    #[test]
+    fn metadata_index_is_rebuilt_from_published_snapshots() {
+        let temp_dir = TempDir::new().expect("temporary directory");
+        let snapshots_dir = temp_dir.path().join("snapshots");
+        let work_dir = temp_dir.path().join("work");
+        let data_dir = temp_dir.path().join("data");
+        fs::create_dir_all(&data_dir).expect("data directory");
+        fs::write(data_dir.join("table.data"), b"data").expect("data file");
+        let manager = SnapshotManager::new(&snapshots_dir, &work_dir).expect("manager");
+        manager
+            .create_snapshot(CreateSnapshotParams {
+                source_dir: data_dir,
+                snapshot_id: 3,
+                vertex_count: 1,
+                edge_count: 0,
+                checkpoint_seq: 3,
+                wal_lsn: 12,
+                options: SnapshotOptions::default(),
+            })
+            .expect("snapshot should be created");
+        fs::remove_file(snapshots_dir.join(METADATA_INDEX_FILE)).expect("index should remove");
+
+        let reopened = SnapshotManager::new(&snapshots_dir, &work_dir).expect("reopen manager");
+        assert_eq!(reopened.snapshot_count(), 1);
+        assert_eq!(reopened.get_latest_snapshot().map(|info| info.id), Some(3));
+    }
+
+    #[test]
+    fn startup_reconciles_stale_metadata_index() {
+        let temp_dir = TempDir::new().expect("temporary directory");
+        let snapshots_dir = temp_dir.path().join("snapshots");
+        let work_dir = temp_dir.path().join("work");
+        let data_dir = temp_dir.path().join("data");
+        fs::create_dir_all(&data_dir).expect("data directory");
+        let manager = SnapshotManager::new(&snapshots_dir, &work_dir).expect("manager");
+        manager
+            .create_snapshot(CreateSnapshotParams {
+                source_dir: data_dir,
+                snapshot_id: 7,
+                vertex_count: 1,
+                edge_count: 0,
+                checkpoint_seq: 7,
+                wal_lsn: 70,
+                options: SnapshotOptions::default(),
+            })
+            .expect("snapshot");
+        let stale = SnapshotMetadataIndex {
+            version: SNAPSHOT_FORMAT_VERSION,
+            snapshots: BTreeMap::new(),
+            current_id: 0,
+        };
+        fs::write(
+            snapshots_dir.join(METADATA_INDEX_FILE),
+            serde_json::to_string(&stale).expect("stale index serialization"),
+        )
+        .expect("stale index write");
+        drop(manager);
+
+        let reopened = SnapshotManager::new(&snapshots_dir, &work_dir).expect("reopen manager");
+        assert_eq!(reopened.snapshot_count(), 1);
+        assert_eq!(reopened.get_latest_snapshot().expect("latest").id, 7);
+    }
+
+    #[test]
+    fn age_retention_runs_even_when_count_is_below_limit() {
+        let temp_dir = TempDir::new().expect("temporary directory");
+        let snapshots_dir = temp_dir.path().join("snapshots");
+        let work_dir = temp_dir.path().join("work");
+        let data_dir = temp_dir.path().join("data");
+        fs::create_dir_all(&data_dir).expect("data directory");
+        let mut manager = SnapshotManager::new(&snapshots_dir, &work_dir).expect("manager");
+        manager.retention_policy.min_interval_seconds = 0;
+        manager.retention_policy.max_snapshots = 10;
+        manager
+            .create_snapshot(CreateSnapshotParams {
+                source_dir: data_dir.clone(),
+                snapshot_id: 1,
+                vertex_count: 1,
+                edge_count: 0,
+                checkpoint_seq: 1,
+                wal_lsn: 10,
+                options: SnapshotOptions::default(),
+            })
+            .expect("first snapshot");
+        manager
+            .create_snapshot(CreateSnapshotParams {
+                source_dir: data_dir,
+                snapshot_id: 2,
+                vertex_count: 1,
+                edge_count: 0,
+                checkpoint_seq: 2,
+                wal_lsn: 20,
+                options: SnapshotOptions::default(),
+            })
+            .expect("second snapshot");
+        manager
+            .metadata_index
+            .write()
+            .snapshots
+            .get_mut(&1)
+            .expect("first metadata")
+            .created_at = 0;
+        manager.retention_policy.max_age_seconds = 1;
+        assert_eq!(manager.cleanup_old_snapshots().expect("cleanup"), 1);
+        assert!(manager.get_snapshot(1).is_none());
+        assert!(manager.get_snapshot(2).is_some());
     }
 }

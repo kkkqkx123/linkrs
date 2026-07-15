@@ -422,7 +422,11 @@ impl QueryPlanCache {
         index_version: Option<u64>,
     ) -> Option<Arc<CachedPlan>> {
         let key = PlanCacheKey::from_query_with_full_context(
-            query, space_name, schema_version, param_type_signature, index_version,
+            query,
+            space_name,
+            schema_version,
+            param_type_signature,
+            index_version,
         );
 
         if let Some(plan) = self.cache.get(&key) {
@@ -469,7 +473,16 @@ impl QueryPlanCache {
     /// - `plan`: Arena-based physical plan
     /// - `param_positions`: Information about the positions of the parameters
     pub fn put(&self, query: &str, plan: Arc<PhysicalPlan>, param_positions: Vec<ParamPosition>) {
-        self.put_with_context(query, plan, param_positions, Vec::new(), None, None, None, false);
+        self.put_with_context(
+            query,
+            plan,
+            param_positions,
+            Vec::new(),
+            None,
+            None,
+            None,
+            false,
+        );
     }
 
     /// Put the plan in the cache with dependent tables.
@@ -480,7 +493,16 @@ impl QueryPlanCache {
         param_positions: Vec<ParamPosition>,
         dependent_tables: Vec<String>,
     ) {
-        self.put_with_context(query, plan, param_positions, dependent_tables, None, None, None, false);
+        self.put_with_context(
+            query,
+            plan,
+            param_positions,
+            dependent_tables,
+            None,
+            None,
+            None,
+            false,
+        );
     }
 
     /// Put the plan with full context (space, schema version, index version, tables).
@@ -509,7 +531,11 @@ impl QueryPlanCache {
         let query_bytes = query.len();
         let param_type_sig = Self::compute_param_type_signature(&param_positions);
         let key = PlanCacheKey::from_query_with_full_context(
-            query, space_name, schema_version, param_type_sig, index_version,
+            query,
+            space_name,
+            schema_version,
+            param_type_sig,
+            index_version,
         );
 
         let priority = if self.config.priority_config.enable_priority {
@@ -643,7 +669,11 @@ impl QueryPlanCache {
         index_version: Option<u64>,
     ) {
         let key = PlanCacheKey::from_query_with_full_context(
-            query, space_name, schema_version, None, index_version,
+            query,
+            space_name,
+            schema_version,
+            None,
+            index_version,
         );
 
         if let Some(plan) = self.cache.get(&key) {

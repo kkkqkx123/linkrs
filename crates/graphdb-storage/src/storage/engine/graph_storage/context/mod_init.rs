@@ -14,6 +14,8 @@ impl GraphStorageContext {
         Self {
             persistent: GraphStoragePersistent::new(),
             runtime: GraphStorageRuntime::new(),
+            operation_context: None,
+            write_timestamp_lease: None,
         }
     }
 
@@ -26,6 +28,8 @@ impl GraphStorageContext {
         GraphStoragePersistent::new_with_persistence(path, config).map(|persistent| Self {
             persistent,
             runtime: GraphStorageRuntime::new(),
+            operation_context: None,
+            write_timestamp_lease: None,
         })
     }
 
@@ -44,6 +48,8 @@ impl GraphStorageContext {
         Self {
             persistent: self.persistent.clone(),
             runtime,
+            operation_context: self.operation_context.clone(),
+            write_timestamp_lease: self.write_timestamp_lease.clone(),
         }
     }
 

@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::core::types::EdgeDirection;
 use crate::core::Expression;
 use crate::query::parser::ast::stmt::Steps;
@@ -18,7 +19,6 @@ use crate::query::planning::plan::core::nodes::{
 };
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::query::QueryContext;
 
 /// SUBGRAPH Query Planner

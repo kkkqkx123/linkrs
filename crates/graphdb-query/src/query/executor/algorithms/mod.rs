@@ -23,8 +23,8 @@ pub mod types;
 // Reexport the algorithm type
 pub use a_star::AStar;
 pub use bfs_shortest::BFSShortestExecutor;
-pub use config::MultiShortestPathConfig;
 pub use bidirectional_bfs::BidirectionalBFS;
+pub use config::MultiShortestPathConfig;
 pub use dijkstra::Dijkstra;
 pub use multi_shortest_path::MultiShortestPathExecutor;
 pub use subgraph_executor::{SubgraphConfig, SubgraphExecutor, SubgraphResult};

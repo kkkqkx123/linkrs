@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::query::planning::plan::PlanNodeEnum;
 use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+use crate::query::planning::plan::PlanNodeEnum;
 
 /// Rewrite the context
 ///

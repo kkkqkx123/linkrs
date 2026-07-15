@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use super::super::super::common::{EdgeProp, TagProp};
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::core::types::{ContextualExpression, EdgeDirection, SerializableExpression};
 use crate::core::Expression;
 use crate::define_binary_input_node;
@@ -12,7 +13,6 @@ use crate::define_plan_node;
 use crate::define_plan_node_with_deps;
 use crate::query::planning::plan::core::node_id_generator::next_node_id;
 use crate::query::planning::plan::core::nodes::base::plan_node_category::PlanNodeCategory;
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
 define_plan_node! {
     pub struct ExpandNode {

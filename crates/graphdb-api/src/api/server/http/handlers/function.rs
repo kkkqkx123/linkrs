@@ -9,7 +9,7 @@ use serde_json;
 
 use crate::api::server::http::{error::HttpError, state::AppState};
 use crate::storage::{
-    StorageClient, StorageSchemaContextOps, StorageSyncContextOps, StorageTransactionContextOps,
+    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 
 /// Register a custom function
@@ -17,7 +17,7 @@ pub async fn register<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync
@@ -61,7 +61,7 @@ pub async fn list<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync
@@ -93,7 +93,7 @@ pub async fn info<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync
@@ -139,7 +139,7 @@ pub async fn unregister<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync

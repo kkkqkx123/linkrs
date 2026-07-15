@@ -1,16 +1,15 @@
 use crate::core::error::StorageError;
 use crate::core::types::{
     EdgeTypeInfo, EdgeTypeSchema, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo,
-    PropertyDef, SpaceInfo, TagInfo, TransactionContextInfo, UpdateInfo, UserAlterInfo, UserInfo,
-    VertexId,
+    PropertyDef, SpaceInfo, TagInfo, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
 };
 use crate::core::{Edge, EdgeDirection, RoleType, Value, Vertex};
 use crate::storage::engine::graph_storage::GraphStorageContext;
 use crate::storage::{
     LabelVersionHistory, PropertyChange, StorageAdmin, StorageAuthOps, StorageGcOps,
-    StoragePersistenceOps, StorageReader, StorageRecoveryOps, StorageSchemaContextOps,
-    StorageSchemaOps, StorageStats, StorageSyncContextOps, StorageTransactionContextOps,
-    StorageWriter,
+    StorageOperationContext, StorageOperationContextOps, StoragePersistenceOps, StorageReader,
+    StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps, StorageStats,
+    StorageSyncContextOps, StorageWriter,
 };
 use crate::transaction::UndoTarget;
 use parking_lot::RwLock;
@@ -29,7 +28,7 @@ macro_rules! mock_stub {
 pub struct MockStorage {
     graph: GraphStorageContext,
     schema_manager: Arc<crate::core::metadata::SchemaManager>,
-    transaction_context: Arc<RwLock<Option<Arc<TransactionContextInfo>>>>,
+    operation_context: Option<Arc<StorageOperationContext>>,
     fail_insert_edge: Arc<RwLock<bool>>,
     fail_delete_edge: Arc<RwLock<bool>>,
     fail_batch_insert_edges: Arc<RwLock<bool>>,
@@ -40,7 +39,7 @@ impl MockStorage {
         Ok(Self {
             graph: GraphStorageContext::new(),
             schema_manager: Arc::new(crate::core::metadata::SchemaManager::new()),
-            transaction_context: Arc::new(RwLock::new(None)),
+            operation_context: None,
             fail_insert_edge: Arc::new(RwLock::new(false)),
             fail_delete_edge: Arc::new(RwLock::new(false)),
             fail_batch_insert_edges: Arc::new(RwLock::new(false)),
@@ -225,6 +224,10 @@ impl StoragePersistenceOps for MockStorage {
         Default::default()
     }
 
+    fn persistence_diagnostics(&self) -> Option<crate::storage::PersistenceDiagnostics> {
+        None
+    }
+
     fn compact(
         &self,
         _config: &crate::core::types::CompactConfig,
@@ -251,13 +254,24 @@ impl StorageSchemaContextOps for MockStorage {
     }
 }
 
-impl StorageTransactionContextOps for MockStorage {
-    fn get_transaction_context(&self) -> Option<Arc<TransactionContextInfo>> {
-        self.transaction_context.read().clone()
+impl StorageOperationContextOps for MockStorage {
+    fn bind_auto_commit_context(&self) -> Self {
+        self.bind_operation_context(StorageOperationContext {
+            transaction_id: None,
+            read_timestamp: 1,
+            write_timestamp: Some(1),
+            read_only: false,
+        })
     }
 
-    fn set_transaction_context(&self, context: Option<Arc<TransactionContextInfo>>) {
-        *self.transaction_context.write() = context;
+    fn bind_operation_context(&self, context: StorageOperationContext) -> Self {
+        let mut bound = self.clone();
+        bound.operation_context = Some(Arc::new(context));
+        bound
+    }
+
+    fn operation_context(&self) -> Option<Arc<StorageOperationContext>> {
+        self.operation_context.clone()
     }
 }
 

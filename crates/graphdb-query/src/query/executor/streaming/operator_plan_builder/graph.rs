@@ -1,7 +1,9 @@
 use crate::core::types::expr::Expression;
 use crate::query::executor::base::ExecutionContext;
 use crate::query::executor::build_error::PlanBuildError;
-use crate::query::executor::streaming::operators::spec::{GraphSpec, JoinSpec, RecursiveFragmentSpec};
+use crate::query::executor::streaming::operators::spec::{
+    GraphSpec, JoinSpec, RecursiveFragmentSpec,
+};
 use crate::query::executor::streaming::plan::node::PhysicalNode;
 use crate::query::executor::streaming::plan::properties::PhysicalProperties;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
@@ -15,10 +17,14 @@ pub fn build_graph_node(
 ) -> Result<PhysicalNode, PlanBuildError> {
     match node {
         PlanNodeEnum::Expand(expand_node) => {
-            let input_plan = expand_node
-                .inputs()
-                .first()
-                .ok_or_else(|| PlanBuildError::missing_value("Expand", node.id(), "input", "Expand requires an input"))?;
+            let input_plan = expand_node.inputs().first().ok_or_else(|| {
+                PlanBuildError::missing_value(
+                    "Expand",
+                    node.id(),
+                    "input",
+                    "Expand requires an input",
+                )
+            })?;
             let input_phys = super::build_plan_node(input_plan, context)?;
             let edge_types = expand_node.edge_types().to_vec();
             let direction = expand_node.direction();
@@ -39,10 +45,14 @@ pub fn build_graph_node(
         }
 
         PlanNodeEnum::ExpandAll(expand_all_node) => {
-            let input_plan = expand_all_node
-                .inputs()
-                .first()
-                .ok_or_else(|| PlanBuildError::missing_value("ExpandAll", node.id(), "input", "ExpandAll requires an input"))?;
+            let input_plan = expand_all_node.inputs().first().ok_or_else(|| {
+                PlanBuildError::missing_value(
+                    "ExpandAll",
+                    node.id(),
+                    "input",
+                    "ExpandAll requires an input",
+                )
+            })?;
             let input_phys = super::build_plan_node(input_plan, context)?;
             let edge_types = expand_all_node.edge_types().to_vec();
             let direction = match expand_all_node.direction().to_lowercase().as_str() {
@@ -195,13 +205,23 @@ pub fn build_graph_node(
                 ));
             }
             let offset = usize::try_from(node.offset()).map_err(|_| {
-                PlanBuildError::missing_value("AllPaths", node.id(), "offset", "AllPaths offset must be non-negative")
+                PlanBuildError::missing_value(
+                    "AllPaths",
+                    node.id(),
+                    "offset",
+                    "AllPaths offset must be non-negative",
+                )
             })?;
             let limit = if node.limit() < 0 {
                 None
             } else {
                 Some(usize::try_from(node.limit()).map_err(|_| {
-                    PlanBuildError::missing_value("AllPaths", node.id(), "limit", "AllPaths limit does not fit in usize")
+                    PlanBuildError::missing_value(
+                        "AllPaths",
+                        node.id(),
+                        "limit",
+                        "AllPaths limit does not fit in usize",
+                    )
                 })?)
             };
             let input_phys =
@@ -223,7 +243,10 @@ pub fn build_graph_node(
                     acyclic: node.is_acyclic(),
                     limit,
                     offset,
-                    filter: node.filter().map(super::contextual_to_expression).transpose()?,
+                    filter: node
+                        .filter()
+                        .map(super::contextual_to_expression)
+                        .transpose()?,
                     start_vertices: node
                         .start_vertex_ids()
                         .iter()
@@ -325,7 +348,10 @@ pub fn build_recursive_fragment_node(
             }
             let offset = usize::try_from(ap_node.offset()).map_err(|_| {
                 PlanBuildError::missing_value(
-                    "AllPaths", node.id(), "offset", "AllPaths offset must be non-negative",
+                    "AllPaths",
+                    node.id(),
+                    "offset",
+                    "AllPaths offset must be non-negative",
                 )
             })?;
             let limit = if ap_node.limit() < 0 {
@@ -333,7 +359,10 @@ pub fn build_recursive_fragment_node(
             } else {
                 Some(usize::try_from(ap_node.limit()).map_err(|_| {
                     PlanBuildError::missing_value(
-                        "AllPaths", node.id(), "limit", "AllPaths limit does not fit in usize",
+                        "AllPaths",
+                        node.id(),
+                        "limit",
+                        "AllPaths limit does not fit in usize",
                     )
                 })?)
             };
@@ -419,10 +448,10 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::query::planning::plan::core::nodes::traversal::path_algorithms::{
         AllPathsNode, BFSShortestNode, ShortestPathNode,
     };
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
     fn context() -> ExecutionContext {
         ExecutionContext::new(Arc::new(ExpressionAnalysisContext::new()))

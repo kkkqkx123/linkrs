@@ -468,10 +468,9 @@ impl MorselWorkerPool {
                         let error_tx = batch.error_tx.clone();
                         let stop = batch.stop.clone();
 
-                        let result =
-                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                Self::process_batch(batch, &stopper)
-                            }));
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            Self::process_batch(batch, &stopper)
+                        }));
                         if let Err(panic_payload) = result {
                             let msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
                                 s.to_string()

@@ -5,6 +5,7 @@ pub mod circuit_breaker;
 pub mod coordinator;
 pub mod dead_letter_queue;
 pub mod manager;
+mod outbox;
 pub mod retry;
 pub mod types;
 pub mod vector_error;
@@ -26,6 +27,7 @@ pub use coordinator::{
 };
 pub use dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
 pub use manager::{EdgeProps, EdgeRef, SyncError, SyncManager};
+pub use outbox::OutboxStats;
 pub use retry::{with_retry, RetryConfig};
 pub use types::{IndexOpKey, IndexOperation};
 

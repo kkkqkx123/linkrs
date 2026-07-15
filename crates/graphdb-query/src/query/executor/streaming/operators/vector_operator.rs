@@ -9,7 +9,7 @@ use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::planning::plan::core::nodes::management::manage_node_enums::VectorManageNode;
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 #[cfg(feature = "qdrant")]
 use crate::sync::VectorSyncCoordinator;
 
@@ -44,14 +44,14 @@ fn make_manage_result(action: &str, name: Option<&str>, status: &str) -> DataChu
 #[derive(Debug)]
 pub enum VectorOperator {
     VectorManage {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         command: VectorManageNode,
         #[cfg(feature = "qdrant")]
         vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     },
     VectorSearch {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         space_id: u64,
         index_name: String,
@@ -63,7 +63,7 @@ pub enum VectorOperator {
         vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     },
     VectorLookup {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         index_name: String,
         lookup_key: Expression,
@@ -71,7 +71,7 @@ pub enum VectorOperator {
         vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     },
     VectorMatch {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         pattern: String,
         field: String,
@@ -89,7 +89,7 @@ impl VectorOperator {
     /// Create a VectorOperator from an immutable spec.
     pub fn from_spec(
         spec: &super::spec::VectorSpec,
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         #[cfg(feature = "qdrant")] vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     ) -> Self {
         match spec {

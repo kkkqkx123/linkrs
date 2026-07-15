@@ -36,10 +36,7 @@ pub enum Capability {
 #[derive(Debug, Clone)]
 pub enum BoundIndexPredicate {
     /// Exact equality: `column = value`
-    Equal {
-        column: String,
-        value: Value,
-    },
+    Equal { column: String, value: Value },
     /// Range scan: `column BETWEEN begin AND end`
     Range {
         column: String,
@@ -49,10 +46,7 @@ pub enum BoundIndexPredicate {
         include_end: bool,
     },
     /// Prefix scan (for string columns): `column STARTS WITH prefix`
-    Prefix {
-        column: String,
-        prefix: Value,
-    },
+    Prefix { column: String, prefix: Value },
     /// Full scan (no predicate, all entries)
     Full,
 }

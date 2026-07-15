@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::core::types::{ContextualExpression, SerializableExpression};
 use crate::define_plan_node;
 use crate::query::planning::plan::core::nodes::base::memory_estimation::MemoryEstimatable;
@@ -12,7 +13,6 @@ use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnu
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
     PlanNode, PlanNodeClonable,
 };
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
 define_plan_node! {
     pub struct ArgumentNode {

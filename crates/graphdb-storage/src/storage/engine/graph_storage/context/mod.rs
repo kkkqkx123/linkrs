@@ -6,9 +6,7 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::core::metadata::{IndexManager, SchemaManager};
 use crate::core::stats::StatsManager;
-use crate::core::types::{
-    LabelId, TableTracker, TableTrackerConfig, Timestamp, TransactionContextInfo,
-};
+use crate::core::types::{LabelId, TableTracker, TableTrackerConfig, Timestamp};
 use crate::core::UserStorage;
 use crate::storage::engine::background_freeze::BackgroundFreezeManager;
 use crate::storage::engine::cache_manager::CacheManager;
@@ -18,6 +16,7 @@ use crate::storage::engine::paths::StoragePaths;
 use crate::storage::engine::persistence_coordinator::PersistenceCoordinator;
 use crate::storage::index::{IndexDataManagerImpl, IndexGcConfig, IndexGcManager};
 use crate::storage::vertex::IdKey;
+use crate::storage::StorageOperationContext;
 use crate::transaction::VersionManager;
 
 type LastCompactedVertices = Arc<Mutex<Vec<(LabelId, Vec<IdKey>)>>>;
@@ -109,9 +108,12 @@ impl GraphStoragePersistent {
         )
     }
 
-    pub fn new_with_config(config: PropertyGraphConfig) -> Self {
-        // Validate configuration for early failure detection
-        let _ = config.validate();
+    pub fn new_with_config(config: PropertyGraphConfig) -> crate::core::StorageResult<Self> {
+        config.validate()?;
+        Ok(Self::from_validated_config(config))
+    }
+
+    fn from_validated_config(config: PropertyGraphConfig) -> Self {
         let cache_manager = CacheManager::new(config.enable_cache, config.cache_memory);
         let table_tracker = Arc::new(TableTracker::with_config(TableTrackerConfig {
             flush_threshold: config.flush_config.flush_threshold,
@@ -137,7 +139,7 @@ impl GraphStoragePersistent {
     }
 
     fn new() -> Self {
-        Self::new_with_config(PropertyGraphConfig::default())
+        Self::from_validated_config(PropertyGraphConfig::default())
     }
 
     fn new_with_persistence(
@@ -215,16 +217,26 @@ impl DeferredWalOps {
 
 #[derive(Clone)]
 struct GraphStorageRuntime {
-    current_txn_context: Arc<RwLock<Option<Arc<TransactionContextInfo>>>>,
     index_gc_manager: Option<Arc<IndexGcManager>>,
     background_freeze_manager: Option<Arc<BackgroundFreezeManager>>,
     deferred_wal_ops: DeferredWalOps,
 }
 
+struct WriteTimestampLease {
+    version_manager: Arc<VersionManager>,
+    timestamp: Timestamp,
+}
+
+impl Drop for WriteTimestampLease {
+    fn drop(&mut self) {
+        self.version_manager
+            .release_insert_timestamp(self.timestamp);
+    }
+}
+
 impl GraphStorageRuntime {
     fn new() -> Self {
         Self {
-            current_txn_context: Arc::new(RwLock::new(None)),
             index_gc_manager: None,
             background_freeze_manager: None,
             deferred_wal_ops: DeferredWalOps::new(),
@@ -241,7 +253,6 @@ impl GraphStorageRuntime {
         let gc_manager = IndexGcManager::new(index_data, version_manager.clone(), config);
 
         Self {
-            current_txn_context: self.current_txn_context.clone(),
             index_gc_manager: Some(Arc::new(gc_manager)),
             background_freeze_manager: self.background_freeze_manager.clone(),
             deferred_wal_ops: self.deferred_wal_ops.clone(),
@@ -250,19 +261,10 @@ impl GraphStorageRuntime {
 
     fn with_background_freeze(&self, manager: Arc<BackgroundFreezeManager>) -> Self {
         Self {
-            current_txn_context: self.current_txn_context.clone(),
             index_gc_manager: self.index_gc_manager.clone(),
             background_freeze_manager: Some(manager),
             deferred_wal_ops: self.deferred_wal_ops.clone(),
         }
-    }
-
-    fn get_transaction_context(&self) -> Option<Arc<TransactionContextInfo>> {
-        self.current_txn_context.read().clone()
-    }
-
-    fn set_transaction_context(&self, context: Option<Arc<TransactionContextInfo>>) {
-        *self.current_txn_context.write() = context;
     }
 
     fn start_index_gc(&self) -> Option<std::thread::JoinHandle<()>> {
@@ -289,6 +291,8 @@ impl GraphStorageRuntime {
 pub struct GraphStorageContext {
     persistent: GraphStoragePersistent,
     runtime: GraphStorageRuntime,
+    operation_context: Option<Arc<StorageOperationContext>>,
+    write_timestamp_lease: Option<Arc<WriteTimestampLease>>,
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -317,11 +321,13 @@ impl std::fmt::Debug for GraphStorageContext {
 }
 
 impl GraphStorageContext {
-    pub fn new_with_config(config: PropertyGraphConfig) -> Self {
-        Self {
-            persistent: GraphStoragePersistent::new_with_config(config),
+    pub fn new_with_config(config: PropertyGraphConfig) -> crate::core::StorageResult<Self> {
+        Ok(Self {
+            persistent: GraphStoragePersistent::new_with_config(config)?,
             runtime: GraphStorageRuntime::new(),
-        }
+            operation_context: None,
+            write_timestamp_lease: None,
+        })
     }
 }
 

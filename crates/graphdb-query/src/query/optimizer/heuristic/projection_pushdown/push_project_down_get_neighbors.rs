@@ -132,10 +132,10 @@ impl PushDownRule for PushProjectDownGetNeighborsRule {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::core::types::ContextualExpression;
     use crate::core::{Expression, YieldColumn};
     use crate::query::planning::plan::core::nodes::{GetNeighborsNode, ProjectNode};
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use std::sync::Arc;
 
     fn create_yield_column(expr: Expression, alias: &str) -> YieldColumn {

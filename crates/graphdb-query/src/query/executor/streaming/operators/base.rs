@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use super::super::runtime::{ExecutionRuntime, OperatorProfileKey};
 use super::super::spill::SpillManager;
-use super::super::state::{GlobalState, GlobalStateKey, LocalState, LocalStateKey, StateArenaSet, TaskId};
+use super::super::state::{
+    GlobalState, GlobalStateKey, LocalState, LocalStateKey, StateArenaSet, TaskId,
+};
 use crate::query::executor::streaming::plan::types::PhysicalOperatorId;
 
 /// Explicit operator lifecycle state machine.
@@ -117,8 +119,11 @@ impl OperatorBase {
     ///
     /// Panics if no runtime is attached.
     pub fn state_arena(&self) -> parking_lot::MutexGuard<'_, StateArenaSet> {
-        self.runtime.as_ref().expect("runtime required")
-            .state_arena.lock()
+        self.runtime
+            .as_ref()
+            .expect("runtime required")
+            .state_arena
+            .lock()
     }
 
     /// Return the [`GlobalStateKey`] for this operator's slot.
@@ -138,7 +143,9 @@ impl OperatorBase {
     /// No-op when no runtime is attached (e.g. in unit tests that construct
     /// executor trees directly without an [`ExecutionRuntime`]).
     pub fn insert_state(&mut self, state: GlobalState) {
-        let Some(rt) = self.runtime.as_ref() else { return };
+        let Some(rt) = self.runtime.as_ref() else {
+            return;
+        };
         let key = self.state_key();
         rt.state_arena.lock().global.insert(key, state);
     }
@@ -152,7 +159,9 @@ impl OperatorBase {
 
     /// Insert a [`LocalState`] into the arena for a given task.
     pub fn insert_local_state(&mut self, task_id: TaskId, state: LocalState) {
-        let Some(rt) = self.runtime.as_ref() else { return };
+        let Some(rt) = self.runtime.as_ref() else {
+            return;
+        };
         let key = self.local_state_key(task_id);
         rt.state_arena.lock().local.insert(key, state);
     }
@@ -230,8 +239,6 @@ impl OperatorBase {
 
     /// Convenience accessor for the spill manager from the runtime.
     pub fn spill_manager(&self) -> Option<Arc<SpillManager>> {
-        self.runtime
-            .as_ref()
-            .and_then(|rt| rt.get_spill_manager())
+        self.runtime.as_ref().and_then(|rt| rt.get_spill_manager())
     }
 }

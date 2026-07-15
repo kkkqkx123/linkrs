@@ -5,7 +5,6 @@ use parking_lot::RwLock;
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::Value;
-use crate::query::planning::plan::core::nodes::management::FulltextManageNode;
 #[cfg(not(feature = "fulltext-search"))]
 use crate::query::core::NodeType;
 use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
@@ -13,9 +12,10 @@ use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::operators::base::OperatorBase;
 #[cfg(feature = "fulltext-search")]
 use crate::query::executor::streaming::operators::ddl_operator::make_single_row;
+use crate::query::planning::plan::core::nodes::management::FulltextManageNode;
 #[cfg(feature = "fulltext-search")]
 use crate::search::manager::FulltextIndexManager;
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 
 #[cfg(not(feature = "fulltext-search"))]
 fn fulltext_command_name(cmd: &FulltextManageNode) -> &str {
@@ -64,14 +64,14 @@ fn make_manage_result(action: &str, name: Option<&str>, status: &str) -> DataChu
 #[derive(Debug)]
 pub enum FulltextOperator {
     FulltextManage {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         command: FulltextManageNode,
         #[cfg(feature = "fulltext-search")]
         fulltext_manager: Option<Arc<FulltextIndexManager>>,
     },
     FulltextSearch {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         space_id: u64,
         index_name: String,
@@ -82,7 +82,7 @@ pub enum FulltextOperator {
         fulltext_manager: Option<Arc<FulltextIndexManager>>,
     },
     FulltextLookup {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         space_id: u64,
         index_name: String,
@@ -93,7 +93,7 @@ pub enum FulltextOperator {
         fulltext_manager: Option<Arc<FulltextIndexManager>>,
     },
     MatchFulltext {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         match_expr: Expression,
         match_field: Option<String>,
@@ -108,7 +108,7 @@ impl FulltextOperator {
     /// Create a FulltextOperator from an immutable spec.
     pub fn from_spec(
         spec: &super::spec::FulltextSpec,
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         #[cfg(feature = "fulltext-search")] fulltext_manager: Option<Arc<FulltextIndexManager>>,
     ) -> Self {
         match spec {

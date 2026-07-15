@@ -15,9 +15,9 @@ pub mod executor;
 pub mod metadata;
 pub mod optimizer;
 pub mod parser;
+pub mod pipeline;
 pub mod planning;
 pub mod query_manager;
-pub mod pipeline;
 pub mod validator;
 
 // Re-export DataSet for convenience

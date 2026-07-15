@@ -25,7 +25,6 @@ use std::sync::Arc;
 
 use crate::core::metadata::SchemaManager;
 use crate::core::stats::StatsManager;
-use crate::core::types::TransactionContextInfo;
 use crate::core::types::{
     CompactConfig, EdgeTypeInfo, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo,
     PropertyDef, SpaceInfo, TagInfo, Timestamp, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
@@ -37,9 +36,9 @@ use crate::storage::engine::graph_storage::context::ExportedEdgeSnapshotRecord;
 use crate::storage::engine::PersistenceConfig;
 use crate::storage::index::IndexGcConfig;
 use crate::storage::{
-    StorageAdmin, StorageAuthOps, StorageGcOps, StoragePersistenceOps, StorageReader,
-    StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps, StorageStats,
-    StorageSyncContextOps, StorageTransactionContextOps, StorageWriter,
+    StorageAdmin, StorageAuthOps, StorageGcOps, StorageOperationContext,
+    StorageOperationContextOps, StoragePersistenceOps, StorageReader, StorageRecoveryOps,
+    StorageSchemaContextOps, StorageSchemaOps, StorageStats, StorageSyncContextOps, StorageWriter,
 };
 
 #[derive(Clone)]
@@ -68,7 +67,7 @@ impl GraphStorage {
         config: crate::storage::engine::config::PropertyGraphConfig,
     ) -> StorageResult<Self> {
         Ok(Self {
-            ctx: Arc::new(GraphStorageContext::new_with_config(config)),
+            ctx: Arc::new(GraphStorageContext::new_with_config(config)?),
         })
     }
 
@@ -166,6 +165,16 @@ impl GraphStorage {
 
     pub fn trigger_background_freeze(&self) -> StorageResult<()> {
         self.ctx.trigger_background_freeze()
+    }
+
+    /// Remove old published checkpoints while retaining the newest recovery points.
+    pub fn cleanup_old_checkpoints(&self, max_checkpoints: usize) -> StorageResult<usize> {
+        let persistence = self
+            .ctx
+            .persistence()
+            .as_ref()
+            .ok_or_else(|| StorageError::not_supported("Persistence is not enabled"))?;
+        persistence.read().cleanup_old_checkpoints(max_checkpoints)
     }
 }
 
@@ -349,7 +358,7 @@ impl StorageReader for GraphStorage {
         let tag_info = self.ctx.schema_manager().get_tag(space, tag)?;
         let tag_info = tag_info.ok_or_else(|| StorageError::label_not_found(tag.to_string()))?;
 
-        let vertex_tables = self.ctx.data_store().vertex_tables().read();
+        let vertex_tables = self.ctx.data_store().read_vertex_tables();
         let table = vertex_tables
             .get(&tag_info.tag_id)
             .ok_or_else(|| StorageError::label_not_found(tag.to_string()))?;
@@ -371,7 +380,7 @@ impl StorageReader for GraphStorage {
             edge_info.ok_or_else(|| StorageError::label_not_found(edge_type.to_string()))?;
 
         let keys = {
-            let edge_label_index = self.ctx.data_store().edge_label_index().read();
+            let edge_label_index = self.ctx.data_store().read_edge_label_index();
             edge_label_index
                 .get(&edge_info.edge_type_id)
                 .ok_or_else(|| StorageError::label_not_found(edge_type.to_string()))?
@@ -384,7 +393,7 @@ impl StorageReader for GraphStorage {
 
         let key = &keys[0];
 
-        let edge_tables = self.ctx.data_store().edge_tables().read();
+        let edge_tables = self.ctx.data_store().read_edge_tables();
         let table = edge_tables
             .get(key)
             .ok_or_else(|| StorageError::label_not_found(edge_type.to_string()))?;
@@ -787,6 +796,10 @@ impl StoragePersistenceOps for GraphStorage {
         persistence::snapshot_stats(&self.ctx)
     }
 
+    fn persistence_diagnostics(&self) -> Option<crate::storage::PersistenceDiagnostics> {
+        persistence::persistence_diagnostics(&self.ctx)
+    }
+
     fn compact(&self, config: &CompactConfig) -> StorageResult<()> {
         persistence::compact_transactional(&self.ctx, config)
     }
@@ -822,13 +835,21 @@ impl StorageSchemaContextOps for GraphStorage {
     }
 }
 
-impl StorageTransactionContextOps for GraphStorage {
-    fn get_transaction_context(&self) -> Option<Arc<TransactionContextInfo>> {
-        self.ctx.get_transaction_context()
+impl StorageOperationContextOps for GraphStorage {
+    fn bind_auto_commit_context(&self) -> Self {
+        Self {
+            ctx: Arc::new(self.ctx.with_auto_commit_context()),
+        }
     }
 
-    fn set_transaction_context(&self, context: Option<Arc<TransactionContextInfo>>) {
-        self.ctx.set_transaction_context(context);
+    fn bind_operation_context(&self, context: StorageOperationContext) -> Self {
+        Self {
+            ctx: Arc::new(self.ctx.with_operation_context(context)),
+        }
+    }
+
+    fn operation_context(&self) -> Option<Arc<StorageOperationContext>> {
+        self.ctx.operation_context()
     }
 }
 

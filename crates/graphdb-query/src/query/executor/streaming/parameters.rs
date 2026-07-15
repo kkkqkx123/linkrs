@@ -37,10 +37,7 @@ pub struct ParameterSchema {
 
 impl ParameterSchema {
     pub fn new(params: Vec<ParameterDesc>) -> Self {
-        let name_to_slot = params
-            .iter()
-            .map(|p| (p.name.clone(), p.slot))
-            .collect();
+        let name_to_slot = params.iter().map(|p| (p.name.clone(), p.slot)).collect();
         Self {
             params,
             name_to_slot,

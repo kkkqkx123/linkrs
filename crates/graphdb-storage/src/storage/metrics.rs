@@ -5,14 +5,14 @@ use crate::core::metadata::SchemaManager;
 use crate::core::stats::StatsManager;
 use crate::core::types::{
     EdgeTypeInfo, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo, PropertyDef,
-    SpaceInfo, TagInfo, TransactionContextInfo, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
+    SpaceInfo, TagInfo, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
 };
 use crate::core::{Edge, EdgeDirection, RoleType, StorageError, Value, Vertex};
 use crate::storage::{
-    StorageAdmin, StorageAuthOps, StorageClient, StorageGcOps, StoragePersistenceOps,
-    StorageReader, StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps,
-    StorageSnapshotOps, StorageStats, StorageSyncContextOps, StorageTransactionContextOps,
-    StorageWriter,
+    StorageAdmin, StorageAuthOps, StorageClient, StorageGcOps, StorageOperationContext,
+    StorageOperationContextOps, StoragePersistenceOps, StorageReader, StorageRecoveryOps,
+    StorageSchemaContextOps, StorageSchemaOps, StorageSnapshotOps, StorageStats,
+    StorageSyncContextOps, StorageWriter,
 };
 use crate::sync::SyncManager;
 
@@ -281,6 +281,10 @@ impl<S: StorageClient> StoragePersistenceOps for MetricsStorage<S> {
         self.inner.snapshot_stats()
     }
 
+    fn persistence_diagnostics(&self) -> Option<crate::storage::PersistenceDiagnostics> {
+        self.inner.persistence_diagnostics()
+    }
+
     fn compact(
         &self,
         config: &crate::core::types::CompactConfig,
@@ -313,16 +317,24 @@ impl<S: StorageClient + StorageSchemaContextOps> StorageSchemaContextOps for Met
     );
 }
 
-impl<S: StorageClient + StorageTransactionContextOps> StorageTransactionContextOps
-    for MetricsStorage<S>
-{
-    forward_methods!(inner;
-        fn get_transaction_context(&self) -> Option<Arc<TransactionContextInfo>>;
-    );
+impl<S: StorageClient> StorageOperationContextOps for MetricsStorage<S> {
+    fn bind_auto_commit_context(&self) -> Self {
+        Self {
+            inner: self.inner.bind_auto_commit_context(),
+            stats_manager: self.stats_manager.clone(),
+        }
+    }
 
-    forward_methods!(inner;
-        fn set_transaction_context(&self, ctx: Option<Arc<TransactionContextInfo>>);
-    );
+    fn bind_operation_context(&self, context: StorageOperationContext) -> Self {
+        Self {
+            inner: self.inner.bind_operation_context(context),
+            stats_manager: self.stats_manager.clone(),
+        }
+    }
+
+    fn operation_context(&self) -> Option<Arc<StorageOperationContext>> {
+        self.inner.operation_context()
+    }
 }
 
 impl<S: StorageClient + StorageSyncContextOps> StorageSyncContextOps for MetricsStorage<S> {

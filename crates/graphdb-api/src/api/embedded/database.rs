@@ -218,7 +218,7 @@ impl GraphDatabase<GraphStorage> {
 
         let fulltext_config = FulltextConfig::default();
 
-        let (fulltext_manager, sync_manager) = if fulltext_config.enabled {
+        let (fulltext_manager, mut sync_manager) = if fulltext_config.enabled {
             #[cfg(feature = "fulltext-search")]
             {
                 let manager: Arc<FulltextIndexManager> = Arc::new(
@@ -256,6 +256,15 @@ impl GraphDatabase<GraphStorage> {
             #[cfg(feature = "qdrant")]
             setup_sync_with_vector_only(vector_runtime.handle())?
         };
+
+        if let (Some(path), Some(manager)) =
+            (config.path(), sync_manager.as_mut().and_then(Arc::get_mut))
+        {
+            manager
+                .configure_outbox(path.join("outbox/events.json"))
+                .map_err(|error| CoreError::StorageError(error.to_string()))?;
+            let _ = manager.retry_outbox_sync();
+        }
 
         let txn_manager_config = TransactionManagerConfig::default();
 

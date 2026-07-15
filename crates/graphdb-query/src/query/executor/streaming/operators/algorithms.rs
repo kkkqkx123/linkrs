@@ -10,7 +10,7 @@ use crate::query::executor::expression::evaluator::traits::ExpressionContext;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::context::ValueRowContext;
 use crate::query::executor::streaming::slot::SlotLayout;
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 
 pub(crate) struct BidirBfsConfig<'a> {
     pub(crate) space_name: &'a str,
@@ -63,7 +63,7 @@ pub(crate) fn path_endpoint_pairs(
 }
 
 pub(crate) fn bidir_bfs_shortest_path(
-    storage: &dyn StorageClient,
+    storage: &dyn QueryStorage,
     start_id: &VertexId,
     end_id: &VertexId,
     cfg: BidirBfsConfig,
@@ -244,7 +244,7 @@ pub(crate) struct AllPathsConfig<'a> {
 }
 
 pub(crate) fn enumerate_all_paths(
-    storage: &dyn StorageClient,
+    storage: &dyn QueryStorage,
     start_id: &VertexId,
     end_id: &VertexId,
     cfg: AllPathsConfig<'_>,

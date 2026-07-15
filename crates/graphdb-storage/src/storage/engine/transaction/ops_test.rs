@@ -10,6 +10,7 @@ mod tests {
     use crate::storage::vertex::{VertexSchema, VertexTable};
 
     use crate::storage::engine::transaction::ops::{
+        create_edge_type_undo, create_vertex_type_undo, delete_edge_type, delete_vertex_type,
         AddEdgeParams, DeleteEdgeParams, DeleteEdgeTypeParams, RevertDeleteEdgeParams,
         TransactionOps,
     };
@@ -285,7 +286,7 @@ mod tests {
         edge_label_names.insert("KNOWS".to_string(), 0);
         edge_label_names.insert("WORKS_AT".to_string(), 1);
 
-        TransactionOps::delete_vertex_type(
+        delete_vertex_type(
             &mut vertex_tables,
             &mut edge_tables,
             &mut vertex_label_names,
@@ -323,7 +324,7 @@ mod tests {
             edge_label: 0,
         };
 
-        TransactionOps::delete_edge_type(&mut edge_tables, &mut edge_label_names, params).unwrap();
+        delete_edge_type(&mut edge_tables, &mut edge_label_names, params).unwrap();
 
         assert!(!edge_label_names.contains_key("KNOWS"));
         assert!(!edge_tables.contains_key(&EdgeTableKey::new(0, 1, 0)));
@@ -411,7 +412,7 @@ mod tests {
         let mut vertex_label_names: HashMap<String, LabelId> = HashMap::new();
         let mut vertex_label_counter: LabelId = 0;
 
-        TransactionOps::create_vertex_type_undo(
+        create_vertex_type_undo(
             &mut vertex_tables,
             &mut vertex_label_names,
             &mut vertex_label_counter,
@@ -424,7 +425,7 @@ mod tests {
         assert!(vertex_label_counter >= 1);
 
         // Create another
-        TransactionOps::create_vertex_type_undo(
+        create_vertex_type_undo(
             &mut vertex_tables,
             &mut vertex_label_names,
             &mut vertex_label_counter,
@@ -442,7 +443,7 @@ mod tests {
         let mut vertex_label_names: HashMap<String, LabelId> = HashMap::new();
         let mut vertex_label_counter: LabelId = 0;
 
-        TransactionOps::create_vertex_type_undo(
+        create_vertex_type_undo(
             &mut vertex_tables,
             &mut vertex_label_names,
             &mut vertex_label_counter,
@@ -454,7 +455,7 @@ mod tests {
         let mut edge_label_names: HashMap<String, LabelId> = HashMap::new();
         let mut edge_label_counter: LabelId = 0;
 
-        let result = TransactionOps::create_edge_type_undo(
+        let result = create_edge_type_undo(
             &mut edge_tables,
             &mut edge_label_names,
             &mut edge_label_counter,
@@ -477,7 +478,7 @@ mod tests {
         let mut edge_label_names: HashMap<String, LabelId> = HashMap::new();
         let mut edge_label_counter: LabelId = 0;
 
-        let result = TransactionOps::create_edge_type_undo(
+        let result = create_edge_type_undo(
             &mut edge_tables,
             &mut edge_label_names,
             &mut edge_label_counter,
@@ -496,7 +497,7 @@ mod tests {
         let mut vertex_label_counter: LabelId = 0;
 
         // First create a vertex type with property "name"
-        TransactionOps::create_vertex_type_undo(
+        create_vertex_type_undo(
             &mut vertex_tables,
             &mut vertex_label_names,
             &mut vertex_label_counter,
@@ -542,7 +543,7 @@ mod tests {
         let mut vertex_label_counter: LabelId = 0;
 
         // Create vertex type (version starts at 1)
-        TransactionOps::create_vertex_type_undo(
+        create_vertex_type_undo(
             &mut vertex_tables,
             &mut vertex_label_names,
             &mut vertex_label_counter,

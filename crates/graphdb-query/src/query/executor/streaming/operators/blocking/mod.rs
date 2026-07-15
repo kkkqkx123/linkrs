@@ -6,7 +6,6 @@ use crate::core::types::expr::Expression;
 use crate::core::types::operators::AggregateFunction;
 use crate::core::value::NullType;
 use crate::core::Value;
-use crate::query::executor::streaming::spill::{SpilledFile, SpillManager, SpillReader};
 use crate::query::executor::base::MemoryTracker;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
@@ -20,20 +19,21 @@ use crate::query::executor::streaming::helpers::compare_values;
 use crate::query::executor::streaming::helpers::compute_aggregate;
 use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::slot::SlotLayout;
+use crate::query::executor::streaming::spill::{SpillManager, SpillReader, SpilledFile};
 
-pub mod sort;
 pub mod aggregate;
-pub mod window;
 pub mod materialize;
+pub mod sort;
+pub mod window;
 
-pub use sort::{SortState, MergeState, RunBuffer, TopNState};
-pub use aggregate::{AggregateState, GroupByState, PartialAggregateState, FinalAggregateState};
+pub use aggregate::{AggregateState, FinalAggregateState, GroupByState, PartialAggregateState};
+pub use materialize::{DataCollectState, DistinctState, MaterializeState, RollUpApplyState};
+pub use sort::{MergeState, RunBuffer, SortState, TopNState};
 pub use window::{WindowFunctionState, WindowState};
-pub use materialize::{DistinctState, MaterializeState, DataCollectState, RollUpApplyState};
 
-use sort::{spill_sorted_run, sort_rows, find_min_run, refill_run_buffer, compare_rows_for_topn};
-use window::compute_window_function;
 use aggregate::{extract_field_value, value_to_partial_accumulator};
+use sort::{compare_rows_for_topn, find_min_run, refill_run_buffer, sort_rows, spill_sorted_run};
+use window::compute_window_function;
 
 fn spill_buffer(
     buffer: &mut Vec<Vec<Value>>,
@@ -243,15 +243,13 @@ impl BlockingOperator {
                 ),
                 state: None,
             },
-            super::spec::BlockingSpec::RollUpApply { rollup_expressions } => {
-                Self::RollUpApply {
-                    rollup_expressions: rollup_expressions.clone(),
-                    memory_tracker: crate::query::executor::base::MemoryTracker::new(
-                        memory_budget.clone(),
-                    ),
-                    state: None,
-                }
-            }
+            super::spec::BlockingSpec::RollUpApply { rollup_expressions } => Self::RollUpApply {
+                rollup_expressions: rollup_expressions.clone(),
+                memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                    memory_budget.clone(),
+                ),
+                state: None,
+            },
             super::spec::BlockingSpec::PartialAggregate {
                 group_by_expressions,
                 aggregate_functions,
@@ -426,9 +424,13 @@ impl BlockingOperator {
                             if let Err(e) = memory_tracker.try_reserve_row(&row) {
                                 if let Some(sm) = base.spill_manager() {
                                     spill_sorted_run(
-                                        &mut st.all_rows, &st.col_names,
-                                        sort_expressions, sort_directions,
-                                        &sm, memory_tracker, &mut st.runs,
+                                        &mut st.all_rows,
+                                        &st.col_names,
+                                        sort_expressions,
+                                        sort_directions,
+                                        &sm,
+                                        memory_tracker,
+                                        &mut st.runs,
                                     )?;
                                     st.has_spilled = true;
                                     memory_tracker.try_reserve_row(&row)?;
@@ -451,16 +453,21 @@ impl BlockingOperator {
                         if !st.all_rows.is_empty() {
                             if let Some(sm) = base.spill_manager() {
                                 spill_sorted_run(
-                                    &mut st.all_rows, &st.col_names,
-                                    sort_expressions, sort_directions,
-                                    &sm, memory_tracker, &mut st.runs,
+                                    &mut st.all_rows,
+                                    &st.col_names,
+                                    sort_expressions,
+                                    sort_directions,
+                                    &sm,
+                                    memory_tracker,
+                                    &mut st.runs,
                                 )?;
                             }
                         }
 
                         let mut run_buffers = Vec::with_capacity(st.runs.len());
                         for run in &st.runs {
-                            let reader = crate::query::executor::streaming::spill::RunReader::open(run)?;
+                            let reader =
+                                crate::query::executor::streaming::spill::RunReader::open(run)?;
                             run_buffers.push(RunBuffer {
                                 rows: Vec::new(),
                                 index: 0,
@@ -478,7 +485,12 @@ impl BlockingOperator {
                         });
                     } else {
                         if !sort_expressions.is_empty() {
-                            sort_rows(&mut st.all_rows, &st.col_names, sort_expressions, sort_directions);
+                            sort_rows(
+                                &mut st.all_rows,
+                                &st.col_names,
+                                sort_expressions,
+                                sort_directions,
+                            );
                         }
                         let taken = std::mem::take(&mut st.all_rows);
                         st.row_iter = Some(taken.into_iter());
@@ -551,7 +563,12 @@ impl BlockingOperator {
                         for row in chunk.rows {
                             if let Err(e) = memory_tracker.try_reserve_row(&row) {
                                 if let Some(sm) = base.spill_manager() {
-                                    spill_buffer(&mut state.all_rows, &sm, &mut state.spill_files, memory_tracker)?;
+                                    spill_buffer(
+                                        &mut state.all_rows,
+                                        &sm,
+                                        &mut state.spill_files,
+                                        memory_tracker,
+                                    )?;
                                     memory_tracker.try_reserve_row(&row)?;
                                 } else {
                                     return Err(e);
@@ -644,7 +661,12 @@ impl BlockingOperator {
                         for row in chunk.rows {
                             if let Err(e) = memory_tracker.try_reserve_row(&row) {
                                 if let Some(sm) = base.spill_manager() {
-                                    spill_buffer(&mut state.all_rows, &sm, &mut state.spill_files, memory_tracker)?;
+                                    spill_buffer(
+                                        &mut state.all_rows,
+                                        &sm,
+                                        &mut state.spill_files,
+                                        memory_tracker,
+                                    )?;
                                     memory_tracker.try_reserve_row(&row)?;
                                 } else {
                                     return Err(e);
@@ -721,7 +743,12 @@ impl BlockingOperator {
                         for row in chunk.rows {
                             if let Err(e) = memory_tracker.try_reserve_row(&row) {
                                 if let Some(sm) = base.spill_manager() {
-                                    spill_buffer(&mut state.all_rows, &sm, &mut state.spill_files, memory_tracker)?;
+                                    spill_buffer(
+                                        &mut state.all_rows,
+                                        &sm,
+                                        &mut state.spill_files,
+                                        memory_tracker,
+                                    )?;
                                     memory_tracker.try_reserve_row(&row)?;
                                 } else {
                                     return Err(e);
@@ -870,7 +897,12 @@ impl BlockingOperator {
                         for row in chunk.rows {
                             if let Err(e) = memory_tracker.try_reserve_row(&row) {
                                 if let Some(sm) = base.spill_manager() {
-                                    spill_buffer(&mut state.all_rows, &sm, &mut state.spill_files, memory_tracker)?;
+                                    spill_buffer(
+                                        &mut state.all_rows,
+                                        &sm,
+                                        &mut state.spill_files,
+                                        memory_tracker,
+                                    )?;
                                     memory_tracker.try_reserve_row(&row)?;
                                 } else {
                                     return Err(e);
@@ -1144,7 +1176,12 @@ impl BlockingOperator {
                         for row in chunk.rows {
                             if let Err(e) = memory_tracker.try_reserve_row(&row) {
                                 if let Some(sm) = base.spill_manager() {
-                                    spill_buffer(&mut state.materialized_rows, &sm, &mut state.spill_files, memory_tracker)?;
+                                    spill_buffer(
+                                        &mut state.materialized_rows,
+                                        &sm,
+                                        &mut state.spill_files,
+                                        memory_tracker,
+                                    )?;
                                     memory_tracker.try_reserve_row(&row)?;
                                 } else {
                                     return Err(e);
@@ -1198,7 +1235,12 @@ impl BlockingOperator {
                     for row in chunk.rows {
                         if let Err(e) = memory_tracker.try_reserve_row(&row) {
                             if let Some(sm) = base.spill_manager() {
-                                spill_buffer(&mut state.all_rows, &sm, &mut state.spill_files, memory_tracker)?;
+                                spill_buffer(
+                                    &mut state.all_rows,
+                                    &sm,
+                                    &mut state.spill_files,
+                                    memory_tracker,
+                                )?;
                                 memory_tracker.try_reserve_row(&row)?;
                             } else {
                                 return Err(e);
@@ -1247,7 +1289,12 @@ impl BlockingOperator {
                         for row in chunk.rows {
                             if let Err(e) = memory_tracker.try_reserve_row(&row) {
                                 if let Some(sm) = base.spill_manager() {
-                                    spill_buffer(&mut state.all_rows, &sm, &mut state.spill_files, memory_tracker)?;
+                                    spill_buffer(
+                                        &mut state.all_rows,
+                                        &sm,
+                                        &mut state.spill_files,
+                                        memory_tracker,
+                                    )?;
                                     memory_tracker.try_reserve_row(&row)?;
                                 } else {
                                     return Err(e);
@@ -1408,15 +1455,14 @@ impl BlockingOperator {
                                         .collect()
                                 });
 
-                            for (i, func) in aggregate_functions.iter().enumerate().take(num_agg_funcs) {
+                            for (i, func) in
+                                aggregate_functions.iter().enumerate().take(num_agg_funcs)
+                            {
                                 if let Some(acc) = group_accs.get_mut(i) {
                                     let acc_col_idx = num_group_keys + i;
                                     let partial_value = row.get(acc_col_idx);
                                     if let Some(val) = partial_value {
-                                        let partial_acc = value_to_partial_accumulator(
-                                            func,
-                                            val,
-                                        );
+                                        let partial_acc = value_to_partial_accumulator(func, val);
                                         if let Some(other) = partial_acc {
                                             acc.merge(&other);
                                         }
@@ -1681,32 +1727,52 @@ impl BlockingOperator {
                 }
                 Ok(())
             }
-            Self::Aggregate { state, memory_tracker, .. } => {
+            Self::Aggregate {
+                state,
+                memory_tracker,
+                ..
+            } => {
                 if let Some(ref mut s) = state {
                     spill_buffer(&mut s.all_rows, sm, &mut s.spill_files, memory_tracker)?;
                 }
                 Ok(())
             }
-            Self::GroupBy { state, memory_tracker, .. } => {
+            Self::GroupBy {
+                state,
+                memory_tracker,
+                ..
+            } => {
                 if let Some(ref mut s) = state {
                     spill_buffer(&mut s.all_rows, sm, &mut s.spill_files, memory_tracker)?;
                 }
                 Ok(())
             }
-            Self::WindowFunction { state, memory_tracker, .. } => {
+            Self::WindowFunction {
+                state,
+                memory_tracker,
+                ..
+            } => {
                 if let Some(ref mut s) = state {
                     spill_buffer(&mut s.all_rows, sm, &mut s.spill_files, memory_tracker)?;
                 }
                 Ok(())
             }
-            Self::Window { state, memory_tracker, .. } => {
+            Self::Window {
+                state,
+                memory_tracker,
+                ..
+            } => {
                 if let Some(ref mut s) = state {
                     spill_buffer(&mut s.all_rows, sm, &mut s.spill_files, memory_tracker)?;
                 }
                 Ok(())
             }
             Self::TopN { .. } => Ok(()),
-            Self::Distinct { state, memory_tracker, .. } => {
+            Self::Distinct {
+                state,
+                memory_tracker,
+                ..
+            } => {
                 if let Some(ref mut s) = state {
                     if !s.seen_rows.is_empty() {
                         let rows: Vec<Vec<Value>> = s.seen_rows.iter().cloned().collect();
@@ -1720,19 +1786,36 @@ impl BlockingOperator {
                 }
                 Ok(())
             }
-            Self::Materialize { state, memory_tracker, .. } => {
+            Self::Materialize {
+                state,
+                memory_tracker,
+                ..
+            } => {
                 if let Some(ref mut s) = state {
-                    spill_buffer(&mut s.materialized_rows, sm, &mut s.spill_files, memory_tracker)?;
+                    spill_buffer(
+                        &mut s.materialized_rows,
+                        sm,
+                        &mut s.spill_files,
+                        memory_tracker,
+                    )?;
                 }
                 Ok(())
             }
-            Self::DataCollect { state, memory_tracker, .. } => {
+            Self::DataCollect {
+                state,
+                memory_tracker,
+                ..
+            } => {
                 if let Some(ref mut s) = state {
                     spill_buffer(&mut s.all_rows, sm, &mut s.spill_files, memory_tracker)?;
                 }
                 Ok(())
             }
-            Self::PartialAggregate { state, memory_tracker, .. } => {
+            Self::PartialAggregate {
+                state,
+                memory_tracker,
+                ..
+            } => {
                 if let Some(ref mut s) = state {
                     if !s.group_map.is_empty() {
                         let mut writer = sm.create_writer()?;
@@ -1751,13 +1834,21 @@ impl BlockingOperator {
                 }
                 Ok(())
             }
-            Self::RollUpApply { state, memory_tracker, .. } => {
+            Self::RollUpApply {
+                state,
+                memory_tracker,
+                ..
+            } => {
                 if let Some(ref mut s) = state {
                     spill_buffer(&mut s.all_rows, sm, &mut s.spill_files, memory_tracker)?;
                 }
                 Ok(())
             }
-            Self::FinalAggregate { state, memory_tracker, .. } => {
+            Self::FinalAggregate {
+                state,
+                memory_tracker,
+                ..
+            } => {
                 if let Some(ref mut s) = state {
                     if !s.group_map.is_empty() {
                         let mut writer = sm.create_writer()?;
@@ -1790,9 +1881,9 @@ impl BlockingOperator {
         match self {
             Self::Sort { state, .. } => {
                 let base = sum_spill!(state);
-                let run_bytes: u64 = state.as_ref().map_or(0, |s| {
-                    s.runs.iter().map(|r| r.byte_size).sum::<u64>()
-                });
+                let run_bytes: u64 = state
+                    .as_ref()
+                    .map_or(0, |s| s.runs.iter().map(|r| r.byte_size).sum::<u64>());
                 base + run_bytes
             }
             Self::Aggregate { state, .. } => sum_spill!(state),

@@ -36,7 +36,11 @@ pub struct FinalAggregateState {
     pub spill_files: Vec<SpilledFile>,
 }
 
-pub(crate) fn extract_field_value(row: &[Value], col_names: &[String], func: &AggregateFunction) -> Value {
+pub(crate) fn extract_field_value(
+    row: &[Value],
+    col_names: &[String],
+    func: &AggregateFunction,
+) -> Value {
     match func {
         AggregateFunction::Count(None) => Value::Int(1),
         AggregateFunction::Count(Some(field))

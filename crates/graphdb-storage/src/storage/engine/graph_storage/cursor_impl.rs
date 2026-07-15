@@ -29,9 +29,13 @@ pub(crate) struct GraphVertexCursor {
     current_internal_id: u32,
     max_internal_id: u32,
     limit: Option<usize>,
+    offset_remaining: usize,
     emitted: usize,
     id_range: Option<Range<i64>>,
+    projection: Option<Vec<String>>,
     exhausted: bool,
+    /// Read timestamp captured when the cursor is opened.
+    ts: Timestamp,
 }
 
 impl std::fmt::Debug for GraphVertexCursor {
@@ -42,6 +46,7 @@ impl std::fmt::Debug for GraphVertexCursor {
             .field("current_internal_id", &self.current_internal_id)
             .field("max_internal_id", &self.max_internal_id)
             .field("limit", &self.limit)
+            .field("offset_remaining", &self.offset_remaining)
             .field("exhausted", &self.exhausted)
             .finish()
     }
@@ -53,6 +58,16 @@ impl GraphVertexCursor {
         space: String,
         options: &ScanOptions,
     ) -> StorageResult<Self> {
+        let ts = ctx.get_read_timestamp();
+        if options
+            .vertex_id_range
+            .as_ref()
+            .is_some_and(|range| range.start < 0 || range.end < 0 || range.end > u32::MAX as i64)
+        {
+            return Err(StorageError::invalid_operation(
+                "vertex_id_range must fit non-negative u32 internal IDs",
+            ));
+        }
         let tag_infos = ctx.schema_manager().list_tags(&space)?;
         let tags = TagCache {
             labels: tag_infos.iter().map(|t| t.tag_id).collect(),
@@ -63,7 +78,7 @@ impl GraphVertexCursor {
         };
 
         let max_internal_id = {
-            let tables = ctx.data_store().vertex_tables().read();
+            let tables = ctx.data_store().read_vertex_tables();
             tags.labels
                 .iter()
                 .filter_map(|label_id| tables.get(label_id))
@@ -79,9 +94,12 @@ impl GraphVertexCursor {
             current_internal_id: 0,
             max_internal_id,
             limit: options.limit,
+            offset_remaining: options.offset,
             emitted: 0,
             id_range: options.vertex_id_range.clone(),
+            projection: options.projection.clone(),
             exhausted: max_internal_id == 0,
+            ts,
         })
     }
 }
@@ -92,8 +110,9 @@ impl VertexCursor for GraphVertexCursor {
             return Ok(Vec::new());
         }
 
-        let ts = self.ctx.get_read_timestamp();
-        let tables = self.ctx.data_store().vertex_tables().read();
+        let batch_size = batch_size.max(1);
+        let ts = self.ts;
+        let tables = self.ctx.data_store().read_vertex_tables();
         let mut batch = Vec::new();
 
         while batch.len() < batch_size && self.current_internal_id < self.max_internal_id {
@@ -122,8 +141,16 @@ impl VertexCursor for GraphVertexCursor {
                             .get(label_id)
                             .map(|s| s.as_str())
                             .unwrap_or("unknown");
-                        let props: HashMap<String, Value> =
-                            record.properties.iter().cloned().collect();
+                        let props: HashMap<String, Value> = record
+                            .properties
+                            .iter()
+                            .filter(|(name, _)| {
+                                self.projection
+                                    .as_ref()
+                                    .is_none_or(|projection| projection.iter().any(|p| p == name))
+                            })
+                            .cloned()
+                            .collect();
                         merged_tags.push(Tag::new(tag_name.to_string(), props.clone()));
                         all_properties.extend(props);
                     }
@@ -131,6 +158,10 @@ impl VertexCursor for GraphVertexCursor {
             }
 
             if let Some(vid) = merged_vid {
+                if self.offset_remaining > 0 {
+                    self.offset_remaining -= 1;
+                    continue;
+                }
                 batch.push(Vertex {
                     vid,
                     id: internal_id as i64,
@@ -204,8 +235,10 @@ impl TableScanState {
 pub(crate) struct GraphEdgeCursor {
     ctx: Arc<GraphStorageContext>,
     limit: Option<usize>,
+    offset_remaining: usize,
     emitted: usize,
     src_id_range: Option<Range<i64>>,
+    projection: Option<Vec<String>>,
     exhausted: bool,
     ts: Timestamp,
     targets: Vec<TargetDef>,
@@ -221,6 +254,7 @@ impl std::fmt::Debug for GraphEdgeCursor {
             .field("table_idx", &self.table_idx)
             .field("phase", &self.table_state.phase)
             .field("limit", &self.limit)
+            .field("offset_remaining", &self.offset_remaining)
             .field("emitted", &self.emitted)
             .field("exhausted", &self.exhausted)
             .finish()
@@ -240,15 +274,17 @@ impl GraphEdgeCursor {
             let edge_types = ctx.schema_manager().list_edge_types(space)?;
             edge_types
                 .into_iter()
-                .filter_map(|et| build_target(&ctx, space, &et.edge_type_name).ok())
-                .collect()
+                .map(|et| build_target(&ctx, space, &et.edge_type_name))
+                .collect::<StorageResult<Vec<_>>>()?
         };
 
         Ok(Self {
             ctx,
             limit: options.limit,
+            offset_remaining: options.offset,
             emitted: 0,
             src_id_range: options.edge_src_id_range.clone(),
+            projection: options.projection.clone(),
             exhausted: targets.is_empty(),
             ts,
             targets,
@@ -265,20 +301,23 @@ impl EdgeCursor for GraphEdgeCursor {
             return Ok(Vec::new());
         }
 
+        let batch_size = batch_size.max(1);
         let mut batch = Vec::new();
 
         let ctx = &*self.ctx;
         let ts = self.ts;
         let limit = self.limit;
         let src_id_range = &self.src_id_range;
+        let projection = &self.projection;
         let targets = &self.targets;
         let target_idx = &mut self.target_idx;
         let table_idx = &mut self.table_idx;
         let table_state = &mut self.table_state;
         let emitted = &mut self.emitted;
+        let offset_remaining = &mut self.offset_remaining;
         let exhausted = &mut self.exhausted;
 
-        let edge_tables = ctx.data_store().edge_tables().read();
+        let edge_tables = ctx.data_store().read_edge_tables();
 
         'outer: while batch.len() < batch_size {
             if *target_idx >= targets.len() {
@@ -314,8 +353,10 @@ impl EdgeCursor for GraphEdgeCursor {
                         td,
                         ts,
                         src_id_range,
+                        projection,
                         limit,
                         emitted,
+                        offset_remaining,
                         state: table_state,
                         batch: &mut batch,
                         batch_size,
@@ -330,8 +371,10 @@ impl EdgeCursor for GraphEdgeCursor {
                             td,
                             ts,
                             src_id_range,
+                            projection,
                             limit,
                             emitted,
+                            offset_remaining,
                             state: table_state,
                             batch: &mut batch,
                             batch_size,
@@ -362,8 +405,10 @@ struct ScanArgs<'a> {
     td: &'a TableDef,
     ts: Timestamp,
     src_id_range: &'a Option<Range<i64>>,
+    projection: &'a Option<Vec<String>>,
     limit: Option<usize>,
     emitted: &'a mut usize,
+    offset_remaining: &'a mut usize,
     state: &'a mut TableScanState,
     batch: &'a mut Vec<Edge>,
     batch_size: usize,
@@ -388,6 +433,7 @@ fn scan_mutable(args: ScanArgs) {
     }
 
     for (src_vid, nbr) in iter {
+        args.state.mutable_consumed += 1;
         if args.store.mvcc.is_tombstoned(nbr.edge_id, args.ts) {
             continue;
         }
@@ -401,6 +447,11 @@ fn scan_mutable(args: ScanArgs) {
             }
         }
 
+        if *args.offset_remaining > 0 {
+            *args.offset_remaining -= 1;
+            continue;
+        }
+
         let edge = build_edge(
             args.ctx,
             args.store,
@@ -409,10 +460,10 @@ fn scan_mutable(args: ScanArgs) {
             &src_vid,
             nbr,
             args.ts,
+            args.projection,
         );
         args.batch.push(edge);
         *args.emitted += 1;
-        args.state.mutable_consumed += 1;
 
         if args.batch.len() >= args.batch_size {
             return;
@@ -477,7 +528,14 @@ fn scan_segments(args: ScanArgs, seg_idx: usize) {
             &src_vid,
             nbr,
             args.ts,
+            args.projection,
         );
+
+        if *args.offset_remaining > 0 {
+            *args.offset_remaining -= 1;
+            continue;
+        }
+
         args.batch.push(edge);
         *args.emitted += 1;
 
@@ -502,6 +560,7 @@ fn scan_segments(args: ScanArgs, seg_idx: usize) {
 // Edge construction
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn build_edge(
     ctx: &GraphStorageContext,
     store: &TimeTravelEdgeStore,
@@ -510,10 +569,11 @@ fn build_edge(
     src_vid: &VertexId,
     nbr: Nbr,
     ts: Timestamp,
+    projection: &Option<Vec<String>>,
 ) -> Edge {
     let src_internal = src_vid.as_int64().unwrap_or(0) as u32;
     let (dst_vid, rank) = decode_endpoint(nbr.neighbor);
-    let properties = properties_for(store, nbr.prop_offset);
+    let properties = properties_for(store, nbr.prop_offset, projection);
 
     let record = EdgeRecord {
         src_vid: VertexId::from_int64(src_internal as i64),
@@ -553,7 +613,11 @@ fn decode_endpoint(key: VertexId) -> (VertexId, i64) {
     )
 }
 
-fn properties_for(store: &TimeTravelEdgeStore, prop_offset: u32) -> Vec<(String, Value)> {
+fn properties_for(
+    store: &TimeTravelEdgeStore,
+    prop_offset: u32,
+    projection: &Option<Vec<String>>,
+) -> Vec<(String, Value)> {
     if prop_offset == 0 {
         return Vec::new();
     }
@@ -563,7 +627,14 @@ fn properties_for(store: &TimeTravelEdgeStore, prop_offset: u32) -> Vec<(String,
         .map(|props| {
             props
                 .into_iter()
-                .filter_map(|(k, v)| v.map(|v| (k, v)))
+                .filter_map(|(k, v)| {
+                    v.filter(|_| {
+                        projection
+                            .as_ref()
+                            .is_none_or(|names| names.iter().any(|name| name == &k))
+                    })
+                    .map(|v| (k, v))
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -619,7 +690,7 @@ fn build_target(
     let dst_label_id = endpoint_label_id(ctx, space, &edge_info.dst_tag_name)?.unwrap_or(0);
 
     let tables = if src_label_id == 0 && dst_label_id == 0 {
-        let edge_tables = ctx.data_store().edge_tables().read();
+        let edge_tables = ctx.data_store().read_edge_tables();
         edge_tables
             .iter()
             .filter(|(_, store)| store.label() == edge_label_id)

@@ -324,10 +324,10 @@ impl StatementValidator for LimitValidator {
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::core::types::expr::Expression;
     use crate::core::Value;
     use crate::query::parser::ast::Stmt;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::query::QueryRequestContext;
 
     /// Create a QueryContext for testing purposes, which should contain a valid space_id.

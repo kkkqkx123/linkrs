@@ -1,6 +1,5 @@
 use crate::core::value::geography::{
-    Geography, GeographyValue, LineStringValue, MultiLineStringValue, MultiPointValue,
-    PolygonValue,
+    Geography, GeographyValue, LineStringValue, MultiLineStringValue, MultiPointValue, PolygonValue,
 };
 use crate::core::value::NullType;
 use crate::core::Value;
@@ -79,8 +78,7 @@ pub fn execute_st_npoints(args: &[Value]) -> Result<Value, ExpressionError> {
                 Geography::Point(_) => 1,
                 Geography::LineString(ls) => ls.points.len(),
                 Geography::Polygon(p) => {
-                    p.exterior.points.len()
-                        + p.holes.iter().map(|h| h.points.len()).sum::<usize>()
+                    p.exterior.points.len() + p.holes.iter().map(|h| h.points.len()).sum::<usize>()
                 }
                 Geography::MultiPoint(mp) => mp.points.len(),
                 Geography::MultiLineString(mls) => {

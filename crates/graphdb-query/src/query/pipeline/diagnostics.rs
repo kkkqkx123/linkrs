@@ -3,15 +3,17 @@ use crate::core::error::{DBError, DBResult, QueryError};
 use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::query::executor::base::{BaseExecutor, ExecutionResult, Executor};
 use crate::query::executor::explain::ProfileExecutor;
-use crate::query::executor::streaming::instance::{QueryBindings, QueryExecutionInstance, ResultSink};
+use crate::query::executor::streaming::instance::{
+    QueryBindings, QueryExecutionInstance, ResultSink,
+};
 use crate::query::executor::streaming::transaction_scope::TransactionScope;
 use crate::query::parser::ast::stmt::{ExplainStmt, ProfileStmt};
 use crate::query::validator::ValidatedStatement;
 use crate::query::QueryContext;
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 use std::sync::Arc;
 
-impl<S: StorageClient + 'static> QueryPipelineManager<S> {
+impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     pub fn execute_explain(
         &mut self,
         explain_stmt: &ExplainStmt,

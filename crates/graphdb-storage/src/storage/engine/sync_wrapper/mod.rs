@@ -7,9 +7,9 @@ use crate::core::metadata::SchemaManager;
 use crate::core::types::{EdgeTypeInfo, TagInfo, VertexId};
 use crate::core::{Edge, StorageError, Value, Vertex};
 use crate::storage::{
-    StorageAdmin, StorageAuthOps, StorageClient, StorageGcOps, StoragePersistenceOps,
-    StorageReader, StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps,
-    StorageSnapshotOps, StorageSyncContextOps, StorageTransactionContextOps,
+    StorageAdmin, StorageAuthOps, StorageClient, StorageGcOps, StorageOperationContext,
+    StorageOperationContextOps, StoragePersistenceOps, StorageReader, StorageRecoveryOps,
+    StorageSchemaContextOps, StorageSchemaOps, StorageSnapshotOps, StorageSyncContextOps,
 };
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -67,10 +67,12 @@ impl<S: StorageClient> SyncWrapper<S> {
     }
 }
 
-impl<S: StorageClient + StorageTransactionContextOps> SyncWrapper<S> {
+impl<S: StorageClient> SyncWrapper<S> {
     /// Get the current transaction ID from storage context.
     fn get_current_txn_id(&self) -> Option<crate::core::types::TransactionId> {
-        self.inner.get_transaction_context().map(|ctx| ctx.id)
+        self.inner
+            .operation_context()
+            .and_then(|ctx| ctx.transaction_id)
     }
 }
 
@@ -472,16 +474,41 @@ impl<S: StorageClient + 'static> StoragePersistenceOps for SyncWrapper<S> {
         fn flush(&self) -> Result<(), StorageError>;
         fn save_data(&self) -> crate::core::StorageResult<()>;
         fn save_data_to_dir(&self, dir: &std::path::Path) -> crate::core::StorageResult<()>;
-        fn create_checkpoint(&self) -> crate::core::StorageResult<Option<crate::storage::CheckpointStats>>;
         fn verify_snapshot(&self, snapshot_id: u64) -> crate::core::StorageResult<bool>;
         fn cleanup_snapshots(&self) -> crate::core::StorageResult<usize>;
         fn snapshot_stats(&self) -> crate::storage::SnapshotStats;
+        fn persistence_diagnostics(&self) -> Option<crate::storage::PersistenceDiagnostics>;
         fn compact(&self, config: &crate::core::types::CompactConfig) -> crate::core::StorageResult<()>;
         fn auto_flush_if_needed(&self) -> crate::core::StorageResult<bool>;
-        fn auto_checkpoint_if_needed(&self) -> crate::core::StorageResult<Option<crate::storage::CheckpointStats>>;
         fn should_flush(&self) -> bool;
         fn should_checkpoint(&self) -> bool;
     );
+
+    fn create_checkpoint(
+        &self,
+    ) -> crate::core::StorageResult<Option<crate::storage::CheckpointStats>> {
+        let result = self.inner.create_checkpoint()?;
+        if let (Some(stats), Some(manager)) = (&result, &self.sync_manager) {
+            let safe_lsn = self
+                .inner
+                .persistence_diagnostics()
+                .map(|diagnostics| diagnostics.safe_lsn.as_u64())
+                .unwrap_or(0);
+            manager
+                .mark_outbox_checkpoint(stats.checkpoint_id, safe_lsn)
+                .map_err(|error| StorageError::db_error(error.to_string()))?;
+        }
+        Ok(result)
+    }
+
+    fn auto_checkpoint_if_needed(
+        &self,
+    ) -> crate::core::StorageResult<Option<crate::storage::CheckpointStats>> {
+        if !self.should_checkpoint() {
+            return Ok(None);
+        }
+        self.create_checkpoint()
+    }
 }
 
 impl<S: StorageClient + StorageSchemaContextOps + 'static> StorageSchemaContextOps
@@ -492,16 +519,26 @@ impl<S: StorageClient + StorageSchemaContextOps + 'static> StorageSchemaContextO
     );
 }
 
-impl<S: StorageClient + StorageTransactionContextOps + 'static> StorageTransactionContextOps
-    for SyncWrapper<S>
-{
-    forward_storage_methods!(inner;
-        fn get_transaction_context(&self) -> Option<Arc<crate::core::types::TransactionContextInfo>>;
-    );
+impl<S: StorageClient + 'static> StorageOperationContextOps for SyncWrapper<S> {
+    fn bind_auto_commit_context(&self) -> Self {
+        Self {
+            inner: self.inner.bind_auto_commit_context(),
+            sync_manager: self.sync_manager.clone(),
+            enabled: self.enabled,
+        }
+    }
 
-    forward_storage_methods!(inner;
-        fn set_transaction_context(&self, context: Option<Arc<crate::core::types::TransactionContextInfo>>);
-    );
+    fn bind_operation_context(&self, context: StorageOperationContext) -> Self {
+        Self {
+            inner: self.inner.bind_operation_context(context),
+            sync_manager: self.sync_manager.clone(),
+            enabled: self.enabled,
+        }
+    }
+
+    fn operation_context(&self) -> Option<Arc<StorageOperationContext>> {
+        self.inner.operation_context()
+    }
 }
 
 impl<S: StorageClient + 'static> StorageSyncContextOps for SyncWrapper<S> {

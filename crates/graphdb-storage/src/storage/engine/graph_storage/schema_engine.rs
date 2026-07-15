@@ -3,7 +3,6 @@ use std::sync::atomic::Ordering;
 use crate::core::types::LabelId;
 use crate::core::{StorageError, StorageResult};
 use crate::storage::edge::{EdgeSchema, EdgeStore, EdgeStrategy};
-use crate::storage::engine::data_store::EdgeTableKey;
 use crate::storage::engine::params::CreateEdgeTypeParams;
 use crate::storage::types::StoragePropertyDef;
 use crate::storage::vertex::{VertexSchema, VertexTable};
@@ -20,41 +19,29 @@ pub fn create_vertex_type(
         return Err(StorageError::storage_not_open());
     }
 
-    let mut vertex_label_names = ctx.data_store().vertex_label_names().write();
-    if vertex_label_names.contains_key(name) {
-        return Err(StorageError::label_already_exists(name.to_string()));
-    }
-
-    let mut vertex_label_counter = ctx.data_store().vertex_label_counter().write();
-    let label_id = *vertex_label_counter;
-    *vertex_label_counter += 1;
-
     let primary_key_index = properties
         .iter()
         .position(|p| p.name == primary_key)
         .ok_or_else(|| StorageError::property_not_found(primary_key.to_string()))?;
 
-    let schema = VertexSchema {
-        label_id,
-        label_name: name.to_string(),
-        properties,
-        primary_key_index,
-        schema_version: 1,
-    };
-
-    // Validate schema at creation time
-    schema
-        .validate_on_creation()
-        .map_err(StorageError::invalid_operation)?;
-
-    let table = VertexTable::new(label_id, name.to_string(), schema);
     ctx.data_store()
-        .vertex_tables()
-        .write()
-        .insert(label_id, table);
-    vertex_label_names.insert(name.to_string(), label_id);
-
-    Ok(label_id)
+        .register_vertex_type(name.to_string(), None, |label_id| {
+            let schema = VertexSchema {
+                label_id,
+                label_name: name.to_string(),
+                properties,
+                primary_key_index,
+                schema_version: 1,
+            };
+            schema
+                .validate_on_creation()
+                .map_err(StorageError::invalid_operation)?;
+            Ok(VertexTable::new(label_id, name.to_string(), schema))
+        })
+        .and_then(|label| {
+            ctx.data_store().verify_invariants()?;
+            Ok(label)
+        })
 }
 
 pub fn create_vertex_type_with_id(
@@ -69,54 +56,29 @@ pub fn create_vertex_type_with_id(
         return Err(StorageError::storage_not_open());
     }
 
-    let mut vertex_label_names = ctx.data_store().vertex_label_names().write();
-    if vertex_label_names.contains_key(storage_name) {
-        return Err(StorageError::label_already_exists(storage_name.to_string()));
-    }
-
-    if ctx
-        .data_store()
-        .vertex_tables()
-        .read()
-        .contains_key(&label_id)
-    {
-        return Err(StorageError::label_already_exists(format!(
-            "label_id {}",
-            label_id
-        )));
-    }
-
-    let mut vertex_label_counter = ctx.data_store().vertex_label_counter().write();
-    if label_id >= *vertex_label_counter {
-        *vertex_label_counter = label_id + 1;
-    }
-
     let primary_key_index = properties
         .iter()
         .position(|p| p.name == primary_key)
         .ok_or_else(|| StorageError::property_not_found(primary_key.to_string()))?;
 
-    let schema = VertexSchema {
-        label_id,
-        label_name: user_name.to_string(),
-        properties,
-        primary_key_index,
-        schema_version: 1,
-    };
-
-    // Validate schema at creation time
-    schema
-        .validate_on_creation()
-        .map_err(StorageError::invalid_operation)?;
-
-    let table = VertexTable::new(label_id, user_name.to_string(), schema);
     ctx.data_store()
-        .vertex_tables()
-        .write()
-        .insert(label_id, table);
-    vertex_label_names.insert(storage_name.to_string(), label_id);
-
-    Ok(label_id)
+        .register_vertex_type(storage_name.to_string(), Some(label_id), |label_id| {
+            let schema = VertexSchema {
+                label_id,
+                label_name: user_name.to_string(),
+                properties,
+                primary_key_index,
+                schema_version: 1,
+            };
+            schema
+                .validate_on_creation()
+                .map_err(StorageError::invalid_operation)?;
+            Ok(VertexTable::new(label_id, user_name.to_string(), schema))
+        })
+        .and_then(|label| {
+            ctx.data_store().verify_invariants()?;
+            Ok(label)
+        })
 }
 
 pub fn create_edge_type(
@@ -132,70 +94,45 @@ pub fn create_edge_type(
         return Err(StorageError::storage_not_open());
     }
 
-    if !ctx
-        .data_store()
-        .vertex_tables()
-        .read()
-        .contains_key(&src_label)
     {
-        return Err(StorageError::label_not_found(format!(
-            "source label {}",
-            src_label
-        )));
-    }
-    if !ctx
-        .data_store()
-        .vertex_tables()
-        .read()
-        .contains_key(&dst_label)
-    {
-        return Err(StorageError::label_not_found(format!(
-            "destination label {}",
-            dst_label
-        )));
+        let vertex_tables = ctx.data_store().read_vertex_tables();
+        if !vertex_tables.contains_key(&src_label) {
+            return Err(StorageError::label_not_found(format!(
+                "source label {}",
+                src_label
+            )));
+        }
+        if !vertex_tables.contains_key(&dst_label) {
+            return Err(StorageError::label_not_found(format!(
+                "destination label {}",
+                dst_label
+            )));
+        }
     }
 
-    let mut edge_label_names = ctx.data_store().edge_label_names().write();
-    if edge_label_names.contains_key(name) {
-        return Err(StorageError::label_already_exists(name.to_string()));
-    }
-
-    let mut edge_label_counter = ctx.data_store().edge_label_counter().write();
-    let label_id = *edge_label_counter;
-    *edge_label_counter += 1;
-
-    let schema = EdgeSchema {
-        label_id,
-        label_name: name.to_string(),
-        src_label,
-        dst_label,
-        properties,
-        oe_strategy,
-        ie_strategy,
-        schema_version: 1,
-    };
-
-    // Validate schema at creation time
-    schema.validate_on_creation()?;
-
-    let mut table = EdgeStore::new(schema)?;
-    if let Some(stats) = ctx.stats_manager() {
-        table.set_stats_manager(stats.clone());
-    }
-    let key = EdgeTableKey::new(src_label, dst_label, label_id);
-    ctx.data_store().edge_tables().write().insert(key, table);
-
-    // Update reverse index for O(1) lookup on edge property operations
     ctx.data_store()
-        .edge_label_index()
-        .write()
-        .entry(label_id)
-        .or_default()
-        .push(key);
-
-    edge_label_names.insert(name.to_string(), label_id);
-
-    Ok(label_id)
+        .register_edge_type(name.to_string(), None, src_label, dst_label, |label_id| {
+            let schema = EdgeSchema {
+                label_id,
+                label_name: name.to_string(),
+                src_label,
+                dst_label,
+                properties,
+                oe_strategy,
+                ie_strategy,
+                schema_version: 1,
+            };
+            schema.validate_on_creation()?;
+            let mut table = EdgeStore::new(schema)?;
+            if let Some(stats) = ctx.stats_manager() {
+                table.set_stats_manager(stats.clone());
+            }
+            Ok(table)
+        })
+        .and_then(|label| {
+            ctx.data_store().verify_invariants()?;
+            Ok(label)
+        })
 }
 
 pub fn create_edge_type_with_id(
@@ -207,73 +144,44 @@ pub fn create_edge_type_with_id(
         return Err(StorageError::storage_not_open());
     }
 
-    if params.src_label != 0
-        && !ctx
-            .data_store()
-            .vertex_tables()
-            .read()
-            .contains_key(&params.src_label)
-    {
-        return Err(StorageError::label_not_found(format!(
-            "source label {}",
-            params.src_label
-        )));
-    }
-    if params.dst_label != 0
-        && !ctx
-            .data_store()
-            .vertex_tables()
-            .read()
-            .contains_key(&params.dst_label)
-    {
-        return Err(StorageError::label_not_found(format!(
-            "destination label {}",
-            params.dst_label
-        )));
-    }
-
-    let mut edge_label_names = ctx.data_store().edge_label_names().write();
-    if edge_label_names.contains_key(params.name) {
-        return Err(StorageError::label_already_exists(params.name.to_string()));
-    }
-
-    let mut edge_label_counter = ctx.data_store().edge_label_counter().write();
-    if label_id >= *edge_label_counter {
-        *edge_label_counter = label_id + 1;
-    }
-
-    let schema = EdgeSchema {
-        label_id,
-        label_name: params.user_name.to_string(),
-        src_label: params.src_label,
-        dst_label: params.dst_label,
-        properties: params.properties,
-        oe_strategy: params.oe_strategy,
-        ie_strategy: params.ie_strategy,
-        schema_version: 1,
-    };
-
-    // Validate schema at creation time
-    schema.validate_on_creation()?;
-
-    let mut table = EdgeStore::new(schema)?;
-    if let Some(stats) = ctx.stats_manager() {
-        table.set_stats_manager(stats.clone());
-    }
-    let key = EdgeTableKey::new(params.src_label, params.dst_label, label_id);
-    ctx.data_store().edge_tables().write().insert(key, table);
-
-    // Update reverse index for O(1) lookup on edge property operations
+    let CreateEdgeTypeParams {
+        name,
+        user_name,
+        src_label,
+        dst_label,
+        properties,
+        oe_strategy,
+        ie_strategy,
+    } = params;
     ctx.data_store()
-        .edge_label_index()
-        .write()
-        .entry(label_id)
-        .or_default()
-        .push(key);
-
-    edge_label_names.insert(params.name.to_string(), label_id);
-
-    Ok(label_id)
+        .register_edge_type(
+            name.to_string(),
+            Some(label_id),
+            src_label,
+            dst_label,
+            |label_id| {
+                let schema = EdgeSchema {
+                    label_id,
+                    label_name: user_name.to_string(),
+                    src_label,
+                    dst_label,
+                    properties,
+                    oe_strategy,
+                    ie_strategy,
+                    schema_version: 1,
+                };
+                schema.validate_on_creation()?;
+                let mut table = EdgeStore::new(schema)?;
+                if let Some(stats) = ctx.stats_manager() {
+                    table.set_stats_manager(stats.clone());
+                }
+                Ok(table)
+            },
+        )
+        .and_then(|label| {
+            ctx.data_store().verify_invariants()?;
+            Ok(label)
+        })
 }
 
 pub fn drop_vertex_type(ctx: &GraphStorageContext, name: &str) -> StorageResult<()> {
@@ -281,40 +189,8 @@ pub fn drop_vertex_type(ctx: &GraphStorageContext, name: &str) -> StorageResult<
         return Err(StorageError::storage_not_open());
     }
 
-    let label_id = {
-        let mut vertex_label_names = ctx.data_store().vertex_label_names().write();
-        vertex_label_names
-            .remove(name)
-            .ok_or_else(|| StorageError::label_not_found(name.to_string()))?
-    };
-
-    ctx.data_store().vertex_tables().write().remove(&label_id);
-
-    // Collect edge tables to remove (those with this vertex as src or dst)
-    let keys_to_remove = {
-        let edge_tables = ctx.data_store().edge_tables().read();
-        edge_tables
-            .keys()
-            .filter(|key| key.src_label == label_id || key.dst_label == label_id)
-            .cloned()
-            .collect::<Vec<_>>()
-    };
-
-    // Remove the edge tables and their index entries
-    let mut edge_tables = ctx.data_store().edge_tables().write();
-    let mut edge_label_index = ctx.data_store().edge_label_index().write();
-
-    for key in keys_to_remove {
-        edge_tables.remove(&key);
-        // Clean up the index: remove key from the edge_label's vector
-        if let Some(keys_vec) = edge_label_index.get_mut(&key.edge_label) {
-            keys_vec.retain(|k| k != &key);
-            // If the vector is now empty, remove the entry entirely
-            if keys_vec.is_empty() {
-                edge_label_index.remove(&key.edge_label);
-            }
-        }
-    }
+    let label_id = ctx.data_store().drop_vertex_type(name)?;
+    ctx.data_store().verify_invariants()?;
 
     ctx.invalidate_vertex_cache(label_id);
 
@@ -326,26 +202,8 @@ pub fn drop_edge_type(ctx: &GraphStorageContext, name: &str) -> StorageResult<()
         return Err(StorageError::storage_not_open());
     }
 
-    let label_id = {
-        let mut edge_label_names = ctx.data_store().edge_label_names().write();
-        edge_label_names
-            .remove(name)
-            .ok_or_else(|| StorageError::label_not_found(name.to_string()))?
-    };
-
-    // Use reverse index for O(1) lookup instead of O(N) full table scan
-    let keys_to_remove = ctx
-        .data_store()
-        .edge_label_index()
-        .write()
-        .remove(&label_id)
-        .unwrap_or_default();
-
-    let mut edge_tables = ctx.data_store().edge_tables().write();
-    for key in keys_to_remove {
-        edge_tables.remove(&key);
-    }
-
+    ctx.data_store().drop_edge_type(name)?;
+    ctx.data_store().verify_invariants()?;
     Ok(())
 }
 
@@ -358,14 +216,8 @@ pub fn add_vertex_property(
         return Err(StorageError::storage_not_open());
     }
 
-    let mut vertex_tables = ctx.data_store().vertex_tables().write();
-    let table = vertex_tables
-        .get_mut(&label)
-        .ok_or_else(|| StorageError::label_not_found(format!("vertex label {}", label)))?;
-
-    table.add_property(prop)?;
-
-    Ok(())
+    ctx.data_store()
+        .with_vertex_table_mut(label, |table| table.add_property(prop))
 }
 
 pub fn delete_vertex_property(
@@ -377,12 +229,8 @@ pub fn delete_vertex_property(
         return Err(StorageError::storage_not_open());
     }
 
-    let mut vertex_tables = ctx.data_store().vertex_tables().write();
-    let table = vertex_tables
-        .get_mut(&label)
-        .ok_or_else(|| StorageError::label_not_found(format!("vertex label {}", label)))?;
-
-    table.remove_property(prop_name)
+    ctx.data_store()
+        .with_vertex_table_mut(label, |table| table.remove_property(prop_name))
 }
 
 pub fn rename_vertex_property(
@@ -395,12 +243,8 @@ pub fn rename_vertex_property(
         return Err(StorageError::storage_not_open());
     }
 
-    let mut vertex_tables = ctx.data_store().vertex_tables().write();
-    let table = vertex_tables
-        .get_mut(&label)
-        .ok_or_else(|| StorageError::label_not_found(format!("vertex label {}", label)))?;
-
-    table.rename_property(old_name, new_name)
+    ctx.data_store()
+        .with_vertex_table_mut(label, |table| table.rename_property(old_name, new_name))
 }
 
 pub fn add_edge_property(
@@ -412,22 +256,15 @@ pub fn add_edge_property(
         return Err(StorageError::storage_not_open());
     }
 
-    // Use reverse index for O(1) lookup instead of O(N) full table scan
-    let edge_label_index = ctx.data_store().edge_label_index().read();
-    let keys = edge_label_index
-        .get(&edge_label)
-        .ok_or_else(|| StorageError::label_not_found(format!("edge label {}", edge_label)))?
-        .clone();
-    drop(edge_label_index);
-
-    let mut edge_tables = ctx.data_store().edge_tables().write();
-    for key in keys {
-        if let Some(table) = edge_tables.get_mut(&key) {
-            table.add_property(prop.name.clone(), prop.data_type.clone(), prop.nullable)?;
-        }
-    }
-
-    Ok(())
+    ctx.data_store()
+        .with_edge_partitions_mut(edge_label, |tables, keys| {
+            for key in keys {
+                if let Some(table) = tables.get_mut(key) {
+                    table.add_property(prop.name.clone(), prop.data_type.clone(), prop.nullable)?;
+                }
+            }
+            Ok(())
+        })
 }
 
 pub fn delete_edge_property(
@@ -439,22 +276,15 @@ pub fn delete_edge_property(
         return Err(StorageError::storage_not_open());
     }
 
-    // Use reverse index for O(1) lookup instead of O(N) full table scan
-    let edge_label_index = ctx.data_store().edge_label_index().read();
-    let keys = edge_label_index
-        .get(&edge_label)
-        .ok_or_else(|| StorageError::label_not_found(format!("edge label {}", edge_label)))?
-        .clone();
-    drop(edge_label_index);
-
-    let mut edge_tables = ctx.data_store().edge_tables().write();
-    for key in keys {
-        if let Some(table) = edge_tables.get_mut(&key) {
-            table.remove_property(prop_name)?;
-        }
-    }
-
-    Ok(())
+    ctx.data_store()
+        .with_edge_partitions_mut(edge_label, |tables, keys| {
+            for key in keys {
+                if let Some(table) = tables.get_mut(key) {
+                    table.remove_property(prop_name)?;
+                }
+            }
+            Ok(())
+        })
 }
 
 pub fn rename_edge_property(
@@ -467,22 +297,15 @@ pub fn rename_edge_property(
         return Err(StorageError::storage_not_open());
     }
 
-    // Use reverse index for O(1) lookup instead of O(N) full table scan
-    let edge_label_index = ctx.data_store().edge_label_index().read();
-    let keys = edge_label_index
-        .get(&edge_label)
-        .ok_or_else(|| StorageError::label_not_found(format!("edge label {}", edge_label)))?
-        .clone();
-    drop(edge_label_index);
-
-    let mut edge_tables = ctx.data_store().edge_tables().write();
-    for key in keys {
-        if let Some(table) = edge_tables.get_mut(&key) {
-            table.rename_property(old_name, new_name)?;
-        }
-    }
-
-    Ok(())
+    ctx.data_store()
+        .with_edge_partitions_mut(edge_label, |tables, keys| {
+            for key in keys {
+                if let Some(table) = tables.get_mut(key) {
+                    table.rename_property(old_name, new_name)?;
+                }
+            }
+            Ok(())
+        })
 }
 
 #[cfg(test)]
@@ -586,17 +409,9 @@ mod tests {
         let ctx = GraphStorageContext::new();
         ctx.create_vertex_type("Person", name_prop(), "name")
             .expect("create_vertex_type should succeed");
-        assert!(ctx
-            .data_store()
-            .vertex_label_names()
-            .read()
-            .contains_key("Person"));
+        assert!(ctx.data_store().vertex_label_id("Person").is_some());
         ctx.drop_vertex_type("Person").expect("drop should succeed");
-        assert!(!ctx
-            .data_store()
-            .vertex_label_names()
-            .read()
-            .contains_key("Person"));
+        assert!(!ctx.data_store().vertex_label_id("Person").is_some());
     }
 
     #[test]
@@ -930,8 +745,7 @@ mod tests {
         // Check initial version is 1
         let initial_version = ctx
             .data_store()
-            .vertex_tables()
-            .read()
+            .read_vertex_tables()
             .get(&0)
             .unwrap()
             .schema()
@@ -947,8 +761,7 @@ mod tests {
 
         let updated_version = ctx
             .data_store()
-            .vertex_tables()
-            .read()
+            .read_vertex_tables()
             .get(&0)
             .unwrap()
             .schema()
@@ -971,8 +784,7 @@ mod tests {
 
         let v1 = ctx
             .data_store()
-            .vertex_tables()
-            .read()
+            .read_vertex_tables()
             .get(&0)
             .unwrap()
             .schema()
@@ -983,8 +795,7 @@ mod tests {
 
         let v2 = ctx
             .data_store()
-            .vertex_tables()
-            .read()
+            .read_vertex_tables()
             .get(&0)
             .unwrap()
             .schema()
@@ -1001,8 +812,7 @@ mod tests {
 
         let v1 = ctx
             .data_store()
-            .vertex_tables()
-            .read()
+            .read_vertex_tables()
             .get(&0)
             .unwrap()
             .schema()
@@ -1013,8 +823,7 @@ mod tests {
 
         let v2 = ctx
             .data_store()
-            .vertex_tables()
-            .read()
+            .read_vertex_tables()
             .get(&0)
             .unwrap()
             .schema()
@@ -1038,8 +847,7 @@ mod tests {
 
             let actual_version = ctx
                 .data_store()
-                .vertex_tables()
-                .read()
+                .read_vertex_tables()
                 .get(&0)
                 .unwrap()
                 .schema()
@@ -1070,8 +878,7 @@ mod tests {
         // Check initial version is 1
         let initial_version = ctx
             .data_store()
-            .edge_tables()
-            .read()
+            .read_edge_tables()
             .values()
             .next()
             .unwrap()
@@ -1087,8 +894,7 @@ mod tests {
 
         let updated_version = ctx
             .data_store()
-            .edge_tables()
-            .read()
+            .read_edge_tables()
             .values()
             .next()
             .unwrap()
@@ -1121,8 +927,7 @@ mod tests {
 
         let v1 = ctx
             .data_store()
-            .edge_tables()
-            .read()
+            .read_edge_tables()
             .values()
             .next()
             .unwrap()
@@ -1134,8 +939,7 @@ mod tests {
 
         let v2 = ctx
             .data_store()
-            .edge_tables()
-            .read()
+            .read_edge_tables()
             .values()
             .next()
             .unwrap()
@@ -1169,8 +973,7 @@ mod tests {
 
         let v1 = ctx
             .data_store()
-            .edge_tables()
-            .read()
+            .read_edge_tables()
             .values()
             .next()
             .unwrap()
@@ -1182,8 +985,7 @@ mod tests {
 
         let v2 = ctx
             .data_store()
-            .edge_tables()
-            .read()
+            .read_edge_tables()
             .values()
             .next()
             .unwrap()
@@ -1221,8 +1023,7 @@ mod tests {
 
             let actual_version = ctx
                 .data_store()
-                .edge_tables()
-                .read()
+                .read_edge_tables()
                 .values()
                 .next()
                 .unwrap()

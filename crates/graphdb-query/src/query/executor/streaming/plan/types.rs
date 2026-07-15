@@ -22,9 +22,9 @@ use super::super::operators::spec::{
     ApplySpec, BlockingSpec, DdlSpec, ExchangeSpec, FulltextSpec, GraphSpec, JoinSpec,
     RecursiveFragmentSpec, SetSpec, SinkSpec, SourceSpec, TxnSpec, UnarySpec, VectorSpec,
 };
-use super::properties::PhysicalProperties;
 use super::super::parameters::ParameterSchema;
 use super::super::slot::SlotLayout;
+use super::properties::PhysicalProperties;
 
 // ── Identity types ──────────────────────────────────────────────────────────
 

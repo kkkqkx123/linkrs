@@ -53,10 +53,7 @@ impl DdlParser {
         Ok(defs)
     }
 
-    fn parse_value_literal(
-        &mut self,
-        ctx: &mut ParseContext,
-    ) -> Result<Value, ParseError> {
+    fn parse_value_literal(&mut self, ctx: &mut ParseContext) -> Result<Value, ParseError> {
         let token_kind = ctx.current_token().kind.clone();
 
         if matches!(token_kind, TokenKind::Identifier(_))
@@ -170,7 +167,10 @@ impl DdlParser {
         })
     }
 
-    pub(super) fn parse_vid_type_value(&mut self, ctx: &mut ParseContext) -> Result<String, ParseError> {
+    pub(super) fn parse_vid_type_value(
+        &mut self,
+        ctx: &mut ParseContext,
+    ) -> Result<String, ParseError> {
         let token = ctx.current_token();
         match token.kind {
             TokenKind::String => {

@@ -2,6 +2,10 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
+use super::algorithms::{
+    bidir_bfs_shortest_path, enumerate_all_paths, path_endpoint_pairs, AllPathsConfig,
+    BidirBfsConfig,
+};
 use crate::core::error::QueryError;
 use crate::core::types::storage_ids::VertexId;
 use crate::core::{EdgeDirection, Value};
@@ -10,15 +14,14 @@ use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::context::ValueRowContext;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::operators::base::OperatorBase;
-use super::algorithms::{AllPathsConfig, BidirBfsConfig, bidir_bfs_shortest_path, enumerate_all_paths, path_endpoint_pairs};
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 
 use super::spec::RecursiveFragmentSpec;
 
 #[derive(Debug)]
 pub enum RecursiveFragmentOperator {
     ShortestPath {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         edge_types: Vec<String>,
         direction: EdgeDirection,
@@ -27,7 +30,7 @@ pub enum RecursiveFragmentOperator {
         target_vertices: Vec<Value>,
     },
     MultiShortestPath {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         edge_types: Vec<String>,
         direction: EdgeDirection,
@@ -37,7 +40,7 @@ pub enum RecursiveFragmentOperator {
         single_shortest: bool,
     },
     BFSShortest {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         edge_types: Vec<String>,
         direction: EdgeDirection,
@@ -45,7 +48,7 @@ pub enum RecursiveFragmentOperator {
         allow_loops: bool,
     },
     AllPaths {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         edge_types: Vec<String>,
         direction: EdgeDirection,
@@ -62,7 +65,7 @@ pub enum RecursiveFragmentOperator {
 impl RecursiveFragmentOperator {
     pub fn from_spec(
         spec: &RecursiveFragmentSpec,
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
     ) -> Self {
         match spec {
@@ -182,11 +185,18 @@ impl RecursiveFragmentOperator {
                                 target_vertices,
                                 None,
                             )?;
-                            let et_ref: Option<&[String]> =
-                                if edge_types.is_empty() { None } else { Some(edge_types.as_slice()) };
+                            let et_ref: Option<&[String]> = if edge_types.is_empty() {
+                                None
+                            } else {
+                                Some(edge_types.as_slice())
+                            };
                             for (src_val, dst_val) in pairs {
-                                let Ok(src_vid) = VertexId::try_from(&src_val) else { continue };
-                                let Ok(dst_vid) = VertexId::try_from(&dst_val) else { continue };
+                                let Ok(src_vid) = VertexId::try_from(&src_val) else {
+                                    continue;
+                                };
+                                let Ok(dst_vid) = VertexId::try_from(&dst_val) else {
+                                    continue;
+                                };
                                 base.ensure_not_cancelled()?;
                                 let cancel_token =
                                     base.runtime.as_ref().map(|rt| rt.cancel_token());
@@ -216,7 +226,10 @@ impl RecursiveFragmentOperator {
                         }
                         let mut new_cols: Vec<ColumnInfo> = col_names
                             .iter()
-                            .map(|n| ColumnInfo { name: n.clone(), data_type: "string".to_string() })
+                            .map(|n| ColumnInfo {
+                                name: n.clone(),
+                                data_type: "string".to_string(),
+                            })
                             .collect();
                         new_cols.push(ColumnInfo {
                             name: "_shortest_path".to_string(),
@@ -262,13 +275,19 @@ impl RecursiveFragmentOperator {
                                 .or_else(|| ctx.get_variable("dst_vid"))
                                 .or_else(|| row.get(1).cloned())
                                 .unwrap_or(Value::Null(crate::core::NullType::Null));
-                            let Ok(src_vid) = VertexId::try_from(&left_val) else { continue };
-                            let Ok(dst_vid) = VertexId::try_from(&right_val) else { continue };
-                            let et_ref: Option<&[String]> =
-                                if edge_types.is_empty() { None } else { Some(edge_types.as_slice()) };
+                            let Ok(src_vid) = VertexId::try_from(&left_val) else {
+                                continue;
+                            };
+                            let Ok(dst_vid) = VertexId::try_from(&right_val) else {
+                                continue;
+                            };
+                            let et_ref: Option<&[String]> = if edge_types.is_empty() {
+                                None
+                            } else {
+                                Some(edge_types.as_slice())
+                            };
                             base.ensure_not_cancelled()?;
-                            let cancel_token =
-                                base.runtime.as_ref().map(|rt| rt.cancel_token());
+                            let cancel_token = base.runtime.as_ref().map(|rt| rt.cancel_token());
                             let paths = bidir_bfs_shortest_path(
                                 &*reader,
                                 &src_vid,
@@ -294,7 +313,10 @@ impl RecursiveFragmentOperator {
                         }
                         let mut new_cols: Vec<ColumnInfo> = col_names
                             .iter()
-                            .map(|n| ColumnInfo { name: n.clone(), data_type: "string".to_string() })
+                            .map(|n| ColumnInfo {
+                                name: n.clone(),
+                                data_type: "string".to_string(),
+                            })
                             .collect();
                         new_cols.push(ColumnInfo {
                             name: "_multi_shortest_path".to_string(),
@@ -328,19 +350,27 @@ impl RecursiveFragmentOperator {
                         for row in &chunk.rows {
                             base.ensure_not_cancelled()?;
                             let ctx = ValueRowContext::new(row.clone(), layout.clone());
-                            let vid_val = ctx.get_variable("vid")
+                            let vid_val = ctx
+                                .get_variable("vid")
                                 .or_else(|| row.first().cloned())
                                 .unwrap_or(Value::Null(crate::core::NullType::Null));
-                            let Ok(start_vid) = VertexId::try_from(&vid_val) else { continue };
-                            let end_val = ctx.get_variable("dst_vid")
+                            let Ok(start_vid) = VertexId::try_from(&vid_val) else {
+                                continue;
+                            };
+                            let end_val = ctx
+                                .get_variable("dst_vid")
                                 .or_else(|| ctx.get_variable("target"))
                                 .or_else(|| row.get(1).cloned())
                                 .unwrap_or(Value::Null(crate::core::NullType::Null));
-                            let Ok(end_vid) = VertexId::try_from(&end_val) else { continue };
-                            let et_ref: Option<&[String]> =
-                                if edge_types.is_empty() { None } else { Some(edge_types.as_slice()) };
-                            let cancel_token =
-                                base.runtime.as_ref().map(|rt| rt.cancel_token());
+                            let Ok(end_vid) = VertexId::try_from(&end_val) else {
+                                continue;
+                            };
+                            let et_ref: Option<&[String]> = if edge_types.is_empty() {
+                                None
+                            } else {
+                                Some(edge_types.as_slice())
+                            };
+                            let cancel_token = base.runtime.as_ref().map(|rt| rt.cancel_token());
                             let paths = bidir_bfs_shortest_path(
                                 &*reader,
                                 &start_vid,
@@ -361,10 +391,15 @@ impl RecursiveFragmentOperator {
                                 out_rows.push(out_row);
                             }
                         }
-                        if out_rows.is_empty() { return Ok(None); }
+                        if out_rows.is_empty() {
+                            return Ok(None);
+                        }
                         let mut new_cols: Vec<ColumnInfo> = col_names
                             .iter()
-                            .map(|n| ColumnInfo { name: n.clone(), data_type: "string".to_string() })
+                            .map(|n| ColumnInfo {
+                                name: n.clone(),
+                                data_type: "string".to_string(),
+                            })
                             .collect();
                         new_cols.push(ColumnInfo {
                             name: "_bfs_path".to_string(),
@@ -410,8 +445,12 @@ impl RecursiveFragmentOperator {
                                 None,
                             )?;
                             for (src_val, dst_val) in pairs {
-                                let Ok(src_vid) = VertexId::try_from(&src_val) else { continue };
-                                let Ok(dst_vid) = VertexId::try_from(&dst_val) else { continue };
+                                let Ok(src_vid) = VertexId::try_from(&src_val) else {
+                                    continue;
+                                };
+                                let Ok(dst_vid) = VertexId::try_from(&dst_val) else {
+                                    continue;
+                                };
                                 let cancel_token =
                                     base.runtime.as_ref().map(|rt| rt.cancel_token());
                                 let paths = enumerate_all_paths(
@@ -437,10 +476,15 @@ impl RecursiveFragmentOperator {
                                 }
                             }
                         }
-                        if out_rows.is_empty() { return Ok(None); }
+                        if out_rows.is_empty() {
+                            return Ok(None);
+                        }
                         let mut new_cols: Vec<ColumnInfo> = col_names
                             .iter()
-                            .map(|n| ColumnInfo { name: n.clone(), data_type: "string".to_string() })
+                            .map(|n| ColumnInfo {
+                                name: n.clone(),
+                                data_type: "string".to_string(),
+                            })
                             .collect();
                         new_cols.push(ColumnInfo {
                             name: "_all_paths".to_string(),

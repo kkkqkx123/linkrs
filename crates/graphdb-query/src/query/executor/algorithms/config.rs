@@ -1,5 +1,5 @@
-use crate::core::types::VertexId;
 use crate::core::types::EdgeDirection;
+use crate::core::types::VertexId;
 
 /// Multiple Starting Point Shortest Path Configuration
 pub struct MultiShortestPathConfig {

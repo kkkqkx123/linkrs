@@ -104,10 +104,14 @@ fn set_partition_on_source_op(
     prange: Option<Range<i64>>,
 ) {
     match source {
-        SourceOperator::StorageScanVertices { partition_range, .. } => {
+        SourceOperator::StorageScanVertices {
+            partition_range, ..
+        } => {
             *partition_range = prange;
         }
-        SourceOperator::StorageScanEdges { partition_range, .. } => {
+        SourceOperator::StorageScanEdges {
+            partition_range, ..
+        } => {
             *partition_range = prange;
         }
         _ => {}

@@ -408,13 +408,21 @@ impl SetOperator {
         }
     }
 
-    pub fn spill_with_manager(&mut self, sm: &crate::query::executor::streaming::spill::SpillManager) -> Result<(), crate::core::error::QueryError> {
+    pub fn spill_with_manager(
+        &mut self,
+        sm: &crate::query::executor::streaming::spill::SpillManager,
+    ) -> Result<(), crate::core::error::QueryError> {
         match self {
-            Self::Union { seen_rows, memory_tracker, .. } => {
+            Self::Union {
+                seen_rows,
+                memory_tracker,
+                ..
+            } => {
                 if !seen_rows.is_empty() {
-                    let rows: Vec<Vec<crate::core::Value>> = seen_rows.iter().map(|s| {
-                        vec![crate::core::Value::String(s.clone())]
-                    }).collect();
+                    let rows: Vec<Vec<crate::core::Value>> = seen_rows
+                        .iter()
+                        .map(|s| vec![crate::core::Value::String(s.clone())])
+                        .collect();
                     let mut writer = sm.create_writer()?;
                     writer.write_rows(&rows)?;
                     seen_rows.clear();
@@ -422,7 +430,12 @@ impl SetOperator {
                 }
                 Ok(())
             }
-            Self::Intersect { left_rows, right_rows, memory_tracker, .. } => {
+            Self::Intersect {
+                left_rows,
+                right_rows,
+                memory_tracker,
+                ..
+            } => {
                 if !left_rows.is_empty() {
                     let mut writer = sm.create_writer()?;
                     writer.write_rows(left_rows)?;
@@ -434,8 +447,16 @@ impl SetOperator {
                 }
                 Ok(())
             }
-            Self::Except { exclude_rows, memory_tracker, .. }
-            | Self::Minus { exclude_rows, memory_tracker, .. } => {
+            Self::Except {
+                exclude_rows,
+                memory_tracker,
+                ..
+            }
+            | Self::Minus {
+                exclude_rows,
+                memory_tracker,
+                ..
+            } => {
                 if !exclude_rows.is_empty() {
                     exclude_rows.clear();
                     memory_tracker.reset();

@@ -58,7 +58,7 @@ pub struct HashShuffleJoinOperator {
 }
 
 impl HashShuffleJoinOperator {
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         join_kind: HashJoinKind,
         left_key_expressions: Vec<Expression>,
@@ -292,18 +292,18 @@ impl HashShuffleJoinOperator {
                             &self.left_schema,
                             &self.right_schema,
                         )? {
-        let mut joined = left_row.clone();
-                        joined.extend(right_row.clone());
-                        chunk_rows.push(joined);
-                        if chunk_rows.len() >= CHUNK_SIZE {
-                            let layout = build_combined_layout_from_schemas(
-                                &self.left_schema,
-                                &self.right_schema,
-                            );
-                            bucket.current_match_offset = Some(i + 1);
-                            return Ok(Some(DataChunk::new_with_layout(chunk_rows, layout)));
+                            let mut joined = left_row.clone();
+                            joined.extend(right_row.clone());
+                            chunk_rows.push(joined);
+                            if chunk_rows.len() >= CHUNK_SIZE {
+                                let layout = build_combined_layout_from_schemas(
+                                    &self.left_schema,
+                                    &self.right_schema,
+                                );
+                                bucket.current_match_offset = Some(i + 1);
+                                return Ok(Some(DataChunk::new_with_layout(chunk_rows, layout)));
+                            }
                         }
-                    }
                     }
                     // All match indices processed for this left row.
                     bucket.current_match_offset = None;

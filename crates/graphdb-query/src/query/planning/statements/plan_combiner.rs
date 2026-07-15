@@ -39,10 +39,8 @@ pub fn cross_join_plans(left: SubPlan, right: SubPlan) -> Result<SubPlan, Planne
         if let Some(expand_all) = join_node.right_input().as_expand_all() {
             let mut new_expand = expand_all.clone();
             new_expand.set_input_var(actual_var);
-            join_node =
-                CrossJoinNode::new(left_root.clone(), new_expand.into_enum()).map_err(|e| {
-                    PlannerError::JoinFailed(format!("Cross-connection failed: {}", e))
-                })?;
+            join_node = CrossJoinNode::new(left_root.clone(), new_expand.into_enum())
+                .map_err(|e| PlannerError::JoinFailed(format!("Cross-connection failed: {}", e)))?;
         }
     }
 
@@ -67,13 +65,15 @@ pub fn connect_node_to_edge_expansion(
     edge_plan: SubPlan,
     node_alias: &str,
 ) -> Result<SubPlan, PlannerError> {
-    let node_root = node_plan.root.as_ref().ok_or_else(|| {
-        PlannerError::PlanGenerationFailed("Node plan has no root".to_string())
-    })?;
+    let node_root = node_plan
+        .root
+        .as_ref()
+        .ok_or_else(|| PlannerError::PlanGenerationFailed("Node plan has no root".to_string()))?;
 
-    let edge_root = edge_plan.root.as_ref().ok_or_else(|| {
-        PlannerError::PlanGenerationFailed("Edge plan has no root".to_string())
-    })?;
+    let edge_root = edge_plan
+        .root
+        .as_ref()
+        .ok_or_else(|| PlannerError::PlanGenerationFailed("Edge plan has no root".to_string()))?;
 
     if let Some(expand_all) = edge_root.as_expand_all() {
         let mut new_expand = expand_all.clone();
@@ -95,13 +95,15 @@ pub fn join_edge_expansions(
     right_plan: SubPlan,
     left_dst_alias: &str,
 ) -> Result<SubPlan, PlannerError> {
-    let left_root = left_plan.root.as_ref().ok_or_else(|| {
-        PlannerError::PlanGenerationFailed("Left plan has no root".to_string())
-    })?;
+    let left_root = left_plan
+        .root
+        .as_ref()
+        .ok_or_else(|| PlannerError::PlanGenerationFailed("Left plan has no root".to_string()))?;
 
-    let right_root = right_plan.root.as_ref().ok_or_else(|| {
-        PlannerError::PlanGenerationFailed("Right plan has no root".to_string())
-    })?;
+    let right_root = right_plan
+        .root
+        .as_ref()
+        .ok_or_else(|| PlannerError::PlanGenerationFailed("Right plan has no root".to_string()))?;
 
     if let Some(expand_all) = right_root.as_expand_all() {
         let mut new_expand = expand_all.clone();
@@ -129,13 +131,8 @@ pub fn left_join_plans(left: SubPlan, right: SubPlan) -> Result<SubPlan, Planner
         None => return Ok(left),
     };
 
-    let join_node = LeftJoinNode::new(
-        left_root.clone(),
-        right_root.clone(),
-        vec![],
-        vec![],
-    )
-    .map_err(|e| PlannerError::JoinFailed(format!("Left connection failed: {}", e)))?;
+    let join_node = LeftJoinNode::new(left_root.clone(), right_root.clone(), vec![], vec![])
+        .map_err(|e| PlannerError::JoinFailed(format!("Left connection failed: {}", e)))?;
 
     Ok(SubPlan {
         root: Some(join_node.into_enum()),
@@ -154,12 +151,7 @@ pub fn union_plans(left: SubPlan, right: SubPlan) -> Result<SubPlan, PlannerErro
         None => return Ok(left),
     };
 
-    let union_node = UnionNode::new(
-        left_root.clone(),
-        right_root.clone(),
-        true,
-    )
-    .map_err(|e| {
+    let union_node = UnionNode::new(left_root.clone(), right_root.clone(), true).map_err(|e| {
         PlannerError::PlanGenerationFailed(format!("Concatenation operation failed: {}", e))
     })?;
 

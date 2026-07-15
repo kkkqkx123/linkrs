@@ -11,7 +11,7 @@ use axum::{
 
 use crate::api::server::web::WebState;
 use crate::storage::{
-    StorageClient, StorageSchemaContextOps, StorageSyncContextOps, StorageTransactionContextOps,
+    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 
 /// Web authentication middleware
@@ -22,7 +22,7 @@ pub async fn web_auth_middleware<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync

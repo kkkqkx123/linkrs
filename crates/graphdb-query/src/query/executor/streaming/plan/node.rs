@@ -19,13 +19,8 @@
 use std::sync::Arc;
 
 use super::super::executor::StreamingExecutor;
-use super::super::operators::base::OperatorBase;
-use super::super::operators::spec::{
-    ApplySpec, DdlSpec, FulltextSpec, GraphSpec, RecursiveFragmentSpec, SetSpec, SinkSpec,
-    TxnSpec, VectorSpec,
-};
-use super::super::operators::spec::{BlockingSpec, ExchangeSpec, JoinSpec, SourceSpec, UnarySpec};
 use super::super::operators::apply_operator::ApplyOperator;
+use super::super::operators::base::OperatorBase;
 use super::super::operators::blocking::BlockingOperator;
 use super::super::operators::ddl_operator::DdlOperator;
 use super::super::operators::exchange_operator::ExchangeOperator;
@@ -36,11 +31,16 @@ use super::super::operators::recursive_fragment_operator::RecursiveFragmentOpera
 use super::super::operators::set_operator::SetOperator;
 use super::super::operators::sink_operator::SinkOperator;
 use super::super::operators::source_operator::SourceOperator;
+use super::super::operators::spec::{
+    ApplySpec, DdlSpec, FulltextSpec, GraphSpec, RecursiveFragmentSpec, SetSpec, SinkSpec, TxnSpec,
+    VectorSpec,
+};
+use super::super::operators::spec::{BlockingSpec, ExchangeSpec, JoinSpec, SourceSpec, UnarySpec};
 use super::super::operators::txn_operator::TxnOperator;
 use super::super::operators::unary_operator::UnaryOperator;
 use super::super::operators::vector_operator::VectorOperator;
-use super::properties::PhysicalProperties;
 use super::super::runtime::ExecutionRuntime;
+use super::properties::PhysicalProperties;
 use crate::query::executor::base::MemoryBudget;
 
 /// Stable identifier for a physical plan node.
@@ -162,11 +162,7 @@ impl PhysicalNode {
             Self::Unary(node_id, child, spec, _) => {
                 let child_exec = child.materialize(runtime.clone(), memory_budget, chunk_size);
                 let unary = UnaryOperator::from_spec(spec);
-                StreamingExecutor::Unary(
-                    OperatorBase::new(*node_id),
-                    Box::new(child_exec),
-                    unary,
-                )
+                StreamingExecutor::Unary(OperatorBase::new(*node_id), Box::new(child_exec), unary)
             }
             Self::Blocking(node_id, child, spec, _) => {
                 let child_exec = child.materialize(runtime.clone(), memory_budget, chunk_size);

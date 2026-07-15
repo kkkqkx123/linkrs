@@ -8,19 +8,19 @@ use std::sync::Arc;
 
 use super::super::builder::StreamingExecutorBuilder;
 use super::super::executor::StreamingExecutor;
-use super::super::operators::base::OperatorBase;
 use super::super::operator_plan_builder::relational;
+use super::super::operators::base::OperatorBase;
 use super::super::operators::blocking::BlockingOperator;
 use super::super::operators::gather_operator::GatherOperator;
 use super::super::operators::shuffle_join_operator::{HashJoinKind, HashShuffleJoinOperator};
 use super::super::partition::PartitionView;
 use super::super::partition_builder;
 use super::super::runtime::ExecutionRuntime;
+use super::types::SyntheticNodeIdAllocator;
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::types::operators::AggregateFunction;
 use crate::query::executor::base::{ExecutionContext, MemoryTracker};
-use super::types::SyntheticNodeIdAllocator;
 use crate::query::planning::plan::{PartitionedPhysicalNode, PlanNodeEnum};
 
 fn allocate_gather_node_id(alloc: &mut SyntheticNodeIdAllocator) -> i64 {
@@ -69,8 +69,12 @@ pub(crate) fn build_partitioned_physical_node(
 ) -> Result<BuildOutput, QueryError> {
     match node {
         PartitionedPhysicalNode::Local { logical_plan } => {
-            let mut local_trees =
-                partition_builder::build_partitioned(logical_plan, context, partition_view, runtime)?;
+            let mut local_trees = partition_builder::build_partitioned(
+                logical_plan,
+                context,
+                partition_view,
+                runtime,
+            )?;
             require_partition_local(&local_trees, "Physical", logical_plan.name())?;
             for (partition_id, tree) in local_trees.iter_mut().enumerate() {
                 tree.set_partition_id(partition_id);
@@ -89,7 +93,8 @@ pub(crate) fn build_partitioned_physical_node(
                 runtime.clone(),
             )?;
             let input = local_to_global(input, synthetic_id_alloc)?;
-            let physical = StreamingExecutorBuilder::from_plan_node_physical(logical_plan, context)?;
+            let physical =
+                StreamingExecutorBuilder::from_plan_node_physical(logical_plan, context)?;
             let mut global = StreamingExecutorBuilder::materialize_physical(
                 &physical,
                 runtime.clone(),
@@ -97,7 +102,7 @@ pub(crate) fn build_partitioned_physical_node(
                 context.chunk_size,
             );
             global.set_global();
-             replace_single_input(&mut global, input)?;
+            replace_single_input(&mut global, input)?;
             Ok(BuildOutput::Global(Box::new(global)))
         }
         PartitionedPhysicalNode::AggregateSplit {
@@ -120,8 +125,12 @@ pub(crate) fn build_partitioned_physical_node(
                     ));
                 }
             };
-            let local_trees =
-                partition_builder::build_partitioned(local_plan, context, partition_view, runtime.clone())?;
+            let local_trees = partition_builder::build_partitioned(
+                local_plan,
+                context,
+                partition_view,
+                runtime.clone(),
+            )?;
             require_partition_local(&local_trees, "AggregateSplit", local_plan.name())?;
 
             let group_by_expressions: Vec<Expression> = aggregate
@@ -187,8 +196,12 @@ pub(crate) fn build_partitioned_physical_node(
                     ));
                 }
             };
-            let local_trees =
-                partition_builder::build_partitioned(input_node, context, partition_view, runtime.clone())?;
+            let local_trees = partition_builder::build_partitioned(
+                input_node,
+                context,
+                partition_view,
+                runtime.clone(),
+            )?;
             require_partition_local(&local_trees, "DistinctSplit", input_node.name())?;
 
             let memory_tracker = MemoryTracker::new(context.memory_budget.clone());
@@ -248,8 +261,12 @@ pub(crate) fn build_partitioned_physical_node(
                     ));
                 }
             };
-            let local_trees =
-                partition_builder::build_partitioned(input_node, context, partition_view, runtime.clone())?;
+            let local_trees = partition_builder::build_partitioned(
+                input_node,
+                context,
+                partition_view,
+                runtime.clone(),
+            )?;
             require_partition_local(&local_trees, "TopNSplit", input_node.name())?;
 
             let limit = topn_node.limit() as u32;
@@ -334,8 +351,16 @@ pub(crate) fn build_partitioned_physical_node(
                 right_schema,
             ) = match logical_plan {
                 PlanNodeEnum::HashInnerJoin(join_node) => {
-                    let hash_keys: Vec<Expression> = join_node.hash_keys().iter().map(to_expr).collect::<Result<_, _>>()?;
-                    let probe_keys: Vec<Expression> = join_node.probe_keys().iter().map(to_expr).collect::<Result<_, _>>()?;
+                    let hash_keys: Vec<Expression> = join_node
+                        .hash_keys()
+                        .iter()
+                        .map(to_expr)
+                        .collect::<Result<_, _>>()?;
+                    let probe_keys: Vec<Expression> = join_node
+                        .probe_keys()
+                        .iter()
+                        .map(to_expr)
+                        .collect::<Result<_, _>>()?;
                     let condition = super::super::operator_plan_builder::join_condition_from_keys(
                         join_node.hash_keys(),
                         join_node.probe_keys(),
@@ -353,8 +378,16 @@ pub(crate) fn build_partitioned_physical_node(
                     )
                 }
                 PlanNodeEnum::HashLeftJoin(join_node) => {
-                    let hash_keys: Vec<Expression> = join_node.hash_keys().iter().map(to_expr).collect::<Result<_, _>>()?;
-                    let probe_keys: Vec<Expression> = join_node.probe_keys().iter().map(to_expr).collect::<Result<_, _>>()?;
+                    let hash_keys: Vec<Expression> = join_node
+                        .hash_keys()
+                        .iter()
+                        .map(to_expr)
+                        .collect::<Result<_, _>>()?;
+                    let probe_keys: Vec<Expression> = join_node
+                        .probe_keys()
+                        .iter()
+                        .map(to_expr)
+                        .collect::<Result<_, _>>()?;
                     let condition = super::super::operator_plan_builder::join_condition_from_keys(
                         join_node.hash_keys(),
                         join_node.probe_keys(),
@@ -420,7 +453,8 @@ pub(crate) fn build_partitioned_physical_node(
                 runtime.clone(),
             )?;
             let right = local_to_global(right, synthetic_id_alloc)?;
-            let physical = StreamingExecutorBuilder::from_plan_node_physical(logical_plan, context)?;
+            let physical =
+                StreamingExecutorBuilder::from_plan_node_physical(logical_plan, context)?;
             let mut global = StreamingExecutorBuilder::materialize_physical(
                 &physical,
                 runtime,

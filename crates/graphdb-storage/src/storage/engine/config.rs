@@ -414,6 +414,36 @@ impl PropertyGraphConfig {
 
     /// Validate all configurations
     pub fn validate(&self) -> Result<(), StorageError> {
+        if self.enable_cache && self.cache_memory == 0 {
+            return Err(StorageError::new(
+                StorageErrorKind::InvalidInput,
+                "cache_memory must be > 0 when cache is enabled",
+            ));
+        }
+        if self.flush_config.flush_threshold == 0 {
+            return Err(StorageError::new(
+                StorageErrorKind::InvalidInput,
+                "flush_threshold must be > 0",
+            ));
+        }
+        if self.flush_config.flush_interval.is_zero() {
+            return Err(StorageError::new(
+                StorageErrorKind::InvalidInput,
+                "flush_interval must be > 0",
+            ));
+        }
+        if !(0.0..=1.0).contains(&self.merge_config.deletion_threshold) {
+            return Err(StorageError::new(
+                StorageErrorKind::InvalidInput,
+                "merge deletion_threshold must be in [0.0, 1.0]",
+            ));
+        }
+        if self.merge_config.max_segment_size_bytes == 0 {
+            return Err(StorageError::new(
+                StorageErrorKind::InvalidInput,
+                "max_segment_size_bytes must be > 0",
+            ));
+        }
         self.freeze.validate()?;
         Ok(())
     }

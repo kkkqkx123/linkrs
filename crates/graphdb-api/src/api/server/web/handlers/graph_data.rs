@@ -19,7 +19,7 @@ use crate::api::server::web::{
     WebState,
 };
 use crate::storage::{
-    StorageClient, StorageSchemaContextOps, StorageSyncContextOps, StorageTransactionContextOps,
+    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 
 /// Create graph data routes (without state)
@@ -27,7 +27,7 @@ pub fn create_routes<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync
@@ -49,7 +49,7 @@ async fn get_vertex<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync
@@ -112,7 +112,7 @@ async fn get_edge<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync
@@ -178,7 +178,7 @@ async fn get_neighbors<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync

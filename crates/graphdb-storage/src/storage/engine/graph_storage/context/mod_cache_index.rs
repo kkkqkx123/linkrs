@@ -55,7 +55,7 @@ impl GraphStorageContext {
 
     pub fn export_snapshot(&self, ts: Timestamp) -> StorageResult<Vec<ExportedEdgeSnapshotRecord>> {
         use crate::storage::edge::edge_table::EdgeSnapshotHandle;
-        let mut edge_tables = self.persistent.data_store.edge_tables().write();
+        let mut edge_tables = self.persistent.data_store.write_edge_tables();
         let mut results = Vec::with_capacity(edge_tables.len());
         let mut handles: Vec<EdgeSnapshotHandle<'_>> = Vec::new();
         for (

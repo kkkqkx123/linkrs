@@ -14,7 +14,7 @@ use crate::query::optimizer::OptimizerEngine;
 use crate::query::planning::{ParameterizedQueryHandler, PlanCacheConfig, QueryPlanCache};
 #[cfg(feature = "fulltext-search")]
 use crate::search::manager::FulltextIndexManager;
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 #[cfg(feature = "qdrant")]
 use crate::sync::vector_sync::VectorSyncCoordinator;
 use crate::sync::SyncManager;
@@ -22,7 +22,7 @@ use parking_lot::RwLock;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
-pub struct QueryPipelineManager<S: StorageClient + 'static> {
+pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     pub(crate) stats_manager: Arc<StatsManager>,
     pub(crate) optimizer_engine: Arc<OptimizerEngine>,
     pub(crate) plan_cache: Arc<QueryPlanCache>,
@@ -45,7 +45,11 @@ fn next_transaction_id() -> u64 {
     NEXT_TXN_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-impl<S: StorageClient + 'static> QueryPipelineManager<S> {
+impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
+    pub fn replace_storage(&mut self, storage: Arc<RwLock<S>>) {
+        self.storage = Some(storage);
+    }
+
     pub fn with_optimizer(
         storage: Arc<RwLock<S>>,
         stats_manager: Arc<StatsManager>,

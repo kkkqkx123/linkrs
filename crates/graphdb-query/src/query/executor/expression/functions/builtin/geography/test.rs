@@ -1,7 +1,7 @@
+use super::*;
 use crate::core::value::geography::{Geography, GeographyValue, LineStringValue, PolygonValue};
 use crate::core::value::NullType;
 use crate::core::Value;
-use super::*;
 
 #[test]
 fn test_st_point() {

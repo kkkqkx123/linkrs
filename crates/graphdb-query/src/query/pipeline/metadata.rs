@@ -6,12 +6,12 @@ use crate::query::validator::ValidatedStatement;
 use crate::query::QueryContext;
 #[cfg(feature = "fulltext-search")]
 use crate::search::manager::FulltextIndexManager;
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 #[cfg(feature = "qdrant")]
 use crate::sync::vector_sync::VectorSyncCoordinator;
 use std::sync::Arc;
 
-impl<S: StorageClient + 'static> QueryPipelineManager<S> {
+impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     pub(crate) fn build_metadata_context(
         &self,
         validated: &ValidatedStatement,

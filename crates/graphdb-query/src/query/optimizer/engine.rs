@@ -35,6 +35,7 @@
 
 use std::sync::Arc;
 
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::query::optimizer::heuristic::PlanRewriter;
 use crate::query::optimizer::partitioning::{PartitioningConfig, PartitioningPlanner};
 use crate::query::optimizer::{
@@ -43,7 +44,6 @@ use crate::query::optimizer::{
     SubqueryUnnestingOptimizer,
 };
 use crate::query::planning::plan::ExecutionPlan;
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
 /// Optimizer engine
 ///
@@ -329,10 +329,8 @@ impl OptimizerEngine {
         // Phase 1: Heuristic Optimization (Always Executed)
         if self.enable_heuristic {
             log::debug!("Starting Phase 1: Heuristic Optimization");
-            current_plan = self.apply_heuristic_with_max_iterations(
-                current_plan,
-                self.max_heuristic_iterations,
-            )?;
+            current_plan = self
+                .apply_heuristic_with_max_iterations(current_plan, self.max_heuristic_iterations)?;
             log::debug!("Phase 1 completed successfully");
         }
 

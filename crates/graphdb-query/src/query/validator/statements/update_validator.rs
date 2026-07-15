@@ -854,10 +854,10 @@ impl Default for UpdateValidator {
 mod tests {
     use super::*;
     use crate::core::types::expr::contextual::ContextualExpression;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::core::Expression;
     use crate::query::parser::ast::stmt::{Assignment, SetClause, UpdateTarget};
     use crate::query::parser::ast::Span;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
     fn create_contextual_expr(expr: Expression) -> ContextualExpression {
         let ctx = std::sync::Arc::new(ExpressionAnalysisContext::new());

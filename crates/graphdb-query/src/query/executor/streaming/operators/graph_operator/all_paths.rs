@@ -12,13 +12,16 @@ use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::context::ValueRowContext;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::operators::base::OperatorBase;
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 
-use super::super::algorithms::{AllPathsConfig, BidirBfsConfig, bidir_bfs_shortest_path, enumerate_all_paths, path_endpoint_pairs};
+use super::super::algorithms::{
+    bidir_bfs_shortest_path, enumerate_all_paths, path_endpoint_pairs, AllPathsConfig,
+    BidirBfsConfig,
+};
 use super::common;
 
 pub(super) fn handle_all_paths(
-    storage: &Option<Arc<RwLock<dyn StorageClient>>>,
+    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     space_name: &str,
     target_vertex: &Option<Expression>,
     edge_types: &[String],
@@ -58,10 +61,8 @@ pub(super) fn handle_all_paths(
                     else {
                         continue;
                     };
-                    let cancel_token =
-                        base.runtime.as_ref().map(|rt| rt.cancel_token());
-                    let result_cap =
-                        limit.unwrap_or(usize::MAX).saturating_add(offset);
+                    let cancel_token = base.runtime.as_ref().map(|rt| rt.cancel_token());
+                    let result_cap = limit.unwrap_or(usize::MAX).saturating_add(offset);
                     let paths = enumerate_all_paths(
                         &*reader,
                         &src_vid,
@@ -118,7 +119,7 @@ pub(super) fn handle_all_paths(
 }
 
 pub(super) fn handle_multi_shortest_path(
-    storage: &Option<Arc<RwLock<dyn StorageClient>>>,
+    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     space_name: &str,
     target_vertices: &[Expression],
     edge_types: &[String],
@@ -160,38 +161,31 @@ pub(super) fn handle_multi_shortest_path(
                     dst_values.push(value);
                 }
                 for expression in target_vertices.iter() {
-                    let mut expression_context = ValueRowContext::new(
-                        row.clone(),
-                        chunk.get_layout(),
-                    );
+                    let mut expression_context =
+                        ValueRowContext::new(row.clone(), chunk.get_layout());
                     dst_values.push(
-                        ExpressionEvaluator::evaluate(
-                            expression,
-                            &mut expression_context,
-                        )
-                        .map_err(|error| {
-                            QueryError::execution(format!(
-                                "MultiShortestPath target evaluation failed: {error}"
-                            ))
-                        })?,
+                        ExpressionEvaluator::evaluate(expression, &mut expression_context)
+                            .map_err(|error| {
+                                QueryError::execution(format!(
+                                    "MultiShortestPath target evaluation failed: {error}"
+                                ))
+                            })?,
                     );
                 }
                 if let Ok(src_vid) = VertexId::try_from(&src_val) {
-                    let et_ref: Option<&[String]> = if edge_types.is_empty()
-                        || edge_types.contains(&"both".to_string())
-                    {
-                        None
-                    } else {
-                        Some(edge_types)
-                    };
+                    let et_ref: Option<&[String]> =
+                        if edge_types.is_empty() || edge_types.contains(&"both".to_string()) {
+                            None
+                        } else {
+                            Some(edge_types)
+                        };
 
                     for dst_value in dst_values {
                         let Ok(dst_vid) = VertexId::try_from(&dst_value) else {
                             continue;
                         };
                         base.ensure_not_cancelled()?;
-                        let cancel_token =
-                            base.runtime.as_ref().map(|rt| rt.cancel_token());
+                        let cancel_token = base.runtime.as_ref().map(|rt| rt.cancel_token());
                         let paths = bidir_bfs_shortest_path(
                             &*reader,
                             &src_vid,

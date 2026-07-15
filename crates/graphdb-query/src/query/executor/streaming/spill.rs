@@ -11,8 +11,8 @@
 
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use crate::core::error::QueryError;
 use crate::core::Value;
@@ -198,12 +198,10 @@ impl DiskQuota {
                     bytes, total, self.max_bytes,
                 )));
             }
-            match self.used.compare_exchange_weak(
-                prev,
-                total,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
+            match self
+                .used
+                .compare_exchange_weak(prev, total, Ordering::Relaxed, Ordering::Relaxed)
+            {
                 Ok(_) => return Ok(()),
                 Err(current) => prev = current,
             }
@@ -604,11 +602,7 @@ impl HashPartitionSpiller {
     }
 
     /// Insert a row into the appropriate partition.
-    pub fn insert_row(
-        &mut self,
-        row: &[Value],
-        manager: &SpillManager,
-    ) -> Result<(), QueryError> {
+    pub fn insert_row(&mut self, row: &[Value], manager: &SpillManager) -> Result<(), QueryError> {
         let partition = hash_row_partition(row, self.config.num_partitions) as usize;
         if let Some(Some(writer)) = self.writers.get_mut(partition) {
             writer.write_row(row)?;
@@ -695,7 +689,11 @@ impl SpillManager {
     }
 
     /// Create with explicit disk quota.
-    pub fn new_with_quota(config: SpillConfig, query_id: u64, disk_quota: DiskQuota) -> Result<Self, QueryError> {
+    pub fn new_with_quota(
+        config: SpillConfig,
+        query_id: u64,
+        disk_quota: DiskQuota,
+    ) -> Result<Self, QueryError> {
         let base = config
             .temp_dir
             .clone()
@@ -1016,8 +1014,7 @@ mod tests {
 
     #[test]
     fn test_spill_writer_reader_roundtrip() {
-        let manager =
-            SpillManager::new(SpillConfig::default(), 42).unwrap();
+        let manager = SpillManager::new(SpillConfig::default(), 42).unwrap();
         let mut writer = manager.create_writer().unwrap();
         let rows = sample_rows(100);
         writer.write_rows(&rows).unwrap();
@@ -1031,8 +1028,7 @@ mod tests {
 
     #[test]
     fn test_spill_empty_file() {
-        let manager =
-            SpillManager::new(SpillConfig::default(), 99).unwrap();
+        let manager = SpillManager::new(SpillConfig::default(), 99).unwrap();
         let writer = manager.create_writer().unwrap();
         let file = writer.finalize().unwrap();
         assert_eq!(file.row_count, 0);
@@ -1042,8 +1038,7 @@ mod tests {
 
     #[test]
     fn test_row_buffer_spill_drain() {
-        let manager =
-            SpillManager::new(SpillConfig::default(), 101).unwrap();
+        let manager = SpillManager::new(SpillConfig::default(), 101).unwrap();
         let mut buf = RowBuffer::new();
         let rows = sample_rows(50);
         for r in &rows {
@@ -1075,8 +1070,7 @@ mod tests {
 
     #[test]
     fn test_run_writer_reader_roundtrip() {
-        let manager =
-            SpillManager::new(SpillConfig::default(), 201).unwrap();
+        let manager = SpillManager::new(SpillConfig::default(), 201).unwrap();
         let fp: u64 = 0x123456789abcdef0;
         let mut writer = manager.create_run_writer(fp).unwrap();
         let rows = sample_rows(100);
@@ -1091,8 +1085,7 @@ mod tests {
 
     #[test]
     fn test_run_empty_file() {
-        let manager =
-            SpillManager::new(SpillConfig::default(), 202).unwrap();
+        let manager = SpillManager::new(SpillConfig::default(), 202).unwrap();
         let writer = manager.create_run_writer(0).unwrap();
         let run = writer.finalize().unwrap();
         assert_eq!(run.row_count, 0);
@@ -1103,8 +1096,7 @@ mod tests {
 
     #[test]
     fn test_run_schema_fingerprint_mismatch() {
-        let manager =
-            SpillManager::new(SpillConfig::default(), 203).unwrap();
+        let manager = SpillManager::new(SpillConfig::default(), 203).unwrap();
         let mut writer = manager.create_run_writer(42).unwrap();
         writer.write_rows(&sample_rows(5)).unwrap();
         let run = writer.finalize().unwrap();
@@ -1127,8 +1119,7 @@ mod tests {
 
     #[test]
     fn test_run_checksum_corruption_detected() {
-        let manager =
-            SpillManager::new(SpillConfig::default(), 204).unwrap();
+        let manager = SpillManager::new(SpillConfig::default(), 204).unwrap();
         let mut writer = manager.create_run_writer(0).unwrap();
         writer.write_rows(&sample_rows(10)).unwrap();
         let run = writer.finalize().unwrap();
@@ -1149,8 +1140,7 @@ mod tests {
 
     #[test]
     fn test_run_invalid_magic() {
-        let manager =
-            SpillManager::new(SpillConfig::default(), 205).unwrap();
+        let manager = SpillManager::new(SpillConfig::default(), 205).unwrap();
         let mut writer = manager.create_run_writer(0).unwrap();
         writer.write_rows(&sample_rows(5)).unwrap();
         let run = writer.finalize().unwrap();
@@ -1177,7 +1167,10 @@ mod tests {
         // This should exceed
         let result = quota.try_reserve(30);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Disk quota exceeded"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Disk quota exceeded"));
     }
 
     #[test]

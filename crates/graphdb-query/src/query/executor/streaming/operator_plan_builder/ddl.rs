@@ -12,7 +12,9 @@ pub fn build_ddl_node(
     match node {
         PlanNodeEnum::SpaceManage(manage_node) => Ok(super::build_leaf_command(
             node.id(),
-            DdlSpec::SpaceManage { command: manage_node.clone() },
+            DdlSpec::SpaceManage {
+                command: manage_node.clone(),
+            },
             PhysicalNode::Ddl,
         )),
 
@@ -45,7 +47,9 @@ pub fn build_ddl_node(
 
         PlanNodeEnum::UserManage(manage_node) => Ok(super::build_leaf_command(
             node.id(),
-            DdlSpec::UserManage { command: manage_node.clone() },
+            DdlSpec::UserManage {
+                command: manage_node.clone(),
+            },
             PhysicalNode::Ddl,
         )),
 

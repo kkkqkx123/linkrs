@@ -56,7 +56,7 @@ pub(crate) fn insert_vertex(
         rollback_vertex_tags(ctx, space_info.space_id, &rollback, ts);
     }
 
-    ctx.version_manager().release_insert_timestamp(ts);
+    ctx.release_write_timestamp(ts);
 
     result
 }
@@ -207,7 +207,7 @@ pub(crate) fn update_vertex(
         }
     }
 
-    ctx.version_manager().release_insert_timestamp(ts);
+    ctx.release_write_timestamp(ts);
 
     Ok(())
 }
@@ -254,7 +254,7 @@ pub(crate) fn delete_vertex(
         )?;
     }
 
-    ctx.version_manager().release_insert_timestamp(ts);
+    ctx.release_write_timestamp(ts);
 
     Ok(())
 }
@@ -308,14 +308,14 @@ pub(crate) fn batch_insert_vertices(
             Ok(id) => id,
             Err(e) => {
                 rollback_vertex_tags(ctx, space_info.space_id, &rollback, ts);
-                ctx.version_manager().release_insert_timestamp(ts);
+                ctx.release_write_timestamp(ts);
                 return Err(e);
             }
         };
         ids.push(id);
     }
 
-    ctx.version_manager().release_insert_timestamp(ts);
+    ctx.release_write_timestamp(ts);
 
     Ok(ids)
 }
@@ -387,7 +387,7 @@ pub(crate) fn delete_tags(
         }
     }
 
-    ctx.version_manager().release_insert_timestamp(ts);
+    ctx.release_write_timestamp(ts);
 
     Ok(deleted_count)
 }
@@ -406,7 +406,7 @@ pub(crate) fn insert_edge(ctx: &GraphStorageContext, space: &str, edge: Edge) ->
         rollback_edges(ctx, space_info.space_id, &rollback, ts);
     }
 
-    ctx.version_manager().release_insert_timestamp(ts);
+    ctx.release_write_timestamp(ts);
 
     result
 }
@@ -577,7 +577,7 @@ pub(crate) fn delete_edge(
 ) -> StorageResult<()> {
     let ts = ctx.get_write_timestamp();
     let result = delete_edge_at_timestamp(ctx, space, src, dst, edge_type, rank, ts);
-    ctx.version_manager().release_insert_timestamp(ts);
+    ctx.release_write_timestamp(ts);
     result
 }
 
@@ -605,7 +605,7 @@ pub(crate) fn update_edge(ctx: &GraphStorageContext, space: &str, edge: Edge) ->
 
     // Delete the old edge
     if let Err(e) = delete_edge_at_timestamp(ctx, space, &src, &dst, &edge_type, ranking, ts) {
-        ctx.version_manager().release_insert_timestamp(ts);
+        ctx.release_write_timestamp(ts);
         return Err(e);
     }
 
@@ -613,7 +613,7 @@ pub(crate) fn update_edge(ctx: &GraphStorageContext, space: &str, edge: Edge) ->
     let mut rollback = Vec::new();
     match insert_edge_at_timestamp(ctx, space, space_info.space_id, edge, ts, &mut rollback) {
         Ok(()) => {
-            ctx.version_manager().release_insert_timestamp(ts);
+            ctx.release_write_timestamp(ts);
             Ok(())
         }
         Err(e) => {
@@ -634,7 +634,7 @@ pub(crate) fn update_edge(ctx: &GraphStorageContext, space: &str, edge: Edge) ->
                 ts,
                 &mut Vec::new(),
             );
-            ctx.version_manager().release_insert_timestamp(ts);
+            ctx.release_write_timestamp(ts);
             Err(e)
         }
     }
@@ -664,7 +664,7 @@ pub(crate) fn batch_insert_edges(
         }
     }
 
-    ctx.version_manager().release_insert_timestamp(ts);
+    ctx.release_write_timestamp(ts);
 
     Ok(())
 }
@@ -745,7 +745,7 @@ pub(crate) fn insert_vertex_data(
         }
         Err(e) => Err(e),
     };
-    ctx.version_manager().release_insert_timestamp(ts);
+    ctx.release_write_timestamp(ts);
     final_result
 }
 
@@ -808,7 +808,7 @@ pub(crate) fn insert_edge_data(
         }
         Err(e) => Err(e),
     };
-    ctx.version_manager().release_insert_timestamp(ts);
+    ctx.release_write_timestamp(ts);
     final_result
 }
 
@@ -841,7 +841,7 @@ pub(crate) fn delete_vertex_data(
         }
     }
 
-    ctx.version_manager().release_insert_timestamp(ts);
+    ctx.release_write_timestamp(ts);
 
     Ok(deleted)
 }
@@ -893,7 +893,7 @@ pub(crate) fn delete_edge_data(
         }
     }
 
-    ctx.version_manager().release_insert_timestamp(ts);
+    ctx.release_write_timestamp(ts);
 
     Ok(deleted)
 }
@@ -994,10 +994,10 @@ pub(crate) fn update_data(
             &merged_props.into_iter().collect::<Vec<_>>(),
             ts,
         )?;
-        ctx.version_manager().release_insert_timestamp(ts);
+        ctx.release_write_timestamp(ts);
         Ok(true)
     } else {
-        ctx.version_manager().release_insert_timestamp(ts);
+        ctx.release_write_timestamp(ts);
         Err(StorageError::not_found(format!(
             "Label {} not found",
             label

@@ -9,7 +9,9 @@ use crate::query::executor::build_error::PlanBuildError;
 use crate::query::executor::streaming::executor::SortDirection;
 use crate::query::executor::streaming::operators::spec::{BlockingSpec, UnarySpec};
 use crate::query::executor::streaming::plan::node::PhysicalNode;
-use crate::query::executor::streaming::plan::properties::{PhysicalProperties, SPILL_DEFAULT_THRESHOLD};
+use crate::query::executor::streaming::plan::properties::{
+    PhysicalProperties, SPILL_DEFAULT_THRESHOLD,
+};
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 
@@ -53,10 +55,22 @@ pub fn build_relational_node(
             let input_phys = super::build_plan_node(input_plan, context)?;
             let count = limit_node.count();
             let offset = limit_node.offset();
-            let offset = u32::try_from(offset)
-                .map_err(|_| PlanBuildError::missing_value("Limit", node.id(), "offset", "Limit offset must fit in u32"))?;
-            let limit = u32::try_from(count)
-                .map_err(|_| PlanBuildError::missing_value("Limit", node.id(), "count", "Limit count must fit in u32"))?;
+            let offset = u32::try_from(offset).map_err(|_| {
+                PlanBuildError::missing_value(
+                    "Limit",
+                    node.id(),
+                    "offset",
+                    "Limit offset must fit in u32",
+                )
+            })?;
+            let limit = u32::try_from(count).map_err(|_| {
+                PlanBuildError::missing_value(
+                    "Limit",
+                    node.id(),
+                    "count",
+                    "Limit count must fit in u32",
+                )
+            })?;
             Ok(PhysicalNode::Unary(
                 node.id(),
                 Box::new(input_phys),

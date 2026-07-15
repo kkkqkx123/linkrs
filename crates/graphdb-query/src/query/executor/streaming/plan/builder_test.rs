@@ -822,8 +822,7 @@ fn hash_shuffle_join_cross_chunk_left_join_pads_nulls_for_unmatched_left() {
 fn hash_shuffle_join_cross_join_no_keys_produces_cartesian_product() {
     let n_left = 3;
     let n_right = 300;
-    let left_rows: Vec<Vec<Value>> =
-        (0..n_left).map(|i| vec![Value::BigInt(i as i64)]).collect();
+    let left_rows: Vec<Vec<Value>> = (0..n_left).map(|i| vec![Value::BigInt(i as i64)]).collect();
     let left = scan_executor(left_rows, 0, vec!["id".to_string()]);
     let right_rows: Vec<Vec<Value>> = (0..n_right)
         .map(|i| vec![Value::BigInt(100 + i as i64)])

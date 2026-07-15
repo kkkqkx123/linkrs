@@ -1,6 +1,6 @@
 use crate::api::server::http::state::AppState;
 use crate::storage::{
-    StorageClient, StorageSchemaContextOps, StorageSyncContextOps, StorageTransactionContextOps,
+    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 use axum::{
     extract::{Request, State},
@@ -13,7 +13,7 @@ pub async fn auth_middleware<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync

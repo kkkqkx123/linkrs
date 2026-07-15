@@ -9,7 +9,7 @@ use crate::api::core::{PropertyDef, SpaceConfig};
 use crate::api::server::http::{error::HttpError, state::AppState};
 use crate::core::DataType;
 use crate::storage::{
-    StorageClient, StorageSchemaContextOps, StorageSyncContextOps, StorageTransactionContextOps,
+    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 
 // ==================== Space related ====================
@@ -28,7 +28,7 @@ pub async fn create_space<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync
@@ -65,7 +65,7 @@ pub async fn get_space<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync
@@ -97,7 +97,7 @@ pub async fn drop_space<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync
@@ -127,7 +127,7 @@ pub async fn list_spaces<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync
@@ -183,7 +183,7 @@ pub async fn create_tag<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync
@@ -231,7 +231,7 @@ pub async fn list_tags<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync
@@ -261,7 +261,7 @@ pub async fn create_edge_type<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync
@@ -309,7 +309,7 @@ pub async fn list_edge_types<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync
@@ -371,7 +371,7 @@ pub async fn get_version_history<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync
@@ -448,7 +448,7 @@ pub async fn get_schema_changes<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync
@@ -512,7 +512,7 @@ pub async fn detect_breaking_changes<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync

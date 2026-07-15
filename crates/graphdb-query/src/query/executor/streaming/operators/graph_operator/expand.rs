@@ -8,12 +8,12 @@ use crate::core::{EdgeDirection, Value};
 use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::operators::base::OperatorBase;
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 
 use super::common;
 
 pub(super) fn handle(
-    storage: &Option<Arc<RwLock<dyn StorageClient>>>,
+    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     space_name: &str,
     edge_types: &[String],
     direction: EdgeDirection,
@@ -77,7 +77,7 @@ pub(super) fn handle(
 }
 
 pub(super) fn handle_all(
-    storage: &Option<Arc<RwLock<dyn StorageClient>>>,
+    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     space_name: &str,
     edge_types: &[String],
     direction: EdgeDirection,

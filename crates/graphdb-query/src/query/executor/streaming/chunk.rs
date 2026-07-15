@@ -331,13 +331,7 @@ impl DataChunk {
         self.rows
             .iter()
             .enumerate()
-            .filter_map(|(i, row)| {
-                if pred(row, &layout) {
-                    Some(i)
-                } else {
-                    None
-                }
-            })
+            .filter_map(|(i, row)| if pred(row, &layout) { Some(i) } else { None })
             .collect()
     }
 

@@ -5,12 +5,12 @@
 
 use std::sync::Arc;
 
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::query::optimizer::analysis::{
     BatchPlanAnalysis, ExpressionAnalysis, ReferenceCountAnalysis,
 };
 use crate::query::optimizer::cost::{CostCalculator, CostModelConfig, SelectivityEstimator};
 use crate::query::optimizer::stats::StatisticsManager;
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
 /// Optimization Context
 ///

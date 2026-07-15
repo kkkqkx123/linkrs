@@ -443,18 +443,11 @@ impl TransactionManager {
 
         if let Some(ref sync_manager) = self.sync_manager {
             if let Err(e) = sync_manager.commit_transaction_sync(txn_id) {
-                log::warn!(
-                    "Sync commit failed for transaction {}, aborting transaction: {}",
+                log::error!(
+                    "Sync commit failed for transaction {}; local commit will complete and the outbox will retry: {}",
                     txn_id,
                     e
                 );
-                self.rollback_context_timestamp(&context);
-                self.active_transactions.remove(&txn_id);
-                let _ = context.transition_to(TransactionState::Aborted);
-                return Err(TransactionError::sync_failed(format!(
-                    "Failed to commit sync data for transaction {}: {}",
-                    txn_id, e
-                )));
             }
         }
 

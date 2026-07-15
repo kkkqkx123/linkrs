@@ -10,7 +10,7 @@ use crate::api::server::http::AppState;
 use crate::config::Config;
 
 use crate::storage::{
-    StorageClient, StorageSchemaContextOps, StorageSyncContextOps, StorageTransactionContextOps,
+    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 
 // Import generated proto types
@@ -29,7 +29,7 @@ pub struct GraphDBService<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + 'static,
 > {
@@ -42,7 +42,7 @@ impl<
         S: StorageClient
             + StorageSchemaContextOps
             + StorageSyncContextOps
-            + StorageTransactionContextOps
+            + StorageOperationContextOps
             + Clone
             + 'static,
     > GraphDBService<S>
@@ -72,7 +72,7 @@ impl<
         S: StorageClient
             + StorageSchemaContextOps
             + StorageSyncContextOps
-            + StorageTransactionContextOps
+            + StorageOperationContextOps
             + Clone
             + Send
             + Sync
@@ -779,7 +779,7 @@ impl<
         S: StorageClient
             + StorageSchemaContextOps
             + StorageSyncContextOps
-            + StorageTransactionContextOps
+            + StorageOperationContextOps
             + Clone
             + Send
             + Sync
@@ -793,7 +793,7 @@ pub async fn run_server<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync
@@ -820,7 +820,7 @@ pub async fn run_server_with_grpc_service<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync

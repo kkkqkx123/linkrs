@@ -677,11 +677,11 @@ impl StatementValidator for InsertVerticesValidator {
 mod tests {
     use super::*;
     use crate::core::types::expr::contextual::ContextualExpression;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::core::Expression;
     use crate::core::Value;
     use crate::query::parser::ast::stmt::InsertStmt;
     use crate::query::parser::ast::Span;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::query::QueryRequestContext;
     use std::sync::Arc;
 

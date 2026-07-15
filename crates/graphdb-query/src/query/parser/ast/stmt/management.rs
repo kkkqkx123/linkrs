@@ -4,8 +4,8 @@ use crate::core::types::Span;
 
 use super::PatternUtils;
 
-use super::{OrderByClause, ReturnClause, ReturnItem, Stmt, YieldClause};
 use super::{CreateTarget, DeleteTarget, FetchTarget, UpdateTarget};
+use super::{OrderByClause, ReturnClause, ReturnItem, Stmt, YieldClause};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct UseStmt {

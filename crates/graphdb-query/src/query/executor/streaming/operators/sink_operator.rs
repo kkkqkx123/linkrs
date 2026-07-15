@@ -14,19 +14,19 @@ use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::context::ValueRowContext;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::operators::base::OperatorBase;
-use crate::storage::{StorageClient, StorageWriter};
+use crate::storage::{QueryStorage, StorageWriter};
 
 #[derive(Debug)]
 pub enum SinkOperator {
     InsertVertices {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         vertex_properties: Vec<(String, Expression)>,
         tags: Vec<String>,
         rows_inserted: u64,
     },
     InsertEdges {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         src_col: String,
         dst_col: String,
@@ -35,13 +35,13 @@ pub enum SinkOperator {
         rows_inserted: u64,
     },
     UpdateVertices {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         updates: Vec<(String, Expression)>,
         rows_updated: u64,
     },
     UpdateEdges {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         src_col: String,
         dst_col: String,
@@ -50,33 +50,33 @@ pub enum SinkOperator {
         rows_updated: u64,
     },
     DeleteVertices {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         vertex_id_col: String,
         rows_deleted: u64,
     },
     DeleteEdges {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         src_col: String,
         dst_col: String,
         rows_deleted: u64,
     },
     PipeDeleteVertices {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         vertex_id_col: String,
         rows_deleted: u64,
     },
     PipeDeleteEdges {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         src_col: String,
         dst_col: String,
         rows_deleted: u64,
     },
     DeleteTags {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         tag_names: Vec<String>,
         vertex_ids: Option<Vec<Value>>,
@@ -111,7 +111,7 @@ fn eval_expr(expr: &Expression, context: &mut ValueRowContext) -> Result<Value, 
 impl SinkOperator {
     pub fn from_spec(
         spec: &super::spec::SinkSpec,
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
     ) -> Self {
         match spec {
             super::spec::SinkSpec::InsertVertices {
@@ -291,8 +291,7 @@ impl SinkOperator {
                         let layout = chunk.get_layout();
 
                         for row in &chunk.rows {
-                            let mut context =
-                                ValueRowContext::new(row.clone(), layout.clone());
+                            let mut context = ValueRowContext::new(row.clone(), layout.clone());
 
                             let vid = if let Some((_name, expr)) = vertex_properties.first() {
                                 let val = eval_expr(expr, &mut context)?;
@@ -351,8 +350,7 @@ impl SinkOperator {
                         let layout = chunk.get_layout();
 
                         for row in &chunk.rows {
-                            let mut context =
-                                ValueRowContext::new(row.clone(), layout.clone());
+                            let mut context = ValueRowContext::new(row.clone(), layout.clone());
                             let src_val = context
                                 .get_variable(src_col)
                                 .unwrap_or(Value::Null(crate::core::NullType::Null));
@@ -403,8 +401,7 @@ impl SinkOperator {
                         let layout = chunk.get_layout();
 
                         for row in &chunk.rows {
-                            let mut context =
-                                ValueRowContext::new(row.clone(), layout.clone());
+                            let mut context = ValueRowContext::new(row.clone(), layout.clone());
                             let vid_val = context
                                 .get_variable("vid")
                                 .or_else(|| row.first().cloned())
@@ -451,8 +448,7 @@ impl SinkOperator {
                         let layout = chunk.get_layout();
 
                         for row in &chunk.rows {
-                            let mut context =
-                                ValueRowContext::new(row.clone(), layout.clone());
+                            let mut context = ValueRowContext::new(row.clone(), layout.clone());
                             let src_val = context
                                 .get_variable(src_col)
                                 .or_else(|| row.first().cloned())
@@ -508,8 +504,7 @@ impl SinkOperator {
                         let layout = chunk.get_layout();
 
                         for row in &chunk.rows {
-                            let context =
-                                ValueRowContext::new(row.clone(), layout.clone());
+                            let context = ValueRowContext::new(row.clone(), layout.clone());
                             if let Some(vid_val) = context.get_variable(vertex_id_col) {
                                 if let Ok(vid) = VertexId::try_from(&vid_val) {
                                     StorageWriter::delete_vertex(&mut *writer, space_name, &vid)
@@ -546,8 +541,7 @@ impl SinkOperator {
                         let layout = chunk.get_layout();
 
                         for row in &chunk.rows {
-                            let context =
-                                ValueRowContext::new(row.clone(), layout.clone());
+                            let context = ValueRowContext::new(row.clone(), layout.clone());
                             let src_val = context
                                 .get_variable(src_col)
                                 .unwrap_or(Value::Null(crate::core::NullType::Null));
@@ -599,8 +593,7 @@ impl SinkOperator {
                         let layout = chunk.get_layout();
 
                         for row in &chunk.rows {
-                            let context =
-                                ValueRowContext::new(row.clone(), layout.clone());
+                            let context = ValueRowContext::new(row.clone(), layout.clone());
                             let src_val = context
                                 .get_variable(src_col)
                                 .unwrap_or(Value::Null(crate::core::NullType::Null));
@@ -651,8 +644,7 @@ impl SinkOperator {
                         let layout = chunk.get_layout();
 
                         for row in &chunk.rows {
-                            let context =
-                                ValueRowContext::new(row.clone(), layout.clone());
+                            let context = ValueRowContext::new(row.clone(), layout.clone());
                             if let Some(vid_val) = context.get_variable(vertex_id_col) {
                                 if let Ok(vid) = VertexId::try_from(&vid_val) {
                                     StorageWriter::delete_vertex(&mut *writer, space_name, &vid)

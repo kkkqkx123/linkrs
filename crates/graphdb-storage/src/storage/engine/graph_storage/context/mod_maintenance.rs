@@ -31,7 +31,7 @@ impl GraphStorageContext {
 
         let vertex_labels: Vec<LabelId>;
         {
-            let mut vertex_tables = self.persistent.data_store.vertex_tables().write();
+            let mut vertex_tables = self.persistent.data_store.write_vertex_tables();
             vertex_labels = vertex_tables.keys().copied().collect();
 
             for &label_id in &vertex_labels {
@@ -66,7 +66,7 @@ impl GraphStorageContext {
         let edge_keys: Vec<EdgeTableKey>;
         let mut total_edges_removed = 0usize;
         {
-            let mut edge_tables = self.persistent.data_store.edge_tables().write();
+            let mut edge_tables = self.persistent.data_store.write_edge_tables();
             edge_keys = edge_tables.keys().copied().collect();
 
             if config.enable_structure_compaction {
@@ -131,7 +131,7 @@ impl GraphStorageContext {
         }
 
         {
-            let mut edge_tables = self.persistent.data_store.edge_tables().write();
+            let mut edge_tables = self.persistent.data_store.write_edge_tables();
             let mut adaptive_merged = 0usize;
             let mut lsm_merged = 0usize;
 

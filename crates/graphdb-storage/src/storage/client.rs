@@ -1,13 +1,11 @@
 use crate::core::metadata::SchemaManager;
-use crate::core::types::TransactionContextInfo;
+use crate::core::types::TransactionId;
 use crate::core::types::{
     CompactConfig, EdgeTypeInfo, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo,
     PropertyDef, SpaceInfo, TagInfo, Timestamp, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
 };
 use crate::core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
-use crate::storage::cursor::{
-    EdgeCursor, IndexCursor, ScanOptions, VecEdgeCursor, VecVertexCursor, VertexCursor,
-};
+use crate::storage::cursor::{EdgeCursor, IndexCursor, ScanOptions, VertexCursor};
 use crate::storage::engine::background_freeze::FreezeStats;
 use crate::storage::engine::graph_storage::context::ExportedEdgeSnapshotRecord;
 use crate::storage::schema::{LabelVersionHistory, PropertyChange};
@@ -58,9 +56,10 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
         offset: usize,
         limit: usize,
     ) -> Result<Vec<Edge>, StorageError> {
-        // Default implementation: scan all and paginate in memory
-        let all = self.scan_edges_by_type(space, edge_type)?;
-        Ok(all.into_iter().skip(offset).take(limit).collect())
+        let _ = (space, edge_type, offset, limit);
+        Err(StorageError::not_supported(
+            "Native edge pagination is not supported by this storage implementation",
+        ))
     }
 
     fn lookup_index(
@@ -167,51 +166,28 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
 
     /// Create a lazy vertex scan cursor.
     ///
-    /// The default implementation falls back to the Vec-backed cursor.
-    /// Storage engines that support lazy iteration should override this
-    /// to return a native cursor.
+    /// Implementations must provide a native lazy cursor.
     fn create_vertex_cursor(
         &self,
-        space: &str,
-        options: &ScanOptions,
+        _space: &str,
+        _options: &ScanOptions,
     ) -> Result<Box<dyn VertexCursor>, StorageError> {
-        let mut vertices = self.scan_vertices(space)?;
-        if let Some(range) = &options.vertex_id_range {
-            vertices.retain(|v| v.id >= range.start && v.id < range.end);
-        }
-        if let Some(limit) = options.limit {
-            vertices.truncate(limit);
-        }
-        Ok(Box::new(VecVertexCursor::new(vertices)))
+        Err(StorageError::not_supported(
+            "Native vertex cursor is not supported by this storage implementation",
+        ))
     }
 
     /// Create a lazy edge scan cursor.
     ///
-    /// The default implementation falls back to the Vec-backed cursor.
-    /// Storage engines that support lazy iteration should override this
-    /// to return a native cursor.
+    /// Implementations must provide a native lazy cursor.
     fn create_edge_cursor(
         &self,
-        space: &str,
-        options: &ScanOptions,
+        _space: &str,
+        _options: &ScanOptions,
     ) -> Result<Box<dyn EdgeCursor>, StorageError> {
-        let mut edges = if let Some(ref et) = options.edge_type {
-            self.scan_edges_by_type(space, et)?
-        } else {
-            self.scan_all_edges(space)?
-        };
-        if let Some(range) = &options.edge_src_id_range {
-            edges.retain(|e| {
-                e.src
-                    .to_string()
-                    .parse::<i64>()
-                    .is_ok_and(|id| id >= range.start && id < range.end)
-            });
-        }
-        if let Some(limit) = options.limit {
-            edges.truncate(limit);
-        }
-        Ok(Box::new(VecEdgeCursor::new(edges)))
+        Err(StorageError::not_supported(
+            "Native edge cursor is not supported by this storage implementation",
+        ))
     }
 
     /// Create an index cursor for the given index and predicate.
@@ -225,8 +201,8 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
         _index_id: u64,
         _predicate: &dyn std::fmt::Debug,
     ) -> Result<Box<dyn IndexCursor<Row = crate::core::Value>>, StorageError> {
-        Err(StorageError::storage_error(
-            "IndexCursor not implemented by this storage engine",
+        Err(StorageError::not_supported(
+            "Native index cursor is not supported by this storage engine",
         ))
     }
 }
@@ -373,6 +349,8 @@ pub trait StoragePersistenceOps: Send + Sync + std::fmt::Debug {
 
     fn snapshot_stats(&self) -> crate::storage::SnapshotStats;
 
+    fn persistence_diagnostics(&self) -> Option<crate::storage::PersistenceDiagnostics>;
+
     fn compact(&self, config: &CompactConfig) -> StorageResult<()>;
 
     fn save_data(&self) -> StorageResult<()> {
@@ -408,11 +386,41 @@ pub trait StorageSchemaContextOps: Send + Sync + std::fmt::Debug {
     fn get_schema_manager(&self) -> Option<Arc<SchemaManager>>;
 }
 
-/// Access to transaction runtime context shared with higher-level components.
-pub trait StorageTransactionContextOps: Send + Sync + std::fmt::Debug {
-    fn get_transaction_context(&self) -> Option<Arc<TransactionContextInfo>>;
+/// Immutable context bound to one storage operation scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorageOperationContext {
+    pub transaction_id: Option<TransactionId>,
+    pub read_timestamp: Timestamp,
+    pub write_timestamp: Option<Timestamp>,
+    pub read_only: bool,
+}
 
-    fn set_transaction_context(&self, context: Option<Arc<TransactionContextInfo>>);
+impl StorageOperationContext {
+    pub fn transaction(
+        transaction_id: TransactionId,
+        timestamp: Timestamp,
+        read_only: bool,
+    ) -> Self {
+        Self {
+            transaction_id: Some(transaction_id),
+            read_timestamp: timestamp,
+            write_timestamp: (!read_only).then_some(timestamp),
+            read_only,
+        }
+    }
+}
+
+/// Creates an immutable storage handle bound to a single operation context.
+pub trait StorageOperationContextOps: Send + Sync + std::fmt::Debug {
+    fn bind_auto_commit_context(&self) -> Self
+    where
+        Self: Sized;
+
+    fn bind_operation_context(&self, context: StorageOperationContext) -> Self
+    where
+        Self: Sized;
+
+    fn operation_context(&self) -> Option<Arc<StorageOperationContext>>;
 }
 
 /// Access to sync runtime context shared with higher-level components.
@@ -447,6 +455,48 @@ pub trait StorageGcOps: Send + Sync + std::fmt::Debug {
     fn stop_index_gc(&self);
 }
 
+/// Logical graph data access used by query execution.
+pub trait GraphStore:
+    StorageReader
+    + StorageWriter
+    + StorageOperationContextOps
+    + UndoTarget
+    + Send
+    + Sync
+    + std::fmt::Debug
+{
+}
+
+impl<T> GraphStore for T where
+    T: StorageReader
+        + StorageWriter
+        + StorageOperationContextOps
+        + UndoTarget
+        + Send
+        + Sync
+        + std::fmt::Debug
+{
+}
+
+/// Catalog and schema access used by query planning and DDL execution.
+pub trait CatalogStore:
+    StorageSchemaOps + StorageSchemaContextOps + Send + Sync + std::fmt::Debug
+{
+}
+
+impl<T> CatalogStore for T where
+    T: StorageSchemaOps + StorageSchemaContextOps + Send + Sync + std::fmt::Debug
+{
+}
+
+/// Minimal combined capability required by the query crate.
+pub trait QueryStorage: GraphStore + CatalogStore + StorageAuthOps + StorageAdmin {}
+impl<T> QueryStorage for T where T: GraphStore + CatalogStore + StorageAuthOps + StorageAdmin {}
+
+/// Maintenance-only capabilities used by server initialization and administration.
+pub trait StorageMaintenance: StorageAdmin + StoragePersistenceOps + StorageGcOps {}
+impl<T> StorageMaintenance for T where T: StorageAdmin + StoragePersistenceOps + StorageGcOps {}
+
 /// Combined storage interface with full read/write/schema/auth/admin capabilities.
 ///
 /// Runtime context accessors such as schema, transaction, and sync context are kept
@@ -456,6 +506,7 @@ pub trait StorageClient:
     + StorageWriter
     + StorageSchemaOps
     + StorageSchemaContextOps
+    + StorageOperationContextOps
     + StorageAuthOps
     + StorageAdmin
     + StoragePersistenceOps
@@ -473,6 +524,7 @@ impl<T> StorageClient for T where
         + StorageWriter
         + StorageSchemaOps
         + StorageSchemaContextOps
+        + StorageOperationContextOps
         + StorageAuthOps
         + StorageAdmin
         + StoragePersistenceOps

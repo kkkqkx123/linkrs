@@ -6,10 +6,10 @@ use std::sync::Arc;
 
 use crate::core::metadata::SchemaManager;
 use crate::core::types::expr::contextual::ContextualExpression;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::core::YieldColumn;
 use crate::query::parser::ast::stmt::{Ast, MatchStmt, OrderByClause, ReturnClause, ReturnItem};
 use crate::query::parser::ast::{Pattern, Stmt};
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::query::validator::error::{ValidationError, ValidationErrorType};
 use crate::query::QueryContext;
 

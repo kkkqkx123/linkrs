@@ -17,7 +17,7 @@ use crate::query::parser::ast::stmt::ExplainFormat;
 use crate::query::planning::plan::explain::{DescribeVisitor, PlanDescription, ProfilingStats};
 use crate::query::planning::plan::ExecutionPlan;
 use crate::query::DataSet;
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 
 use super::execution_stats_context::ExecutionStatsContext;
 
@@ -25,13 +25,13 @@ use super::execution_stats_context::ExecutionStatsContext;
 ///
 /// Handles PROFILE statements.
 /// Executes the query and returns detailed performance statistics similar to PostgreSQL's EXPLAIN ANALYZE.
-pub struct ProfileExecutor<S: StorageClient> {
+pub struct ProfileExecutor<S: QueryStorage> {
     base: BaseExecutor<S>,
     inner_plan: ExecutionPlan,
     format: ExplainFormat,
 }
 
-impl<S: StorageClient + Send + 'static> ProfileExecutor<S> {
+impl<S: QueryStorage + Send + 'static> ProfileExecutor<S> {
     pub fn new(base: BaseExecutor<S>, inner_plan: ExecutionPlan, format: ExplainFormat) -> Self {
         Self {
             base,
@@ -76,7 +76,7 @@ impl<S: StorageClient + Send + 'static> ProfileExecutor<S> {
 
         let mut exec_context = self.base.context.clone();
         if let Some(ref storage) = self.base.storage {
-            let dyn_storage: Arc<RwLock<dyn StorageClient>> = storage.clone();
+            let dyn_storage: Arc<RwLock<dyn QueryStorage>> = storage.clone();
             exec_context.storage = Some(dyn_storage);
         }
 
@@ -266,7 +266,7 @@ impl<S: StorageClient + Send + 'static> ProfileExecutor<S> {
     }
 }
 
-impl<S: StorageClient + Send + 'static> Executor<S> for ProfileExecutor<S> {
+impl<S: QueryStorage + Send + 'static> Executor<S> for ProfileExecutor<S> {
     fn execute(&mut self) -> ExecutorDBResult<ExecutionResult> {
         let start = Instant::now();
         let (_exec_result, stats_context, runtime) = self.execute_profiled()?;

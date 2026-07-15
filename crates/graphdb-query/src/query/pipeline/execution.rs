@@ -1,24 +1,26 @@
-use super::QueryPipelineManager;
 use super::next_transaction_id;
+use super::QueryPipelineManager;
 use crate::core::error::{DBError, DBResult, QueryError};
 use crate::core::types::SpaceInfo;
 use crate::core::{
     ErrorInfo, ErrorType, MetricType, QueryMetrics, QueryPhase, QueryProfile, StatsManager,
 };
 use crate::query::executor::base::{ExecutionContext, ExecutionResult};
+use crate::query::executor::streaming::instance::{
+    QueryBindings, QueryExecutionInstance, ResultSink,
+};
 use crate::query::executor::streaming::plan::PhysicalPlan;
-use crate::query::executor::streaming::instance::{QueryBindings, QueryExecutionInstance, ResultSink};
 use crate::query::executor::streaming::transaction_scope::TransactionScope;
 use crate::query::executor::streaming::{StreamingQueryExecutor, StreamingQueryResult};
 use crate::query::validator::ValidatedStatement;
 use crate::query::QueryContext;
 use crate::query::QueryRequestContext;
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Instant;
 
-impl<S: StorageClient + 'static> QueryPipelineManager<S> {
+impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     pub fn execute_query(&mut self, query_text: &str) -> DBResult<ExecutionResult> {
         self.execute_query_with_space(query_text, None)
     }
@@ -59,9 +61,9 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             log::debug!("Query plan cache hit");
             let execute_start = Instant::now();
             let txn_scope = if cached_plan.is_dml {
-                TransactionScope::auto_commit(
-                    crate::core::types::TransactionId::new(next_transaction_id()),
-                )
+                TransactionScope::auto_commit(crate::core::types::TransactionId::new(
+                    next_transaction_id(),
+                ))
             } else {
                 TransactionScope::None
             };
@@ -134,16 +136,15 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         }
 
         let execute_start = Instant::now();
-        let (physical_plan, optimized_plan) =
-            self.compile(query_context.clone(), &validated)?;
+        let (physical_plan, optimized_plan) = self.compile(query_context.clone(), &validated)?;
 
         let result = if optimized_plan.partition_spec().is_some() {
             self.execute_plan(query_context.clone(), optimized_plan)?
         } else {
             let txn_scope = if is_dml {
-                TransactionScope::auto_commit(
-                    crate::core::types::TransactionId::new(next_transaction_id()),
-                )
+                TransactionScope::auto_commit(crate::core::types::TransactionId::new(
+                    next_transaction_id(),
+                ))
             } else {
                 TransactionScope::None
             };
@@ -239,8 +240,7 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             _ => {}
         }
 
-        let (physical_plan, optimized_plan) =
-            self.compile(query_context.clone(), &validated)?;
+        let (physical_plan, optimized_plan) = self.compile(query_context.clone(), &validated)?;
 
         if optimized_plan.partition_spec().is_some() {
             self.execute_plan_to_stream(query_context, optimized_plan)
@@ -276,8 +276,7 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             _ => {}
         }
 
-        let (physical_plan, optimized_plan) =
-            self.compile(query_context.clone(), &validated)?;
+        let (physical_plan, optimized_plan) = self.compile(query_context.clone(), &validated)?;
 
         if optimized_plan.partition_spec().is_some() {
             self.execute_plan(query_context, optimized_plan)
@@ -308,16 +307,14 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         session_id: i64,
     ) -> DBResult<(ExecutionResult, QueryMetrics, QueryProfile)> {
         self.stats_manager.add_value(MetricType::NumQueries);
-        self.stats_manager
-            .add_value(MetricType::NumActiveQueries);
+        self.stats_manager.add_value(MetricType::NumActiveQueries);
 
         struct ActiveQueryGuard {
             stats_manager: Arc<StatsManager>,
         }
         impl Drop for ActiveQueryGuard {
             fn drop(&mut self) {
-                self.stats_manager
-                    .dec_value(MetricType::NumActiveQueries);
+                self.stats_manager.dec_value(MetricType::NumActiveQueries);
             }
         }
         let _guard = ActiveQueryGuard {
@@ -394,25 +391,24 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
         }
 
         let plan_start = Instant::now();
-        let execution_plan =
-            match self.generate_execution_plan(query_context.clone(), &validated) {
-                Ok(plan) => {
-                    profile.stages.plan_us = plan_start.elapsed().as_micros() as u64;
-                    metrics.set_plan_node_count(plan.node_count());
-                    metrics.record_plan_time(plan_start.elapsed());
-                    plan
-                }
-                Err(e) => {
-                    profile.stages.plan_us = plan_start.elapsed().as_micros() as u64;
-                    let error_info =
-                        ErrorInfo::new(ErrorType::PlanningError, QueryPhase::Plan, e.to_string());
-                    profile.mark_failed_with_info(error_info.clone());
-                    profile.total_duration_us = total_start.elapsed().as_micros() as u64;
-                    self.stats_manager
-                        .record_failed_query(profile.clone(), error_info);
-                    return Err(e);
-                }
-            };
+        let execution_plan = match self.generate_execution_plan(query_context.clone(), &validated) {
+            Ok(plan) => {
+                profile.stages.plan_us = plan_start.elapsed().as_micros() as u64;
+                metrics.set_plan_node_count(plan.node_count());
+                metrics.record_plan_time(plan_start.elapsed());
+                plan
+            }
+            Err(e) => {
+                profile.stages.plan_us = plan_start.elapsed().as_micros() as u64;
+                let error_info =
+                    ErrorInfo::new(ErrorType::PlanningError, QueryPhase::Plan, e.to_string());
+                profile.mark_failed_with_info(error_info.clone());
+                profile.total_duration_us = total_start.elapsed().as_micros() as u64;
+                self.stats_manager
+                    .record_failed_query(profile.clone(), error_info);
+                return Err(e);
+            }
+        };
 
         let optimize_start = Instant::now();
         let optimized_plan = match self.optimize_execution_plan(execution_plan) {
@@ -574,10 +570,7 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             .map_err(|e| DBError::from(QueryError::execution(e.to_string())))
     }
 
-    pub(crate) fn build_execution_context(
-        &self,
-        query_context: &QueryContext,
-    ) -> ExecutionContext {
+    pub(crate) fn build_execution_context(&self, query_context: &QueryContext) -> ExecutionContext {
         use std::collections::HashMap;
 
         let mut context = ExecutionContext::default();
@@ -592,7 +585,7 @@ impl<S: StorageClient + 'static> QueryPipelineManager<S> {
             .max_buffered_chunks
             .max(1);
         if let Some(ref storage) = self.storage {
-            let dyn_storage: Arc<RwLock<dyn StorageClient>> = storage.clone();
+            let dyn_storage: Arc<RwLock<dyn QueryStorage>> = storage.clone();
             context.storage = Some(dyn_storage);
         }
         #[cfg(feature = "fulltext-search")]

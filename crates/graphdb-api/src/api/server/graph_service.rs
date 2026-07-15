@@ -10,13 +10,13 @@ use crate::config::Config;
 use crate::core::metadata::SchemaManager;
 use crate::core::stats::StatsManager;
 use crate::core::types::SpaceSummary;
-use crate::core::types::TransactionContextInfo;
 use crate::core::{DataType, MetricType, Permission};
 use crate::query::executor::streaming::StreamingQueryResult;
 use crate::query::executor::ExecutionResult;
 use crate::query::DataSet;
 use crate::storage::{
-    StorageClient, StorageSchemaContextOps, StorageSyncContextOps, StorageTransactionContextOps,
+    StorageClient, StorageOperationContext, StorageOperationContextOps, StorageSchemaContextOps,
+    StorageSyncContextOps,
 };
 use crate::transaction::TransactionManager;
 use log::{info, warn};
@@ -26,23 +26,6 @@ use std::sync::Arc;
 use std::time::Duration;
 #[cfg(feature = "qdrant")]
 use vector_client::VectorManager;
-
-/// RAII guard to ensure transaction context is always cleared from storage.
-struct TransactionContextGuard<'a, S: StorageTransactionContextOps + ?Sized> {
-    storage: &'a S,
-}
-
-impl<'a, S: StorageTransactionContextOps + ?Sized> TransactionContextGuard<'a, S> {
-    fn new(storage: &'a S) -> Self {
-        Self { storage }
-    }
-}
-
-impl<S: StorageTransactionContextOps + ?Sized> Drop for TransactionContextGuard<'_, S> {
-    fn drop(&mut self) {
-        self.storage.set_transaction_context(None);
-    }
-}
 
 pub struct GraphService<S: StorageClient + Clone + 'static> {
     session_manager: Arc<GraphSessionManager>,
@@ -66,7 +49,7 @@ impl<
         S: StorageClient
             + StorageSchemaContextOps
             + StorageSyncContextOps
-            + StorageTransactionContextOps
+            + StorageOperationContextOps
             + Clone
             + 'static,
     > GraphService<S>
@@ -462,8 +445,7 @@ impl<
             }
         }
 
-        // If session has an active transaction, set the transaction context on storage
-        // so that subsequent queries execute within the same transaction
+        // Resolve the immutable operation context for this query.
         let txn_context = if let Some(txn_id) = session.current_transaction() {
             if let Some(ref txn_manager) = self.transaction_manager {
                 match txn_manager.get_context(txn_id) {
@@ -495,19 +477,6 @@ impl<
             None
         };
 
-        if let Some(ref ctx) = txn_context {
-            let ctx_info = Arc::new(TransactionContextInfo::new(
-                ctx.id,
-                ctx.start_timestamp,
-                ctx.read_only,
-                0,
-            ));
-            self.storage.set_transaction_context(Some(ctx_info));
-        }
-
-        // RAII guard ensures transaction context is cleared even if query panics
-        let _guard = TransactionContextGuard::new(self.storage.as_ref());
-
         // Use core layer QueryApi to execute query
         let query_request = crate::api::core::QueryRequest {
             space_id: session.space().map(|s| s.id),
@@ -518,6 +487,18 @@ impl<
         };
 
         let mut query_api = self.query_api.write();
+        let execution_storage = txn_context.map_or_else(
+            || self.storage.bind_auto_commit_context(),
+            |ctx| {
+                self.storage
+                    .bind_operation_context(StorageOperationContext::transaction(
+                        ctx.id,
+                        ctx.start_timestamp,
+                        ctx.read_only,
+                    ))
+            },
+        );
+        query_api.replace_storage(execution_storage);
         let result = query_api.execute(stmt, query_request);
 
         // If the query failed and we have an active transaction, check if the

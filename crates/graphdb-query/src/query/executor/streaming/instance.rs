@@ -32,7 +32,7 @@ use super::PhysicalNode;
 use crate::core::error::QueryError;
 use crate::core::Value;
 use crate::query::executor::base::{ExecutionResult, MemoryBudget};
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 
 use super::parameters::{ParameterFrame, ParameterSchema};
 use super::query_registry::{QueryGuard, QueryId, QueryMetadata, QueryRegistry};
@@ -60,7 +60,7 @@ pub struct QueryBindings {
     /// Target space name.
     pub space_name: Option<String>,
     /// Storage client for this execution.
-    pub storage: Option<Arc<RwLock<dyn StorageClient>>>,
+    pub storage: Option<Arc<RwLock<dyn QueryStorage>>>,
     /// Per-query memory budget.
     pub memory_budget: MemoryBudget,
     /// Maximum intra-query worker threads (1 = serial only).
@@ -185,8 +185,7 @@ impl QueryExecutionInstance {
         PhysicalPlanValidator::validate(&plan)?;
 
         // Phase 2: materialize arena plan → executor tree via materializer.
-        let (executor, mut runtime) =
-            PhysicalPlanMaterializer::materialize(&plan, &bindings)?;
+        let (executor, mut runtime) = PhysicalPlanMaterializer::materialize(&plan, &bindings)?;
 
         // Phase 3: register with query registry (M2.8).
         let registry_guard = registry.as_ref().map(|reg| {

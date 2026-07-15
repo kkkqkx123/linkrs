@@ -37,7 +37,11 @@ impl VisitedSet {
     pub fn contains(&self, id: &VertexId) -> bool {
         match &self.inner {
             Inner::Sparse(set) => set.contains(id),
-            Inner::Dense { ids, bitmap, offset } => {
+            Inner::Dense {
+                ids,
+                bitmap,
+                offset,
+            } => {
                 if let Some(idx) = id_to_dense_index(id, *offset) {
                     if idx < bitmap.len() && bitmap[idx] {
                         return true;
@@ -75,14 +79,22 @@ impl VisitedSet {
                         if !new {
                             set.insert(id);
                         }
-                        self.inner = Inner::Dense { ids: std::mem::take(set), bitmap, offset };
+                        self.inner = Inner::Dense {
+                            ids: std::mem::take(set),
+                            bitmap,
+                            offset,
+                        };
                         self.switch_count += 1;
                         return !new;
                     }
                 }
                 set.insert(id)
             }
-            Inner::Dense { ids, bitmap, offset } => {
+            Inner::Dense {
+                ids,
+                bitmap,
+                offset,
+            } => {
                 if let Some(idx) = id_to_dense_index(&id, *offset) {
                     if idx < bitmap.len() {
                         if bitmap[idx] {
@@ -135,10 +147,7 @@ fn id_to_dense_index(id: &VertexId, offset: i64) -> Option<usize> {
     usize::try_from(idx).ok()
 }
 
-fn try_switch_to_dense(
-    set: &HashSet<VertexId>,
-    candidate: &VertexId,
-) -> Option<(i64, i64)> {
+fn try_switch_to_dense(set: &HashSet<VertexId>, candidate: &VertexId) -> Option<(i64, i64)> {
     let min_id = set.iter().filter_map(|id| id.as_int64()).min()?;
     let max_id = set.iter().filter_map(|id| id.as_int64()).max()?;
     let candidate_int = candidate.as_int64()?;

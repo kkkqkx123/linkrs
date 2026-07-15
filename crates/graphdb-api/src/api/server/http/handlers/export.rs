@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use crate::api::server::http::{error::HttpError, state::AppState};
 use crate::storage::{
-    StorageClient, StorageSchemaContextOps, StorageSyncContextOps, StorageTransactionContextOps,
+    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 
 #[derive(Debug, Deserialize)]
@@ -25,7 +25,7 @@ pub async fn export_data<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync

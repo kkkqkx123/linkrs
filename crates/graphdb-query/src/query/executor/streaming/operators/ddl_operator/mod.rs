@@ -11,7 +11,7 @@ use crate::query::executor::streaming::operators::spec::MigrateAction;
 use crate::query::planning::plan::core::nodes::management::manage_node_enums::{
     EdgeManageNode, IndexManageNode, SpaceManageNode, TagManageNode, UserManageNode,
 };
-use crate::storage::{StorageAuthOps, StorageClient, StorageSchemaOps};
+use crate::storage::{QueryStorage, StorageAuthOps, StorageSchemaOps};
 
 mod auth_executor;
 mod maintenance_executor;
@@ -46,7 +46,7 @@ fn make_manage_result(action: &str, name: Option<&str>, status: &str) -> DataChu
 }
 
 fn exec_ddl<F>(
-    storage: &Option<Arc<RwLock<dyn StorageClient>>>,
+    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     f: F,
 ) -> Result<Option<DataChunk>, QueryError>
 where
@@ -61,11 +61,11 @@ where
 }
 
 fn exec_auth<F>(
-    storage: &Option<Arc<RwLock<dyn StorageClient>>>,
+    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     f: F,
 ) -> Result<Option<DataChunk>, QueryError>
 where
-    F: FnOnce(&mut dyn StorageAuthOps) -> Result<(), QueryError>,
+    F: FnOnce(&mut dyn QueryStorage) -> Result<(), QueryError>,
 {
     if let Some(lock) = storage {
         let mut writer = lock.write();
@@ -76,8 +76,8 @@ where
 }
 
 fn get_reader(
-    storage: &Option<Arc<RwLock<dyn StorageClient>>>,
-) -> Result<parking_lot::RwLockReadGuard<'_, dyn StorageClient>, QueryError> {
+    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
+) -> Result<parking_lot::RwLockReadGuard<'_, dyn QueryStorage>, QueryError> {
     storage
         .as_ref()
         .map(|s| s.read())
@@ -98,53 +98,53 @@ fn make_single_col_schema(col_name: &str, col_type: &str) -> Arc<Schema> {
 #[derive(Debug)]
 pub enum DdlOperator {
     SpaceManage {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         command: SpaceManageNode,
         emitted: bool,
     },
     TagManage {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         command: TagManageNode,
         emitted: bool,
     },
     EdgeManage {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         command: EdgeManageNode,
         emitted: bool,
     },
     IndexManage {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         command: IndexManageNode,
         emitted: bool,
     },
     DeleteIndex {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         index_name: String,
         emitted: bool,
     },
     UserManage {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         command: UserManageNode,
         emitted: bool,
     },
     ShowStats {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         emitted: bool,
     },
     Analyze {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         analyze_target: String,
         target_name: Option<String>,
         emitted: bool,
     },
     Migrate {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         action: MigrateAction,
         migration_data: Option<String>,
@@ -155,16 +155,14 @@ pub enum DdlOperator {
 impl DdlOperator {
     pub fn from_spec(
         spec: &super::spec::DdlSpec,
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
     ) -> Self {
         match spec {
-            super::spec::DdlSpec::SpaceManage { command } => {
-                DdlOperator::SpaceManage {
-                    storage: storage.clone(),
-                    command: command.clone(),
-                    emitted: false,
-                }
-            }
+            super::spec::DdlSpec::SpaceManage { command } => DdlOperator::SpaceManage {
+                storage: storage.clone(),
+                command: command.clone(),
+                emitted: false,
+            },
             super::spec::DdlSpec::TagManage {
                 space_name,
                 command,
@@ -201,20 +199,16 @@ impl DdlOperator {
                 index_name: index_name.clone(),
                 emitted: false,
             },
-            super::spec::DdlSpec::UserManage { command } => {
-                DdlOperator::UserManage {
-                    storage: storage.clone(),
-                    command: command.clone(),
-                    emitted: false,
-                }
-            }
-            super::spec::DdlSpec::ShowStats { space_name } => {
-                DdlOperator::ShowStats {
-                    storage: storage.clone(),
-                    space_name: space_name.clone(),
-                    emitted: false,
-                }
-            }
+            super::spec::DdlSpec::UserManage { command } => DdlOperator::UserManage {
+                storage: storage.clone(),
+                command: command.clone(),
+                emitted: false,
+            },
+            super::spec::DdlSpec::ShowStats { space_name } => DdlOperator::ShowStats {
+                storage: storage.clone(),
+                space_name: space_name.clone(),
+                emitted: false,
+            },
             super::spec::DdlSpec::Analyze { space_name } => DdlOperator::Analyze {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
@@ -292,7 +286,9 @@ impl DdlOperator {
                 space_name,
                 index_name,
                 emitted,
-            } => schema_executor::execute_delete_index(storage, space_name, index_name, emitted, base),
+            } => schema_executor::execute_delete_index(
+                storage, space_name, index_name, emitted, base,
+            ),
             DdlOperator::UserManage {
                 storage,
                 command,

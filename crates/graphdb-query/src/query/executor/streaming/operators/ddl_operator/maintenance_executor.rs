@@ -7,10 +7,10 @@ use crate::core::Value;
 use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::operators::spec::MigrateAction;
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 
 pub(super) fn execute_show_stats(
-    storage: &Option<Arc<RwLock<dyn StorageClient>>>,
+    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     emitted: &mut bool,
     base: &mut OperatorBase,
 ) -> Result<Option<DataChunk>, QueryError> {
@@ -82,7 +82,7 @@ pub(super) fn execute_show_stats(
 }
 
 pub(super) fn execute_analyze(
-    storage: &Option<Arc<RwLock<dyn StorageClient>>>,
+    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     space_name: &str,
     analyze_target: &str,
     target_name: &Option<String>,
@@ -128,7 +128,11 @@ pub(super) fn execute_analyze(
         }
         "tag" | "edge" => {
             let name = target_name.as_deref().unwrap_or("");
-            Ok(Some(super::make_manage_result("analyze", Some(name), "executed")))
+            Ok(Some(super::make_manage_result(
+                "analyze",
+                Some(name),
+                "executed",
+            )))
         }
         _ => Err(QueryError::execution(format!(
             "Unsupported analyze target: {}",
@@ -140,7 +144,7 @@ pub(super) fn execute_analyze(
 }
 
 pub(super) fn execute_migrate(
-    storage: &Option<Arc<RwLock<dyn StorageClient>>>,
+    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     space_name: &str,
     action: &MigrateAction,
     emitted: &mut bool,
@@ -157,9 +161,9 @@ pub(super) fn execute_migrate(
         MigrateAction::MigrateSpace => {
             if let Some(lock) = storage {
                 let writer = lock.write();
-                let res = writer.save_to_disk().map_err(|e| {
-                    QueryError::execution(format!("Migrate failed: {}", e))
-                });
+                let res = writer
+                    .save_to_disk()
+                    .map_err(|e| QueryError::execution(format!("Migrate failed: {}", e)));
                 match res {
                     Ok(_) => Ok(Some(super::make_manage_result(
                         "migrate",

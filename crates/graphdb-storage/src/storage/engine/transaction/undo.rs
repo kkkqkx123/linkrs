@@ -4,47 +4,34 @@ use crate::core::types::{
 };
 use crate::storage::engine::graph_storage::GraphStorageContext;
 use crate::storage::engine::transaction::{
-    DeleteEdgeParams, DeleteEdgeTypeParams, EdgeTypeLabelParams, RevertDeleteEdgeParams,
-    TransactionOps, UpdateEdgePropertyUndoParams,
+    DeleteEdgeParams, EdgeTypeLabelParams, RevertDeleteEdgeParams, TransactionOps,
+    UpdateEdgePropertyUndoParams,
 };
 
 impl UndoTarget for GraphStorageContext {
     fn delete_vertex_type(&self, label: LabelId) -> UndoLogResult<()> {
-        {
-            let mut vertex_tables = self.data_store().vertex_tables().write();
-            let mut edge_tables = self.data_store().edge_tables().write();
-            let mut vertex_label_names = self.data_store().vertex_label_names().write();
-            let mut edge_label_names = self.data_store().edge_label_names().write();
-            TransactionOps::delete_vertex_type(
-                &mut vertex_tables,
-                &mut edge_tables,
-                &mut vertex_label_names,
-                &mut edge_label_names,
-                label,
-            )?;
-        }
+        self.data_store()
+            .drop_vertex_type_by_label(label)
+            .map_err(|error| UndoLogError::UndoFailed(error.to_string()))?;
         self.mark_vertex_modified(label);
         Ok(())
     }
 
     fn delete_edge_type(&self, edge_key: EdgeKey) -> UndoLogResult<()> {
-        let params = DeleteEdgeTypeParams {
-            src_label: edge_key.src_label,
-            dst_label: edge_key.dst_label,
-            edge_label: edge_key.edge_label,
-        };
-        {
-            let mut edge_tables = self.data_store().edge_tables().write();
-            let mut edge_label_names = self.data_store().edge_label_names().write();
-            TransactionOps::delete_edge_type(&mut edge_tables, &mut edge_label_names, params)?;
-        }
+        self.data_store()
+            .drop_edge_partition(crate::storage::engine::data_store::EdgeTableKey::new(
+                edge_key.src_label,
+                edge_key.dst_label,
+                edge_key.edge_label,
+            ))
+            .map_err(|error| UndoLogError::UndoFailed(error.to_string()))?;
         self.mark_edge_modified(edge_key.edge_label);
         Ok(())
     }
 
     fn delete_vertex(&self, vertex: VertexIdentifier, ts: Timestamp) -> UndoLogResult<()> {
         {
-            let mut vertex_tables = self.data_store().vertex_tables().write();
+            let mut vertex_tables = self.data_store().write_vertex_tables();
             TransactionOps::delete_vertex(&mut vertex_tables, vertex.label, vertex.vid, ts)?;
         }
         self.mark_vertex_modified(vertex.label);
@@ -61,7 +48,7 @@ impl UndoTarget for GraphStorageContext {
             rank: edge_ctx.edge_id.rank,
         };
         {
-            let mut edge_tables = self.data_store().edge_tables().write();
+            let mut edge_tables = self.data_store().write_edge_tables();
             TransactionOps::delete_edge(
                 &mut edge_tables,
                 params,
@@ -82,7 +69,7 @@ impl UndoTarget for GraphStorageContext {
         ts: Timestamp,
     ) -> UndoLogResult<()> {
         {
-            let mut vertex_tables = self.data_store().vertex_tables().write();
+            let mut vertex_tables = self.data_store().write_vertex_tables();
             TransactionOps::update_vertex_property_undo(
                 &mut vertex_tables,
                 vertex.label,
@@ -114,7 +101,7 @@ impl UndoTarget for GraphStorageContext {
             rank: edge_id.rank,
         };
         {
-            let mut edge_tables = self.data_store().edge_tables().write();
+            let mut edge_tables = self.data_store().write_edge_tables();
             TransactionOps::update_edge_property_undo(
                 &mut edge_tables,
                 params,
@@ -131,7 +118,7 @@ impl UndoTarget for GraphStorageContext {
 
     fn revert_delete_vertex(&self, vertex: VertexIdentifier, ts: Timestamp) -> UndoLogResult<()> {
         {
-            let mut vertex_tables = self.data_store().vertex_tables().write();
+            let mut vertex_tables = self.data_store().write_vertex_tables();
             TransactionOps::revert_delete_vertex(&mut vertex_tables, vertex.label, vertex.vid, ts)?;
         }
         self.mark_vertex_modified(vertex.label);
@@ -148,7 +135,7 @@ impl UndoTarget for GraphStorageContext {
             rank: edge_ctx.edge_id.rank,
         };
         {
-            let mut edge_tables = self.data_store().edge_tables().write();
+            let mut edge_tables = self.data_store().write_edge_tables();
             TransactionOps::revert_delete_edge(
                 &mut edge_tables,
                 params,
@@ -167,15 +154,14 @@ impl UndoTarget for GraphStorageContext {
         prop_names: &[String],
     ) -> UndoLogResult<()> {
         let label_id = {
-            let mut vertex_tables = self.data_store().vertex_tables().write();
-            let mut vertex_label_names = self.data_store().vertex_label_names().write();
+            let mut catalog = self.data_store().catalog_write_set();
             TransactionOps::revert_delete_vertex_properties(
-                &mut vertex_tables,
-                &mut vertex_label_names,
+                &mut catalog.vertex_tables,
+                &mut catalog.vertex_label_names,
                 label_name,
                 prop_names,
             )?;
-            vertex_label_names.get(label_name).copied()
+            catalog.vertex_label_names.get(label_name).copied()
         };
         if let Some(label) = label_id {
             self.mark_vertex_modified(label);
@@ -191,22 +177,20 @@ impl UndoTarget for GraphStorageContext {
         prop_names: &[String],
     ) -> UndoLogResult<()> {
         let edge_label_id = {
-            let vertex_tables = self.data_store().vertex_tables().read();
-            let mut edge_tables = self.data_store().edge_tables().write();
-            let mut edge_label_names = self.data_store().edge_label_names().write();
+            let mut catalog = self.data_store().catalog_write_set();
             let edge_labels = EdgeTypeLabelParams {
                 src_label,
                 dst_label,
                 edge_label,
             };
             TransactionOps::revert_delete_edge_properties(
-                &mut edge_tables,
-                &mut edge_label_names,
-                &vertex_tables,
+                &mut catalog.edge_tables,
+                &mut catalog.edge_label_names,
+                &catalog.vertex_tables,
                 prop_names,
                 &edge_labels,
             )?;
-            edge_label_names.get(edge_label).copied()
+            catalog.edge_label_names.get(edge_label).copied()
         };
         if let Some(label) = edge_label_id {
             self.mark_edge_modified(label);
@@ -215,19 +199,23 @@ impl UndoTarget for GraphStorageContext {
     }
 
     fn revert_delete_vertex_label(&self, label_name: &str) -> UndoLogResult<()> {
-        let label;
-        {
-            let mut vertex_tables = self.data_store().vertex_tables().write();
-            let mut vertex_label_names = self.data_store().vertex_label_names().write();
-            let mut vertex_label_counter = self.data_store().vertex_label_counter().write();
-            label = *vertex_label_counter;
-            TransactionOps::create_vertex_type_undo(
-                &mut vertex_tables,
-                &mut vertex_label_names,
-                &mut vertex_label_counter,
-                label_name,
-            )?;
-        }
+        let label = self
+            .data_store()
+            .register_vertex_type(label_name.to_string(), None, |label| {
+                let schema = crate::storage::vertex::VertexSchema {
+                    label_id: label,
+                    label_name: label_name.to_string(),
+                    properties: Vec::new(),
+                    primary_key_index: 0,
+                    schema_version: 1,
+                };
+                Ok(crate::storage::vertex::VertexTable::new(
+                    label,
+                    label_name.to_string(),
+                    schema,
+                ))
+            })
+            .map_err(|error| UndoLogError::UndoFailed(error.to_string()))?;
         self.mark_vertex_modified(label);
         Ok(())
     }
@@ -238,26 +226,42 @@ impl UndoTarget for GraphStorageContext {
         dst_label: &str,
         edge_label: &str,
     ) -> UndoLogResult<()> {
-        let edge_label_id = {
-            let vertex_tables = self.data_store().vertex_tables().read();
-            let mut edge_tables = self.data_store().edge_tables().write();
-            let mut edge_label_names = self.data_store().edge_label_names().write();
-            let mut edge_label_counter = self.data_store().edge_label_counter().write();
-            TransactionOps::create_edge_type_undo(
-                &mut edge_tables,
-                &mut edge_label_names,
-                &mut edge_label_counter,
-                &vertex_tables,
-                edge_label,
-                src_label,
-                dst_label,
-            )
-            .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
-            edge_label_names
-                .get(edge_label)
-                .copied()
-                .ok_or(UndoLogError::LabelNotFound(0))?
+        let (src_label_id, dst_label_id) = {
+            let vertex_tables = self.data_store().read_vertex_tables();
+            let src = vertex_tables
+                .values()
+                .find(|table| table.label_name() == src_label)
+                .map(|table| table.label())
+                .ok_or(UndoLogError::LabelNotFound(0))?;
+            let dst = vertex_tables
+                .values()
+                .find(|table| table.label_name() == dst_label)
+                .map(|table| table.label())
+                .ok_or(UndoLogError::LabelNotFound(0))?;
+            (src, dst)
         };
+        let edge_label_id = self
+            .data_store()
+            .register_edge_type(
+                edge_label.to_string(),
+                None,
+                src_label_id,
+                dst_label_id,
+                |label| {
+                    let schema = crate::storage::edge::EdgeSchema {
+                        label_id: label,
+                        label_name: edge_label.to_string(),
+                        src_label: src_label_id,
+                        dst_label: dst_label_id,
+                        properties: Vec::new(),
+                        oe_strategy: crate::storage::edge::EdgeStrategy::Multiple,
+                        ie_strategy: crate::storage::edge::EdgeStrategy::Multiple,
+                        schema_version: 1,
+                    };
+                    crate::storage::edge::EdgeStore::new(schema)
+                },
+            )
+            .map_err(|error| UndoLogError::UndoFailed(error.to_string()))?;
 
         self.mark_edge_modified(edge_label_id);
         Ok(())
@@ -270,16 +274,15 @@ impl UndoTarget for GraphStorageContext {
         original_names: &[String],
     ) -> UndoLogResult<()> {
         let label_id = {
-            let mut vertex_tables = self.data_store().vertex_tables().write();
-            let mut vertex_label_names = self.data_store().vertex_label_names().write();
+            let mut catalog = self.data_store().catalog_write_set();
             TransactionOps::revert_rename_vertex_properties(
-                &mut vertex_tables,
-                &mut vertex_label_names,
+                &mut catalog.vertex_tables,
+                &mut catalog.vertex_label_names,
                 label,
                 current_names,
                 original_names,
             )?;
-            vertex_label_names.get(label).copied()
+            catalog.vertex_label_names.get(label).copied()
         };
         if let Some(label_id) = label_id {
             self.mark_vertex_modified(label_id);
@@ -296,23 +299,21 @@ impl UndoTarget for GraphStorageContext {
         original_names: &[String],
     ) -> UndoLogResult<()> {
         let edge_label_id = {
-            let vertex_tables = self.data_store().vertex_tables().read();
-            let mut edge_tables = self.data_store().edge_tables().write();
-            let mut edge_label_names = self.data_store().edge_label_names().write();
+            let mut catalog = self.data_store().catalog_write_set();
             let edge_labels = EdgeTypeLabelParams {
                 src_label,
                 dst_label,
                 edge_label,
             };
             TransactionOps::revert_rename_edge_properties(
-                &mut edge_tables,
-                &mut edge_label_names,
-                &vertex_tables,
+                &mut catalog.edge_tables,
+                &mut catalog.edge_label_names,
+                &catalog.vertex_tables,
                 &edge_labels,
                 current_names,
                 original_names,
             )?;
-            edge_label_names.get(edge_label).copied()
+            catalog.edge_label_names.get(edge_label).copied()
         };
         if let Some(label) = edge_label_id {
             self.mark_edge_modified(label);

@@ -11,13 +11,13 @@ use crate::query::executor::streaming::context::ValueRowContext;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::traversal::config::TraversalConfig;
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 
-use super::common;
 use super::super::visited_set::VisitedSet;
+use super::common;
 
 pub(super) fn handle_traverse(
-    storage: &Option<Arc<RwLock<dyn StorageClient>>>,
+    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     space_name: &str,
     edge_types: &[String],
     direction: EdgeDirection,
@@ -88,7 +88,7 @@ pub(super) fn handle_traverse_all(
 }
 
 pub(super) fn handle_bi_expand(
-    storage: &Option<Arc<RwLock<dyn StorageClient>>>,
+    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     space_name: &str,
     edge_types: &[String],
     base: &mut OperatorBase,
@@ -120,11 +120,8 @@ pub(super) fn handle_bi_expand(
                             if !edge_type_matches {
                                 continue;
                             }
-                            let neighbor_id =
-                                if e.src() == &vid { *e.dst() } else { *e.src() };
-                            if let Ok(Some(vertex)) =
-                                reader.get_vertex(space_name, &neighbor_id)
-                            {
+                            let neighbor_id = if e.src() == &vid { *e.dst() } else { *e.src() };
+                            if let Ok(Some(vertex)) = reader.get_vertex(space_name, &neighbor_id) {
                                 let mut out_row = row.clone();
                                 out_row.push(Value::Vertex(Box::new(vertex)));
                                 out_row.push(Value::String(e.edge_type.clone()));
@@ -169,7 +166,7 @@ pub(super) fn handle_bi_expand(
 }
 
 pub(super) fn handle_bi_traverse(
-    storage: &Option<Arc<RwLock<dyn StorageClient>>>,
+    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     space_name: &str,
     edge_types: &[String],
     min_depth: u32,
@@ -219,17 +216,13 @@ pub(super) fn handle_bi_traverse(
                                 } else {
                                     *e.src()
                                 };
-                                if local_visited.contains(&nid)
-                                    || !visited.insert(nid)
-                                {
+                                if local_visited.contains(&nid) || !visited.insert(nid) {
                                     continue;
                                 }
                                 local_visited.insert(nid);
 
                                 if depth + 1 >= min_depth {
-                                    if let Ok(Some(vertex)) =
-                                        reader.get_vertex(space_name, &nid)
-                                    {
+                                    if let Ok(Some(vertex)) = reader.get_vertex(space_name, &nid) {
                                         let mut out_row = row.clone();
                                         out_row.push(Value::Vertex(Box::new(vertex)));
                                         out_row.push(Value::String(edge_types.join("/")));

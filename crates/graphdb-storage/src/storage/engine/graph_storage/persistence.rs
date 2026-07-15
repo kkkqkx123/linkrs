@@ -166,7 +166,7 @@ pub(crate) fn create_checkpoint(
         ts,
     );
 
-    ctx.version_manager().release_insert_timestamp(ts);
+    ctx.release_write_timestamp(ts);
 
     let stats = result?;
 
@@ -196,6 +196,20 @@ pub(crate) fn snapshot_stats(ctx: &GraphStorageContext) -> crate::storage::Snaps
         .as_ref()
         .map(|persistence| persistence.read().snapshot_stats())
         .unwrap_or_default()
+}
+
+pub(crate) fn persistence_diagnostics(
+    ctx: &GraphStorageContext,
+) -> Option<crate::storage::PersistenceDiagnostics> {
+    ctx.persistence().as_ref().map(|persistence| {
+        let mut diagnostics = persistence.read().diagnostics();
+        let catalog = ctx.data_store().lock_metrics();
+        diagnostics.catalog_lock_acquisitions = catalog.acquisitions;
+        diagnostics.catalog_lock_wait_nanos = catalog.wait_nanos;
+        diagnostics.catalog_lock_hold_nanos = catalog.hold_nanos;
+        diagnostics.catalog_lock_contentions = catalog.contended;
+        diagnostics
+    })
 }
 
 pub(crate) fn load_latest_checkpoint(

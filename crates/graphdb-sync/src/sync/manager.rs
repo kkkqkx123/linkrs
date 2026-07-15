@@ -8,6 +8,7 @@ use crate::core::Value;
 use crate::search::SyncConfig;
 #[cfg(feature = "fulltext-search")]
 use crate::sync::coordinator::{ChangeType, CoordinatorError, SyncCoordinator};
+use crate::sync::outbox::{OutboxPayload, PersistentOutbox};
 #[cfg(not(feature = "fulltext-search"))]
 use crate::sync::types::ChangeType;
 #[cfg(feature = "qdrant")]
@@ -31,6 +32,7 @@ pub struct SyncManager {
     txn_sequences: DashMap<TransactionId, AtomicU64>,
     running: Arc<std::sync::atomic::AtomicBool>,
     dead_letter_queue: Option<Arc<crate::sync::DeadLetterQueue>>,
+    outbox: Option<Arc<PersistentOutbox>>,
     #[allow(clippy::type_complexity)]
     handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -53,6 +55,7 @@ impl Clone for SyncManager {
             txn_sequences,
             running: self.running.clone(),
             dead_letter_queue: self.dead_letter_queue.clone(),
+            outbox: self.outbox.clone(),
             handle: Mutex::new(None),
         }
     }
@@ -130,6 +133,7 @@ impl SyncManager {
             txn_sequences: DashMap::new(),
             running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             dead_letter_queue: None,
+            outbox: None,
             handle: Mutex::new(None),
         }
     }
@@ -143,6 +147,7 @@ impl SyncManager {
             txn_sequences: DashMap::new(),
             running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             dead_letter_queue: None,
+            outbox: None,
             handle: Mutex::new(None),
         }
     }
@@ -170,6 +175,92 @@ impl SyncManager {
     ) -> Self {
         self.dead_letter_queue = Some(dead_letter_queue);
         self
+    }
+
+    pub fn with_outbox(mut self, path: impl AsRef<std::path::Path>) -> Result<Self, SyncError> {
+        self.configure_outbox(path)?;
+        Ok(self)
+    }
+
+    pub fn configure_outbox(&mut self, path: impl AsRef<std::path::Path>) -> Result<(), SyncError> {
+        self.outbox = Some(Arc::new(
+            PersistentOutbox::open(path).map_err(SyncError::PersistenceError)?,
+        ));
+        Ok(())
+    }
+
+    pub fn outbox_stats(&self) -> crate::sync::OutboxStats {
+        self.outbox
+            .as_ref()
+            .map(|outbox| outbox.stats())
+            .unwrap_or_default()
+    }
+
+    fn finish_direct_outbox_attempt(
+        &self,
+        event_id: Option<&str>,
+        delivered: bool,
+    ) -> Result<(), SyncError> {
+        let (Some(outbox), Some(event_id)) = (&self.outbox, event_id) else {
+            return Ok(());
+        };
+        if delivered {
+            outbox
+                .acknowledge(event_id)
+                .map_err(SyncError::PersistenceError)
+        } else {
+            outbox
+                .record_retry(event_id)
+                .map_err(SyncError::PersistenceError)
+        }
+    }
+
+    pub fn retry_outbox_sync(&self) -> Result<usize, SyncError> {
+        let Some(outbox) = &self.outbox else {
+            return Ok(0);
+        };
+        let mut delivered = 0;
+        for event in outbox.committed_events() {
+            let result = match &event.payload {
+                OutboxPayload::Vertex {
+                    space_id,
+                    tag_name,
+                    vertex_id,
+                    properties,
+                    change_type,
+                } => self.execute_sync(|| {
+                    self.on_vertex_change_direct(
+                        *space_id,
+                        tag_name,
+                        vertex_id,
+                        properties,
+                        *change_type,
+                    )
+                }),
+                OutboxPayload::EdgeInsert { space_id, edge } => {
+                    self.execute_sync(|| self.on_edge_insert_direct(*space_id, edge))
+                }
+                OutboxPayload::EdgeDelete {
+                    space_id,
+                    src,
+                    dst,
+                    edge_type,
+                } => {
+                    self.execute_sync(|| self.on_edge_delete_direct(*space_id, src, dst, edge_type))
+                }
+            };
+            if result.is_ok() {
+                outbox
+                    .acknowledge(&event.id)
+                    .map_err(SyncError::PersistenceError)?;
+                delivered += 1;
+            } else {
+                outbox
+                    .record_retry(&event.id)
+                    .map_err(SyncError::PersistenceError)?;
+            }
+        }
+        Ok(delivered)
     }
 
     pub async fn start(&self) -> Result<(), SyncError> {
@@ -212,6 +303,21 @@ impl SyncManager {
         change_type: ChangeType,
     ) -> Result<(), SyncError> {
         let sequence = self.next_sync_sequence(txn_id);
+        if let Some(outbox) = &self.outbox {
+            outbox
+                .enqueue(
+                    Some(txn_id),
+                    sequence,
+                    OutboxPayload::Vertex {
+                        space_id,
+                        tag_name: tag_name.to_string(),
+                        vertex_id: vertex_id.clone(),
+                        properties: properties.to_vec(),
+                        change_type,
+                    },
+                )
+                .map_err(SyncError::PersistenceError)?;
+        }
         for (field_name, value) in properties {
             #[cfg(feature = "fulltext-search")]
             if let Value::String(text) = value {
@@ -312,6 +418,18 @@ impl SyncManager {
         edge: &crate::core::Edge,
     ) -> Result<(), SyncError> {
         let sequence = self.next_sync_sequence(txn_id);
+        if let Some(outbox) = &self.outbox {
+            outbox
+                .enqueue(
+                    Some(txn_id),
+                    sequence,
+                    OutboxPayload::EdgeInsert {
+                        space_id,
+                        edge: edge.clone(),
+                    },
+                )
+                .map_err(SyncError::PersistenceError)?;
+        }
         let props: Vec<(String, Value)> = edge
             .props
             .iter()
@@ -371,6 +489,20 @@ impl SyncManager {
         edge_type: &str,
     ) -> Result<(), SyncError> {
         let sequence = self.next_sync_sequence(txn_id);
+        if let Some(outbox) = &self.outbox {
+            outbox
+                .enqueue(
+                    Some(txn_id),
+                    sequence,
+                    OutboxPayload::EdgeDelete {
+                        space_id,
+                        src: src.clone(),
+                        dst: dst.clone(),
+                        edge_type: edge_type.to_string(),
+                    },
+                )
+                .map_err(SyncError::PersistenceError)?;
+        }
         let edge_id = format!("{}->{}", src, dst);
 
         #[cfg(feature = "fulltext-search")]
@@ -553,9 +685,29 @@ impl SyncManager {
         properties: &[(String, crate::core::Value)],
         change_type: ChangeType,
     ) -> Result<(), SyncError> {
-        self.execute_sync(|| {
+        let event_id = self
+            .outbox
+            .as_ref()
+            .map(|outbox| {
+                outbox.enqueue(
+                    None,
+                    0,
+                    OutboxPayload::Vertex {
+                        space_id,
+                        tag_name: tag_name.to_string(),
+                        vertex_id: vertex_id.clone(),
+                        properties: properties.to_vec(),
+                        change_type,
+                    },
+                )
+            })
+            .transpose()
+            .map_err(SyncError::PersistenceError)?;
+        let result = self.execute_sync(|| {
             self.on_vertex_change_direct(space_id, tag_name, vertex_id, properties, change_type)
-        })
+        });
+        self.finish_direct_outbox_attempt(event_id.as_deref(), result.is_ok())?;
+        result
     }
 
     pub fn on_edge_insert_direct_sync(
@@ -563,7 +715,24 @@ impl SyncManager {
         space_id: u64,
         edge: &crate::core::Edge,
     ) -> Result<(), SyncError> {
-        self.execute_sync(|| self.on_edge_insert_direct(space_id, edge))
+        let event_id = self
+            .outbox
+            .as_ref()
+            .map(|outbox| {
+                outbox.enqueue(
+                    None,
+                    0,
+                    OutboxPayload::EdgeInsert {
+                        space_id,
+                        edge: edge.clone(),
+                    },
+                )
+            })
+            .transpose()
+            .map_err(SyncError::PersistenceError)?;
+        let result = self.execute_sync(|| self.on_edge_insert_direct(space_id, edge));
+        self.finish_direct_outbox_attempt(event_id.as_deref(), result.is_ok())?;
+        result
     }
 
     pub fn on_edge_delete_direct_sync(
@@ -573,7 +742,27 @@ impl SyncManager {
         dst: &crate::core::Value,
         edge_type: &str,
     ) -> Result<(), SyncError> {
-        self.execute_sync(|| self.on_edge_delete_direct(space_id, src, dst, edge_type))
+        let event_id = self
+            .outbox
+            .as_ref()
+            .map(|outbox| {
+                outbox.enqueue(
+                    None,
+                    0,
+                    OutboxPayload::EdgeDelete {
+                        space_id,
+                        src: src.clone(),
+                        dst: dst.clone(),
+                        edge_type: edge_type.to_string(),
+                    },
+                )
+            })
+            .transpose()
+            .map_err(SyncError::PersistenceError)?;
+        let result =
+            self.execute_sync(|| self.on_edge_delete_direct(space_id, src, dst, edge_type));
+        self.finish_direct_outbox_attempt(event_id.as_deref(), result.is_ok())?;
+        result
     }
 
     pub fn on_edge_update(
@@ -748,6 +937,9 @@ impl SyncManager {
         &self,
         txn_id: crate::core::types::TransactionId,
     ) -> Result<(), SyncError> {
+        if let Some(outbox) = &self.outbox {
+            outbox.commit(txn_id).map_err(SyncError::PersistenceError)?;
+        }
         #[cfg(feature = "fulltext-search")]
         if let Some(ref coord) = self.sync_coordinator {
             coord.prepare_transaction(txn_id).await?;
@@ -790,6 +982,11 @@ impl SyncManager {
         }
 
         self.txn_sequences.remove(&txn_id);
+        if let Some(outbox) = &self.outbox {
+            outbox
+                .acknowledge_transaction(txn_id)
+                .map_err(SyncError::PersistenceError)?;
+        }
 
         Ok(())
     }
@@ -798,7 +995,13 @@ impl SyncManager {
         &self,
         txn_id: crate::core::types::TransactionId,
     ) -> Result<(), SyncError> {
-        self.rollback_transaction_to_sequence_sync(txn_id, 0)
+        self.rollback_transaction_to_sequence_sync(txn_id, 0)?;
+        if let Some(outbox) = &self.outbox {
+            outbox
+                .rollback(txn_id)
+                .map_err(SyncError::PersistenceError)?;
+        }
+        Ok(())
     }
 
     #[cfg(feature = "fulltext-search")]
@@ -1051,6 +1254,9 @@ pub enum SyncError {
 
     #[error("Vector error: {0}")]
     VectorError(String),
+
+    #[error("Persistence error: {0}")]
+    PersistenceError(String),
 
     #[error("Internal error: {0}")]
     Internal(String),

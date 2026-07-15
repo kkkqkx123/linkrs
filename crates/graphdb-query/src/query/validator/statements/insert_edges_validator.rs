@@ -625,10 +625,10 @@ impl StatementValidator for InsertEdgesValidator {
 mod tests {
     use super::*;
     use crate::core::types::expr::contextual::ContextualExpression;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::core::types::expr::Expression;
     use crate::query::parser::ast::stmt::InsertStmt;
     use crate::query::parser::ast::Span;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::query::QueryRequestContext;
     use std::sync::Arc;
 

@@ -22,6 +22,12 @@ pub struct QueryApi<S: StorageClient + 'static> {
 }
 
 impl<S: StorageClient + Clone + 'static> QueryApi<S> {
+    /// Bind a storage handle for the next execution scope.
+    pub fn replace_storage(&mut self, storage: S) {
+        self.pipeline_manager
+            .replace_storage(Arc::new(RwLock::new(storage)));
+    }
+
     /// Create a new QueryApi instance with external StatsManager
     pub fn new(storage: Arc<RwLock<S>>, stats_manager: Arc<StatsManager>) -> Self {
         let optimizer_engine = Arc::new(OptimizerEngine::default());

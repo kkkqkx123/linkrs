@@ -154,7 +154,18 @@ impl CheckpointManager {
             self.last_checkpoint_lsn.as_u64()
         );
 
-        fs::write(&self.checkpoint_file, content).map_err(|e| WalError::IoError(e.to_string()))?;
+        let temporary_file = self.checkpoint_file.with_extension("meta.tmp");
+        fs::write(&temporary_file, content).map_err(|e| WalError::IoError(e.to_string()))?;
+        fs::File::open(&temporary_file)
+            .and_then(|file| file.sync_all())
+            .map_err(|e| WalError::IoError(e.to_string()))?;
+        fs::rename(&temporary_file, &self.checkpoint_file)
+            .map_err(|e| WalError::IoError(e.to_string()))?;
+        if let Some(parent) = self.checkpoint_file.parent() {
+            fs::File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|e| WalError::IoError(e.to_string()))?;
+        }
 
         Ok(())
     }
@@ -195,26 +206,63 @@ impl CheckpointManager {
 
     /// Create a new checkpoint
     pub fn create_checkpoint(&mut self, timestamp: Timestamp, lsn: Lsn) -> WalResult<Checkpoint> {
-        self.current_seq += 1;
-        self.last_checkpoint_ts = timestamp;
-        self.last_checkpoint_lsn = lsn;
+        let checkpoint = self.prepare_checkpoint(timestamp, lsn)?;
+        self.publish_checkpoint(&checkpoint)?;
+        Ok(checkpoint)
+    }
 
-        let wal_files = self.get_wal_files_before_checkpoint()?;
+    /// Build the next checkpoint descriptor without publishing its sequence.
+    pub fn prepare_checkpoint(&self, timestamp: Timestamp, lsn: Lsn) -> WalResult<Checkpoint> {
+        let next_seq = self
+            .current_seq
+            .checked_add(1)
+            .ok_or_else(|| WalError::IoError("checkpoint sequence overflow".to_string()))?;
 
-        let redo_lsn = self.calculate_redo_lsn();
+        let wal_files = self.get_wal_files_before_checkpoint(next_seq)?;
+        let redo_lsn = if self.active_transactions.is_empty() {
+            lsn
+        } else {
+            Lsn::ZERO
+        };
 
-        let checkpoint = Checkpoint {
-            seq: self.current_seq,
+        Ok(Checkpoint {
+            seq: next_seq,
             timestamp,
             lsn,
             wal_files,
             active_transactions: self.active_transactions.clone(),
             redo_lsn,
-        };
+        })
+    }
 
-        self.save_checkpoint_meta()?;
+    /// Persist a fully written checkpoint as the current recovery boundary.
+    pub fn publish_checkpoint(&mut self, checkpoint: &Checkpoint) -> WalResult<()> {
+        let expected_seq = self
+            .current_seq
+            .checked_add(1)
+            .ok_or_else(|| WalError::IoError("checkpoint sequence overflow".to_string()))?;
+        if checkpoint.seq != expected_seq {
+            return Err(WalError::IoError(format!(
+                "checkpoint sequence mismatch: expected {}, got {}",
+                expected_seq, checkpoint.seq
+            )));
+        }
 
-        Ok(checkpoint)
+        let previous = (
+            self.current_seq,
+            self.last_checkpoint_ts,
+            self.last_checkpoint_lsn,
+        );
+        self.current_seq = checkpoint.seq;
+        self.last_checkpoint_ts = checkpoint.timestamp;
+        self.last_checkpoint_lsn = checkpoint.lsn;
+        if let Err(error) = self.save_checkpoint_meta() {
+            self.current_seq = previous.0;
+            self.last_checkpoint_ts = previous.1;
+            self.last_checkpoint_lsn = previous.2;
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// Calculate the redo LSN (where recovery should start)
@@ -290,7 +338,7 @@ impl CheckpointManager {
     }
 
     /// Get WAL files that can be deleted before current checkpoint
-    fn get_wal_files_before_checkpoint(&self) -> WalResult<Vec<PathBuf>> {
+    fn get_wal_files_before_checkpoint(&self, checkpoint_seq: u64) -> WalResult<Vec<PathBuf>> {
         let mut wal_files = Vec::new();
 
         if !self.wal_dir.exists() {
@@ -307,7 +355,7 @@ impl CheckpointManager {
                     .and_then(|n| n.to_str())
                     .is_some_and(|n| n.starts_with("thread_") && n.contains("_wal_"))
             {
-                if let Ok(true) = self.is_wal_file_before_checkpoint(&path) {
+                if let Ok(true) = self.is_wal_file_before_checkpoint(&path, checkpoint_seq) {
                     wal_files.push(path);
                 }
             }
@@ -317,7 +365,7 @@ impl CheckpointManager {
     }
 
     /// Check if a WAL file is before the current checkpoint
-    fn is_wal_file_before_checkpoint(&self, path: &Path) -> WalResult<bool> {
+    fn is_wal_file_before_checkpoint(&self, path: &Path, checkpoint_seq: u64) -> WalResult<bool> {
         use std::fs::File;
         use std::io::Read;
 
@@ -326,7 +374,7 @@ impl CheckpointManager {
         let mut buffer = [0u8; WAL_FILE_HEADER_SIZE];
         if let Ok(()) = file.read_exact(&mut buffer) {
             if let Some(header) = WalFileHeader::from_bytes(&buffer) {
-                return Ok(header.checkpoint_seq < self.current_seq);
+                return Ok(header.checkpoint_seq < checkpoint_seq);
             }
         }
 
@@ -350,6 +398,15 @@ impl CheckpointManager {
     /// Get current checkpoint sequence
     pub fn current_seq(&self) -> u64 {
         self.current_seq
+    }
+
+    /// Reconcile manager metadata with an already atomically published directory.
+    pub fn adopt_published_sequence(&mut self, sequence: u64) -> WalResult<()> {
+        if sequence <= self.current_seq {
+            return Ok(());
+        }
+        self.current_seq = sequence;
+        self.save_checkpoint_meta()
     }
 
     /// Get last checkpoint timestamp

@@ -15,7 +15,7 @@ impl GraphStorageContext {
         {
             return None;
         }
-        let vertex_tables = self.persistent.data_store.vertex_tables().read();
+        let vertex_tables = self.persistent.data_store.read_vertex_tables();
         vertex_tables.get(&label).map(|t| t.scan(ts).collect())
     }
 
@@ -29,8 +29,7 @@ impl GraphStorageContext {
         use crate::storage::engine::data_store::EdgeTableKey;
         self.persistent
             .data_store
-            .edge_tables()
-            .read()
+            .read_edge_tables()
             .get(&EdgeTableKey::new(src_label, dst_label, edge_label))
             .map(|t| t.scan(ts))
             .unwrap_or_default()
@@ -41,7 +40,7 @@ impl GraphStorageContext {
         edge_label: LabelId,
         ts: Timestamp,
     ) -> Vec<crate::storage::edge::EdgeRecord> {
-        let edge_tables = self.persistent.data_store.edge_tables().read();
+        let edge_tables = self.persistent.data_store.read_edge_tables();
         let mut records = Vec::new();
 
         for table in edge_tables
@@ -57,8 +56,7 @@ impl GraphStorageContext {
     pub fn total_vertex_count(&self) -> usize {
         self.persistent
             .data_store
-            .vertex_tables()
-            .read()
+            .read_vertex_tables()
             .values()
             .map(|t| t.total_count())
             .sum()
@@ -67,8 +65,7 @@ impl GraphStorageContext {
     pub fn total_edge_count(&self) -> usize {
         self.persistent
             .data_store
-            .edge_tables()
-            .read()
+            .read_edge_tables()
             .values()
             .map(|t| t.edge_count() as usize)
             .sum()
@@ -79,7 +76,7 @@ impl GraphStorageContext {
         ts: Timestamp,
     ) -> Vec<(LabelId, LabelId, LabelId, crate::storage::edge::EdgeRecord)> {
         use crate::storage::engine::data_store::EdgeTableKey;
-        let edge_tables = self.persistent.data_store.edge_tables().read();
+        let edge_tables = self.persistent.data_store.read_edge_tables();
         let mut records = Vec::new();
         for (
             EdgeTableKey {

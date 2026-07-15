@@ -14,8 +14,8 @@ use crate::storage::cursor::{EdgeCursor, VertexCursor};
 
 use super::super::chunk::DataChunk;
 use super::super::executor::SortDirection;
-use super::spec::SourceSpec;
 use super::source_operator::NeighborScanState;
+use super::spec::SourceSpec;
 
 // ── Source state ─────────────────────────────────────────────────────────────
 
@@ -85,7 +85,11 @@ impl SourceState {
                 current_index: 0,
                 col_names: col_names.clone(),
             },
-            SourceSpec::StorageScanVertices { col_names, projected_properties, .. } => SourceState::StorageScanVertices {
+            SourceSpec::StorageScanVertices {
+                col_names,
+                projected_properties,
+                ..
+            } => SourceState::StorageScanVertices {
                 partition_id: 0,
                 partition_range: None,
                 cursor: None,
@@ -117,7 +121,11 @@ impl SourceState {
                 position: 0,
             },
             SourceSpec::Argument => SourceState::Argument,
-            SourceSpec::GetProp { entity_slot, prop_names, .. } => SourceState::GetProp {
+            SourceSpec::GetProp {
+                entity_slot,
+                prop_names,
+                ..
+            } => SourceState::GetProp {
                 entity_slot: *entity_slot,
                 prop_names: prop_names.clone(),
             },
@@ -522,18 +530,10 @@ pub enum FulltextState {
 impl FulltextState {
     pub fn from_spec(spec: &super::spec::FulltextSpec) -> Self {
         match spec {
-            super::spec::FulltextSpec::FulltextManage { .. } => {
-                FulltextState::FulltextManage
-            }
-            super::spec::FulltextSpec::FulltextSearch { .. } => {
-                FulltextState::FulltextSearch
-            }
-            super::spec::FulltextSpec::FulltextLookup { .. } => {
-                FulltextState::FulltextLookup
-            }
-            super::spec::FulltextSpec::MatchFulltext { .. } => {
-                FulltextState::MatchFulltext
-            }
+            super::spec::FulltextSpec::FulltextManage { .. } => FulltextState::FulltextManage,
+            super::spec::FulltextSpec::FulltextSearch { .. } => FulltextState::FulltextSearch,
+            super::spec::FulltextSpec::FulltextLookup { .. } => FulltextState::FulltextLookup,
+            super::spec::FulltextSpec::MatchFulltext { .. } => FulltextState::MatchFulltext,
         }
     }
 }
@@ -583,9 +583,7 @@ impl RecursiveFragmentState {
             super::spec::RecursiveFragmentSpec::BFSShortest { .. } => {
                 RecursiveFragmentState::BFSShortest
             }
-            super::spec::RecursiveFragmentSpec::AllPaths { .. } => {
-                RecursiveFragmentState::AllPaths
-            }
+            super::spec::RecursiveFragmentSpec::AllPaths { .. } => RecursiveFragmentState::AllPaths,
         }
     }
 }

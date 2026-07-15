@@ -117,8 +117,7 @@ pub(super) fn next_semi_join(
                     for i in 0..right_row.len() {
                         combined_col_names.push(format!("right_{}", i));
                     }
-                    let mut context =
-                        ValueRowContext::from_names(combined_row, combined_col_names);
+                    let mut context = ValueRowContext::from_names(combined_row, combined_col_names);
                     match ExpressionEvaluator::evaluate(condition, &mut context) {
                         Ok(Value::Bool(b)) => b,
                         _ => false,
@@ -153,10 +152,16 @@ pub(super) fn close_cross(
     left: &mut StreamingExecutor,
     right: &mut StreamingExecutor,
 ) -> Result<(), QueryError> {
-    close_common(lifecycle, memory_tracker, || {
-        all_left_rows.clear();
-        all_right_rows.clear();
-    }, left, right)
+    close_common(
+        lifecycle,
+        memory_tracker,
+        || {
+            all_left_rows.clear();
+            all_right_rows.clear();
+        },
+        left,
+        right,
+    )
 }
 
 pub(super) fn close_semi(
@@ -166,7 +171,13 @@ pub(super) fn close_semi(
     left: &mut StreamingExecutor,
     right: &mut StreamingExecutor,
 ) -> Result<(), QueryError> {
-    close_common(lifecycle, memory_tracker, || {
-        right_rows.clear();
-    }, left, right)
+    close_common(
+        lifecycle,
+        memory_tracker,
+        || {
+            right_rows.clear();
+        },
+        left,
+        right,
+    )
 }

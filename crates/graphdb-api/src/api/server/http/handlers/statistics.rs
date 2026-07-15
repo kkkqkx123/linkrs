@@ -10,8 +10,8 @@ use serde_json;
 use crate::api::server::http::{error::HttpError, state::AppState};
 use crate::core::stats::MetricType;
 use crate::storage::{
-    StorageClient, StorageSchemaContextOps, StorageSnapshotOps, StorageSyncContextOps,
-    StorageTransactionContextOps,
+    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSnapshotOps,
+    StorageSyncContextOps,
 };
 
 /// Obtaining session statistics
@@ -19,7 +19,7 @@ pub async fn session<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync
@@ -75,7 +75,7 @@ pub async fn queries<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync
@@ -160,7 +160,7 @@ pub async fn database<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync
@@ -296,7 +296,7 @@ pub async fn system<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync
@@ -333,7 +333,7 @@ pub async fn search<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync
@@ -485,7 +485,7 @@ pub async fn freeze_stats<
         + StorageSchemaContextOps
         + StorageSnapshotOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync
@@ -525,7 +525,7 @@ pub async fn trigger_freeze<
         + StorageSchemaContextOps
         + StorageSnapshotOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync

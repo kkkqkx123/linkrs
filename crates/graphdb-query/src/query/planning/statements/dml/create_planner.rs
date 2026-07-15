@@ -3,6 +3,7 @@
 //! Query planning for handling Cypher-style CREATE statements
 //! supports CREATE (n:Label {props}) and CREATE (a)-[:Type]->(b) syntaxes
 
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::core::types::ContextualExpression;
 use crate::core::Value;
 use crate::core::YieldColumn;
@@ -16,7 +17,6 @@ use crate::query::planning::plan::core::{
 };
 use crate::query::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::query::QueryContext;
 use std::sync::Arc;
 

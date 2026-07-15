@@ -283,8 +283,8 @@ impl PushDownRule for PushFilterDownAggregateRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+    use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use std::sync::Arc;
 
     #[test]

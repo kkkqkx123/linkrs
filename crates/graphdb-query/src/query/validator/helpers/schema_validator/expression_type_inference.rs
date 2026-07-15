@@ -82,17 +82,18 @@ impl SchemaValidator {
             return ValueType::Unknown;
         }
 
-        let properties =
-            if let Ok(Some(tag_info)) = self.get_schema_manager().get_tag(space_name, &schema_name)
-            {
-                tag_info.properties
-            } else if let Ok(Some(edge_info)) =
-                self.get_schema_manager().get_edge_type(space_name, &schema_name)
-            {
-                edge_info.properties
-            } else {
-                return ValueType::Unknown;
-            };
+        let properties = if let Ok(Some(tag_info)) =
+            self.get_schema_manager().get_tag(space_name, &schema_name)
+        {
+            tag_info.properties
+        } else if let Ok(Some(edge_info)) = self
+            .get_schema_manager()
+            .get_edge_type(space_name, &schema_name)
+        {
+            edge_info.properties
+        } else {
+            return ValueType::Unknown;
+        };
 
         for prop in &properties {
             if prop.name == property {
@@ -131,9 +132,7 @@ impl SchemaValidator {
             "substr" | "lower" | "upper" | "trim" | "ltrim" | "rtrim" | "replace" => {
                 ValueType::String
             }
-            "abs" | "round" | "floor" | "ceil" | "sqrt" | "log" | "exp" | "pow" => {
-                ValueType::Float
-            }
+            "abs" | "round" | "floor" | "ceil" | "sqrt" | "log" | "exp" | "pow" => ValueType::Float,
             "type" | "label" => ValueType::String,
             "id" => ValueType::Int,
             "head" | "last" => ValueType::Unknown,

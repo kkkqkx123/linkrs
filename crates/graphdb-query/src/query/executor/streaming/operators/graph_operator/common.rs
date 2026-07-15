@@ -13,11 +13,15 @@ use crate::query::executor::streaming::slot::SlotLayout;
 use crate::query::executor::traversal::config::TraversalConfig;
 use crate::query::executor::traversal::graph_reader::TraversalGraphReader;
 use crate::query::executor::traversal::runtime::TraversalRuntime;
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 
 use super::super::visited_set::VisitedSet;
 
-pub(super) fn row_passes_filter(row: &[Value], col_names: &[String], filter: &Option<Expression>) -> bool {
+pub(super) fn row_passes_filter(
+    row: &[Value],
+    col_names: &[String],
+    filter: &Option<Expression>,
+) -> bool {
     let Some(expr) = filter else {
         return true;
     };
@@ -32,7 +36,7 @@ pub(super) fn row_passes_filter(row: &[Value], col_names: &[String], filter: &Op
 
 pub(super) fn expand_on_chunk(
     chunk: DataChunk,
-    reader: &dyn StorageClient,
+    reader: &dyn QueryStorage,
     space_name: &str,
     edge_types: &[String],
     direction: EdgeDirection,
@@ -108,7 +112,7 @@ pub(super) fn expand_on_chunk(
 
 pub(super) fn traverse_on_chunk(
     chunk: DataChunk,
-    reader: &dyn StorageClient,
+    reader: &dyn QueryStorage,
     config: &TraversalConfig,
     visited: &mut VisitedSet,
     cancel_token: Option<Arc<AtomicBool>>,

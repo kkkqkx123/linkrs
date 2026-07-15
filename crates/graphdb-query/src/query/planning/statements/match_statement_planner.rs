@@ -254,7 +254,12 @@ impl MatchStatementPlanner {
                 }
 
                 if let Some(delete_clause) = &match_stmt.delete_clause {
-                    plan = pattern_planner::plan_match_delete(plan, delete_clause, space_name, match_stmt)?;
+                    plan = pattern_planner::plan_match_delete(
+                        plan,
+                        delete_clause,
+                        space_name,
+                        match_stmt,
+                    )?;
                 }
 
                 Ok(plan)

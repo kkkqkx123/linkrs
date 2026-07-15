@@ -9,11 +9,11 @@
 
 use std::sync::Arc;
 
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::query::parser::ast::{SetOperationStmt, SetOperationType, Stmt};
 use crate::query::planning::plan::core::nodes::{IntersectNode, MinusNode, UnionNode};
 use crate::query::planning::plan::{PlanNodeEnum, SubPlan};
 use crate::query::planning::planner::{Planner, PlannerEnum, PlannerError, ValidatedStatement};
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::query::QueryContext;
 
 /// Set Operation Planner

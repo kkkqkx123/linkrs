@@ -4,16 +4,16 @@ use std::sync::Arc;
 
 use super::execution_result::ExecutionResult;
 use super::MemoryBudget;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::core::Value;
 use crate::query::executor::expression::functions::global_registry_ref;
 use crate::query::executor::expression::functions::OwnedFunctionRef;
 use crate::query::executor::streaming::pool::SharedScheduler;
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 #[cfg(feature = "fulltext-search")]
 use crate::search::manager::FulltextIndexManager;
 #[cfg(feature = "fulltext-search")]
 use crate::search::tantivy_index::TantivySearchEngine;
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 #[cfg(feature = "qdrant")]
 use crate::sync::VectorSyncCoordinator;
 
@@ -28,7 +28,7 @@ pub struct ExecutionContext {
     pub fulltext_manager: Option<Arc<FulltextIndexManager>>,
     #[cfg(feature = "qdrant")]
     pub vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
-    pub storage: Option<Arc<RwLock<dyn StorageClient>>>,
+    pub storage: Option<Arc<RwLock<dyn QueryStorage>>>,
     pub space_name: Option<String>,
     pub parameters: Arc<HashMap<String, crate::core::Value>>,
     /// Per-query memory budget for blocking operators.

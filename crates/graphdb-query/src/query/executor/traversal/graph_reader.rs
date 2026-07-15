@@ -1,13 +1,13 @@
 use crate::core::types::storage_ids::VertexId;
 use crate::core::{Edge, EdgeDirection, Vertex};
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 
 pub struct TraversalGraphReader<'a> {
-    storage: &'a dyn StorageClient,
+    storage: &'a dyn QueryStorage,
 }
 
 impl<'a> TraversalGraphReader<'a> {
-    pub fn new(storage: &'a dyn StorageClient) -> Self {
+    pub fn new(storage: &'a dyn QueryStorage) -> Self {
         Self { storage }
     }
 

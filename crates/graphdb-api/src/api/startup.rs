@@ -86,7 +86,7 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
     #[cfg(not(feature = "qdrant"))]
     let _vector_manager = None::<Arc<()>>;
 
-    let sync_manager = if config.fulltext.enabled || config.is_vector_enabled() {
+    let mut sync_manager = if config.fulltext.enabled || config.is_vector_enabled() {
         use crate::sync::SyncManager;
 
         let sync_manager = if config.fulltext.enabled {
@@ -240,6 +240,19 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
     } else {
         None
     };
+
+    if let Some(manager) = sync_manager.as_mut().and_then(Arc::get_mut) {
+        let outbox_path = PathBuf::from(config.storage_path()).join("outbox/events.json");
+        if let Err(error) = manager.configure_outbox(outbox_path) {
+            return Err(crate::core::DBError::storage(format!(
+                "Failed to initialize sync outbox: {}",
+                error
+            )));
+        }
+        if let Err(error) = manager.retry_outbox_sync() {
+            error!("Initial outbox delivery will be retried later: {}", error);
+        }
+    }
 
     let storage = if let Some(ref sync_manager) = sync_manager {
         let sync_storage =

@@ -456,11 +456,11 @@ fn extract_aggregate_function(
 mod tests {
     use super::*;
     use crate::core::types::expr::contextual::ContextualExpression;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::core::Expression;
     use crate::query::parser::ast::Span;
     use crate::query::planning::plan::core::nodes::StartNode;
     use crate::query::planning::plan::core::PlanNodeEnum;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use std::sync::Arc;
 
     #[test]

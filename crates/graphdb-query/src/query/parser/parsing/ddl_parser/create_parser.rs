@@ -6,7 +6,11 @@ use crate::query::parser::TokenKind;
 
 use super::DdlParser;
 
-type TagEdgeDefsResult = (Vec<crate::core::types::PropertyDef>, Option<i64>, Option<String>);
+type TagEdgeDefsResult = (
+    Vec<crate::core::types::PropertyDef>,
+    Option<i64>,
+    Option<String>,
+);
 
 impl DdlParser {
     pub fn parse_create_statement(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {

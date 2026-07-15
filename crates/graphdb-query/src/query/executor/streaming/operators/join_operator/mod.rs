@@ -15,10 +15,10 @@ use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::operators::base::OperatorLifecycle;
 use crate::query::executor::streaming::slot::SlotLayout;
 
-mod hash_join;
-mod nested_loop_join;
-mod merge_join;
 mod cross_semi_join;
+mod hash_join;
+mod merge_join;
+mod nested_loop_join;
 
 fn build_combined_names(
     left_col_names: &[String],
@@ -194,28 +194,24 @@ impl JoinOperator {
                 ),
                 right_col_names: Vec::new(),
             },
-            super::spec::JoinSpec::NestedLoopJoin { join_condition } => {
-                Self::NestedLoopJoin {
-                    join_condition: join_condition.clone(),
-                    build_side_tuples: Vec::new(),
-                    left_consumed: false,
-                    memory_tracker: crate::query::executor::base::MemoryTracker::new(
-                        memory_budget.clone(),
-                    ),
-                    right_col_names: Vec::new(),
-                }
-            }
-            super::spec::JoinSpec::InnerJoin { join_condition } => {
-                Self::InnerJoin {
-                    join_condition: join_condition.clone(),
-                    build_side_tuples: Vec::new(),
-                    left_consumed: false,
-                    memory_tracker: crate::query::executor::base::MemoryTracker::new(
-                        memory_budget.clone(),
-                    ),
-                    right_col_names: Vec::new(),
-                }
-            }
+            super::spec::JoinSpec::NestedLoopJoin { join_condition } => Self::NestedLoopJoin {
+                join_condition: join_condition.clone(),
+                build_side_tuples: Vec::new(),
+                left_consumed: false,
+                memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                    memory_budget.clone(),
+                ),
+                right_col_names: Vec::new(),
+            },
+            super::spec::JoinSpec::InnerJoin { join_condition } => Self::InnerJoin {
+                join_condition: join_condition.clone(),
+                build_side_tuples: Vec::new(),
+                left_consumed: false,
+                memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                    memory_budget.clone(),
+                ),
+                right_col_names: Vec::new(),
+            },
             super::spec::JoinSpec::LeftJoin { join_condition } => Self::LeftJoin {
                 join_condition: join_condition.clone(),
                 build_side_tuples: Vec::new(),
@@ -225,31 +221,27 @@ impl JoinOperator {
                 ),
                 right_col_names: Vec::new(),
             },
-            super::spec::JoinSpec::RightJoin { join_condition } => {
-                Self::RightJoin {
-                    join_condition: join_condition.clone(),
-                    build_side_tuples: Vec::new(),
-                    right_consumed: false,
-                    memory_tracker: crate::query::executor::base::MemoryTracker::new(
-                        memory_budget.clone(),
-                    ),
-                    right_col_names: Vec::new(),
-                }
-            }
-            super::spec::JoinSpec::FullOuterJoin { join_condition } => {
-                Self::FullOuterJoin {
-                    join_condition: join_condition.clone(),
-                    left_rows: Vec::new(),
-                    right_rows: Vec::new(),
-                    matched_right_indices: std::collections::HashSet::new(),
-                    result_iter: None,
-                    phase: FullOuterJoinPhase::BuildingRight,
-                    memory_tracker: crate::query::executor::base::MemoryTracker::new(
-                        memory_budget.clone(),
-                    ),
-                    right_col_names: Vec::new(),
-                }
-            }
+            super::spec::JoinSpec::RightJoin { join_condition } => Self::RightJoin {
+                join_condition: join_condition.clone(),
+                build_side_tuples: Vec::new(),
+                right_consumed: false,
+                memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                    memory_budget.clone(),
+                ),
+                right_col_names: Vec::new(),
+            },
+            super::spec::JoinSpec::FullOuterJoin { join_condition } => Self::FullOuterJoin {
+                join_condition: join_condition.clone(),
+                left_rows: Vec::new(),
+                right_rows: Vec::new(),
+                matched_right_indices: std::collections::HashSet::new(),
+                result_iter: None,
+                phase: FullOuterJoinPhase::BuildingRight,
+                memory_tracker: crate::query::executor::base::MemoryTracker::new(
+                    memory_budget.clone(),
+                ),
+                right_col_names: Vec::new(),
+            },
             super::spec::JoinSpec::CrossJoin => Self::CrossJoin {
                 all_left_rows: Vec::new(),
                 all_right_rows: Vec::new(),
@@ -622,7 +614,10 @@ impl JoinOperator {
         }
     }
 
-    pub fn spill_with_manager(&mut self, _sm: &crate::query::executor::streaming::spill::SpillManager) -> Result<(), crate::core::error::QueryError> {
+    pub fn spill_with_manager(
+        &mut self,
+        _sm: &crate::query::executor::streaming::spill::SpillManager,
+    ) -> Result<(), crate::core::error::QueryError> {
         Ok(())
     }
 

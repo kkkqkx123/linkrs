@@ -31,7 +31,7 @@ impl RecoveryApplier for GraphStorageContext {
         ts: Timestamp,
     ) -> StorageResult<()> {
         {
-            let mut vertex_tables = self.data_store().vertex_tables().write();
+            let mut vertex_tables = self.data_store().write_vertex_tables();
             if let Err(e) =
                 TransactionOps::add_vertex(&mut vertex_tables, label, vid, properties, ts)
             {
@@ -59,7 +59,7 @@ impl RecoveryApplier for GraphStorageContext {
     fn replay_insert_edge(&self, redo: &InsertEdgeRedo, ts: Timestamp) -> StorageResult<()> {
         // Check if endpoints exist
         let endpoints_exist = {
-            let vertex_tables = self.data_store().vertex_tables().read();
+            let vertex_tables = self.data_store().read_vertex_tables();
             let src_exists = vertex_tables.contains_key(&redo.src_label)
                 && TransactionOps::resolve_vertex_id(
                     vertex_tables.get(&redo.src_label).unwrap(),
@@ -92,7 +92,7 @@ impl RecoveryApplier for GraphStorageContext {
     fn replay_delete_edge(&self, redo: &DeleteEdgeRedo, ts: Timestamp) -> StorageResult<()> {
         // Check if endpoints exist
         let endpoints_exist = {
-            let vertex_tables = self.data_store().vertex_tables().read();
+            let vertex_tables = self.data_store().read_vertex_tables();
             let src_exists = vertex_tables.contains_key(&redo.src_label)
                 && resolve_external_vid(&vertex_tables, redo.src_label, redo.src_vid, ts).is_some();
 
@@ -127,7 +127,7 @@ impl RecoveryApplier for GraphStorageContext {
         })?;
 
         {
-            let mut vertex_tables = self.data_store().vertex_tables().write();
+            let mut vertex_tables = self.data_store().write_vertex_tables();
             TransactionOps::update_vertex_property_by_vid(
                 &mut vertex_tables,
                 label,
@@ -163,11 +163,10 @@ impl RecoveryApplier for GraphStorageContext {
         };
 
         {
-            let vertex_tables = self.data_store().vertex_tables().read();
-            let mut edge_tables = self.data_store().edge_tables().write();
+            let mut catalog = self.data_store().catalog_write_set();
             TransactionOps::update_edge_property(
-                &mut edge_tables,
-                &vertex_tables,
+                &mut catalog.edge_tables,
+                &catalog.vertex_tables,
                 params,
                 &redo.prop_name,
                 &prop_value,
@@ -186,7 +185,7 @@ impl RecoveryApplier for GraphStorageContext {
         ts: Timestamp,
     ) -> StorageResult<()> {
         {
-            let mut vertex_tables = self.data_store().vertex_tables().write();
+            let mut vertex_tables = self.data_store().write_vertex_tables();
             match TransactionOps::delete_vertex_by_external_vid(&mut vertex_tables, label, vid, ts)
             {
                 Ok(_) => {}
@@ -222,13 +221,13 @@ impl RecoveryApplier for GraphStorageContext {
         let tags = self.schema_manager().list_tags(&redo.space_name)?;
         let edge_types = self.schema_manager().list_edge_types(&redo.space_name)?;
 
-        for tag in tags {
-            let storage_name = format!("space_{space_id}:tag:{}", tag.tag_name);
-            let _ = self.drop_vertex_type(&storage_name);
-        }
         for edge_type in edge_types {
             let storage_name = format!("space_{space_id}:edge:{}", edge_type.edge_type_name);
             let _ = self.drop_edge_type(&storage_name);
+        }
+        for tag in tags {
+            let storage_name = format!("space_{space_id}:tag:{}", tag.tag_name);
+            let _ = self.drop_vertex_type(&storage_name);
         }
 
         let _ = self.schema_manager().drop_space(&redo.space_name)?;
@@ -244,13 +243,13 @@ impl RecoveryApplier for GraphStorageContext {
         let tags = self.schema_manager().list_tags(&redo.space_name)?;
         let edge_types = self.schema_manager().list_edge_types(&redo.space_name)?;
 
-        for tag in tags {
-            let storage_name = format!("space_{space_id}:tag:{}", tag.tag_name);
-            let _ = self.drop_vertex_type(&storage_name);
-        }
         for edge_type in edge_types {
             let storage_name = format!("space_{space_id}:edge:{}", edge_type.edge_type_name);
             let _ = self.drop_edge_type(&storage_name);
+        }
+        for tag in tags {
+            let storage_name = format!("space_{space_id}:tag:{}", tag.tag_name);
+            let _ = self.drop_vertex_type(&storage_name);
         }
 
         let _ = self.schema_manager().clear_space(&redo.space_name)?;
@@ -492,7 +491,7 @@ impl RecoveryApplier for GraphStorageContext {
                     // If column already exists, just record the schema change for version_history
                     if e.to_string().contains("already exists") {
                         // Column exists - need to record schema change for recovery
-                        let mut vertex_tables = self.data_store().vertex_tables().write();
+                        let mut vertex_tables = self.data_store().write_vertex_tables();
                         if let Some(table) = vertex_tables.get_mut(&redo.label) {
                             let change_details =
                                 crate::storage::schema::ChangeDetails::PropertyAdded {
@@ -545,13 +544,13 @@ impl RecoveryApplier for GraphStorageContext {
                     // If column already exists, just record the schema change for version_history
                     if e.to_string().contains("already exists") {
                         // Column exists - need to record schema change for recovery
-                        let edge_label_index = self.data_store().edge_label_index().read();
+                        let edge_label_index = self.data_store().read_edge_label_index();
                         if let Some(keys) = edge_label_index.get(&redo.edge_label) {
                             if !keys.is_empty() {
                                 let key = keys[0];
                                 drop(edge_label_index);
 
-                                let mut edge_tables = self.data_store().edge_tables().write();
+                                let mut edge_tables = self.data_store().write_edge_tables();
                                 if let Some(table) = edge_tables.get_mut(&key) {
                                     let change_details =
                                         crate::storage::schema::ChangeDetails::PropertyAdded {
@@ -715,7 +714,7 @@ impl GraphStorageContext {
         ts: Timestamp,
     ) -> StorageResult<()> {
         let (src_internal, dst_internal) = {
-            let vertex_tables = self.data_store().vertex_tables().read();
+            let vertex_tables = self.data_store().read_vertex_tables();
             let src_table = vertex_tables.get(&redo.src_label).ok_or_else(|| {
                 StorageError::db_error(format!(
                     "Source vertex label not found during recovery: label={}",
@@ -756,12 +755,11 @@ impl GraphStorageContext {
         };
 
         {
-            let vertex_tables = self.data_store().vertex_tables().read();
-            let mut edge_tables = self.data_store().edge_tables().write();
+            let mut catalog = self.data_store().catalog_write_set();
 
             if let Err(e) = TransactionOps::add_edge(
-                &mut edge_tables,
-                &vertex_tables,
+                &mut catalog.edge_tables,
+                &catalog.vertex_tables,
                 params,
                 &redo.properties,
                 ts,
@@ -800,7 +798,7 @@ impl GraphStorageContext {
 
         let (src_internal, dst_internal) =
             {
-                let vertex_tables = self.data_store().vertex_tables().read();
+                let vertex_tables = self.data_store().read_vertex_tables();
                 let src_internal =
                     resolve_external_vid(&vertex_tables, redo.src_label, redo.src_vid, ts)
                         .ok_or_else(|| {
@@ -821,7 +819,7 @@ impl GraphStorageContext {
             };
 
         {
-            let mut edge_tables = self.data_store().edge_tables().write();
+            let mut edge_tables = self.data_store().write_edge_tables();
             if let Some(table) = edge_tables.get_mut(&key) {
                 let _ = table.delete_edge(src_internal, dst_internal, redo.rank, ts)?;
             }
@@ -1037,17 +1035,11 @@ mod tests {
 
         let person_label = ctx
             .data_store()
-            .vertex_label_names()
-            .read()
-            .get("space_1:tag:Person")
-            .copied()
+            .vertex_label_id("space_1:tag:Person")
             .expect("Person label should exist");
         let city_label = ctx
             .data_store()
-            .vertex_label_names()
-            .read()
-            .get("space_1:tag:City")
-            .copied()
+            .vertex_label_id("space_1:tag:City")
             .expect("City label should exist");
 
         ctx.replay_add_vertex_prop(

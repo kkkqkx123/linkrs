@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
+use super::super::state::GlobalState;
 use super::spec::BoundIndexPredicate;
 use super::state::SourceState;
-use super::super::state::GlobalState;
 use crate::core::error::QueryError;
 use crate::core::types::storage_ids::VertexId;
 use crate::core::{EdgeDirection, Value};
@@ -16,10 +16,9 @@ use crate::query::executor::streaming::slot::SlotLayout;
 use crate::storage::cursor::{
     open_edge_scan, open_vertex_scan, EdgeCursor, ScanOptions, VecEdgeCursor, VertexCursor,
 };
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 
-#[derive(Debug)]
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub enum NeighborScanState {
     #[default]
     Init,
@@ -36,7 +35,6 @@ pub enum NeighborScanState {
     },
     Done,
 }
-
 
 fn make_vertex_row(vertex: crate::core::vertex_edge_path::Vertex) -> Vec<Value> {
     vec![Value::Vertex(Box::new(vertex))]
@@ -73,7 +71,7 @@ pub enum SourceOperator {
     },
     /// Storage-backed vertex scan — rows come from a storage cursor.
     StorageScanVertices {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         limit: Option<usize>,
         partition_range: Option<std::ops::Range<i64>>,
@@ -93,7 +91,7 @@ pub enum SourceOperator {
     },
     /// Storage-backed edge scan — rows come from a storage cursor.
     StorageScanEdges {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         limit: Option<usize>,
         edge_type: Option<String>,
@@ -104,13 +102,13 @@ pub enum SourceOperator {
     },
     /// Fetch vertices by ID.
     GetVertices {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         vertex_ids: Option<Vec<Value>>,
     },
     /// Fetch edges by src/dst/type/rank.
     GetEdges {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         edge_type: Option<String>,
         src: Option<String>,
@@ -121,7 +119,7 @@ pub enum SourceOperator {
     },
     /// Traverse neighbors of each input vertex.
     GetNeighbors {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         direction: String,
         /// State kept inline (complex state machine with owned data).
@@ -129,14 +127,14 @@ pub enum SourceOperator {
     },
     /// Scan edges via index.
     EdgeIndexScan {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         edge_type: Option<String>,
         cursor: Option<Box<dyn EdgeCursor>>,
     },
     /// Index scan with typed predicate and projection.
     IndexScan {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         index_name: String,
         index_id: u64,
@@ -146,7 +144,7 @@ pub enum SourceOperator {
     Argument,
     /// Property retrieval (zero-input source, will migrate to Unary in M2).
     GetProp {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         entity_slot: usize,
         prop_names: Vec<String>,
@@ -155,7 +153,7 @@ pub enum SourceOperator {
     },
     /// Alias for IndexScan (same semantics, kept for transitional compat).
     LookupIndex {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         index_name: String,
         index_id: u64,
@@ -172,16 +170,14 @@ impl SourceOperator {
     /// state arena on [`OperatorBase`].
     pub fn from_spec(
         spec: &super::spec::SourceSpec,
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
     ) -> Self {
         match spec {
-            super::spec::SourceSpec::ScanVertices { rows, col_names } => {
-                Self::ScanVertices {
-                    buffer: rows.clone(),
-                    current_index: 0,
-                    col_names: col_names.clone(),
-                }
-            }
+            super::spec::SourceSpec::ScanVertices { rows, col_names } => Self::ScanVertices {
+                buffer: rows.clone(),
+                current_index: 0,
+                col_names: col_names.clone(),
+            },
             super::spec::SourceSpec::StorageScanVertices {
                 space_name,
                 limit,
@@ -196,13 +192,11 @@ impl SourceOperator {
                 projected_properties: projected_properties.clone(),
                 cursor: None,
             },
-            super::spec::SourceSpec::ScanEdges { rows, col_names } => {
-                Self::ScanEdges {
-                    buffer: rows.clone(),
-                    current_index: 0,
-                    col_names: col_names.clone(),
-                }
-            }
+            super::spec::SourceSpec::ScanEdges { rows, col_names } => Self::ScanEdges {
+                buffer: rows.clone(),
+                current_index: 0,
+                col_names: col_names.clone(),
+            },
             super::spec::SourceSpec::StorageScanEdges {
                 space_name,
                 limit,
@@ -309,29 +303,54 @@ impl SourceOperator {
 
     pub fn open(&mut self, base: &mut OperatorBase) -> Result<(), QueryError> {
         match self {
-            Self::ScanVertices { current_index, col_names, .. } => {
+            Self::ScanVertices {
+                current_index,
+                col_names,
+                ..
+            } => {
                 *current_index = 0;
                 base.insert_state(GlobalState::Source(SourceState::ScanVertices {
                     current_index: 0,
                     col_names: col_names.clone(),
                 }));
             }
-            Self::ScanEdges { current_index, col_names, .. } => {
+            Self::ScanEdges {
+                current_index,
+                col_names,
+                ..
+            } => {
                 *current_index = 0;
                 base.insert_state(GlobalState::Source(SourceState::ScanEdges {
                     current_index: 0,
                     col_names: col_names.clone(),
                 }));
             }
-            Self::StorageScanVertices { storage, space_name, limit, partition_range, col_names, projected_properties, cursor } => {
+            Self::StorageScanVertices {
+                storage,
+                space_name,
+                limit,
+                partition_range,
+                col_names,
+                projected_properties,
+                cursor,
+            } => {
                 let storage_ref = storage.as_ref().ok_or_else(|| {
                     QueryError::execution("StorageScanVertices requires storage".to_string())
                 })?;
-                *cursor = Some(open_vertex_scan(storage_ref, space_name, &ScanOptions {
-                    limit: *limit,
-                    vertex_id_range: partition_range.clone(),
-                    ..ScanOptions::default()
-                }).map_err(|error| storage_error("StorageScanVertices", "open cursor", space_name, error))?);
+                *cursor = Some(
+                    open_vertex_scan(
+                        storage_ref,
+                        space_name,
+                        &ScanOptions {
+                            limit: *limit,
+                            vertex_id_range: partition_range.clone(),
+                            ..ScanOptions::default()
+                        },
+                    )
+                    .map_err(|error| {
+                        storage_error("StorageScanVertices", "open cursor", space_name, error)
+                    })?,
+                );
                 base.insert_state(GlobalState::Source(SourceState::StorageScanVertices {
                     partition_id: base.partition_id.unwrap_or(0),
                     partition_range: partition_range.clone(),
@@ -342,16 +361,33 @@ impl SourceOperator {
                     projected_properties: projected_properties.clone(),
                 }));
             }
-            Self::StorageScanEdges { storage, space_name, limit, edge_type, partition_range, col_names, cursor } => {
+            Self::StorageScanEdges {
+                storage,
+                space_name,
+                limit,
+                edge_type,
+                partition_range,
+                col_names,
+                cursor,
+            } => {
                 let storage_ref = storage.as_ref().ok_or_else(|| {
                     QueryError::execution("StorageScanEdges requires storage".to_string())
                 })?;
-                *cursor = Some(open_edge_scan(storage_ref, space_name, &ScanOptions {
-                    limit: *limit,
-                    edge_type: edge_type.clone(),
-                    edge_src_id_range: partition_range.clone(),
-                    ..ScanOptions::default()
-                }).map_err(|error| storage_error("StorageScanEdges", "open cursor", space_name, error))?);
+                *cursor = Some(
+                    open_edge_scan(
+                        storage_ref,
+                        space_name,
+                        &ScanOptions {
+                            limit: *limit,
+                            edge_type: edge_type.clone(),
+                            edge_src_id_range: partition_range.clone(),
+                            ..ScanOptions::default()
+                        },
+                    )
+                    .map_err(|error| {
+                        storage_error("StorageScanEdges", "open cursor", space_name, error)
+                    })?,
+                );
                 base.insert_state(GlobalState::Source(SourceState::StorageScanEdges {
                     partition_id: base.partition_id.unwrap_or(0),
                     partition_range: partition_range.clone(),
@@ -362,9 +398,19 @@ impl SourceOperator {
                 }));
             }
             Self::GetVertices { .. } => {
-                base.insert_state(GlobalState::Source(SourceState::GetVertices { position: 0 }));
+                base.insert_state(GlobalState::Source(SourceState::GetVertices {
+                    position: 0,
+                }));
             }
-            Self::GetEdges { storage, space_name, edge_type, src, dst, rank, cursor } => {
+            Self::GetEdges {
+                storage,
+                space_name,
+                edge_type,
+                src,
+                dst,
+                rank,
+                cursor,
+            } => {
                 let storage_ref = storage.as_ref().ok_or_else(|| {
                     QueryError::execution("GetEdges requires storage".to_string())
                 })?;
@@ -403,14 +449,30 @@ impl SourceOperator {
                     state: NeighborScanState::Init,
                 }));
             }
-            Self::EdgeIndexScan { storage, space_name, edge_type, cursor } => {
+            Self::EdgeIndexScan {
+                storage,
+                space_name,
+                edge_type,
+                cursor,
+            } => {
                 if let Some(storage_ref) = storage {
-                    *cursor = Some(open_edge_scan(storage_ref, space_name, &ScanOptions {
-                        edge_type: edge_type.clone(),
-                        ..ScanOptions::default()
-                    }).map_err(|error| storage_error("EdgeIndexScan", "open cursor", space_name, error))?);
+                    *cursor = Some(
+                        open_edge_scan(
+                            storage_ref,
+                            space_name,
+                            &ScanOptions {
+                                edge_type: edge_type.clone(),
+                                ..ScanOptions::default()
+                            },
+                        )
+                        .map_err(|error| {
+                            storage_error("EdgeIndexScan", "open cursor", space_name, error)
+                        })?,
+                    );
                 }
-                base.insert_state(GlobalState::Source(SourceState::EdgeIndexScan { cursor: None }));
+                base.insert_state(GlobalState::Source(SourceState::EdgeIndexScan {
+                    cursor: None,
+                }));
             }
             Self::IndexScan { .. } => {
                 base.insert_state(GlobalState::Source(SourceState::IndexScan {
@@ -421,7 +483,11 @@ impl SourceOperator {
             Self::Argument => {
                 base.insert_state(GlobalState::Source(SourceState::Argument));
             }
-            Self::GetProp { entity_slot, prop_names, .. } => {
+            Self::GetProp {
+                entity_slot,
+                prop_names,
+                ..
+            } => {
                 base.insert_state(GlobalState::Source(SourceState::GetProp {
                     entity_slot: *entity_slot,
                     prop_names: prop_names.clone(),
@@ -443,10 +509,25 @@ impl SourceOperator {
 
     pub fn next(&mut self, base: &mut OperatorBase) -> Result<Option<DataChunk>, QueryError> {
         match self {
-            Self::ScanVertices { buffer, current_index, col_names, .. }
-            | Self::ScanEdges { buffer, current_index, col_names, .. } =>
-                next_buffer_chunk(base, buffer, current_index, col_names),
-            Self::StorageScanVertices { space_name, cursor, col_names, projected_properties, .. } => loop {
+            Self::ScanVertices {
+                buffer,
+                current_index,
+                col_names,
+                ..
+            }
+            | Self::ScanEdges {
+                buffer,
+                current_index,
+                col_names,
+                ..
+            } => next_buffer_chunk(base, buffer, current_index, col_names),
+            Self::StorageScanVertices {
+                space_name,
+                cursor,
+                col_names,
+                projected_properties,
+                ..
+            } => loop {
                 base.ensure_not_cancelled()?;
                 let mut cur = match cursor.take() {
                     Some(c) => c,
@@ -461,10 +542,14 @@ impl SourceOperator {
                 let rows = if projected_properties.is_empty() {
                     batch.into_iter().map(make_vertex_row).collect::<Vec<_>>()
                 } else {
-                    batch.into_iter().map(|mut v| {
-                        v.properties.retain(|key, _| projected_properties.contains(key));
-                        make_vertex_row(v)
-                    }).collect::<Vec<_>>()
+                    batch
+                        .into_iter()
+                        .map(|mut v| {
+                            v.properties
+                                .retain(|key, _| projected_properties.contains(key));
+                            make_vertex_row(v)
+                        })
+                        .collect::<Vec<_>>()
                 };
                 if !rows.is_empty() {
                     let reservation = reserve_memory(base, &rows)?;
@@ -480,7 +565,12 @@ impl SourceOperator {
                 }
                 *cursor = Some(cur);
             },
-            Self::StorageScanEdges { space_name, cursor, col_names, .. } => loop {
+            Self::StorageScanEdges {
+                space_name,
+                cursor,
+                col_names,
+                ..
+            } => loop {
                 base.ensure_not_cancelled()?;
                 let mut cur = match cursor.take() {
                     Some(c) => c,
@@ -507,7 +597,11 @@ impl SourceOperator {
                 }
                 *cursor = Some(cur);
             },
-            Self::GetVertices { storage, space_name, vertex_ids } => {
+            Self::GetVertices {
+                storage,
+                space_name,
+                vertex_ids,
+            } => {
                 let storage_ref = storage.as_ref().ok_or_else(|| {
                     QueryError::execution("GetVertices requires storage".to_string())
                 })?;
@@ -557,7 +651,9 @@ impl SourceOperator {
                 // No vertices resolved in this batch — loop back for next range
                 Ok(None)
             }
-            Self::GetEdges { space_name, cursor, .. } => {
+            Self::GetEdges {
+                space_name, cursor, ..
+            } => {
                 let mut cur = match cursor.take() {
                     Some(c) => c,
                     None => return Ok(None),
@@ -581,7 +677,12 @@ impl SourceOperator {
                 *cursor = Some(cur);
                 Ok(None)
             }
-            Self::GetNeighbors { storage, space_name, direction, state } => {
+            Self::GetNeighbors {
+                storage,
+                space_name,
+                direction,
+                state,
+            } => {
                 let storage_ref = storage.as_ref().ok_or_else(|| {
                     QueryError::execution("GetNeighbors requires storage".to_string())
                 })?;
@@ -631,14 +732,23 @@ impl SourceOperator {
                                 let edges = guard
                                     .get_node_edges(space_name, vid, *direction)
                                     .map_err(|error| {
-                                        storage_error("GetNeighbors", "get node edges", space_name, error)
+                                        storage_error(
+                                            "GetNeighbors",
+                                            "get node edges",
+                                            space_name,
+                                            error,
+                                        )
                                     })?;
                                 for edge in edges {
                                     let nid = match direction {
                                         EdgeDirection::Out => *edge.dst(),
                                         EdgeDirection::In => *edge.src(),
                                         EdgeDirection::Both => {
-                                            if edge.src() == vid { *edge.dst() } else { *edge.src() }
+                                            if edge.src() == vid {
+                                                *edge.dst()
+                                            } else {
+                                                *edge.src()
+                                            }
                                         }
                                     };
                                     if seen.insert(nid) {
@@ -663,7 +773,12 @@ impl SourceOperator {
                             for neighbor_id in &neighbor_ids[*position..end] {
                                 if let Some(vertex) =
                                     guard.get_vertex(space_name, neighbor_id).map_err(|error| {
-                                        storage_error("GetNeighbors", "get neighbor vertex", space_name, error)
+                                        storage_error(
+                                            "GetNeighbors",
+                                            "get neighbor vertex",
+                                            space_name,
+                                            error,
+                                        )
                                     })?
                                 {
                                     rows.push(make_vertex_row(vertex));
@@ -692,7 +807,8 @@ impl SourceOperator {
                 // returns a capability-unavailable error.
                 Err(QueryError::execution(
                     "GetProp is not available as a source operator; \
-                     use the unary GetProp (coming in M2)".to_string(),
+                     use the unary GetProp (coming in M2)"
+                        .to_string(),
                 ))
             }
             Self::LookupIndex {
@@ -725,9 +841,8 @@ impl SourceOperator {
                                             .clone_into(resolved_ids);
                                     }
                                     _ => {
-                                        let vertices = guard
-                                            .scan_vertices(space_name)
-                                            .unwrap_or_default();
+                                        let vertices =
+                                            guard.scan_vertices(space_name).unwrap_or_default();
                                         *resolved_ids = vertices
                                             .into_iter()
                                             .map(|v| Value::Vertex(Box::new(v)))
@@ -748,8 +863,7 @@ impl SourceOperator {
                     let mut arena = base.state_arena();
                     let s = arena.global.get_mut(&base.state_key());
                     if let Some(GlobalState::Source(SourceState::LookupIndex {
-                        position,
-                        ..
+                        position, ..
                     })) = s
                     {
                         *position = end;
@@ -775,7 +889,9 @@ impl SourceOperator {
                     Ok(None)
                 }
             }
-            Self::EdgeIndexScan { space_name, cursor, .. } => loop {
+            Self::EdgeIndexScan {
+                space_name, cursor, ..
+            } => loop {
                 base.ensure_not_cancelled()?;
                 let mut cur = match cursor.take() {
                     Some(c) => c,
@@ -813,7 +929,11 @@ impl SourceOperator {
                 let (resolved_ids, position) = {
                     let mut arena = base.state_arena();
                     let s = arena.global.get_mut(&base.state_key()).unwrap();
-                    let GlobalState::Source(SourceState::IndexScan { resolved_ids, position }) = s else {
+                    let GlobalState::Source(SourceState::IndexScan {
+                        resolved_ids,
+                        position,
+                    }) = s
+                    else {
                         return Ok(None);
                     };
                     if resolved_ids.is_empty() && *position == 0 {
@@ -823,13 +943,18 @@ impl SourceOperator {
                                 *resolved_ids = guard
                                     .lookup_index(space_name, index_name, value)
                                     .map_err(|error| {
-                                        storage_error("IndexScan", "lookup index", space_name, error)
-                                    })?;
+                                    storage_error("IndexScan", "lookup index", space_name, error)
+                                })?;
                             }
                             _ => {
-                                let vertices = guard.scan_vertices(space_name)
-                                    .map_err(|error| {
-                                        storage_error("IndexScan", "scan vertices", space_name, error)
+                                let vertices =
+                                    guard.scan_vertices(space_name).map_err(|error| {
+                                        storage_error(
+                                            "IndexScan",
+                                            "scan vertices",
+                                            space_name,
+                                            error,
+                                        )
                                     })?;
                                 *resolved_ids = vertices
                                     .into_iter()
@@ -1080,7 +1205,7 @@ mod tests {
             storage: None,
             space_name: "test".to_string(),
             vertex_ids: None,
-            };
+        };
         let mut base = OperatorBase::new(0);
 
         // GetVertices without storage is an error in the new incremental path

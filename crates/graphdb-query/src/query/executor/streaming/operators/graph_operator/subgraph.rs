@@ -11,10 +11,10 @@ use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::context::ValueRowContext;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::operators::base::OperatorBase;
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 
 pub(super) fn handle(
-    storage: &Option<Arc<RwLock<dyn StorageClient>>>,
+    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     space_name: &str,
     steps: u32,
     direction: EdgeDirection,
@@ -51,15 +51,10 @@ pub(super) fn handle(
                         if current_step >= steps {
                             continue;
                         }
-                        if let Ok(edges) =
-                            reader.get_node_edges(space_name, &current, direction)
-                        {
-                            let et_set: HashSet<String> =
-                                edge_types.iter().cloned().collect();
+                        if let Ok(edges) = reader.get_node_edges(space_name, &current, direction) {
+                            let et_set: HashSet<String> = edge_types.iter().cloned().collect();
                             for e in &edges {
-                                if !edge_types.is_empty()
-                                    && !et_set.contains(&e.edge_type)
-                                {
+                                if !edge_types.is_empty() && !et_set.contains(&e.edge_type) {
                                     continue;
                                 }
                                 let neighbor_id = match direction {
@@ -74,9 +69,7 @@ pub(super) fn handle(
                                     }
                                 };
                                 history_edges.push((e.clone(), current_step + 1));
-                                if visited.insert(neighbor_id)
-                                    && current_step + 1 < steps
-                                {
+                                if visited.insert(neighbor_id) && current_step + 1 < steps {
                                     frontier.push((neighbor_id, current_step + 1));
                                 }
                             }
@@ -90,18 +83,14 @@ pub(super) fn handle(
                             .ok()
                             .flatten()
                             .unwrap_or_else(|| {
-                                crate::core::vertex_edge_path::Vertex::with_vid(
-                                    edge.src,
-                                )
+                                crate::core::vertex_edge_path::Vertex::with_vid(edge.src)
                             });
                         let dst_vertex = reader
                             .get_vertex(space_name, &edge.dst)
                             .ok()
                             .flatten()
                             .unwrap_or_else(|| {
-                                crate::core::vertex_edge_path::Vertex::with_vid(
-                                    edge.dst,
-                                )
+                                crate::core::vertex_edge_path::Vertex::with_vid(edge.dst)
                             });
                         out_row.push(Value::Vertex(Box::new(src_vertex)));
                         out_row.push(Value::Vertex(Box::new(dst_vertex)));

@@ -10,7 +10,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::api::server::http::{error::HttpError, state::AppState};
 use crate::storage::{
-    StorageClient, StorageSchemaContextOps, StorageSyncContextOps, StorageTransactionContextOps,
+    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 
 /// Streaming Query Requests
@@ -46,7 +46,7 @@ pub async fn execute_stream<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync

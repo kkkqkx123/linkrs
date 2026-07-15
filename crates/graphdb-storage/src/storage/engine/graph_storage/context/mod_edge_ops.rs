@@ -25,7 +25,7 @@ impl GraphStorageContext {
             return Err(StorageError::storage_not_open());
         }
 
-        let vertex_tables = self.persistent.data_store.vertex_tables().read();
+        let vertex_tables = self.persistent.data_store.read_vertex_tables();
 
         let src_internal = helpers::resolve_internal_id(
             self,
@@ -60,52 +60,46 @@ impl GraphStorageContext {
         drop(vertex_tables);
 
         let key = EdgeTableKey::new(actual_src_label, actual_dst_label, params.edge_label);
-        let mut edge_tables = self.persistent.data_store.edge_tables().write();
-
-        let edge_table = if edge_tables.contains_key(&key) {
-            edge_tables.get_mut(&key).unwrap()
-        } else {
-            let edge_schema = {
-                let original_key = EdgeTableKey::new(0, 0, params.edge_label);
-                let orig = edge_tables.get(&original_key).ok_or_else(|| {
-                    StorageError::label_not_found(format!("edge label {}", params.edge_label))
-                })?;
-                let mut s = orig.schema().clone();
+        let template_key = EdgeTableKey::new(0, 0, params.edge_label);
+        let stats_manager = self.persistent.stats_manager.clone();
+        self.persistent.data_store.with_edge_partition_mut(
+            key,
+            template_key,
+            |template| {
+                let mut s = template.schema().clone();
                 s.src_label = actual_src_label;
                 s.dst_label = actual_dst_label;
-                s
-            };
-            let mut new_table = crate::storage::edge::EdgeStore::new(edge_schema)?;
-            if let Some(stats) = &self.persistent.stats_manager {
-                new_table.set_stats_manager(stats.clone());
-            }
-            edge_tables.insert(key, new_table);
-            edge_tables.get_mut(&key).unwrap()
-        };
-
-        let mut rank = params.rank;
-        loop {
-            match edge_table.insert_edge(
-                src_internal,
-                dst_internal,
-                rank,
-                params.properties,
-                params.ts,
-            ) {
-                Ok(()) => {
-                    self.mark_edge_modified(params.edge_label);
-                    return Ok(());
+                let mut table = crate::storage::edge::EdgeStore::new(s)?;
+                if let Some(stats) = stats_manager {
+                    table.set_stats_manager(stats);
                 }
-                Err(ref e)
-                    if e.kind()
-                        == crate::core::error::storage::StorageErrorKind::EdgeAlreadyExists
-                        && rank == params.rank =>
-                {
-                    rank += 1;
+                Ok(table)
+            },
+            |edge_table| {
+                let mut rank = params.rank;
+                loop {
+                    match edge_table.insert_edge(
+                        src_internal,
+                        dst_internal,
+                        rank,
+                        params.properties,
+                        params.ts,
+                    ) {
+                        Ok(()) => return Ok(()),
+                        Err(ref error)
+                            if error.kind()
+                                == crate::core::error::storage::StorageErrorKind::EdgeAlreadyExists
+                                && rank == params.rank =>
+                        {
+                            rank += 1;
+                        }
+                        Err(error) => return Err(error),
+                    }
                 }
-                Err(e) => return Err(e),
-            }
-        }
+            },
+        )?;
+        self.mark_edge_modified(params.edge_label);
+        Ok(())
     }
 
     fn resolve_edge_table_key(ctx: EdgeLabelLookupCtx) -> EdgeTableKey {
@@ -129,7 +123,7 @@ impl GraphStorageContext {
             return None;
         }
 
-        let vertex_tables = self.persistent.data_store.vertex_tables().read();
+        let vertex_tables = self.persistent.data_store.read_vertex_tables();
 
         let src_internal = helpers::resolve_internal_id(
             self,
@@ -155,7 +149,7 @@ impl GraphStorageContext {
             edge_label: params.edge_label,
             ts,
         });
-        let edge_tables = self.persistent.data_store.edge_tables().read();
+        let edge_tables = self.persistent.data_store.read_edge_tables();
         let edge_table = edge_tables.get(&key)?;
 
         edge_table.get_edge(src_internal, dst_internal, params.rank, ts)
@@ -166,7 +160,7 @@ impl GraphStorageContext {
             return Err(StorageError::storage_not_open());
         }
 
-        let vertex_tables = self.persistent.data_store.vertex_tables().read();
+        let vertex_tables = self.persistent.data_store.read_vertex_tables();
 
         let src_internal =
             helpers::resolve_internal_id(self, &vertex_tables, params.src_label, params.src_id, ts)
@@ -201,7 +195,7 @@ impl GraphStorageContext {
         });
         drop(vertex_tables);
 
-        let mut edge_tables = self.persistent.data_store.edge_tables().write();
+        let mut edge_tables = self.persistent.data_store.write_edge_tables();
         let edge_table = edge_tables.get_mut(&key).ok_or_else(|| {
             StorageError::label_not_found(format!("edge label {}", params.edge_label))
         })?;
@@ -226,7 +220,7 @@ impl GraphStorageContext {
             return None;
         }
 
-        let vertex_tables = self.persistent.data_store.vertex_tables().read();
+        let vertex_tables = self.persistent.data_store.read_vertex_tables();
         let src_internal =
             helpers::resolve_internal_id(self, &vertex_tables, src_label, src_id, ts)?;
         let actual_src = if src_label == 0 {
@@ -236,7 +230,7 @@ impl GraphStorageContext {
         };
         drop(vertex_tables);
 
-        let edge_tables = self.persistent.data_store.edge_tables().read();
+        let edge_tables = self.persistent.data_store.read_edge_tables();
         let mut records = Vec::new();
         for table in edge_tables
             .values()
@@ -259,7 +253,7 @@ impl GraphStorageContext {
             return None;
         }
 
-        let vertex_tables = self.persistent.data_store.vertex_tables().read();
+        let vertex_tables = self.persistent.data_store.read_vertex_tables();
         let dst_internal =
             helpers::resolve_internal_id(self, &vertex_tables, dst_label, dst_id, ts)?;
         let actual_dst = if dst_label == 0 {
@@ -269,7 +263,7 @@ impl GraphStorageContext {
         };
         drop(vertex_tables);
 
-        let edge_tables = self.persistent.data_store.edge_tables().read();
+        let edge_tables = self.persistent.data_store.read_edge_tables();
         let mut records = Vec::new();
         for table in edge_tables
             .values()

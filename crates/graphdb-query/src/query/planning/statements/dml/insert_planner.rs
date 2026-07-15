@@ -17,11 +17,11 @@ use crate::query::QueryContext;
 use std::sync::Arc;
 
 #[cfg(test)]
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+#[cfg(test)]
 use crate::core::YieldColumn;
 #[cfg(test)]
 use crate::query::parser::ast::utils::ExprFactory;
-#[cfg(test)]
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
 /// Insert Operation Planner
 /// Responsible for converting INSERT statements into execution plans.
@@ -213,12 +213,12 @@ impl Default for InsertPlanner {
 mod tests {
     use super::*;
     use crate::core::types::expr::contextual::ContextualExpression;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::core::Value;
     use crate::query::parser::ast::utils::ExprFactory;
     use crate::query::parser::ast::{Ast, Span, Stmt};
     use crate::query::parser::ast::{InsertStmt, InsertTarget, TagInsertSpec, VertexRow};
     use crate::query::planning::planner::{Planner, ValidatedStatement};
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::query::validator::ValidationInfo;
     use crate::query::QueryContext;
     use std::sync::Arc;

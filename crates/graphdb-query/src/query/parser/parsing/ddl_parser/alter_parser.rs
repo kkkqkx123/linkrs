@@ -6,7 +6,11 @@ use crate::query::parser::TokenKind;
 
 use super::DdlParser;
 
-type AlterOpsResult = (Vec<crate::core::types::PropertyDef>, Vec<String>, Vec<PropertyChange>);
+type AlterOpsResult = (
+    Vec<crate::core::types::PropertyDef>,
+    Vec<String>,
+    Vec<PropertyChange>,
+);
 
 impl DdlParser {
     pub fn parse_alter_statement(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {

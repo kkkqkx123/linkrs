@@ -11,7 +11,6 @@
 //! - ResultStream: Streaming result handle
 
 pub mod builder;
-mod partition_builder;
 pub mod chunk;
 pub mod context;
 pub mod coordinator;
@@ -25,10 +24,12 @@ pub mod memory_pool;
 pub mod operator_plan_builder;
 pub mod operators;
 pub mod parallel_safety;
+pub mod parameters;
 pub mod partition;
+mod partition_builder;
 pub mod plan;
 pub mod pool;
-pub mod parameters;
+pub mod query_registry;
 pub mod result_boundary;
 pub mod result_utils;
 pub mod runtime;
@@ -37,7 +38,6 @@ pub mod spill;
 pub mod state;
 pub mod stream;
 pub mod stream_result;
-pub mod query_registry;
 pub mod transaction_scope;
 
 pub use builder::StreamingExecutorBuilder;
@@ -62,29 +62,27 @@ pub use slot::{
 pub use stream::ResultStream;
 pub use stream_result::StreamingQueryResult;
 
+pub use plan::context::PhysicalPlanBuildContext;
 pub use plan::types::{
     CapabilitySet, FragmentGraph, FragmentId, FragmentKind, FragmentSpec, LogicalNodeId,
     OperatorKindSpec, OutputContract, PhysicalOperatorId, PhysicalOperatorIdAllocator,
     PhysicalOperatorSpec, PhysicalPlan, PlanCompatibility, SortOrder,
 };
-pub use plan::context::PhysicalPlanBuildContext;
 pub use plan::validator::{PhysicalPlanValidator, ValidationResult, ValidationTier};
 
 // ── Spill types ──
 pub use spill::{
     cleanup_orphan_spill_dirs, hash_row_partition, DiskQuota, HashPartitionConfig,
-    HashPartitionSpiller, RowBuffer, RunHeader, RunReader, RunWriter, SpillConfig, SpilledFile,
-    SpilledRun, SpillManager, SpillReader, SpillWriter,
+    HashPartitionSpiller, RowBuffer, RunHeader, RunReader, RunWriter, SpillConfig, SpillManager,
+    SpillReader, SpillWriter, SpilledFile, SpilledRun,
 };
 
 // ── P2: New types ──
 pub use instance::{QueryBindings, QueryExecutionInstance, ResultSink};
+pub use query_registry::{CancelToken, QueryGuard, QueryId, QueryMetadata, QueryRegistry};
 pub use state::{
     GlobalState, GlobalStateArena, GlobalStateKey, LocalState, LocalStateArena, LocalStateKey,
     StateArenaSet, TaskId,
-};
-pub use query_registry::{
-    CancelToken, QueryGuard, QueryId, QueryMetadata, QueryRegistry,
 };
 pub use transaction_scope::{
     CancelReason, SessionTransactionController, TransactionCommandResult, TransactionId,
@@ -92,14 +90,10 @@ pub use transaction_scope::{
 };
 
 // ── M4: Result boundary types ──
-pub use result_boundary::{
-    ChunkOrDone, ResultBoundary, ResultBoundaryGuard,
-};
+pub use result_boundary::{ChunkOrDone, ResultBoundary, ResultBoundaryGuard};
 
 // ── M4: Memory pool types ──
 pub use memory_pool::{
     DatabaseMemoryPool, FragmentPool, MemoryPoolError, MemoryPoolReservation, OperatorPool,
     PoolHandle, PooledChunk, QueryPool, TaskPool,
 };
-
-

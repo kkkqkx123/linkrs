@@ -1,14 +1,14 @@
 use super::QueryPipelineManager;
 use crate::core::error::{DBError, DBResult, QueryError};
 use crate::query::executor::streaming::plan::{
-    PhysicalPlan, PhysicalPlanBuilder, PhysicalPlanBuildContext, PhysicalPlanValidator,
+    PhysicalPlan, PhysicalPlanBuildContext, PhysicalPlanBuilder, PhysicalPlanValidator,
 };
 use crate::query::validator::ValidatedStatement;
 use crate::query::QueryContext;
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 use std::sync::Arc;
 
-impl<S: StorageClient + 'static> QueryPipelineManager<S> {
+impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     pub(crate) fn generate_execution_plan(
         &mut self,
         query_context: Arc<QueryContext>,

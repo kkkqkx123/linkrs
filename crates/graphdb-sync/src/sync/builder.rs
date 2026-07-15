@@ -13,6 +13,7 @@ pub struct SyncManagerBuilder {
     #[cfg(feature = "qdrant")]
     vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
     dead_letter_queue: Option<Arc<DeadLetterQueue>>,
+    outbox_path: Option<std::path::PathBuf>,
 }
 
 impl Default for SyncManagerBuilder {
@@ -29,6 +30,7 @@ impl SyncManagerBuilder {
             #[cfg(feature = "qdrant")]
             vector_coordinator: None,
             dead_letter_queue: None,
+            outbox_path: None,
         }
     }
 
@@ -49,7 +51,12 @@ impl SyncManagerBuilder {
         self
     }
 
-    pub fn build(self) -> SyncManager {
+    pub fn with_outbox_path(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.outbox_path = Some(path.into());
+        self
+    }
+
+    pub fn build(self) -> Result<SyncManager, crate::sync::manager::SyncError> {
         let mut manager = SyncManager::new_without_fulltext();
 
         #[cfg(feature = "fulltext-search")]
@@ -66,7 +73,11 @@ impl SyncManagerBuilder {
             manager = manager.with_dead_letter_queue(dlq);
         }
 
-        manager
+        if let Some(path) = self.outbox_path {
+            manager = manager.with_outbox(path)?;
+        }
+
+        Ok(manager)
     }
 }
 

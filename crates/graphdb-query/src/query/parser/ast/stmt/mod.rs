@@ -4,21 +4,21 @@ pub use super::pattern::*;
 pub use super::types::*;
 use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
-mod dql;
-mod dml;
-mod ddl;
 mod dcl;
+mod ddl;
+mod dml;
+mod dql;
+mod management;
 mod search;
 mod transaction;
-mod management;
 
-pub use dql::*;
-pub use dml::*;
-pub use ddl::*;
 pub use dcl::*;
+pub use ddl::*;
+pub use dml::*;
+pub use dql::*;
+pub use management::*;
 pub use search::*;
 pub use transaction::*;
-pub use management::*;
 
 #[derive(Debug, Clone)]
 pub struct Ast {

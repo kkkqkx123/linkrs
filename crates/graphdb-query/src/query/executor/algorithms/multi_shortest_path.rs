@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
+use super::config::MultiShortestPathConfig;
 use crate::core::error::{DBError, DBResult};
 use crate::core::types::VertexId;
 use crate::core::{Edge, Path, Step, Value, Vertex};
@@ -13,9 +14,8 @@ use crate::query::executor::base::{
     BaseExecutor, DBResult as ExecDBResult, EdgeDirection, ExecutionResult,
     Executor as BaseExecutorTrait, ExecutorStats, HasStorage,
 };
-use super::config::MultiShortestPathConfig;
 use crate::query::DataSet;
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 use parking_lot::RwLock;
 
 use super::types::{
@@ -27,7 +27,7 @@ use super::types::{
 ///
 /// Handle multiple (src, dst) path lookup requests simultaneously
 /// Supports single/multiple shortest paths using bi-directional BFS algorithm
-pub struct MultiShortestPathExecutor<S: StorageClient + Send + 'static> {
+pub struct MultiShortestPathExecutor<S: QueryStorage + Send + 'static> {
     base: BaseExecutor<S>,
     start_vids: Vec<VertexId>,
     end_vids: Vec<VertexId>,
@@ -49,7 +49,7 @@ pub struct MultiShortestPathExecutor<S: StorageClient + Send + 'static> {
     found_count: usize,
 }
 
-impl<S: StorageClient> std::fmt::Debug for MultiShortestPathExecutor<S> {
+impl<S: QueryStorage> std::fmt::Debug for MultiShortestPathExecutor<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MultiShortestPathExecutor")
             .field("base", &"BaseExecutor")
@@ -64,7 +64,7 @@ impl<S: StorageClient> std::fmt::Debug for MultiShortestPathExecutor<S> {
     }
 }
 
-impl<S: StorageClient> MultiShortestPathExecutor<S> {
+impl<S: QueryStorage> MultiShortestPathExecutor<S> {
     pub fn new(
         base_config: crate::query::executor::base::ExecutorConfig<S>,
         config: MultiShortestPathConfig,
@@ -445,7 +445,7 @@ impl<S: StorageClient> MultiShortestPathExecutor<S> {
     }
 }
 
-impl<S: StorageClient + Send + 'static> BaseExecutorTrait<S> for MultiShortestPathExecutor<S> {
+impl<S: QueryStorage + Send + 'static> BaseExecutorTrait<S> for MultiShortestPathExecutor<S> {
     fn execute(&mut self) -> ExecDBResult<ExecutionResult> {
         let paths = self
             .execute_multi_path()
@@ -489,7 +489,7 @@ impl<S: StorageClient + Send + 'static> BaseExecutorTrait<S> for MultiShortestPa
     }
 }
 
-impl<S: StorageClient> HasStorage<S> for MultiShortestPathExecutor<S> {
+impl<S: QueryStorage> HasStorage<S> for MultiShortestPathExecutor<S> {
     fn get_storage(&self) -> &Arc<RwLock<S>> {
         self.base.get_storage()
     }
@@ -498,10 +498,10 @@ impl<S: StorageClient> HasStorage<S> for MultiShortestPathExecutor<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::core::types::VertexId;
     use crate::core::{Path, Vertex};
     use crate::query::executor::base::ExecutorConfig;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::storage::MockStorage;
 
     #[test]

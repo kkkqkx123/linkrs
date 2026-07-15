@@ -261,31 +261,29 @@ impl SchemaValidator {
             Expression::Unary {
                 op: UnaryOperator::Minus,
                 operand,
-            } => {
-                match operand.as_ref() {
-                    Expression::Literal(Value::SmallInt(_))
-                    | Expression::Literal(Value::Int(_))
-                    | Expression::Literal(Value::BigInt(_)) => {
-                        if !matches!(
-                            vid_type,
-                            DataType::SmallInt | DataType::Int | DataType::BigInt | DataType::VID
-                        ) {
-                            return Err(CoreValidationError::new(
-                                format!(
-                                    "{} vertex ID expectation {:?} type, actually a negative integer",
-                                    role, vid_type
-                                ),
-                                ValidationErrorType::TypeMismatch,
-                            ));
-                        }
-                        Ok(())
+            } => match operand.as_ref() {
+                Expression::Literal(Value::SmallInt(_))
+                | Expression::Literal(Value::Int(_))
+                | Expression::Literal(Value::BigInt(_)) => {
+                    if !matches!(
+                        vid_type,
+                        DataType::SmallInt | DataType::Int | DataType::BigInt | DataType::VID
+                    ) {
+                        return Err(CoreValidationError::new(
+                            format!(
+                                "{} vertex ID expectation {:?} type, actually a negative integer",
+                                role, vid_type
+                            ),
+                            ValidationErrorType::TypeMismatch,
+                        ));
                     }
-                    _ => Err(CoreValidationError::new(
-                        format!("{} vertex ID must be a constant or variable.", role),
-                        ValidationErrorType::SemanticError,
-                    )),
+                    Ok(())
                 }
-            }
+                _ => Err(CoreValidationError::new(
+                    format!("{} vertex ID must be a constant or variable.", role),
+                    ValidationErrorType::SemanticError,
+                )),
+            },
             _ => Err(CoreValidationError::new(
                 format!("{} vertex ID must be a constant or variable.", role),
                 ValidationErrorType::SemanticError,

@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use crate::core::types::expr::contextual::ContextualExpression;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::query::parser::ast::stmt::{Ast, Stmt};
 use crate::query::parser::parsing::expr_parser::ExprParser;
 use crate::query::parser::parsing::parse_context::ParseContext;
 use crate::query::parser::parsing::stmt_parser::StmtParser;
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
 /// Parser analysis results, including the AST (Statement + Expression Context).
 ///

@@ -10,17 +10,13 @@ use std::collections::{HashMap, HashSet};
 use crate::query::executor::streaming::plan::types::{
     FragmentGraph, FragmentId, PhysicalOperatorId, PhysicalPlan,
 };
-use crate::query::planning::plan::explain::{
-    Pair, PlanDescription, PlanNodeDescription,
-};
+use crate::query::planning::plan::explain::{Pair, PlanDescription, PlanNodeDescription};
 
 /// Build a [`PlanDescription`] from an arena [`PhysicalPlan`].
 ///
 /// Walks the fragment DAG in topological order (producers before consumers)
 /// and creates one [`PlanNodeDescription`] per physical operator.
-pub fn physical_plan_to_plan_description(
-    plan: &PhysicalPlan,
-) -> PlanDescription {
+pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription {
     let mut desc = PlanDescription::new();
     desc.requested_workers = 1;
 
@@ -82,10 +78,7 @@ pub fn physical_plan_to_plan_description(
             None => continue,
         };
 
-        let mut pnd = PlanNodeDescription::new(
-            op_spec.explain_name,
-            op_id.0 as i64,
-        );
+        let mut pnd = PlanNodeDescription::new(op_spec.explain_name, op_id.0 as i64);
 
         // Extract description from properties
         let mut pairs = Vec::new();
@@ -109,7 +102,9 @@ pub fn physical_plan_to_plan_description(
         }
 
         match &props.distribution {
-            crate::query::executor::streaming::plan::properties::Distribution::HashPartitioned(keys) => {
+            crate::query::executor::streaming::plan::properties::Distribution::HashPartitioned(
+                keys,
+            ) => {
                 if !keys.is_empty() {
                     pairs.push(Pair::new("hash_keys", keys.join(", ")));
                 }
@@ -124,7 +119,10 @@ pub fn physical_plan_to_plan_description(
             _ => {}
         }
 
-        if let crate::query::executor::streaming::plan::properties::MemoryPolicy::Spillable { threshold } = &props.memory_policy {
+        if let crate::query::executor::streaming::plan::properties::MemoryPolicy::Spillable {
+            threshold,
+        } = &props.memory_policy
+        {
             pairs.push(Pair::new("spill_threshold", format!("{}", threshold)));
         }
 
@@ -162,10 +160,7 @@ pub fn physical_plan_to_plan_description(
 }
 
 /// Return fragment IDs in topological order (sources first, root last).
-fn topological_operator_order(
-    fragments: &FragmentGraph,
-    _plan: &PhysicalPlan,
-) -> Vec<FragmentId> {
+fn topological_operator_order(fragments: &FragmentGraph, _plan: &PhysicalPlan) -> Vec<FragmentId> {
     let root = fragments.root();
     let mut order = Vec::new();
     let mut visited = HashSet::new();

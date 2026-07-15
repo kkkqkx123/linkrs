@@ -9,6 +9,11 @@
 
 use std::collections::HashMap;
 
+use super::super::operators::spec::{
+    ApplySpec, BlockingSpec, DdlSpec, ExchangeSpec, FulltextSpec, GraphSpec, JoinSpec,
+    RecursiveFragmentSpec, SetSpec, SinkSpec, SourceSpec, TxnSpec, UnarySpec, VectorSpec,
+};
+use super::super::slot::SlotLayout;
 use super::context::PhysicalPlanBuildContext;
 use super::node::PhysicalNode;
 use super::properties::{PhysicalProperties, PipelineKind};
@@ -17,11 +22,6 @@ use super::types::{
     OperatorKindSpec, OutputContract, PhysicalOperatorId, PhysicalOperatorIdAllocator,
     PhysicalOperatorSpec, PhysicalPlan, PlanCompatibility,
 };
-use super::super::operators::spec::{
-    ApplySpec, BlockingSpec, DdlSpec, ExchangeSpec, FulltextSpec, GraphSpec, JoinSpec,
-    RecursiveFragmentSpec, SetSpec, SinkSpec, SourceSpec, TxnSpec, UnarySpec, VectorSpec,
-};
-use super::super::slot::SlotLayout;
 use crate::query::executor::base::ExecutionContext;
 use crate::query::executor::build_error::PlanBuildError;
 use crate::query::executor::streaming::operator_plan_builder::build_plan_node;
@@ -78,7 +78,11 @@ impl PhysicalPlanBuilder {
         let mut frag_alloc = ArenaFragmentAllocator::new();
 
         let (root_fid, root_op_id) = Self::convert_node(
-            node, &mut operators, &mut fragments, &mut op_alloc, &mut frag_alloc,
+            node,
+            &mut operators,
+            &mut fragments,
+            &mut op_alloc,
+            &mut frag_alloc,
         )?;
 
         let output = operators
@@ -154,9 +158,8 @@ impl PhysicalPlanBuilder {
             }
 
             PhysicalNode::Unary(id, child, spec, props) => {
-                let (child_fid, _) = Self::convert_node(
-                    child, operators, fragments, op_alloc, frag_alloc,
-                )?;
+                let (child_fid, _) =
+                    Self::convert_node(child, operators, fragments, op_alloc, frag_alloc)?;
                 let op_id = op_alloc.allocate();
 
                 operators.push(PhysicalOperatorSpec {
@@ -180,9 +183,8 @@ impl PhysicalPlanBuilder {
             }
 
             PhysicalNode::Blocking(id, child, spec, props) => {
-                let (child_fid, _) = Self::convert_node(
-                    child, operators, fragments, op_alloc, frag_alloc,
-                )?;
+                let (child_fid, _) =
+                    Self::convert_node(child, operators, fragments, op_alloc, frag_alloc)?;
                 let op_id = op_alloc.allocate();
 
                 operators.push(PhysicalOperatorSpec {
@@ -206,12 +208,10 @@ impl PhysicalPlanBuilder {
             }
 
             PhysicalNode::Join(id, left, right, spec, props) => {
-                let (left_fid, _) = Self::convert_node(
-                    left, operators, fragments, op_alloc, frag_alloc,
-                )?;
-                let (right_fid, _) = Self::convert_node(
-                    right, operators, fragments, op_alloc, frag_alloc,
-                )?;
+                let (left_fid, _) =
+                    Self::convert_node(left, operators, fragments, op_alloc, frag_alloc)?;
+                let (right_fid, _) =
+                    Self::convert_node(right, operators, fragments, op_alloc, frag_alloc)?;
                 let op_id = op_alloc.allocate();
                 let fid = frag_alloc.allocate();
 
@@ -240,9 +240,8 @@ impl PhysicalPlanBuilder {
             }
 
             PhysicalNode::Graph(id, child, spec, props) => {
-                let (child_fid, _) = Self::convert_node(
-                    child, operators, fragments, op_alloc, frag_alloc,
-                )?;
+                let (child_fid, _) =
+                    Self::convert_node(child, operators, fragments, op_alloc, frag_alloc)?;
                 let op_id = op_alloc.allocate();
                 let fid = frag_alloc.allocate();
 
@@ -271,9 +270,8 @@ impl PhysicalPlanBuilder {
             }
 
             PhysicalNode::RecursiveFragment(id, child, spec, props) => {
-                let (child_fid, _) = Self::convert_node(
-                    child, operators, fragments, op_alloc, frag_alloc,
-                )?;
+                let (child_fid, _) =
+                    Self::convert_node(child, operators, fragments, op_alloc, frag_alloc)?;
                 let op_id = op_alloc.allocate();
                 let fid = frag_alloc.allocate();
 
@@ -302,9 +300,8 @@ impl PhysicalPlanBuilder {
             }
 
             PhysicalNode::Sink(id, child, spec, props) => {
-                let (child_fid, _) = Self::convert_node(
-                    child, operators, fragments, op_alloc, frag_alloc,
-                )?;
+                let (child_fid, _) =
+                    Self::convert_node(child, operators, fragments, op_alloc, frag_alloc)?;
                 let op_id = op_alloc.allocate();
                 let fid = frag_alloc.allocate();
 
@@ -333,12 +330,10 @@ impl PhysicalPlanBuilder {
             }
 
             PhysicalNode::Set(id, left, right, spec, props) => {
-                let (left_fid, _) = Self::convert_node(
-                    left, operators, fragments, op_alloc, frag_alloc,
-                )?;
-                let (right_fid, _) = Self::convert_node(
-                    right, operators, fragments, op_alloc, frag_alloc,
-                )?;
+                let (left_fid, _) =
+                    Self::convert_node(left, operators, fragments, op_alloc, frag_alloc)?;
+                let (right_fid, _) =
+                    Self::convert_node(right, operators, fragments, op_alloc, frag_alloc)?;
                 let op_id = op_alloc.allocate();
                 let fid = frag_alloc.allocate();
 
@@ -367,12 +362,10 @@ impl PhysicalPlanBuilder {
             }
 
             PhysicalNode::Apply(id, left, right, spec, props) => {
-                let (left_fid, _) = Self::convert_node(
-                    left, operators, fragments, op_alloc, frag_alloc,
-                )?;
-                let (right_fid, _) = Self::convert_node(
-                    right, operators, fragments, op_alloc, frag_alloc,
-                )?;
+                let (left_fid, _) =
+                    Self::convert_node(left, operators, fragments, op_alloc, frag_alloc)?;
+                let (right_fid, _) =
+                    Self::convert_node(right, operators, fragments, op_alloc, frag_alloc)?;
                 let op_id = op_alloc.allocate();
                 let fid = frag_alloc.allocate();
 
@@ -403,9 +396,8 @@ impl PhysicalPlanBuilder {
             PhysicalNode::Exchange(id, children, spec, props) => {
                 let mut child_fids = Vec::new();
                 for child in children {
-                    let (fid, _) = Self::convert_node(
-                        child, operators, fragments, op_alloc, frag_alloc,
-                    )?;
+                    let (fid, _) =
+                        Self::convert_node(child, operators, fragments, op_alloc, frag_alloc)?;
                     child_fids.push(fid);
                 }
                 let op_id = op_alloc.allocate();
@@ -436,9 +428,8 @@ impl PhysicalPlanBuilder {
             }
 
             PhysicalNode::Ddl(id, child, spec, props) => {
-                let (child_fid, _) = Self::convert_node(
-                    child, operators, fragments, op_alloc, frag_alloc,
-                )?;
+                let (child_fid, _) =
+                    Self::convert_node(child, operators, fragments, op_alloc, frag_alloc)?;
                 let op_id = op_alloc.allocate();
                 let fid = frag_alloc.allocate();
 
@@ -467,9 +458,8 @@ impl PhysicalPlanBuilder {
             }
 
             PhysicalNode::Fulltext(id, child, spec, props) => {
-                let (child_fid, _) = Self::convert_node(
-                    child, operators, fragments, op_alloc, frag_alloc,
-                )?;
+                let (child_fid, _) =
+                    Self::convert_node(child, operators, fragments, op_alloc, frag_alloc)?;
                 let op_id = op_alloc.allocate();
                 let fid = frag_alloc.allocate();
 
@@ -498,9 +488,8 @@ impl PhysicalPlanBuilder {
             }
 
             PhysicalNode::Vector(id, child, spec, props) => {
-                let (child_fid, _) = Self::convert_node(
-                    child, operators, fragments, op_alloc, frag_alloc,
-                )?;
+                let (child_fid, _) =
+                    Self::convert_node(child, operators, fragments, op_alloc, frag_alloc)?;
                 let op_id = op_alloc.allocate();
                 let fid = frag_alloc.allocate();
 
@@ -529,9 +518,8 @@ impl PhysicalPlanBuilder {
             }
 
             PhysicalNode::Txn(id, child, spec, props) => {
-                let (child_fid, _) = Self::convert_node(
-                    child, operators, fragments, op_alloc, frag_alloc,
-                )?;
+                let (child_fid, _) =
+                    Self::convert_node(child, operators, fragments, op_alloc, frag_alloc)?;
                 let op_id = op_alloc.allocate();
                 let fid = frag_alloc.allocate();
 
@@ -774,10 +762,10 @@ fn fragment_kind_for_spec(_spec: &SourceSpec, props: &PhysicalProperties) -> Fra
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::query::executor::base::ExecutionContext;
     use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+    use std::sync::Arc;
 
     fn test_context() -> ExecutionContext {
         ExecutionContext::new(Arc::new(ExpressionAnalysisContext::new()))
@@ -812,10 +800,12 @@ mod tests {
 
     #[test]
     fn test_build_then_materialize_start() {
-        use std::sync::Arc;
-        use crate::query::executor::streaming::instance::{QueryBindings, QueryExecutionInstance, ResultSink};
         use crate::query::executor::base::MemoryBudget;
+        use crate::query::executor::streaming::instance::{
+            QueryBindings, QueryExecutionInstance, ResultSink,
+        };
         use crate::query::executor::streaming::transaction_scope::TransactionScope;
+        use std::sync::Arc;
 
         let start = StartNode::new();
         let node = PlanNodeEnum::Start(start);
@@ -848,12 +838,8 @@ mod tests {
             vector_coordinator: None,
         };
 
-        let result = QueryExecutionInstance::instantiate_plan(
-            plan_arc,
-            bindings,
-            ResultSink::Discard,
-            None,
-        );
+        let result =
+            QueryExecutionInstance::instantiate_plan(plan_arc, bindings, ResultSink::Discard, None);
         assert!(result.is_ok());
     }
 }

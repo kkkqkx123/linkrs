@@ -126,9 +126,9 @@ mod tests {
     }
 
     fn create_test_expression() -> crate::core::types::ContextualExpression {
+        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
         use crate::core::types::expr::ExpressionMeta;
         use crate::core::Expression;
-        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
         let ctx = Arc::new(ExpressionAnalysisContext::new());
         let expr_meta = ExpressionMeta::new(Expression::Variable("condition".to_string()));

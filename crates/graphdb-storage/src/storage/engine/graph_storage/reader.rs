@@ -1,12 +1,15 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::core::types::VertexId;
 use crate::core::types::{EdgeTypeInfo, LabelId, TagInfo};
 use crate::core::vertex_edge_path::Tag;
 use crate::core::{Edge, EdgeDirection, StorageError, StorageResult, Value, Vertex};
+use crate::storage::cursor::EdgeCursor;
 use crate::storage::engine::params::EdgeOperationParams;
 
 use super::context::GraphStorageContext;
+use super::cursor_impl::GraphEdgeCursor;
 use super::ops::{
     edge_record_to_edge, endpoint_label_id, serialize_properties, value_to_string,
     vertex_record_to_vertex,
@@ -390,7 +393,7 @@ pub(crate) fn scan_edges_by_type(
     // different tables whose internal IDs may collide, so we fall back to
     // get_external_id_any for those (best-effort).
     if src_label_id == 0 && dst_label_id == 0 {
-        let edge_tables = ctx.data_store().edge_tables().read();
+        let edge_tables = ctx.data_store().read_edge_tables();
         for table in edge_tables.values().filter(|t| t.label() == edge_label_id) {
             let tbl_src = table.src_label();
             let tbl_dst = table.dst_label();
@@ -465,113 +468,29 @@ pub(crate) fn scan_edges_by_type_paginated(
     offset: usize,
     limit: usize,
 ) -> StorageResult<Vec<Edge>> {
-    let edge_info = ctx
-        .schema_manager()
-        .get_edge_type(space, edge_type)?
-        .ok_or_else(|| {
-            StorageError::not_found(format!(
-                "Edge type {} not found in space {}",
-                edge_type, space
-            ))
-        })?;
-
-    let ts = ctx.get_read_timestamp();
-    let mut edges = Vec::new();
-
-    let edge_label_id = edge_info.edge_type_id;
-
-    let src_label_id: LabelId = match endpoint_label_id(ctx, space, &edge_info.src_tag_name)? {
-        Some(id) => id,
-        None => return Ok(edges),
-    };
-    let dst_label_id: LabelId = match endpoint_label_id(ctx, space, &edge_info.dst_tag_name)? {
-        Some(id) => id,
-        None => return Ok(edges),
-    };
-
-    let endpoint_to_edge = |ctx: &GraphStorageContext,
-                            record: crate::storage::edge::EdgeRecord,
-                            tbl_src: u32,
-                            tbl_dst: u32,
-                            edge_type: &str,
-                            edges: &mut Vec<Edge>| {
-        let src_internal = record.src_vid.as_int64().unwrap_or(0) as u32;
-        let dst_internal = record.dst_vid.as_int64().unwrap_or(0) as u32;
-
-        let src_external = if tbl_src != 0 {
-            ctx.get_external_id(tbl_src, src_internal, ts)
-                .or_else(|| {
-                    ctx.get_external_id_by_internal_id(tbl_src, src_internal)
-                        .map(|v| vid_to_string(&v))
-                })
-                .unwrap_or_else(|| format!("{}", record.src_vid))
-        } else {
-            ctx.get_external_id_any(src_internal, ts)
-                .unwrap_or_else(|| format!("{}", record.src_vid))
-        };
-
-        let dst_external = if tbl_dst != 0 {
-            ctx.get_external_id(tbl_dst, dst_internal, ts)
-                .or_else(|| {
-                    ctx.get_external_id_by_internal_id(tbl_dst, dst_internal)
-                        .map(|v| vid_to_string(&v))
-                })
-                .unwrap_or_else(|| format!("{}", record.dst_vid))
-        } else {
-            ctx.get_external_id_any(dst_internal, ts)
-                .unwrap_or_else(|| format!("{}", record.dst_vid))
-        };
-
-        let edge = edge_record_to_edge(&record, edge_type, &src_external, &dst_external);
-        edges.push(edge);
-    };
-
-    if src_label_id == 0 && dst_label_id == 0 {
-        let edge_tables = ctx.data_store().edge_tables().read();
-        for table in edge_tables.values().filter(|t| t.label() == edge_label_id) {
-            let tbl_src = table.src_label();
-            let tbl_dst = table.dst_label();
-            let (page, has_more) = table.scan_paginated(ts, offset, limit);
-            for record in page {
-                endpoint_to_edge(ctx, record, tbl_src, tbl_dst, edge_type, &mut edges);
-            }
-            if !has_more || edges.len() >= offset + limit {
-                break;
-            }
-        }
-        return Ok(truncate_to_page(edges, offset, limit));
+    if limit == 0 {
+        return Ok(Vec::new());
     }
-
-    let edge_tables = ctx.data_store().edge_tables().read();
-    for table in edge_tables.values().filter(|t| {
-        t.src_label() == src_label_id && t.dst_label() == dst_label_id && t.label() == edge_label_id
-    }) {
-        let mut iter = table.scan_paginated_iter(ts, offset, limit);
-        for record in iter.by_ref() {
-            endpoint_to_edge(
-                ctx,
-                record,
-                src_label_id,
-                dst_label_id,
-                edge_type,
-                &mut edges,
-            );
+    let mut cursor = GraphEdgeCursor::new(
+        Arc::new(ctx.clone()),
+        space,
+        &crate::storage::cursor::ScanOptions {
+            edge_type: Some(edge_type.to_string()),
+            offset,
+            limit: Some(limit),
+            ..Default::default()
+        },
+    )?;
+    let mut edges = Vec::with_capacity(limit);
+    while edges.len() < limit {
+        let batch = cursor.next_batch((limit - edges.len()).min(1024))?;
+        if batch.is_empty() {
+            break;
         }
-        if iter.has_more() && edges.len() < offset + limit {
-            log::debug!("scan_edges_by_type_paginated: more records available beyond page");
-        }
+        edges.extend(batch);
     }
-
-    Ok(truncate_to_page(edges, offset, limit))
-}
-
-/// Truncate a collection to return only the requested page.
-fn truncate_to_page<T>(items: Vec<T>, offset: usize, limit: usize) -> Vec<T> {
-    if offset == 0 {
-        items.into_iter().take(limit).collect()
-    } else {
-        items.into_iter().skip(offset).take(limit).collect()
-    }
+    edges.truncate(limit);
+    Ok(edges)
 }
 
 pub(crate) fn count_vertices_by_tag(
@@ -583,7 +502,7 @@ pub(crate) fn count_vertices_by_tag(
         StorageError::not_found(format!("Tag {} not found in space {}", tag, space))
     })?;
 
-    let vertex_tables = ctx.data_store().vertex_tables().read();
+    let vertex_tables = ctx.data_store().read_vertex_tables();
     let count = vertex_tables
         .get(&tag_info.tag_id)
         .map(|t| t.total_count() as u64)
@@ -618,7 +537,7 @@ pub(crate) fn count_edges_by_type(
     };
 
     if src_label_id == 0 && dst_label_id == 0 {
-        let edge_tables = ctx.data_store().edge_tables().read();
+        let edge_tables = ctx.data_store().read_edge_tables();
         let count: u64 = edge_tables
             .values()
             .filter(|t| t.label() == edge_label_id)
@@ -632,7 +551,7 @@ pub(crate) fn count_edges_by_type(
         dst_label_id,
         edge_label_id,
     );
-    let edge_tables = ctx.data_store().edge_tables().read();
+    let edge_tables = ctx.data_store().read_edge_tables();
     let count = edge_tables.get(&key).map(|t| t.edge_count()).unwrap_or(0);
     Ok(count)
 }

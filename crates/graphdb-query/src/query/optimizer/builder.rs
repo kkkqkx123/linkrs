@@ -5,11 +5,11 @@
 
 use std::sync::Arc;
 
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::query::optimizer::OptimizerEngine;
 use crate::query::optimizer::{
     CostModelConfig, CteCacheManager, SelectivityFeedbackManager, StatisticsManager,
 };
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
 /// Builder for creating OptimizerEngine instances
 pub struct OptimizerEngineBuilder {

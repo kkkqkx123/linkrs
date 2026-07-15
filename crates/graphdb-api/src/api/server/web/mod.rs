@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use crate::api::server::http::state::AppState;
 use crate::storage::{
-    StorageClient, StorageSchemaContextOps, StorageSyncContextOps, StorageTransactionContextOps,
+    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 
 use self::storage::SqliteStorage;
@@ -30,7 +30,7 @@ pub struct WebState<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync
@@ -46,7 +46,7 @@ impl<
         S: StorageClient
             + StorageSchemaContextOps
             + StorageSyncContextOps
-            + StorageTransactionContextOps
+            + StorageOperationContextOps
             + Clone
             + Send
             + Sync
@@ -68,7 +68,7 @@ pub fn create_router<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync

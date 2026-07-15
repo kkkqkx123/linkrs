@@ -1047,10 +1047,6 @@ impl TimeTravelEdgeStore {
         self.dst_label
     }
 
-    pub fn label_name(&self) -> &str {
-        &self.label_name
-    }
-
     pub fn schema(&self) -> &EdgeSchema {
         &self.schema
     }

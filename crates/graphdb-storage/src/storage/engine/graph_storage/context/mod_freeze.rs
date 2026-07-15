@@ -27,7 +27,7 @@ impl GraphStorageContext {
             .map(|m| FreezeGuard::new(m.clone()));
 
         {
-            let mut edge_tables = self.persistent.data_store.edge_tables().write();
+            let mut edge_tables = self.persistent.data_store.write_edge_tables();
             for table in edge_tables.values_mut() {
                 let delta_edges = table.delta_edge_count();
                 let delta_memory = table.used_memory_size() as u64;

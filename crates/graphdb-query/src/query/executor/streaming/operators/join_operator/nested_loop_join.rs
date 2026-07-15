@@ -49,13 +49,9 @@ pub(super) fn next_nested_loop_join(
                 let condition_satisfied = if let Some(condition) = join_condition {
                     let mut combined_row = left_row.clone();
                     combined_row.extend(right_row.clone());
-                    let combined_names = build_combined_names(
-                        &left_col_names,
-                        right_col_names,
-                        right_row.len(),
-                    );
-                    let mut context =
-                        ValueRowContext::from_names(combined_row, combined_names);
+                    let combined_names =
+                        build_combined_names(&left_col_names, right_col_names, right_row.len());
+                    let mut context = ValueRowContext::from_names(combined_row, combined_names);
                     match ExpressionEvaluator::evaluate(condition, &mut context) {
                         Ok(value) => match value {
                             Value::Bool(b) => b,
@@ -105,7 +101,13 @@ pub(super) fn close(
     left: &mut StreamingExecutor,
     right: &mut StreamingExecutor,
 ) -> Result<(), QueryError> {
-    close_common(lifecycle, memory_tracker, || {
-        build_side_tuples.clear();
-    }, left, right)
+    close_common(
+        lifecycle,
+        memory_tracker,
+        || {
+            build_side_tuples.clear();
+        },
+        left,
+        right,
+    )
 }

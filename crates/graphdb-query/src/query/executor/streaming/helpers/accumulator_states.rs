@@ -162,8 +162,6 @@ fn numeric_value(value: &Value) -> Option<f64> {
     }
 }
 
-
-
 /// Serialize an accumulator state into a Value for inter-operator transfer.
 /// The partial aggregate output stores accumulator states as Value rows
 /// where each accumulator is encoded as a list [type_tag, ...fields].

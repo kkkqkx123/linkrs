@@ -31,7 +31,7 @@ impl GraphStorageContext {
         fs::create_dir_all(&vertex_dir)?;
 
         {
-            let vertex_tables = self.persistent.data_store.vertex_tables().read();
+            let vertex_tables = self.persistent.data_store.read_vertex_tables();
             for (label_id, table) in &*vertex_tables {
                 let table_dir = vertex_dir.join(format!("label_{}", label_id));
                 table.flush(&table_dir, compression)?;
@@ -43,7 +43,7 @@ impl GraphStorageContext {
 
         {
             let ts = self.get_read_timestamp();
-            let mut edge_tables = self.persistent.data_store.edge_tables().write();
+            let mut edge_tables = self.persistent.data_store.write_edge_tables();
             for (
                 EdgeTableKey {
                     src_label,
@@ -84,7 +84,7 @@ impl GraphStorageContext {
 
         let vertex_dir = checkpoint_paths.vertices_dir();
         if vertex_dir.exists() {
-            let mut vertex_tables = self.persistent.data_store.vertex_tables().write();
+            let mut vertex_tables = self.persistent.data_store.write_vertex_tables();
             for entry in fs::read_dir(&vertex_dir)? {
                 let entry = entry?;
                 let path = entry.path();
@@ -106,7 +106,7 @@ impl GraphStorageContext {
 
         let edge_dir = checkpoint_paths.edges_dir();
         if edge_dir.exists() {
-            let mut edge_tables = self.persistent.data_store.edge_tables().write();
+            let mut edge_tables = self.persistent.data_store.write_edge_tables();
             for entry in fs::read_dir(&edge_dir)? {
                 let entry = entry?;
                 let path = entry.path();

@@ -3,7 +3,6 @@
 //! Tests the workflow: StreamingExecutor construction → execution call chain
 //! Focus: verify call chain integrity and executor lifecycle
 
-use graphdb::query::executor::streaming::operators::base::OperatorBase;
 use graphdb::core::error::QueryError;
 use graphdb::core::types::expr::Expression;
 use graphdb::core::types::operators::AggregateFunction;
@@ -11,6 +10,7 @@ use graphdb::core::Value;
 use graphdb::query::executor::base::{MemoryBudget, MemoryTracker};
 use graphdb::query::executor::streaming::executor::SortDirection;
 use graphdb::query::executor::streaming::executor::StreamingExecutor;
+use graphdb::query::executor::streaming::operators::base::OperatorBase;
 use graphdb::query::executor::streaming::operators::blocking_operator::BlockingOperator;
 use graphdb::query::executor::streaming::operators::join_operator::JoinOperator;
 use graphdb::query::executor::streaming::operators::set_operator::SetOperator;
@@ -28,22 +28,22 @@ fn create_scan_executor(rows: usize) -> StreamingExecutor {
 
     StreamingExecutor::Source(
         OperatorBase::new(0),
-            SourceOperator::ScanVertices {
-                buffer,
-                current_index: 0,
-                col_names: vec![],
-            },
+        SourceOperator::ScanVertices {
+            buffer,
+            current_index: 0,
+            col_names: vec![],
+        },
     )
 }
 
 fn scan_vertices(data: Vec<Vec<Value>>) -> StreamingExecutor {
     StreamingExecutor::Source(
         OperatorBase::new(0),
-            SourceOperator::ScanVertices {
-                buffer: data,
-                current_index: 0,
-                col_names: vec![],
-            },
+        SourceOperator::ScanVertices {
+            buffer: data,
+            current_index: 0,
+            col_names: vec![],
+        },
     )
 }
 
@@ -78,11 +78,11 @@ fn test_scan_edges_lifecycle() {
     ];
     let mut executor = StreamingExecutor::Source(
         OperatorBase::new(0),
-            SourceOperator::ScanEdges {
-                buffer,
-                current_index: 0,
-                col_names: vec![],
-            },
+        SourceOperator::ScanEdges {
+            buffer,
+            current_index: 0,
+            col_names: vec![],
+        },
     );
     assert!(verify_executor_lifecycle(&mut executor).is_ok());
 }

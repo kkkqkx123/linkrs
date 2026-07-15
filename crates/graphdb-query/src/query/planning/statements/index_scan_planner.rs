@@ -135,29 +135,18 @@ fn find_suitable_index(
     Ok(None)
 }
 
-fn extract_filter_conditions(
-    node: &NodePattern,
-    var_name: &str,
-) -> Vec<(String, String, String)> {
+fn extract_filter_conditions(node: &NodePattern, var_name: &str) -> Vec<(String, String, String)> {
     let mut conditions = Vec::new();
 
     if let Some(ref props) = node.properties {
         if let Some(expr_meta) = props.expression() {
-            extract_conditions_from_expression(
-                expr_meta.inner(),
-                var_name,
-                &mut conditions,
-            );
+            extract_conditions_from_expression(expr_meta.inner(), var_name, &mut conditions);
         }
     }
 
     for pred in &node.predicates {
         if let Some(expr_meta) = pred.expression() {
-            extract_conditions_from_expression(
-                expr_meta.inner(),
-                var_name,
-                &mut conditions,
-            );
+            extract_conditions_from_expression(expr_meta.inner(), var_name, &mut conditions);
         }
     }
 

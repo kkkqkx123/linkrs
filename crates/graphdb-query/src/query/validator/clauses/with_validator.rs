@@ -493,8 +493,8 @@ impl StatementValidator for WithValidator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Value;
     use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+    use crate::core::Value;
 
     #[test]
     fn test_with_validator_new() {

@@ -17,7 +17,7 @@ use crate::query::executor::streaming::StreamingQueryExecutor;
 use crate::query::parser::ast::stmt::ExplainFormat;
 use crate::query::planning::plan::explain::{DescribeVisitor, PlanDescription, ProfilingStats};
 use crate::query::planning::plan::ExecutionPlan;
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 
 use super::execution_stats_context::{ExecutionStatsContext, NodeExecutionStats};
 use super::format::{format_plan_as_dot, format_plan_with_output_table};
@@ -36,14 +36,14 @@ pub enum ExplainMode {
 /// Handles EXPLAIN and EXPLAIN ANALYZE statements.
 /// For EXPLAIN: generates plan description only.
 /// For EXPLAIN ANALYZE: executes the query and collects actual statistics.
-pub struct ExplainExecutor<S: StorageClient> {
+pub struct ExplainExecutor<S: QueryStorage> {
     base: BaseExecutor<S>,
     inner_plan: ExecutionPlan,
     format: ExplainFormat,
     mode: ExplainMode,
 }
 
-impl<S: StorageClient + Send + 'static> ExplainExecutor<S> {
+impl<S: QueryStorage + Send + 'static> ExplainExecutor<S> {
     pub fn new(
         base: BaseExecutor<S>,
         inner_plan: ExecutionPlan,
@@ -114,7 +114,7 @@ impl<S: StorageClient + Send + 'static> ExplainExecutor<S> {
 
         let mut exec_context = self.base.context.clone();
         if let Some(ref storage) = self.base.storage {
-            let dyn_storage: Arc<RwLock<dyn StorageClient>> = storage.clone();
+            let dyn_storage: Arc<RwLock<dyn QueryStorage>> = storage.clone();
             exec_context.storage = Some(dyn_storage);
         }
 
@@ -189,7 +189,7 @@ impl<S: StorageClient + Send + 'static> ExplainExecutor<S> {
     }
 }
 
-impl<S: StorageClient + Send + 'static> Executor<S> for ExplainExecutor<S> {
+impl<S: QueryStorage + Send + 'static> Executor<S> for ExplainExecutor<S> {
     fn execute(&mut self) -> ExecutorDBResult<ExecutionResult> {
         match self.mode {
             ExplainMode::PlanOnly => {

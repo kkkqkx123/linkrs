@@ -63,12 +63,13 @@ pub enum MemoryPolicy {
     #[default]
     None,
     RequiresBudget,
-    Spillable { threshold: u64 },
+    Spillable {
+        threshold: u64,
+    },
 }
 
 /// Default spill threshold for operators with full external spill support.
 pub const SPILL_DEFAULT_THRESHOLD: u64 = 64 * 1024 * 1024; // 64 MB
-
 
 /// Physical plan properties attached to each node's output.
 #[derive(Debug, Clone)]

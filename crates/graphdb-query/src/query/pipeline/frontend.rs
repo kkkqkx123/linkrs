@@ -4,10 +4,10 @@ use crate::core::MetricType;
 use crate::query::parser::Parser;
 use crate::query::validator::ValidationInfo;
 use crate::query::QueryContext;
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 use std::sync::Arc;
 
-impl<S: StorageClient + 'static> QueryPipelineManager<S> {
+impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     pub(crate) fn parse_into_context(
         &mut self,
         query_text: &str,

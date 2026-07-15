@@ -48,10 +48,10 @@ pub trait ClausePlanner: std::fmt::Debug {
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::query::parser::ast::{Ast, Span};
     use crate::query::planning::plan::core::nodes::StartNode;
     use crate::query::planning::plan::core::PlanNodeEnum;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::query::validator::ValidatedStatement;
     use crate::query::QueryRequestContext;
     use std::collections::HashMap;

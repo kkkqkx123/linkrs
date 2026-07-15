@@ -10,7 +10,7 @@ use crate::api::server::session::GraphSessionManager;
 use crate::config::Config;
 use crate::query::executor::expression::functions::FunctionRegistry;
 use crate::storage::{
-    StorageClient, StorageSchemaContextOps, StorageSyncContextOps, StorageTransactionContextOps,
+    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
 use crate::transaction::TransactionManager;
 use parking_lot::RwLock;
@@ -24,7 +24,7 @@ pub struct HttpServer<
     S: StorageClient
         + StorageSchemaContextOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + 'static,
 > {
@@ -44,7 +44,7 @@ impl<
         S: StorageClient
             + StorageSchemaContextOps
             + StorageSyncContextOps
-            + StorageTransactionContextOps
+            + StorageOperationContextOps
             + Clone
             + 'static,
     > HttpServer<S>

@@ -77,11 +77,17 @@ pub enum TransactionScope {
 
 impl TransactionScope {
     pub fn explicit(transaction_id: TransactionId, read_write: bool) -> Self {
-        Self::ExplicitBorrowed { transaction_id, read_write }
+        Self::ExplicitBorrowed {
+            transaction_id,
+            read_write,
+        }
     }
 
     pub fn auto_commit(transaction_id: TransactionId) -> Self {
-        Self::AutoCommitOwned { transaction_id, rollback_only: false }
+        Self::AutoCommitOwned {
+            transaction_id,
+            rollback_only: false,
+        }
     }
 
     pub fn read_only(transaction_id: TransactionId) -> Self {
@@ -136,14 +142,24 @@ impl TransactionScope {
 
     /// Mark the transaction as rollback-only (auto-commit variants).
     pub fn mark_rollback_only(&mut self) {
-        if let Self::AutoCommitOwned { ref mut rollback_only, .. } = self {
+        if let Self::AutoCommitOwned {
+            ref mut rollback_only,
+            ..
+        } = self
+        {
             *rollback_only = true;
         }
     }
 
     /// Whether the auto-commit transaction has been marked rollback-only.
     pub fn is_rollback_only(&self) -> bool {
-        matches!(self, Self::AutoCommitOwned { rollback_only: true, .. })
+        matches!(
+            self,
+            Self::AutoCommitOwned {
+                rollback_only: true,
+                ..
+            }
+        )
     }
 }
 
@@ -266,12 +282,17 @@ impl SessionTransactionController {
     ///
     /// The caller should have already created the transaction on the
     /// `TransactionManager` before calling this method.
-    pub fn begin_tracking(&self, transaction_id: TransactionId, read_write: bool) -> Result<(), QueryError> {
+    pub fn begin_tracking(
+        &self,
+        transaction_id: TransactionId,
+        read_write: bool,
+    ) -> Result<(), QueryError> {
         let mut state = self.state.write();
         if !state.state.can_begin() {
-            return Err(QueryError::execution(
-                format!("Cannot BEGIN in state {:?}", state.state),
-            ));
+            return Err(QueryError::execution(format!(
+                "Cannot BEGIN in state {:?}",
+                state.state
+            )));
         }
         state.active_transaction = Some(transaction_id);
         state.read_write = read_write;
@@ -288,13 +309,14 @@ impl SessionTransactionController {
     pub fn begin_commit(&self) -> Result<TransactionId, QueryError> {
         let mut state = self.state.write();
         if !state.state.can_commit() {
-            return Err(QueryError::execution(
-                format!("Cannot COMMIT in state {:?}", state.state),
-            ));
+            return Err(QueryError::execution(format!(
+                "Cannot COMMIT in state {:?}",
+                state.state
+            )));
         }
-        let txn_id = state.active_transaction.ok_or_else(|| {
-            QueryError::execution("No active transaction to commit".to_string())
-        })?;
+        let txn_id = state
+            .active_transaction
+            .ok_or_else(|| QueryError::execution("No active transaction to commit".to_string()))?;
         state.state = TransactionState::Committing;
         Ok(txn_id)
     }
@@ -318,9 +340,10 @@ impl SessionTransactionController {
     pub fn begin_rollback(&self) -> Result<TransactionId, QueryError> {
         let mut state = self.state.write();
         if !state.state.can_rollback() {
-            return Err(QueryError::execution(
-                format!("Cannot ROLLBACK in state {:?}", state.state),
-            ));
+            return Err(QueryError::execution(format!(
+                "Cannot ROLLBACK in state {:?}",
+                state.state
+            )));
         }
         let txn_id = state.active_transaction.ok_or_else(|| {
             QueryError::execution("No active transaction to roll back".to_string())

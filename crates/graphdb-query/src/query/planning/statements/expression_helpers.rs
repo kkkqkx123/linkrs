@@ -21,22 +21,14 @@ pub fn build_label_filter_expression(
         Expression::function("contains", vec![labels_func, label_literal])
     } else {
         let first_label = Expression::literal(labels[0].clone());
-        let first_condition = Expression::function(
-            "contains",
-            vec![labels_func.clone(), first_label],
-        );
+        let first_condition =
+            Expression::function("contains", vec![labels_func.clone(), first_label]);
 
         labels.iter().skip(1).fold(first_condition, |acc, label| {
             let label_literal = Expression::literal(label.clone());
-            let condition = Expression::function(
-                "contains",
-                vec![labels_func.clone(), label_literal],
-            );
-            Expression::binary(
-                acc,
-                BinaryOperator::And,
-                condition,
-            )
+            let condition =
+                Expression::function("contains", vec![labels_func.clone(), label_literal]);
+            Expression::binary(acc, BinaryOperator::And, condition)
         })
     };
 
@@ -67,9 +59,9 @@ pub fn convert_properties_to_filter(
             })
             .collect();
 
-        let combined = conditions.into_iter().reduce(|acc, cond| {
-            Expression::binary(acc, BinaryOperator::And, cond)
-        })?;
+        let combined = conditions
+            .into_iter()
+            .reduce(|acc, cond| Expression::binary(acc, BinaryOperator::And, cond))?;
 
         let expr_meta = crate::core::types::expr::ExpressionMeta::new(combined);
         let id = expr_context.register_expression(expr_meta);

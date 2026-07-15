@@ -9,10 +9,10 @@ use crate::core::Value;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::planning::plan::core::nodes::management::manage_node_enums::UserManageNode;
-use crate::storage::{StorageAuthOps, StorageClient};
+use crate::storage::{QueryStorage, StorageAuthOps};
 
 pub(super) fn execute_user_manage(
-    storage: &Option<Arc<RwLock<dyn StorageClient>>>,
+    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     command: &UserManageNode,
     emitted: &mut bool,
     base: &mut OperatorBase,
@@ -36,8 +36,7 @@ pub(super) fn execute_user_manage(
         }),
         UserManageNode::Drop(_) => super::exec_auth(storage, |s| {
             let name = username.as_deref().unwrap_or("");
-            StorageAuthOps::drop_user(s, name)
-                .map_err(|e| QueryError::execution(e.to_string()))?;
+            StorageAuthOps::drop_user(s, name).map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
         UserManageNode::Alter(_) => super::exec_auth(storage, |s| {
@@ -88,11 +87,9 @@ pub(super) fn execute_user_manage(
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        UserManageNode::ShowRoles(_) | UserManageNode::ShowUsers(_) => {
-            Err(QueryError::execution(
-                "User listing is not exposed by StorageAuthOps".to_string(),
-            ))
-        }
+        UserManageNode::ShowRoles(_) | UserManageNode::ShowUsers(_) => Err(QueryError::execution(
+            "User listing is not exposed by StorageAuthOps".to_string(),
+        )),
     };
     base.lifecycle.mark_closed();
     result

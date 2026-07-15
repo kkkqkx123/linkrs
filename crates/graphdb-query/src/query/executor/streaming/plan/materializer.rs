@@ -14,12 +14,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::types::{
-    FragmentGraph, FragmentId, FragmentSpec, OperatorKindSpec, PhysicalPlan,
-};
 use super::super::executor::StreamingExecutor;
-use super::super::operators::base::OperatorBase;
 use super::super::operators::apply_operator::ApplyOperator;
+use super::super::operators::base::OperatorBase;
 use super::super::operators::blocking::BlockingOperator;
 use super::super::operators::ddl_operator::DdlOperator;
 use super::super::operators::exchange_operator::ExchangeOperator;
@@ -34,6 +31,7 @@ use super::super::operators::txn_operator::TxnOperator;
 use super::super::operators::unary_operator::UnaryOperator;
 use super::super::operators::vector_operator::VectorOperator;
 use super::super::runtime::ExecutionRuntime;
+use super::types::{FragmentGraph, FragmentId, FragmentSpec, OperatorKindSpec, PhysicalPlan};
 use crate::core::error::QueryError;
 
 use super::super::instance::QueryBindings;
@@ -76,9 +74,10 @@ impl PhysicalPlanMaterializer {
         let mut fragment_roots: HashMap<FragmentId, StreamingExecutor> = HashMap::new();
 
         for &fid in &topo_order {
-            let fragment = plan.fragments.get(fid).ok_or_else(|| {
-                QueryError::execution(format!("Fragment {:?} not found", fid))
-            })?;
+            let fragment = plan
+                .fragments
+                .get(fid)
+                .ok_or_else(|| QueryError::execution(format!("Fragment {:?} not found", fid)))?;
 
             let executor = Self::build_fragment_pipeline(
                 fragment,
@@ -136,10 +135,7 @@ impl PhysicalPlanMaterializer {
         // ── Process operators leaf → root ──
         for &op_id in &fragment.operators {
             let op_spec = plan.operator(op_id).ok_or_else(|| {
-                QueryError::execution(format!(
-                    "Operator {:?} not found in plan arena",
-                    op_id
-                ))
+                QueryError::execution(format!("Operator {:?} not found in plan arena", op_id))
             })?;
 
             let base = OperatorBase::new(op_spec.operator_id.0 as i64);
@@ -169,24 +165,15 @@ impl PhysicalPlanMaterializer {
                 OperatorKindSpec::Graph(graph_spec) => {
                     let child = pop_stack_or_err(&mut stack)?;
                     let storage = runtime.storage.clone();
-                    let space_name = runtime
-                        .query_id()
-                        .space_name
-                        .clone()
-                        .unwrap_or_default();
+                    let space_name = runtime.query_id().space_name.clone().unwrap_or_default();
                     let op = GraphOperator::from_spec(graph_spec, storage, space_name);
                     StreamingExecutor::Graph(base, Box::new(child), op)
                 }
                 OperatorKindSpec::RecursiveFragment(rf_spec) => {
                     let child = pop_stack_or_err(&mut stack)?;
                     let storage = runtime.storage.clone();
-                    let space_name = runtime
-                        .query_id()
-                        .space_name
-                        .clone()
-                        .unwrap_or_default();
-                    let op =
-                        RecursiveFragmentOperator::from_spec(rf_spec, storage, space_name);
+                    let space_name = runtime.query_id().space_name.clone().unwrap_or_default();
+                    let op = RecursiveFragmentOperator::from_spec(rf_spec, storage, space_name);
                     StreamingExecutor::RecursiveFragment(base, Box::new(child), op)
                 }
                 OperatorKindSpec::Sink(sink_spec) => {
@@ -471,8 +458,6 @@ impl PhysicalPlanMaterializer {
 
 fn pop_stack_or_err(stack: &mut Vec<StreamingExecutor>) -> Result<StreamingExecutor, QueryError> {
     stack.pop().ok_or_else(|| {
-        QueryError::execution(
-            "Operator requires child but stack is empty".to_string(),
-        )
+        QueryError::execution("Operator requires child but stack is empty".to_string())
     })
 }

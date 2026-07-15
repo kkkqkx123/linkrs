@@ -226,4 +226,3 @@ fn extract_projected_properties(col_names: &[String]) -> Vec<String> {
         })
         .collect()
 }
-

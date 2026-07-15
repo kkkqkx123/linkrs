@@ -136,6 +136,7 @@ impl<'a> NodeEstimator for DataProcessingEstimator<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::core::types::expr::ExpressionMeta;
     use crate::core::YieldColumn;
     use crate::core::{Expression, Value};
@@ -144,7 +145,6 @@ mod tests {
     use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::*;
     use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNode;
     use crate::query::planning::plan::core::nodes::operation::project_node::ProjectNode;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use std::sync::Arc;
 
     fn create_test_expression() -> crate::core::types::ContextualExpression {

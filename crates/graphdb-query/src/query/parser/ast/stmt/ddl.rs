@@ -25,7 +25,9 @@ pub enum CreateTarget {
         properties: Option<ContextualExpression>,
         direction: EdgeDirection,
     },
-    Path { patterns: Vec<Pattern> },
+    Path {
+        patterns: Vec<Pattern>,
+    },
     Tag {
         name: String,
         properties: Vec<PropertyDef>,

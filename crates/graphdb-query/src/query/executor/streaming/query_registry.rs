@@ -96,13 +96,16 @@ impl QueryRegistry {
         let reason = Arc::new(parking_lot::Mutex::new(None));
         let token = CancelToken(reason.clone());
 
-        self.active.insert(id, QueryEntry {
-            _metadata: QueryMetadata {
-                query_id: id,
-                ..metadata
+        self.active.insert(
+            id,
+            QueryEntry {
+                _metadata: QueryMetadata {
+                    query_id: id,
+                    ..metadata
+                },
+                cancel_reason: reason,
             },
-            cancel_reason: reason,
-        });
+        );
 
         (id, token)
     }
@@ -319,10 +322,7 @@ mod tests {
         assert_eq!(reg.active_count(), 2);
 
         for id in &cancelled {
-            assert_eq!(
-                reg.cancellation_reason(*id),
-                Some(CancelReason::Shutdown)
-            );
+            assert_eq!(reg.cancellation_reason(*id), Some(CancelReason::Shutdown));
         }
     }
 

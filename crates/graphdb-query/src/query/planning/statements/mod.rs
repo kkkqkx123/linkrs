@@ -18,8 +18,8 @@ pub mod dql;
 pub mod expression_helpers;
 pub mod index_scan_planner;
 pub mod paths;
-pub mod plan_combiner;
 pub mod pattern_planner;
+pub mod plan_combiner;
 pub mod seeks;
 
 // Core traits and special planners

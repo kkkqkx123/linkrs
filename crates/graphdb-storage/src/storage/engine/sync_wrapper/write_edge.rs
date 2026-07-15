@@ -1,9 +1,9 @@
 use super::SyncWrapper;
 use crate::core::types::VertexId;
 use crate::core::{Edge, StorageError, Value};
-use crate::storage::{StorageClient, StorageTransactionContextOps};
+use crate::storage::StorageClient;
 
-impl<S: StorageClient + StorageTransactionContextOps + 'static> SyncWrapper<S> {
+impl<S: StorageClient + 'static> SyncWrapper<S> {
     pub(super) fn sync_insert_edge(
         &mut self,
         space: &str,

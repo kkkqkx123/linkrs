@@ -8,37 +8,37 @@ use crate::core::{EdgeDirection, Value};
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::operators::base::OperatorBase;
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 
-use super::spec::GraphSpec;
 use super::super::runtime::ExecutionRuntime;
+use super::spec::GraphSpec;
 use super::visited_set::VisitedSet;
 
+mod all_paths;
 mod common;
 mod expand;
-mod traverse;
 mod shortest_path;
-mod all_paths;
 mod subgraph;
+mod traverse;
 
 #[derive(Debug)]
 pub enum GraphOperator {
     Expand {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         edge_types: Vec<String>,
         direction: EdgeDirection,
         filter_expr: Option<Expression>,
     },
     ExpandAll {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         edge_types: Vec<String>,
         direction: EdgeDirection,
         filter_expr: Option<Expression>,
     },
     Traverse {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         edge_types: Vec<String>,
         direction: EdgeDirection,
@@ -48,7 +48,7 @@ pub enum GraphOperator {
         visited: VisitedSet,
     },
     TraverseAll {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         edge_types: Vec<String>,
         direction: EdgeDirection,
@@ -58,13 +58,13 @@ pub enum GraphOperator {
         visited: VisitedSet,
     },
     BiExpand {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         edge_types: Vec<String>,
         direction: EdgeDirection,
     },
     BiTraverse {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         edge_types: Vec<String>,
         direction: EdgeDirection,
@@ -73,7 +73,7 @@ pub enum GraphOperator {
         visited: VisitedSet,
     },
     ShortestPath {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         target_vertex: Option<Expression>,
         edge_types: Vec<String>,
@@ -83,7 +83,7 @@ pub enum GraphOperator {
         target_vertices: Vec<Value>,
     },
     BFSShortest {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         target_vertex: Option<Expression>,
         edge_types: Vec<String>,
@@ -94,7 +94,7 @@ pub enum GraphOperator {
         visited: VisitedSet,
     },
     AllPaths {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         target_vertex: Option<Expression>,
         edge_types: Vec<String>,
@@ -111,7 +111,7 @@ pub enum GraphOperator {
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
     },
     MultiShortestPath {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         target_vertices: Vec<Expression>,
         edge_types: Vec<String>,
@@ -124,7 +124,7 @@ pub enum GraphOperator {
         result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
     },
     Subgraph {
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         steps: u32,
         direction: EdgeDirection,
@@ -200,7 +200,7 @@ impl GraphOperator {
 
     pub fn from_spec(
         spec: &GraphSpec,
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
     ) -> Self {
         match spec {
@@ -442,13 +442,7 @@ impl GraphOperator {
                 space_name,
                 edge_types,
                 ..
-            } => traverse::handle_bi_expand(
-                &*storage,
-                &*space_name,
-                &*edge_types,
-                base,
-                input,
-            ),
+            } => traverse::handle_bi_expand(&*storage, &*space_name, &*edge_types, base, input),
 
             Self::BiTraverse {
                 storage,

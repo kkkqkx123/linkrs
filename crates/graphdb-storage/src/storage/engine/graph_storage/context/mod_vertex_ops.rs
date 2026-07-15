@@ -16,7 +16,7 @@ impl GraphStorageContext {
         if !self.persistent.is_open.load(Ordering::Acquire) {
             return Err(StorageError::storage_not_open());
         }
-        let mut vertex_tables = self.persistent.data_store.vertex_tables().write();
+        let mut vertex_tables = self.persistent.data_store.write_vertex_tables();
         let table = vertex_tables
             .get_mut(&label)
             .ok_or_else(|| StorageError::label_not_found(format!("vertex label {}", label)))?;
@@ -41,7 +41,7 @@ impl GraphStorageContext {
         if !self.persistent.is_open.load(Ordering::Acquire) {
             return Err(StorageError::storage_not_open());
         }
-        let mut vertex_tables = self.persistent.data_store.vertex_tables().write();
+        let mut vertex_tables = self.persistent.data_store.write_vertex_tables();
         let table = vertex_tables
             .get_mut(&label)
             .ok_or_else(|| StorageError::label_not_found(format!("vertex label {}", label)))?;
@@ -75,7 +75,7 @@ impl GraphStorageContext {
             .get_cached_vertex_id(label, external_id, ts)
             .or_else(|| {
                 let id = {
-                    let vertex_tables = self.persistent.data_store.vertex_tables().read();
+                    let vertex_tables = self.persistent.data_store.read_vertex_tables();
                     vertex_tables.get(&label)?.get_internal_id(external_id, ts)
                 };
                 if let Some(id) = id {
@@ -105,7 +105,7 @@ impl GraphStorageContext {
         }
 
         let record = {
-            let vertex_tables = self.persistent.data_store.vertex_tables().read();
+            let vertex_tables = self.persistent.data_store.read_vertex_tables();
             vertex_tables
                 .get(&label)?
                 .get_by_internal_id(internal_id, ts)?
@@ -139,7 +139,7 @@ impl GraphStorageContext {
             .get_cached_vertex_id(label, &external_id_str, ts)
             .or_else(|| {
                 let id = {
-                    let vertex_tables = self.persistent.data_store.vertex_tables().read();
+                    let vertex_tables = self.persistent.data_store.read_vertex_tables();
                     vertex_tables
                         .get(&label)?
                         .get_internal_id_by_i64(external_id, ts)
@@ -165,7 +165,7 @@ impl GraphStorageContext {
         }
 
         let record = {
-            let vertex_tables = self.persistent.data_store.vertex_tables().read();
+            let vertex_tables = self.persistent.data_store.read_vertex_tables();
             vertex_tables
                 .get(&label)?
                 .get_by_internal_id(internal_id, ts)?
@@ -211,14 +211,14 @@ impl GraphStorageContext {
         }
 
         let record = {
-            let vertex_tables = self.persistent.data_store.vertex_tables().read();
+            let vertex_tables = self.persistent.data_store.read_vertex_tables();
             vertex_tables
                 .get(&label)?
                 .get_by_internal_id(internal_id, ts)?
         };
 
         let external_id = {
-            let vertex_tables = self.persistent.data_store.vertex_tables().read();
+            let vertex_tables = self.persistent.data_store.read_vertex_tables();
             vertex_tables
                 .get(&label)?
                 .get_external_id(internal_id, ts)
@@ -249,7 +249,7 @@ impl GraphStorageContext {
         internal_id: u32,
         ts: Timestamp,
     ) -> Option<String> {
-        let vertex_tables = self.persistent.data_store.vertex_tables().read();
+        let vertex_tables = self.persistent.data_store.read_vertex_tables();
         vertex_tables
             .get(&label)?
             .get_external_id(internal_id, ts)
@@ -257,7 +257,7 @@ impl GraphStorageContext {
     }
 
     pub fn get_external_id_any(&self, internal_id: u32, ts: Timestamp) -> Option<String> {
-        let vertex_tables = self.persistent.data_store.vertex_tables().read();
+        let vertex_tables = self.persistent.data_store.read_vertex_tables();
         vertex_tables
             .values()
             .find_map(|t| t.get_external_id(internal_id, ts))
@@ -269,7 +269,7 @@ impl GraphStorageContext {
         label: LabelId,
         internal_id: u32,
     ) -> Option<VertexId> {
-        let vertex_tables = self.persistent.data_store.vertex_tables().read();
+        let vertex_tables = self.persistent.data_store.read_vertex_tables();
         let table = vertex_tables.get(&label)?;
         let key = table.get_external_id_raw(internal_id)?;
         Some(match key {
@@ -288,7 +288,7 @@ impl GraphStorageContext {
             return Err(StorageError::storage_not_open());
         }
 
-        let mut vertex_tables = self.persistent.data_store.vertex_tables().write();
+        let mut vertex_tables = self.persistent.data_store.write_vertex_tables();
         let table = vertex_tables
             .get_mut(&label)
             .ok_or_else(|| StorageError::label_not_found(format!("vertex label {}", label)))?;
@@ -319,7 +319,7 @@ impl GraphStorageContext {
             return Err(StorageError::storage_not_open());
         }
 
-        let mut vertex_tables = self.persistent.data_store.vertex_tables().write();
+        let mut vertex_tables = self.persistent.data_store.write_vertex_tables();
         let table = vertex_tables
             .get_mut(&label)
             .ok_or_else(|| StorageError::label_not_found(format!("vertex label {}", label)))?;
@@ -353,7 +353,7 @@ impl GraphStorageContext {
             return Err(StorageError::storage_not_open());
         }
 
-        let mut vertex_tables = self.persistent.data_store.vertex_tables().write();
+        let mut vertex_tables = self.persistent.data_store.write_vertex_tables();
         let table = vertex_tables
             .get_mut(&label)
             .ok_or_else(|| StorageError::label_not_found(format!("vertex label {}", label)))?;
@@ -384,7 +384,7 @@ impl GraphStorageContext {
             return Err(StorageError::storage_not_open());
         }
 
-        let mut vertex_tables = self.persistent.data_store.vertex_tables().write();
+        let mut vertex_tables = self.persistent.data_store.write_vertex_tables();
         let table = vertex_tables
             .get_mut(&label)
             .ok_or_else(|| StorageError::label_not_found(format!("vertex label {}", label)))?;

@@ -9,15 +9,15 @@ use parking_lot::RwLock;
 
 use super::query_registry::{CancelToken, QueryId, QueryRegistry};
 use super::slot::SlotLayout;
+use super::spill::SpillManager;
 use super::state::StateArenaSet;
 use super::transaction_scope::{CancelReason, SessionTransactionController, TransactionScope};
 use crate::core::error::QueryError;
 use crate::core::Value;
-use super::spill::SpillManager;
 use crate::query::executor::base::MemoryBudget;
 use crate::query::executor::streaming::pool::TaskScheduler;
 use crate::query::query_manager::QueryManager;
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 
 /// Query identity information
 #[derive(Debug, Clone, Default)]
@@ -239,7 +239,7 @@ pub struct ExecutionRuntime {
     /// Storage client for this query execution.
     /// Moved here from OperatorSpec so that the physical plan tree is
     /// truly immutable and cacheable without sharing storage handles.
-    pub storage: Option<Arc<RwLock<dyn StorageClient>>>,
+    pub storage: Option<Arc<RwLock<dyn QueryStorage>>>,
     #[cfg(feature = "fulltext-search")]
     pub fulltext_manager: Option<Arc<crate::search::manager::FulltextIndexManager>>,
     #[cfg(feature = "qdrant")]
@@ -265,11 +265,13 @@ impl ExecutionRuntime {
     pub fn new(
         query_id: QueryIdentity,
         memory_budget: MemoryBudget,
-        storage: Option<Arc<RwLock<dyn StorageClient>>>,
-        #[cfg(feature = "fulltext-search")]
-        fulltext_manager: Option<Arc<crate::search::manager::FulltextIndexManager>>,
-        #[cfg(feature = "qdrant")]
-        vector_coordinator: Option<Arc<crate::sync::VectorSyncCoordinator>>,
+        storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+        #[cfg(feature = "fulltext-search")] fulltext_manager: Option<
+            Arc<crate::search::manager::FulltextIndexManager>,
+        >,
+        #[cfg(feature = "qdrant")] vector_coordinator: Option<
+            Arc<crate::sync::VectorSyncCoordinator>,
+        >,
     ) -> Self {
         Self {
             query_id: parking_lot::Mutex::new(query_id),
@@ -411,7 +413,9 @@ impl ExecutionRuntime {
     /// Return an error if the query has been cancelled.
     pub fn ensure_not_cancelled(&self) -> Result<(), QueryError> {
         if self.is_cancelled() {
-            let reason = self.cancel_token_v2.reason()
+            let reason = self
+                .cancel_token_v2
+                .reason()
                 .map(|r| r.to_string())
                 .unwrap_or_else(|| "Query cancelled".to_string());
             Err(QueryError::execution(reason))

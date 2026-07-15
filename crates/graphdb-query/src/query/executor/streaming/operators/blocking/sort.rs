@@ -9,7 +9,7 @@ use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::executor::SortDirection;
 use crate::query::executor::streaming::executor::ValueRowContext;
 use crate::query::executor::streaming::helpers::compare_values;
-use crate::query::executor::streaming::spill::{RunReader, SpilledFile, SpilledRun, SpillManager};
+use crate::query::executor::streaming::spill::{RunReader, SpillManager, SpilledFile, SpilledRun};
 
 #[derive(Debug)]
 pub struct SortState {
@@ -125,11 +125,7 @@ fn estimate_run_size(buffer: &[Vec<Value>], _col_names: &[String]) -> u64 {
     let per_row_overhead: u64 = 8;
     let data_bytes: u64 = buffer
         .iter()
-        .map(|r| {
-            r.iter()
-                .map(|v| v.estimated_size() as u64 + 1)
-                .sum::<u64>()
-        })
+        .map(|r| r.iter().map(|v| v.estimated_size() as u64 + 1).sum::<u64>())
         .sum();
     40 + data_bytes + per_row_overhead * buffer.len() as u64
 }
@@ -151,8 +147,11 @@ pub(crate) fn find_min_run(
                 best_row = Some(row);
             } else if let Some(best) = best_row {
                 let cmp = compare_two_rows_for_merge(
-                    row, best, col_names,
-                    sort_expressions, sort_directions,
+                    row,
+                    best,
+                    col_names,
+                    sort_expressions,
+                    sort_directions,
                 );
                 if cmp == std::cmp::Ordering::Less {
                     best_idx = Some(i);
@@ -199,10 +198,7 @@ pub(crate) fn compare_two_rows_for_merge(
     std::cmp::Ordering::Equal
 }
 
-pub(crate) fn refill_run_buffer(
-    buf: &mut RunBuffer,
-    batch_size: usize,
-) -> Result<(), QueryError> {
+pub(crate) fn refill_run_buffer(buf: &mut RunBuffer, batch_size: usize) -> Result<(), QueryError> {
     buf.rows.clear();
     buf.index = 0;
     for _ in 0..batch_size {

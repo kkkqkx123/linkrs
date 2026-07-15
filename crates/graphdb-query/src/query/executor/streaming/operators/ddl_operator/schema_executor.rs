@@ -14,10 +14,10 @@ use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::planning::plan::core::nodes::management::manage_node_enums::{
     EdgeManageNode, IndexManageNode, SpaceManageNode, TagManageNode,
 };
-use crate::storage::{StorageClient, StorageSchemaOps};
+use crate::storage::{QueryStorage, StorageSchemaOps};
 
 pub(super) fn execute_space_manage(
-    storage: &Option<Arc<RwLock<dyn StorageClient>>>,
+    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     command: &SpaceManageNode,
     emitted: &mut bool,
     base: &mut OperatorBase,
@@ -149,9 +149,7 @@ pub(super) fn execute_space_manage(
                         ],
                     )))
                 }
-                None => {
-                    Err(QueryError::execution(format!("Space not found: {}", name)))
-                }
+                None => Err(QueryError::execution(format!("Space not found: {}", name))),
             }
         }
         SpaceManageNode::Show(_) => {
@@ -201,7 +199,7 @@ pub(super) fn execute_space_manage(
 }
 
 pub(super) fn execute_tag_manage(
-    storage: &Option<Arc<RwLock<dyn StorageClient>>>,
+    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     space_name: &str,
     command: &TagManageNode,
     emitted: &mut bool,
@@ -344,7 +342,10 @@ pub(super) fn execute_tag_manage(
                             .join(", ")
                     );
                     let schema = super::make_single_col_schema("create_tag", "string");
-                    Ok(Some(super::make_single_row(schema, vec![Value::String(ddl)])))
+                    Ok(Some(super::make_single_row(
+                        schema,
+                        vec![Value::String(ddl)],
+                    )))
                 }
                 None => Ok(Some(super::make_manage_result(
                     "show_create_tag",
@@ -359,7 +360,7 @@ pub(super) fn execute_tag_manage(
 }
 
 pub(super) fn execute_edge_manage(
-    storage: &Option<Arc<RwLock<dyn StorageClient>>>,
+    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     space_name: &str,
     command: &EdgeManageNode,
     emitted: &mut bool,
@@ -499,7 +500,7 @@ pub(super) fn execute_edge_manage(
 }
 
 pub(super) fn execute_index_manage(
-    storage: &Option<Arc<RwLock<dyn StorageClient>>>,
+    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     space_name: &str,
     command: &IndexManageNode,
     emitted: &mut bool,
@@ -656,7 +657,7 @@ pub(super) fn execute_index_manage(
 }
 
 pub(super) fn execute_delete_index(
-    storage: &Option<Arc<RwLock<dyn StorageClient>>>,
+    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     space_name: &str,
     index_name: &str,
     emitted: &mut bool,

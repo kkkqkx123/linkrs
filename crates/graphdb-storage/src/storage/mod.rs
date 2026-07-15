@@ -14,24 +14,24 @@ pub(crate) mod edge;
 pub(crate) mod encoding;
 pub(crate) mod engine;
 pub(crate) mod index;
-pub mod mvcc;
+pub(crate) mod mvcc;
 pub(crate) mod naming;
 pub(crate) mod schema;
-pub mod sync;
+pub(crate) mod sync;
 
 mod metrics;
 pub(crate) mod persistence;
 pub(crate) mod types;
-pub mod vertex;
+pub(crate) mod vertex;
 
 #[cfg(any(test, feature = "test-support"))]
 mod test_mock;
 
 pub use client::{
-    StorageAdmin, StorageAuthOps, StorageClient, StorageGcOps, StoragePersistenceOps,
-    StorageReader, StorageRecoveryOps, StorageSchemaContextOps, StorageSchemaOps,
-    StorageSnapshotOps, StorageStats, StorageSyncContextOps, StorageTransactionContextOps,
-    StorageWriter,
+    CatalogStore, GraphStore, QueryStorage, StorageAdmin, StorageAuthOps, StorageClient,
+    StorageGcOps, StorageMaintenance, StorageOperationContext, StorageOperationContextOps,
+    StoragePersistenceOps, StorageReader, StorageRecoveryOps, StorageSchemaContextOps,
+    StorageSchemaOps, StorageSnapshotOps, StorageStats, StorageSyncContextOps, StorageWriter,
 };
 pub use cursor::{
     open_edge_scan, open_vertex_scan, EdgeCursor, ScanOptions, ScanTarget, VecEdgeCursor,
@@ -39,15 +39,12 @@ pub use cursor::{
 };
 pub use engine::config::PropertyGraphConfig;
 pub use engine::graph_storage::GraphStorage;
-pub use engine::persistence_coordinator::{CheckpointStats, SnapshotStats};
+pub use engine::persistence_coordinator::{CheckpointStats, PersistenceDiagnostics, SnapshotStats};
 pub use engine::sync_wrapper::SyncWrapper;
 pub use engine::transaction::UndoTarget;
 pub use metrics::MetricsStorage;
-pub use mvcc::{MVCCTable, SnapshotHandle, TieredTombstoneManager, TombstoneEntry};
 pub use schema::{ChangeDetails, ChangeLog, LabelVersionHistory, PropertyChange, SchemaObjectType};
-pub use sync::{EdgeTableSync, PropertyTableSync, SnapshotGuard, VertexTableSync};
 pub use types::StoragePropertyDef;
-pub use vertex::{VertexSchema, VertexTable};
 
 pub use crate::core::StorageError;
 

@@ -11,11 +11,9 @@
 
 use std::collections::HashSet;
 
-use crate::core::error::QueryError;
-use super::types::{
-    FragmentId, OperatorKindSpec, PhysicalOperatorId, PhysicalPlan,
-};
 use super::properties::{MemoryPolicy, Ordering, PipelineKind};
+use super::types::{FragmentId, OperatorKindSpec, PhysicalOperatorId, PhysicalPlan};
+use crate::core::error::QueryError;
 
 /// The two validation tiers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,7 +84,7 @@ impl PhysicalPlanValidator {
         Self::check_root_output_contract(plan, &mut result);
         Self::check_capability_set(plan, &mut result);
 
-            // M3.6: Additional structural integrity checks.
+        // M3.6: Additional structural integrity checks.
         Self::check_fragment_kind_matches(plan, &mut result);
         Self::check_root_fragment_kind(plan, &mut result);
         Self::check_unreferenced_operators(plan, &mut result);
@@ -129,10 +127,9 @@ impl PhysicalPlanValidator {
         let mut seen = HashSet::new();
         for op in &plan.operators {
             if !seen.insert(op.operator_id) {
-                result.errors.push(format!(
-                    "Duplicate PhysicalOperatorId: {}",
-                    op.operator_id
-                ));
+                result
+                    .errors
+                    .push(format!("Duplicate PhysicalOperatorId: {}", op.operator_id));
             }
         }
     }
@@ -162,12 +159,8 @@ impl PhysicalPlanValidator {
 
     /// Fragment graph is connected and root exists.
     fn check_fragment_connectivity(plan: &PhysicalPlan, result: &mut ValidationResult) {
-        let fragment_ids: HashSet<FragmentId> = plan
-            .fragments
-            .fragments()
-            .iter()
-            .map(|f| f.id)
-            .collect();
+        let fragment_ids: HashSet<FragmentId> =
+            plan.fragments.fragments().iter().map(|f| f.id).collect();
 
         if !fragment_ids.contains(&plan.root_fragment) {
             result.errors.push(format!(
@@ -178,10 +171,9 @@ impl PhysicalPlanValidator {
 
         for fragment in plan.fragments.fragments() {
             if fragment.operators.is_empty() {
-                result.warnings.push(format!(
-                    "Fragment {:?} has no operators",
-                    fragment.id
-                ));
+                result
+                    .warnings
+                    .push(format!("Fragment {:?} has no operators", fragment.id));
             }
             for input_id in &fragment.inputs {
                 if !fragment_ids.contains(input_id) {
@@ -197,12 +189,8 @@ impl PhysicalPlanValidator {
     /// No illegal cycles in fragment DAG (a fragment cannot depend on itself
     /// transitively — the graph must be a DAG).
     fn check_fragment_cycles(plan: &PhysicalPlan, result: &mut ValidationResult) {
-        let fragment_ids: Vec<FragmentId> = plan
-            .fragments
-            .fragments()
-            .iter()
-            .map(|f| f.id)
-            .collect();
+        let fragment_ids: Vec<FragmentId> =
+            plan.fragments.fragments().iter().map(|f| f.id).collect();
 
         // Compute in-degree and topological order.
         let mut in_degree: std::collections::HashMap<FragmentId, usize> =
@@ -232,10 +220,9 @@ impl PhysicalPlanValidator {
 
         for &fid in &fragment_ids {
             if !reachable.contains(&fid) {
-                result.warnings.push(format!(
-                    "Fragment {:?} is not reachable from root",
-                    fid
-                ));
+                result
+                    .warnings
+                    .push(format!("Fragment {:?} is not reachable from root", fid));
             }
         }
     }
@@ -244,8 +231,7 @@ impl PhysicalPlanValidator {
     /// operator list.
     fn check_fragment_operator_belongs(plan: &PhysicalPlan, result: &mut ValidationResult) {
         for fragment in plan.fragments.fragments() {
-            let op_set: HashSet<PhysicalOperatorId> =
-                fragment.operators.iter().copied().collect();
+            let op_set: HashSet<PhysicalOperatorId> = fragment.operators.iter().copied().collect();
             if !op_set.contains(&fragment.root_operator) {
                 result.errors.push(format!(
                     "Fragment {:?} root operator {:?} not in its operator list",
@@ -281,9 +267,9 @@ impl PhysicalPlanValidator {
                 | OperatorKindSpec::Ddl(_)
                 | OperatorKindSpec::Fulltext(_)
                 | OperatorKindSpec::Vector(_) => 1,
-                OperatorKindSpec::Join(_) | OperatorKindSpec::Set(_) | OperatorKindSpec::Apply(_) => {
-                    2
-                }
+                OperatorKindSpec::Join(_)
+                | OperatorKindSpec::Set(_)
+                | OperatorKindSpec::Apply(_) => 2,
                 OperatorKindSpec::Exchange(_) => {
                     continue;
                 }
@@ -339,10 +325,7 @@ impl PhysicalPlanValidator {
                         ));
                     }
                     // PartialAggregate and FinalAggregate should be blocking.
-                    if matches!(
-                        op.properties.pipeline_kind,
-                        PipelineKind::Streaming
-                    ) {
+                    if matches!(op.properties.pipeline_kind, PipelineKind::Streaming) {
                         result.warnings.push(format!(
                             "Blocking spec operator {:?} is marked as streaming",
                             op.operator_id
@@ -360,10 +343,8 @@ impl PhysicalPlanValidator {
                 }
                 OperatorKindSpec::Source(spec) => {
                     // Start source produces one row; must be streaming.
-                    if matches!(
-                        spec,
-                        super::super::operators::spec::SourceSpec::Start
-                    ) && op.properties.pipeline_kind == PipelineKind::Blocking
+                    if matches!(spec, super::super::operators::spec::SourceSpec::Start)
+                        && op.properties.pipeline_kind == PipelineKind::Blocking
                     {
                         result.warnings.push(format!(
                             "Start source {:?} should be streaming",
@@ -397,9 +378,9 @@ impl PhysicalPlanValidator {
     /// Root output contract must be present.
     fn check_root_output_contract(plan: &PhysicalPlan, result: &mut ValidationResult) {
         if plan.output.output_layout.is_empty() {
-            result.warnings.push(
-                "Plan root output contract has empty layout".to_string(),
-            );
+            result
+                .warnings
+                .push("Plan root output contract has empty layout".to_string());
         }
 
         // Verify root fragment exists and has operators.
@@ -417,9 +398,9 @@ impl PhysicalPlanValidator {
     /// Required capabilities must be non-empty and valid.
     fn check_capability_set(plan: &PhysicalPlan, result: &mut ValidationResult) {
         if plan.required_capabilities.is_empty() {
-            result.warnings.push(
-                "Plan declares no required capabilities".to_string(),
-            );
+            result
+                .warnings
+                .push("Plan declares no required capabilities".to_string());
         }
     }
 
@@ -536,9 +517,9 @@ impl PhysicalPlanValidator {
     fn check_parameter_schema(plan: &PhysicalPlan, result: &mut ValidationResult) {
         for param in &plan.parameter_schema.params {
             if param.name.is_empty() {
-                result.errors.push(
-                    "Parameter schema contains unnamed parameter".to_string(),
-                );
+                result
+                    .errors
+                    .push("Parameter schema contains unnamed parameter".to_string());
             }
             if param.slot.0 >= plan.parameter_schema.params.len() {
                 result.warnings.push(format!(

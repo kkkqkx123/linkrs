@@ -51,13 +51,9 @@ pub(super) fn next_inner_join(
                 let condition_satisfied = if let Some(condition) = join_condition {
                     let mut combined_row = left_row.clone();
                     combined_row.extend(right_row.clone());
-                    let combined_names = build_combined_names(
-                        &left_col_names,
-                        right_col_names,
-                        right_row.len(),
-                    );
-                    let mut context =
-                        ValueRowContext::from_names(combined_row, combined_names);
+                    let combined_names =
+                        build_combined_names(&left_col_names, right_col_names, right_row.len());
+                    let mut context = ValueRowContext::from_names(combined_row, combined_names);
                     match ExpressionEvaluator::evaluate(condition, &mut context) {
                         Ok(Value::Bool(b)) => b,
                         _ => false,
@@ -127,13 +123,9 @@ pub(super) fn next_left_join(
                 let condition_satisfied = if let Some(condition) = join_condition {
                     let mut combined_row = left_row.clone();
                     combined_row.extend(right_row.clone());
-                    let combined_names = build_combined_names(
-                        &left_col_names,
-                        right_col_names,
-                        right_row.len(),
-                    );
-                    let mut context =
-                        ValueRowContext::from_names(combined_row, combined_names);
+                    let combined_names =
+                        build_combined_names(&left_col_names, right_col_names, right_row.len());
+                    let mut context = ValueRowContext::from_names(combined_row, combined_names);
                     match ExpressionEvaluator::evaluate(condition, &mut context) {
                         Ok(Value::Bool(b)) => b,
                         _ => false,
@@ -212,13 +204,9 @@ pub(super) fn next_right_join(
                 let condition_satisfied = if let Some(condition) = join_condition {
                     let mut combined_row = left_row.clone();
                     combined_row.extend(right_row.clone());
-                    let combined_names = build_combined_names(
-                        right_col_names,
-                        &right_cols,
-                        left_row.len(),
-                    );
-                    let mut context =
-                        ValueRowContext::from_names(combined_row, combined_names);
+                    let combined_names =
+                        build_combined_names(right_col_names, &right_cols, left_row.len());
+                    let mut context = ValueRowContext::from_names(combined_row, combined_names);
                     match ExpressionEvaluator::evaluate(condition, &mut context) {
                         Ok(Value::Bool(b)) => b,
                         _ => false,
@@ -344,8 +332,7 @@ pub(super) fn next_full_outer_join(
                     if !matched {
                         let mut unmatched_row = left_row.clone();
                         for _ in 0..right_col_count {
-                            unmatched_row
-                                .push(Value::Null(crate::core::value::NullType::Null));
+                            unmatched_row.push(Value::Null(crate::core::value::NullType::Null));
                         }
                         all_results.push(unmatched_row);
                     }
@@ -358,9 +345,11 @@ pub(super) fn next_full_outer_join(
                             .map(|i| format!("col_{}", i))
                             .collect::<Vec<_>>(),
                     ));
-                    let right_layout = Arc::new(SlotLayout::from_names(
-                        &build_combined_names(&[], right_col_names, right_col_count),
-                    ));
+                    let right_layout = Arc::new(SlotLayout::from_names(&build_combined_names(
+                        &[],
+                        right_col_names,
+                        right_col_count,
+                    )));
                     let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
                     let rows: Vec<Vec<Value>> = all_results.into_iter().collect();
                     if !rows.is_empty() {
@@ -382,12 +371,11 @@ pub(super) fn next_full_outer_join(
                                 .map(|i| format!("col_{}", i))
                                 .collect::<Vec<_>>(),
                         ));
-                        let right_layout =
-                            Arc::new(SlotLayout::from_names(&build_combined_names(
-                                &[],
-                                right_col_names,
-                                right_rows.first().map(|r| r.len()).unwrap_or(0),
-                            )));
+                        let right_layout = Arc::new(SlotLayout::from_names(&build_combined_names(
+                            &[],
+                            right_col_names,
+                            right_rows.first().map(|r| r.len()).unwrap_or(0),
+                        )));
                         let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
                         return Ok(Some(DataChunk::new_with_layout(rows, layout)));
                     }
@@ -435,8 +423,14 @@ pub(super) fn close_full_outer(
     left: &mut StreamingExecutor,
     right: &mut StreamingExecutor,
 ) -> Result<(), QueryError> {
-    close_common(lifecycle, memory_tracker, || {
-        left_rows.clear();
-        right_rows.clear();
-    }, left, right)
+    close_common(
+        lifecycle,
+        memory_tracker,
+        || {
+            left_rows.clear();
+            right_rows.clear();
+        },
+        left,
+        right,
+    )
 }

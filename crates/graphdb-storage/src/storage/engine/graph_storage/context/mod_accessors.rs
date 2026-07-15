@@ -1,32 +1,62 @@
 use crate::core::stats::StatsManager;
-use crate::core::types::{LabelId, TableId, Timestamp, TransactionContextInfo};
+use crate::core::types::{LabelId, TableId, Timestamp};
+use crate::storage::StorageOperationContext;
 use std::sync::Arc;
 
-use super::GraphStorageContext;
+use super::{GraphStorageContext, WriteTimestampLease};
 
 impl GraphStorageContext {
     pub fn get_read_timestamp(&self) -> u32 {
-        if let Some(txn_ctx) = self.runtime.get_transaction_context() {
-            txn_ctx.timestamp
+        if let Some(operation) = &self.operation_context {
+            operation.read_timestamp
         } else {
             self.persistent.version_manager.read_timestamp()
         }
     }
 
     pub fn get_write_timestamp(&self) -> u32 {
-        if let Some(txn_ctx) = self.runtime.get_transaction_context() {
-            txn_ctx.timestamp
+        if let Some(operation) = &self.operation_context {
+            operation
+                .write_timestamp
+                .unwrap_or(operation.read_timestamp)
         } else {
             self.persistent.version_manager.next_write_timestamp()
         }
     }
 
-    pub fn get_transaction_context(&self) -> Option<Arc<TransactionContextInfo>> {
-        self.runtime.get_transaction_context()
+    pub fn operation_context(&self) -> Option<Arc<StorageOperationContext>> {
+        self.operation_context.clone()
     }
 
-    pub fn set_transaction_context(&self, context: Option<Arc<TransactionContextInfo>>) {
-        self.runtime.set_transaction_context(context);
+    pub fn with_operation_context(&self, context: StorageOperationContext) -> Self {
+        let mut bound = self.clone();
+        bound.operation_context = Some(Arc::new(context));
+        bound.write_timestamp_lease = None;
+        bound
+    }
+
+    pub fn with_auto_commit_context(&self) -> Self {
+        let timestamp = self.persistent.version_manager.next_write_timestamp();
+        let mut bound = self.clone();
+        bound.operation_context = Some(Arc::new(StorageOperationContext {
+            transaction_id: None,
+            read_timestamp: timestamp,
+            write_timestamp: Some(timestamp),
+            read_only: false,
+        }));
+        bound.write_timestamp_lease = Some(Arc::new(WriteTimestampLease {
+            version_manager: self.persistent.version_manager.clone(),
+            timestamp,
+        }));
+        bound
+    }
+
+    pub(crate) fn release_write_timestamp(&self, timestamp: Timestamp) {
+        if self.operation_context.is_none() {
+            self.persistent
+                .version_manager
+                .release_insert_timestamp(timestamp);
+        }
     }
 
     pub fn start_index_gc(&self) -> Option<std::thread::JoinHandle<()>> {
@@ -56,13 +86,13 @@ impl GraphStorageContext {
     pub(crate) fn storage_size(&self) -> usize {
         let mut total = 0usize;
         {
-            let vertex_tables = self.persistent.data_store.vertex_tables().read();
+            let vertex_tables = self.persistent.data_store.read_vertex_tables();
             for table in vertex_tables.values() {
                 total += table.memory_size();
             }
         }
         {
-            let edge_tables = self.persistent.data_store.edge_tables().read();
+            let edge_tables = self.persistent.data_store.read_edge_tables();
             for table in edge_tables.values() {
                 total += table.memory_size();
             }
@@ -73,13 +103,13 @@ impl GraphStorageContext {
     pub(crate) fn used_storage_size(&self) -> usize {
         let mut total = 0usize;
         {
-            let vertex_tables = self.persistent.data_store.vertex_tables().read();
+            let vertex_tables = self.persistent.data_store.read_vertex_tables();
             for table in vertex_tables.values() {
                 total += table.used_memory_size();
             }
         }
         {
-            let edge_tables = self.persistent.data_store.edge_tables().read();
+            let edge_tables = self.persistent.data_store.read_edge_tables();
             for table in edge_tables.values() {
                 total += table.used_memory_size();
             }

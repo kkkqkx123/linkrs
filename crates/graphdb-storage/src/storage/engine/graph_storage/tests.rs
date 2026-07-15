@@ -9,8 +9,9 @@ mod tests {
     use crate::core::DataType;
     use crate::core::{Edge, EdgeDirection, RoleType, Value, Vertex};
     use crate::storage::{
-        GraphStorage, StorageAdmin, StorageAuthOps, StoragePersistenceOps, StorageReader,
-        StorageSchemaOps, StorageWriter,
+        GraphStorage, ScanOptions, StorageAdmin, StorageAuthOps, StorageOperationContext,
+        StorageOperationContextOps, StoragePersistenceOps, StorageReader, StorageSchemaOps,
+        StorageWriter,
     };
 
     fn create_test_storage() -> GraphStorage {
@@ -77,6 +78,148 @@ mod tests {
             .cleanup_snapshots()
             .expect("snapshot cleanup should succeed");
         assert_eq!(deleted, 0);
+    }
+
+    #[test]
+    fn bound_operation_contexts_are_isolated_across_concurrent_handles() {
+        use crate::core::types::TransactionId;
+        use std::sync::{Arc, Barrier};
+
+        let mut storage = create_test_storage();
+        setup_space(&mut storage);
+        setup_person_tag(&mut storage);
+
+        let mut writer = storage.bind_operation_context(StorageOperationContext::transaction(
+            TransactionId::from(1),
+            10,
+            false,
+        ));
+        writer
+            .insert_vertex(
+                "test_space",
+                Vertex::new(
+                    VertexId::from_int64(1),
+                    vec![Tag::new(
+                        "Person".to_string(),
+                        [("name".to_string(), Value::String("Alice".to_string()))]
+                            .into_iter()
+                            .collect(),
+                    )],
+                ),
+            )
+            .expect("Failed to insert vertex at timestamp 10");
+
+        let barrier = Arc::new(Barrier::new(8));
+        let handles: Vec<_> = (0..8)
+            .map(|id| {
+                let barrier = barrier.clone();
+                let bound = storage.bind_operation_context(StorageOperationContext::transaction(
+                    TransactionId::from(id + 100),
+                    10,
+                    true,
+                ));
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let context = bound
+                        .operation_context()
+                        .expect("Bound context should remain available");
+                    assert_eq!(context.transaction_id, Some(TransactionId::from(id + 100)));
+                    assert_eq!(context.read_timestamp, 10);
+                    assert!(bound
+                        .get_vertex("test_space", &VertexId::from_int64(1))
+                        .expect("Concurrent read failed")
+                        .is_some());
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().expect("Concurrent context task panicked");
+        }
+        assert!(storage.operation_context().is_none());
+    }
+
+    #[test]
+    fn cursor_keeps_the_read_timestamp_from_its_bound_handle() {
+        use crate::core::types::TransactionId;
+
+        let mut storage = create_test_storage();
+        setup_space(&mut storage);
+        setup_person_tag(&mut storage);
+
+        let mut initial_writer = storage.bind_operation_context(
+            StorageOperationContext::transaction(TransactionId::from(1), 10, false),
+        );
+        initial_writer
+            .insert_vertex(
+                "test_space",
+                Vertex::new(
+                    VertexId::from_int64(1),
+                    vec![Tag::new("Person".to_string(), Default::default())],
+                ),
+            )
+            .expect("Failed to insert initial vertex");
+
+        let reader = storage.bind_operation_context(StorageOperationContext::transaction(
+            TransactionId::from(2),
+            10,
+            true,
+        ));
+        let mut cursor = reader
+            .create_vertex_cursor("test_space", &ScanOptions::default())
+            .expect("Failed to create cursor");
+
+        let mut later_writer = storage.bind_operation_context(
+            StorageOperationContext::transaction(TransactionId::from(3), 20, false),
+        );
+        later_writer
+            .insert_vertex(
+                "test_space",
+                Vertex::new(
+                    VertexId::from_int64(2),
+                    vec![Tag::new("Person".to_string(), Default::default())],
+                ),
+            )
+            .expect("Failed to insert later vertex");
+
+        let rows = cursor.next_batch(16).expect("Cursor read failed");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].vid, VertexId::from_int64(1));
+    }
+
+    #[test]
+    fn cursor_applies_property_projection_during_scan() {
+        let mut storage = create_test_storage();
+        setup_space(&mut storage);
+        setup_person_tag(&mut storage);
+        storage
+            .insert_vertex(
+                "test_space",
+                Vertex::new(
+                    VertexId::from_int64(1),
+                    vec![Tag::new(
+                        "Person".to_string(),
+                        [
+                            ("name".to_string(), Value::String("Alice".to_string())),
+                            ("age".to_string(), Value::BigInt(30)),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    )],
+                ),
+            )
+            .expect("vertex insert");
+
+        let mut cursor = storage
+            .create_vertex_cursor(
+                "test_space",
+                &ScanOptions::default().with_projection(vec!["name".to_string()]),
+            )
+            .expect("cursor should open");
+        let rows = cursor.next_batch(8).expect("cursor batch");
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].properties.contains_key("name"));
+        assert!(!rows[0].properties.contains_key("age"));
     }
 
     // ==================== Schema Operations ====================

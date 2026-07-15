@@ -22,10 +22,7 @@ pub enum PlanBuildError {
         detail: String,
     },
     /// The runtime does not provide a capability that the plan requires.
-    CapabilityUnavailable {
-        capability: String,
-        detail: String,
-    },
+    CapabilityUnavailable { capability: String, detail: String },
     /// The plan requires a transaction mode that does not match the current scope.
     InvalidTransactionMode {
         required: String,
@@ -42,7 +39,11 @@ pub enum PlanBuildError {
 }
 
 impl PlanBuildError {
-    pub fn unsupported(node_type: impl Into<String>, node_id: i64, detail: impl Into<String>) -> Self {
+    pub fn unsupported(
+        node_type: impl Into<String>,
+        node_id: i64,
+        detail: impl Into<String>,
+    ) -> Self {
         Self::UnsupportedNode {
             node_type: node_type.into(),
             node_id,
@@ -89,10 +90,23 @@ impl PlanBuildError {
 impl fmt::Display for PlanBuildError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::UnsupportedNode { node_type, node_id, detail } => {
-                write!(f, "Unsupported node '{}' (id={}): {}", node_type, node_id, detail)
+            Self::UnsupportedNode {
+                node_type,
+                node_id,
+                detail,
+            } => {
+                write!(
+                    f,
+                    "Unsupported node '{}' (id={}): {}",
+                    node_type, node_id, detail
+                )
             }
-            Self::MissingRequiredValue { node_type, node_id, field, detail } => {
+            Self::MissingRequiredValue {
+                node_type,
+                node_id,
+                field,
+                detail,
+            } => {
                 write!(
                     f,
                     "Missing required value '{}' for node '{}' (id={}): {}",
@@ -100,16 +114,29 @@ impl fmt::Display for PlanBuildError {
                 )
             }
             Self::CapabilityUnavailable { capability, detail } => {
-                write!(f, "Capability '{}' is not available: {}", capability, detail)
+                write!(
+                    f,
+                    "Capability '{}' is not available: {}",
+                    capability, detail
+                )
             }
-            Self::InvalidTransactionMode { required, actual, detail } => {
+            Self::InvalidTransactionMode {
+                required,
+                actual,
+                detail,
+            } => {
                 write!(
                     f,
                     "Transaction mode mismatch: required '{}', actual '{}': {}",
                     required, actual, detail
                 )
             }
-            Self::ExpressionBinding { node_type, node_id, expression, detail } => {
+            Self::ExpressionBinding {
+                node_type,
+                node_id,
+                expression,
+                detail,
+            } => {
                 write!(
                     f,
                     "Expression binding error in node '{}' (id={}): '{}' - {}",

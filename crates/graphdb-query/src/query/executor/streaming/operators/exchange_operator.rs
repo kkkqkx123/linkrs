@@ -261,9 +261,8 @@ impl ExchangeOperator {
                             result_rows.push(buckets[*current_bucket][*current_row].clone());
                             *current_row += 1;
                         }
-                        let layout = Arc::new(SlotLayout::from_names(
-                            col_names.as_deref().unwrap_or(&[]),
-                        ));
+                        let layout =
+                            Arc::new(SlotLayout::from_names(col_names.as_deref().unwrap_or(&[])));
                         return Ok(Some(DataChunk::new_with_layout(result_rows, layout)));
                     }
                     *current_bucket += 1;
@@ -351,9 +350,8 @@ impl ExchangeOperator {
                     if all_rows.is_empty() {
                         return Ok(None);
                     }
-                    let layout = Arc::new(SlotLayout::from_names(
-                        col_names.as_deref().unwrap_or(&[]),
-                    ));
+                    let layout =
+                        Arc::new(SlotLayout::from_names(col_names.as_deref().unwrap_or(&[])));
                     return Ok(Some(DataChunk::new_with_layout(all_rows, layout)));
                 }
                 Ok(None)
@@ -392,9 +390,7 @@ impl ExchangeOperator {
                     *position += 1;
                 }
 
-                let layout = Arc::new(SlotLayout::from_names(
-                    col_names.as_deref().unwrap_or(&[]),
-                ));
+                let layout = Arc::new(SlotLayout::from_names(col_names.as_deref().unwrap_or(&[])));
                 Ok(Some(DataChunk::new_with_layout(result_rows, layout)))
             }
         }
@@ -447,9 +443,8 @@ fn drain_and_partition(
                     if col_names.is_none() {
                         *col_names = Some(chunk.col_names());
                     }
-                    let layout = Arc::new(SlotLayout::from_names(
-                        col_names.as_deref().unwrap_or(&[]),
-                    ));
+                    let layout =
+                        Arc::new(SlotLayout::from_names(col_names.as_deref().unwrap_or(&[])));
                     for row in &chunk.rows {
                         let hash = compute_hash(row, hash_expressions, &layout)?;
                         let bucket = (hash as usize) % num_partitions;
@@ -694,10 +689,7 @@ mod tests {
         StreamingExecutor::Source(
             OperatorBase::new(1),
             SourceOperator::ScanVertices {
-                buffer: values
-                    .iter()
-                    .map(|v| vec![Value::BigInt(*v)])
-                    .collect(),
+                buffer: values.iter().map(|v| vec![Value::BigInt(*v)]).collect(),
                 current_index: 0,
                 col_names: vec![column.to_string()],
             },

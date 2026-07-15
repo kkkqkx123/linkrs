@@ -734,9 +734,9 @@ mod tests {
         assert_eq!(empty_complexity, 0.0);
 
         // Test with simple expressions
+        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
         use crate::core::types::expr::Expression;
         use crate::core::value::Value;
-        use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
         let ctx = ExpressionAnalysisContext::new();
         let expr = Expression::Literal(Value::Int(42));

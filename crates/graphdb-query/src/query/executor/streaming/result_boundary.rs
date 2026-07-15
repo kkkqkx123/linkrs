@@ -71,15 +71,16 @@ pub enum ResultBoundary {
     /// Used for side-effect-only commands (DML without RETURNING, DDL,
     /// transaction control).  The pipeline still opens, advances, and
     /// closes normally — chunks are simply dropped.
-    DiscardSink {
-        output: OutputContract,
-    },
+    DiscardSink { output: OutputContract },
 }
 
 impl fmt::Debug for ResultBoundary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::DataSetSink { output, accumulated } => f
+            Self::DataSetSink {
+                output,
+                accumulated,
+            } => f
                 .debug_struct("DataSetSink")
                 .field("output", output)
                 .field("accumulated_count", &accumulated.len())
@@ -224,9 +225,7 @@ impl ResultBoundary {
                     let _ = s.send(ChunkOrDone::Done);
                 }
             }
-            Self::DataSetSink { .. }
-            | Self::PullHandle { .. }
-            | Self::DiscardSink { .. } => {
+            Self::DataSetSink { .. } | Self::PullHandle { .. } | Self::DiscardSink { .. } => {
                 // No-op for other variants.
             }
         }
@@ -250,7 +249,10 @@ impl ResultBoundary {
     /// Materialise the accumulated result (only for [`DataSetSink`]).
     pub fn into_execution_result(mut self) -> Result<ExecutionResult, QueryError> {
         match &mut self {
-            Self::DataSetSink { accumulated, output } => {
+            Self::DataSetSink {
+                accumulated,
+                output,
+            } => {
                 if accumulated.is_empty() {
                     // Publish schema even for zero-row results.
                     let col_names = output.output_layout.names();
@@ -340,8 +342,10 @@ mod tests {
     #[test]
     fn test_data_set_sink_accumulates_chunks() {
         let mut sink = ResultBoundary::data_set(test_output_contract());
-        sink.push_chunk(make_chunk(vec![vec![Value::Int(1)]])).unwrap();
-        sink.push_chunk(make_chunk(vec![vec![Value::Int(2)]])).unwrap();
+        sink.push_chunk(make_chunk(vec![vec![Value::Int(1)]]))
+            .unwrap();
+        sink.push_chunk(make_chunk(vec![vec![Value::Int(2)]]))
+            .unwrap();
         let result = sink.into_execution_result().unwrap();
         if let ExecutionResult::DataSet { data } = result {
             assert_eq!(data.row_count(), 2);
@@ -391,7 +395,8 @@ mod tests {
         let (mut sink, receiver) =
             ResultBoundary::chunk_stream(test_output_contract(), 16, runtime);
 
-        sink.push_chunk(make_chunk(vec![vec![Value::Int(42)]])).unwrap();
+        sink.push_chunk(make_chunk(vec![vec![Value::Int(42)]]))
+            .unwrap();
         sink.finish();
 
         let received: Vec<ChunkOrDone> = receiver.iter().collect();
@@ -435,16 +440,9 @@ mod tests {
         ));
         engine.set_runtime(runtime.clone());
         let stream = engine.into_stream().unwrap();
-        let sink = ResultBoundary::pull_handle(
-            test_output_contract(),
-            stream,
-            runtime,
-        );
+        let sink = ResultBoundary::pull_handle(test_output_contract(), stream, runtime);
         let result = sink.into_execution_result();
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("PullHandle"));
+        assert!(result.unwrap_err().to_string().contains("PullHandle"));
     }
 }

@@ -7,15 +7,15 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::core::error::{DBError, DBResult};
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::core::types::VertexId;
 use crate::core::{Edge, Path, Value, Vertex};
 use crate::query::executor::base::{
     BaseExecutor, DBResult as ExecDBResult, EdgeDirection, ExecutionResult,
     Executor as BaseExecutorTrait, ExecutorStats, HasStorage,
 };
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::query::DataSet;
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 use parking_lot::RwLock;
 
 use super::types::AlgorithmStats;
@@ -134,7 +134,7 @@ impl Default for SubgraphResult {
 }
 
 /// Subgraph Query Executor
-pub struct SubgraphExecutor<S: StorageClient + Send + 'static> {
+pub struct SubgraphExecutor<S: QueryStorage + Send + 'static> {
     base: BaseExecutor<S>,
     start_vids: Vec<VertexId>,
     config: SubgraphConfig,
@@ -147,7 +147,7 @@ pub struct SubgraphExecutor<S: StorageClient + Send + 'static> {
     stats: AlgorithmStats,
 }
 
-impl<S: StorageClient> std::fmt::Debug for SubgraphExecutor<S> {
+impl<S: QueryStorage> std::fmt::Debug for SubgraphExecutor<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SubgraphExecutor")
             .field("base", &"BaseExecutor")
@@ -160,7 +160,7 @@ impl<S: StorageClient> std::fmt::Debug for SubgraphExecutor<S> {
     }
 }
 
-impl<S: StorageClient> SubgraphExecutor<S> {
+impl<S: QueryStorage> SubgraphExecutor<S> {
     pub fn new(
         id: i64,
         storage: Arc<RwLock<S>>,
@@ -347,7 +347,7 @@ impl<S: StorageClient> SubgraphExecutor<S> {
     }
 }
 
-impl<S: StorageClient + Send + 'static> BaseExecutorTrait<S> for SubgraphExecutor<S> {
+impl<S: QueryStorage + Send + 'static> BaseExecutorTrait<S> for SubgraphExecutor<S> {
     fn execute(&mut self) -> ExecDBResult<ExecutionResult> {
         let result = self
             .execute_subgraph()
@@ -392,7 +392,7 @@ impl<S: StorageClient + Send + 'static> BaseExecutorTrait<S> for SubgraphExecuto
     }
 }
 
-impl<S: StorageClient> HasStorage<S> for SubgraphExecutor<S> {
+impl<S: QueryStorage> HasStorage<S> for SubgraphExecutor<S> {
     fn get_storage(&self) -> &Arc<RwLock<S>> {
         self.base.get_storage()
     }

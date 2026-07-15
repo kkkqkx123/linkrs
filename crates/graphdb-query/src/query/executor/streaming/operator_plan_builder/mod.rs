@@ -308,7 +308,8 @@ fn build_join_with_keys(
 ) -> Result<PhysicalNode, PlanBuildError> {
     let left_phys = build_plan_node(config.left_plan, context)?;
     let right_phys = build_plan_node(config.right_plan, context)?;
-    let condition = join_condition_from_keys(config.hash_keys, config.probe_keys, config.right_col_names)?;
+    let condition =
+        join_condition_from_keys(config.hash_keys, config.probe_keys, config.right_col_names)?;
     Ok(PhysicalNode::Join(
         config.node_id,
         Box::new(left_phys),
@@ -393,9 +394,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::query::executor::build_error::PlanBuildError;
     use crate::query::planning::plan::core::nodes::operation::sort_node::LimitNode;
-    use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
     #[test]
     fn domain_build_errors_are_not_replaced_by_unsupported_errors() {

@@ -24,6 +24,7 @@
 //! let decision = optimizer.should_unnest(&pattern_apply, &analysis);
 //! ```
 
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::core::types::expr::ExpressionMeta;
 use crate::core::types::operators::BinaryOperator;
 use crate::core::types::ContextualExpression;
@@ -32,7 +33,6 @@ use crate::query::optimizer::analysis::BatchPlanAnalysis;
 use crate::query::optimizer::stats::StatisticsManager;
 use crate::query::planning::plan::core::nodes::PlanNodeEnum;
 use crate::query::planning::plan::core::nodes::{HashInnerJoinNode, PatternApplyNode};
-use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 
 /// Decentralized decision-making using subqueries
 #[derive(Debug, Clone, PartialEq)]

@@ -80,7 +80,11 @@ pub enum StreamingExecutor {
     Graph(OperatorBase, Box<StreamingExecutor>, GraphOperator),
     /// M7: Recursive fragment for variable-length path traversal,
     /// BFS, shortest-path, and multi-round graph algorithms.
-    RecursiveFragment(OperatorBase, Box<StreamingExecutor>, RecursiveFragmentOperator),
+    RecursiveFragment(
+        OperatorBase,
+        Box<StreamingExecutor>,
+        RecursiveFragmentOperator,
+    ),
     Sink(OperatorBase, Box<StreamingExecutor>, SinkOperator),
     Ddl(OperatorBase, Box<StreamingExecutor>, DdlOperator),
     Fulltext(OperatorBase, Box<StreamingExecutor>, FulltextOperator),

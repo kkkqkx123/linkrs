@@ -242,11 +242,12 @@ pub fn plan_pattern_node(
     let mut plan = SubPlan::from_root(scan_node.into_enum());
 
     if !node.labels.is_empty() {
-        let expr_ctx = expr_context
-            .as_ref()
-            .expect("expr_context should be set");
-        let label_filter =
-            expression_helpers::build_label_filter_expression(&node.variable, &node.labels, expr_ctx);
+        let expr_ctx = expr_context.as_ref().expect("expr_context should be set");
+        let label_filter = expression_helpers::build_label_filter_expression(
+            &node.variable,
+            &node.labels,
+            expr_ctx,
+        );
         let root_node = plan.root.as_ref().expect("The root of plan should exist");
         let filter_node = FilterNode::new(root_node.clone(), label_filter)
             .map_err(|e| PlannerError::PlanGenerationFailed(e.to_string()))?;
@@ -508,13 +509,25 @@ pub fn plan_pattern(
     expr_context: &Option<Arc<ExpressionAnalysisContext>>,
 ) -> Result<SubPlan, PlannerError> {
     match pattern {
-        Pattern::Node(node) => {
-            plan_pattern_node(node, space_id, space_name, enable_index_optimization, metadata_context, expr_context)
-        }
+        Pattern::Node(node) => plan_pattern_node(
+            node,
+            space_id,
+            space_name,
+            enable_index_optimization,
+            metadata_context,
+            expr_context,
+        ),
         Pattern::Edge(edge) => plan_pattern_edge(edge, space_id, space_name, expr_context),
-        Pattern::Path(_) => {
-            plan_path_pattern(pattern, space_id, space_name, validation_info, _qctx, enable_index_optimization, metadata_context, expr_context)
-        }
+        Pattern::Path(_) => plan_path_pattern(
+            pattern,
+            space_id,
+            space_name,
+            validation_info,
+            _qctx,
+            enable_index_optimization,
+            metadata_context,
+            expr_context,
+        ),
         Pattern::Variable(var) => plan_variable_pattern(var, space_id, validation_info),
     }
 }
@@ -593,9 +606,14 @@ pub fn plan_optional_element(
     expr_context: &Option<Arc<ExpressionAnalysisContext>>,
 ) -> Result<SubPlan, PlannerError> {
     let opt_plan = match element {
-        PathElement::Node(node) => {
-            plan_pattern_node(node, space_id, space_name, enable_index_optimization, metadata_context, expr_context)?
-        }
+        PathElement::Node(node) => plan_pattern_node(
+            node,
+            space_id,
+            space_name,
+            enable_index_optimization,
+            metadata_context,
+            expr_context,
+        )?,
         PathElement::Edge(edge) => plan_pattern_edge(edge, space_id, space_name, expr_context)?,
         _ => {
             return Err(PlannerError::PlanGenerationFailed(
@@ -617,9 +635,14 @@ pub fn plan_repeated_element(
     metadata_context: &Option<MetadataContext>,
 ) -> Result<SubPlan, PlannerError> {
     let base_plan = match element {
-        PathElement::Node(node) => {
-            plan_pattern_node(node, space_id, space_name, enable_index_optimization, metadata_context, expr_context)?
-        }
+        PathElement::Node(node) => plan_pattern_node(
+            node,
+            space_id,
+            space_name,
+            enable_index_optimization,
+            metadata_context,
+            expr_context,
+        )?,
         PathElement::Edge(edge) => plan_pattern_edge(edge, space_id, space_name, expr_context)?,
         _ => {
             return Err(PlannerError::PlanGenerationFailed(
@@ -639,9 +662,7 @@ pub fn plan_repeated_element(
     };
 
     let expr_ctx = expr_context.as_ref().ok_or_else(|| {
-        PlannerError::PlanGenerationFailed(
-            "Expression context is unavailable".to_string(),
-        )
+        PlannerError::PlanGenerationFailed("Expression context is unavailable".to_string())
     })?;
     let expr_meta = crate::core::types::expr::ExpressionMeta::new(
         crate::core::Expression::Variable(condition_str),

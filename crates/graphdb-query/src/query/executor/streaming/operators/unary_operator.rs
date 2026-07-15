@@ -84,11 +84,9 @@ impl UnaryOperator {
                 current_row_index: 0,
                 current_unwind_index: 0,
             },
-            super::spec::UnarySpec::AppendVertices { vertex_properties } => {
-                Self::AppendVertices {
-                    vertex_properties: vertex_properties.clone(),
-                }
-            }
+            super::spec::UnarySpec::AppendVertices { vertex_properties } => Self::AppendVertices {
+                vertex_properties: vertex_properties.clone(),
+            },
             super::spec::UnarySpec::Sample { count } => Self::Sample {
                 count: *count,
                 consumed: 0,
@@ -131,8 +129,7 @@ impl UnaryOperator {
                         let mut selected = Vec::new();
                         for i in 0..chunk.len() {
                             let row = &chunk.rows[i];
-                            let mut context =
-                                BorrowedRowContext::new(row, layout.clone());
+                            let mut context = BorrowedRowContext::new(row, layout.clone());
                             let keep = match ExpressionEvaluator::evaluate(predicate, &mut context)
                             {
                                 Ok(value) => match value {
@@ -178,8 +175,7 @@ impl UnaryOperator {
                     let layout = Arc::new(SlotLayout::from_names(&output_col_names_final));
                     let mut projected_rows = Vec::new();
                     for row in chunk.rows {
-                        let mut context =
-                            ValueRowContext::new(row, input_layout.clone());
+                        let mut context = ValueRowContext::new(row, input_layout.clone());
                         let mut projected_row = Vec::new();
                         for expr in output_expressions.iter() {
                             match ExpressionEvaluator::evaluate(expr, &mut context) {
@@ -254,8 +250,7 @@ impl UnaryOperator {
                     for row in chunk.rows {
                         let mut new_row = row.clone();
                         for (_col_name, expr) in assignments.iter() {
-                            let mut context =
-                                ValueRowContext::new(row.clone(), layout.clone());
+                            let mut context = ValueRowContext::new(row.clone(), layout.clone());
                             match ExpressionEvaluator::evaluate(expr, &mut context) {
                                 Ok(val) => new_row.push(val),
                                 Err(_) => {

@@ -9,8 +9,8 @@ use crate::config::Config;
 use crate::core::error::DBResult;
 use crate::storage::UndoTarget;
 use crate::storage::{
-    StorageClient, StorageSchemaContextOps, StorageSnapshotOps, StorageSyncContextOps,
-    StorageTransactionContextOps,
+    StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSnapshotOps,
+    StorageSyncContextOps,
 };
 
 use super::shutdown::async_shutdown_signal;
@@ -21,7 +21,7 @@ pub async fn start_http_server<
         + StorageSchemaContextOps
         + StorageSnapshotOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + UndoTarget
         + Clone
         + Send
@@ -71,7 +71,7 @@ pub async fn start_http_and_grpc_servers<
         + StorageSchemaContextOps
         + StorageSnapshotOps
         + StorageSyncContextOps
-        + StorageTransactionContextOps
+        + StorageOperationContextOps
         + Clone
         + Send
         + Sync

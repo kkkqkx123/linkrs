@@ -36,10 +36,13 @@ fn test_sort_rows_ascending() {
 
     sort_rows(&mut rows, &col_names, &exprs, &dirs);
 
-    let vals: Vec<i64> = rows.iter().map(|r| match &r[0] {
-        Value::BigInt(n) => *n,
-        _ => panic!("expected BigInt"),
-    }).collect();
+    let vals: Vec<i64> = rows
+        .iter()
+        .map(|r| match &r[0] {
+            Value::BigInt(n) => *n,
+            _ => panic!("expected BigInt"),
+        })
+        .collect();
     assert_eq!(vals, vec![1, 1, 2, 3, 4, 5, 6, 9]);
 }
 
@@ -52,10 +55,13 @@ fn test_sort_rows_descending() {
 
     sort_rows(&mut rows, &col_names, &exprs, &dirs);
 
-    let vals: Vec<i64> = rows.iter().map(|r| match &r[0] {
-        Value::BigInt(n) => *n,
-        _ => panic!("expected BigInt"),
-    }).collect();
+    let vals: Vec<i64> = rows
+        .iter()
+        .map(|r| match &r[0] {
+            Value::BigInt(n) => *n,
+            _ => panic!("expected BigInt"),
+        })
+        .collect();
     assert_eq!(vals, vec![9, 6, 5, 4, 3, 2, 1, 1]);
 }
 
@@ -100,8 +106,7 @@ fn test_sort_rows_null_ordering() {
 
 #[test]
 fn test_spill_sorted_run_basic() {
-    let manager = SpillManager::new(SpillConfig::default(), 301)
-        .expect("spill manager");
+    let manager = SpillManager::new(SpillConfig::default(), 301).expect("spill manager");
     let mut buffer = integer_rows(&[3, 1, 4, 1, 5]);
     let col_names = vec!["val".to_string()];
     let exprs = vec![make_sort_expr("val")];
@@ -111,9 +116,15 @@ fn test_spill_sorted_run_basic() {
     let mut runs: Vec<crate::query::executor::streaming::spill::SpilledRun> = vec![];
 
     let count = spill_sorted_run(
-        &mut buffer, &col_names, &exprs, &dirs,
-        &manager, &mut tracker, &mut runs,
-    ).expect("spill");
+        &mut buffer,
+        &col_names,
+        &exprs,
+        &dirs,
+        &manager,
+        &mut tracker,
+        &mut runs,
+    )
+    .expect("spill");
 
     assert_eq!(count, 5);
     assert_eq!(runs.len(), 1);
@@ -121,18 +132,20 @@ fn test_spill_sorted_run_basic() {
 
     let mut reader = RunReader::open(&runs[0]).expect("open run");
     let read_rows = reader.read_all().expect("read all");
-    let vals: Vec<i64> = read_rows.iter().map(|r| match &r[0] {
-        Value::BigInt(n) => *n,
-        _ => panic!("expected BigInt"),
-    }).collect();
+    let vals: Vec<i64> = read_rows
+        .iter()
+        .map(|r| match &r[0] {
+            Value::BigInt(n) => *n,
+            _ => panic!("expected BigInt"),
+        })
+        .collect();
     assert_eq!(vals, vec![1, 1, 3, 4, 5]);
 }
 
 #[test]
 fn test_spill_sorted_run_empty_buffer() {
     use crate::query::executor::streaming::spill::SpilledRun;
-    let manager = SpillManager::new(SpillConfig::default(), 302)
-        .expect("spill manager");
+    let manager = SpillManager::new(SpillConfig::default(), 302).expect("spill manager");
     let mut buffer: Vec<Vec<Value>> = vec![];
     let col_names = vec!["val".to_string()];
     let budget = MemoryBudget::new(1024 * 1024);
@@ -140,9 +153,15 @@ fn test_spill_sorted_run_empty_buffer() {
     let mut runs: Vec<SpilledRun> = vec![];
 
     let count = spill_sorted_run(
-        &mut buffer, &col_names, &[], &[],
-        &manager, &mut tracker, &mut runs,
-    ).expect("spill");
+        &mut buffer,
+        &col_names,
+        &[],
+        &[],
+        &manager,
+        &mut tracker,
+        &mut runs,
+    )
+    .expect("spill");
 
     assert_eq!(count, 0);
     assert!(runs.is_empty());
@@ -151,8 +170,7 @@ fn test_spill_sorted_run_empty_buffer() {
 #[test]
 fn test_multi_run_merge_correctness() {
     use crate::query::executor::streaming::spill::SpilledRun;
-    let manager = SpillManager::new(SpillConfig::default(), 303)
-        .expect("spill manager");
+    let manager = SpillManager::new(SpillConfig::default(), 303).expect("spill manager");
     let col_names = vec!["val".to_string()];
     let exprs = vec![make_sort_expr("val")];
     let dirs = vec![SortDirection::Ascending];
@@ -162,18 +180,49 @@ fn test_multi_run_merge_correctness() {
     let mut runs: Vec<SpilledRun> = vec![];
 
     let mut b1 = integer_rows(&[1, 4, 7]);
-    spill_sorted_run(&mut b1, &col_names, &exprs, &dirs, &manager, &mut tracker, &mut runs).unwrap();
+    spill_sorted_run(
+        &mut b1,
+        &col_names,
+        &exprs,
+        &dirs,
+        &manager,
+        &mut tracker,
+        &mut runs,
+    )
+    .unwrap();
 
     let mut b2 = integer_rows(&[2, 5, 8]);
-    spill_sorted_run(&mut b2, &col_names, &exprs, &dirs, &manager, &mut tracker, &mut runs).unwrap();
+    spill_sorted_run(
+        &mut b2,
+        &col_names,
+        &exprs,
+        &dirs,
+        &manager,
+        &mut tracker,
+        &mut runs,
+    )
+    .unwrap();
 
     let mut b3 = integer_rows(&[3, 6, 9]);
-    spill_sorted_run(&mut b3, &col_names, &exprs, &dirs, &manager, &mut tracker, &mut runs).unwrap();
+    spill_sorted_run(
+        &mut b3,
+        &col_names,
+        &exprs,
+        &dirs,
+        &manager,
+        &mut tracker,
+        &mut runs,
+    )
+    .unwrap();
 
     let mut run_buffers: Vec<RunBuffer> = Vec::with_capacity(runs.len());
     for run in &runs {
         let reader = RunReader::open(run).expect("open run");
-        run_buffers.push(RunBuffer { rows: vec![], index: 0, reader });
+        run_buffers.push(RunBuffer {
+            rows: vec![],
+            index: 0,
+            reader,
+        });
     }
     for buf in &mut run_buffers {
         refill_run_buffer(buf, 1024).unwrap();
@@ -216,10 +265,13 @@ fn test_sort_rows_multi_column() {
 
     sort_rows(&mut rows, &col_names, &exprs, &dirs);
 
-    let vals: Vec<i64> = rows.iter().map(|r| match r[0] {
-        Value::BigInt(n) => n,
-        _ => panic!("expected BigInt"),
-    }).collect();
+    let vals: Vec<i64> = rows
+        .iter()
+        .map(|r| match r[0] {
+            Value::BigInt(n) => n,
+            _ => panic!("expected BigInt"),
+        })
+        .collect();
     assert_eq!(vals, vec![1, 2, 3, 4]);
 }
 

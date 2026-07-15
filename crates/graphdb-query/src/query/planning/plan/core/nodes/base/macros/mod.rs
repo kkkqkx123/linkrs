@@ -5,8 +5,8 @@
 //! # Refactoring changes
 //! Remove the dependency on `ast::Variable` and use `String` instead.
 
+mod binary_input;
+mod data_operation;
+mod dependency;
 mod enum_methods;
 mod single_input;
-mod binary_input;
-mod dependency;
-mod data_operation;

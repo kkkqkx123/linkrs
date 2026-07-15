@@ -1,6 +1,4 @@
-use crate::core::value::geography::{
-    Geography, GeographyValue, LineStringValue, PolygonValue,
-};
+use crate::core::value::geography::{Geography, GeographyValue, LineStringValue, PolygonValue};
 use crate::core::value::NullType;
 use crate::core::Value;
 use crate::query::executor::expression::ExpressionError;

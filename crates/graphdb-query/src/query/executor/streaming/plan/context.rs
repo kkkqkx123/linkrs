@@ -7,12 +7,12 @@
 //! This ensures the resulting [`PhysicalPlan`](super::types::PhysicalPlan)
 //! is immutable, cacheable, and safe to share across concurrent executions.
 
+use super::types::{FragmentIdAllocator, PhysicalOperatorIdAllocator};
 use crate::core::error::QueryError;
 use crate::query::executor::base::ExecutionContext;
-use crate::query::planning::plan::PartitionSpec;
-use super::types::{FragmentIdAllocator, PhysicalOperatorIdAllocator};
 use crate::query::executor::streaming::parameters::ParameterSchema;
 use crate::query::executor::streaming::slot::SlotLayout;
+use crate::query::planning::plan::PartitionSpec;
 
 /// Schema identifier for catalog lookups during plan building.
 #[derive(Debug, Clone)]
@@ -54,7 +54,7 @@ impl Default for PlanningConfig {
 /// Read-only context used during [`PhysicalPlan`] construction.
 ///
 /// Intentionally free of:
-/// - `StorageClient`, transaction/session handles
+/// - `QueryStorage`, transaction/session handles
 /// - Runtime, memory tracker, cursor, buffer, emitted state
 /// - Per-execution parameter values, auth context, current snapshot
 /// - Temporary space/storage references that belong in bindings
@@ -124,17 +124,23 @@ impl PhysicalPlanBuildContext {
     }
 
     /// Allocate a new physical operator ID from the unified arena.
-    pub fn allocate_operator_id(&mut self) -> crate::query::executor::streaming::plan::types::PhysicalOperatorId {
+    pub fn allocate_operator_id(
+        &mut self,
+    ) -> crate::query::executor::streaming::plan::types::PhysicalOperatorId {
         self.operator_id_alloc.allocate()
     }
 
     /// Allocate a new fragment ID.
-    pub fn allocate_fragment_id(&mut self) -> crate::query::executor::streaming::plan::types::FragmentId {
+    pub fn allocate_fragment_id(
+        &mut self,
+    ) -> crate::query::executor::streaming::plan::types::FragmentId {
         self.fragment_id_alloc.allocate()
     }
 
     /// Peek at the next operator ID without consuming it.
-    pub fn peek_operator_id(&self) -> crate::query::executor::streaming::plan::types::PhysicalOperatorId {
+    pub fn peek_operator_id(
+        &self,
+    ) -> crate::query::executor::streaming::plan::types::PhysicalOperatorId {
         self.operator_id_alloc.peek()
     }
 

@@ -1,11 +1,11 @@
-mod schema_lookup;
-mod property_validator;
-mod expression_type_inference;
 mod constant_evaluator;
+mod expression_type_inference;
+mod property_validator;
 mod schema_auto_creator;
+mod schema_lookup;
 
-pub use schema_lookup::*;
 pub use schema_auto_creator::*;
+pub use schema_lookup::*;
 
 #[cfg(test)]
 mod tests {
@@ -94,11 +94,8 @@ mod tests {
         let validator = create_test_validator();
         let prop_def = PropertyDef::new("name".to_string(), DataType::String).with_nullable(false);
 
-        let result = validator.validate_not_null(
-            "name",
-            &prop_def,
-            &Value::Null(NullType::default()),
-        );
+        let result =
+            validator.validate_not_null("name", &prop_def, &Value::Null(NullType::default()));
         assert!(result.is_err());
         assert!(result.unwrap_err().message.contains("cannot be NULL"));
     }

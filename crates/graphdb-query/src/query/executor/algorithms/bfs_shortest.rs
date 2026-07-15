@@ -11,7 +11,7 @@ use crate::core::{Edge, EdgeDirection, Path, Value, Vertex};
 use crate::query::executor::base::{BaseExecutor, ExecutorConfig};
 use crate::query::executor::base::{DBResult, ExecutionResult, Executor, HasStorage};
 use crate::query::DataSet;
-use crate::storage::StorageClient;
+use crate::storage::QueryStorage;
 use parking_lot::RwLock;
 
 /// BFS (Broadest First Search) shortest path configuration
@@ -31,7 +31,7 @@ pub struct BfsShortestPathConfig {
 ///
 /// Use a bidirectional breadth-first search algorithm to find the shortest path.
 /// Referencing the Nebula-Graph implementation, it supports bidirectional BFS (Breadth-First Search) and path concatenation.
-pub struct BFSShortestExecutor<S: StorageClient + 'static> {
+pub struct BFSShortestExecutor<S: QueryStorage + 'static> {
     base: BaseExecutor<S>,
     steps: usize,
     max_depth: Option<usize>,
@@ -59,7 +59,7 @@ pub struct BFSShortestExecutor<S: StorageClient + 'static> {
     execution_time_ms: u64,
 }
 
-impl<S: StorageClient + 'static> BFSShortestExecutor<S> {
+impl<S: QueryStorage + 'static> BFSShortestExecutor<S> {
     pub fn new(base_config: ExecutorConfig<S>, config: BfsShortestPathConfig) -> Self {
         Self {
             base: BaseExecutor::new(
@@ -376,7 +376,7 @@ impl<S: StorageClient + 'static> BFSShortestExecutor<S> {
     }
 }
 
-impl<S: StorageClient + 'static> Executor<S> for BFSShortestExecutor<S> {
+impl<S: QueryStorage + 'static> Executor<S> for BFSShortestExecutor<S> {
     fn execute(&mut self) -> DBResult<ExecutionResult> {
         let start_time = std::time::Instant::now();
 
@@ -504,7 +504,7 @@ impl<S: StorageClient + 'static> Executor<S> for BFSShortestExecutor<S> {
     }
 }
 
-impl<S: StorageClient + 'static> HasStorage<S> for BFSShortestExecutor<S> {
+impl<S: QueryStorage + 'static> HasStorage<S> for BFSShortestExecutor<S> {
     fn get_storage(&self) -> &Arc<RwLock<S>> {
         self.base.storage.as_ref().expect("Storage not set")
     }

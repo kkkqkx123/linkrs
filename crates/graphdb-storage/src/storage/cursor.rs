@@ -7,12 +7,10 @@
 //!
 //! # Performance contract
 //!
-//! Implementations **should** be lazy (read only what the caller asks
-//! for).  The default implementations shipped here are thin wrappers
-//! over the existing Vec-based scans – they are *not* truly lazy yet.
-//! True cursor implementations that thread the internal `VertexIterator`
-//! / CSR iterators will replace them once the storage-internal plumbing
-//! is in place.
+//! Storage engines are expected to provide native lazy cursors. The
+//! `Vec*Cursor` types remain available for adapters and test doubles, but
+//! they are explicit materialized implementations rather than an implicit
+//! fallback for production scans.
 
 use std::sync::Arc;
 
@@ -50,6 +48,8 @@ pub enum ScanTarget {
 pub struct ScanOptions {
     /// Maximum number of rows to return (None = unlimited).
     pub limit: Option<usize>,
+    /// Number of matching rows to skip before emitting the first row.
+    pub offset: usize,
     /// Batch size for cursor reads.
     pub batch_size: usize,
     /// Optional vertex ID range filter. Only vertices whose `id` falls in
@@ -61,6 +61,8 @@ pub struct ScanOptions {
     pub edge_src_id_range: Option<std::ops::Range<i64>>,
     /// Edge type filter (for edge scans only).
     pub edge_type: Option<String>,
+    /// Optional property projection pushed into the physical scan.
+    pub projection: Option<Vec<String>>,
 }
 
 impl ScanOptions {
@@ -91,6 +93,17 @@ impl ScanOptions {
     /// Builder: set row limit.
     pub fn with_limit(mut self, limit: usize) -> Self {
         self.limit = Some(limit);
+        self
+    }
+
+    /// Builder: set the number of matching rows to skip.
+    pub fn with_offset(mut self, offset: usize) -> Self {
+        self.offset = offset;
+        self
+    }
+
+    pub fn with_projection(mut self, projection: Vec<String>) -> Self {
+        self.projection = Some(projection);
         self
     }
 
@@ -242,8 +255,8 @@ impl EdgeCursor for VecEdgeCursor {
 /// Vec-backed cursor.
 ///
 /// When `options.limit` is `Some(n)`, at most `n` vertices are returned.
-pub fn open_vertex_scan(
-    storage: &Arc<RwLock<dyn StorageClient>>,
+pub fn open_vertex_scan<S: crate::storage::StorageReader + ?Sized>(
+    storage: &Arc<RwLock<S>>,
     space: &str,
     options: &ScanOptions,
 ) -> Result<Box<dyn VertexCursor>, StorageError> {
@@ -254,8 +267,8 @@ pub fn open_vertex_scan(
 /// Open a vertex scan cursor with a limit.
 ///
 /// Convenience wrapper – delegates to [`open_vertex_scan`] with a limit.
-pub fn open_vertex_scan_with_limit(
-    storage: &Arc<RwLock<dyn StorageClient>>,
+pub fn open_vertex_scan_with_limit<S: crate::storage::StorageReader + ?Sized>(
+    storage: &Arc<RwLock<S>>,
     space: &str,
     limit: usize,
 ) -> Result<Box<dyn VertexCursor>, StorageError> {
@@ -271,8 +284,8 @@ pub fn open_vertex_scan_with_limit(
 ///
 /// When `options.edge_type` is set, only edges of that type are scanned.
 /// When `options.limit` is `Some(n)`, at most `n` edges are returned.
-pub fn open_edge_scan(
-    storage: &Arc<RwLock<dyn StorageClient>>,
+pub fn open_edge_scan<S: crate::storage::StorageReader + ?Sized>(
+    storage: &Arc<RwLock<S>>,
     space: &str,
     options: &ScanOptions,
 ) -> Result<Box<dyn EdgeCursor>, StorageError> {
@@ -285,8 +298,12 @@ pub fn open_edge_scan(
 /// Returns a reader bound to the current transaction snapshot.
 pub fn open_property_batch_reader(
     storage: &Arc<RwLock<dyn StorageClient>>,
+    space: impl Into<String>,
 ) -> Box<dyn PropertyBatchReader> {
-    Box::new(DefaultPropertyBatchReader::new(storage.clone()))
+    Box::new(DefaultPropertyBatchReader::new(
+        storage.clone(),
+        space.into(),
+    ))
 }
 
 /// Open an index scan cursor through a storage client.
@@ -317,11 +334,15 @@ pub fn open_index_cursor(
 #[derive(Debug)]
 pub struct DefaultPropertyBatchReader {
     storage: Arc<RwLock<dyn StorageClient>>,
+    space: String,
 }
 
 impl DefaultPropertyBatchReader {
-    pub fn new(storage: Arc<RwLock<dyn StorageClient>>) -> Self {
-        Self { storage }
+    pub fn new(storage: Arc<RwLock<dyn StorageClient>>, space: impl Into<String>) -> Self {
+        Self {
+            storage,
+            space: space.into(),
+        }
     }
 }
 
@@ -334,7 +355,7 @@ impl PropertyBatchReader for DefaultPropertyBatchReader {
         let guard = self.storage.read();
         let mut results = Vec::with_capacity(ids.len());
         for id in ids {
-            match guard.get_vertex("", id) {
+            match guard.get_vertex(&self.space, id) {
                 Ok(Some(vertex)) => {
                     let props = prop_names
                         .iter()
@@ -348,7 +369,10 @@ impl PropertyBatchReader for DefaultPropertyBatchReader {
                     results.push(props);
                 }
                 Ok(None) => {
-                    results.push(vec![crate::core::Value::Null(NullType::Null); prop_names.len()]);
+                    results.push(vec![
+                        crate::core::Value::Null(NullType::Null);
+                        prop_names.len()
+                    ]);
                 }
                 Err(e) => return Err(e),
             }
@@ -364,7 +388,7 @@ impl PropertyBatchReader for DefaultPropertyBatchReader {
         let guard = self.storage.read();
         let mut results = Vec::with_capacity(edges.len());
         for (src, dst, edge_type, rank) in edges {
-            match guard.get_edge("", src, dst, edge_type, *rank) {
+            match guard.get_edge(&self.space, src, dst, edge_type, *rank) {
                 Ok(Some(edge)) => {
                     let props = prop_names
                         .iter()
@@ -377,7 +401,10 @@ impl PropertyBatchReader for DefaultPropertyBatchReader {
                     results.push(props);
                 }
                 Ok(None) => {
-                    results.push(vec![crate::core::Value::Null(NullType::Null); prop_names.len()]);
+                    results.push(vec![
+                        crate::core::Value::Null(NullType::Null);
+                        prop_names.len()
+                    ]);
                 }
                 Err(e) => return Err(e),
             }
