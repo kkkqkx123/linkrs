@@ -69,6 +69,7 @@ pub(super) fn handle_shortest_path(
                             max_depth,
                             single_shortest: true,
                             limit: 1,
+                            direction,
                         },
                         cancel_token.as_deref(),
                     )?;
@@ -110,6 +111,7 @@ pub(super) fn handle_bfs_shortest(
     storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
     space_name: &str,
     edge_types: &[String],
+    direction: EdgeDirection,
     max_depth: usize,
     base: &mut OperatorBase,
     input: &mut StreamingExecutor,
@@ -157,6 +159,7 @@ pub(super) fn handle_bfs_shortest(
                             max_depth,
                             single_shortest: true,
                             limit: 1,
+                            direction,
                         },
                         cancel_token.as_deref(),
                     )?;

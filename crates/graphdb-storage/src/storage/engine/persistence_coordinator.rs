@@ -36,8 +36,7 @@ use std::time::{Duration, Instant, SystemTime};
 use parking_lot::RwLock;
 
 use graphdb_sync::sync::checkpoint_manifest::{
-    CheckpointManifest, CheckpointManifestManager, IndexManifestRef, OutboxSnapshotRef,
-    StorageSnapshotRef,
+    CheckpointManifest, CheckpointManifestManager, StorageSnapshotRef,
 };
 
 use crate::core::types::Timestamp;
@@ -980,14 +979,14 @@ impl PersistenceCoordinator {
     pub fn latest_safe_lsn(&self) -> StorageResult<graphdb_core::core::types::CommitLsn> {
         self.manifest_manager
             .latest_safe_lsn()
-            .map_err(|error| StorageError::db_error(error))
+            .map_err(StorageError::db_error)
     }
 
     /// Load the latest published checkpoint manifest.
     pub fn load_latest_manifest(&self) -> StorageResult<Option<CheckpointManifest>> {
         self.manifest_manager
             .load_latest()
-            .map_err(|error| StorageError::db_error(error))
+            .map_err(StorageError::db_error)
     }
 }
 

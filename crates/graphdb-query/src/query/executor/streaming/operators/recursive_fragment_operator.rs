@@ -164,7 +164,7 @@ impl RecursiveFragmentOperator {
                 storage,
                 space_name,
                 edge_types,
-                direction: _direction,
+                direction,
                 max_depth,
                 start_vertices,
                 target_vertices,
@@ -210,6 +210,7 @@ impl RecursiveFragmentOperator {
                                         max_depth: *max_depth,
                                         single_shortest: true,
                                         limit: 1,
+                                        direction: *direction,
                                     },
                                     cancel_token.as_deref(),
                                 )?;
@@ -249,6 +250,7 @@ impl RecursiveFragmentOperator {
                 storage,
                 space_name,
                 edge_types,
+                direction,
                 max_depth,
                 left_vertex_column,
                 right_vertex_column,
@@ -298,6 +300,7 @@ impl RecursiveFragmentOperator {
                                     max_depth: *max_depth,
                                     single_shortest: *single_shortest,
                                     limit: if *single_shortest { 1 } else { 10 },
+                                    direction: *direction,
                                 },
                                 cancel_token.as_deref(),
                             )?;
@@ -336,7 +339,7 @@ impl RecursiveFragmentOperator {
                 storage,
                 space_name,
                 edge_types,
-                direction: _direction,
+                direction,
                 max_depth,
                 allow_loops,
             } => {
@@ -381,6 +384,7 @@ impl RecursiveFragmentOperator {
                                     max_depth: *max_depth,
                                     single_shortest: !*allow_loops,
                                     limit: if *allow_loops { 1000 } else { 1 },
+                                    direction: *direction,
                                 },
                                 cancel_token.as_deref(),
                             )?;

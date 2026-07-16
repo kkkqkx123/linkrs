@@ -8,7 +8,7 @@ use crate::api::embedded::result::QueryResult;
 use crate::api::embedded::session::{GraphDatabaseInner, Session};
 use crate::core::{StatsManager, Value};
 use crate::search::{FulltextConfig, FulltextIndexManager, SyncFailurePolicy};
-use crate::storage::{GraphStorage, StorageClient, StoragePersistenceOps};
+use crate::storage::{GraphStorage, StorageClient};
 use crate::sync::{SyncConfig, SyncManager};
 use crate::transaction::wal::SyncPolicy;
 use crate::transaction::{TransactionManager, TransactionManagerConfig};

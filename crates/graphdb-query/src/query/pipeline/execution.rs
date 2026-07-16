@@ -573,17 +573,23 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     pub(crate) fn build_execution_context(&self, query_context: &QueryContext) -> ExecutionContext {
         use std::collections::HashMap;
 
-        let mut context = ExecutionContext::default();
-        context.max_workers = self
-            .optimizer_engine
-            .partitioning_config()
-            .max_workers
-            .max(1);
-        context.max_buffered_chunks = self
-            .optimizer_engine
-            .partitioning_config()
-            .max_buffered_chunks
-            .max(1);
+        let params: HashMap<String, crate::core::Value> =
+            query_context.request_context().parameters.clone();
+
+        let mut context = ExecutionContext {
+            max_workers: self
+                .optimizer_engine
+                .partitioning_config()
+                .max_workers
+                .max(1),
+            max_buffered_chunks: self
+                .optimizer_engine
+                .partitioning_config()
+                .max_buffered_chunks
+                .max(1),
+            parameters: Arc::new(params),
+            ..ExecutionContext::default()
+        };
         if let Some(ref storage) = self.storage {
             let dyn_storage: Arc<RwLock<dyn QueryStorage>> = storage.clone();
             context.storage = Some(dyn_storage);
@@ -599,9 +605,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         if let Some(ref space_name) = query_context.space_name() {
             context.space_name = Some(space_name.clone());
         }
-        let params: HashMap<String, crate::core::Value> =
-            query_context.request_context().parameters.clone();
-        context.parameters = Arc::new(params);
         context
     }
 

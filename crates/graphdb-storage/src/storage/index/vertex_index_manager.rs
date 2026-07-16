@@ -9,7 +9,6 @@
 //! need for post-filtering predicate matches on range scans.
 
 use crate::core::types::{Index, Timestamp, MAX_TIMESTAMP};
-use crate::core::value::ordered_codec::OrderedCodec;
 use crate::core::wal::EntityRef;
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::cursor::{IndexCursor, IndexPredicate, IndexRow, IndexScanPlan};
@@ -17,7 +16,7 @@ use crate::storage::index::generic_index_manager::GenericIndexManager;
 use crate::storage::index::index_data_manager::IndexEntry;
 use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
 use crate::storage::index::key_codec::{KeyBuilder, KeyParser, VertexIndexKeyGen};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -333,7 +332,6 @@ impl VertexIndexManager {
         plan: &IndexScanPlan,
     ) -> StorageResult<VertexIndexCursor> {
         let index_prefix = KeyBuilder::build_vertex_index_prefix(space_id, &index.name);
-        let codec = OrderedCodec::new();
 
         // Compute range bounds based on predicate.
         // Since the encoding is now order-preserving, the BTreeMap range
@@ -404,7 +402,7 @@ impl VertexIndexManager {
             let index = forward_index.read();
             index
                 .range(start.clone()..end.clone())
-                .filter(|(key, entry)| entry.is_visible_at(plan.read_timestamp))
+                .filter(|(_key, entry)| entry.is_visible_at(plan.read_timestamp))
                 .count() as u64
         };
 

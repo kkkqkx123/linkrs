@@ -87,36 +87,32 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
         }
 
         let props = &op_spec.properties;
-        match &props.ordering {
-            crate::query::executor::streaming::plan::properties::Ordering::Sorted(orders) => {
-                let order_str = orders
-                    .iter()
-                    .map(|o| format!("{} {:?}", o.column, o.direction))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                if !order_str.is_empty() {
-                    pairs.push(Pair::new("ordering", order_str));
-                }
+        if let crate::query::executor::streaming::plan::properties::Ordering::Sorted(orders) =
+            &props.ordering
+        {
+            let order_str = orders
+                .iter()
+                .map(|o| format!("{} {:?}", o.column, o.direction))
+                .collect::<Vec<_>>()
+                .join(", ");
+            if !order_str.is_empty() {
+                pairs.push(Pair::new("ordering", order_str));
             }
-            _ => {}
         }
 
-        match &props.distribution {
-            crate::query::executor::streaming::plan::properties::Distribution::HashPartitioned(
-                keys,
-            ) => {
-                if !keys.is_empty() {
-                    pairs.push(Pair::new("hash_keys", keys.join(", ")));
-                }
+        if let crate::query::executor::streaming::plan::properties::Distribution::HashPartitioned(
+            keys,
+        ) = &props.distribution
+        {
+            if !keys.is_empty() {
+                pairs.push(Pair::new("hash_keys", keys.join(", ")));
             }
-            _ => {}
         }
 
-        match &props.pipeline_kind {
-            crate::query::executor::streaming::plan::properties::PipelineKind::Blocking => {
-                pairs.push(Pair::new("blocking", "true"));
-            }
-            _ => {}
+        if props.pipeline_kind
+            == crate::query::executor::streaming::plan::properties::PipelineKind::Blocking
+        {
+            pairs.push(Pair::new("blocking", "true"));
         }
 
         if let crate::query::executor::streaming::plan::properties::MemoryPolicy::Spillable {
@@ -127,20 +123,19 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
         }
 
         // Try to extract output column names from SourceSpec
-        match &op_spec.spec {
-            crate::query::executor::streaming::plan::types::OperatorKindSpec::Source(src_spec) => {
-                let col_names: Vec<String> = match src_spec {
-                    crate::query::executor::streaming::operators::spec::SourceSpec::ScanVertices { col_names, .. } => col_names.clone(),
-                    crate::query::executor::streaming::operators::spec::SourceSpec::StorageScanVertices { col_names, .. } => col_names.clone(),
-                    crate::query::executor::streaming::operators::spec::SourceSpec::ScanEdges { col_names, .. } => col_names.clone(),
-                    crate::query::executor::streaming::operators::spec::SourceSpec::StorageScanEdges { col_names, .. } => col_names.clone(),
-                    _ => vec![],
-                };
-                if !col_names.is_empty() {
-                    pnd.output_var = col_names.join(", ");
-                }
+        if let crate::query::executor::streaming::plan::types::OperatorKindSpec::Source(src_spec) =
+            &op_spec.spec
+        {
+            let col_names: Vec<String> = match src_spec {
+                crate::query::executor::streaming::operators::spec::SourceSpec::ScanVertices { col_names, .. } => col_names.clone(),
+                crate::query::executor::streaming::operators::spec::SourceSpec::StorageScanVertices { col_names, .. } => col_names.clone(),
+                crate::query::executor::streaming::operators::spec::SourceSpec::ScanEdges { col_names, .. } => col_names.clone(),
+                crate::query::executor::streaming::operators::spec::SourceSpec::StorageScanEdges { col_names, .. } => col_names.clone(),
+                _ => vec![],
+            };
+            if !col_names.is_empty() {
+                pnd.output_var = col_names.join(", ");
             }
-            _ => {}
         }
 
         if !pairs.is_empty() {

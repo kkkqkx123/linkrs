@@ -18,6 +18,7 @@ pub(crate) struct BidirBfsConfig<'a> {
     pub(crate) max_depth: usize,
     pub(crate) single_shortest: bool,
     pub(crate) limit: usize,
+    pub(crate) direction: EdgeDirection,
 }
 
 pub(crate) fn path_endpoint_pairs(
@@ -89,6 +90,16 @@ pub(crate) fn bidir_bfs_shortest_path(
 
     let dir_out = EdgeDirection::Out;
     let dir_in = EdgeDirection::In;
+    let forward_dir = match cfg.direction {
+        EdgeDirection::Out => dir_out,
+        EdgeDirection::In => dir_in,
+        EdgeDirection::Both => dir_out,
+    };
+    let backward_dir = match cfg.direction {
+        EdgeDirection::Out => dir_in,
+        EdgeDirection::In => dir_out,
+        EdgeDirection::Both => dir_in,
+    };
 
     while !left_queue.is_empty() && !right_queue.is_empty() {
         if let Some(token) = cancel_token {
@@ -110,7 +121,7 @@ pub(crate) fn bidir_bfs_shortest_path(
                 if current_npath.len() >= cfg.max_depth {
                     continue;
                 }
-                if let Ok(edges) = storage.get_node_edges(cfg.space_name, &current_id, dir_out) {
+                if let Ok(edges) = storage.get_node_edges(cfg.space_name, &current_id, forward_dir) {
                     let filtered: Vec<&Edge> = if let Some(types) = cfg.edge_type_filter {
                         edges
                             .iter()
@@ -173,7 +184,7 @@ pub(crate) fn bidir_bfs_shortest_path(
                     continue;
                 }
 
-                if let Ok(edges) = storage.get_node_edges(cfg.space_name, &current_id, dir_in) {
+                if let Ok(edges) = storage.get_node_edges(cfg.space_name, &current_id, backward_dir) {
                     let filtered: Vec<&Edge> = if let Some(types) = cfg.edge_type_filter {
                         edges
                             .iter()

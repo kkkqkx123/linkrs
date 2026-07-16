@@ -11,7 +11,7 @@ use crate::query::executor::streaming::operators::spec::MigrateAction;
 use crate::query::planning::plan::core::nodes::management::manage_node_enums::{
     EdgeManageNode, IndexManageNode, SpaceManageNode, TagManageNode, UserManageNode,
 };
-use crate::storage::{QueryStorage, StorageAuthOps, StorageSchemaOps};
+use crate::storage::{QueryStorage, StorageSchemaOps};
 
 mod auth_executor;
 mod maintenance_executor;

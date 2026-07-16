@@ -3,7 +3,6 @@
 
 use crate::core::types::expr::contextual::ContextualExpression;
 use crate::core::types::graph_schema::OrderDirection;
-use crate::core::value::NullType;
 use crate::core::Value;
 use crate::define_plan_node;
 use crate::query::planning::plan::core::node_id_generator::next_node_id;

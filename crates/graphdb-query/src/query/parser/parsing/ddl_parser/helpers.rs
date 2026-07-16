@@ -1,6 +1,5 @@
 use crate::core::types::PropertyDef;
 use crate::core::{NullType, Value};
-use crate::query::parser::ast::stmt::*;
 use crate::query::parser::ast::types::DataType;
 use crate::query::parser::core::error::{ParseError, ParseErrorKind};
 use crate::query::parser::parsing::expr_parser::ExprParser;

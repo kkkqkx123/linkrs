@@ -123,6 +123,7 @@ pub(super) fn handle_multi_shortest_path(
     space_name: &str,
     target_vertices: &[Expression],
     edge_types: &[String],
+    direction: EdgeDirection,
     max_depth: usize,
     left_vertex_column: &str,
     right_vertex_column: &str,
@@ -196,6 +197,7 @@ pub(super) fn handle_multi_shortest_path(
                                 max_depth,
                                 single_shortest,
                                 limit: if single_shortest { 1 } else { 10 },
+                                direction,
                             },
                             cancel_token.as_deref(),
                         )?;

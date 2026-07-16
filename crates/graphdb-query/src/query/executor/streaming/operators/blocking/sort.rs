@@ -74,7 +74,7 @@ pub(crate) fn spill_sorted_run(
 }
 
 pub(crate) fn sort_rows(
-    buffer: &mut Vec<Vec<Value>>,
+    buffer: &mut [Vec<Value>],
     col_names: &[String],
     sort_expressions: &[Expression],
     sort_directions: &[SortDirection],

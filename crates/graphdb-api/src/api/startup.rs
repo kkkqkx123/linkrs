@@ -17,7 +17,7 @@ use crate::api::server::{GraphService, HttpServer};
 use crate::config::Config;
 use crate::core::error::DBResult;
 use crate::storage::{
-    GraphStorage, MetricsStorage, StorageCommitOps, StoragePersistenceOps, SyncWrapper,
+    GraphStorage, MetricsStorage, StorageCommitOps, SyncWrapper,
 };
 use crate::transaction::{TransactionManager, TransactionManagerConfig};
 

@@ -341,16 +341,13 @@ impl PhysicalPlanValidator {
                         ));
                     }
                 }
-                OperatorKindSpec::Source(spec) => {
-                    // Start source produces one row; must be streaming.
-                    if matches!(spec, super::super::operators::spec::SourceSpec::Start)
-                        && op.properties.pipeline_kind == PipelineKind::Blocking
-                    {
-                        result.warnings.push(format!(
-                            "Start source {:?} should be streaming",
-                            op.operator_id
-                        ));
-                    }
+                OperatorKindSpec::Source(super::super::operators::spec::SourceSpec::Start)
+                    if op.properties.pipeline_kind == PipelineKind::Blocking =>
+                {
+                    result.warnings.push(format!(
+                        "Start source {:?} should be streaming",
+                        op.operator_id
+                    ));
                 }
                 _ => {}
             }
@@ -445,13 +442,13 @@ impl PhysicalPlanValidator {
                         ));
                     }
                 }
-                super::types::FragmentKind::Exchange => {
-                    if !matches!(&root_op.spec, OperatorKindSpec::Exchange(_)) {
-                        result.warnings.push(format!(
-                            "Fragment {:?} has kind Exchange but root operator is {:?}",
-                            fragment.id, root_op.explain_name
-                        ));
-                    }
+                super::types::FragmentKind::Exchange
+                    if !matches!(&root_op.spec, OperatorKindSpec::Exchange(_)) =>
+                {
+                    result.warnings.push(format!(
+                        "Fragment {:?} has kind Exchange but root operator is {:?}",
+                        fragment.id, root_op.explain_name
+                    ));
                 }
                 _ => {}
             }

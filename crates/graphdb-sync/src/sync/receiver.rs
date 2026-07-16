@@ -139,6 +139,13 @@ pub struct VectorReceiver {
 }
 
 #[cfg(feature = "qdrant")]
+impl Default for VectorReceiver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "qdrant")]
 impl VectorReceiver {
     pub fn new() -> Self {
         Self {

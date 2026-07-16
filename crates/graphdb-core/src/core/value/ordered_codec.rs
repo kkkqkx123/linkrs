@@ -474,7 +474,7 @@ fn write_vertex_id(vid: &VertexId, buf: &mut Vec<u8>) {
     buf.push(bytes.len() as u8);
     buf.extend_from_slice(bytes);
     let pad = 14usize.saturating_sub(bytes.len());
-    buf.extend(std::iter::repeat(0u8).take(pad));
+    buf.extend(std::iter::repeat_n(0u8, pad));
 }
 
 /// Read a VertexId from 16 fixed-size bytes.

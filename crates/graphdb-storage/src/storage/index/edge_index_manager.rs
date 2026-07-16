@@ -1,5 +1,4 @@
 use crate::core::types::{Index, Timestamp, MAX_TIMESTAMP};
-use crate::core::value::ordered_codec::OrderedCodec;
 use crate::core::wal::EntityRef;
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::cursor::{IndexCursor, IndexPredicate, IndexRow, IndexScanPlan};
@@ -347,7 +346,6 @@ impl EdgeIndexManager {
         plan: &IndexScanPlan,
     ) -> StorageResult<EdgeIndexCursor> {
         let index_prefix = KeyBuilder::build_edge_index_prefix(space_id, &index.name);
-        let codec = OrderedCodec::new();
 
         let (start, end) = match &plan.predicate {
             IndexPredicate::Equal(value) => {
@@ -411,7 +409,7 @@ impl EdgeIndexManager {
             let index = forward_index.read();
             index
                 .range(start.clone()..end.clone())
-                .filter(|(key, entry)| entry.is_visible_at(plan.read_timestamp))
+                .filter(|(_key, entry)| entry.is_visible_at(plan.read_timestamp))
                 .count() as u64
         };
 
@@ -551,10 +549,11 @@ fn parse_edge_entity_ref(key: &[u8]) -> Option<EntityRef> {
     let (src, dst, edge_type, ranking) = KeyParser::parse_edge_identity_from_key(key).ok()?;
     let src_id = value_to_vertex_id(&src)?;
     let dst_id = value_to_vertex_id(&dst)?;
+    let edge_type_id: u32 = edge_type.parse::<u32>().unwrap_or_default();
     Some(EntityRef::Edge {
         src: src_id,
         dst: dst_id,
-        edge_type: 0u32,
+        edge_type: edge_type_id,
         ranking,
     })
 }

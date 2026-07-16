@@ -84,6 +84,9 @@ pub(super) fn handle_traverse_all(
     base: &mut OperatorBase,
     input: &mut StreamingExecutor,
 ) -> Result<Option<DataChunk>, QueryError> {
+    if !base.lifecycle.is_opened() {
+        return Err(QueryError::execution("TraverseAll not opened".to_string()));
+    }
     input.advance()
 }
 

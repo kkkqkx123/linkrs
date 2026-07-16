@@ -980,7 +980,6 @@ impl crate::storage::StorageCommitOps for GraphStorage {
         sync_manager: &crate::sync::SyncManager,
     ) -> StorageResult<usize> {
         use crate::transaction::wal::{collect_committed_transactions, LocalWalParser, WalParser};
-        use graphdb_core::core::types::CommitLsn;
         use graphdb_sync::sync::outbox_recovery::{find_latest_snapshot, restore_snapshot_sync};
         let Some(paths) = self.ctx.storage_paths() else {
             return Ok(0);

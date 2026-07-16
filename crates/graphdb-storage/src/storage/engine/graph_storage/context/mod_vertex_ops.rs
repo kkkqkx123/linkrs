@@ -114,11 +114,9 @@ impl GraphStorageContext {
 
         let record = self.persistent.data_store.with_vertex_tables(
             |vertex_tables| -> Option<VertexRecord> {
-                Some(
-                    vertex_tables
-                        .get(&label)?
-                        .get_by_internal_id(internal_id, ts)?,
-                )
+                vertex_tables
+                    .get(&label)?
+                    .get_by_internal_id(internal_id, ts)
             },
         )?;
 
@@ -179,11 +177,9 @@ impl GraphStorageContext {
 
         let record = self.persistent.data_store.with_vertex_tables(
             |vertex_tables| -> Option<VertexRecord> {
-                Some(
-                    vertex_tables
-                        .get(&label)?
-                        .get_by_internal_id(internal_id, ts)?,
-                )
+                vertex_tables
+                    .get(&label)?
+                    .get_by_internal_id(internal_id, ts)
             },
         )?;
 
@@ -228,11 +224,9 @@ impl GraphStorageContext {
 
         let record = self.persistent.data_store.with_vertex_tables(
             |vertex_tables| -> Option<VertexRecord> {
-                Some(
-                    vertex_tables
-                        .get(&label)?
-                        .get_by_internal_id(internal_id, ts)?,
-                )
+                vertex_tables
+                    .get(&label)?
+                    .get_by_internal_id(internal_id, ts)
             },
         )?;
 

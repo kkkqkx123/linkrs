@@ -89,10 +89,10 @@ impl RecoveryApplier for GraphStorageContext {
         // Check if endpoints exist
         let endpoints_exist = self.data_store().with_vertex_tables(|vertex_tables| {
             let src_exists = vertex_tables.contains_key(&redo.src_label)
-                && resolve_external_vid(&vertex_tables, redo.src_label, redo.src_vid, ts).is_some();
+                && resolve_external_vid(vertex_tables, redo.src_label, redo.src_vid, ts).is_some();
 
             let dst_exists = vertex_tables.contains_key(&redo.dst_label)
-                && resolve_external_vid(&vertex_tables, redo.dst_label, redo.dst_vid, ts).is_some();
+                && resolve_external_vid(vertex_tables, redo.dst_label, redo.dst_vid, ts).is_some();
             src_exists && dst_exists
         });
 

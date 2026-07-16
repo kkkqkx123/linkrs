@@ -10,6 +10,7 @@ use self::predicates::*;
 use self::serialization::*;
 use self::transform::*;
 
+#[cfg(test)]
 #[path = "test.rs"]
 mod tests;
 

@@ -3,7 +3,6 @@
 //! This module provides functions for parsing index keys encoded with the
 //! `OrderedCodec`.
 
-use crate::core::value::ordered_codec::OrderedCodec;
 use crate::core::{StorageError, Value};
 
 use super::key_builder::codec;
@@ -103,8 +102,7 @@ impl KeyParser {
         let type_bytes = codec().encode(&type_val)?;
         pos += consumed4;
 
-        let (rank_val, consumed5) = codec().decode_value_inner(&key_bytes[pos..])?;
-        let rank_bytes = codec().encode(&rank_val)?;
+        let (_rank_val, consumed5) = codec().decode_value_inner(&key_bytes[pos..])?;
         pos += consumed5;
 
         Ok((prop_value_bytes, src_bytes, dst_bytes, type_bytes, pos))

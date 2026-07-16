@@ -4,7 +4,6 @@
 //! order-preserving `OrderedCodec`.
 
 use crate::core::value::ordered_codec::OrderedCodec;
-use crate::core::wal::EntityRef;
 use crate::core::{StorageError, Value};
 
 use super::key_types::{

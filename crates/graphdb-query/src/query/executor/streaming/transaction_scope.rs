@@ -52,7 +52,7 @@ impl std::fmt::Display for CancelReason {
 /// - `ExplicitBorrowed`: the query runs within a session-level explicit
 ///   transaction.
 /// - `AutoCommitOwned`: the instance owns an auto-commit transaction that is
-///    committed (or rolled back) when execution completes.
+///   committed (or rolled back) when execution completes.
 /// - `ReadOnlySnapshot`: a read-only snapshot that does not need a write
 ///   transaction handle.
 /// - `CommandScope`: transient scope for BEGIN / COMMIT / ROLLBACK state
