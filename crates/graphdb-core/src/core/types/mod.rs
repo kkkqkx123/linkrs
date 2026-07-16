@@ -252,7 +252,8 @@ pub use self::storage_ids::{
     TransactionId, VertexId, VertexIdentifier, INVALID_EDGE_ID, INVALID_TIMESTAMP, MAX_TIMESTAMP,
 };
 pub use self::sync_protocol::{
-    CommitLsn, IdempotencyKey, IndexGeneration, LeaseEpoch, ManifestEpoch, OrderingKey, TargetId,
+    CommitLsn, IdempotencyKey, IndexGeneration, LeaseEpoch, ManifestEpoch, OrderingKey,
+    SnapshotTimestamp, TargetId,
 };
 pub use self::table_tracker::{TableId, TableTracker, TableTrackerConfig, TableType};
 pub use self::transaction_config::{DurabilityLevel, TransactionIsolationLevel};

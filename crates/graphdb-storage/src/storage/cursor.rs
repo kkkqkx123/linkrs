@@ -144,8 +144,8 @@ pub enum PartitionSelector {
     All,
     Shards(Vec<u32>),
     KeyRange {
-        lower: Vec<u8>,
-        upper: Vec<u8>,
+        lower: Option<Vec<u8>>,
+        upper: Option<Vec<u8>>,
     },
 }
 
@@ -214,6 +214,16 @@ pub trait IndexCursor: Send + std::fmt::Debug {
 
     /// Number of stale rows skipped so far (for diagnostics).
     fn stale_skipped(&self) -> u64 {
+        0
+    }
+
+    /// Number of invisible (MVCC-hidden) entries skipped so far.
+    fn invisible_skipped(&self) -> u64 {
+        0
+    }
+
+    /// Number of malformed/unparseable entries skipped so far.
+    fn malformed_skipped(&self) -> u64 {
         0
     }
 

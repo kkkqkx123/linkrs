@@ -36,8 +36,8 @@ pub use client::{
 };
 pub use cursor::{
     open_edge_scan, open_index_cursor, open_property_batch_reader, open_vertex_scan, EdgeCursor,
-    IndexCursor, IndexPredicate, IndexScanPlan, PropertyBatchReader, ScanOptions, ScanTarget,
-    VecEdgeCursor, VecVertexCursor, VertexCursor,
+    IndexCursor, IndexPredicate, IndexRow, IndexScanPlan, PartitionSelector, PropertyBatchReader,
+    ScanOptions, ScanTarget, VecEdgeCursor, VecVertexCursor, VertexCursor,
 };
 pub use engine::config::PropertyGraphConfig;
 pub use engine::graph_storage::GraphStorage;
@@ -47,6 +47,7 @@ pub use engine::persistence_coordinator::{
 };
 pub use engine::sync_wrapper::SyncWrapper;
 pub use engine::transaction::UndoTarget;
+pub use index::{IndexManifest, IndexShard, ManifestCatalog, ManifestCatalogStats, ManifestHandle};
 pub use metrics::MetricsStorage;
 pub use schema::{ChangeDetails, ChangeLog, LabelVersionHistory, PropertyChange, SchemaObjectType};
 pub use types::StoragePropertyDef;

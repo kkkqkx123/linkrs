@@ -1,6 +1,6 @@
 # 存储、索引与同步的目标架构
 
-> 文档状态（2026-07）：目标架构已完成设计冻结；阶段 0 已完成，阶段 1 的本地提交闭环已接入真实写路径，阶段 3 已具备 SQLite 快照和共同 safe LSN 的基础能力。本文其余章节描述目标行为，不代表所有 transport、generation rebuild、typed cursor 和 shard split 已经完成。
+> 文档状态（2026-07）：目标架构已完成设计冻结；阶段 0 已完成，阶段 1 的本地提交闭环已接入真实写路径，阶段 3 已具备 SQLite 快照和共同 safe LSN 的基础能力；ordered codec、typed cursor 和 edge index 已有部分实现，manifest shard 路由与 reader 回收 fence 已落地 primitive。本文其余章节描述目标行为，不代表 transport、generation rebuild 或在线 shard split 已经完成。
 
 ## 1. 目标与不变量
 
@@ -271,6 +271,7 @@ rebuild 和 split 使用同一追平协议：
 - fulltext/vector 仍使用现有 coordinator/transport 适配层，尚未实现远端 receipt 与 mutation 的同事务持久化，也未完成 vector 的持久化单调 LSN 拒绝协议。
 - checkpoint manifest 尚未同时原子引用 storage snapshot、outbox snapshot 和 native-index manifests；SQLite 丢失后的 snapshot 加剩余 WAL 自动重建流程仍需接入启动恢复。
 - `minimum_lsn` 等待接口、显式 degraded skip、完整 lifecycle barrier 和 target/index 双层 frontier 尚未对外稳定开放。
-- `OrderedKeyCodec`、typed predicate、统一 `IndexRow` cursor、edge native index、generation rebuild/catch-up/publish fence 和在线 shard split 尚未完成。
+- `OrderedKeyCodec`、typed predicate、`IndexRow` cursor 和 edge native index 已有实现，但 prefix 仍存在扫描后过滤，covering record 与 storage 内实体版本校验尚未闭环。
+- immutable manifest、结构化 shard range、路由/pruning、引用计数 handle 和延迟回收 primitive 已实现；尚未接入物理 cursor/checkpoint，在线 split 仍等待 crash-safe rebuild/catch-up/publish fence。
 
 因此，当前实现可以声明“本地 WAL → SQLite outbox → claim 的 at-least-once 基础闭环”，不能声明所有 target 的 exactly-once、在线 rebuild/split 安全发布或完整 read-your-writes guarantee。

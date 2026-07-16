@@ -44,6 +44,7 @@ numeric_version_type!(CommitLsn, "lsn:");
 numeric_version_type!(IndexGeneration, "generation:");
 numeric_version_type!(ManifestEpoch, "manifest:");
 numeric_version_type!(LeaseEpoch, "lease:");
+numeric_version_type!(SnapshotTimestamp, "snapshot:");
 
 macro_rules! string_identifier_type {
     ($name:ident) => {

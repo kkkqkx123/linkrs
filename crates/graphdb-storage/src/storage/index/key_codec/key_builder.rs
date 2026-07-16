@@ -204,17 +204,10 @@ impl KeyBuilder {
     // Range Query Helpers
     // ========================================================================
 
+    /// Compute an exclusive upper bound for a prefix range.
+    /// Delegates to [`OrderedCodec::prefix_upper_bound`].
     pub fn build_range_end(prefix: &ByteKey) -> ByteKey {
-        let mut end = prefix.0.clone();
-        for i in (0..end.len()).rev() {
-            if end[i] == 255 {
-                end[i] = 0;
-            } else {
-                end[i] += 1;
-                break;
-            }
-        }
-        ByteKey(end)
+        ByteKey(OrderedCodec::prefix_upper_bound(&prefix.0))
     }
 }
 

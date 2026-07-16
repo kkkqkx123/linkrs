@@ -1,7 +1,10 @@
 use crate::core::metadata::index_manager::IndexMetadataManager;
-use crate::core::types::{Index, IndexStatus};
+use crate::core::types::{Index, IndexStatus, MAX_TIMESTAMP};
 use crate::core::{StorageError, StorageResult, Value};
+use crate::storage::index::index_data_manager::IndexRecord;
+use crate::storage::index::key_codec::KeyBuilder;
 use crate::storage::index::{EdgeIndexOps, VertexIndexOps};
+use std::collections::BTreeMap;
 
 use super::context::GraphStorageContext;
 
@@ -54,6 +57,14 @@ pub(crate) fn list_tag_indexes(
     ctx.index_metadata_manager().list_tag_indexes(space_id)
 }
 
+/// Build a physical index key by appending a unique version suffix.
+fn make_physical_key(logical_key: &[u8], version: u64) -> Vec<u8> {
+    let mut physical_key = Vec::with_capacity(logical_key.len() + 8);
+    physical_key.extend_from_slice(logical_key);
+    physical_key.extend_from_slice(&version.to_le_bytes());
+    physical_key
+}
+
 pub(crate) fn rebuild_tag_index(
     ctx: &GraphStorageContext,
     space: &str,
@@ -67,18 +78,18 @@ pub(crate) fn rebuild_tag_index(
         .ok_or_else(|| StorageError::not_found(format!("Index {} not found", index_name)))?;
 
     // Generation rebuild: Building -> Active protocol.
-    // Set status to Building before starting the rebuild.
     ctx.index_metadata_manager().set_tag_index_status(
         space_id,
         index_name,
         IndexStatus::Building,
     )?;
 
-    let ts = ctx.get_write_timestamp();
-    // Clear existing index entries.
-    ctx.index_data_manager()
-        .write()
-        .clear_tag_index(space_id, &index.name)?;
+    // Build new index data from a fixed snapshot without clearing the active generation.
+    // This allows existing readers to continue using the old generation during rebuild.
+    let mut forward = BTreeMap::new();
+    let mut reverse = BTreeMap::new();
+    let mut version_counter = 1u64;
+
     for vertex in vertices {
         let props: Vec<(String, Value)> = vertex
             .properties
@@ -86,12 +97,41 @@ pub(crate) fn rebuild_tag_index(
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         let vid_value = Value::from(vertex.vid);
-        ctx.update_vertex_indexes_mvcc(space_id, &vid_value, &index.name, &props, ts)?;
+
+        for (_, prop_value) in &props {
+            let logical_forward_key = KeyBuilder::build_vertex_index_key(
+                space_id, &index.name, prop_value, &vid_value,
+            )?;
+            let logical_reverse_key =
+                KeyBuilder::build_vertex_reverse_key_v2(space_id, &vid_value, &index.name)?;
+
+            let entry = IndexRecord::new(MAX_TIMESTAMP);
+            let fwd_key = make_physical_key(&logical_forward_key.0, version_counter);
+            version_counter = version_counter.wrapping_add(1);
+            let rev_key = make_physical_key(&logical_reverse_key.0, version_counter);
+            version_counter = version_counter.wrapping_add(1);
+
+            forward.insert(fwd_key, entry.clone());
+            reverse.insert(rev_key, entry);
+        }
     }
 
+    // Atomically swap the in-memory BTreeMaps.
+    // After this point, new reads and writes use the rebuilt data.
+    let mgr = ctx.index_data_manager().write();
+    mgr.vertex_manager().base().replace_data(forward, reverse);
+
     // Mark as Active after successful rebuild.
-    ctx.index_metadata_manager()
-        .set_tag_index_status(space_id, index_name, IndexStatus::Active)?;
+    ctx.index_metadata_manager().set_tag_index_status(
+        space_id,
+        index_name,
+        IndexStatus::Publishing,
+    )?;
+    ctx.index_metadata_manager().set_tag_index_status(
+        space_id,
+        index_name,
+        IndexStatus::Active,
+    )?;
 
     Ok(true)
 }
@@ -166,11 +206,11 @@ pub(crate) fn rebuild_edge_index(
         IndexStatus::Building,
     )?;
 
-    let ts = ctx.get_write_timestamp();
-    // Clear existing index entries.
-    ctx.index_data_manager()
-        .write()
-        .clear_edge_index(space_id, &index.name)?;
+    // Build new index data from a fixed snapshot without clearing the active generation.
+    let mut forward = BTreeMap::new();
+    let mut reverse = BTreeMap::new();
+    let mut version_counter = 1u64;
+
     for edge in edges {
         let props: Vec<(String, Value)> = edge
             .props
@@ -179,19 +219,38 @@ pub(crate) fn rebuild_edge_index(
             .collect();
         let src_value = Value::from(edge.src);
         let dst_value = Value::from(edge.dst);
-        ctx.update_edge_indexes_mvcc(
-            space_id,
-            &src_value,
-            &dst_value,
-            &edge.edge_type,
-            edge.ranking,
-            &index.name,
-            &props,
-            ts,
-        )?;
+
+        for (_, prop_value) in &props {
+            let logical_forward_key = KeyBuilder::build_edge_index_key(
+                space_id, &index.name, prop_value, &src_value, &dst_value,
+                &edge.edge_type, edge.ranking,
+            )?;
+            let logical_reverse_key = KeyBuilder::build_edge_reverse_key(
+                space_id, &src_value, &dst_value, &edge.edge_type,
+                edge.ranking, &index.name,
+            )?;
+
+            let entry = IndexRecord::new(MAX_TIMESTAMP);
+            let fwd_key = make_physical_key(&logical_forward_key.0, version_counter);
+            version_counter = version_counter.wrapping_add(1);
+            let rev_key = make_physical_key(&logical_reverse_key.0, version_counter);
+            version_counter = version_counter.wrapping_add(1);
+
+            forward.insert(fwd_key, entry.clone());
+            reverse.insert(rev_key, entry);
+        }
     }
 
-    // Mark as Active after successful rebuild.
+    // Atomically swap the in-memory BTreeMaps.
+    let mgr = ctx.index_data_manager().write();
+    mgr.edge_manager().base().replace_data(forward, reverse);
+
+    // Transition through publishing to active.
+    ctx.index_metadata_manager().set_edge_index_status(
+        space_id,
+        index_name,
+        IndexStatus::Publishing,
+    )?;
     ctx.index_metadata_manager().set_edge_index_status(
         space_id,
         index_name,

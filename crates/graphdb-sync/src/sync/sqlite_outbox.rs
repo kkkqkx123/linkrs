@@ -375,7 +375,7 @@ impl SqliteOutbox {
         Ok(())
     }
 
-    pub async fn activate_generation(
+    pub async fn transition_generation_to_publishing(
         &self,
         target: &TargetId,
         index_id: u64,
@@ -401,6 +401,59 @@ impl SqliteOutbox {
             .map_err(|error| error.to_string())?
             .ok_or_else(|| "Generation not in catching_up state".to_string())?;
 
+            if current_lsn < to_sql_i64(barrier_lsn.get(), "barrier LSN")? {
+                return Err(format!(
+                    "Generation has not caught up to barrier LSN {} < {}",
+                    current_lsn,
+                    barrier_lsn.get()
+                ));
+            }
+
+            sqlx::query(
+                "UPDATE generation_state SET state = 'publishing', barrier_lsn = ? \
+                 WHERE target = ? AND index_id = ? AND generation = ? AND state = 'catching_up'",
+            )
+            .bind(to_sql_i64(barrier_lsn.get(), "barrier LSN")?)
+            .bind(target.as_str())
+            .bind(to_sql_i64(index_id, "index ID")?)
+            .bind(to_sql_i64(generation, "index generation")?)
+            .execute(&mut *connection)
+            .await
+            .map_err(|error| error.to_string())?;
+            Ok(())
+        }
+        .await;
+        finish_transaction(&mut connection, result).await
+    }
+
+    pub async fn activate_generation(
+        &self,
+        target: &TargetId,
+        index_id: u64,
+        generation: u64,
+        barrier_lsn: CommitLsn,
+    ) -> Result<(), String> {
+        let mut connection = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|error| error.to_string())?;
+        begin_immediate(&mut connection).await?;
+        let result = async {
+            let row = sqlx::query(
+                "SELECT barrier_lsn FROM generation_state \
+                 WHERE target = ? AND index_id = ? AND generation = ? \
+                 AND state IN ('catching_up', 'publishing')",
+            )
+            .bind(target.as_str())
+            .bind(to_sql_i64(index_id, "index ID")?)
+            .bind(to_sql_i64(generation, "index generation")?)
+            .fetch_optional(&mut *connection)
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "Generation not in catching_up or publishing state".to_string())?;
+
+            let current_lsn: i64 = row.get("barrier_lsn");
             if current_lsn < to_sql_i64(barrier_lsn.get(), "barrier LSN")? {
                 return Err(format!(
                     "Generation has not caught up to barrier LSN {} < {}",
@@ -452,7 +505,8 @@ impl SqliteOutbox {
     ) -> Result<(), String> {
         sqlx::query(
             "UPDATE generation_state SET state = 'dropped' \
-             WHERE target = ? AND index_id = ? AND generation = ? AND state IN ('active', 'draining', 'failed')",
+             WHERE target = ? AND index_id = ? AND generation = ? \
+             AND state IN ('active', 'draining', 'publishing', 'failed')",
         )
         .bind(target.as_str())
         .bind(to_sql_i64(index_id, "index ID")?)

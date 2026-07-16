@@ -8,7 +8,14 @@
 //!
 //! Each field starts with a type tag byte, followed by the encoded body.
 //! Fixed-length types encode to a fixed byte count; variable-length types
-//! (String, Blob) use a big-endian u32 length prefix.
+//! (String, Blob) use a 0x00 terminator byte.  The 0x00 byte does not appear
+//! inside the encoded data — encoding a value containing 0x00 returns an
+//! [`StorageError`].
+//!
+//! The terminator enables tight prefix upper bounds: for a string or blob
+//! prefix value P, the range scan bound is `[encode(P), tag +
+//! prefix_upper_bound(P_data_bytes))`, covering all values that start with P
+//! and excluding those that do not.
 //!
 //! Composite keys concatenate multiple field encodings; the entity tie-breaker
 //! is appended as the final field.
@@ -142,15 +149,16 @@ impl OrderedCodec {
                 Ok((Value::Double(decode_f64_ordered(raw)), 9))
             }
             TAG_STRING | TAG_BLOB => {
-                if bytes.len() < 5 {
-                    return Err(StorageError::deserialize_error("truncated string length"));
-                }
-                let len = u32::from_be_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]) as usize;
-                let end = 5 + len;
-                if bytes.len() < end {
-                    return Err(StorageError::deserialize_error("truncated string data"));
-                }
-                let data = bytes[5..end].to_vec();
+                // Terminator-based: scan for 0x00 byte (the terminator).
+                let term_rel = bytes[1..]
+                    .iter()
+                    .position(|b| *b == 0)
+                    .ok_or_else(|| {
+                        StorageError::deserialize_error("missing string/blob terminator")
+                    })?;
+                let term_abs = 1 + term_rel;
+                let data = bytes[1..term_abs].to_vec();
+                let end = term_abs + 1;
                 if tag == TAG_STRING {
                     let s = String::from_utf8(data).map_err(|e| {
                         StorageError::deserialize_error(format!("invalid UTF-8: {}", e))
@@ -343,6 +351,9 @@ impl OrderedCodec {
     }
 
     /// Compute the prefix upper bound for range scanning.
+    ///
+    /// Increments the last byte of the prefix (with carry) to produce an
+    /// exclusive upper bound for a tight prefix range.
     pub fn prefix_upper_bound(prefix: &[u8]) -> Vec<u8> {
         let mut end = prefix.to_vec();
         for i in (0..end.len()).rev() {
@@ -354,6 +365,66 @@ impl OrderedCodec {
             }
         }
         end
+    }
+
+    /// Return tight (inclusive lower, exclusive upper) byte bounds for a
+    /// prefix scan over the given value.
+    ///
+    /// For fixed-length types the bounds are the encoded value and its
+    /// [`prefix_upper_bound`].  For variable-length types (String, Blob)
+    /// the lower bound is the full encoded value (including terminator)
+    /// and the upper bound is the tag followed by
+    /// `prefix_upper_bound(data_bytes)` — this correctly covers all values
+    /// whose encoded prefix equals the given value's encoding while
+    /// excluding the next value in order.
+    pub fn prefix_bounds(&self, value: &Value) -> Result<(Vec<u8>, Vec<u8>), StorageError> {
+        match value {
+            // Fixed-length types: simple upper bound from the encoded form.
+            Value::Null(_) | Value::Empty | Value::Bool(_)
+            | Value::SmallInt(_) | Value::Int(_) | Value::BigInt(_)
+            | Value::Float(_) | Value::Double(_)
+            | Value::Date(_) | Value::Time(_) | Value::DateTime(_)
+            | Value::Uuid(_) => {
+                let lower = self.encode(value)?;
+                let upper = Self::prefix_upper_bound(&lower);
+                Ok((lower, upper))
+            }
+
+            // String / blob: terminator-based, tight upper bound.
+            // Lower = full encoded value (TAG + data + 0x00).
+            // Upper = TAG + prefix_upper_bound(data).
+            Value::String(_s) => {
+                let lower = self.encode(value)?;
+                let tag = lower[0];
+                let data = &lower[1..lower.len() - 1]; // strip tag and terminator
+                let mut upper = vec![tag];
+                upper.extend_from_slice(&Self::prefix_upper_bound(data));
+                Ok((lower, upper))
+            }
+            Value::FixedString { data, .. } => {
+                let s = Value::String(data.clone());
+                let lower = self.encode(&s)?;
+                let tag = lower[0];
+                let data_bytes = &lower[1..lower.len() - 1];
+                let mut upper = vec![tag];
+                upper.extend_from_slice(&Self::prefix_upper_bound(data_bytes));
+                Ok((lower, upper))
+            }
+            Value::Blob(_b) => {
+                let lower = self.encode(value)?;
+                let tag = lower[0];
+                let data = &lower[1..lower.len() - 1];
+                let mut upper = vec![tag];
+                upper.extend_from_slice(&Self::prefix_upper_bound(data));
+                Ok((lower, upper))
+            }
+
+            // Complex / non-indexable types: error.
+            other => Err(StorageError::db_error(format!(
+                "prefix_bounds not supported for type {:?}",
+                other
+            ))),
+        }
     }
 
     // ── Internal encoding ────────────────────────────────────────────────────
@@ -393,19 +464,34 @@ impl OrderedCodec {
                 buf.extend_from_slice(&encode_f64_ordered(*f).to_be_bytes());
             }
             Value::String(s) => {
+                if s.as_bytes().contains(&0) {
+                    return Err(StorageError::db_error(
+                        "string with embedded 0x00 byte cannot be encoded in ordered_codec v1",
+                    ));
+                }
                 buf.push(TAG_STRING);
-                buf.extend_from_slice(&(s.len() as u32).to_be_bytes());
                 buf.extend_from_slice(s.as_bytes());
+                buf.push(0x00);
             }
             Value::FixedString { data, .. } => {
+                if data.as_bytes().contains(&0) {
+                    return Err(StorageError::db_error(
+                        "fixed string with embedded 0x00 byte cannot be encoded",
+                    ));
+                }
                 buf.push(TAG_STRING);
-                buf.extend_from_slice(&(data.len() as u32).to_be_bytes());
                 buf.extend_from_slice(data.as_bytes());
+                buf.push(0x00);
             }
             Value::Blob(b) => {
+                if b.contains(&0) {
+                    return Err(StorageError::db_error(
+                        "blob with embedded 0x00 byte cannot be encoded in ordered_codec v1",
+                    ));
+                }
                 buf.push(TAG_BLOB);
-                buf.extend_from_slice(&(b.len() as u32).to_be_bytes());
                 buf.extend_from_slice(b);
+                buf.push(0x00);
             }
             Value::Date(d) => {
                 buf.push(TAG_DATE);
@@ -647,7 +733,7 @@ mod tests {
     }
 
     #[test]
-    fn test_string() {
+    fn test_string_roundtrip() {
         let cases = [
             Value::String("".to_string()),
             Value::String("hello".to_string()),
@@ -665,6 +751,13 @@ mod tests {
     }
 
     #[test]
+    fn test_string_order_aa_less_than_b() {
+        let aa = codec().encode(&Value::String("aa".to_string())).unwrap();
+        let b = codec().encode(&Value::String("b".to_string())).unwrap();
+        assert!(aa < b, "encoded('aa') < encoded('b') must hold for semantic ordering");
+    }
+
+    #[test]
     fn test_string_order() {
         let a = codec().encode(&Value::String("a".to_string())).unwrap();
         let b = codec().encode(&Value::String("b".to_string())).unwrap();
@@ -672,17 +765,140 @@ mod tests {
     }
 
     #[test]
-    fn test_blob() {
+    fn test_blob_roundtrip() {
         let cases = vec![
             Value::Blob(vec![]),
-            Value::Blob(vec![0x00, 0xFF]),
             Value::Blob(vec![0x01, 0x02, 0x03]),
+            Value::Blob(vec![0xFF, 0xFE]),
         ];
+        // Note: blobs with 0x00 byte are rejected at encode time.
         for v in cases {
             let enc = codec().encode(&v).unwrap();
             let dec = codec().decode(&enc).unwrap();
             assert_eq!(dec, v, "roundtrip failed for {:?}", v);
         }
+    }
+
+    #[test]
+    fn test_blob_rejects_zero_byte() {
+        let v = Value::Blob(vec![0x00, 0x01]);
+        assert!(codec().encode(&v).is_err());
+    }
+
+    #[test]
+    fn test_string_rejects_zero_byte() {
+        let v = Value::String("a\x00b".to_string());
+        assert!(codec().encode(&v).is_err());
+    }
+
+    #[test]
+    fn test_prefix_bounds_string() {
+        let (lower, upper) = codec()
+            .prefix_bounds(&Value::String("a".to_string()))
+            .unwrap();
+        // lower = [TAG_STRING, 0x61, 0x00]
+        assert_eq!(lower[0], TAG_STRING);
+        assert_eq!(&lower[1..lower.len() - 1], b"a");
+        assert_eq!(lower[lower.len() - 1], 0x00);
+
+        // upper = [TAG_STRING, 0x62]
+        assert_eq!(upper, vec![TAG_STRING, 0x62]);
+
+        // Verify all "a*" strings fall within bounds
+        for suffix in &["", "a", "aa", "az"] {
+            let s_val = format!("a{}", suffix);
+            let enc = codec().encode(&Value::String(s_val.clone())).unwrap();
+            assert!(
+                enc.as_slice() >= lower.as_slice(),
+                "{:?} >= lower",
+                s_val
+            );
+            assert!(
+                enc.as_slice() < upper.as_slice(),
+                "{:?} < upper",
+                s_val
+            );
+        }
+
+        // "b" is excluded
+        let b_enc = codec().encode(&Value::String("b".to_string())).unwrap();
+        assert!(b_enc.as_slice() >= upper.as_slice());
+    }
+
+    #[test]
+    fn test_prefix_bounds_multi_byte() {
+        let (lower, upper) = codec()
+            .prefix_bounds(&Value::String("ab".to_string()))
+            .unwrap();
+        assert_eq!(&lower[1..lower.len() - 1], b"ab");
+        assert_eq!(upper, vec![TAG_STRING, 0x61, 0x63]);
+
+        let aba = codec().encode(&Value::String("aba".to_string())).unwrap();
+        assert!(aba.as_slice() < upper.as_slice());
+
+        let ac = codec().encode(&Value::String("ac".to_string())).unwrap();
+        assert!(ac.as_slice() >= upper.as_slice());
+    }
+
+    #[test]
+    fn test_prefix_bounds_blob() {
+        let (lower, upper) = codec()
+            .prefix_bounds(&Value::Blob(vec![0x01, 0x02]))
+            .unwrap();
+        assert_eq!(lower[0], TAG_BLOB);
+        assert_eq!(&lower[1..lower.len() - 1], &[0x01, 0x02]);
+        assert_eq!(upper, vec![TAG_BLOB, 0x01, 0x03]);
+    }
+
+    #[test]
+    fn test_prefix_bounds_int() {
+        let (lower, upper) = codec()
+            .prefix_bounds(&Value::Int(42))
+            .unwrap();
+        assert!(lower < upper);
+        // No other int with bytes starting with 42 exists (fixed-length),
+        // so upper should follow right after lower
+        let forty_two = codec().encode(&Value::Int(42)).unwrap();
+        assert_eq!(lower, forty_two);
+    }
+
+    #[test]
+    fn test_encoded_order_matches_semantic_order() {
+        // Verify that ordering is preserved for pairs that the length-prefixed
+        // encoding got wrong.
+        let pairs: [(Value, Value); 4] = [
+            (Value::String("aa".into()), Value::String("b".into())),
+            (Value::String("a".into()), Value::String("aa".into())),
+            (Value::String("".into()), Value::String("a".into())),
+            (Value::String("a".into()), Value::String("ab".into())),
+        ];
+        for (a, b) in &pairs {
+            let enc_a = codec().encode(a).unwrap();
+            let enc_b = codec().encode(b).unwrap();
+            assert!(
+                enc_a < enc_b,
+                "ordered_codec: {:?} < {:?} should hold, but enc({:?}) >= enc({:?})",
+                a, b, a, b
+            );
+        }
+    }
+
+    #[test]
+    fn test_prefix_bounds_overflow() {
+        // Prefix with last byte = 0xFF should carry correctly
+        let (lower, upper) = codec()
+            .prefix_bounds(&Value::Blob(vec![0x01, 0xFF]))
+            .unwrap();
+        assert_eq!(&lower[1..lower.len() - 1], &[0x01, 0xFF]);
+        // prefix_upper_bound([0x01, 0xFF]) = [0x02, 0x00]
+        assert_eq!(upper, vec![TAG_BLOB, 0x02, 0x00]);
+
+        // Blob starting with [0x01, 0xFF] should be within bounds
+        let test = codec().encode(&Value::Blob(vec![0x01, 0xFF, 0x01])).unwrap();
+        assert!(test.as_slice() < upper.as_slice(), "0x01,0xFF,0x01 < upper");
+        // Blob starting with [0x02] should be outside bounds
+        let next = codec().encode(&Value::Blob(vec![0x02])).unwrap();
+        assert!(next.as_slice() >= upper.as_slice(), "0x02 >= upper");
     }
 
     #[test]

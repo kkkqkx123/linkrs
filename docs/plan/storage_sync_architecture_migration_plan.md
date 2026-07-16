@@ -1,6 +1,6 @@
 # 存储、索引与同步架构迁移计划
 
-> 当前进度（2026-07）：阶段 0 已完成；阶段 1 已完成 WAL、事务 commit sink、SQLite projection、claim/fence 和真实写路径接入，但仍保留 JSON outbox 兼容层，尚未满足最终删除条件；阶段 3 已完成 SQLite snapshot primitive 和共同 safe LSN 截断基础，但原子 checkpoint manifest、在线 SQLite 重建和 JSON 一次性 importer 尚未完成。阶段 2、4、5、6、7 尚未完成。
+> 当前进度（2026-07）：阶段 0 已完成；阶段 1 和阶段 3 已形成基础闭环但尚未完成旧路径删除与全部故障验收；阶段 4 已落地 ordered codec、typed predicate 和统一 cursor 的主要结构；阶段 5 已接入 edge index，但 rebuild、covering record 和 cursor 正确性仍未闭环；阶段 6 已完成持久 manifest、结构化 shard 路由、reader handle fence 和安全回收 primitive，在线 split 仍因阶段 5 的增量追平协议缺失而禁用；阶段 7 仅完成部分测试和指标，尚未收尾。
 
 ## 1. 执行原则
 
@@ -23,10 +23,10 @@
 | 1 | 基本闭环，未最终收尾 | WAL batch、commit LSN、committed recovery、自动/显式 commit sink、SQLite projection、claim/lease/retry/frontier | 删除 JSON 运行依赖；补齐 DDL/所有写 API 垂直闭环；移除兼容 direct API |
 | 2 | 未开始 | SQLite 已有 generation gate 和基础 frontier | 真实 fulltext/vector receiver、远端幂等 receipt、late-arrival 防护、minimum LSN |
 | 3 | 部分完成 | SQLite `VACUUM INTO` snapshot、checksum/restore primitive、延后 WAL 截断 | 组合 checkpoint manifest、snapshot+WAL 重建、JSON importer、独立回收判定 |
-| 4 | 未开始 | `IndexRow`/`PartitionSelector` 类型占位 | OrderedKeyCodec、typed predicate、统一 MVCC cursor |
-| 5 | 未开始 | `EdgeRef` 和 manifest 基础类型 | edge index、included columns、generation rebuild/catch-up/publish fence |
-| 6 | 未开始 | 单 shard manifest 数据结构占位 | shard split、manifest handle、旧 generation 安全回收 |
-| 7 | 未开始 | 部分单元测试和 workspace check | 端到端故障演练、指标、运维文档和旧路径清理 |
+| 4 | 部分完成 | OrderedKeyCodec、typed predicate、`IndexRow` cursor 接口 | prefix codec 边界、storage 内实体版本校验、完整 covering row |
+| 5 | 部分完成 | edge index DDL/读写/cursor、基础 MVCC record | included columns；固定 snapshot、增量追平和 publish fence rebuild |
+| 6 | 部分完成 | 版本化持久 manifest、`[lower,upper)` 路由/pruning、manifest handle 与延迟回收 | 将 manifest 接入物理 cursor/checkpoint；复用安全 rebuild 完成在线 split |
+| 7 | 部分完成 | manifest 指标和针对性单元测试 | 全链路故障演练、旧路径清理和完整运维文档 |
 
 ## 2. 阶段 0：基线、类型与协议冻结（已完成）
 
@@ -160,7 +160,13 @@
 - build 期间持续写入，发布后不丢 `start_lsn` 之后的更新。
 - build、catch-up 和 publish 各 crash point 均恢复到旧 generation 或完整新 generation。
 
-## 8. 阶段 6：manifest shard、split 与安全回收（未开始）
+## 8. 阶段 6：manifest shard、split 与安全回收（部分完成）
+
+### 实现审查（2026-07）
+
+已完成带格式版本的 immutable manifest 原子落盘、无界端点的半开 shard range、按 key 和 query range 路由、epoch 单调发布、cursor 可持有的引用计数 handle，以及 reader 释放后才返回待回收文件的安全 primitive。该 primitive 只返回文件清单，实际删除仍由 checkpoint owner 在持久 fence 后执行。
+
+在线 split 尚不能启用。当前 rebuild 会清空 active B-tree 后直接从调用方提供的 `vertices`/`edges` 重建，只记录 `Building -> Active`，没有 `snapshot_ts/start_lsn`、增量 change log、barrier LSN、publish fence 或崩溃恢复。基于该路径实现 split 会在并发写下丢更新，也会让读者观察到构建中的不完整索引。必须先补齐阶段 5 的 generation rebuild 协议，再把 manifest catalog 接入真实 cursor 和 checkpoint 发布。
 
 ### 修改
 
@@ -179,7 +185,11 @@
 - split 并发写和 crash 测试不丢更新、不重复可见记录。
 - 长读持有旧 manifest 时文件不回收，handle 释放后可回收。
 
-## 9. 阶段 7：端到端收尾（未开始）
+## 9. 阶段 7：端到端收尾（部分完成）
+
+### 当前边界（2026-07）
+
+manifest catalog 已暴露 active epoch/generation、active reader、retired generation、publish 和 reclaim 计数，并覆盖 range routing、持久 roundtrip、未知版本拒绝、epoch 发布和长读回收 fence 单元测试。全阶段收尾仍被前序未完成项阻塞：prefix cursor 仍使用扫描后解码过滤，covering row 尚未生成，rebuild/split 没有 crash-safe 增量追平，因此不能删除相应兼容路径或宣称通过 split/recovery 演练。
 
 ### 修改
 

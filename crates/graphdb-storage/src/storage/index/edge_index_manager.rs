@@ -1,11 +1,13 @@
+use crate::core::value::ordered_codec::OrderedCodec;
 use crate::core::types::{Index, Timestamp, MAX_TIMESTAMP};
 use crate::core::wal::EntityRef;
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::cursor::{IndexCursor, IndexPredicate, IndexRow, IndexScanPlan};
 use crate::storage::index::generic_index_manager::GenericIndexManager;
-use crate::storage::index::index_data_manager::IndexEntry;
+use crate::storage::index::index_data_manager::IndexRecord;
 use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
 use crate::storage::index::key_codec::{EdgeIndexKeyGen, KeyBuilder, KeyParser};
+use crate::storage::index::manifest::{ManifestCatalog, ManifestHandle};
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
@@ -88,7 +90,12 @@ impl EdgeIndexManager {
 
             let index_key = logical_forward_key;
             let reverse_key = logical_reverse_key;
-            let entry = IndexEntry::new(write_ts);
+            let entity_ref = make_edge_entity_ref(edge_src, edge_dst, edge_type, ranking);
+            let entry = if let Some(er) = entity_ref {
+                IndexRecord::new(write_ts).with_entity_ref(er)
+            } else {
+                IndexRecord::new(write_ts)
+            };
             let compressed_forward = self.base.physical_key(&index_key.0);
             let compressed_reverse = self.base.physical_key(&reverse_key.0);
             {
@@ -339,11 +346,36 @@ impl EdgeIndexManager {
         self.base.tombstone_count()
     }
 
+    pub fn base(&self) -> &GenericIndexManager<EdgeIndexKeyGen> {
+        &self.base
+    }
+
     pub fn open_edge_index_cursor(
         &self,
         space_id: u64,
         index: &Index,
         plan: &IndexScanPlan,
+    ) -> StorageResult<EdgeIndexCursor> {
+        self.open_edge_index_cursor_full(space_id, index, plan, None, None)
+    }
+
+    pub fn open_edge_index_cursor_with_checker(
+        &self,
+        space_id: u64,
+        index: &Index,
+        plan: &IndexScanPlan,
+        stale_checker: Option<Arc<dyn Fn(&EntityRef) -> bool + Send + Sync>>,
+    ) -> StorageResult<EdgeIndexCursor> {
+        self.open_edge_index_cursor_full(space_id, index, plan, stale_checker, None)
+    }
+
+    pub fn open_edge_index_cursor_full(
+        &self,
+        space_id: u64,
+        index: &Index,
+        plan: &IndexScanPlan,
+        stale_checker: Option<Arc<dyn Fn(&EntityRef) -> bool + Send + Sync>>,
+        catalog: Option<&ManifestCatalog>,
     ) -> StorageResult<EdgeIndexCursor> {
         let index_prefix = KeyBuilder::build_edge_index_prefix(space_id, &index.name);
 
@@ -393,10 +425,12 @@ impl EdgeIndexManager {
                 (start, end)
             }
             IndexPredicate::Prefix(value) => {
-                let value_prefix =
-                    KeyBuilder::build_edge_index_value_prefix(space_id, &index.name, value)?;
-                let end = KeyBuilder::build_range_end(&index_prefix);
-                (value_prefix.0, end.0)
+                let (value_lower, value_upper) = OrderedCodec::new().prefix_bounds(value)?;
+                let mut start = KeyBuilder::build_edge_index_prefix(space_id, &index.name).0;
+                start.extend_from_slice(&value_lower);
+                let mut end = KeyBuilder::build_edge_index_prefix(space_id, &index.name).0;
+                end.extend_from_slice(&value_upper);
+                (start, end)
             }
             IndexPredicate::All => (
                 index_prefix.0.clone(),
@@ -413,10 +447,7 @@ impl EdgeIndexManager {
                 .count() as u64
         };
 
-        let prefix_filter = match &plan.predicate {
-            IndexPredicate::Prefix(value) => Some(value.clone()),
-            _ => None,
-        };
+        let manifest_handle = catalog.map(|c| c.acquire());
 
         Ok(EdgeIndexCursor {
             forward_index,
@@ -428,8 +459,12 @@ impl EdgeIndexManager {
             limit: plan.limit,
             emitted: 0,
             read_timestamp: plan.read_timestamp,
+            invisible_skipped: 0,
+            malformed_skipped: 0,
+            stale_skipped: 0,
             estimated_match_count,
-            prefix_filter,
+            manifest_handle,
+            stale_checker,
         })
     }
 }
@@ -440,10 +475,9 @@ impl Default for EdgeIndexManager {
     }
 }
 
-#[derive(Debug)]
 pub struct EdgeIndexCursor {
     forward_index:
-        Arc<parking_lot::RwLock<std::collections::BTreeMap<SecondaryIndexKey, IndexEntry>>>,
+        Arc<parking_lot::RwLock<std::collections::BTreeMap<SecondaryIndexKey, IndexRecord>>>,
     range_start: Vec<u8>,
     range_end: Vec<u8>,
     next_key: Option<SecondaryIndexKey>,
@@ -452,8 +486,33 @@ pub struct EdgeIndexCursor {
     limit: Option<usize>,
     emitted: usize,
     read_timestamp: Timestamp,
+    invisible_skipped: u64,
+    malformed_skipped: u64,
+    stale_skipped: u64,
     estimated_match_count: u64,
-    prefix_filter: Option<Value>,
+    manifest_handle: Option<ManifestHandle>,
+    stale_checker: Option<Arc<dyn Fn(&EntityRef) -> bool + Send + Sync>>,
+}
+
+impl std::fmt::Debug for EdgeIndexCursor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EdgeIndexCursor")
+            .field("range_start", &self.range_start)
+            .field("range_end", &self.range_end)
+            .field("next_key", &self.next_key)
+            .field("exhausted", &self.exhausted)
+            .field("offset_remaining", &self.offset_remaining)
+            .field("limit", &self.limit)
+            .field("emitted", &self.emitted)
+            .field("read_timestamp", &self.read_timestamp)
+            .field("invisible_skipped", &self.invisible_skipped)
+            .field("malformed_skipped", &self.malformed_skipped)
+            .field("stale_skipped", &self.stale_skipped)
+            .field("estimated_match_count", &self.estimated_match_count)
+            .field("manifest_handle", &self.manifest_handle)
+            .field("stale_checker", &self.stale_checker.as_ref().map(|_| "…"))
+            .finish()
+    }
 }
 
 impl IndexCursor for EdgeIndexCursor {
@@ -483,27 +542,8 @@ impl IndexCursor for EdgeIndexCursor {
             visited = true;
             last_key = Some(key.clone());
             if !entry.is_visible_at(self.read_timestamp) {
+                self.invisible_skipped += 1;
                 continue;
-            }
-
-            if let Some(ref prefix) = self.prefix_filter {
-                let prop_value = match KeyParser::parse_prop_value_from_edge_key(key) {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                };
-                match (&prop_value, prefix) {
-                    (Value::String(s), Value::String(prefix_str)) => {
-                        if !s.starts_with(prefix_str) {
-                            continue;
-                        }
-                    }
-                    (Value::Blob(b), Value::Blob(prefix_bytes)) => {
-                        if !b.starts_with(prefix_bytes) {
-                            continue;
-                        }
-                    }
-                    _ => continue,
-                }
             }
 
             if self.offset_remaining > 0 {
@@ -511,11 +551,37 @@ impl IndexCursor for EdgeIndexCursor {
                 continue;
             }
 
-            let entity_ref = match parse_edge_entity_ref(key) {
-                Some(er) => er,
-                None => continue,
+            // Get entity_ref from IndexRecord (new path) or fall back to key parsing.
+            let entity_ref = match &entry.entity_ref {
+                Some(er) => er.clone(),
+                None => match parse_edge_entity_ref(key) {
+                    Some(er) => er,
+                    None => {
+                        self.malformed_skipped += 1;
+                        continue;
+                    }
+                },
             };
-            rows.push(IndexRow::RowId(entity_ref));
+
+            // Validate entity existence via optional stale checker.
+            if let Some(ref checker) = self.stale_checker {
+                if !checker(&entity_ref) {
+                    self.stale_skipped += 1;
+                    continue;
+                }
+            }
+
+            // Covering projection support: when projection matches included_columns,
+            // return IndexRow::Covering instead of RowId (phased in with planner support).
+            let row = if !entry.included_columns.is_empty() {
+                IndexRow::Covering {
+                    entity_ref,
+                    columns: entry.included_columns.clone(),
+                }
+            } else {
+                IndexRow::RowId(entity_ref)
+            };
+            rows.push(row);
             self.emitted += 1;
             if self.limit.is_some_and(|limit| self.emitted >= limit) {
                 break;
@@ -537,12 +603,32 @@ impl IndexCursor for EdgeIndexCursor {
     }
 
     fn stale_skipped(&self) -> u64 {
-        0
+        self.invisible_skipped + self.malformed_skipped + self.stale_skipped
+    }
+
+    fn invisible_skipped(&self) -> u64 {
+        self.invisible_skipped
+    }
+
+    fn malformed_skipped(&self) -> u64 {
+        self.malformed_skipped
     }
 
     fn is_exhausted(&self) -> bool {
         self.exhausted
     }
+}
+
+fn make_edge_entity_ref(edge_src: &Value, edge_dst: &Value, edge_type: &str, ranking: i64) -> Option<EntityRef> {
+    let src_id = value_to_vertex_id(edge_src)?;
+    let dst_id = value_to_vertex_id(edge_dst)?;
+    let edge_type_id: u32 = edge_type.parse::<u32>().unwrap_or_default();
+    Some(EntityRef::Edge {
+        src: src_id,
+        dst: dst_id,
+        edge_type: edge_type_id,
+        ranking,
+    })
 }
 
 fn parse_edge_entity_ref(key: &[u8]) -> Option<EntityRef> {

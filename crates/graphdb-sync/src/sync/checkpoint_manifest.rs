@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use graphdb_core::core::types::CommitLsn;
+use graphdb_core::core::types::{CommitLsn, IndexGeneration};
 use serde::{Deserialize, Serialize};
 
 use crate::sync::sqlite_outbox::OutboxSnapshot;
@@ -83,7 +83,7 @@ pub struct IndexManifestRef {
     /// Index identifier
     pub index_id: u64,
     /// Index generation
-    pub generation: u64,
+    pub generation: IndexGeneration,
     /// Path to the manifest file
     pub path: PathBuf,
     /// Size in bytes

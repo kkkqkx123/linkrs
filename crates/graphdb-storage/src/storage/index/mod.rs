@@ -33,4 +33,6 @@ pub use index_data_manager::{
     EdgeIndexOps, GcStats, IndexDataManagerImpl, IndexGcOps, VertexIndexOps,
 };
 pub use index_gc_manager::{IndexGcConfig, IndexGcManager};
-pub use manifest::{IndexManifest, IndexShard};
+pub use manifest::{
+    IndexManifest, IndexShard, ManifestCatalog, ManifestCatalogStats, ManifestHandle,
+};

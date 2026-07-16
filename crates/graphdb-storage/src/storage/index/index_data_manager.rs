@@ -7,24 +7,44 @@
 //! Supports MVCC (Multi-Version Concurrency Control) for snapshot isolation.
 
 use crate::core::types::{Index, Timestamp, MAX_TIMESTAMP};
+use crate::core::wal::EntityRef;
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::cursor::IndexScanPlan;
 use crate::storage::index::edge_index_manager::EdgeIndexManager;
 use crate::storage::index::vertex_index_manager::VertexIndexManager;
 use std::path::Path;
+use std::sync::Arc;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IndexEntry {
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexRecord {
     pub created_ts: Timestamp,
     pub deleted_ts: Option<Timestamp>,
+    pub included_columns: Vec<(String, Value)>,
+    pub entity_ref: Option<EntityRef>,
 }
 
-impl IndexEntry {
+impl IndexRecord {
     pub fn new(created_ts: Timestamp) -> Self {
         Self {
             created_ts,
             deleted_ts: None,
+            included_columns: Vec::new(),
+            entity_ref: None,
         }
+    }
+
+    pub fn new_with_columns(created_ts: Timestamp, included_columns: Vec<(String, Value)>) -> Self {
+        Self {
+            created_ts,
+            deleted_ts: None,
+            included_columns,
+            entity_ref: None,
+        }
+    }
+
+    pub fn with_entity_ref(mut self, entity_ref: EntityRef) -> Self {
+        self.entity_ref = Some(entity_ref);
+        self
     }
 
     pub fn is_visible_at(&self, read_ts: Timestamp) -> bool {
@@ -39,7 +59,7 @@ impl IndexEntry {
     }
 }
 
-impl Default for IndexEntry {
+impl Default for IndexRecord {
     fn default() -> Self {
         Self::new(MAX_TIMESTAMP)
     }
@@ -180,6 +200,32 @@ impl IndexDataManagerImpl {
             .open_tag_index_cursor(space_id, index, plan)
     }
 
+    pub fn open_tag_index_cursor_with_checker(
+        &self,
+        space_id: u64,
+        index: &Index,
+        plan: &IndexScanPlan,
+        stale_checker: Option<
+            Arc<dyn Fn(&crate::core::wal::EntityRef) -> bool + Send + Sync>,
+        >,
+    ) -> StorageResult<crate::storage::index::vertex_index_manager::VertexIndexCursor> {
+        self.open_tag_index_cursor_full(space_id, index, plan, stale_checker, None)
+    }
+
+    pub fn open_tag_index_cursor_full(
+        &self,
+        space_id: u64,
+        index: &Index,
+        plan: &IndexScanPlan,
+        stale_checker: Option<
+            Arc<dyn Fn(&crate::core::wal::EntityRef) -> bool + Send + Sync>,
+        >,
+        catalog: Option<&crate::storage::index::manifest::ManifestCatalog>,
+    ) -> StorageResult<crate::storage::index::vertex_index_manager::VertexIndexCursor> {
+        self.vertex_manager
+            .open_tag_index_cursor_full(space_id, index, plan, stale_checker, catalog)
+    }
+
     pub fn open_edge_index_cursor(
         &self,
         space_id: u64,
@@ -188,6 +234,32 @@ impl IndexDataManagerImpl {
     ) -> StorageResult<crate::storage::index::edge_index_manager::EdgeIndexCursor> {
         self.edge_manager
             .open_edge_index_cursor(space_id, index, plan)
+    }
+
+    pub fn open_edge_index_cursor_with_checker(
+        &self,
+        space_id: u64,
+        index: &Index,
+        plan: &IndexScanPlan,
+        stale_checker: Option<
+            Arc<dyn Fn(&crate::core::wal::EntityRef) -> bool + Send + Sync>,
+        >,
+    ) -> StorageResult<crate::storage::index::edge_index_manager::EdgeIndexCursor> {
+        self.open_edge_index_cursor_full(space_id, index, plan, stale_checker, None)
+    }
+
+    pub fn open_edge_index_cursor_full(
+        &self,
+        space_id: u64,
+        index: &Index,
+        plan: &IndexScanPlan,
+        stale_checker: Option<
+            Arc<dyn Fn(&crate::core::wal::EntityRef) -> bool + Send + Sync>,
+        >,
+        catalog: Option<&crate::storage::index::manifest::ManifestCatalog>,
+    ) -> StorageResult<crate::storage::index::edge_index_manager::EdgeIndexCursor> {
+        self.edge_manager
+            .open_edge_index_cursor_full(space_id, index, plan, stale_checker, catalog)
     }
 
     pub fn vertex_manager(&self) -> &VertexIndexManager {

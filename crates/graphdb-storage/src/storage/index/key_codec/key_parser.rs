@@ -73,41 +73,6 @@ impl KeyParser {
     // Edge Forward Index Key Parsing
     // ========================================================================
 
-    fn parse_edge_key_identity(
-        key_bytes: &[u8],
-    ) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, usize), StorageError> {
-        let mut pos = 9;
-        if key_bytes.len() < pos + 4 {
-            return Err(StorageError::db_error(
-                "Invalid edge key: too short".to_string(),
-            ));
-        }
-        let index_name_len =
-            u32::from_le_bytes(key_bytes[pos..pos + 4].try_into().unwrap_or([0; 4])) as usize;
-        pos += 4 + index_name_len;
-
-        let (_prop_value, consumed) = codec().decode_value_inner(&key_bytes[pos..])?;
-        let prop_value_bytes = codec().encode(&_prop_value)?;
-        pos += consumed;
-
-        let (src_val, consumed2) = codec().decode_value_inner(&key_bytes[pos..])?;
-        let src_bytes = codec().encode(&src_val)?;
-        pos += consumed2;
-
-        let (dst_val, consumed3) = codec().decode_value_inner(&key_bytes[pos..])?;
-        let dst_bytes = codec().encode(&dst_val)?;
-        pos += consumed3;
-
-        let (type_val, consumed4) = codec().decode_value_inner(&key_bytes[pos..])?;
-        let type_bytes = codec().encode(&type_val)?;
-        pos += consumed4;
-
-        let (_rank_val, consumed5) = codec().decode_value_inner(&key_bytes[pos..])?;
-        pos += consumed5;
-
-        Ok((prop_value_bytes, src_bytes, dst_bytes, type_bytes, pos))
-    }
-
     pub fn parse_edge_identity_from_key(
         key_bytes: &[u8],
     ) -> Result<(Value, Value, String, i64), StorageError> {
@@ -224,25 +189,28 @@ impl KeyParser {
     // Vertex Reverse Index Key Parsing
     // ========================================================================
 
+    /// Parse a vertex reverse key (v2 format) and return the encoded vertex ID
+    /// bytes and the index name.
+    ///
+    /// Format: `[space_id(8) LE] [KEY_TYPE_VERTEX_REVERSE(1)]
+    ///         [OrderedCodec(vertex_id)] [index_name_len(4) LE] [index_name(N)]`
     pub fn parse_vertex_reverse_key_v2(
         key_bytes: &[u8],
     ) -> Result<(Vec<u8>, String), StorageError> {
         if key_bytes.len() < 9 {
             return Err(StorageError::db_error(
-                "Invalid reverse key v2: too short".to_string(),
+                "Invalid vertex reverse key: too short".to_string(),
             ));
         }
-
         let mut pos = 9;
 
-        // Decode the entity (vertex_id)
         let (vertex_id, consumed) = codec().decode_value_inner(&key_bytes[pos..])?;
         let vertex_id_bytes = codec().encode(&vertex_id)?;
         pos += consumed;
 
         if key_bytes.len() < pos + 4 {
             return Err(StorageError::db_error(
-                "Invalid reverse key: missing index_name_len".to_string(),
+                "Invalid vertex reverse key: missing index_name_len".to_string(),
             ));
         }
         let index_name_len =
@@ -251,7 +219,7 @@ impl KeyParser {
 
         if key_bytes.len() < pos + index_name_len {
             return Err(StorageError::db_error(
-                "Invalid reverse key: index_name exceeds key length".to_string(),
+                "Invalid vertex reverse key: index_name exceeds key length".to_string(),
             ));
         }
         let index_name = String::from_utf8(key_bytes[pos..pos + index_name_len].to_vec())
@@ -261,8 +229,8 @@ impl KeyParser {
     }
 }
 
-#[cfg(test)]
-mod tests {
+    #[cfg(test)]
+    mod tests {
     use super::*;
     use crate::core::Value;
     use crate::storage::index::key_codec::key_builder::KeyBuilder;

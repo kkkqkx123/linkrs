@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use log::warn;
 use parking_lot::RwLock;
 
 use super::super::state::GlobalState;
@@ -1003,7 +1004,15 @@ fn next_index_chunk(
                         if let Some(vid) = vertex_id {
                             match guard.get_vertex(space_name, &vid) {
                                 Ok(Some(vertex)) => output_rows.push(make_vertex_row(vertex)),
-                                Ok(None) => {}
+                                Ok(None) => {
+                                    // Stale row — cursor should have filtered this.
+                                    // The storage cursor is responsible for entity version
+                                    // consistency; query layer must not silently drop.
+                                    warn!(
+                                        "Index cursor yielded stale vertex {} in space {}",
+                                        vid, space_name
+                                    );
+                                }
                                 Err(error) => {
                                     return Err(storage_error(
                                         source,
@@ -1020,7 +1029,12 @@ fn next_index_chunk(
                         if let Some(vid) = vertex_id {
                             match guard.get_vertex(space_name, &vid) {
                                 Ok(Some(vertex)) => output_rows.push(make_vertex_row(vertex)),
-                                Ok(None) => {}
+                                Ok(None) => {
+                                    warn!(
+                                        "Index cursor yielded stale vertex {} in space {}",
+                                        vid, space_name
+                                    );
+                                }
                                 Err(error) => {
                                     return Err(storage_error(
                                         source,

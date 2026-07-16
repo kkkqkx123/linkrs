@@ -8,14 +8,16 @@
 //! Index keys now use the order-preserving `OrderedCodec`, eliminating the
 //! need for post-filtering predicate matches on range scans.
 
+use crate::core::value::ordered_codec::OrderedCodec;
 use crate::core::types::{Index, Timestamp, MAX_TIMESTAMP};
 use crate::core::wal::EntityRef;
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::cursor::{IndexCursor, IndexPredicate, IndexRow, IndexScanPlan};
 use crate::storage::index::generic_index_manager::GenericIndexManager;
-use crate::storage::index::index_data_manager::IndexEntry;
+use crate::storage::index::index_data_manager::IndexRecord;
 use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
 use crate::storage::index::key_codec::{KeyBuilder, KeyParser, VertexIndexKeyGen};
+use crate::storage::index::manifest::{ManifestCatalog, ManifestHandle};
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
@@ -103,7 +105,12 @@ impl VertexIndexManager {
 
             let index_key = logical_forward_key;
             let reverse_key = logical_reverse_key;
-            let entry = IndexEntry::new(write_ts);
+            let entity_ref = vertex_id_to_entity_ref(vertex_id);
+            let entry = if let Some(er) = entity_ref {
+                IndexRecord::new(write_ts).with_entity_ref(er)
+            } else {
+                IndexRecord::new(write_ts)
+            };
             let compressed_forward = self.base.physical_key(&index_key.0);
             let compressed_reverse = self.base.physical_key(&reverse_key.0);
             {
@@ -325,11 +332,36 @@ impl VertexIndexManager {
         self.base.tombstone_count()
     }
 
+    pub fn base(&self) -> &GenericIndexManager<VertexIndexKeyGen> {
+        &self.base
+    }
+
     pub fn open_tag_index_cursor(
         &self,
         space_id: u64,
         index: &Index,
         plan: &IndexScanPlan,
+    ) -> StorageResult<VertexIndexCursor> {
+        self.open_tag_index_cursor_full(space_id, index, plan, None, None)
+    }
+
+    pub fn open_tag_index_cursor_with_checker(
+        &self,
+        space_id: u64,
+        index: &Index,
+        plan: &IndexScanPlan,
+        stale_checker: Option<Arc<dyn Fn(&EntityRef) -> bool + Send + Sync>>,
+    ) -> StorageResult<VertexIndexCursor> {
+        self.open_tag_index_cursor_full(space_id, index, plan, stale_checker, None)
+    }
+
+    pub fn open_tag_index_cursor_full(
+        &self,
+        space_id: u64,
+        index: &Index,
+        plan: &IndexScanPlan,
+        stale_checker: Option<Arc<dyn Fn(&EntityRef) -> bool + Send + Sync>>,
+        catalog: Option<&ManifestCatalog>,
     ) -> StorageResult<VertexIndexCursor> {
         let index_prefix = KeyBuilder::build_vertex_index_prefix(space_id, &index.name);
 
@@ -382,14 +414,13 @@ impl VertexIndexManager {
                 (start, end)
             }
             IndexPredicate::Prefix(value) => {
-                // Prefix scan: start from the value prefix, extend to the end
-                // of this index. The length-prefixed encoding prevents a tight
-                // range (strings of different lengths with the same prefix are
-                // not contiguous), so we filter in the cursor instead.
-                let value_prefix =
-                    KeyBuilder::build_vertex_index_value_prefix(space_id, &index.name, value)?;
-                let end = KeyBuilder::build_range_end(&index_prefix);
-                (value_prefix.0, end.0)
+                // Tight prefix bounds using the codec's terminator-based encoding.
+                let (value_lower, value_upper) = OrderedCodec::new().prefix_bounds(value)?;
+                let mut start = KeyBuilder::build_vertex_index_prefix(space_id, &index.name).0;
+                start.extend_from_slice(&value_lower);
+                let mut end = KeyBuilder::build_vertex_index_prefix(space_id, &index.name).0;
+                end.extend_from_slice(&value_upper);
+                (start, end)
             }
             IndexPredicate::All => (
                 index_prefix.0.clone(),
@@ -406,10 +437,7 @@ impl VertexIndexManager {
                 .count() as u64
         };
 
-        let prefix_filter = match &plan.predicate {
-            IndexPredicate::Prefix(value) => Some(value.clone()),
-            _ => None,
-        };
+        let manifest_handle = catalog.map(|c| c.acquire());
 
         Ok(VertexIndexCursor {
             forward_index,
@@ -421,16 +449,19 @@ impl VertexIndexManager {
             limit: plan.limit,
             emitted: 0,
             read_timestamp: plan.read_timestamp,
+            invisible_skipped: 0,
+            malformed_skipped: 0,
+            stale_skipped: 0,
             estimated_match_count,
-            prefix_filter,
+            manifest_handle,
+            stale_checker,
         })
     }
 }
 
-#[derive(Debug)]
 pub struct VertexIndexCursor {
     forward_index:
-        Arc<parking_lot::RwLock<std::collections::BTreeMap<SecondaryIndexKey, IndexEntry>>>,
+        Arc<parking_lot::RwLock<std::collections::BTreeMap<SecondaryIndexKey, IndexRecord>>>,
     range_start: Vec<u8>,
     range_end: Vec<u8>,
     next_key: Option<SecondaryIndexKey>,
@@ -439,9 +470,33 @@ pub struct VertexIndexCursor {
     limit: Option<usize>,
     emitted: usize,
     read_timestamp: Timestamp,
+    invisible_skipped: u64,
+    malformed_skipped: u64,
+    stale_skipped: u64,
     estimated_match_count: u64,
-    /// Optional value to match as a string prefix (used with IndexPredicate::Prefix).
-    prefix_filter: Option<Value>,
+    manifest_handle: Option<ManifestHandle>,
+    stale_checker: Option<Arc<dyn Fn(&EntityRef) -> bool + Send + Sync>>,
+}
+
+impl std::fmt::Debug for VertexIndexCursor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VertexIndexCursor")
+            .field("range_start", &self.range_start)
+            .field("range_end", &self.range_end)
+            .field("next_key", &self.next_key)
+            .field("exhausted", &self.exhausted)
+            .field("offset_remaining", &self.offset_remaining)
+            .field("limit", &self.limit)
+            .field("emitted", &self.emitted)
+            .field("read_timestamp", &self.read_timestamp)
+            .field("invisible_skipped", &self.invisible_skipped)
+            .field("malformed_skipped", &self.malformed_skipped)
+            .field("stale_skipped", &self.stale_skipped)
+            .field("estimated_match_count", &self.estimated_match_count)
+            .field("manifest_handle", &self.manifest_handle)
+            .field("stale_checker", &self.stale_checker.as_ref().map(|_| "…"))
+            .finish()
+    }
 }
 
 impl IndexCursor for VertexIndexCursor {
@@ -456,6 +511,7 @@ impl IndexCursor for VertexIndexCursor {
         let mut last_key = None;
         let mut visited = false;
         let batch_limit = batch_size.max(1);
+
         let scan = if let Some(next_key) = self.next_key.clone() {
             index.range((
                 std::ops::Bound::Excluded(next_key),
@@ -471,37 +527,8 @@ impl IndexCursor for VertexIndexCursor {
             visited = true;
             last_key = Some(key.clone());
             if !entry.is_visible_at(self.read_timestamp) {
+                self.invisible_skipped += 1;
                 continue;
-            }
-            let vertex_id = match KeyParser::parse_vertex_id_from_key(key) {
-                Ok(vid) => vid,
-                Err(_) => {
-                    // Skip unparseable keys (not stale, just malformed)
-                    continue;
-                }
-            };
-
-            // Apply prefix filter for Prefix predicates.
-            // The length-prefixed string encoding doesn't support byte-level
-            // prefix matching, so we decode the property value and check here.
-            if let Some(ref prefix) = self.prefix_filter {
-                let prop_value = match KeyParser::parse_prop_value_from_key(key) {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                };
-                match (&prop_value, prefix) {
-                    (Value::String(s), Value::String(prefix_str)) => {
-                        if !s.starts_with(prefix_str) {
-                            continue;
-                        }
-                    }
-                    (Value::Blob(b), Value::Blob(prefix_bytes)) => {
-                        if !b.starts_with(prefix_bytes) {
-                            continue;
-                        }
-                    }
-                    _ => continue,
-                }
             }
 
             if self.offset_remaining > 0 {
@@ -509,14 +536,46 @@ impl IndexCursor for VertexIndexCursor {
                 continue;
             }
 
-            // Convert to EntityRef
-            let entity_ref = match vertex_id_to_entity_ref(&vertex_id) {
-                Some(er) => er,
-                None => continue,
+            // Get entity_ref from IndexRecord (new path) or fall back to key parsing.
+            let entity_ref = match &entry.entity_ref {
+                Some(er) => er.clone(),
+                None => {
+                    let vertex_id = match KeyParser::parse_vertex_id_from_key(key) {
+                        Ok(vid) => vid,
+                        Err(_) => {
+                            self.malformed_skipped += 1;
+                            continue;
+                        }
+                    };
+                    match vertex_id_to_entity_ref(&vertex_id) {
+                        Some(er) => er,
+                        None => {
+                            self.stale_skipped += 1;
+                            continue;
+                        }
+                    }
+                }
             };
-            // For now, return RowId (back-to-table fetch).
-            // Phase 5+ will add covering index support.
-            rows.push(IndexRow::RowId(entity_ref));
+
+            // Validate entity existence via optional stale checker.
+            if let Some(ref checker) = self.stale_checker {
+                if !checker(&entity_ref) {
+                    self.stale_skipped += 1;
+                    continue;
+                }
+            }
+
+            // Covering projection support: when projection matches included_columns,
+            // return IndexRow::Covering instead of RowId (phased in with planner support).
+            let row = if !entry.included_columns.is_empty() {
+                IndexRow::Covering {
+                    entity_ref,
+                    columns: entry.included_columns.clone(),
+                }
+            } else {
+                IndexRow::RowId(entity_ref)
+            };
+            rows.push(row);
             self.emitted += 1;
             if self.limit.is_some_and(|limit| self.emitted >= limit) {
                 break;
@@ -538,7 +597,15 @@ impl IndexCursor for VertexIndexCursor {
     }
 
     fn stale_skipped(&self) -> u64 {
-        0
+        self.invisible_skipped + self.malformed_skipped + self.stale_skipped
+    }
+
+    fn invisible_skipped(&self) -> u64 {
+        self.invisible_skipped
+    }
+
+    fn malformed_skipped(&self) -> u64 {
+        self.malformed_skipped
     }
 
     fn is_exhausted(&self) -> bool {
