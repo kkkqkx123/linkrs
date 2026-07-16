@@ -13,6 +13,7 @@ use crate::core::types::ContextualExpression;
 use crate::core::types::Index;
 use crate::core::value::NullType;
 use crate::core::Expression;
+use crate::core::Value;
 use crate::query::parser::ast::{LookupStmt, Stmt};
 use crate::query::planning::plan::core::nodes::access::{
     EdgeIndexScanNode, IndexLimit, IndexScanNode, ScanType,
@@ -299,7 +300,7 @@ impl LookupPlanner {
                     if let Some((col, val)) = Self::extract_comparison(left, right, index_columns) {
                         limits.push(IndexLimit::range(
                             col,
-                            None::<String>,
+                            None::<Value>,
                             Some(val),
                             false,
                             false,
@@ -310,7 +311,7 @@ impl LookupPlanner {
                         limits.push(IndexLimit::range(
                             col,
                             Some(val),
-                            None::<String>,
+                            None::<Value>,
                             true,
                             false,
                         ));
@@ -320,7 +321,7 @@ impl LookupPlanner {
                     if let Some((col, val)) = Self::extract_comparison(left, right, index_columns) {
                         limits.push(IndexLimit::range(
                             col,
-                            None::<String>,
+                            None::<Value>,
                             Some(val),
                             false,
                             true,
@@ -328,13 +329,7 @@ impl LookupPlanner {
                     } else if let Some((col, val)) =
                         Self::extract_comparison(right, left, index_columns)
                     {
-                        limits.push(IndexLimit::range(
-                            col,
-                            Some(val),
-                            None::<String>,
-                            true,
-                            true,
-                        ));
+                        limits.push(IndexLimit::range(col, Some(val), None::<Value>, true, true));
                     }
                 }
                 BinaryOperator::GreaterThan => {
@@ -342,7 +337,7 @@ impl LookupPlanner {
                         limits.push(IndexLimit::range(
                             col,
                             Some(val),
-                            None::<String>,
+                            None::<Value>,
                             false,
                             false,
                         ));
@@ -351,7 +346,7 @@ impl LookupPlanner {
                     {
                         limits.push(IndexLimit::range(
                             col,
-                            None::<String>,
+                            None::<Value>,
                             Some(val),
                             false,
                             false,
@@ -363,7 +358,7 @@ impl LookupPlanner {
                         limits.push(IndexLimit::range(
                             col,
                             Some(val),
-                            None::<String>,
+                            None::<Value>,
                             true,
                             false,
                         ));
@@ -372,7 +367,7 @@ impl LookupPlanner {
                     {
                         limits.push(IndexLimit::range(
                             col,
-                            None::<String>,
+                            None::<Value>,
                             Some(val),
                             false,
                             true,
@@ -392,7 +387,7 @@ impl LookupPlanner {
         left: &Expression,
         right: &Expression,
         index_columns: &[String],
-    ) -> Option<(String, String)> {
+    ) -> Option<(String, Value)> {
         let col_name = Self::extract_property_name(left)?;
         if !index_columns.iter().any(|c| c == &col_name) {
             return None;
@@ -416,16 +411,9 @@ impl LookupPlanner {
         }
     }
 
-    fn extract_literal_value(expr: &Expression) -> Option<String> {
+    fn extract_literal_value(expr: &Expression) -> Option<Value> {
         match expr {
-            Expression::Literal(value) => match value {
-                crate::core::Value::String(s) => Some(s.clone()),
-                crate::core::Value::Int(i) => Some(i.to_string()),
-                crate::core::Value::BigInt(i) => Some(i.to_string()),
-                crate::core::Value::Float(f) => Some(f.to_string()),
-                crate::core::Value::Bool(b) => Some(b.to_string()),
-                _ => None,
-            },
+            Expression::Literal(value) => Some(value.clone()),
             _ => None,
         }
     }

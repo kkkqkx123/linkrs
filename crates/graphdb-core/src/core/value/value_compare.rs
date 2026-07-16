@@ -38,6 +38,7 @@ impl PartialEq for Value {
             // JSON and JSONB can be compared
             (Value::Json(a), Value::JsonB(b)) => a.to_value().ok() == Some(b.as_value().clone()),
             (Value::JsonB(a), Value::Json(b)) => Some(a.as_value().clone()) == b.to_value().ok(),
+            (Value::Blob(a), Value::Blob(b)) => a == b,
             (Value::Uuid(a), Value::Uuid(b)) => a == b,
             (Value::Interval(a), Value::Interval(b)) => a == b,
 

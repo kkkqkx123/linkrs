@@ -128,6 +128,8 @@ impl PartialIndexCondition {
 pub enum IndexStatus {
     #[serde(rename = "creating")]
     Creating,
+    #[serde(rename = "building")]
+    Building,
     #[serde(rename = "active")]
     Active,
     #[serde(rename = "dropped")]

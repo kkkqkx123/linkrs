@@ -472,6 +472,15 @@ impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
             &self,
             space: &str,
         ) -> Result<Vec<crate::core::types::Index>, StorageError>;
+        fn get_edge_index(
+            &self,
+            space: &str,
+            index: &str,
+        ) -> Result<Option<crate::core::types::Index>, StorageError>;
+        fn list_edge_indexes(
+            &self,
+            space: &str,
+        ) -> Result<Vec<crate::core::types::Index>, StorageError>;
         fn get_vertex_version_history(
             &self,
             space: &str,
@@ -561,6 +570,13 @@ impl<S: StorageClient + 'static> StorageSchemaOps for SyncWrapper<S> {
         ) -> Result<bool, StorageError>;
         fn drop_tag_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError>;
         fn rebuild_tag_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError>;
+        fn create_edge_index(
+            &mut self,
+            space: &str,
+            info: &crate::core::types::Index,
+        ) -> Result<bool, StorageError>;
+        fn drop_edge_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError>;
+        fn rebuild_edge_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError>;
     );
 }
 

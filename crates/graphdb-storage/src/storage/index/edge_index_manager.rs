@@ -1,13 +1,3 @@
-//! Vertex Index Management Module
-//!
-//! Provide functions for updating, deleting, and querying vertex indices.
-//! This implementation uses in-memory storage with BTreeMap for efficient range queries.
-//! Supports persistence through flush/load operations.
-//! Supports MVCC (Multi-Version Concurrency Control) for snapshot isolation.
-//!
-//! Index keys now use the order-preserving `OrderedCodec`, eliminating the
-//! need for post-filtering predicate matches on range scans.
-
 use crate::core::types::{Index, Timestamp, MAX_TIMESTAMP};
 use crate::core::value::ordered_codec::OrderedCodec;
 use crate::core::wal::EntityRef;
@@ -16,49 +6,65 @@ use crate::storage::cursor::{IndexCursor, IndexPredicate, IndexRow, IndexScanPla
 use crate::storage::index::generic_index_manager::GenericIndexManager;
 use crate::storage::index::index_data_manager::IndexEntry;
 use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
-use crate::storage::index::key_codec::{KeyBuilder, KeyParser, VertexIndexKeyGen};
-use std::collections::{HashMap, HashSet};
+use crate::storage::index::key_codec::{EdgeIndexKeyGen, KeyBuilder, KeyParser};
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 
 #[derive(Clone)]
-pub struct VertexIndexManager {
-    base: GenericIndexManager<VertexIndexKeyGen>,
+pub struct EdgeIndexManager {
+    base: GenericIndexManager<EdgeIndexKeyGen>,
 }
 
-impl VertexIndexManager {
+impl EdgeIndexManager {
     pub fn new() -> Self {
         Self {
             base: GenericIndexManager::new(),
         }
     }
 
-    pub fn update_vertex_indexes(
+    pub fn update_edge_indexes(
         &self,
         space_id: u64,
-        vertex_id: &Value,
+        edge_src: &Value,
+        edge_dst: &Value,
+        edge_type: &str,
+        ranking: i64,
         index_name: &str,
         props: &[(String, Value)],
     ) -> Result<(), StorageError> {
-        self.update_vertex_indexes_mvcc(space_id, vertex_id, index_name, props, MAX_TIMESTAMP)
+        self.update_edge_indexes_mvcc(
+            space_id,
+            edge_src,
+            edge_dst,
+            edge_type,
+            ranking,
+            index_name,
+            props,
+            MAX_TIMESTAMP,
+        )
     }
 
-    pub fn update_vertex_indexes_mvcc(
+    pub fn update_edge_indexes_mvcc(
         &self,
         space_id: u64,
-        vertex_id: &Value,
+        edge_src: &Value,
+        edge_dst: &Value,
+        edge_type: &str,
+        ranking: i64,
         index_name: &str,
         props: &[(String, Value)],
         write_ts: Timestamp,
     ) -> Result<(), StorageError> {
         for (_prop_name, prop_value) in props {
-            let logical_forward_key =
-                KeyBuilder::build_vertex_index_key(space_id, index_name, prop_value, vertex_id)?;
-            let logical_reverse_key =
-                KeyBuilder::build_vertex_reverse_key_v2(space_id, vertex_id, index_name)?;
+            let logical_forward_key = KeyBuilder::build_edge_index_key(
+                space_id, index_name, prop_value, edge_src, edge_dst, edge_type, ranking,
+            )?;
+            let logical_reverse_key = KeyBuilder::build_edge_reverse_key(
+                space_id, edge_src, edge_dst, edge_type, ranking, index_name,
+            )?;
 
             let mut forward_keys_to_delete: Vec<SecondaryIndexKey> = Vec::new();
-            let mut reverse_keys_to_delete: Vec<SecondaryIndexKey> = Vec::new();
 
             {
                 let forward_index = self.base.forward_index().read();
@@ -73,30 +79,9 @@ impl VertexIndexManager {
             }
 
             {
-                let reverse_index = self.base.reverse_index().read();
-                let reverse_end = KeyBuilder::build_range_end(&logical_reverse_key);
-                for (key, entry) in
-                    reverse_index.range(logical_reverse_key.0.clone()..reverse_end.0)
-                {
-                    if entry.is_visible_at(write_ts) {
-                        reverse_keys_to_delete.push(key.clone());
-                    }
-                }
-            }
-
-            {
                 let mut forward_index = self.base.forward_index().write();
                 for key in &forward_keys_to_delete {
                     if let Some(entry) = forward_index.get_mut(key) {
-                        entry.mark_deleted(write_ts);
-                    }
-                }
-            }
-
-            {
-                let mut reverse_index = self.base.reverse_index().write();
-                for key in &reverse_keys_to_delete {
-                    if let Some(entry) = reverse_index.get_mut(key) {
                         entry.mark_deleted(write_ts);
                     }
                 }
@@ -120,19 +105,33 @@ impl VertexIndexManager {
         Ok(())
     }
 
-    pub fn delete_vertex_indexes(
+    pub fn delete_edge_indexes(
         &self,
         space_id: u64,
-        vertex_id: &Value,
+        edge_src: &Value,
+        edge_dst: &Value,
+        edge_type: &str,
+        ranking: i64,
         index_names: &[String],
     ) -> Result<(), StorageError> {
-        self.delete_vertex_indexes_mvcc(space_id, vertex_id, index_names, MAX_TIMESTAMP)
+        self.delete_edge_indexes_mvcc(
+            space_id,
+            edge_src,
+            edge_dst,
+            edge_type,
+            ranking,
+            index_names,
+            MAX_TIMESTAMP,
+        )
     }
 
-    pub fn delete_vertex_indexes_mvcc(
+    pub fn delete_edge_indexes_mvcc(
         &self,
         space_id: u64,
-        vertex_id: &Value,
+        edge_src: &Value,
+        edge_dst: &Value,
+        edge_type: &str,
+        ranking: i64,
         index_names: &[String],
         write_ts: Timestamp,
     ) -> Result<(), StorageError> {
@@ -140,7 +139,9 @@ impl VertexIndexManager {
             return Ok(());
         }
 
-        let reverse_prefix = KeyBuilder::build_vertex_reverse_prefix_v2(space_id, vertex_id)?;
+        let reverse_prefix = KeyBuilder::build_edge_reverse_prefix(
+            space_id, edge_src, edge_dst, edge_type, ranking,
+        )?;
         let reverse_end = KeyBuilder::build_range_end(&reverse_prefix);
 
         let mut forward_keys_to_delete: Vec<SecondaryIndexKey> = Vec::new();
@@ -152,15 +153,19 @@ impl VertexIndexManager {
                 reverse_index.range(reverse_prefix.0.clone()..reverse_end.0)
             {
                 if entry.is_visible_at(write_ts) {
-                    let key_bytes = compressed_key.as_slice();
                     reverse_keys_to_delete.push(compressed_key.clone());
 
-                    if let Ok((_vertex_id_bytes, index_name)) =
-                        KeyParser::parse_vertex_reverse_key_v2(key_bytes)
+                    if let Ok((
+                        _src_bytes,
+                        _dst_bytes,
+                        _type_bytes,
+                        _rank_bytes,
+                        parsed_index_name,
+                    )) = KeyParser::parse_edge_reverse_key(compressed_key)
                     {
-                        if index_names.contains(&index_name) {
+                        if index_names.contains(&parsed_index_name) {
                             let forward_key_start =
-                                KeyBuilder::build_vertex_index_prefix(space_id, &index_name);
+                                KeyBuilder::build_edge_index_prefix(space_id, &parsed_index_name);
                             let forward_key_end = KeyBuilder::build_range_end(&forward_key_start);
 
                             let forward_index = self.base.forward_index().read();
@@ -168,10 +173,14 @@ impl VertexIndexManager {
                                 forward_index.range(forward_key_start.0.clone()..forward_key_end.0)
                             {
                                 if fwd_entry.is_visible_at(write_ts) {
-                                    if let Ok(vid) = KeyParser::parse_vertex_id_from_key(
-                                        fwd_compressed_key.as_slice(),
-                                    ) {
-                                        if vid == *vertex_id {
+                                    if let Ok((fwd_src, fwd_dst, fwd_type, fwd_rank)) =
+                                        KeyParser::parse_edge_identity_from_key(fwd_compressed_key)
+                                    {
+                                        if fwd_src == *edge_src
+                                            && fwd_dst == *edge_dst
+                                            && fwd_type == edge_type
+                                            && fwd_rank == ranking
+                                        {
                                             forward_keys_to_delete.push(fwd_compressed_key.clone());
                                         }
                                     }
@@ -204,8 +213,8 @@ impl VertexIndexManager {
         Ok(())
     }
 
-    pub fn clear_tag_index(&self, space_id: u64, index_name: &str) -> Result<(), StorageError> {
-        let prefix = KeyBuilder::build_vertex_index_prefix(space_id, index_name);
+    pub fn clear_edge_index(&self, space_id: u64, index_name: &str) -> Result<(), StorageError> {
+        let prefix = KeyBuilder::build_edge_index_prefix(space_id, index_name);
         let end = KeyBuilder::build_range_end(&prefix);
 
         let mut forward_keys_to_mark: Vec<SecondaryIndexKey> = Vec::new();
@@ -230,8 +239,8 @@ impl VertexIndexManager {
                     continue;
                 }
 
-                if let Ok((_vertex_id_bytes, parsed_index_name)) =
-                    KeyParser::parse_vertex_reverse_key_v2(key_bytes)
+                if let Ok((_src_bytes, _dst_bytes, _type_bytes, _rank_bytes, parsed_index_name)) =
+                    KeyParser::parse_edge_reverse_key(key_bytes)
                 {
                     if parsed_index_name == index_name {
                         reverse_keys_to_mark.push(key_bytes.clone());
@@ -261,23 +270,23 @@ impl VertexIndexManager {
         Ok(())
     }
 
-    pub fn lookup_tag_index(
+    pub fn lookup_edge_index(
         &self,
         space_id: u64,
         index: &Index,
         value: &Value,
-    ) -> Result<Vec<Value>, StorageError> {
-        self.lookup_tag_index_mvcc(space_id, index, value, MAX_TIMESTAMP)
+    ) -> Result<Vec<(Value, Value, String, i64)>, StorageError> {
+        self.lookup_edge_index_mvcc(space_id, index, value, MAX_TIMESTAMP)
     }
 
-    pub fn lookup_tag_index_mvcc(
+    pub fn lookup_edge_index_mvcc(
         &self,
         space_id: u64,
         index: &Index,
         value: &Value,
         read_ts: Timestamp,
-    ) -> Result<Vec<Value>, StorageError> {
-        let prefix = KeyBuilder::build_vertex_index_prefix(space_id, &index.name);
+    ) -> Result<Vec<(Value, Value, String, i64)>, StorageError> {
+        let prefix = KeyBuilder::build_edge_index_prefix(space_id, &index.name);
         let end = KeyBuilder::build_range_end(&prefix);
 
         let mut results = Vec::new();
@@ -290,10 +299,15 @@ impl VertexIndexManager {
             }
 
             let key_bytes = compressed_key.as_slice();
-            if let Ok(vertex_id) = KeyParser::parse_vertex_id_from_key(key_bytes) {
-                if let Ok(stored_value) = KeyParser::parse_prop_value_from_key(key_bytes) {
-                    if &stored_value == value && seen.insert(vertex_id.clone()) {
-                        results.push(vertex_id);
+            if let Ok(stored_value) = KeyParser::parse_prop_value_from_edge_key(key_bytes) {
+                if &stored_value == value {
+                    if let Ok((src, dst, edge_type, ranking)) =
+                        KeyParser::parse_edge_identity_from_key(key_bytes)
+                    {
+                        let key = (src.clone(), dst.clone(), edge_type.clone(), ranking);
+                        if seen.insert(key.clone()) {
+                            results.push((src, dst, edge_type, ranking));
+                        }
                     }
                 }
             }
@@ -326,22 +340,19 @@ impl VertexIndexManager {
         self.base.tombstone_count()
     }
 
-    pub fn open_tag_index_cursor(
+    pub fn open_edge_index_cursor(
         &self,
         space_id: u64,
         index: &Index,
         plan: &IndexScanPlan,
-    ) -> StorageResult<VertexIndexCursor> {
-        let index_prefix = KeyBuilder::build_vertex_index_prefix(space_id, &index.name);
+    ) -> StorageResult<EdgeIndexCursor> {
+        let index_prefix = KeyBuilder::build_edge_index_prefix(space_id, &index.name);
         let codec = OrderedCodec::new();
 
-        // Compute range bounds based on predicate.
-        // Since the encoding is now order-preserving, the BTreeMap range
-        // directly gives the correct results — no post-filtering needed.
         let (start, end) = match &plan.predicate {
             IndexPredicate::Equal(value) => {
                 let prefix =
-                    KeyBuilder::build_vertex_index_value_prefix(space_id, &index.name, value)?;
+                    KeyBuilder::build_edge_index_value_prefix(space_id, &index.name, value)?;
                 let end = KeyBuilder::build_range_end(&prefix);
                 (prefix.0, end.0)
             }
@@ -353,7 +364,7 @@ impl VertexIndexManager {
             } => {
                 let start = match lower {
                     Some(value) => {
-                        let prefix = KeyBuilder::build_vertex_index_value_prefix(
+                        let prefix = KeyBuilder::build_edge_index_value_prefix(
                             space_id,
                             &index.name,
                             value,
@@ -368,7 +379,7 @@ impl VertexIndexManager {
                 };
                 let end = match upper {
                     Some(value) => {
-                        let prefix = KeyBuilder::build_vertex_index_value_prefix(
+                        let prefix = KeyBuilder::build_edge_index_value_prefix(
                             space_id,
                             &index.name,
                             value,
@@ -384,12 +395,8 @@ impl VertexIndexManager {
                 (start, end)
             }
             IndexPredicate::Prefix(value) => {
-                // Prefix scan: start from the value prefix, extend to the end
-                // of this index. The length-prefixed encoding prevents a tight
-                // range (strings of different lengths with the same prefix are
-                // not contiguous), so we filter in the cursor instead.
                 let value_prefix =
-                    KeyBuilder::build_vertex_index_value_prefix(space_id, &index.name, value)?;
+                    KeyBuilder::build_edge_index_value_prefix(space_id, &index.name, value)?;
                 let end = KeyBuilder::build_range_end(&index_prefix);
                 (value_prefix.0, end.0)
             }
@@ -413,7 +420,7 @@ impl VertexIndexManager {
             _ => None,
         };
 
-        Ok(VertexIndexCursor {
+        Ok(EdgeIndexCursor {
             forward_index,
             range_start: start,
             range_end: end,
@@ -429,8 +436,14 @@ impl VertexIndexManager {
     }
 }
 
+impl Default for EdgeIndexManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug)]
-pub struct VertexIndexCursor {
+pub struct EdgeIndexCursor {
     forward_index:
         Arc<parking_lot::RwLock<std::collections::BTreeMap<SecondaryIndexKey, IndexEntry>>>,
     range_start: Vec<u8>,
@@ -442,11 +455,10 @@ pub struct VertexIndexCursor {
     emitted: usize,
     read_timestamp: Timestamp,
     estimated_match_count: u64,
-    /// Optional value to match as a string prefix (used with IndexPredicate::Prefix).
     prefix_filter: Option<Value>,
 }
 
-impl IndexCursor for VertexIndexCursor {
+impl IndexCursor for EdgeIndexCursor {
     type Row = IndexRow;
 
     fn next_batch(&mut self, batch_size: usize) -> Result<Vec<Self::Row>, StorageError> {
@@ -475,19 +487,9 @@ impl IndexCursor for VertexIndexCursor {
             if !entry.is_visible_at(self.read_timestamp) {
                 continue;
             }
-            let vertex_id = match KeyParser::parse_vertex_id_from_key(key) {
-                Ok(vid) => vid,
-                Err(_) => {
-                    // Skip unparseable keys (not stale, just malformed)
-                    continue;
-                }
-            };
 
-            // Apply prefix filter for Prefix predicates.
-            // The length-prefixed string encoding doesn't support byte-level
-            // prefix matching, so we decode the property value and check here.
             if let Some(ref prefix) = self.prefix_filter {
-                let prop_value = match KeyParser::parse_prop_value_from_key(key) {
+                let prop_value = match KeyParser::parse_prop_value_from_edge_key(key) {
                     Ok(v) => v,
                     Err(_) => continue,
                 };
@@ -511,13 +513,10 @@ impl IndexCursor for VertexIndexCursor {
                 continue;
             }
 
-            // Convert to EntityRef
-            let entity_ref = match vertex_id_to_entity_ref(&vertex_id) {
+            let entity_ref = match parse_edge_entity_ref(key) {
                 Some(er) => er,
                 None => continue,
             };
-            // For now, return RowId (back-to-table fetch).
-            // Phase 5+ will add covering index support.
             rows.push(IndexRow::RowId(entity_ref));
             self.emitted += 1;
             if self.limit.is_some_and(|limit| self.emitted >= limit) {
@@ -548,45 +547,45 @@ impl IndexCursor for VertexIndexCursor {
     }
 }
 
-/// Convert a Value that represents a vertex ID into an EntityRef.
-fn vertex_id_to_entity_ref(v: &Value) -> Option<EntityRef> {
+fn parse_edge_entity_ref(key: &[u8]) -> Option<EntityRef> {
+    let (src, dst, edge_type, ranking) = KeyParser::parse_edge_identity_from_key(key).ok()?;
+    let src_id = value_to_vertex_id(&src)?;
+    let dst_id = value_to_vertex_id(&dst)?;
+    Some(EntityRef::Edge {
+        src: src_id,
+        dst: dst_id,
+        edge_type: 0u32,
+        ranking,
+    })
+}
+
+fn value_to_vertex_id(v: &Value) -> Option<crate::core::types::storage_ids::VertexId> {
     match v {
-        Value::BigInt(id) => Some(EntityRef::Vertex(
-            crate::core::types::storage_ids::VertexId::from_int64(*id),
-        )),
-        Value::Int(id) => Some(EntityRef::Vertex(
-            crate::core::types::storage_ids::VertexId::from_int64(*id as i64),
+        Value::BigInt(id) => Some(crate::core::types::storage_ids::VertexId::from_int64(*id)),
+        Value::Int(id) => Some(crate::core::types::storage_ids::VertexId::from_int64(
+            *id as i64,
         )),
         Value::String(s) => {
-            // Try to parse as i64 first, then treat as string ID
             if let Ok(id) = s.parse::<i64>() {
-                Some(EntityRef::Vertex(
-                    crate::core::types::storage_ids::VertexId::from_int64(id),
-                ))
+                Some(crate::core::types::storage_ids::VertexId::from_int64(id))
             } else {
-                Some(EntityRef::Vertex(
-                    crate::core::types::storage_ids::VertexId::from_string(s.clone()),
+                Some(crate::core::types::storage_ids::VertexId::from_string(
+                    s.clone(),
                 ))
             }
         }
-        Value::Vertex(v) => Some(EntityRef::Vertex(v.vid)),
         _ => None,
-    }
-}
-
-impl Default for VertexIndexManager {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::core::types::storage_ids::VertexId;
     use crate::core::types::{Index, IndexConfig, IndexField, IndexType};
     use crate::core::Value;
     use crate::storage::cursor::{IndexCursor, IndexPredicate, IndexRow, IndexScanPlan};
 
-    use super::VertexIndexManager;
+    use super::EdgeIndexManager;
 
     fn create_test_index(name: &str, schema_name: &str) -> Index {
         Index::new(IndexConfig {
@@ -595,269 +594,167 @@ mod tests {
             space_id: 1,
             schema_name: schema_name.to_string(),
             fields: vec![IndexField::new(
-                "name".to_string(),
+                "weight".to_string(),
                 Value::String("".to_string()),
                 false,
             )],
             properties: vec![],
-            index_type: IndexType::TagIndex,
+            index_type: IndexType::EdgeIndex,
             is_unique: false,
             partial_condition: None,
         })
     }
 
-    #[test]
-    fn test_update_and_lookup_vertex_index() {
-        let manager = VertexIndexManager::new();
-
-        let space_id = 1u64;
-        let vertex_id = Value::Int(123);
-        let index_name = "idx_name";
-        let props = vec![("name".to_string(), Value::String("Alice".to_string()))];
-
-        manager
-            .update_vertex_indexes(space_id, &vertex_id, index_name, &props)
-            .expect("Failed to update vertex indexes");
-
-        let index = create_test_index(index_name, "person");
-
-        let results = manager
-            .lookup_tag_index(space_id, &index, &Value::String("Alice".to_string()))
-            .expect("Failed to lookup tag index");
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0], vertex_id);
-
-        let empty_results = manager
-            .lookup_tag_index(space_id, &index, &Value::String("Bob".to_string()))
-            .expect("Failed to lookup tag index");
-        assert!(empty_results.is_empty());
+    fn make_edge_values(src_id: i64, dst_id: i64, edge_type: &str, ranking: i64) -> (Value, Value) {
+        (Value::BigInt(src_id), Value::BigInt(dst_id))
     }
 
     #[test]
-    fn test_delete_vertex_indexes() {
-        let manager = VertexIndexManager::new();
+    fn test_update_and_lookup_edge_index() {
+        let manager = EdgeIndexManager::new();
 
         let space_id = 1u64;
-        let vertex_id = Value::Int(123);
-        let index_name = "idx_name";
-        let props = vec![("name".to_string(), Value::String("Alice".to_string()))];
+        let (src, dst) = make_edge_values(101, 202, "knows", 1);
+        let index_name = "idx_weight";
+        let props = vec![("weight".to_string(), Value::Int(42))];
 
         manager
-            .update_vertex_indexes(space_id, &vertex_id, index_name, &props)
-            .expect("Failed to update vertex indexes");
+            .update_edge_indexes(space_id, &src, &dst, "knows", 1, index_name, &props)
+            .expect("Failed to update edge indexes");
 
-        let index = create_test_index(index_name, "person");
+        let index = create_test_index(index_name, "knows");
 
         let results = manager
-            .lookup_tag_index(space_id, &index, &Value::String("Alice".to_string()))
-            .expect("Failed to lookup tag index");
+            .lookup_edge_index(space_id, &index, &Value::Int(42))
+            .expect("Failed to lookup edge index");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, src);
+        assert_eq!(results[0].1, dst);
+        assert_eq!(results[0].2, "knows");
+        assert_eq!(results[0].3, 1);
+    }
+
+    #[test]
+    fn test_delete_edge_indexes() {
+        let manager = EdgeIndexManager::new();
+
+        let space_id = 1u64;
+        let (src, dst) = make_edge_values(101, 202, "knows", 1);
+        let index_name = "idx_weight";
+        let props = vec![("weight".to_string(), Value::Int(42))];
+
+        manager
+            .update_edge_indexes(space_id, &src, &dst, "knows", 1, index_name, &props)
+            .expect("Failed to update edge indexes");
+
+        let index = create_test_index(index_name, "knows");
+        let results = manager
+            .lookup_edge_index(space_id, &index, &Value::Int(42))
+            .expect("Failed to lookup");
         assert_eq!(results.len(), 1);
 
         manager
-            .delete_vertex_indexes(space_id, &vertex_id, &[index_name.to_string()])
-            .expect("Failed to delete vertex indexes");
+            .delete_edge_indexes(space_id, &src, &dst, "knows", 1, &[index_name.to_string()])
+            .expect("Failed to delete edge indexes");
 
         let results_after = manager
-            .lookup_tag_index(space_id, &index, &Value::String("Alice".to_string()))
-            .expect("Failed to lookup tag index");
+            .lookup_edge_index(space_id, &index, &Value::Int(42))
+            .expect("Failed to lookup after delete");
         assert!(results_after.is_empty());
     }
 
     #[test]
-    fn test_clear_tag_index() {
-        let manager = VertexIndexManager::new();
+    fn test_clear_edge_index() {
+        let manager = EdgeIndexManager::new();
 
         let space_id = 1u64;
-        let vertex_id = Value::Int(123);
-        let index_name = "idx_name";
-        let props = vec![("name".to_string(), Value::String("Alice".to_string()))];
+        let (src1, dst1) = make_edge_values(101, 202, "knows", 1);
+        let (src2, dst2) = make_edge_values(102, 203, "knows", 2);
+        let index_name = "idx_weight";
 
         manager
-            .update_vertex_indexes(space_id, &vertex_id, index_name, &props)
-            .expect("Failed to update vertex indexes");
+            .update_edge_indexes(
+                space_id,
+                &src1,
+                &dst1,
+                "knows",
+                1,
+                index_name,
+                &[("weight".to_string(), Value::Int(42))],
+            )
+            .expect("insert edge 1");
+        manager
+            .update_edge_indexes(
+                space_id,
+                &src2,
+                &dst2,
+                "knows",
+                2,
+                index_name,
+                &[("weight".to_string(), Value::Int(99))],
+            )
+            .expect("insert edge 2");
 
-        let index = create_test_index(index_name, "person");
+        manager
+            .clear_edge_index(space_id, index_name)
+            .expect("clear edge index");
+
+        let index = create_test_index(index_name, "knows");
         let results = manager
-            .lookup_tag_index(space_id, &index, &Value::String("Alice".to_string()))
-            .expect("Failed to lookup tag index");
-        assert_eq!(results.len(), 1);
-
-        manager
-            .clear_tag_index(space_id, index_name)
-            .expect("Failed to clear tag index");
-
-        let results_after = manager
-            .lookup_tag_index(space_id, &index, &Value::String("Alice".to_string()))
-            .expect("Failed to lookup tag index");
-        assert!(results_after.is_empty());
+            .lookup_edge_index(space_id, &index, &Value::Int(42))
+            .expect("lookup");
+        assert!(results.is_empty());
 
         let (fwd, rev) = manager.base.entry_count();
-        assert!(fwd >= 1, "forward entries should exist as tombstones");
-        assert!(rev >= 1, "reverse entries should exist as tombstones");
+        assert!(fwd >= 1);
+        assert!(rev >= 1);
     }
 
     #[test]
-    fn test_lookup_deduplicates_versions() {
-        let manager = VertexIndexManager::new();
-
-        let space_id = 1u64;
-        let vertex_id = Value::Int(123);
-        let index_name = "idx_name";
-        let props = vec![("name".to_string(), Value::String("Alice".to_string()))];
+    fn test_edge_index_cursor() {
+        let manager = EdgeIndexManager::new();
+        let index = create_test_index("idx_weight", "knows");
 
         manager
-            .update_vertex_indexes_mvcc(space_id, &vertex_id, index_name, &props, 10)
-            .expect("Failed to update vertex indexes");
-        manager
-            .update_vertex_indexes_mvcc(space_id, &vertex_id, index_name, &props, 20)
-            .expect("Failed to update vertex indexes");
-
-        assert_eq!(manager.base.entry_count(), (2, 2));
-
-        let index = create_test_index(index_name, "person");
-        let results = manager
-            .lookup_tag_index_mvcc(space_id, &index, &Value::String("Alice".to_string()), 20)
-            .expect("Failed to lookup tag index");
-        assert_eq!(results, vec![vertex_id.clone()]);
-
-        manager
-            .delete_vertex_indexes_mvcc(space_id, &vertex_id, &[index_name.to_string()], 30)
-            .expect("Failed to delete vertex indexes");
-
-        let results_after = manager
-            .lookup_tag_index_mvcc(space_id, &index, &Value::String("Alice".to_string()), 30)
-            .expect("Failed to lookup tag index");
-        assert!(results_after.is_empty());
-    }
-
-    #[test]
-    fn test_clear_tag_index_is_space_scoped() {
-        let manager = VertexIndexManager::new();
-
-        let vertex_id_one = Value::Int(1);
-        let vertex_id_two = Value::Int(2);
-        let index_name = "idx_shared";
-        let index_one = create_test_index(index_name, "person");
-        let index_two = create_test_index(index_name, "person");
-
-        manager
-            .update_vertex_indexes(
+            .update_edge_indexes_mvcc(
                 1,
-                &vertex_id_one,
-                index_name,
-                &[("name".to_string(), Value::String("Alice".to_string()))],
-            )
-            .expect("Failed to insert space one index");
-        manager
-            .update_vertex_indexes(
-                2,
-                &vertex_id_two,
-                index_name,
-                &[("name".to_string(), Value::String("Alice".to_string()))],
-            )
-            .expect("Failed to insert space two index");
-
-        manager
-            .clear_tag_index(1, index_name)
-            .expect("Failed to clear space one index");
-
-        let space_one_results = manager
-            .lookup_tag_index(1, &index_one, &Value::String("Alice".to_string()))
-            .expect("Failed to lookup cleared space");
-        assert!(space_one_results.is_empty());
-
-        let space_two_results = manager
-            .lookup_tag_index(2, &index_two, &Value::String("Alice".to_string()))
-            .expect("Failed to lookup retained space");
-        assert_eq!(space_two_results, vec![vertex_id_two]);
-    }
-
-    #[test]
-    fn native_cursor_filters_by_predicate_and_preserves_snapshot_visibility() {
-        let manager = VertexIndexManager::new();
-        let index = create_test_index("idx_name", "person");
-        manager
-            .update_vertex_indexes_mvcc(
-                1,
-                &Value::Int(1),
-                "idx_name",
-                &[("name".to_string(), Value::String("Alice".to_string()))],
+                &Value::BigInt(1),
+                &Value::BigInt(2),
+                "knows",
+                0,
+                "idx_weight",
+                &[("weight".to_string(), Value::Int(10))],
                 10,
             )
-            .expect("first index entry should be written");
+            .expect("edge entry");
         manager
-            .update_vertex_indexes_mvcc(
+            .update_edge_indexes_mvcc(
                 1,
-                &Value::Int(2),
-                "idx_name",
-                &[("name".to_string(), Value::String("Bob".to_string()))],
+                &Value::BigInt(3),
+                &Value::BigInt(4),
+                "knows",
+                1,
+                "idx_weight",
+                &[("weight".to_string(), Value::Int(20))],
                 20,
             )
-            .expect("second index entry should be written");
+            .expect("edge entry");
 
         let plan = IndexScanPlan {
             space: "space".to_string(),
             index_id: 1,
-            predicate: IndexPredicate::Prefix(Value::String("A".to_string())),
+            predicate: IndexPredicate::All,
             projection: None,
             limit: None,
             offset: 0,
-            read_timestamp: 10,
+            read_timestamp: 20,
         };
         let mut cursor = manager
-            .open_tag_index_cursor(1, &index, &plan)
-            .expect("native cursor should open");
-        assert_eq!(cursor.estimated_match_count(), Some(1));
+            .open_edge_index_cursor(1, &index, &plan)
+            .expect("cursor");
+        assert_eq!(cursor.estimated_match_count(), Some(2));
 
-        // Cursor now returns IndexRow, not Value
-        let batch = cursor.next_batch(8).expect("cursor should read entries");
-        assert_eq!(batch.len(), 1);
-        match &batch[0] {
-            IndexRow::RowId(_) => {} // RowId is the expected return type
-            _ => panic!("expected RowId"),
-        }
-
-        let empty = cursor.next_batch(8).expect("cursor should reach end");
-        assert!(empty.is_empty());
-    }
-
-    #[test]
-    fn native_cursor_paginates_across_index_range() {
-        let manager = VertexIndexManager::new();
-        let index = create_test_index("idx_name", "person");
-        for id in 0..32 {
-            manager
-                .update_vertex_indexes_mvcc(
-                    1,
-                    &Value::Int(id),
-                    "idx_name",
-                    &[("name".to_string(), Value::String(format!("name-{id}")))],
-                    10,
-                )
-                .expect("index entry should be written");
-        }
-
-        let plan = IndexScanPlan {
-            space: "space".to_string(),
-            index_id: 1,
-            predicate: IndexPredicate::Prefix(Value::String("name-".to_string())),
-            projection: None,
-            limit: None,
-            offset: 0,
-            read_timestamp: 10,
-        };
-        let mut cursor = manager
-            .open_tag_index_cursor(1, &index, &plan)
-            .expect("native cursor should open");
-        let mut count = 0;
-        loop {
-            let batch = cursor.next_batch(3).expect("cursor should read entries");
-            if batch.is_empty() {
-                break;
-            }
-            count += batch.len();
-        }
-
-        assert_eq!(count, 32);
+        let batch = cursor.next_batch(8).expect("read");
+        assert_eq!(batch.len(), 2);
     }
 }

@@ -1,9 +1,10 @@
 //! Index Key Types and Constants
 //!
 //! This module defines the core types and constants used for index key encoding.
+//! Value serialization now uses `OrderedCodec` from `graphdb-core` (order-preserving).
 
+use crate::core::value::ordered_codec::OrderedCodec;
 use crate::core::{StorageError, Value};
-use postcard::{from_bytes, to_allocvec};
 
 /// Byte key wrapper for index keys
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
@@ -31,13 +32,20 @@ pub type SecondaryIndexKey = Vec<u8>;
 
 pub const KEY_TYPE_VERTEX_REVERSE: u8 = 0x01;
 pub const KEY_TYPE_VERTEX_FORWARD: u8 = 0x03;
+pub const KEY_TYPE_EDGE_REVERSE: u8 = 0x02;
+pub const KEY_TYPE_EDGE_FORWARD: u8 = 0x04;
 
+/// Encode a Value using the order-preserving OrderedCodec.
+///
+/// Replaces the old postcard-based serialization which did not
+/// preserve byte-order comparison.
 pub fn serialize_value(value: &Value) -> Result<Vec<u8>, StorageError> {
-    to_allocvec(value).map_err(|e| StorageError::serialize_error(e.to_string()))
+    OrderedCodec::new().encode(value)
 }
 
+/// Decode a Value from OrderedCodec bytes.
 pub fn deserialize_value(data: &[u8]) -> Result<Value, StorageError> {
-    from_bytes(data).map_err(|e| StorageError::deserialize_error(e.to_string()))
+    OrderedCodec::new().decode(data)
 }
 
 #[cfg(test)]

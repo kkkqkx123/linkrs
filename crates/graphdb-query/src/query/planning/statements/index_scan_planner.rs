@@ -92,32 +92,35 @@ fn find_suitable_index(
             for (field, op, value) in &filter_conditions {
                 if &index_meta.field_name == field {
                     let index_limit = match op.as_str() {
-                        "=" => Some(IndexLimit::equal(field.clone(), value.clone())),
+                        "=" => Some(IndexLimit::equal(
+                            field.clone(),
+                            Value::String(value.clone()),
+                        )),
                         ">" => Some(IndexLimit::range(
                             field.clone(),
-                            Some(value.clone()) as Option<String>,
-                            None::<String>,
+                            Some(Value::String(value.clone())),
+                            None::<Value>,
                             false,
                             false,
                         )),
                         "<" => Some(IndexLimit::range(
                             field.clone(),
-                            None::<String>,
-                            Some(value.clone()) as Option<String>,
+                            None::<Value>,
+                            Some(Value::String(value.clone())),
                             false,
                             false,
                         )),
                         ">=" => Some(IndexLimit::range(
                             field.clone(),
-                            Some(value.clone()) as Option<String>,
-                            None::<String>,
+                            Some(Value::String(value.clone())),
+                            None::<Value>,
                             true,
                             false,
                         )),
                         "<=" => Some(IndexLimit::range(
                             field.clone(),
-                            None::<String>,
-                            Some(value.clone()) as Option<String>,
+                            None::<Value>,
+                            Some(Value::String(value.clone())),
                             false,
                             true,
                         )),

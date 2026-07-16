@@ -400,14 +400,15 @@ impl SqliteOutbox {
             .await
             .map_err(|error| error.to_string())?
             .ok_or_else(|| "Generation not in catching_up state".to_string())?;
-            
+
             if current_lsn < to_sql_i64(barrier_lsn.get(), "barrier LSN")? {
                 return Err(format!(
                     "Generation has not caught up to barrier LSN {} < {}",
-                    current_lsn, barrier_lsn.get()
+                    current_lsn,
+                    barrier_lsn.get()
                 ));
             }
-            
+
             sqlx::query(
                 "UPDATE generation_state SET state = 'active', barrier_lsn = NULL \
                  WHERE target = ? AND index_id = ? AND generation = ?",
@@ -487,21 +488,25 @@ impl SqliteOutbox {
         index_id: u64,
         generation: u64,
     ) -> Result<Option<(String, Option<CommitLsn>)>, String> {
-        let row = sqlx::query("SELECT state, barrier_lsn FROM generation_state \
-                               WHERE target = ? AND index_id = ? AND generation = ?")
-            .bind(target.as_str())
-            .bind(to_sql_i64(index_id, "index ID")?)
-            .bind(to_sql_i64(generation, "index generation")?)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|error| error.to_string())?;
-        
+        let row = sqlx::query(
+            "SELECT state, barrier_lsn FROM generation_state \
+                               WHERE target = ? AND index_id = ? AND generation = ?",
+        )
+        .bind(target.as_str())
+        .bind(to_sql_i64(index_id, "index ID")?)
+        .bind(to_sql_i64(generation, "index generation")?)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|error| error.to_string())?;
+
         row.map(|row| {
             let state: String = row.get("state");
             let barrier_lsn: Option<i64> = row.get("barrier_lsn");
-            let barrier = barrier_lsn.map(|lsn| CommitLsn::new(from_sql_i64(lsn, "barrier LSN").unwrap_or(0)));
+            let barrier = barrier_lsn
+                .map(|lsn| CommitLsn::new(from_sql_i64(lsn, "barrier LSN").unwrap_or(0)));
             Ok((state, barrier))
-        }).transpose()
+        })
+        .transpose()
     }
 
     pub async fn get_active_generation(
@@ -509,19 +514,22 @@ impl SqliteOutbox {
         target: &TargetId,
         index_id: u64,
     ) -> Result<Option<u64>, String> {
-        let row = sqlx::query("SELECT generation FROM generation_state \
+        let row = sqlx::query(
+            "SELECT generation FROM generation_state \
                                WHERE target = ? AND index_id = ? AND state = 'active' \
-                               ORDER BY generation DESC LIMIT 1")
-            .bind(target.as_str())
-            .bind(to_sql_i64(index_id, "index ID")?)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|error| error.to_string())?;
-        
+                               ORDER BY generation DESC LIMIT 1",
+        )
+        .bind(target.as_str())
+        .bind(to_sql_i64(index_id, "index ID")?)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|error| error.to_string())?;
+
         row.map(|row| {
             let generation: i64 = row.get("generation");
             from_sql_i64(generation, "index generation")
-        }).transpose()
+        })
+        .transpose()
     }
 
     pub async fn materialize_commit(
@@ -1108,7 +1116,7 @@ async fn advance_index_frontier(
 ) -> Result<(), String> {
     let index_id_i64 = to_sql_i64(index_id, "index ID")?;
     let generation_i64 = to_sql_i64(generation, "index generation")?;
-    
+
     sqlx::query(
         "INSERT INTO index_frontier(target, index_id, generation) \
          VALUES(?, ?, ?) ON CONFLICT DO NOTHING",
@@ -1119,7 +1127,7 @@ async fn advance_index_frontier(
     .execute(&mut *connection)
     .await
     .map_err(|error| error.to_string())?;
-    
+
     loop {
         let current: i64 = sqlx::query_scalar(
             "SELECT applied_lsn FROM index_frontier \
@@ -1131,7 +1139,7 @@ async fn advance_index_frontier(
         .fetch_one(&mut *connection)
         .await
         .map_err(|error| error.to_string())?;
-        
+
         let next = sqlx::query(
             "SELECT e.commit_lsn, \
                     (SELECT COUNT(*) FROM events e2 \
@@ -1150,7 +1158,7 @@ async fn advance_index_frontier(
         .fetch_optional(&mut *connection)
         .await
         .map_err(|error| error.to_string())?;
-        
+
         let Some(next) = next else {
             return Ok(());
         };
@@ -1158,11 +1166,11 @@ async fn advance_index_frontier(
         let total_count: i64 = next.get("total_count");
         let skipped_count: i64 = next.get("skipped_count");
         let has_skipped = skipped_count != 0;
-        
+
         if applied_count != total_count || has_skipped {
             return Ok(());
         }
-        
+
         let next_lsn: i64 = next.get("commit_lsn");
         sqlx::query(
             "UPDATE index_frontier SET applied_lsn = ? \

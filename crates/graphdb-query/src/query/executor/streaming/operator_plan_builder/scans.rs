@@ -4,8 +4,6 @@ use std::sync::Arc;
 
 use std::collections::HashSet;
 
-use crate::core::value::NullType;
-use crate::core::Value;
 use crate::query::executor::base::ExecutionContext;
 use crate::query::executor::build_error::PlanBuildError;
 use crate::query::executor::streaming::operators::spec::{
@@ -120,7 +118,9 @@ pub fn build_scan_node(
                     ),
                 ));
             }
-            // Build a BoundIndexPredicate from the first scan limit
+            // Build a BoundIndexPredicate from the first scan limit.
+            // Values are already typed (Value enum, not String), preserving
+            // the original type from the planner.
             let predicate = scan_node
                 .scan_limits()
                 .first()
@@ -128,39 +128,25 @@ pub fn build_scan_node(
                     let column = limit.column.clone();
                     match limit.scan_type {
                         crate::query::planning::plan::core::nodes::access::index_scan::ScanType::Unique => {
-                            let value = limit
-                                .begin_value
-                                .clone()
-                                .map(Value::String)
-                                .unwrap_or(Value::Null(NullType::Null));
-                            BoundIndexPredicate::Equal { column, value }
+                            BoundIndexPredicate::Equal {
+                                column,
+                                value: limit.begin_value.clone().unwrap_or(crate::core::Value::Null(crate::core::value::NullType::Null)),
+                            }
                         }
                         crate::query::planning::plan::core::nodes::access::index_scan::ScanType::Range => {
-                            let begin = limit
-                                .begin_value
-                                .clone()
-                                .map(Value::String)
-                                .unwrap_or(Value::Null(NullType::Null));
-                            let end = limit
-                                .end_value
-                                .clone()
-                                .map(Value::String)
-                                .unwrap_or(Value::Null(NullType::Null));
                             BoundIndexPredicate::Range {
                                 column,
-                                begin,
-                                end,
+                                begin: limit.begin_value.clone().unwrap_or(crate::core::Value::Null(crate::core::value::NullType::Null)),
+                                end: limit.end_value.clone().unwrap_or(crate::core::Value::Null(crate::core::value::NullType::Null)),
                                 include_begin: limit.include_begin,
                                 include_end: limit.include_end,
                             }
                         }
                         crate::query::planning::plan::core::nodes::access::index_scan::ScanType::Prefix => {
-                            let prefix = limit
-                                .begin_value
-                                .clone()
-                                .map(Value::String)
-                                .unwrap_or(Value::Null(NullType::Null));
-                            BoundIndexPredicate::Prefix { column, prefix }
+                            BoundIndexPredicate::Prefix {
+                                column,
+                                prefix: limit.begin_value.clone().unwrap_or(crate::core::Value::Null(crate::core::value::NullType::Null)),
+                            }
                         }
                         crate::query::planning::plan::core::nodes::access::index_scan::ScanType::Full => {
                             BoundIndexPredicate::Full

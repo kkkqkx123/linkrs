@@ -160,6 +160,7 @@ impl<'a> NodeEstimator for ScanEstimator<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::Value;
     use crate::query::optimizer::cost::config::CostModelConfig;
     use crate::query::optimizer::stats::{EdgeTypeStatistics, TagStatistics};
     use crate::query::planning::plan::core::nodes::access::graph_scan_node::*;
@@ -250,7 +251,10 @@ mod tests {
             "test_schema".to_string(),
             ScanType::Unique,
         );
-        node.set_scan_limits(vec![IndexLimit::equal("Person.name", "Alice")]);
+        node.set_scan_limits(vec![IndexLimit::equal(
+            "Person.name",
+            Value::String("Alice".into()),
+        )]);
         let plan_node = PlanNodeEnum::IndexScan(node);
 
         let child_estimates = vec![];
@@ -268,7 +272,10 @@ mod tests {
         let estimator = ScanEstimator::new(&calculator);
 
         let mut node = EdgeIndexScanNode::new(1, "friend", "friend_index");
-        node.set_scan_limits(vec![IndexLimit::equal("friend.rank", "1")]);
+        node.set_scan_limits(vec![IndexLimit::equal(
+            "friend.rank",
+            Value::String("1".into()),
+        )]);
         let plan_node = PlanNodeEnum::EdgeIndexScan(node);
 
         let child_estimates = vec![];
@@ -324,7 +331,10 @@ mod tests {
             "test_schema".to_string(),
             ScanType::Unique,
         );
-        node.set_scan_limits(vec![IndexLimit::equal("Person.name", "Alice")]);
+        node.set_scan_limits(vec![IndexLimit::equal(
+            "Person.name",
+            Value::String("Alice".into()),
+        )]);
         let selectivity = estimator.estimate_index_scan_selectivity(&node);
         assert_eq!(selectivity, 0.01);
     }
@@ -342,7 +352,10 @@ mod tests {
             "test_schema".to_string(),
             ScanType::Prefix,
         );
-        node.set_scan_limits(vec![IndexLimit::prefix("Person.name", "A")]);
+        node.set_scan_limits(vec![IndexLimit::prefix(
+            "Person.name",
+            Value::String("A".into()),
+        )]);
         let selectivity = estimator.estimate_index_scan_selectivity(&node);
         assert_eq!(selectivity, 0.05);
     }
@@ -362,8 +375,8 @@ mod tests {
         );
         node.set_scan_limits(vec![IndexLimit::range(
             "Person.age",
-            Some("20"),
-            Some("30"),
+            Some(Value::String("20".into())),
+            Some(Value::String("30".into())),
             true,
             true,
         )]);
@@ -385,8 +398,8 @@ mod tests {
             ScanType::Unique,
         );
         node.set_scan_limits(vec![
-            IndexLimit::equal("Person.name", "Alice"),
-            IndexLimit::equal("Person.age", "25"),
+            IndexLimit::equal("Person.name", Value::String("Alice".into())),
+            IndexLimit::equal("Person.age", Value::String("25".into())),
         ]);
         let selectivity = estimator.estimate_index_scan_selectivity(&node);
         assert_eq!(selectivity, 0.0001);
@@ -408,7 +421,10 @@ mod tests {
         let estimator = ScanEstimator::new(&calculator);
 
         let mut node = EdgeIndexScanNode::new(1, "friend", "friend_index");
-        node.set_scan_limits(vec![IndexLimit::equal("friend.rank", "1")]);
+        node.set_scan_limits(vec![IndexLimit::equal(
+            "friend.rank",
+            Value::String("1".into()),
+        )]);
         let selectivity = estimator.estimate_edge_index_scan_selectivity(&node);
         assert_eq!(selectivity, 0.01);
     }
@@ -477,7 +493,10 @@ mod tests {
             "test_schema".to_string(),
             ScanType::Unique,
         );
-        node.set_scan_limits(vec![IndexLimit::equal("Person.name", "Alice")]);
+        node.set_scan_limits(vec![IndexLimit::equal(
+            "Person.name",
+            Value::String("Alice".into()),
+        )]);
         let property_name = estimator.get_property_name_from_index_scan(&node);
         assert_eq!(property_name, "Person.name");
     }

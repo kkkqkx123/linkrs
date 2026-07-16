@@ -20,6 +20,10 @@ pub use crate::search::SyncConfig;
 #[cfg(feature = "fulltext-search")]
 pub use batch::FulltextBatchProcessor;
 pub use batch::{BatchConfig, BatchError, BatchProcessor, TransactionBatchBuffer};
+pub use checkpoint_manifest::{
+    CheckpointManifest, CheckpointManifestManager, IndexManifestRef, OutboxSnapshotRef,
+    StorageSnapshotRef,
+};
 pub use circuit_breaker::{
     with_circuit_breaker, CircuitBreaker, CircuitBreakerConfig, CircuitBreakerError,
     CircuitBreakerStats, CircuitState,
@@ -35,17 +39,13 @@ pub use outbox::{OutboxEvent, OutboxPayload, OutboxStats};
 pub use outbox_recovery::{
     find_latest_snapshot, live_database_exists, restore_snapshot_sync, verify_live_database,
 };
-pub use receiver::{ApplyReceipt, LateArrivalResult};
 #[cfg(feature = "fulltext-search")]
 pub use receiver::FulltextReceiver;
 #[cfg(feature = "qdrant")]
 pub use receiver::VectorReceiver;
+pub use receiver::{ApplyReceipt, LateArrivalResult};
 pub use retry::{with_retry, RetryConfig};
 pub use sqlite_outbox::{ClaimedEvent, OutboxSnapshot, SqliteOutbox};
-pub use checkpoint_manifest::{
-    CheckpointManifest, CheckpointManifestManager, IndexManifestRef, OutboxSnapshotRef,
-    StorageSnapshotRef,
-};
 pub use types::{IndexOpKey, IndexOperation};
 
 #[cfg(feature = "qdrant")]

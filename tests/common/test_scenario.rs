@@ -6,7 +6,7 @@ use crate::common::TestResult;
 use graphdb::core::types::VertexId;
 use graphdb::core::Value;
 use graphdb::query::executor::base::ExecutionResult;
-use graphdb::query::query_pipeline_manager::QueryPipelineManager;
+use graphdb::query::QueryPipelineManager;
 use graphdb::storage::{GraphStorage, StorageReader, StorageSchemaContextOps};
 use parking_lot::RwLock;
 use std::collections::HashMap;

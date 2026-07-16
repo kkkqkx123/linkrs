@@ -134,7 +134,7 @@ pub enum IndexPredicate {
         include_lower: bool,
         include_upper: bool,
     },
-    StringPrefix(String),
+    Prefix(crate::core::Value),
     All,
 }
 
@@ -165,7 +165,6 @@ pub struct IndexScanPlan {
     pub index_id: u64,
     pub predicate: IndexPredicate,
     pub projection: Option<Vec<String>>,
-    pub partition: Option<String>,
     pub limit: Option<usize>,
     pub offset: usize,
     pub read_timestamp: Timestamp,
@@ -384,7 +383,7 @@ pub fn open_property_batch_reader(
 pub fn open_index_cursor<S: crate::storage::StorageReader + ?Sized>(
     storage: &Arc<RwLock<S>>,
     plan: &IndexScanPlan,
-) -> Result<Box<dyn IndexCursor<Row = crate::core::Value>>, StorageError> {
+) -> Result<Box<dyn IndexCursor<Row = IndexRow>>, StorageError> {
     let reader = storage.read();
     reader.create_index_cursor(plan)
 }

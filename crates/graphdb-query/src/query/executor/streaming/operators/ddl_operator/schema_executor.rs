@@ -532,18 +532,35 @@ pub(super) fn execute_index_manage(
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        IndexManageNode::CreateEdgeIndex(_) => Err(QueryError::execution(
-            "Edge index creation is not exposed by StorageSchemaOps".to_string(),
-        )),
+        IndexManageNode::CreateEdgeIndex(_) => super::exec_ddl(storage, |s| {
+            let idx_name = index_name.as_deref().unwrap_or("unnamed");
+            let info = Index::new(IndexConfig {
+                id: 0,
+                name: idx_name.to_string(),
+                space_id: 0,
+                schema_name: space_name.to_string(),
+                fields: vec![],
+                properties: vec![],
+                index_type: IndexType::EdgeIndex,
+                is_unique: false,
+                partial_condition: None,
+            });
+            StorageSchemaOps::create_edge_index(s, space_name, &info)
+                .map_err(|e| QueryError::execution(e.to_string()))?;
+            Ok(())
+        }),
         IndexManageNode::DropTagIndex(_) => super::exec_ddl(storage, |s| {
             let name = index_name.as_deref().unwrap_or("");
             StorageSchemaOps::drop_tag_index(s, space_name, name)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        IndexManageNode::DropEdgeIndex(_) => Err(QueryError::execution(
-            "Edge index deletion is not exposed by StorageSchemaOps".to_string(),
-        )),
+        IndexManageNode::DropEdgeIndex(_) => super::exec_ddl(storage, |s| {
+            let name = index_name.as_deref().unwrap_or("");
+            StorageSchemaOps::drop_edge_index(s, space_name, name)
+                .map_err(|e| QueryError::execution(e.to_string()))?;
+            Ok(())
+        }),
         IndexManageNode::DescTagIndex(_) | IndexManageNode::ShowCreateIndex(_) => {
             let reader = super::get_reader(storage)?;
             let name = index_name.as_deref().unwrap_or("");
@@ -646,11 +663,108 @@ pub(super) fn execute_index_manage(
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        IndexManageNode::DescEdgeIndex(_)
-        | IndexManageNode::ShowEdgeIndexes(_)
-        | IndexManageNode::RebuildEdgeIndex(_) => Err(QueryError::execution(
-            "Edge index management is not exposed by StorageSchemaOps".to_string(),
-        )),
+        IndexManageNode::DescEdgeIndex(_) => {
+            let reader = super::get_reader(storage)?;
+            let name = index_name.as_deref().unwrap_or("");
+            match reader
+                .get_edge_index(space_name, name)
+                .map_err(|e| QueryError::execution(e.to_string()))?
+            {
+                Some(idx) => {
+                    let fields_str: String = idx
+                        .fields
+                        .iter()
+                        .map(|f| f.name.clone())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let schema = Arc::new(Schema::new(vec![
+                        ColumnInfo {
+                            name: "name".to_string(),
+                            data_type: "string".to_string(),
+                        },
+                        ColumnInfo {
+                            name: "index_type".to_string(),
+                            data_type: "string".to_string(),
+                        },
+                        ColumnInfo {
+                            name: "fields".to_string(),
+                            data_type: "string".to_string(),
+                        },
+                        ColumnInfo {
+                            name: "status".to_string(),
+                            data_type: "string".to_string(),
+                        },
+                        ColumnInfo {
+                            name: "unique".to_string(),
+                            data_type: "bool".to_string(),
+                        },
+                    ]));
+                    Ok(Some(super::make_single_row(
+                        schema,
+                        vec![
+                            Value::String(idx.name),
+                            Value::String(format!("{:?}", idx.index_type)),
+                            Value::String(fields_str),
+                            Value::String(format!("{:?}", idx.status)),
+                            Value::Bool(idx.is_unique),
+                        ],
+                    )))
+                }
+                None => Ok(Some(super::make_manage_result(
+                    "desc_index",
+                    Some(name),
+                    "not-found",
+                ))),
+            }
+        }
+        IndexManageNode::ShowEdgeIndexes(_) => {
+            let reader = super::get_reader(storage)?;
+            let indexes = reader
+                .list_edge_indexes(space_name)
+                .map_err(|e| QueryError::execution(e.to_string()))?;
+            let schema = Arc::new(Schema::new(vec![
+                ColumnInfo {
+                    name: "name".to_string(),
+                    data_type: "string".to_string(),
+                },
+                ColumnInfo {
+                    name: "index_type".to_string(),
+                    data_type: "string".to_string(),
+                },
+                ColumnInfo {
+                    name: "fields".to_string(),
+                    data_type: "string".to_string(),
+                },
+                ColumnInfo {
+                    name: "status".to_string(),
+                    data_type: "string".to_string(),
+                },
+            ]));
+            let rows: Vec<Vec<Value>> = indexes
+                .into_iter()
+                .map(|idx| {
+                    let fields_str: String = idx
+                        .fields
+                        .iter()
+                        .map(|f| f.name.clone())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    vec![
+                        Value::String(idx.name),
+                        Value::String(format!("{:?}", idx.index_type)),
+                        Value::String(fields_str),
+                        Value::String(format!("{:?}", idx.status)),
+                    ]
+                })
+                .collect();
+            Ok(Some(DataChunk::new(rows, schema)))
+        }
+        IndexManageNode::RebuildEdgeIndex(_) => super::exec_ddl(storage, |s| {
+            let name = index_name.as_deref().unwrap_or("");
+            StorageSchemaOps::rebuild_edge_index(s, space_name, name)
+                .map_err(|e| QueryError::execution(e.to_string()))?;
+            Ok(())
+        }),
     };
     base.lifecycle.mark_closed();
     result
@@ -668,7 +782,11 @@ pub(super) fn execute_delete_index(
     }
     *emitted = true;
     let result = super::exec_ddl(storage, |schema| {
-        StorageSchemaOps::drop_tag_index(schema, space_name, index_name)
+        // Try tag index first, then edge index
+        if StorageSchemaOps::drop_tag_index(schema, space_name, index_name).is_ok() {
+            return Ok(());
+        }
+        StorageSchemaOps::drop_edge_index(schema, space_name, index_name)
             .map(|_| ())
             .map_err(|error| QueryError::execution(error.to_string()))
     });

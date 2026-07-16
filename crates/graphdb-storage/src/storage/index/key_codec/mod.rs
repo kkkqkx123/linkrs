@@ -33,7 +33,7 @@ pub mod key_parser;
 pub mod key_types;
 
 pub use key_builder::KeyBuilder;
-pub use key_generator::{IndexKeyGenerator, VertexIndexKeyGen};
+pub use key_generator::{EdgeIndexKeyGen, IndexKeyGenerator, VertexIndexKeyGen};
 pub use key_parser::KeyParser;
 
 #[cfg(test)]

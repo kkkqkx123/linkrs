@@ -3,6 +3,8 @@
 
 use crate::core::types::expr::contextual::ContextualExpression;
 use crate::core::types::graph_schema::OrderDirection;
+use crate::core::value::NullType;
+use crate::core::Value;
 use crate::define_plan_node;
 use crate::query::planning::plan::core::node_id_generator::next_node_id;
 use crate::query::planning::plan::core::nodes::base::plan_node_visitor::PlanNodeVisitor;
@@ -80,8 +82,8 @@ impl ScanType {
 #[derive(Debug, Clone)]
 pub struct IndexLimit {
     pub column: String,
-    pub begin_value: Option<String>,
-    pub end_value: Option<String>,
+    pub begin_value: Option<Value>,
+    pub end_value: Option<Value>,
     /// Does it include a starting value?
     pub include_begin: bool,
     /// Does it include an end value?
@@ -92,8 +94,7 @@ pub struct IndexLimit {
 
 impl IndexLimit {
     /// Create restrictions for equivalent queries
-    pub fn equal(column: impl Into<String>, value: impl Into<String>) -> Self {
-        let value = value.into();
+    pub fn equal(column: impl Into<String>, value: Value) -> Self {
         Self {
             column: column.into(),
             begin_value: Some(value.clone()),
@@ -107,15 +108,15 @@ impl IndexLimit {
     /// Create range query limits.
     pub fn range(
         column: impl Into<String>,
-        begin: Option<impl Into<String>>,
-        end: Option<impl Into<String>>,
+        begin: Option<Value>,
+        end: Option<Value>,
         include_begin: bool,
         include_end: bool,
     ) -> Self {
         Self {
             column: column.into(),
-            begin_value: begin.map(|v| v.into()),
-            end_value: end.map(|v| v.into()),
+            begin_value: begin,
+            end_value: end,
             include_begin,
             include_end,
             scan_type: ScanType::Range,
@@ -123,10 +124,10 @@ impl IndexLimit {
     }
 
     /// Create restrictions for prefix queries
-    pub fn prefix(column: impl Into<String>, prefix: impl Into<String>) -> Self {
+    pub fn prefix(column: impl Into<String>, prefix: Value) -> Self {
         Self {
             column: column.into(),
-            begin_value: Some(prefix.into()),
+            begin_value: Some(prefix),
             end_value: None,
             include_begin: true,
             include_end: false,

@@ -9,6 +9,7 @@ use super::state::SourceState;
 use crate::core::error::QueryError;
 use crate::core::types::storage_ids::VertexId;
 use crate::core::types::MAX_TIMESTAMP;
+use crate::core::wal::EntityRef;
 use crate::core::{EdgeDirection, Value};
 use crate::query::executor::base::{MemoryBudget, MemoryReservation};
 use crate::query::executor::streaming::chunk::DataChunk;
@@ -16,7 +17,7 @@ use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::slot::SlotLayout;
 use crate::storage::cursor::{
     open_edge_scan, open_index_cursor, open_vertex_scan, EdgeCursor, IndexCursor, IndexPredicate,
-    IndexScanPlan, ScanOptions, VecEdgeCursor, VertexCursor,
+    IndexRow, IndexScanPlan, ScanOptions, VecEdgeCursor, VertexCursor,
 };
 use crate::storage::QueryStorage;
 
@@ -143,7 +144,7 @@ pub enum SourceOperator {
         predicate: BoundIndexPredicate,
         projection: IndexProjection,
         output_layout: Arc<SlotLayout>,
-        cursor: Option<Box<dyn IndexCursor<Row = Value>>>,
+        cursor: Option<Box<dyn IndexCursor<Row = IndexRow>>>,
     },
     Argument,
     /// Property retrieval (zero-input source, will migrate to Unary in M2).
@@ -164,7 +165,7 @@ pub enum SourceOperator {
         predicate: BoundIndexPredicate,
         projection: IndexProjection,
         output_layout: Arc<SlotLayout>,
-        cursor: Option<Box<dyn IndexCursor<Row = Value>>>,
+        cursor: Option<Box<dyn IndexCursor<Row = IndexRow>>>,
     },
     Start,
 }
@@ -942,14 +943,7 @@ fn build_index_scan_plan(
             include_lower: *include_begin,
             include_upper: *include_end,
         },
-        BoundIndexPredicate::Prefix { prefix, .. } => {
-            let Value::String(prefix) = prefix else {
-                return Err(QueryError::execution(
-                    "String prefix index scans require a string prefix value".to_string(),
-                ));
-            };
-            IndexPredicate::StringPrefix(prefix.clone())
-        }
+        BoundIndexPredicate::Prefix { prefix, .. } => IndexPredicate::Prefix(prefix.clone()),
         BoundIndexPredicate::Full => IndexPredicate::All,
     };
 
@@ -969,7 +963,6 @@ fn build_index_scan_plan(
         index_id,
         predicate: physical_predicate,
         projection,
-        partition: None,
         limit: None,
         offset: 0,
         read_timestamp,
@@ -979,7 +972,7 @@ fn build_index_scan_plan(
 fn next_index_chunk(
     storage: &Arc<RwLock<dyn QueryStorage>>,
     space_name: &str,
-    cursor: &mut Option<Box<dyn IndexCursor<Row = Value>>>,
+    cursor: &mut Option<Box<dyn IndexCursor<Row = IndexRow>>>,
     output_layout: &Arc<SlotLayout>,
     base: &mut OperatorBase,
     source: &str,
@@ -990,42 +983,63 @@ fn next_index_chunk(
             Some(cursor) => cursor,
             None => return Ok(None),
         };
-        let ids = index_cursor
+        let rows = index_cursor
             .next_batch(base.chunk_size)
             .map_err(|error| storage_error(source, "read cursor", space_name, error))?;
         let exhausted = index_cursor.is_exhausted();
-        let mut rows = Vec::with_capacity(ids.len());
+        let mut output_rows = Vec::with_capacity(rows.len());
 
-        if !ids.is_empty() {
+        if !rows.is_empty() {
             let guard = storage.read();
-            for id_value in ids {
-                if let Value::Vertex(vertex) = &id_value {
-                    rows.push(make_vertex_row((**vertex).clone()));
-                    continue;
-                }
-
-                let Ok(vertex_id) = VertexId::try_from(&id_value) else {
-                    continue;
-                };
-                match guard.get_vertex(space_name, &vertex_id) {
-                    Ok(Some(vertex)) => rows.push(make_vertex_row(vertex)),
-                    Ok(None) => {}
-                    Err(error) => {
-                        return Err(storage_error(
-                            source,
-                            "get indexed vertex",
-                            space_name,
-                            error,
-                        ));
+            for row in rows {
+                match row {
+                    IndexRow::Covering {
+                        entity_ref,
+                        columns: _,
+                    } => {
+                        // Phase 5+: handle covering projections directly.
+                        // For now, fall through to back-to-table fetch.
+                        let vertex_id = entity_ref_to_vertex_id(&entity_ref);
+                        if let Some(vid) = vertex_id {
+                            match guard.get_vertex(space_name, &vid) {
+                                Ok(Some(vertex)) => output_rows.push(make_vertex_row(vertex)),
+                                Ok(None) => {}
+                                Err(error) => {
+                                    return Err(storage_error(
+                                        source,
+                                        "get indexed vertex",
+                                        space_name,
+                                        error,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    IndexRow::RowId(entity_ref) => {
+                        let vertex_id = entity_ref_to_vertex_id(&entity_ref);
+                        if let Some(vid) = vertex_id {
+                            match guard.get_vertex(space_name, &vid) {
+                                Ok(Some(vertex)) => output_rows.push(make_vertex_row(vertex)),
+                                Ok(None) => {}
+                                Err(error) => {
+                                    return Err(storage_error(
+                                        source,
+                                        "get indexed vertex",
+                                        space_name,
+                                        error,
+                                    ));
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
 
         *cursor = Some(index_cursor);
-        if !rows.is_empty() {
-            let reservation = reserve_memory(base, &rows)?;
-            let mut chunk = DataChunk::new_with_layout(rows, output_layout.clone());
+        if !output_rows.is_empty() {
+            let reservation = reserve_memory(base, &output_rows)?;
+            let mut chunk = DataChunk::new_with_layout(output_rows, output_layout.clone());
             if let Some(reservation) = reservation {
                 chunk = chunk.with_memory_reservation(reservation);
             }
@@ -1034,6 +1048,14 @@ fn next_index_chunk(
         if exhausted {
             return Ok(None);
         }
+    }
+}
+
+/// Convert an EntityRef to VertexId for back-to-table fetches.
+fn entity_ref_to_vertex_id(entity_ref: &EntityRef) -> Option<VertexId> {
+    match entity_ref {
+        EntityRef::Vertex(vid) => Some(*vid),
+        EntityRef::Edge { .. } => None, // Edge indexes not yet supported
     }
 }
 

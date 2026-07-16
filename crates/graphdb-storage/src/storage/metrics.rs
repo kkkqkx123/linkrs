@@ -130,6 +130,8 @@ impl<S: StorageClient> StorageReader for MetricsStorage<S> {
     wrap_read!(list_edge_types(self, space: &str) -> Result<Vec<EdgeTypeInfo>, StorageError>);
     wrap_read!(get_tag_index(self, space: &str, index: &str) -> Result<Option<Index>, StorageError>);
     wrap_read!(list_tag_indexes(self, space: &str) -> Result<Vec<Index>, StorageError>);
+    wrap_read!(get_edge_index(self, space: &str, index: &str) -> Result<Option<Index>, StorageError>);
+    wrap_read!(list_edge_indexes(self, space: &str) -> Result<Vec<Index>, StorageError>);
     wrap_read!(get_vertex_version_history(self, space: &str, tag: &str) -> Result<Option<crate::storage::LabelVersionHistory>, StorageError>);
     wrap_read!(get_edge_version_history(self, space: &str, edge_type: &str) -> Result<Option<crate::storage::LabelVersionHistory>, StorageError>);
     wrap_read!(get_vertex_schema_changes(self, space: &str, tag: &str, from_version: u64, to_version: u64) -> Result<Vec<crate::storage::PropertyChange>, StorageError>);
@@ -189,6 +191,9 @@ impl<S: StorageClient> StorageSchemaOps for MetricsStorage<S> {
     wrap_write!(create_tag_index(self, space: &str, info: &Index) -> Result<bool, StorageError>);
     wrap_write!(drop_tag_index(self, space: &str, index: &str) -> Result<bool, StorageError>);
     wrap_write!(rebuild_tag_index(self, space: &str, index: &str) -> Result<bool, StorageError>);
+    wrap_write!(create_edge_index(self, space: &str, info: &Index) -> Result<bool, StorageError>);
+    wrap_write!(drop_edge_index(self, space: &str, index: &str) -> Result<bool, StorageError>);
+    wrap_write!(rebuild_edge_index(self, space: &str, index: &str) -> Result<bool, StorageError>);
 }
 
 impl<S: StorageClient> StorageAuthOps for MetricsStorage<S> {

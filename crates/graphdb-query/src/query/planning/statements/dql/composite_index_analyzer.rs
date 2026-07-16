@@ -103,11 +103,15 @@ impl PredicateInfo {
             PredicateOp::Equal => self
                 .value
                 .as_ref()
-                .map(|v| IndexLimit::equal(&self.column, Self::value_to_string(v))),
+                .map(|v| IndexLimit::equal(&self.column, Value::String(Self::value_to_string(v)))),
             PredicateOp::Range => Some(IndexLimit::range(
                 &self.column,
-                self.lower.as_ref().map(Self::value_to_string),
-                self.upper.as_ref().map(Self::value_to_string),
+                self.lower
+                    .as_ref()
+                    .map(|s| Value::String(Self::value_to_string(s))),
+                self.upper
+                    .as_ref()
+                    .map(|s| Value::String(Self::value_to_string(s))),
                 self.include_lower,
                 self.include_upper,
             )),
@@ -115,7 +119,7 @@ impl PredicateInfo {
                 if self.values.len() == 1 {
                     Some(IndexLimit::equal(
                         &self.column,
-                        Self::value_to_string(&self.values[0]),
+                        Value::String(Self::value_to_string(&self.values[0])),
                     ))
                 } else {
                     None

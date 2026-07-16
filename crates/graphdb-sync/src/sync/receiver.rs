@@ -176,11 +176,7 @@ impl VectorReceiver {
         }
     }
 
-    pub async fn record_application(
-        &self,
-        commit_lsn: CommitLsn,
-        idempotency_key: &str,
-    ) {
+    pub async fn record_application(&self, commit_lsn: CommitLsn, idempotency_key: &str) {
         self.idempotency_keys
             .write()
             .await
@@ -204,7 +200,9 @@ mod tests {
     #[cfg(feature = "qdrant")]
     async fn vector_receiver_rejects_late_arrival() {
         let receiver = VectorReceiver::new();
-        receiver.record_application(CommitLsn::new(100), "key-1").await;
+        receiver
+            .record_application(CommitLsn::new(100), "key-1")
+            .await;
 
         let result = receiver
             .check_late_arrival(CommitLsn::new(50), "key-2")
@@ -216,7 +214,9 @@ mod tests {
             .check_late_arrival(CommitLsn::new(100), "key-3")
             .await;
         assert!(result.accepted);
-        receiver.record_application(CommitLsn::new(100), "key-3").await;
+        receiver
+            .record_application(CommitLsn::new(100), "key-3")
+            .await;
 
         let result = receiver
             .check_late_arrival(CommitLsn::new(200), "key-3")

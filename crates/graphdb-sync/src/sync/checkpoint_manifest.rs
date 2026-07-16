@@ -96,7 +96,7 @@ impl CheckpointManifest {
     /// Current manifest format version
     pub const CURRENT_FORMAT_VERSION: u32 = 1;
 
-/// Create a new checkpoint manifest from component snapshots.
+    /// Create a new checkpoint manifest from component snapshots.
     ///
     /// This computes the common safe LSN as the minimum of storage and outbox LSNs.
     /// When there is no outbox snapshot, outbox_lsn is set to ZERO and safe_lsn
@@ -205,8 +205,7 @@ impl CheckpointManifest {
     /// Load a manifest from a file
     pub fn load(path: impl AsRef<Path>) -> Result<Self, String> {
         let bytes = std::fs::read(path.as_ref()).map_err(|error| error.to_string())?;
-        let manifest: Self =
-            postcard::from_bytes(&bytes).map_err(|error| error.to_string())?;
+        let manifest: Self = postcard::from_bytes(&bytes).map_err(|error| error.to_string())?;
         manifest.validate()?;
         Ok(manifest)
     }
@@ -541,13 +540,8 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let storage_ref = create_test_storage_snapshot_ref(temp_dir.path());
 
-        let mut manifest = CheckpointManifest::new(
-            1,
-            CommitLsn::new(100),
-            storage_ref,
-            None,
-            Vec::new(),
-        );
+        let mut manifest =
+            CheckpointManifest::new(1, CommitLsn::new(100), storage_ref, None, Vec::new());
 
         assert!(manifest.verify_checksum());
 

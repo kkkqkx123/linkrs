@@ -5,7 +5,9 @@ use crate::core::types::{
     PropertyDef, SpaceInfo, TagInfo, Timestamp, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
 };
 use crate::core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
-use crate::storage::cursor::{EdgeCursor, IndexCursor, IndexScanPlan, ScanOptions, VertexCursor};
+use crate::storage::cursor::{
+    EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor,
+};
 use crate::storage::engine::background_freeze::FreezeStats;
 use crate::storage::engine::graph_storage::context::ExportedEdgeSnapshotRecord;
 use crate::storage::schema::{LabelVersionHistory, PropertyChange};
@@ -111,6 +113,9 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
     fn get_tag_index(&self, space: &str, index: &str) -> Result<Option<Index>, StorageError>;
     fn list_tag_indexes(&self, space: &str) -> Result<Vec<Index>, StorageError>;
 
+    fn get_edge_index(&self, space: &str, index: &str) -> Result<Option<Index>, StorageError>;
+    fn list_edge_indexes(&self, space: &str) -> Result<Vec<Index>, StorageError>;
+
     /// Schema version history queries
     /// Query version history for a specific vertex tag
     fn get_vertex_version_history(
@@ -198,7 +203,7 @@ pub trait StorageReader: Send + Sync + std::fmt::Debug {
     fn create_index_cursor(
         &self,
         _plan: &IndexScanPlan,
-    ) -> Result<Box<dyn IndexCursor<Row = crate::core::Value>>, StorageError> {
+    ) -> Result<Box<dyn IndexCursor<Row = IndexRow>>, StorageError> {
         Err(StorageError::not_supported(
             "Native index cursor is not supported by this storage engine",
         ))
@@ -305,6 +310,10 @@ pub trait StorageSchemaOps: Send + Sync + std::fmt::Debug {
     fn create_tag_index(&mut self, space: &str, info: &Index) -> Result<bool, StorageError>;
     fn drop_tag_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError>;
     fn rebuild_tag_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError>;
+
+    fn create_edge_index(&mut self, space: &str, info: &Index) -> Result<bool, StorageError>;
+    fn drop_edge_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError>;
+    fn rebuild_edge_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError>;
 }
 
 /// Authentication and authorization operations.

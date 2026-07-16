@@ -15,6 +15,8 @@ struct IndexSnapshot {
     edge_indexes: Vec<(u64, String, Index)>,
 }
 
+use crate::core::types::IndexStatus;
+
 pub trait IndexMetadataManager: Send + Sync + std::fmt::Debug {
     fn create_tag_index(&self, space_id: u64, index: &Index) -> Result<bool, StorageError>;
     fn drop_tag_index(&self, space_id: u64, index_name: &str) -> Result<bool, StorageError>;
@@ -33,6 +35,22 @@ pub trait IndexMetadataManager: Send + Sync + std::fmt::Debug {
     fn list_edge_indexes(&self, space_id: u64) -> Result<Vec<Index>, StorageError>;
     fn drop_edge_indexes_by_type(&self, space_id: u64, edge_type: &str)
         -> Result<(), StorageError>;
+
+    /// Set the status of a tag index (used for generation rebuild lifecycle).
+    fn set_tag_index_status(
+        &self,
+        space_id: u64,
+        index_name: &str,
+        status: IndexStatus,
+    ) -> Result<bool, StorageError>;
+
+    /// Set the status of an edge index (used for generation rebuild lifecycle).
+    fn set_edge_index_status(
+        &self,
+        space_id: u64,
+        index_name: &str,
+        status: IndexStatus,
+    ) -> Result<bool, StorageError>;
 }
 
 pub struct IndexManager {
@@ -226,5 +244,37 @@ impl IndexMetadataManager for IndexManager {
         let mut indexes = self.edge_indexes.write();
         indexes.retain(|_, index| !(index.space_id == space_id && index.schema_name == edge_type));
         Ok(())
+    }
+
+    fn set_tag_index_status(
+        &self,
+        space_id: u64,
+        index_name: &str,
+        status: IndexStatus,
+    ) -> Result<bool, StorageError> {
+        let mut indexes = self.tag_indexes.write();
+        let key = (space_id, index_name.to_string());
+        if let Some(index) = indexes.get_mut(&key) {
+            index.status = status;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn set_edge_index_status(
+        &self,
+        space_id: u64,
+        index_name: &str,
+        status: IndexStatus,
+    ) -> Result<bool, StorageError> {
+        let mut indexes = self.edge_indexes.write();
+        let key = (space_id, index_name.to_string());
+        if let Some(index) = indexes.get_mut(&key) {
+            index.status = status;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 }

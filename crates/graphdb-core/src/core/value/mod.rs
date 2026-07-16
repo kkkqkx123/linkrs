@@ -25,6 +25,7 @@ pub mod json;
 pub mod list;
 pub mod memory;
 pub mod null;
+pub mod ordered_codec;
 pub mod uuid;
 pub mod value_arithmetic;
 pub mod value_compare;

@@ -30,7 +30,9 @@ use crate::core::types::{
     PropertyDef, SpaceInfo, TagInfo, Timestamp, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
 };
 use crate::core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
-use crate::storage::cursor::{EdgeCursor, IndexCursor, IndexScanPlan, ScanOptions, VertexCursor};
+use crate::storage::cursor::{
+    EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor,
+};
 use crate::storage::engine::background_freeze::{BackgroundFreezeManager, FreezeStats};
 use crate::storage::engine::graph_storage::context::ExportedEdgeSnapshotRecord;
 use crate::storage::engine::PersistenceConfig;
@@ -364,6 +366,14 @@ impl StorageReader for GraphStorage {
         index_manager::list_tag_indexes(&self.ctx, space)
     }
 
+    fn get_edge_index(&self, space: &str, index_name: &str) -> Result<Option<Index>, StorageError> {
+        index_manager::get_edge_index(&self.ctx, space, index_name)
+    }
+
+    fn list_edge_indexes(&self, space: &str) -> Result<Vec<Index>, StorageError> {
+        index_manager::list_edge_indexes(&self.ctx, space)
+    }
+
     fn get_vertex_version_history(
         &self,
         space: &str,
@@ -514,30 +524,40 @@ impl StorageReader for GraphStorage {
     fn create_index_cursor(
         &self,
         plan: &IndexScanPlan,
-    ) -> Result<Box<dyn IndexCursor<Row = Value>>, StorageError> {
-        let indexes = self.list_tag_indexes(&plan.space)?;
+    ) -> Result<Box<dyn IndexCursor<Row = IndexRow>>, StorageError> {
+        let tag_indexes = self.list_tag_indexes(&plan.space)?;
+        let edge_indexes = self.list_edge_indexes(&plan.space)?;
         let index_id = i32::try_from(plan.index_id).map_err(|_| {
             StorageError::not_found(format!(
                 "Index {} is outside metadata ID range",
                 plan.index_id
             ))
         })?;
-        let index = indexes
-            .into_iter()
-            .find(|index| index.id == index_id)
-            .ok_or_else(|| {
-                StorageError::not_found(format!(
-                    "Index {} not found in space {}",
-                    plan.index_id, plan.space
-                ))
-            })?;
-        let space_id = self.ctx.schema_manager().get_space_id(&plan.space)?;
-        let cursor = self
-            .ctx
-            .index_data_manager()
-            .read()
-            .open_tag_index_cursor(space_id, &index, plan)?;
-        Ok(Box::new(cursor))
+
+        if let Some(index) = tag_indexes.into_iter().find(|index| index.id == index_id) {
+            let space_id = self.ctx.schema_manager().get_space_id(&plan.space)?;
+            let cursor = self
+                .ctx
+                .index_data_manager()
+                .read()
+                .open_tag_index_cursor(space_id, &index, plan)?;
+            return Ok(Box::new(cursor));
+        }
+
+        if let Some(index) = edge_indexes.into_iter().find(|index| index.id == index_id) {
+            let space_id = self.ctx.schema_manager().get_space_id(&plan.space)?;
+            let cursor = self
+                .ctx
+                .index_data_manager()
+                .read()
+                .open_edge_index_cursor(space_id, &index, plan)?;
+            return Ok(Box::new(cursor));
+        }
+
+        Err(StorageError::not_found(format!(
+            "Index {} not found in space {}",
+            plan.index_id, plan.space
+        )))
     }
 }
 
@@ -783,6 +803,19 @@ impl StorageSchemaOps for GraphStorage {
     fn rebuild_tag_index(&mut self, space: &str, index_name: &str) -> Result<bool, StorageError> {
         let vertices = reader::scan_vertices(&self.ctx, space)?;
         index_manager::rebuild_tag_index(&self.ctx, space, index_name, &vertices)
+    }
+
+    fn create_edge_index(&mut self, space: &str, index: &Index) -> Result<bool, StorageError> {
+        index_manager::create_edge_index(&self.ctx, space, index)
+    }
+
+    fn drop_edge_index(&mut self, space: &str, index_name: &str) -> Result<bool, StorageError> {
+        index_manager::drop_edge_index(&self.ctx, space, index_name)
+    }
+
+    fn rebuild_edge_index(&mut self, space: &str, index_name: &str) -> Result<bool, StorageError> {
+        let edges = reader::scan_all_edges(&self.ctx, space)?;
+        index_manager::rebuild_edge_index(&self.ctx, space, index_name, &edges)
     }
 }
 

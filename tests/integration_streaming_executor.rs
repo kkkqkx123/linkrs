@@ -11,7 +11,7 @@ use graphdb::query::executor::base::{MemoryBudget, MemoryTracker};
 use graphdb::query::executor::streaming::executor::SortDirection;
 use graphdb::query::executor::streaming::executor::StreamingExecutor;
 use graphdb::query::executor::streaming::operators::base::OperatorBase;
-use graphdb::query::executor::streaming::operators::blocking_operator::BlockingOperator;
+use graphdb::query::executor::streaming::operators::blocking::BlockingOperator;
 use graphdb::query::executor::streaming::operators::join_operator::JoinOperator;
 use graphdb::query::executor::streaming::operators::set_operator::SetOperator;
 use graphdb::query::executor::streaming::operators::source_operator::SourceOperator;
@@ -611,7 +611,7 @@ mod storage_backed {
     use graphdb::core::Value;
     use graphdb::query::executor::streaming::StreamingQueryResult;
     use graphdb::query::optimizer::OptimizerEngine;
-    use graphdb::query::query_pipeline_manager::QueryPipelineManager;
+    use graphdb::query::QueryPipelineManager;
     use graphdb::query::QueryRequestContext;
     use graphdb::storage::{
         StorageReader, StorageSchemaContextOps, StorageSchemaOps, StorageWriter,

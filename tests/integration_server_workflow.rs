@@ -14,7 +14,7 @@ use graphdb::api::server::graph_service::GraphService;
 use graphdb::config::Config;
 use graphdb::core::stats::StatsManager;
 use graphdb::query::optimizer::OptimizerEngine;
-use graphdb::query::query_pipeline_manager::QueryPipelineManager;
+use graphdb::query::QueryPipelineManager;
 use graphdb::storage::{GraphStorage, StorageSchemaContextOps, SyncWrapper};
 use std::sync::Arc;
 use vector_client::VectorClientConfig;

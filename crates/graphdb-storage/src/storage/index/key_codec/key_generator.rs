@@ -13,3 +13,8 @@ pub trait IndexKeyGenerator: Send + Sync + 'static {}
 pub struct VertexIndexKeyGen;
 
 impl IndexKeyGenerator for VertexIndexKeyGen {}
+
+/// Edge index key generator
+pub struct EdgeIndexKeyGen;
+
+impl IndexKeyGenerator for EdgeIndexKeyGen {}

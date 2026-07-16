@@ -973,7 +973,7 @@ fn test_index_range_query_with_boundaries() {
     // Test >= (with boundaries): age >= 25, should return 25, 30, 35, 40
     let _limit = IndexLimit {
         column: "age".to_string(),
-        begin_value: Some("25".to_string()),
+        begin_value: Some(graphdb::core::Value::String("25".to_string())),
         end_value: None,
         include_begin: true,
         include_end: false,

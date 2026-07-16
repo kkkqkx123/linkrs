@@ -89,11 +89,7 @@ impl std::fmt::Debug for SyncManager {
     allow(unused_variables)
 )]
 impl SyncManager {
-    fn stage_event(
-        &self,
-        txn_id: TransactionId,
-        payload: OutboxPayload,
-    ) -> Result<(), SyncError> {
+    fn stage_event(&self, txn_id: TransactionId, payload: OutboxPayload) -> Result<(), SyncError> {
         let target = "sync".to_string();
         let mut events = self.staged_events.entry(txn_id).or_default();
         let sequence = (events.len() as u64).saturating_add(1);
@@ -611,8 +607,6 @@ impl SyncManager {
 
         Ok(())
     }
-
-
 
     pub fn on_edge_update(
         &self,

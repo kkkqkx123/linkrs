@@ -5,7 +5,7 @@
 use crate::common::TestResult;
 use graphdb::core::Value;
 use graphdb::query::executor::base::ExecutionResult;
-use graphdb::query::query_pipeline_manager::QueryPipelineManager;
+use graphdb::query::QueryPipelineManager;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;

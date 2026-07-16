@@ -918,7 +918,7 @@ impl PersistenceCoordinator {
         *self.last_flush_time.write() = Instant::now();
     }
 
-    pub     fn mark_checkpointed(&self, lsn: Lsn) {
+    pub fn mark_checkpointed(&self, lsn: Lsn) {
         if let Some(ref wal) = self.wal_manager {
             let _ = wal.read().set_current_lsn(lsn);
         }
@@ -946,8 +946,7 @@ impl PersistenceCoordinator {
             path: checkpoint_dir.to_path_buf(),
             size_bytes: data.data_size,
             checksum: crc32fast::hash(
-                &std::fs::read(checkpoint_dir.join("checkpoint.meta"))
-                    .unwrap_or_default(),
+                &std::fs::read(checkpoint_dir.join("checkpoint.meta")).unwrap_or_default(),
             ),
             checkpoint_seq: checkpoint.seq,
             vertex_count: data.vertex_count,
@@ -964,11 +963,9 @@ impl PersistenceCoordinator {
             Vec::new(),
         );
 
-        self.manifest_manager
-            .publish(&manifest)
-            .map_err(|error| {
-                StorageError::db_error(format!("Failed to publish manifest: {}", error))
-            })?;
+        self.manifest_manager.publish(&manifest).map_err(|error| {
+            StorageError::db_error(format!("Failed to publish manifest: {}", error))
+        })?;
 
         log::info!(
             "Published checkpoint manifest {} with safe LSN {}",
@@ -987,9 +984,7 @@ impl PersistenceCoordinator {
     }
 
     /// Load the latest published checkpoint manifest.
-    pub fn load_latest_manifest(
-        &self,
-    ) -> StorageResult<Option<CheckpointManifest>> {
+    pub fn load_latest_manifest(&self) -> StorageResult<Option<CheckpointManifest>> {
         self.manifest_manager
             .load_latest()
             .map_err(|error| StorageError::db_error(error))

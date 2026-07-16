@@ -104,10 +104,7 @@ pub fn find_latest_snapshot(snapshot_dir: &Path) -> Option<OutboxSnapshot> {
 ///
 /// This is a sync version of `SqliteOutbox::restore_snapshot` for use
 /// from contexts that cannot use async (e.g., storage recovery).
-pub fn restore_snapshot_sync(
-    snapshot: &OutboxSnapshot,
-    destination: &Path,
-) -> Result<(), String> {
+pub fn restore_snapshot_sync(snapshot: &OutboxSnapshot, destination: &Path) -> Result<(), String> {
     // Verify snapshot first
     let bytes = std::fs::read(&snapshot.path).map_err(|error| error.to_string())?;
     if bytes.len() as u64 != snapshot.size_bytes {
@@ -223,7 +220,11 @@ mod tests {
         let data = b"test snapshot data";
         std::fs::write(&snapshot_path, data).unwrap();
         let checksum = crc32fast::hash(data);
-        std::fs::write(snapshot_path.with_extension("checksum"), checksum.to_string()).unwrap();
+        std::fs::write(
+            snapshot_path.with_extension("checksum"),
+            checksum.to_string(),
+        )
+        .unwrap();
 
         let snapshot = find_latest_snapshot(&snapshot_dir).unwrap();
         let dest = temp_dir.path().join("restored.sqlite");

@@ -10,7 +10,7 @@ mod common;
 use common::TestStorage;
 use graphdb::core::stats::StatsManager;
 use graphdb::query::optimizer::OptimizerEngine;
-use graphdb::query::query_pipeline_manager::QueryPipelineManager;
+use graphdb::query::QueryPipelineManager;
 use std::sync::Arc;
 
 /// Test that QueryPipelineManager works without schema_manager
