@@ -46,7 +46,10 @@ pub use receiver::FulltextReceiver;
 pub use receiver::VectorReceiver;
 pub use receiver::{ApplyReceipt, LateArrivalResult};
 pub use retry::{with_retry, RetryConfig};
-pub use sqlite_outbox::{ClaimedEvent, OutboxSnapshot, SqliteOutbox};
+pub use sqlite_outbox::{
+    ClaimedEvent, IndexSyncDiagnostics, OutboxSnapshot, SqliteOutbox, SyncDiagnostics,
+    TargetSyncDiagnostics,
+};
 pub use types::{IndexOpKey, IndexOperation};
 
 #[cfg(feature = "qdrant")]

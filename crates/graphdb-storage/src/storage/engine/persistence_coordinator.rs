@@ -55,10 +55,16 @@ pub enum PersistenceState {
 /// Controlled failure points used by recovery tests and operational drills.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PersistenceFaultPoint {
-    DiskSpace,
-    CheckpointMetadataWrite,
-    CheckpointRename,
-    CheckpointDirectoryFsync,
+    /// Fail before the checkpoint's durable data is written.
+    CheckpointRedoBefore,
+    /// Fail after data flush and before checkpoint metadata is written.
+    CheckpointIntentMid,
+    /// Fail after metadata write and before the checkpoint directory is committed.
+    CheckpointCommitMid,
+    /// Fail after the checkpoint directory has been fsynced.
+    CheckpointFsyncAfter,
+    /// Fail immediately before the combined checkpoint manifest becomes visible.
+    CheckpointVisibilityPublish,
     RecoveryScan,
 }
 
@@ -184,14 +190,20 @@ impl PersistenceCoordinator {
             None
         };
 
+        Self::cleanup_temporary_checkpoints(&config.checkpoint_dir)?;
+        let manifest_dir = config.checkpoint_dir.join("manifests");
+        let manifest_manager = CheckpointManifestManager::new(&manifest_dir);
+        manifest_manager.init().map_err(|error| {
+            StorageError::db_error(format!("Failed to init manifest manager: {error}"))
+        })?;
+        let published_sequence = Self::latest_published_sequence(&manifest_manager)?;
+        Self::cleanup_unpublished_checkpoints(&config.checkpoint_dir, published_sequence)?;
+
         let mut checkpoint_manager =
             CheckpointManager::new(&config.wal_dir, &config.checkpoint_dir, None);
         checkpoint_manager.init().map_err(|e| {
             crate::core::StorageError::db_error(format!("Failed to init checkpoint manager: {}", e))
         })?;
-
-        Self::cleanup_temporary_checkpoints(&config.checkpoint_dir)?;
-        let published_sequence = Self::latest_published_sequence(&config.checkpoint_dir)?;
         checkpoint_manager
             .adopt_published_sequence(published_sequence)
             .map_err(|error| {
@@ -215,12 +227,6 @@ impl PersistenceCoordinator {
         } else {
             None
         };
-
-        let manifest_dir = config.checkpoint_dir.join("manifests");
-        let manifest_manager = CheckpointManifestManager::new(&manifest_dir);
-        manifest_manager.init().map_err(|error| {
-            StorageError::db_error(format!("Failed to init manifest manager: {}", error))
-        })?;
 
         Ok(Self {
             config,
@@ -307,26 +313,40 @@ impl PersistenceCoordinator {
         Ok(())
     }
 
-    fn latest_published_sequence(checkpoint_dir: &Path) -> StorageResult<u64> {
-        let mut latest = 0;
+    fn latest_published_sequence(
+        manifest_manager: &CheckpointManifestManager,
+    ) -> StorageResult<u64> {
+        manifest_manager
+            .load_latest()
+            .map_err(StorageError::db_error)
+            .map(|manifest| manifest.map_or(0, |manifest| manifest.checkpoint_id))
+    }
+
+    /// A checkpoint directory is recoverable only after its combined manifest
+    /// is visible. Remove directories left behind by a crash after rename but
+    /// before that final publication fence.
+    fn cleanup_unpublished_checkpoints(
+        checkpoint_dir: &Path,
+        latest_published_sequence: u64,
+    ) -> StorageResult<()> {
         for entry in std::fs::read_dir(checkpoint_dir)? {
             let path = entry?.path();
             if !path.is_dir() {
                 continue;
             }
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            let Some(sequence) = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(|name| name.strip_prefix("checkpoint_"))
+                .and_then(|value| value.parse::<u64>().ok())
+            else {
                 continue;
             };
-            if let Some(sequence) = name
-                .strip_prefix("checkpoint_")
-                .and_then(|value| value.parse::<u64>().ok())
-            {
-                if path.join("checkpoint.meta").is_file() {
-                    latest = latest.max(sequence);
-                }
+            if sequence > latest_published_sequence {
+                std::fs::remove_dir_all(path)?;
             }
         }
-        Ok(latest)
+        Ok(())
     }
 
     fn current_lsn(&self) -> Lsn {
@@ -407,7 +427,7 @@ impl PersistenceCoordinator {
         );
 
         let checkpoint = {
-            let published_sequence = Self::latest_published_sequence(&self.config.checkpoint_dir)?;
+            let published_sequence = Self::latest_published_sequence(&self.manifest_manager)?;
             let mut cm = self.checkpoint_manager.write();
             cm.adopt_published_sequence(published_sequence)
                 .map_err(|error| {
@@ -438,18 +458,18 @@ impl PersistenceCoordinator {
                 checkpoint.seq
             )));
         }
-        self.fail_if_injected(PersistenceFaultPoint::DiskSpace)?;
         std::fs::create_dir(&temporary_dir)?;
 
+        self.fail_if_injected(PersistenceFaultPoint::CheckpointRedoBefore)?;
         let data = flush_data(&temporary_dir, timestamp)?;
+        self.fail_if_injected(PersistenceFaultPoint::CheckpointIntentMid)?;
         let files = Self::collect_checkpoint_files(&temporary_dir)?;
-        self.fail_if_injected(PersistenceFaultPoint::CheckpointMetadataWrite)?;
         self.save_checkpoint_metadata(&temporary_dir, &checkpoint, &data, &files)?;
+        self.fail_if_injected(PersistenceFaultPoint::CheckpointCommitMid)?;
         Self::sync_tree(&temporary_dir)?;
-        self.fail_if_injected(PersistenceFaultPoint::CheckpointRename)?;
         std::fs::rename(&temporary_dir, &checkpoint_dir)?;
-        self.fail_if_injected(PersistenceFaultPoint::CheckpointDirectoryFsync)?;
         Self::sync_directory(&self.config.checkpoint_dir)?;
+        self.fail_if_injected(PersistenceFaultPoint::CheckpointFsyncAfter)?;
 
         {
             let mut cm = self.checkpoint_manager.write();
@@ -502,6 +522,7 @@ impl PersistenceCoordinator {
             false
         };
 
+        self.fail_if_injected(PersistenceFaultPoint::CheckpointVisibilityPublish)?;
         self.publish_checkpoint_manifest(&checkpoint, &data, &checkpoint_dir, wal_lsn)?;
 
         if let Some(ref wal) = self.wal_manager {
@@ -1309,7 +1330,7 @@ mod tests {
     }
 
     #[test]
-    fn startup_removes_only_unpublished_checkpoint_directories() {
+    fn startup_removes_checkpoint_directories_without_a_published_manifest() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let config = PersistenceConfig {
             enable_snapshots: false,
@@ -1319,13 +1340,13 @@ mod tests {
         std::fs::create_dir_all(config.checkpoint_dir.join("checkpoint_7.tmp"))
             .expect("Failed to create temporary checkpoint");
         std::fs::create_dir_all(config.checkpoint_dir.join("checkpoint_6"))
-            .expect("Failed to create published checkpoint placeholder");
+            .expect("Failed to create unpublished checkpoint placeholder");
 
         let _coordinator =
             PersistenceCoordinator::new(config.clone()).expect("Failed to create coordinator");
 
         assert!(!config.checkpoint_dir.join("checkpoint_7.tmp").exists());
-        assert!(config.checkpoint_dir.join("checkpoint_6").exists());
+        assert!(!config.checkpoint_dir.join("checkpoint_6").exists());
     }
 
     #[test]
@@ -1391,30 +1412,74 @@ mod tests {
     }
 
     #[test]
-    fn injected_checkpoint_boundary_failure_is_diagnosable_and_not_published() {
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let config = PersistenceConfig {
-            enable_snapshots: false,
-            enable_wal: false,
-            ..PersistenceConfig::for_work_dir(temp_dir.path())
-        };
-        let coordinator = PersistenceCoordinator::new(config.clone()).expect("coordinator");
-        coordinator.inject_failure(PersistenceFaultPoint::CheckpointRename);
-        let result = coordinator.create_checkpoint(
-            |temporary_dir, _| {
-                std::fs::write(temporary_dir.join("table.data"), b"data")?;
-                Ok(CheckpointData {
-                    vertex_count: 1,
-                    edge_count: 0,
-                    data_size: 4,
-                })
-            },
-            1,
-        );
-        assert!(result.is_err());
-        assert_eq!(*coordinator.state.read(), PersistenceState::Idle);
-        assert!(!config.checkpoint_dir.join("checkpoint_1").exists());
-        assert!(config.checkpoint_dir.join("checkpoint_1.tmp").exists());
-        assert!(coordinator.diagnostics().last_checkpoint_error.is_some());
+    fn every_checkpoint_crash_boundary_recovers_without_publishing_partial_state() {
+        let fault_points = [
+            PersistenceFaultPoint::CheckpointRedoBefore,
+            PersistenceFaultPoint::CheckpointIntentMid,
+            PersistenceFaultPoint::CheckpointCommitMid,
+            PersistenceFaultPoint::CheckpointFsyncAfter,
+            PersistenceFaultPoint::CheckpointVisibilityPublish,
+        ];
+        for point in fault_points {
+            let temp_dir = TempDir::new().expect("Failed to create temp dir");
+            let config = PersistenceConfig {
+                enable_snapshots: false,
+                enable_wal: false,
+                ..PersistenceConfig::for_work_dir(temp_dir.path())
+            };
+            let coordinator = PersistenceCoordinator::new(config.clone()).expect("coordinator");
+            coordinator.inject_failure(point);
+            let result = coordinator.create_checkpoint(
+                |temporary_dir, _| {
+                    std::fs::write(temporary_dir.join("table.data"), b"data")?;
+                    Ok(CheckpointData {
+                        vertex_count: 1,
+                        edge_count: 0,
+                        data_size: 4,
+                    })
+                },
+                1,
+            );
+            assert!(result.is_err(), "fault point {point:?} should fail");
+            assert_eq!(*coordinator.state.read(), PersistenceState::Idle);
+            assert!(coordinator.diagnostics().last_checkpoint_error.is_some());
+            assert!(
+                coordinator
+                    .manifest_manager
+                    .load_latest()
+                    .expect("manifest lookup should succeed")
+                    .is_none(),
+                "fault point {point:?} must not publish a checkpoint"
+            );
+            drop(coordinator);
+
+            let recovered = PersistenceCoordinator::new(config.clone())
+                .expect("recovery should discard unpublished checkpoint state");
+            assert!(
+                !config.checkpoint_dir.join("checkpoint_1").exists(),
+                "recovery should remove the unpublished checkpoint for {point:?}"
+            );
+            recovered
+                .create_checkpoint(
+                    |temporary_dir, _| {
+                        std::fs::write(temporary_dir.join("table.data"), b"data")?;
+                        Ok(CheckpointData {
+                            vertex_count: 1,
+                            edge_count: 0,
+                            data_size: 4,
+                        })
+                    },
+                    2,
+                )
+                .expect("a checkpoint should succeed after recovery");
+            assert!(
+                recovered
+                    .manifest_manager
+                    .load_latest()
+                    .expect("manifest lookup should succeed")
+                    .is_some(),
+                "recovered checkpoint should be visible for {point:?}"
+            );
+        }
     }
 }

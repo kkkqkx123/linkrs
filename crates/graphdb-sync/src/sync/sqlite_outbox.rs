@@ -34,6 +34,41 @@ pub struct OutboxSnapshot {
     pub materialized_lsn: CommitLsn,
 }
 
+/// Point-in-time operational state of the durable outbox.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncDiagnostics {
+    pub materialized_lsn: CommitLsn,
+    pub targets: Vec<TargetSyncDiagnostics>,
+    pub indexes: Vec<IndexSyncDiagnostics>,
+}
+
+/// Delivery health for one synchronization target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TargetSyncDiagnostics {
+    pub target: String,
+    pub applied_lsn: CommitLsn,
+    pub frontier_lag: u64,
+    pub pending: u64,
+    pub retrying: u64,
+    pub leased: u64,
+    pub dead_lettered: u64,
+    pub oldest_event_age_ms: Option<u64>,
+    pub degraded: bool,
+}
+
+/// Generation and frontier health for one secondary index target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexSyncDiagnostics {
+    pub target: String,
+    pub index_id: u64,
+    pub generation: u64,
+    pub state: String,
+    pub barrier_lsn: Option<CommitLsn>,
+    pub applied_lsn: CommitLsn,
+    pub frontier_lag: u64,
+    pub degraded: bool,
+}
+
 impl SqliteOutbox {
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, String> {
         if let Some(parent) = path.as_ref().parent() {
@@ -201,6 +236,7 @@ impl SqliteOutbox {
                 lease_until_ms INTEGER NOT NULL DEFAULT 0,\
                 lease_epoch INTEGER NOT NULL DEFAULT 0,\
                 retry_count INTEGER NOT NULL DEFAULT 0,\
+                created_at_ms INTEGER NOT NULL DEFAULT 0,\
                 last_error TEXT,\
                 UNIQUE(target, idempotency_key),\
                 UNIQUE(transaction_id, intent_sequence)\
@@ -209,6 +245,18 @@ impl SqliteOutbox {
         .execute(&mut *connection)
         .await
         .map_err(|error| error.to_string())?;
+        let has_created_at: i64 = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('events') WHERE name = 'created_at_ms')",
+        )
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(|error| error.to_string())?;
+        if has_created_at == 0 {
+            sqlx::query("ALTER TABLE events ADD COLUMN created_at_ms INTEGER NOT NULL DEFAULT 0")
+                .execute(&mut *connection)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS events_claim_idx \
              ON events(target, status, next_attempt_at_ms, commit_lsn, intent_sequence)",
@@ -641,6 +689,10 @@ impl SqliteOutbox {
             if lsn < current {
                 return Ok(());
             }
+            let materialized_at_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|error| error.to_string())?
+                .as_millis() as u64;
 
             for target in targets {
                 sqlx::query("INSERT OR IGNORE INTO target_state(target) VALUES(?)")
@@ -672,8 +724,8 @@ impl SqliteOutbox {
                 sqlx::query(
                     "INSERT OR IGNORE INTO events(\
                         transaction_id, intent_sequence, target, index_id, generation, mutation,\
-                        commit_lsn, idempotency_key, ordering_key\
-                     ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        commit_lsn, idempotency_key, ordering_key, created_at_ms\
+                     ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 )
                 .bind(to_sql_i64(
                     intent.transaction_id.as_u64(),
@@ -690,6 +742,7 @@ impl SqliteOutbox {
                 .bind(lsn)
                 .bind(intent.mutation.idempotency_key.as_str())
                 .bind(intent.mutation.ordering_key.as_str())
+                .bind(to_sql_i64(materialized_at_ms, "event creation timestamp")?)
                 .execute(&mut *connection)
                 .await
                 .map_err(|error| error.to_string())?;
@@ -1204,6 +1257,86 @@ impl SqliteOutbox {
         .map_err(|error| error.to_string())?;
         from_sql_i64(value, "dead letter count")
     }
+
+    /// Return a single consistent view of outbox backlog, delivery frontiers,
+    /// degraded ranges, and index-generation progress.
+    pub async fn diagnostics(&self) -> Result<SyncDiagnostics, String> {
+        let materialized_lsn = self.materialized_lsn().await?;
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| error.to_string())?
+            .as_millis() as u64;
+        let target_rows = sqlx::query(
+            "SELECT s.target, s.applied_lsn, s.degraded, \
+                    SUM(CASE WHEN e.status = 'pending' THEN 1 ELSE 0 END) AS pending, \
+                    SUM(CASE WHEN e.status = 'retry' THEN 1 ELSE 0 END) AS retrying, \
+                    SUM(CASE WHEN e.status = 'leased' THEN 1 ELSE 0 END) AS leased, \
+                    SUM(CASE WHEN e.status = 'dead_letter' THEN 1 ELSE 0 END) AS dead_lettered, \
+                    MIN(CASE WHEN e.status IN ('pending', 'retry', 'leased') \
+                              AND e.created_at_ms > 0 THEN e.created_at_ms END) AS oldest_created_at_ms \
+             FROM target_state s LEFT JOIN events e ON e.target = s.target \
+             GROUP BY s.target, s.applied_lsn, s.degraded ORDER BY s.target",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| error.to_string())?;
+        let mut targets = Vec::with_capacity(target_rows.len());
+        for row in target_rows {
+            let applied_lsn =
+                CommitLsn::new(from_sql_i64(row.get("applied_lsn"), "target frontier")?);
+            let oldest_created_at_ms: Option<i64> = row.get("oldest_created_at_ms");
+            let oldest_event_age_ms = oldest_created_at_ms
+                .map(|created_at_ms| from_sql_i64(created_at_ms, "event creation timestamp"))
+                .transpose()?
+                .map(|created_at_ms| now_ms.saturating_sub(created_at_ms));
+            targets.push(TargetSyncDiagnostics {
+                target: row.get("target"),
+                applied_lsn,
+                frontier_lag: materialized_lsn.get().saturating_sub(applied_lsn.get()),
+                pending: from_sql_i64(row.get("pending"), "pending event count")?,
+                retrying: from_sql_i64(row.get("retrying"), "retry event count")?,
+                leased: from_sql_i64(row.get("leased"), "leased event count")?,
+                dead_lettered: from_sql_i64(row.get("dead_lettered"), "dead-letter event count")?,
+                oldest_event_age_ms,
+                degraded: row.get::<i64, _>("degraded") != 0,
+            });
+        }
+
+        let index_rows = sqlx::query(
+            "SELECT g.target, g.index_id, g.generation, g.state, g.barrier_lsn, \
+                    COALESCE(f.applied_lsn, 0) AS applied_lsn, COALESCE(f.degraded, 0) AS degraded \
+             FROM generation_state g LEFT JOIN index_frontier f \
+                  ON f.target = g.target AND f.index_id = g.index_id AND f.generation = g.generation \
+             ORDER BY g.target, g.index_id, g.generation",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| error.to_string())?;
+        let mut indexes = Vec::with_capacity(index_rows.len());
+        for row in index_rows {
+            let applied_lsn =
+                CommitLsn::new(from_sql_i64(row.get("applied_lsn"), "index frontier")?);
+            let barrier_lsn: Option<i64> = row.get("barrier_lsn");
+            indexes.push(IndexSyncDiagnostics {
+                target: row.get("target"),
+                index_id: from_sql_i64(row.get("index_id"), "index ID")?,
+                generation: from_sql_i64(row.get("generation"), "index generation")?,
+                state: row.get("state"),
+                barrier_lsn: barrier_lsn
+                    .map(|value| from_sql_i64(value, "generation barrier LSN"))
+                    .transpose()?
+                    .map(CommitLsn::new),
+                applied_lsn,
+                frontier_lag: materialized_lsn.get().saturating_sub(applied_lsn.get()),
+                degraded: row.get::<i64, _>("degraded") != 0,
+            });
+        }
+        Ok(SyncDiagnostics {
+            materialized_lsn,
+            targets,
+            indexes,
+        })
+    }
 }
 
 fn validate_intents(intents: &[OutboxIntent]) -> Result<(), String> {
@@ -1618,5 +1751,49 @@ mod tests {
         bytes[0] ^= 0xff;
         std::fs::write(&snapshot_path, bytes).expect("snapshot should be corrupted");
         assert!(SqliteOutbox::verify_snapshot(&snapshot).is_err());
+    }
+
+    #[tokio::test]
+    async fn diagnostics_report_backlog_and_generation_frontiers() {
+        let directory = TempDir::new().expect("temporary directory should be created");
+        let target = TargetId::new("fulltext").expect("target should be valid");
+        let outbox = SqliteOutbox::open(directory.path().join("outbox.sqlite"))
+            .await
+            .expect("outbox should open");
+        outbox
+            .create_index_generation(&target, 1, 1, CommitLsn::ZERO)
+            .await
+            .expect("generation should be created");
+        outbox
+            .transition_generation_to_backfilling(&target, 1, 1)
+            .await
+            .expect("generation should transition to backfilling");
+        outbox
+            .transition_generation_to_catching_up(&target, 1, 1, CommitLsn::ZERO)
+            .await
+            .expect("generation should transition to catching up");
+        outbox
+            .activate_generation(&target, 1, 1, CommitLsn::ZERO)
+            .await
+            .expect("generation should activate");
+        outbox
+            .materialize_commit(
+                CommitLsn::new(42),
+                &[intent(0, 1, &target)],
+                &[target.clone()],
+            )
+            .await
+            .expect("commit should materialize");
+
+        let diagnostics = outbox.diagnostics().await.expect("diagnostics should load");
+        assert_eq!(diagnostics.materialized_lsn, CommitLsn::new(42));
+        assert_eq!(diagnostics.targets.len(), 1);
+        assert_eq!(diagnostics.targets[0].target, "fulltext");
+        assert_eq!(diagnostics.targets[0].pending, 1);
+        assert_eq!(diagnostics.targets[0].frontier_lag, 42);
+        assert!(diagnostics.targets[0].oldest_event_age_ms.is_some());
+        assert_eq!(diagnostics.indexes.len(), 1);
+        assert_eq!(diagnostics.indexes[0].state, "active");
+        assert_eq!(diagnostics.indexes[0].frontier_lag, 42);
     }
 }

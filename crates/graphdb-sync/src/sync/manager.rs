@@ -503,6 +503,9 @@ impl SyncManager {
         properties: &[(String, crate::core::Value)],
         change_type: ChangeType,
     ) -> Result<(), SyncError> {
+        #[cfg(not(feature = "fulltext-search"))]
+        let _ = (space_id, tag_name, vertex_id, properties, change_type);
+
         #[cfg(feature = "fulltext-search")]
         if let Some(ref coord) = self.sync_coordinator {
             for (field_name, value) in properties {
@@ -516,29 +519,6 @@ impl SyncManager {
                         text.clone(),
                     );
                     coord.on_change(ctx).await.map_err(SyncError::from)?;
-                }
-            }
-        }
-
-        #[cfg(feature = "qdrant")]
-        if let Some(ref vector_coord) = self.vector_coordinator {
-            for (field_name, value) in properties {
-                if let Some(vector) = value.as_vector() {
-                    let ctx = crate::sync::vector_sync::VectorChangeContext::new(
-                        space_id,
-                        tag_name,
-                        field_name,
-                        crate::sync::vector_sync::VectorChangeType::from(change_type),
-                        crate::sync::vector_sync::VectorPointData {
-                            id: format!("{}", vertex_id),
-                            vector: vector.clone(),
-                            payload: std::collections::HashMap::new(),
-                        },
-                    );
-                    vector_coord
-                        .on_vector_change(ctx)
-                        .await
-                        .map_err(|e| SyncError::VectorError(e.to_string()))?;
                 }
             }
         }
@@ -587,11 +567,15 @@ impl SyncManager {
         space_id: u64,
         edge: &crate::core::Edge,
     ) -> Result<(), SyncError> {
+        #[cfg(feature = "fulltext-search")]
         let props: Vec<(String, crate::core::Value)> = edge
             .props
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
+
+        #[cfg(not(feature = "fulltext-search"))]
+        let _ = (space_id, edge);
 
         #[cfg(feature = "fulltext-search")]
         if let Some(ref coord) = self.sync_coordinator {
@@ -610,31 +594,6 @@ impl SyncManager {
             }
         }
 
-        #[cfg(feature = "qdrant")]
-        if let Some(ref vector_coord) = self.vector_coordinator {
-            for (field_name, value) in &props {
-                if let Some(vector) = value.as_vector() {
-                    if vector_coord.index_exists(space_id, &edge.edge_type, field_name) {
-                        let ctx = crate::sync::vector_sync::VectorChangeContext::new(
-                            space_id,
-                            &edge.edge_type,
-                            field_name,
-                            crate::sync::vector_sync::VectorChangeType::from(ChangeType::Insert),
-                            crate::sync::vector_sync::VectorPointData {
-                                id: format!("{}->{}", edge.src, edge.dst),
-                                vector: vector.clone(),
-                                payload: std::collections::HashMap::new(),
-                            },
-                        );
-                        vector_coord
-                            .on_vector_change(ctx)
-                            .await
-                            .map_err(|e| SyncError::VectorError(e.to_string()))?;
-                    }
-                }
-            }
-        }
-
         Ok(())
     }
 
@@ -645,7 +604,11 @@ impl SyncManager {
         dst: &crate::core::Value,
         edge_type: &str,
     ) -> Result<(), SyncError> {
+        #[cfg(feature = "fulltext-search")]
         let edge_id = format!("{}->{}", src, dst);
+
+        #[cfg(not(feature = "fulltext-search"))]
+        let _ = (space_id, src, dst, edge_type);
 
         #[cfg(feature = "fulltext-search")]
         if let Some(ref coord) = self.sync_coordinator {
@@ -665,30 +628,6 @@ impl SyncManager {
                     String::new(),
                 );
                 coord.on_change(ctx).await.map_err(SyncError::from)?;
-            }
-        }
-
-        #[cfg(feature = "qdrant")]
-        if let Some(ref vector_coord) = self.vector_coordinator {
-            let vector_indexes = vector_coord.list_indexes();
-            for idx in vector_indexes {
-                if idx.space_id == space_id && idx.tag_name == edge_type {
-                    let ctx = crate::sync::vector_sync::VectorChangeContext::new(
-                        space_id,
-                        edge_type,
-                        &idx.field_name,
-                        crate::sync::vector_sync::VectorChangeType::Delete,
-                        crate::sync::vector_sync::VectorPointData {
-                            id: edge_id.clone(),
-                            vector: Vec::new(),
-                            payload: std::collections::HashMap::new(),
-                        },
-                    );
-                    vector_coord
-                        .on_vector_change(ctx)
-                        .await
-                        .map_err(|e| SyncError::VectorError(e.to_string()))?;
-                }
             }
         }
 
@@ -716,25 +655,6 @@ impl SyncManager {
                 .buffer_vector_change(txn_id, ctx)
                 .map_err(|e| SyncError::VectorError(e.to_string()))?;
         }
-        Ok(())
-    }
-
-    #[cfg(feature = "qdrant")]
-    pub async fn on_vector_change_with_context(
-        &self,
-        ctx: crate::sync::vector_sync::VectorChangeContext,
-    ) -> Result<(), SyncError> {
-        if self.vector_coordinator.is_none() {
-            return Ok(());
-        }
-
-        if let Some(ref vector_coord) = self.vector_coordinator {
-            vector_coord
-                .on_vector_change(ctx)
-                .await
-                .map_err(|e| SyncError::VectorError(e.to_string()))?;
-        }
-
         Ok(())
     }
 
@@ -891,6 +811,19 @@ impl SyncManager {
                 .materialized_lsn()
                 .await
                 .map(Some)
+                .map_err(SyncError::PersistenceError)
+        })
+    }
+
+    /// Return durable outbox delivery and index-generation diagnostics.
+    pub fn sync_diagnostics(&self) -> Result<crate::sync::SyncDiagnostics, SyncError> {
+        let Some(outbox) = &self.sqlite_outbox else {
+            return Err(SyncError::PersistenceError("SQLite outbox is not configured".to_string()));
+        };
+        self.execute_sync(|| async {
+            outbox
+                .diagnostics()
+                .await
                 .map_err(SyncError::PersistenceError)
         })
     }

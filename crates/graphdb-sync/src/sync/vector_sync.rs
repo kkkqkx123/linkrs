@@ -755,45 +755,6 @@ impl VectorSyncCoordinator {
         }
     }
 
-    /// Handle vector change (direct sync mode)
-    pub async fn on_vector_change(&self, ctx: VectorChangeContext) -> VectorCoordinatorResult<()> {
-        if self.is_disabled_engine() {
-            return Ok(());
-        }
-
-        let collection_name = ctx.location.to_collection_name();
-        let point_id = ctx.data.id.to_string();
-
-        match ctx.change_type {
-            VectorChangeType::Insert => {
-                let vector = ctx.data.vector;
-                let mut json_payload: HashMap<String, serde_json::Value> = ctx
-                    .data
-                    .payload
-                    .into_iter()
-                    .filter_map(|(k, v)| serde_json::to_value(&v).ok().map(|json| (k, json)))
-                    .collect();
-
-                json_payload.insert(
-                    "group_id".to_string(),
-                    serde_json::to_value(ctx.location.group_id())
-                        .unwrap_or(serde_json::Value::Null),
-                );
-
-                let point = VectorPoint::new(point_id, vector).with_payload(json_payload);
-
-                self.vector_manager.upsert(&collection_name, point).await?;
-            }
-            VectorChangeType::Delete => {
-                self.vector_manager
-                    .delete(&collection_name, &point_id)
-                    .await?;
-            }
-        }
-
-        Ok(())
-    }
-
     /// Commit transaction: flush buffered vector updates
     pub async fn commit_transaction(&self, txn_id: TransactionId) -> VectorCoordinatorResult<()> {
         if let Some(ref buffer) = self.transaction_buffer {
