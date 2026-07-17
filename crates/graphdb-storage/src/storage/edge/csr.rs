@@ -41,13 +41,12 @@ fn read_vertex_id(data: &[u8], offset: &mut usize) -> StorageResult<VertexId> {
 /// Standard CSR format:
 /// - `offsets`: Offset array where offsets[v] is the start index in edges for vertex v
 /// - `edges`: Contiguous array of all edges
-/// - offsets[vertex_capacity] stores the total edge count
+/// - offsets[len-1] stores the total edge count (i.e. `offsets` has `vertex_capacity + 1` entries)
 #[derive(Debug)]
 pub struct Csr {
     offsets: Vec<u32>,
     edges: Vec<ImmutableNbr>,
     edge_count: AtomicU64,
-    vertex_capacity: usize,
 }
 
 impl Clone for Csr {
@@ -56,18 +55,24 @@ impl Clone for Csr {
             offsets: self.offsets.clone(),
             edges: self.edges.clone(),
             edge_count: AtomicU64::new(self.edge_count.load(Ordering::Relaxed)),
-            vertex_capacity: self.vertex_capacity,
         }
     }
 }
 
 impl Csr {
+    /// Derived vertex capacity: `offsets.len() - 1` (offsets has one extra entry for total count).
+    #[inline]
+    pub fn vertex_capacity(&self) -> usize {
+        // offsets is always initialized with at least 1 element (see new/with_capacity),
+        // so saturating_sub is safe and avoids panic on empty edge cases.
+        self.offsets.len().saturating_sub(1)
+    }
+
     pub fn new() -> Self {
         Self {
             offsets: vec![0],
             edges: Vec::new(),
             edge_count: AtomicU64::new(0),
-            vertex_capacity: 1,
         }
     }
 
@@ -76,7 +81,6 @@ impl Csr {
             offsets: vec![0; vertex_capacity + 1],
             edges: Vec::with_capacity(edge_capacity),
             edge_count: AtomicU64::new(0),
-            vertex_capacity,
         }
     }
 
@@ -92,16 +96,15 @@ impl Csr {
 
     /// Resize vertex capacity
     fn resize(&mut self, new_vertex_capacity: usize) {
-        if new_vertex_capacity > self.vertex_capacity {
+        if new_vertex_capacity > self.vertex_capacity() {
             let last_offset = *self.offsets.last().unwrap_or(&0);
             self.offsets.resize(new_vertex_capacity + 1, last_offset);
-            self.vertex_capacity = new_vertex_capacity;
         }
     }
 
     pub fn edges_of(&self, vid: u32) -> &[ImmutableNbr] {
         let vid_idx = vid as usize;
-        if vid_idx >= self.vertex_capacity {
+        if vid_idx >= self.vertex_capacity() {
             return &[];
         }
 
@@ -128,7 +131,7 @@ impl Csr {
     /// stored separately from the edge data.
     pub fn edges_of_with_position(&self, vid: u32) -> Vec<(usize, &ImmutableNbr)> {
         let vid_idx = vid as usize;
-        if vid_idx >= self.vertex_capacity {
+        if vid_idx >= self.vertex_capacity() {
             return Vec::new();
         }
 
@@ -180,25 +183,26 @@ impl Csr {
         }
 
         let max_vertex = *src_list.iter().max().unwrap_or(&0) as usize;
-        if max_vertex >= self.vertex_capacity {
+        if max_vertex >= self.vertex_capacity() {
             self.resize(max_vertex + 1);
         }
 
-        let mut degrees = vec![0u32; self.vertex_capacity];
+        let vc = self.vertex_capacity();
+        let mut degrees = vec![0u32; vc];
         for src in src_list {
             let src_idx = *src as usize;
-            if src_idx < degrees.len() {
+            if src_idx < vc {
                 degrees[src_idx] += 1;
             }
         }
 
-        let mut new_offsets = vec![0u32; self.vertex_capacity + 1];
+        let mut new_offsets = vec![0u32; vc + 1];
         let mut cumsum = 0u32;
         for (i, &deg) in degrees.iter().enumerate() {
             new_offsets[i] = cumsum;
             cumsum += deg;
         }
-        new_offsets[self.vertex_capacity] = cumsum;
+        new_offsets[vc] = cumsum;
 
         let mut new_edges =
             vec![ImmutableNbr::new(VertexId::from_int64(0), EdgeId(0), 0); src_list.len()];
@@ -234,7 +238,6 @@ impl Csr {
     pub fn dump(&self) -> Vec<u8> {
         let mut result = Vec::new();
 
-        result.extend_from_slice(&(self.vertex_capacity as u64).to_le_bytes());
         result.extend_from_slice(&self.edge_count.load(Ordering::Relaxed).to_le_bytes());
 
         result.extend_from_slice(&(self.offsets.len() as u64).to_le_bytes());
@@ -255,7 +258,7 @@ impl Csr {
 
     /// Load from bytes
     pub fn load(&mut self, data: &[u8]) -> StorageResult<()> {
-        if data.len() < 24 {
+        if data.len() < 16 {
             return Err(StorageError::deserialize_error(
                 "Immutable CSR data too short for header",
             ));
@@ -263,7 +266,6 @@ impl Csr {
 
         let mut offset = 0usize;
 
-        let vertex_capacity = read_u64_le(data, &mut offset)? as usize;
         let edge_count = read_u64_le(data, &mut offset)?;
         let offsets_len = read_u64_le(data, &mut offset)? as usize;
 
@@ -289,7 +291,6 @@ impl Csr {
             ));
         }
 
-        self.vertex_capacity = vertex_capacity;
         self.offsets = offsets;
         self.edges = edges;
         self.edge_count.store(edge_count, Ordering::Relaxed);
@@ -331,7 +332,7 @@ impl<'a> Iterator for CsrIterator<'a> {
     type Item = (VertexId, &'a ImmutableNbr);
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.current_vertex < self.csr.vertex_capacity {
+        while self.current_vertex < self.csr.vertex_capacity() {
             let start = self.csr.offsets[self.current_vertex] as usize;
             let end = self.csr.offsets[self.current_vertex + 1] as usize;
 
@@ -354,7 +355,7 @@ impl<'a> Iterator for CsrIterator<'a> {
 
 impl CsrBase for Csr {
     fn vertex_capacity(&self) -> usize {
-        self.vertex_capacity
+        Csr::vertex_capacity(self)
     }
 
     fn edge_count(&self) -> u64 {

@@ -38,8 +38,6 @@ pub struct MultiSingleMutableCsr {
     counts: Vec<u32>,
     /// Total edge count
     edge_count: AtomicU64,
-    /// Number of vertices
-    vertex_capacity: usize,
 }
 
 impl Clone for MultiSingleMutableCsr {
@@ -49,7 +47,6 @@ impl Clone for MultiSingleMutableCsr {
             edges_per_vertex: self.edges_per_vertex,
             counts: self.counts.clone(),
             edge_count: AtomicU64::new(self.edge_count.load(Ordering::Relaxed)),
-            vertex_capacity: self.vertex_capacity,
         }
     }
 }
@@ -57,7 +54,7 @@ impl Clone for MultiSingleMutableCsr {
 impl fmt::Debug for MultiSingleMutableCsr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MultiSingleMutableCsr")
-            .field("vertex_capacity", &self.vertex_capacity)
+            .field("vertex_capacity", &self.vertex_capacity())
             .field("edges_per_vertex", &self.edges_per_vertex)
             .field("edge_count", &self.edge_count.load(Ordering::Relaxed))
             .finish_non_exhaustive()
@@ -87,12 +84,11 @@ impl MultiSingleMutableCsr {
             edges_per_vertex: edges_per,
             counts: vec![0u32; vertex_cap],
             edge_count: AtomicU64::new(0),
-            vertex_capacity: vertex_cap,
         }
     }
 
     pub fn vertex_capacity(&self) -> usize {
-        self.vertex_capacity
+        self.counts.len()
     }
 
     pub fn edges_per_vertex(&self) -> usize {
@@ -116,11 +112,11 @@ impl MultiSingleMutableCsr {
     }
 
     pub fn resize(&mut self, new_vertex_capacity: usize) {
-        if new_vertex_capacity <= self.vertex_capacity {
+        if new_vertex_capacity <= self.vertex_capacity() {
             return;
         }
 
-        let additional = new_vertex_capacity - self.vertex_capacity;
+        let additional = new_vertex_capacity - self.vertex_capacity();
         self.edges.extend(std::iter::repeat_n(
             Nbr::with_delete_ts(
                 VertexId::from_int64(0),
@@ -132,7 +128,6 @@ impl MultiSingleMutableCsr {
             additional * self.edges_per_vertex,
         ));
         self.counts.extend(std::iter::repeat_n(0, additional));
-        self.vertex_capacity = new_vertex_capacity;
     }
 
     fn vertex_offset(&self, src_vid: u32) -> usize {
@@ -140,7 +135,7 @@ impl MultiSingleMutableCsr {
     }
 
     fn get_slot_for_dst(&self, src_vid: u32, dst: VertexId) -> Option<usize> {
-        if src_vid as usize >= self.vertex_capacity {
+        if src_vid as usize >= self.vertex_capacity() {
             return None;
         }
 
@@ -156,7 +151,7 @@ impl MultiSingleMutableCsr {
     }
 
     fn find_empty_slot(&self, src_vid: u32) -> Option<usize> {
-        if src_vid as usize >= self.vertex_capacity {
+        if src_vid as usize >= self.vertex_capacity() {
             return None;
         }
 
@@ -173,7 +168,7 @@ impl MultiSingleMutableCsr {
 
 impl CsrBase for MultiSingleMutableCsr {
     fn vertex_capacity(&self) -> usize {
-        self.vertex_capacity
+        MultiSingleMutableCsr::vertex_capacity(self)
     }
 
     fn edge_count(&self) -> u64 {
@@ -183,8 +178,6 @@ impl CsrBase for MultiSingleMutableCsr {
     fn dump(&self) -> Vec<u8> {
         let mut data = Vec::new();
 
-        // Write vertex capacity and edges per vertex
-        data.extend(self.vertex_capacity.to_le_bytes());
         data.extend(self.edges_per_vertex.to_le_bytes());
 
         // Write edges array
@@ -209,14 +202,12 @@ impl CsrBase for MultiSingleMutableCsr {
     fn load(&mut self, data: &[u8]) -> StorageResult<()> {
         let mut offset = 0;
 
-        // Read vertex capacity and edges per vertex
-        if data.len() < offset + 16 {
+        if data.len() < offset + 8 {
             return Err(StorageError::deserialize_error(
-                "MultiSingleMutableCsr: data too short for capacities",
+                "MultiSingleMutableCsr: data too short for edges_per_vertex",
             ));
         }
 
-        let vertex_cap = read_u64_le(data, &mut offset)? as usize;
         let edges_per = read_u64_le(data, &mut offset)? as usize;
 
         // Read edges array
@@ -263,7 +254,6 @@ impl CsrBase for MultiSingleMutableCsr {
             self.counts.push(read_u32_le(data, &mut offset)?);
         }
 
-        self.vertex_capacity = vertex_cap;
         self.edges_per_vertex = edges_per;
         Ok(())
     }
@@ -278,8 +268,8 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
         prop_offset: u32,
         ts: Timestamp,
     ) -> bool {
-        if src_vid as usize >= self.vertex_capacity {
-            self.resize((src_vid as usize + 1).max(self.vertex_capacity * 2));
+        if src_vid as usize >= self.vertex_capacity() {
+            self.resize((src_vid as usize + 1).max(self.vertex_capacity() * 2));
         }
 
         // Check if edge already exists
@@ -305,7 +295,7 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
     }
 
     fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> bool {
-        if src_vid as usize >= self.vertex_capacity {
+        if src_vid as usize >= self.vertex_capacity() {
             return false;
         }
 
@@ -330,7 +320,7 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
     }
 
     fn delete_edge_by_offset(&mut self, src_vid: u32, offset: i32, ts: Timestamp) -> bool {
-        if src_vid as usize >= self.vertex_capacity || offset < 0 {
+        if src_vid as usize >= self.vertex_capacity() || offset < 0 {
             return false;
         }
 
@@ -345,7 +335,7 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
     }
 
     fn revert_delete_by_offset(&mut self, src_vid: u32, offset: i32, ts: Timestamp) -> bool {
-        if src_vid as usize >= self.vertex_capacity || offset < 0 {
+        if src_vid as usize >= self.vertex_capacity() || offset < 0 {
             return false;
         }
 
@@ -375,7 +365,7 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
     }
 
     fn edges_of(&self, src_vid: u32, ts: Timestamp) -> Vec<Nbr> {
-        if src_vid as usize >= self.vertex_capacity {
+        if src_vid as usize >= self.vertex_capacity() {
             return Vec::new();
         }
 
@@ -393,7 +383,7 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
         let mut removed = 0;
 
         // Remove expired edges by shifting
-        for src_vid in 0..self.vertex_capacity as u32 {
+        for src_vid in 0..self.vertex_capacity() as u32 {
             let base = self.vertex_offset(src_vid);
             let count = self.counts[src_vid as usize] as usize;
 
@@ -454,7 +444,7 @@ impl<'a> Iterator for MultiSingleMutableCsrIterator<'a> {
     type Item = (VertexId, Nbr);
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.current_vertex < self.csr.vertex_capacity {
+        while self.current_vertex < self.csr.vertex_capacity() {
             let count = self.csr.counts[self.current_vertex] as usize;
 
             while self.edge_idx < count {

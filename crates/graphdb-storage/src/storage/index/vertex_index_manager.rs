@@ -466,6 +466,7 @@ impl VertexIndexManager {
             estimated_match_count,
             manifest_handle,
             stale_checker,
+            partition_id_range: plan.partition_id_range.clone(),
         })
     }
 }
@@ -488,6 +489,7 @@ pub struct VertexIndexCursor {
     estimated_match_count: u64,
     manifest_handle: Option<ManifestHandle>,
     stale_checker: Option<Arc<dyn Fn(&EntityRef, Option<Timestamp>) -> bool + Send + Sync>>,
+    partition_id_range: Option<std::ops::Range<i64>>,
 }
 
 impl std::fmt::Debug for VertexIndexCursor {
@@ -574,6 +576,17 @@ impl IndexCursor for VertexIndexCursor {
                 {
                     self.stale_skipped += 1;
                     continue;
+                }
+                if let Some(ref prange) = self.partition_id_range {
+                    let vid = match &entity_ref {
+                        crate::core::wal::EntityRef::Vertex(vid) => vid,
+                        _ => continue,
+                    };
+                    if let Some(vid_i64) = try_vertex_id_to_i64(vid) {
+                        if vid_i64 < prange.start || vid_i64 >= prange.end {
+                            continue;
+                        }
+                    }
                 }
                 if self.offset_remaining > 0 {
                     self.offset_remaining -= 1;
@@ -677,6 +690,17 @@ fn vertex_id_to_entity_ref(v: &Value) -> Option<EntityRef> {
         }
         Value::Vertex(v) => Some(EntityRef::Vertex(v.vid)),
         _ => None,
+    }
+}
+
+fn try_vertex_id_to_i64(vid: &crate::core::types::storage_ids::VertexId) -> Option<i64> {
+    let bytes = vid.as_bytes();
+    if bytes.len() == 8 {
+        let mut buf = [0u8; 8];
+        buf.copy_from_slice(bytes);
+        Some(i64::from_be_bytes(buf))
+    } else {
+        None
     }
 }
 
@@ -906,6 +930,7 @@ mod tests {
             index_id: 1,
             predicate: IndexPredicate::Prefix(Value::String("A".to_string())),
             partition: crate::storage::cursor::PartitionSelector::All,
+            partition_id_range: None,
             projection: None,
             limit: None,
             offset: 0,
@@ -949,6 +974,7 @@ mod tests {
             index_id: 1,
             predicate: IndexPredicate::Prefix(Value::String("name-".to_string())),
             partition: crate::storage::cursor::PartitionSelector::All,
+            partition_id_range: None,
             projection: None,
             limit: None,
             offset: 0,
@@ -1020,7 +1046,19 @@ mod tests {
             index_id: 1,
             predicate: IndexPredicate::All,
             partition: crate::storage::cursor::PartitionSelector::All,
+            partition_id_range: None,
             projection: None,
+            limit: None,
+            offset: 0,
+            read_timestamp: 10,
+        };
+        let covering_plan = IndexScanPlan {
+            space: "space".to_string(),
+            index_id: 1,
+            predicate: IndexPredicate::All,
+            partition: crate::storage::cursor::PartitionSelector::All,
+            partition_id_range: None,
+            projection: Some(vec![]),
             limit: None,
             offset: 0,
             read_timestamp: 10,
@@ -1041,17 +1079,6 @@ mod tests {
         };
         assert_eq!(rowid_rows.len(), expected_entry_count);
 
-        // ---- Covering path (projection=Some([]) → all columns) ----
-        let covering_plan = IndexScanPlan {
-            space: "space".to_string(),
-            index_id: 1,
-            predicate: IndexPredicate::All,
-            partition: crate::storage::cursor::PartitionSelector::All,
-            projection: Some(vec![]),
-            limit: None,
-            offset: 0,
-            read_timestamp: 10,
-        };
         let mut covering_cursor = manager
             .open_tag_index_cursor(1, &index, &covering_plan)
             .expect("covering cursor should open");
@@ -1090,6 +1117,7 @@ mod tests {
             index_id: 1,
             predicate: IndexPredicate::All,
             partition: crate::storage::cursor::PartitionSelector::All,
+            partition_id_range: None,
             projection: None,
             limit: Some(2),
             offset: 1,
@@ -1118,6 +1146,7 @@ mod tests {
             index_id: 1,
             predicate: IndexPredicate::All,
             partition: crate::storage::cursor::PartitionSelector::All,
+            partition_id_range: None,
             projection: None,
             limit: None,
             offset: 0,
@@ -1140,6 +1169,7 @@ mod tests {
             index_id: 1,
             predicate: IndexPredicate::All,
             partition: crate::storage::cursor::PartitionSelector::All,
+            partition_id_range: None,
             projection: None,
             limit: None,
             offset: 0,

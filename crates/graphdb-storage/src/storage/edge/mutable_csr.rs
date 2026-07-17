@@ -108,7 +108,6 @@ pub struct MutableCsr {
     overflow_capacities: Vec<u32>,
 
     edge_count: AtomicU64,
-    vertex_capacity: usize,
     total_edge_capacity: usize,
 }
 
@@ -123,7 +122,6 @@ impl Clone for MutableCsr {
             overflow_counts: self.overflow_counts.clone(),
             overflow_capacities: self.overflow_capacities.clone(),
             edge_count: AtomicU64::new(self.edge_count.load(Ordering::Relaxed)),
-            vertex_capacity: self.vertex_capacity,
             total_edge_capacity: self.total_edge_capacity,
         }
     }
@@ -132,7 +130,7 @@ impl Clone for MutableCsr {
 impl fmt::Debug for MutableCsr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MutableCsr")
-            .field("vertex_capacity", &self.vertex_capacity)
+            .field("vertex_capacity", &self.vertex_capacity())
             .field("total_edge_capacity", &self.total_edge_capacity)
             .field("edge_count", &self.edge_count.load(Ordering::Relaxed))
             .finish_non_exhaustive()
@@ -148,8 +146,6 @@ impl MutableCsr {
         let vertex_cap = vertex_capacity.max(1);
         let edge_cap = edge_capacity.max(vertex_cap * DEFAULT_VERTEX_DEGREE);
 
-        // Use DEFAULT_VERTEX_DEGREE for compatibility unless specifically tuned
-        // Future optimization: could add a separate factory method for adaptive capacity
         let initial_primary = DEFAULT_VERTEX_DEGREE;
 
         let mut nbr_list = Vec::with_capacity(edge_cap);
@@ -177,13 +173,12 @@ impl MutableCsr {
             overflow_counts: vec![0; vertex_cap],
             overflow_capacities: vec![0; vertex_cap],
             edge_count: AtomicU64::new(0),
-            vertex_capacity: vertex_cap,
             total_edge_capacity: offset,
         }
     }
 
     pub fn vertex_capacity(&self) -> usize {
-        self.vertex_capacity
+        self.adj_offsets.len()
     }
 
     pub fn edge_count(&self) -> u64 {
@@ -192,15 +187,14 @@ impl MutableCsr {
 
     /// Resize vertex capacity (requires exclusive access)
     pub fn resize(&mut self, new_vertex_capacity: usize) {
-        if new_vertex_capacity <= self.vertex_capacity {
+        if new_vertex_capacity <= self.vertex_capacity() {
             return;
         }
 
-        let old_capacity = self.vertex_capacity;
+        let old_capacity = self.vertex_capacity();
         let additional = new_vertex_capacity - old_capacity;
 
-        // Use consistent primary capacity for new vertices
-        let current_primary = if self.vertex_capacity > 0 {
+        let current_primary = if self.vertex_capacity() > 0 {
             self.primary_capacities[0] as usize
         } else {
             DEFAULT_VERTEX_DEGREE
@@ -221,13 +215,12 @@ impl MutableCsr {
             new_total_capacity,
             Nbr::new(VertexId::from_int64(0), EdgeId(0), 0, INVALID_TIMESTAMP),
         );
-        self.vertex_capacity = new_vertex_capacity;
         self.total_edge_capacity = new_total_capacity;
     }
 
     /// Ensure vertex capacity (grows if needed)
     pub fn ensure_vertex_capacity(&mut self, min_capacity: usize) {
-        if min_capacity > self.vertex_capacity {
+        if min_capacity > self.vertex_capacity() {
             let new_capacity = min_capacity.next_power_of_two();
             self.resize(new_capacity);
         }
@@ -278,7 +271,7 @@ impl MutableCsr {
     ) -> bool {
         let src_idx = src_vid as usize;
 
-        if src_idx >= self.vertex_capacity {
+        if src_idx >= self.vertex_capacity() {
             self.ensure_vertex_capacity(src_idx + 1);
         }
 
@@ -353,7 +346,7 @@ impl MutableCsr {
     /// Delete an edge by edge_id
     pub fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> bool {
         let src_idx = src_vid as usize;
-        if src_idx >= self.vertex_capacity {
+        if src_idx >= self.vertex_capacity() {
             return false;
         }
 
@@ -386,7 +379,7 @@ impl MutableCsr {
     /// Delete edge by destination vertex
     pub fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> bool {
         let src_idx = src_vid as usize;
-        if src_idx >= self.vertex_capacity {
+        if src_idx >= self.vertex_capacity() {
             return false;
         }
 
@@ -427,7 +420,7 @@ impl MutableCsr {
             return false;
         }
         let src_idx = src_vid as usize;
-        if src_idx >= self.vertex_capacity {
+        if src_idx >= self.vertex_capacity() {
             return false;
         }
 
@@ -457,7 +450,7 @@ impl MutableCsr {
             return false;
         }
         let src_idx = src_vid as usize;
-        if src_idx >= self.vertex_capacity {
+        if src_idx >= self.vertex_capacity() {
             return false;
         }
 
@@ -482,7 +475,7 @@ impl MutableCsr {
     /// Get edges of a vertex at a given timestamp
     pub fn edges_of(&self, src_vid: u32, ts: Timestamp) -> Vec<Nbr> {
         let src_idx = src_vid as usize;
-        if src_idx >= self.vertex_capacity {
+        if src_idx >= self.vertex_capacity() {
             return Vec::new();
         }
 
@@ -551,7 +544,7 @@ impl MutableCsr {
     /// Get a specific edge
     pub fn get_edge(&self, src_vid: u32, dst: VertexId, ts: Timestamp) -> Option<Nbr> {
         let src_idx = src_vid as usize;
-        if src_idx >= self.vertex_capacity {
+        if src_idx >= self.vertex_capacity() {
             return None;
         }
 
@@ -620,7 +613,7 @@ impl MutableCsr {
     pub fn dump(&self) -> Vec<u8> {
         let mut result = Vec::new();
 
-        result.extend_from_slice(&(self.vertex_capacity as u64).to_le_bytes());
+        result.extend_from_slice(&(self.adj_offsets.len() as u64).to_le_bytes());
         result.extend_from_slice(&self.edge_count.load(Ordering::Relaxed).to_le_bytes());
         result.extend_from_slice(&(self.total_edge_capacity as u64).to_le_bytes());
 
@@ -721,7 +714,6 @@ impl MutableCsr {
             ));
         }
 
-        self.vertex_capacity = vertex_capacity;
         self.total_edge_capacity = total_edge_capacity;
         self.adj_offsets = adj_offsets;
         self.degrees = degrees;
@@ -743,13 +735,13 @@ impl MutableCsr {
     pub fn compact_with_ts(&mut self, _ts: u32, reserve_ratio: f32) -> usize {
         // Phase 1: compact individual vertex data (primary + overflow)
         // and compute new layout.
-        let mut new_offsets = Vec::with_capacity(self.vertex_capacity);
-        let mut new_degrees = Vec::with_capacity(self.vertex_capacity);
-        let mut new_capacities = Vec::with_capacity(self.vertex_capacity);
+        let mut new_offsets = Vec::with_capacity(self.vertex_capacity());
+        let mut new_degrees = Vec::with_capacity(self.vertex_capacity());
+        let mut new_capacities = Vec::with_capacity(self.vertex_capacity());
         let mut new_edges = Vec::<Nbr>::new();
         let mut removed_count = 0usize;
 
-        for vid in 0..self.vertex_capacity {
+        for vid in 0..self.vertex_capacity() {
             let start = self.adj_offsets[vid] as usize;
             let degree = self.degrees[vid] as usize;
 
@@ -788,9 +780,9 @@ impl MutableCsr {
         // Phase 2: rebuild nbr_list as flat CSR (no overflow)
         let new_total_edge_capacity: usize = new_capacities.iter().map(|&c| c as usize).sum();
         let mut new_nbr_list = Vec::with_capacity(new_total_edge_capacity);
-        let mut final_offsets = Vec::with_capacity(self.vertex_capacity);
+        let mut final_offsets = Vec::with_capacity(self.vertex_capacity());
 
-        for vid in 0..self.vertex_capacity {
+        for vid in 0..self.vertex_capacity() {
             final_offsets.push(new_nbr_list.len() as u32);
             let off = new_offsets[vid];
             let deg = new_degrees[vid] as usize;
@@ -859,7 +851,7 @@ impl MutableCsr {
         let mut zombie_blocks = 0;
         let mut total_wasted = 0;
 
-        for vid in 0..self.vertex_capacity {
+        for vid in 0..self.vertex_capacity() {
             if self.overflow_starts[vid] != NO_OVERFLOW {
                 // Count overflow blocks and estimate waste
                 let old_primary_cap = self.primary_capacities[vid] as usize;
@@ -906,7 +898,7 @@ impl<'a> VertexEdgesIter<'a> {
     /// Create iterator for all edges of a vertex at the given timestamp
     pub fn new(csr: &'a MutableCsr, src_vid: u32, ts: Timestamp) -> Self {
         let src_idx = src_vid as usize;
-        if src_idx >= csr.vertex_capacity {
+        if src_idx >= csr.vertex_capacity() {
             return Self {
                 csr,
                 ts,
@@ -999,7 +991,7 @@ impl<'a> Iterator for MutableCsrIterator<'a> {
     type Item = (VertexId, Nbr);
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.current_vertex < self.csr.vertex_capacity {
+        while self.current_vertex < self.csr.vertex_capacity() {
             let degree = self.csr.degrees[self.current_vertex] as usize;
             let offset = self.csr.adj_offsets[self.current_vertex] as usize;
 
@@ -1042,7 +1034,7 @@ impl<'a> Iterator for MutableCsrIterator<'a> {
 
 impl CsrBase for MutableCsr {
     fn vertex_capacity(&self) -> usize {
-        self.vertex_capacity
+        MutableCsr::vertex_capacity(self)
     }
 
     fn edge_count(&self) -> u64 {

@@ -165,6 +165,10 @@ pub struct IndexScanPlan {
     pub index_id: u64,
     pub predicate: IndexPredicate,
     pub partition: PartitionSelector,
+    /// Optional vertex/edge ID range for partition-based shard selection.
+    /// Forwarded from `PartitionView`; the storage layer converts this to
+    /// precise key bounds using index metadata.
+    pub partition_id_range: Option<std::ops::Range<i64>>,
     pub projection: Option<Vec<String>>,
     pub limit: Option<usize>,
     pub offset: usize,

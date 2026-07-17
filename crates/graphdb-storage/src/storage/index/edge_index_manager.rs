@@ -476,6 +476,7 @@ impl EdgeIndexManager {
             estimated_match_count,
             manifest_handle,
             stale_checker,
+            partition_id_range: plan.partition_id_range.clone(),
         })
     }
 }
@@ -504,6 +505,7 @@ pub struct EdgeIndexCursor {
     estimated_match_count: u64,
     manifest_handle: Option<ManifestHandle>,
     stale_checker: Option<Arc<dyn Fn(&EntityRef, Option<Timestamp>) -> bool + Send + Sync>>,
+    partition_id_range: Option<std::ops::Range<i64>>,
 }
 
 impl std::fmt::Debug for EdgeIndexCursor {
@@ -581,6 +583,21 @@ impl IndexCursor for EdgeIndexCursor {
                 {
                     self.stale_skipped += 1;
                     continue;
+                }
+                if let Some(ref prange) = self.partition_id_range {
+                    let src = match &entity_ref {
+                        crate::core::wal::EntityRef::Edge { src, .. } => src,
+                        _ => continue,
+                    };
+                    let bytes = src.as_bytes();
+                    if bytes.len() == 8 {
+                        let mut buf = [0u8; 8];
+                        buf.copy_from_slice(bytes);
+                        let vid_i64 = i64::from_be_bytes(buf);
+                        if vid_i64 < prange.start || vid_i64 >= prange.end {
+                            continue;
+                        }
+                    }
                 }
                 if self.offset_remaining > 0 {
                     self.offset_remaining -= 1;
@@ -877,6 +894,7 @@ mod tests {
             index_id: 1,
             predicate: IndexPredicate::All,
             partition: crate::storage::cursor::PartitionSelector::All,
+            partition_id_range: None,
             projection: None,
             limit: None,
             offset: 0,
@@ -922,6 +940,7 @@ mod tests {
             index_id: 1,
             predicate: IndexPredicate::All,
             partition: crate::storage::cursor::PartitionSelector::All,
+            partition_id_range: None,
             projection: None,
             limit: None,
             offset: 0,
@@ -950,6 +969,7 @@ mod tests {
             index_id: 1,
             predicate: IndexPredicate::All,
             partition: crate::storage::cursor::PartitionSelector::All,
+            partition_id_range: None,
             projection: Some(vec![]),
             limit: None,
             offset: 0,
@@ -993,6 +1013,7 @@ mod tests {
             index_id: 1,
             predicate: IndexPredicate::All,
             partition: crate::storage::cursor::PartitionSelector::All,
+            partition_id_range: None,
             projection: None,
             limit: Some(1),
             offset: 1,

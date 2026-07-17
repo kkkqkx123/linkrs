@@ -396,6 +396,7 @@ impl IndexDataManagerImpl {
     }
 
     fn save_build_state(&self, index_root: &Path, state: &GenerationBuildState) -> StorageResult<()> {
+        std::fs::create_dir_all(index_root)?;
         let path = self.build_state_path(index_root);
         let temporary = path.with_extension("tmp");
         let serialized =

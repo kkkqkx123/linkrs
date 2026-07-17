@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::ops::Range;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -144,6 +145,7 @@ pub enum SourceOperator {
         predicate: BoundIndexPredicate,
         projection: IndexProjection,
         output_layout: Arc<SlotLayout>,
+        partition_range: Option<Range<i64>>,
         cursor: Option<Box<dyn IndexCursor<Row = IndexRow>>>,
     },
     Argument,
@@ -165,6 +167,7 @@ pub enum SourceOperator {
         predicate: BoundIndexPredicate,
         projection: IndexProjection,
         output_layout: Arc<SlotLayout>,
+        partition_range: Option<Range<i64>>,
         cursor: Option<Box<dyn IndexCursor<Row = IndexRow>>>,
     },
     Start,
@@ -275,6 +278,7 @@ impl SourceOperator {
                 predicate: predicate.clone(),
                 projection: projection.clone(),
                 output_layout: output_layout.clone(),
+                partition_range: None,
                 cursor: None,
             },
             super::spec::SourceSpec::Argument => Self::Argument,
@@ -308,6 +312,7 @@ impl SourceOperator {
                 predicate: predicate.clone(),
                 projection: projection.clone(),
                 output_layout: output_layout.clone(),
+                partition_range: None,
                 cursor: None,
             },
             super::spec::SourceSpec::Start => Self::Start,
@@ -474,6 +479,7 @@ impl SourceOperator {
                 index_id,
                 predicate,
                 projection,
+                partition_range,
                 cursor,
                 ..
             } => {
@@ -486,6 +492,7 @@ impl SourceOperator {
                     *index_id,
                     predicate,
                     projection,
+                    partition_range.clone(),
                 )?;
                 *cursor = Some(open_index_cursor(storage_ref, &plan).map_err(|error| {
                     storage_error("IndexScan", "open cursor", space_name, error)
@@ -511,6 +518,7 @@ impl SourceOperator {
                 index_id,
                 predicate,
                 projection,
+                partition_range,
                 cursor,
                 ..
             } => {
@@ -523,6 +531,7 @@ impl SourceOperator {
                     *index_id,
                     predicate,
                     projection,
+                    partition_range.clone(),
                 )?;
                 *cursor = Some(open_index_cursor(storage_ref, &plan).map_err(|error| {
                     storage_error("LookupIndex", "open cursor", space_name, error)
@@ -928,6 +937,7 @@ fn build_index_scan_plan(
     index_id: u64,
     predicate: &BoundIndexPredicate,
     projection: &IndexProjection,
+    partition_range: Option<Range<i64>>,
 ) -> Result<IndexScanPlan, QueryError> {
     let physical_predicate = match predicate {
         BoundIndexPredicate::Equal { value, .. } => IndexPredicate::Equal(value.clone()),
@@ -959,17 +969,18 @@ fn build_index_scan_plan(
         .unwrap_or(MAX_TIMESTAMP);
 
     // A manifest shard is bounded by complete native-index keys, including
-    // space and index prefixes. A predicate value alone cannot safely form a
-    // shard selector. Storage derives complete key bounds from the predicate
-    // and intersects them with the manifest; a physical PartitionView bridge
-    // can provide a narrower selector once it can encode those full keys.
-    let partition = graphdb_storage::storage::PartitionSelector::All;
+    // space and index prefixes. The storage derives complete key bounds from
+    // the predicate and intersects them with the manifest. Partition ranges
+    // (i64 vertex/edge ID ranges) are forwarded to the storage layer which
+    // constructs precise key-range selectors using index metadata.
+    let partition_id_range = partition_range;
 
     Ok(IndexScanPlan {
         space: space_name.to_string(),
         index_id,
         predicate: physical_predicate,
-        partition,
+        partition: graphdb_storage::storage::PartitionSelector::All,
+        partition_id_range,
         projection,
         limit: None,
         offset: 0,

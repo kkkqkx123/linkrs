@@ -114,6 +114,16 @@ fn set_partition_on_source_op(
         } => {
             *partition_range = prange;
         }
+        SourceOperator::IndexScan {
+            partition_range, ..
+        } => {
+            *partition_range = prange;
+        }
+        SourceOperator::LookupIndex {
+            partition_range, ..
+        } => {
+            *partition_range = prange;
+        }
         _ => {}
     }
 }

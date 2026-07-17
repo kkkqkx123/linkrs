@@ -42,7 +42,6 @@ pub struct LabeledMutableCsr {
     label_ranges: Vec<Vec<LabelRange>>,
     degrees: Vec<u32>,
     edge_count: AtomicU64,
-    vertex_capacity: usize,
 }
 
 impl Clone for LabeledMutableCsr {
@@ -52,7 +51,6 @@ impl Clone for LabeledMutableCsr {
             label_ranges: self.label_ranges.clone(),
             degrees: self.degrees.clone(),
             edge_count: AtomicU64::new(self.edge_count.load(Ordering::Relaxed)),
-            vertex_capacity: self.vertex_capacity,
         }
     }
 }
@@ -60,7 +58,7 @@ impl Clone for LabeledMutableCsr {
 impl fmt::Debug for LabeledMutableCsr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LabeledMutableCsr")
-            .field("vertex_capacity", &self.vertex_capacity)
+            .field("vertex_capacity", &self.vertex_capacity())
             .field("edge_count", &self.edge_count.load(Ordering::Relaxed))
             .finish_non_exhaustive()
     }
@@ -78,12 +76,11 @@ impl LabeledMutableCsr {
             label_ranges: vec![Vec::new(); vertex_cap],
             degrees: vec![0u32; vertex_cap],
             edge_count: AtomicU64::new(0),
-            vertex_capacity: vertex_cap,
         }
     }
 
     pub fn vertex_capacity(&self) -> usize {
-        self.vertex_capacity
+        self.degrees.len()
     }
 
     pub fn edge_count(&self) -> u64 {
@@ -98,14 +95,13 @@ impl LabeledMutableCsr {
     }
 
     pub fn resize(&mut self, new_vertex_capacity: usize) {
-        if new_vertex_capacity <= self.vertex_capacity {
+        if new_vertex_capacity <= self.vertex_capacity() {
             return;
         }
-        let additional = new_vertex_capacity - self.vertex_capacity;
+        let additional = new_vertex_capacity - self.vertex_capacity();
         self.label_ranges
             .extend(std::iter::repeat_n(Vec::new(), additional));
         self.degrees.extend(std::iter::repeat_n(0, additional));
-        self.vertex_capacity = new_vertex_capacity;
     }
 
     /// Insert edge with label information
@@ -118,8 +114,8 @@ impl LabeledMutableCsr {
         label: LabelId,
         ts: Timestamp,
     ) -> bool {
-        if src_vid as usize >= self.vertex_capacity {
-            self.resize((src_vid as usize + 1).max(self.vertex_capacity * 2));
+        if src_vid as usize >= self.vertex_capacity() {
+            self.resize((src_vid as usize + 1).max(self.vertex_capacity() * 2));
         }
 
         // Find or create label range
@@ -163,7 +159,7 @@ impl LabeledMutableCsr {
 
 impl CsrBase for LabeledMutableCsr {
     fn vertex_capacity(&self) -> usize {
-        self.vertex_capacity
+        LabeledMutableCsr::vertex_capacity(self)
     }
 
     fn edge_count(&self) -> u64 {
@@ -172,9 +168,6 @@ impl CsrBase for LabeledMutableCsr {
 
     fn dump(&self) -> Vec<u8> {
         let mut data = Vec::new();
-
-        // Write vertex capacity
-        data.extend(self.vertex_capacity.to_le_bytes());
 
         // Write nbr_list
         data.extend((self.nbr_list.len() as u64).to_le_bytes());
@@ -208,14 +201,6 @@ impl CsrBase for LabeledMutableCsr {
 
     fn load(&mut self, data: &[u8]) -> StorageResult<()> {
         let mut offset = 0;
-
-        // Read vertex capacity
-        if data.len() < offset + 8 {
-            return Err(StorageError::deserialize_error(
-                "LabeledMutableCsr: data too short for vertex capacity",
-            ));
-        }
-        self.vertex_capacity = read_u64_le(data, &mut offset)? as usize;
 
         // Read nbr_list
         let nbr_count = read_u64_le(data, &mut offset)? as usize;
@@ -297,7 +282,7 @@ impl MutableCsrTrait for LabeledMutableCsr {
     }
 
     fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> bool {
-        if src_vid as usize >= self.vertex_capacity {
+        if src_vid as usize >= self.vertex_capacity() {
             return false;
         }
 
@@ -311,7 +296,7 @@ impl MutableCsrTrait for LabeledMutableCsr {
     }
 
     fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> bool {
-        if src_vid as usize >= self.vertex_capacity {
+        if src_vid as usize >= self.vertex_capacity() {
             return false;
         }
 
@@ -331,7 +316,7 @@ impl MutableCsrTrait for LabeledMutableCsr {
     }
 
     fn delete_edge_by_offset(&mut self, src_vid: u32, offset: i32, ts: Timestamp) -> bool {
-        if src_vid as usize >= self.vertex_capacity {
+        if src_vid as usize >= self.vertex_capacity() {
             return false;
         }
 
@@ -352,7 +337,7 @@ impl MutableCsrTrait for LabeledMutableCsr {
     }
 
     fn revert_delete_by_offset(&mut self, src_vid: u32, offset: i32, ts: Timestamp) -> bool {
-        if src_vid as usize >= self.vertex_capacity {
+        if src_vid as usize >= self.vertex_capacity() {
             return false;
         }
 
@@ -377,7 +362,7 @@ impl MutableCsrTrait for LabeledMutableCsr {
     }
 
     fn get_edge(&self, src_vid: u32, dst: VertexId, ts: Timestamp) -> Option<Nbr> {
-        if src_vid as usize >= self.vertex_capacity {
+        if src_vid as usize >= self.vertex_capacity() {
             return None;
         }
 
@@ -396,7 +381,7 @@ impl MutableCsrTrait for LabeledMutableCsr {
     }
 
     fn edges_of(&self, src_vid: u32, ts: Timestamp) -> Vec<Nbr> {
-        if src_vid as usize >= self.vertex_capacity {
+        if src_vid as usize >= self.vertex_capacity() {
             return Vec::new();
         }
 
@@ -437,7 +422,7 @@ impl MutableCsrTrait for LabeledMutableCsr {
 
         for idx in 0..self.nbr_list.len() {
             if let Some(src_vid) = self.find_vertex_for_edge(idx as u32) {
-                if (src_vid as usize) < self.vertex_capacity {
+                if (src_vid as usize) < self.vertex_capacity() {
                     let ranges = &mut self.label_ranges[src_vid as usize];
                     if let Some(lr) = ranges.last_mut() {
                         if lr.label == 0 {
@@ -511,7 +496,7 @@ impl<'a> Iterator for LabeledMutableCsrIterator<'a> {
     type Item = (VertexId, Nbr);
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.current_vertex < self.csr.vertex_capacity {
+        while self.current_vertex < self.csr.vertex_capacity() {
             let ranges = &self.csr.label_ranges[self.current_vertex];
 
             // Iterate through label ranges for current vertex

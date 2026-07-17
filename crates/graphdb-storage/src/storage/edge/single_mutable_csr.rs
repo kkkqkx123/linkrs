@@ -79,7 +79,6 @@ const DEFAULT_VERTEX_CAPACITY: usize = 1024;
 pub struct SingleMutableCsr {
     nbr_list: Vec<Nbr>,
     edge_count: AtomicU64,
-    vertex_capacity: usize,
 }
 
 impl Clone for SingleMutableCsr {
@@ -87,7 +86,6 @@ impl Clone for SingleMutableCsr {
         Self {
             nbr_list: self.nbr_list.clone(),
             edge_count: AtomicU64::new(self.edge_count.load(Ordering::Relaxed)),
-            vertex_capacity: self.vertex_capacity,
         }
     }
 }
@@ -95,7 +93,7 @@ impl Clone for SingleMutableCsr {
 impl std::fmt::Debug for SingleMutableCsr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SingleMutableCsr")
-            .field("vertex_capacity", &self.vertex_capacity)
+            .field("vertex_capacity", &self.vertex_capacity())
             .field("edge_count", &self.edge_count.load(Ordering::Relaxed))
             .finish_non_exhaustive()
     }
@@ -122,12 +120,11 @@ impl SingleMutableCsr {
         Self {
             nbr_list,
             edge_count: AtomicU64::new(0),
-            vertex_capacity: vertex_cap,
         }
     }
 
     pub fn vertex_capacity(&self) -> usize {
-        self.vertex_capacity
+        self.nbr_list.len()
     }
 
     pub fn edge_count(&self) -> u64 {
@@ -135,11 +132,11 @@ impl SingleMutableCsr {
     }
 
     pub fn resize(&mut self, new_vertex_capacity: usize) {
-        if new_vertex_capacity <= self.vertex_capacity {
+        if new_vertex_capacity <= self.vertex_capacity() {
             return;
         }
 
-        let additional = new_vertex_capacity - self.vertex_capacity;
+        let additional = new_vertex_capacity - self.vertex_capacity();
         self.nbr_list.extend(std::iter::repeat_n(
             Nbr::new(
                 VertexId::from_int64(0),
@@ -149,11 +146,10 @@ impl SingleMutableCsr {
             ),
             additional,
         ));
-        self.vertex_capacity = new_vertex_capacity;
     }
 
     pub fn ensure_vertex_capacity(&mut self, min_capacity: usize) {
-        if min_capacity > self.vertex_capacity {
+        if min_capacity > self.vertex_capacity() {
             let new_capacity = min_capacity.next_power_of_two();
             self.resize(new_capacity);
         }
@@ -169,7 +165,7 @@ impl SingleMutableCsr {
     ) -> bool {
         let src_idx = src as usize;
 
-        if src_idx >= self.vertex_capacity {
+        if src_idx >= self.vertex_capacity() {
             self.ensure_vertex_capacity(src_idx + 1);
         }
 
@@ -197,7 +193,7 @@ impl SingleMutableCsr {
     pub fn delete_edge(&mut self, src: u32, edge_id: EdgeId, ts: Timestamp) -> bool {
         let src_idx = src as usize;
 
-        if src_idx >= self.vertex_capacity {
+        if src_idx >= self.vertex_capacity() {
             return false;
         }
 
@@ -219,7 +215,7 @@ impl SingleMutableCsr {
     pub fn delete_edge_by_dst(&mut self, src: u32, dst: VertexId, ts: Timestamp) -> bool {
         let src_idx = src as usize;
 
-        if src_idx >= self.vertex_capacity {
+        if src_idx >= self.vertex_capacity() {
             return false;
         }
 
@@ -237,7 +233,7 @@ impl SingleMutableCsr {
     pub fn get_edge(&self, src: u32, dst: VertexId, ts: Timestamp) -> Option<Nbr> {
         let src_idx = src as usize;
 
-        if src_idx >= self.vertex_capacity {
+        if src_idx >= self.vertex_capacity() {
             return None;
         }
 
@@ -260,7 +256,7 @@ impl SingleMutableCsr {
         }
 
         let src_idx = src as usize;
-        if src_idx >= self.vertex_capacity {
+        if src_idx >= self.vertex_capacity() {
             return false;
         }
 
@@ -278,7 +274,7 @@ impl SingleMutableCsr {
 
         let src_idx = src as usize;
 
-        if src_idx >= self.vertex_capacity {
+        if src_idx >= self.vertex_capacity() {
             return false;
         }
 
@@ -297,7 +293,7 @@ impl SingleMutableCsr {
     pub fn edges_of(&self, src: u32, ts: Timestamp) -> Vec<Nbr> {
         let src_idx = src as usize;
 
-        if src_idx >= self.vertex_capacity {
+        if src_idx >= self.vertex_capacity() {
             return Vec::new();
         }
 
@@ -313,7 +309,7 @@ impl SingleMutableCsr {
     fn get_edge_any_dst(&self, src: u32, ts: Timestamp) -> Option<Nbr> {
         let src_idx = src as usize;
 
-        if src_idx >= self.vertex_capacity {
+        if src_idx >= self.vertex_capacity() {
             return None;
         }
 
@@ -347,7 +343,6 @@ impl SingleMutableCsr {
     pub fn dump(&self) -> Vec<u8> {
         let mut result = Vec::new();
 
-        result.extend_from_slice(&(self.vertex_capacity as u64).to_le_bytes());
         result.extend_from_slice(&self.edge_count.load(Ordering::Relaxed).to_le_bytes());
 
         for nbr in &self.nbr_list {
@@ -366,7 +361,7 @@ impl SingleMutableCsr {
     }
 
     pub fn load(&mut self, data: &[u8]) -> StorageResult<()> {
-        if data.len() < 16 {
+        if data.len() < 8 {
             return Err(StorageError::deserialize_error(
                 "Single CSR data too short for header",
             ));
@@ -374,11 +369,10 @@ impl SingleMutableCsr {
 
         let mut offset = 0usize;
 
-        let vertex_capacity = read_u64_le(data, &mut offset)? as usize;
         let edge_count = read_u64_le(data, &mut offset)?;
 
-        let mut nbr_list = Vec::with_capacity(vertex_capacity);
-        for _ in 0..vertex_capacity {
+        let mut nbr_list = Vec::new();
+        while offset < data.len() {
             let neighbor = read_vertex_id(data, &mut offset)?;
             let raw_edge_id = read_u64_le(data, &mut offset)?;
             let prop_offset = read_u32_le(data, &mut offset)?;
@@ -394,7 +388,6 @@ impl SingleMutableCsr {
             ));
         }
 
-        self.vertex_capacity = vertex_capacity;
         self.nbr_list = nbr_list;
         self.edge_count.store(edge_count, Ordering::Relaxed);
 
@@ -432,7 +425,7 @@ impl<'a> Iterator for SingleMutableCsrIterator<'a> {
     type Item = (VertexId, Nbr);
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.current_vertex < self.csr.vertex_capacity {
+        while self.current_vertex < self.csr.vertex_capacity() {
             let vid = self.current_vertex;
             self.current_vertex += 1;
 
@@ -446,7 +439,7 @@ impl<'a> Iterator for SingleMutableCsrIterator<'a> {
 
 impl CsrBase for SingleMutableCsr {
     fn vertex_capacity(&self) -> usize {
-        self.vertex_capacity
+        SingleMutableCsr::vertex_capacity(self)
     }
 
     fn edge_count(&self) -> u64 {
