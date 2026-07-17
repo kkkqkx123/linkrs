@@ -130,6 +130,8 @@ pub enum IndexStatus {
     Creating,
     #[serde(rename = "building")]
     Building,
+    #[serde(rename = "catching_up")]
+    CatchingUp,
     #[serde(rename = "publishing")]
     Publishing,
     #[serde(rename = "active")]

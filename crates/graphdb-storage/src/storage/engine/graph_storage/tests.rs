@@ -688,7 +688,7 @@ mod tests {
         let index = Index::new(IndexConfig {
             id: 1,
             name: "person_name_idx".to_string(),
-            space_id: 0,
+            space_id: 1,
             schema_name: "Person".to_string(),
             fields: vec![IndexField::new(
                 "name".to_string(),
@@ -755,7 +755,7 @@ mod tests {
         let index = Index::new(IndexConfig {
             id: 1,
             name: "person_name_idx".to_string(),
-            space_id: 0,
+            space_id: 1,
             schema_name: "Person".to_string(),
             fields: vec![IndexField::new(
                 "name".to_string(),

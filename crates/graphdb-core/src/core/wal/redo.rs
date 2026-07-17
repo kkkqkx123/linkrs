@@ -166,6 +166,36 @@ pub struct RenameEdgePropRedo {
     pub new_name: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateTagIndexRedo {
+    pub space_id: u64,
+    pub index_name: String,
+    pub fields: Vec<(String, String)>,
+    pub properties: Vec<String>,
+    pub is_unique: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DropTagIndexRedo {
+    pub space_id: u64,
+    pub index_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateEdgeIndexRedo {
+    pub space_id: u64,
+    pub index_name: String,
+    pub fields: Vec<(String, String)>,
+    pub properties: Vec<String>,
+    pub is_unique: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DropEdgeIndexRedo {
+    pub space_id: u64,
+    pub index_name: String,
+}
+
 // Compact has no redo data (just timestamp in the WAL header).
 // A struct exists for completeness but carries no payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]

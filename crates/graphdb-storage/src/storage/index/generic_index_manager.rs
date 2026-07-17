@@ -190,19 +190,25 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
     }
 
     pub fn flush<P: AsRef<Path>>(&self, path: P) -> StorageResult<()> {
-        use std::fs;
+        let forward = self.forward_index.read();
+        let reverse = self.reverse_index.read();
+        Self::flush_data(path, &forward, &reverse)
+    }
 
+    pub(crate) fn flush_data<P: AsRef<Path>>(
+        path: P,
+        forward: &BTreeMap<SecondaryIndexKey, IndexRecord>,
+        reverse: &BTreeMap<SecondaryIndexKey, IndexRecord>,
+    ) -> StorageResult<()> {
         let path = path.as_ref();
-        fs::create_dir_all(path)?;
-
-        self.flush_forward_index(&path.join("forward_index.bin"))?;
-        self.flush_reverse_index(&path.join("reverse_index.bin"))?;
-
+        std::fs::create_dir_all(path)?;
+        Self::flush_index_file(&path.join("forward_index.bin"), forward)?;
+        Self::flush_index_file(&path.join("reverse_index.bin"), reverse)?;
+        std::fs::File::open(path)?.sync_all()?;
         Ok(())
     }
 
     fn flush_index_map<W: std::io::Write>(
-        &self,
         writer: &mut W,
         index: &BTreeMap<SecondaryIndexKey, IndexRecord>,
     ) -> std::io::Result<()> {
@@ -226,35 +232,36 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
                 let name_bytes = name.as_bytes();
                 writer.write_all(&(name_bytes.len() as u32).to_le_bytes())?;
                 writer.write_all(name_bytes)?;
-                let value_bytes = OrderedCodec::new().encode(value)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+                let value_bytes = OrderedCodec::new().encode(value).map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+                })?;
                 writer.write_all(&(value_bytes.len() as u32).to_le_bytes())?;
                 writer.write_all(&value_bytes)?;
             }
 
             write_entity_ref(writer, &entry.entity_ref)?;
+
+            if let Some(entity_version) = entry.entity_version {
+                writer.write_all(&[1u8])?;
+                writer.write_all(&entity_version.to_le_bytes())?;
+            } else {
+                writer.write_all(&[0u8])?;
+            }
         }
 
         Ok(())
     }
 
-    fn flush_forward_index(&self, path: &Path) -> StorageResult<()> {
-        use std::fs::File;
-        use std::io::Write;
-
-        let mut file = File::create(path)?;
-        let forward_index = self.forward_index.read();
-        self.flush_index_map(&mut file, &forward_index)?;
-        Ok(())
-    }
-
-    fn flush_reverse_index(&self, path: &Path) -> StorageResult<()> {
-        use std::fs::File;
-        use std::io::Write;
-
-        let mut file = File::create(path)?;
-        let reverse_index = self.reverse_index.read();
-        self.flush_index_map(&mut file, &reverse_index)?;
+    fn flush_index_file(
+        path: &Path,
+        index: &BTreeMap<SecondaryIndexKey, IndexRecord>,
+    ) -> StorageResult<()> {
+        let temporary = path.with_extension("tmp");
+        let mut file = std::fs::File::create(&temporary)?;
+        Self::flush_index_map(&mut file, index)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temporary, path)?;
         Ok(())
     }
 
@@ -270,22 +277,49 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
         *self.reverse_index.write() = reverse;
     }
 
+    pub fn snapshot_data(
+        &self,
+    ) -> (
+        BTreeMap<SecondaryIndexKey, IndexRecord>,
+        BTreeMap<SecondaryIndexKey, IndexRecord>,
+    ) {
+        (
+            self.forward_index.read().clone(),
+            self.reverse_index.read().clone(),
+        )
+    }
+
     pub fn load<P: AsRef<Path>>(&mut self, path: P) -> StorageResult<()> {
         let path = path.as_ref();
-
-        let (forward_index, forward_max_version) =
-            self.load_index_file(&path.join("forward_index.bin"))?;
-        let (reverse_index, reverse_max_version) =
-            self.load_index_file(&path.join("reverse_index.bin"))?;
-
-        let max_version = forward_max_version.max(reverse_max_version);
+        let (forward_index, reverse_index, next_version) = Self::load_data(path)?;
 
         *self.forward_index.write() = forward_index;
         *self.reverse_index.write() = reverse_index;
-        self.version_counter
-            .store(max_version.saturating_add(1), Ordering::Release);
+        self.version_counter.store(next_version, Ordering::Release);
 
         Ok(())
+    }
+
+    pub(crate) fn load_data<P: AsRef<Path>>(
+        path: P,
+    ) -> StorageResult<(
+        BTreeMap<SecondaryIndexKey, IndexRecord>,
+        BTreeMap<SecondaryIndexKey, IndexRecord>,
+        u64,
+    )> {
+        let path = path.as_ref();
+        let loader = Self::new();
+        let (forward_index, forward_max_version) =
+            loader.load_index_file(&path.join("forward_index.bin"))?;
+        let (reverse_index, reverse_max_version) =
+            loader.load_index_file(&path.join("reverse_index.bin"))?;
+        Ok((
+            forward_index,
+            reverse_index,
+            forward_max_version
+                .max(reverse_max_version)
+                .saturating_add(1),
+        ))
     }
 
     fn load_index_file(
@@ -340,8 +374,9 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
                     let name_len = u32::from_le_bytes(name_len_bytes) as usize;
                     let mut name_bytes = vec![0u8; name_len];
                     file.read_exact(&mut name_bytes)?;
-                    let name = String::from_utf8(name_bytes)
-                        .map_err(|e| StorageError::db_error(format!("Invalid included column name: {e}")))?;
+                    let name = String::from_utf8(name_bytes).map_err(|e| {
+                        StorageError::db_error(format!("Invalid included column name: {e}"))
+                    })?;
 
                     let mut value_len_bytes = [0u8; 4];
                     file.read_exact(&mut value_len_bytes)?;
@@ -355,14 +390,35 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
 
             let entity_ref = read_entity_ref(&mut file)?;
 
-            let entry = IndexRecord {
-                created_ts,
-                deleted_ts,
-                included_columns,
-                entity_ref,
-            };
-            max_version = max_version.max(Self::extract_version_from_key(&key));
-            index.insert(key, entry);
+            let mut has_entity_version = [0u8; 1];
+            if file.read_exact(&mut has_entity_version).is_ok() {
+                let entity_version = if has_entity_version[0] == 1 {
+                    let mut bytes = [0u8; 4];
+                    file.read_exact(&mut bytes)?;
+                    Some(u32::from_le_bytes(bytes))
+                } else {
+                    None
+                };
+                let entry = IndexRecord {
+                    created_ts,
+                    deleted_ts,
+                    entity_version,
+                    included_columns,
+                    entity_ref,
+                };
+                max_version = max_version.max(Self::extract_version_from_key(&key));
+                index.insert(key, entry);
+            } else {
+                let entry = IndexRecord {
+                    created_ts,
+                    deleted_ts,
+                    entity_version: None,
+                    included_columns,
+                    entity_ref,
+                };
+                max_version = max_version.max(Self::extract_version_from_key(&key));
+                index.insert(key, entry);
+            }
         }
 
         Ok((index, max_version))
@@ -375,7 +431,7 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
     pub(crate) fn forward_index_handle(
         &self,
     ) -> Arc<RwLock<BTreeMap<SecondaryIndexKey, IndexRecord>>> {
-        self.forward_index.clone()
+        Arc::new(RwLock::new(self.forward_index.read().clone()))
     }
 
     pub fn reverse_index(&self) -> &Arc<RwLock<BTreeMap<SecondaryIndexKey, IndexRecord>>> {

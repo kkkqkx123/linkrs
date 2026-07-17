@@ -229,8 +229,8 @@ impl KeyParser {
     }
 }
 
-    #[cfg(test)]
-    mod tests {
+#[cfg(test)]
+mod tests {
     use super::*;
     use crate::core::Value;
     use crate::storage::index::key_codec::key_builder::KeyBuilder;

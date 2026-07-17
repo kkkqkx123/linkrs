@@ -5,11 +5,153 @@ use std::sync::Arc;
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 
-use crate::core::types::{IndexGeneration, ManifestEpoch};
+use crate::core::types::{CommitLsn, IndexGeneration, ManifestEpoch, SnapshotTimestamp};
 use crate::core::{StorageError, StorageResult};
 use crate::storage::cursor::PartitionSelector;
 
-const MANIFEST_FORMAT_VERSION: u16 = 1;
+const MANIFEST_FORMAT_VERSION: u16 = 2;
+
+// ── Crash-safe generation rebuild state machine ──
+
+/// Persistent state of a native index generation rebuild.
+/// Written to durable storage before each phase so that crash recovery
+/// can determine whether the partial build can be resumed or must restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GenerationState {
+    /// Building new index data from a fixed MVCC snapshot.
+    /// On crash: discard and restart from scratch.
+    Building,
+    /// Catching up by replaying committed WAL entries since the snapshot LSN.
+    /// On crash: discard catch-up progress and restart from the snapshot.
+    CatchingUp,
+    /// Flushed to checkpoint files; about to atomically publish the manifest.
+    /// On crash: publishing must complete before the new generation is usable.
+    Publishing,
+    /// The new generation is published and active.
+    /// On crash: nothing to do.
+    Active,
+    /// The build failed before publication and must be restarted explicitly.
+    Failed,
+    /// The build was cancelled before publication and its files may be reclaimed.
+    Cancelled,
+}
+
+/// Persisted tracking data for one native index generation build.
+/// Stored alongside the index metadata so it survives crashes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerationBuildState {
+    /// The new generation number being built.
+    pub generation: IndexGeneration,
+    /// Manifest epoch reserved for this publication attempt.
+    pub manifest_epoch: ManifestEpoch,
+    /// MVCC timestamp used by the fixed snapshot scan.
+    pub snapshot_timestamp: SnapshotTimestamp,
+    /// WAL LSN at which the snapshot was taken. Catch-up replays entries > this.
+    pub start_lsn: CommitLsn,
+    /// WAL LSN at which the publish fence was established.
+    /// All writes with LSN <= barrier_lsn are reflected in the new generation.
+    pub barrier_lsn: Option<CommitLsn>,
+    /// Current state in the Building → CatchingUp → Publishing → Active sequence.
+    pub state: GenerationState,
+    /// Durable diagnostic for terminal failure or cancellation.
+    pub terminal_reason: Option<String>,
+}
+
+impl GenerationBuildState {
+    pub fn new(
+        generation: IndexGeneration,
+        manifest_epoch: ManifestEpoch,
+        snapshot_timestamp: SnapshotTimestamp,
+        start_lsn: CommitLsn,
+    ) -> Self {
+        Self {
+            generation,
+            manifest_epoch,
+            snapshot_timestamp,
+            start_lsn,
+            barrier_lsn: None,
+            state: GenerationState::Building,
+            terminal_reason: None,
+        }
+    }
+
+    pub fn transition_to_catching_up(&mut self) -> Result<(), String> {
+        self.require_state(GenerationState::Building)?;
+        self.state = GenerationState::CatchingUp;
+        Ok(())
+    }
+
+    pub fn transition_to_publishing(&mut self, barrier_lsn: CommitLsn) -> Result<(), String> {
+        self.require_state(GenerationState::CatchingUp)?;
+        if barrier_lsn < self.start_lsn {
+            return Err("Generation barrier LSN precedes the snapshot LSN".to_string());
+        }
+        self.barrier_lsn = Some(barrier_lsn);
+        self.state = GenerationState::Publishing;
+        Ok(())
+    }
+
+    /// Bypass the CatchingUp phase (used by split, which operates under an
+    /// exclusive fence and needs no incremental replay).
+    pub fn transition_from_building_to_publishing(
+        &mut self,
+        barrier_lsn: CommitLsn,
+    ) -> Result<(), String> {
+        self.require_state(GenerationState::Building)?;
+        self.barrier_lsn = Some(barrier_lsn);
+        self.state = GenerationState::Publishing;
+        Ok(())
+    }
+
+    pub fn transition_to_active(&mut self) -> Result<(), String> {
+        self.require_state(GenerationState::Publishing)?;
+        self.state = GenerationState::Active;
+        Ok(())
+    }
+
+    pub fn transition_to_failed(&mut self, reason: impl Into<String>) -> Result<(), String> {
+        if matches!(
+            self.state,
+            GenerationState::Active | GenerationState::Cancelled
+        ) {
+            return Err(format!("Cannot fail a {:?} generation", self.state));
+        }
+        self.state = GenerationState::Failed;
+        self.terminal_reason = Some(reason.into());
+        Ok(())
+    }
+
+    pub fn transition_to_cancelled(&mut self, reason: impl Into<String>) -> Result<(), String> {
+        if matches!(
+            self.state,
+            GenerationState::Publishing | GenerationState::Active
+        ) {
+            return Err(format!("Cannot cancel a {:?} generation", self.state));
+        }
+        self.state = GenerationState::Cancelled;
+        self.terminal_reason = Some(reason.into());
+        Ok(())
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.state == GenerationState::Active
+    }
+
+    pub fn can_resume(&self) -> bool {
+        self.state == GenerationState::CatchingUp
+    }
+
+    fn require_state(&self, expected: GenerationState) -> Result<(), String> {
+        if self.state == expected {
+            Ok(())
+        } else {
+            Err(format!(
+                "Invalid generation transition from {:?}; expected {:?}",
+                self.state, expected
+            ))
+        }
+    }
+}
 
 /// An immutable half-open ordered-key range. `None` represents infinity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +204,9 @@ impl IndexShard {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexManifest {
     pub format_version: u16,
+    /// Logical namespace of this index. Index IDs are schema-local, so the
+    /// pair `(space_id, index_id)` is the physical native-index identity.
+    pub space_id: u64,
     pub index_id: u64,
     pub generation: IndexGeneration,
     pub epoch: ManifestEpoch,
@@ -70,6 +215,7 @@ pub struct IndexManifest {
 
 impl IndexManifest {
     pub fn new(
+        space_id: u64,
         index_id: u64,
         generation: IndexGeneration,
         epoch: ManifestEpoch,
@@ -77,6 +223,7 @@ impl IndexManifest {
     ) -> Result<Self, String> {
         let manifest = Self {
             format_version: MANIFEST_FORMAT_VERSION,
+            space_id,
             index_id,
             generation,
             epoch,
@@ -145,6 +292,29 @@ impl IndexManifest {
                 .filter(|shard| shard.intersects(lower.as_deref(), upper.as_deref()))
                 .collect(),
         }
+    }
+
+    pub fn scan_ranges(
+        &self,
+        selector: &PartitionSelector,
+        query_lower: &[u8],
+        query_upper: &[u8],
+    ) -> Vec<(Vec<u8>, Vec<u8>)> {
+        self.select_shards(selector)
+            .into_iter()
+            .filter(|shard| shard.intersects(Some(query_lower), Some(query_upper)))
+            .filter_map(|shard| {
+                let lower = shard.lower.as_deref().map_or_else(
+                    || query_lower.to_vec(),
+                    |value| value.max(query_lower).to_vec(),
+                );
+                let upper = shard.upper.as_deref().map_or_else(
+                    || query_upper.to_vec(),
+                    |value| value.min(query_upper).to_vec(),
+                );
+                (lower < upper).then_some((lower, upper))
+            })
+            .collect()
     }
 
     pub fn store(&self, path: &Path) -> StorageResult<()> {
@@ -251,25 +421,39 @@ impl ManifestCatalog {
     /// Returns files from generations that have no cursor-owned handles.
     /// The checkpoint owner performs deletion after its own durable fence.
     pub fn take_reclaimable_files(&self) -> Vec<PathBuf> {
+        self.take_reclaimable_manifests()
+            .into_iter()
+            .flat_map(|manifest| {
+                manifest
+                    .shards
+                    .into_iter()
+                    .map(|shard| shard.checkpoint_file)
+            })
+            .collect()
+    }
+
+    /// Returns fully retired manifests after their last cursor handle is gone.
+    /// Callers use the generation identity to retire matching in-memory data
+    /// before deleting the returned checkpoint files.
+    pub fn take_reclaimable_manifests(&self) -> Vec<IndexManifest> {
         let mut retired = self.retired.lock();
-        let mut files = Vec::new();
+        let mut manifests = Vec::new();
         retired.retain(|entry| {
             if Arc::strong_count(&entry.manifest) == 1 {
-                files.extend(
-                    entry
-                        .manifest
-                        .shards
-                        .iter()
-                        .map(|shard| shard.checkpoint_file.clone()),
-                );
+                manifests.push((*entry.manifest).clone());
                 false
             } else {
                 true
             }
         });
-        self.reclaimed_files
-            .fetch_add(files.len() as u64, Ordering::Relaxed);
-        files
+        self.reclaimed_files.fetch_add(
+            manifests
+                .iter()
+                .map(|manifest| manifest.shards.len() as u64)
+                .sum(),
+            Ordering::Relaxed,
+        );
+        manifests
     }
 
     pub fn stats(&self) -> ManifestCatalogStats {
@@ -304,6 +488,7 @@ mod tests {
 
     fn manifest(epoch: u64, shards: Vec<IndexShard>) -> IndexManifest {
         IndexManifest::new(
+            1,
             1,
             IndexGeneration::new(epoch),
             ManifestEpoch::new(epoch),
@@ -343,6 +528,7 @@ mod tests {
     #[test]
     fn manifest_rejects_range_gaps() {
         let result = IndexManifest::new(
+            1,
             1,
             IndexGeneration::new(1),
             ManifestEpoch::new(1),

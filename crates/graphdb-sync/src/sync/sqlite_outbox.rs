@@ -22,6 +22,7 @@ pub struct ClaimedEvent {
 #[derive(Debug, Clone)]
 pub struct SqliteOutbox {
     pool: SqlitePool,
+    path: std::path::PathBuf,
 }
 
 /// Immutable copy of the SQLite projection used by checkpoint recovery.
@@ -50,13 +51,20 @@ impl SqliteOutbox {
             .connect_with(options)
             .await
             .map_err(|error| error.to_string())?;
-        let outbox = Self { pool };
+        let outbox = Self {
+            pool,
+            path: path.as_ref().to_path_buf(),
+        };
         outbox.migrate().await?;
         Ok(outbox)
     }
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     /// Create an immutable SQLite backup at `destination`.
@@ -98,6 +106,14 @@ impl SqliteOutbox {
             std::fs::remove_file(destination).map_err(|error| error.to_string())?;
         }
         std::fs::rename(&temporary, destination).map_err(|error| error.to_string())?;
+        let checksum_path = destination.with_extension("checksum");
+        let checksum_temporary = checksum_path.with_extension("checksum.tmp");
+        std::fs::write(&checksum_temporary, crc32fast::hash(&bytes).to_string())
+            .map_err(|error| error.to_string())?;
+        std::fs::File::open(&checksum_temporary)
+            .and_then(|file| file.sync_all())
+            .map_err(|error| error.to_string())?;
+        std::fs::rename(&checksum_temporary, &checksum_path).map_err(|error| error.to_string())?;
         if let Some(parent) = destination.parent() {
             std::fs::File::open(parent)
                 .and_then(|directory| directory.sync_all())
@@ -291,6 +307,21 @@ impl SqliteOutbox {
              failed_at_ms INTEGER NOT NULL,\
              error TEXT NOT NULL,\
              FOREIGN KEY(event_id) REFERENCES events(id)\
+             )",
+        )
+        .execute(&mut *connection)
+        .await
+        .map_err(|error| error.to_string())?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS degraded_ranges (\
+             target TEXT NOT NULL,\
+             index_id INTEGER NOT NULL,\
+             generation INTEGER NOT NULL,\
+             start_lsn INTEGER NOT NULL,\
+             end_lsn INTEGER NOT NULL,\
+             reason TEXT NOT NULL,\
+             created_at_ms INTEGER NOT NULL,\
+             PRIMARY KEY(target, index_id, generation, start_lsn, end_lsn)\
              )",
         )
         .execute(&mut *connection)
@@ -890,6 +921,37 @@ impl SqliteOutbox {
         finish_transaction(&mut connection, result).await
     }
 
+    pub async fn requeue_dead_letter(&self, event_id: i64) -> Result<bool, String> {
+        let mut connection = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|error| error.to_string())?;
+        begin_immediate(&mut connection).await?;
+        let result = async {
+            let updated = sqlx::query(
+                "UPDATE events SET status = 'pending', next_attempt_at_ms = 0, \
+                 lease_owner = NULL, lease_until_ms = 0, last_error = NULL \
+                 WHERE id = ? AND status = 'dead_letter'",
+            )
+            .bind(event_id)
+            .execute(&mut *connection)
+            .await
+            .map_err(|error| error.to_string())?;
+            if updated.rows_affected() == 0 {
+                return Ok(false);
+            }
+            sqlx::query("DELETE FROM dead_letters WHERE event_id = ?")
+                .bind(event_id)
+                .execute(&mut *connection)
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok(true)
+        }
+        .await;
+        finish_transaction(&mut connection, result).await
+    }
+
     pub async fn delivery_targets(&self) -> Result<Vec<TargetId>, String> {
         let rows = sqlx::query_scalar::<_, String>(
             "SELECT DISTINCT target FROM events WHERE status IN ('pending', 'retry', 'leased') \
@@ -969,6 +1031,18 @@ impl SqliteOutbox {
             + timeout_ms;
 
         loop {
+            if self
+                .has_degraded_range_through(target, index_id, generation, minimum_lsn)
+                .await?
+            {
+                return Err(format!(
+                    "Consistency frontier for target {} index {} generation {} is degraded through LSN {}",
+                    target.as_str(),
+                    index_id,
+                    generation,
+                    minimum_lsn
+                ));
+            }
             let frontier = self.index_frontier(target, index_id, generation).await?;
             if frontier >= minimum_lsn {
                 return Ok(true);
@@ -1037,6 +1111,31 @@ impl SqliteOutbox {
             .await
             .map_err(|error| error.to_string())?;
 
+            let now_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|error| error.to_string())?
+                .as_millis() as u64;
+            sqlx::query(
+                "INSERT INTO degraded_ranges(\
+                     target, index_id, generation, start_lsn, end_lsn, reason, created_at_ms\
+                 ) VALUES(?, ?, ?, ?, ?, ?, ?) \
+                 ON CONFLICT(target, index_id, generation, start_lsn, end_lsn) \
+                 DO UPDATE SET reason = excluded.reason, created_at_ms = excluded.created_at_ms",
+            )
+            .bind(event.mutation.target.as_str())
+            .bind(to_sql_i64(event.mutation.index_id, "index ID")?)
+            .bind(to_sql_i64(
+                event.mutation.index_generation.get(),
+                "index generation",
+            )?)
+            .bind(lsn)
+            .bind(lsn)
+            .bind(reason)
+            .bind(to_sql_i64(now_ms, "degraded range timestamp")?)
+            .execute(&mut *connection)
+            .await
+            .map_err(|error| error.to_string())?;
+
             advance_frontier(&mut connection, &event.mutation.target).await?;
             advance_index_frontier(
                 &mut connection,
@@ -1068,6 +1167,29 @@ impl SqliteOutbox {
         .await
         .map_err(|error| error.to_string())?;
         Ok(value.unwrap_or(0) != 0)
+    }
+
+    pub async fn has_degraded_range_through(
+        &self,
+        target: &TargetId,
+        index_id: u64,
+        generation: u64,
+        minimum_lsn: CommitLsn,
+    ) -> Result<bool, String> {
+        let value: i64 = sqlx::query_scalar(
+            "SELECT EXISTS(\
+                 SELECT 1 FROM degraded_ranges \
+                 WHERE target = ? AND index_id = ? AND generation = ? AND start_lsn <= ?\
+             )",
+        )
+        .bind(target.as_str())
+        .bind(to_sql_i64(index_id, "index ID")?)
+        .bind(to_sql_i64(generation, "index generation")?)
+        .bind(to_sql_i64(minimum_lsn.get(), "minimum LSN")?)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|error| error.to_string())?;
+        Ok(value != 0)
     }
 
     pub async fn dead_lettered_count(&self, target: &TargetId) -> Result<u64, String> {
@@ -1149,16 +1271,20 @@ async fn advance_frontier(
         };
         let completed: i64 = next.get("completed");
         let degraded: i64 = next.get("degraded");
-        if completed == 0 || degraded != 0 {
+        if completed == 0 {
             return Ok(());
         }
         let next_lsn: i64 = next.get("commit_lsn");
-        sqlx::query("UPDATE target_state SET applied_lsn = ? WHERE target = ?")
-            .bind(next_lsn)
-            .bind(target.as_str())
-            .execute(&mut *connection)
-            .await
-            .map_err(|error| error.to_string())?;
+        sqlx::query(
+            "UPDATE target_state SET applied_lsn = ?, degraded = MAX(degraded, ?) \
+             WHERE target = ?",
+        )
+        .bind(next_lsn)
+        .bind(degraded)
+        .bind(target.as_str())
+        .execute(&mut *connection)
+        .await
+        .map_err(|error| error.to_string())?;
     }
 }
 
@@ -1195,18 +1321,28 @@ async fn advance_index_frontier(
         .map_err(|error| error.to_string())?;
 
         let next = sqlx::query(
-            "SELECT e.commit_lsn, \
-                    (SELECT COUNT(*) FROM events e2 \
-                     WHERE e2.target = e.target AND e2.commit_lsn = e.commit_lsn \
-                     AND e2.status IN ('applied', 'skipped')) as applied_count, \
-                    (SELECT COUNT(*) FROM events e2 \
-                     WHERE e2.target = e.target AND e2.commit_lsn = e.commit_lsn) as total_count, \
-                    (SELECT COUNT(*) FROM events e2 \
-                     WHERE e2.target = e.target AND e2.commit_lsn = e.commit_lsn AND e2.status = 'skipped') as skipped_count \
-             FROM events e \
-             WHERE e.target = ? AND e.commit_lsn > ? \
-             ORDER BY e.commit_lsn LIMIT 1",
+            "SELECT c.commit_lsn, \
+                    (SELECT COUNT(*) FROM events e \
+                     WHERE e.target = c.target AND e.commit_lsn = c.commit_lsn \
+                       AND e.index_id = ? AND e.generation = ?) AS total_count, \
+                    (SELECT COUNT(*) FROM events e \
+                     WHERE e.target = c.target AND e.commit_lsn = c.commit_lsn \
+                       AND e.index_id = ? AND e.generation = ? \
+                       AND e.status IN ('applied', 'skipped')) AS terminal_count, \
+                    (SELECT COUNT(*) FROM events e \
+                     WHERE e.target = c.target AND e.commit_lsn = c.commit_lsn \
+                       AND e.index_id = ? AND e.generation = ? \
+                       AND e.status = 'skipped') AS skipped_count \
+             FROM commit_targets c \
+             WHERE c.target = ? AND c.commit_lsn > ? \
+             ORDER BY c.commit_lsn LIMIT 1",
         )
+        .bind(index_id_i64)
+        .bind(generation_i64)
+        .bind(index_id_i64)
+        .bind(generation_i64)
+        .bind(index_id_i64)
+        .bind(generation_i64)
         .bind(target.as_str())
         .bind(current)
         .fetch_optional(&mut *connection)
@@ -1216,21 +1352,21 @@ async fn advance_index_frontier(
         let Some(next) = next else {
             return Ok(());
         };
-        let applied_count: i64 = next.get("applied_count");
+        let terminal_count: i64 = next.get("terminal_count");
         let total_count: i64 = next.get("total_count");
         let skipped_count: i64 = next.get("skipped_count");
-        let has_skipped = skipped_count != 0;
 
-        if applied_count != total_count || has_skipped {
+        if terminal_count != total_count {
             return Ok(());
         }
 
         let next_lsn: i64 = next.get("commit_lsn");
         sqlx::query(
-            "UPDATE index_frontier SET applied_lsn = ? \
+            "UPDATE index_frontier SET applied_lsn = ?, degraded = MAX(degraded, ?) \
              WHERE target = ? AND index_id = ? AND generation = ?",
         )
         .bind(next_lsn)
+        .bind(i64::from(skipped_count != 0))
         .bind(target.as_str())
         .bind(index_id_i64)
         .bind(generation_i64)

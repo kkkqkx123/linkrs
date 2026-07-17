@@ -1,5 +1,5 @@
-use crate::core::value::ordered_codec::OrderedCodec;
 use crate::core::types::{Index, Timestamp, MAX_TIMESTAMP};
+use crate::core::value::ordered_codec::OrderedCodec;
 use crate::core::wal::EntityRef;
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::cursor::{IndexCursor, IndexPredicate, IndexRow, IndexScanPlan};
@@ -92,9 +92,11 @@ impl EdgeIndexManager {
             let reverse_key = logical_reverse_key;
             let entity_ref = make_edge_entity_ref(edge_src, edge_dst, edge_type, ranking);
             let entry = if let Some(er) = entity_ref {
-                IndexRecord::new(write_ts).with_entity_ref(er)
-            } else {
                 IndexRecord::new(write_ts)
+                    .with_entity_version(write_ts)
+                    .with_entity_ref(er)
+            } else {
+                IndexRecord::new(write_ts).with_entity_version(write_ts)
             };
             let compressed_forward = self.base.physical_key(&index_key.0);
             let compressed_reverse = self.base.physical_key(&reverse_key.0);
@@ -364,7 +366,7 @@ impl EdgeIndexManager {
         space_id: u64,
         index: &Index,
         plan: &IndexScanPlan,
-        stale_checker: Option<Arc<dyn Fn(&EntityRef) -> bool + Send + Sync>>,
+        stale_checker: Option<Arc<dyn Fn(&EntityRef, Option<Timestamp>) -> bool + Send + Sync>>,
     ) -> StorageResult<EdgeIndexCursor> {
         self.open_edge_index_cursor_full(space_id, index, plan, stale_checker, None)
     }
@@ -374,7 +376,7 @@ impl EdgeIndexManager {
         space_id: u64,
         index: &Index,
         plan: &IndexScanPlan,
-        stale_checker: Option<Arc<dyn Fn(&EntityRef) -> bool + Send + Sync>>,
+        stale_checker: Option<Arc<dyn Fn(&EntityRef, Option<Timestamp>) -> bool + Send + Sync>>,
         catalog: Option<&ManifestCatalog>,
     ) -> StorageResult<EdgeIndexCursor> {
         let index_prefix = KeyBuilder::build_edge_index_prefix(space_id, &index.name);
@@ -438,26 +440,35 @@ impl EdgeIndexManager {
             ),
         };
 
+        let manifest_handle = catalog.map(|catalog| catalog.acquire());
+        let ranges = manifest_handle.as_ref().map_or_else(
+            || vec![(start.clone(), end.clone())],
+            |handle| handle.manifest().scan_ranges(&plan.partition, &start, &end),
+        );
         let forward_index = self.base.forward_index_handle();
         let estimated_match_count = {
             let index = forward_index.read();
-            index
-                .range(start.clone()..end.clone())
-                .filter(|(_key, entry)| entry.is_visible_at(plan.read_timestamp))
-                .count() as u64
+            ranges
+                .iter()
+                .map(|(lower, upper)| {
+                    index
+                        .range(lower.clone()..upper.clone())
+                        .filter(|(_key, entry)| entry.is_visible_at(plan.read_timestamp))
+                        .count() as u64
+                })
+                .sum()
         };
-
-        let manifest_handle = catalog.map(|c| c.acquire());
 
         Ok(EdgeIndexCursor {
             forward_index,
-            range_start: start,
-            range_end: end,
+            ranges,
+            range_index: 0,
             next_key: None,
             exhausted: false,
             offset_remaining: plan.offset,
             limit: plan.limit,
             emitted: 0,
+            projection: plan.projection.clone(),
             read_timestamp: plan.read_timestamp,
             invisible_skipped: 0,
             malformed_skipped: 0,
@@ -478,27 +489,28 @@ impl Default for EdgeIndexManager {
 pub struct EdgeIndexCursor {
     forward_index:
         Arc<parking_lot::RwLock<std::collections::BTreeMap<SecondaryIndexKey, IndexRecord>>>,
-    range_start: Vec<u8>,
-    range_end: Vec<u8>,
+    ranges: Vec<(Vec<u8>, Vec<u8>)>,
+    range_index: usize,
     next_key: Option<SecondaryIndexKey>,
     exhausted: bool,
     offset_remaining: usize,
     limit: Option<usize>,
     emitted: usize,
+    projection: Option<Vec<String>>,
     read_timestamp: Timestamp,
     invisible_skipped: u64,
     malformed_skipped: u64,
     stale_skipped: u64,
     estimated_match_count: u64,
     manifest_handle: Option<ManifestHandle>,
-    stale_checker: Option<Arc<dyn Fn(&EntityRef) -> bool + Send + Sync>>,
+    stale_checker: Option<Arc<dyn Fn(&EntityRef, Option<Timestamp>) -> bool + Send + Sync>>,
 }
 
 impl std::fmt::Debug for EdgeIndexCursor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EdgeIndexCursor")
-            .field("range_start", &self.range_start)
-            .field("range_end", &self.range_end)
+            .field("ranges", &self.ranges)
+            .field("range_index", &self.range_index)
             .field("next_key", &self.next_key)
             .field("exhausted", &self.exhausted)
             .field("offset_remaining", &self.offset_remaining)
@@ -515,86 +527,89 @@ impl std::fmt::Debug for EdgeIndexCursor {
     }
 }
 
+impl EdgeIndexCursor {
+    pub(crate) fn set_manifest_handle(&mut self, manifest_handle: ManifestHandle) {
+        self.manifest_handle = Some(manifest_handle);
+    }
+}
+
 impl IndexCursor for EdgeIndexCursor {
     type Row = IndexRow;
 
     fn next_batch(&mut self, batch_size: usize) -> Result<Vec<Self::Row>, StorageError> {
-        if self.exhausted {
+        if self.exhausted || self.ranges.is_empty() {
+            self.exhausted = true;
             return Ok(Vec::new());
         }
         let mut rows = Vec::with_capacity(batch_size.max(1));
         let index = self.forward_index.read();
-        let mut last_key = None;
-        let mut visited = false;
         let batch_limit = batch_size.max(1);
-        let scan = if let Some(next_key) = self.next_key.clone() {
-            index.range((
-                std::ops::Bound::Excluded(next_key),
-                std::ops::Bound::Excluded(self.range_end.clone()),
-            ))
-        } else {
-            index.range((
-                std::ops::Bound::Included(self.range_start.clone()),
-                std::ops::Bound::Excluded(self.range_end.clone()),
-            ))
-        };
-        for (key, entry) in scan {
-            visited = true;
-            last_key = Some(key.clone());
-            if !entry.is_visible_at(self.read_timestamp) {
-                self.invisible_skipped += 1;
-                continue;
-            }
-
-            if self.offset_remaining > 0 {
-                self.offset_remaining -= 1;
-                continue;
-            }
-
-            // Get entity_ref from IndexRecord (new path) or fall back to key parsing.
-            let entity_ref = match &entry.entity_ref {
-                Some(er) => er.clone(),
-                None => match parse_edge_entity_ref(key) {
-                    Some(er) => er,
-                    None => {
-                        self.malformed_skipped += 1;
-                        continue;
-                    }
-                },
+        while self.range_index < self.ranges.len() && rows.len() < batch_limit {
+            let (range_start, range_end) = &self.ranges[self.range_index];
+            let scan = if let Some(next_key) = self.next_key.clone() {
+                index.range((
+                    std::ops::Bound::Excluded(next_key),
+                    std::ops::Bound::Excluded(range_end.clone()),
+                ))
+            } else {
+                index.range((
+                    std::ops::Bound::Included(range_start.clone()),
+                    std::ops::Bound::Excluded(range_end.clone()),
+                ))
             };
-
-            // Validate entity existence via optional stale checker.
-            if let Some(ref checker) = self.stale_checker {
-                if !checker(&entity_ref) {
+            let mut paused = false;
+            for (key, entry) in scan {
+                self.next_key = Some(key.clone());
+                if !entry.is_visible_at(self.read_timestamp) {
+                    self.invisible_skipped += 1;
+                    continue;
+                }
+                let entity_ref = match &entry.entity_ref {
+                    Some(entity_ref) => entity_ref.clone(),
+                    None => match parse_edge_entity_ref(key) {
+                        Some(entity_ref) => entity_ref,
+                        None => {
+                            self.malformed_skipped += 1;
+                            continue;
+                        }
+                    },
+                };
+                if self
+                    .stale_checker
+                    .as_ref()
+                    .is_some_and(|checker| !checker(&entity_ref, entry.entity_version))
+                {
                     self.stale_skipped += 1;
                     continue;
                 }
-            }
-
-            // Covering projection support: when projection matches included_columns,
-            // return IndexRow::Covering instead of RowId (phased in with planner support).
-            let row = if !entry.included_columns.is_empty() {
-                IndexRow::Covering {
-                    entity_ref,
-                    columns: entry.included_columns.clone(),
+                if self.offset_remaining > 0 {
+                    self.offset_remaining -= 1;
+                    continue;
                 }
-            } else {
-                IndexRow::RowId(entity_ref)
-            };
-            rows.push(row);
-            self.emitted += 1;
+                rows.push(project_edge_row(
+                    entity_ref,
+                    &entry.included_columns,
+                    self.projection.as_deref(),
+                ));
+                self.emitted += 1;
+                if self.limit.is_some_and(|limit| self.emitted >= limit)
+                    || rows.len() >= batch_limit
+                {
+                    paused = true;
+                    break;
+                }
+            }
             if self.limit.is_some_and(|limit| self.emitted >= limit) {
+                self.exhausted = true;
                 break;
             }
-            if rows.len() >= batch_limit {
+            if paused {
                 break;
             }
+            self.range_index += 1;
+            self.next_key = None;
         }
-        drop(index);
-        self.next_key = last_key;
-        if !visited || self.limit.is_some_and(|limit| self.emitted >= limit) {
-            self.exhausted = true;
-        }
+        self.exhausted |= self.range_index >= self.ranges.len();
         Ok(rows)
     }
 
@@ -619,7 +634,39 @@ impl IndexCursor for EdgeIndexCursor {
     }
 }
 
-fn make_edge_entity_ref(edge_src: &Value, edge_dst: &Value, edge_type: &str, ranking: i64) -> Option<EntityRef> {
+fn project_edge_row(
+    entity_ref: EntityRef,
+    included_columns: &[(String, Value)],
+    projection: Option<&[String]>,
+) -> IndexRow {
+    let Some(projection) = projection else {
+        return IndexRow::RowId(entity_ref);
+    };
+    let columns = if projection.is_empty() {
+        included_columns.to_vec()
+    } else {
+        projection
+            .iter()
+            .filter_map(|name| {
+                included_columns
+                    .iter()
+                    .find(|(candidate, _)| candidate == name)
+                    .cloned()
+            })
+            .collect()
+    };
+    IndexRow::Covering {
+        entity_ref,
+        columns,
+    }
+}
+
+fn make_edge_entity_ref(
+    edge_src: &Value,
+    edge_dst: &Value,
+    edge_type: &str,
+    ranking: i64,
+) -> Option<EntityRef> {
     let src_id = value_to_vertex_id(edge_src)?;
     let dst_id = value_to_vertex_id(edge_dst)?;
     let edge_type_id: u32 = edge_type.parse::<u32>().unwrap_or_default();
@@ -829,6 +876,7 @@ mod tests {
             space: "space".to_string(),
             index_id: 1,
             predicate: IndexPredicate::All,
+            partition: crate::storage::cursor::PartitionSelector::All,
             projection: None,
             limit: None,
             offset: 0,
@@ -841,5 +889,123 @@ mod tests {
 
         let batch = cursor.next_batch(8).expect("read");
         assert_eq!(batch.len(), 2);
+    }
+
+    #[test]
+    fn edge_cursor_covering_and_rowid_paths_produce_consistent_results() {
+        let manager = EdgeIndexManager::new();
+        let index = create_test_index("idx_weight", "knows");
+
+        let entries = vec![
+            (Value::BigInt(1), Value::BigInt(2), 10, 10),
+            (Value::BigInt(3), Value::BigInt(4), 20, 20),
+            (Value::BigInt(5), Value::BigInt(6), 30, 10),
+        ];
+        for (src, dst, weight, ts) in &entries {
+            manager
+                .update_edge_indexes_mvcc(
+                    1,
+                    src,
+                    dst,
+                    "knows",
+                    0,
+                    "idx_weight",
+                    &[("weight".to_string(), Value::Int(*weight))],
+                    *ts,
+                )
+                .expect("edge entry");
+        }
+
+        // ---- RowId path ----
+        let rowid_plan = IndexScanPlan {
+            space: "space".to_string(),
+            index_id: 1,
+            predicate: IndexPredicate::All,
+            partition: crate::storage::cursor::PartitionSelector::All,
+            projection: None,
+            limit: None,
+            offset: 0,
+            read_timestamp: 20,
+        };
+        let mut rowid_cursor = manager
+            .open_edge_index_cursor(1, &index, &rowid_plan)
+            .expect("rowid cursor");
+        let rowid_rows: Vec<IndexRow> = {
+            let mut rows = Vec::new();
+            loop {
+                let batch = rowid_cursor.next_batch(10).expect("cursor read");
+                if batch.is_empty() {
+                    break;
+                }
+                rows.extend(batch);
+            }
+            rows
+        };
+        // All 3 entries have created_ts <= 20, all visible
+        assert_eq!(rowid_rows.len(), 3);
+
+        // ---- Covering path ----
+        let covering_plan = IndexScanPlan {
+            space: "space".to_string(),
+            index_id: 1,
+            predicate: IndexPredicate::All,
+            partition: crate::storage::cursor::PartitionSelector::All,
+            projection: Some(vec![]),
+            limit: None,
+            offset: 0,
+            read_timestamp: 20,
+        };
+        let mut covering_cursor = manager
+            .open_edge_index_cursor(1, &index, &covering_plan)
+            .expect("covering cursor");
+        let covering_rows: Vec<IndexRow> = {
+            let mut rows = Vec::new();
+            loop {
+                let batch = covering_cursor.next_batch(10).expect("cursor read");
+                if batch.is_empty() {
+                    break;
+                }
+                rows.extend(batch);
+            }
+            rows
+        };
+        assert_eq!(covering_rows.len(), 3);
+
+        // Verify entity_ref consistency
+        for (rowid_row, covering_row) in rowid_rows.iter().zip(covering_rows.iter()) {
+            let rowid_ref = match rowid_row {
+                IndexRow::RowId(ref entity_ref) => entity_ref,
+                _ => panic!("expected RowId"),
+            };
+            let covering_ref = match covering_row {
+                IndexRow::Covering {
+                    entity_ref,
+                    columns: _,
+                } => entity_ref,
+                _ => panic!("expected Covering"),
+            };
+            assert_eq!(rowid_ref, covering_ref);
+        }
+
+        // ---- offset/limit consistency ----
+        let offset_plan = IndexScanPlan {
+            space: "space".to_string(),
+            index_id: 1,
+            predicate: IndexPredicate::All,
+            partition: crate::storage::cursor::PartitionSelector::All,
+            projection: None,
+            limit: Some(1),
+            offset: 1,
+            read_timestamp: 20,
+        };
+        let mut offset_cursor = manager
+            .open_edge_index_cursor(1, &index, &offset_plan)
+            .expect("offset cursor");
+        let offset_rows = offset_cursor.next_batch(10).expect("cursor read");
+        assert_eq!(
+            offset_rows.len(),
+            1,
+            "offset=1, limit=1 should return 1 entry"
+        );
     }
 }

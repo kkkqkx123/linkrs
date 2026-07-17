@@ -36,7 +36,7 @@ use std::time::{Duration, Instant, SystemTime};
 use parking_lot::RwLock;
 
 use graphdb_sync::sync::checkpoint_manifest::{
-    CheckpointManifest, CheckpointManifestManager, StorageSnapshotRef,
+    CheckpointManifest, CheckpointManifestManager, IndexManifestRef, StorageSnapshotRef,
 };
 
 use crate::core::types::Timestamp;
@@ -659,6 +659,14 @@ impl PersistenceCoordinator {
             return Ok(None);
         }
 
+        let Some(published_manifest) = self
+            .manifest_manager
+            .load_latest()
+            .map_err(StorageError::db_error)?
+        else {
+            return Ok(None);
+        };
+        let published_checkpoint = published_manifest.storage_snapshot.checkpoint_seq;
         let mut checkpoints: Vec<(u64, PathBuf)> = std::fs::read_dir(checkpoints_dir)?
             .filter_map(|entry| entry.ok())
             .filter_map(|entry| {
@@ -667,7 +675,7 @@ impl PersistenceCoordinator {
                     let name = path.file_name()?.to_string_lossy();
                     if name.starts_with("checkpoint_") {
                         let id: u64 = name.trim_start_matches("checkpoint_").parse().ok()?;
-                        Some((id, path))
+                        (id == published_checkpoint).then_some((id, path))
                     } else {
                         None
                     }
@@ -687,7 +695,8 @@ impl PersistenceCoordinator {
 
             if let Some(ref wal) = self.wal_manager {
                 wal.read().set_checkpoint_seq(info.checkpoint_id)?;
-                wal.read().truncate(info.lsn)?;
+                wal.read()
+                    .truncate(Lsn::new(published_manifest.safe_lsn.get()))?;
             }
 
             return Ok(Some(info));
@@ -953,13 +962,23 @@ impl PersistenceCoordinator {
         };
 
         let storage_lsn = graphdb_core::core::types::CommitLsn::new(wal_lsn.into());
+        let work_dir = self
+            .config
+            .data_dir
+            .parent()
+            .unwrap_or(&self.config.data_dir);
+        let outbox_snapshot =
+            graphdb_sync::sync::find_latest_snapshot(&work_dir.join("outbox_snapshots"))
+                .filter(|snapshot| snapshot.materialized_lsn >= storage_lsn)
+                .map(|snapshot| CheckpointManifest::outbox_snapshot_from(&snapshot));
+        let index_manifests = Self::collect_index_manifest_refs(checkpoint_dir)?;
 
         let manifest = CheckpointManifest::new(
             checkpoint.seq,
             storage_lsn,
             storage_snapshot_ref,
-            None,
-            Vec::new(),
+            outbox_snapshot,
+            index_manifests,
         );
 
         self.manifest_manager.publish(&manifest).map_err(|error| {
@@ -973,6 +992,43 @@ impl PersistenceCoordinator {
         );
 
         Ok(())
+    }
+
+    fn collect_index_manifest_refs(root: &Path) -> StorageResult<Vec<IndexManifestRef>> {
+        fn visit(directory: &Path, refs: &mut Vec<IndexManifestRef>) -> StorageResult<()> {
+            for entry in std::fs::read_dir(directory)? {
+                let path = entry?.path();
+                if path.is_dir() {
+                    visit(&path, refs)?;
+                    continue;
+                }
+                if path
+                    .parent()
+                    .and_then(Path::file_name)
+                    .and_then(|name| name.to_str())
+                    != Some("native_index_manifests")
+                    || path.extension().and_then(|extension| extension.to_str()) != Some("json")
+                {
+                    continue;
+                }
+                let manifest = crate::storage::index::manifest::IndexManifest::load(&path)?;
+                let bytes = std::fs::read(&path)?;
+                refs.push(IndexManifestRef {
+                    space_id: manifest.space_id,
+                    index_id: manifest.index_id,
+                    generation: manifest.generation,
+                    path,
+                    size_bytes: bytes.len() as u64,
+                    checksum: crc32fast::hash(&bytes),
+                });
+            }
+            Ok(())
+        }
+
+        let mut refs = Vec::new();
+        visit(root, &mut refs)?;
+        refs.sort_by_key(|reference| reference.index_id);
+        Ok(refs)
     }
 
     /// Get the latest safe LSN from the published manifest.

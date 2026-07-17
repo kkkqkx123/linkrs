@@ -10,9 +10,10 @@ pub mod types;
 
 pub use redo::{
     AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CompactRedo,
-    CreateEdgeTypeRedo, CreateSpaceRedo, CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeRedo,
-    DeleteEdgeTypeRedo, DeleteVertexPropRedo, DeleteVertexRedo, DeleteVertexTypeRedo,
-    DropSpaceRedo, InsertEdgeRedo, InsertVertexRedo, RenameEdgePropRedo, RenameVertexPropRedo,
+    CreateEdgeIndexRedo, CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo,
+    CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo,
+    DeleteVertexPropRedo, DeleteVertexRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo,
+    DropTagIndexRedo, InsertEdgeRedo, InsertVertexRedo, RenameEdgePropRedo, RenameVertexPropRedo,
     UpdateEdgePropRedo, UpdateVertexPropRedo,
 };
 pub use sync::{

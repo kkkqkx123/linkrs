@@ -214,11 +214,49 @@ impl SyncManager {
         } else {
             path.with_extension("sqlite")
         };
-        self.sqlite_outbox = Some(Arc::new(self.execute_sync(|| async {
+
+        let database_parent = sqlite_path.parent().unwrap_or(Path::new("."));
+        let snapshot_dir = database_parent
+            .parent()
+            .unwrap_or(database_parent)
+            .join("outbox_snapshots");
+
+        // Restore before opening when the live database is absent. Snapshots
+        // are stored at the database work-directory root, not below outbox/.
+        if !crate::sync::live_database_exists(&sqlite_path) {
+            if snapshot_dir.is_dir() {
+                match crate::sync::recover_outbox(&sqlite_path, &snapshot_dir) {
+                    Ok(Some(lsn)) => {
+                        log::info!("Recovered outbox from snapshot at LSN {}", lsn.get());
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        log::warn!("Outbox recovery attempted but failed: {}. Starting fresh.", e);
+                    }
+                }
+            }
+        }
+
+        let open_outbox = || self.execute_sync(|| async {
             SqliteOutbox::open(&sqlite_path)
                 .await
                 .map_err(SyncError::PersistenceError)
-        })?));
+        });
+        let outbox = match open_outbox() {
+            Ok(outbox) => outbox,
+            Err(error) if snapshot_dir.is_dir() => {
+                log::warn!(
+                    "Failed to open outbox {}: {}. Restoring the latest snapshot.",
+                    sqlite_path.display(),
+                    error
+                );
+                crate::sync::restore_latest_snapshot(&sqlite_path, &snapshot_dir)
+                    .map_err(SyncError::PersistenceError)?;
+                open_outbox()?
+            }
+            Err(error) => return Err(error),
+        };
+        self.sqlite_outbox = Some(Arc::new(outbox));
         Ok(())
     }
 
@@ -316,7 +354,7 @@ impl SyncManager {
     }
 
     fn apply_payload(&self, payload: &OutboxPayload) -> Result<(), String> {
-        let result = match payload {
+        match payload {
             OutboxPayload::Vertex {
                 space_id,
                 tag_name,
@@ -336,8 +374,17 @@ impl SyncManager {
                 edge_type,
             } => self
                 .execute_sync(|| self.apply_edge_delete_mutation(*space_id, src, dst, edge_type)),
-        };
-        result.map_err(|error| error.to_string())
+            OutboxPayload::CreateIndex { .. } => {
+                // DDL already executed locally before the outbox event was staged.
+                // Delivery acknowledges the event without reapplying it.
+                Ok(())
+            }
+            OutboxPayload::DropIndex { .. } => {
+                // Delivery is a no-op for the same reason as CreateIndex.
+                Ok(())
+            }
+        }
+        .map_err(|error| error.to_string())
     }
 
     pub async fn start(&self) -> Result<(), SyncError> {
@@ -403,6 +450,46 @@ impl SyncManager {
                 vertex_id: vertex_id.clone(),
                 properties: properties.to_vec(),
                 change_type,
+            },
+        )?;
+        Ok(())
+    }
+
+    pub fn on_index_create(
+        &self,
+        txn_id: TransactionId,
+        space_id: u64,
+        index_name: &str,
+        index_type: &str,
+        fields: &[(String, Value)],
+        properties: &[String],
+    ) -> Result<(), SyncError> {
+        self.stage_event(
+            txn_id,
+            OutboxPayload::CreateIndex {
+                space_id,
+                index_name: index_name.to_string(),
+                index_type: index_type.to_string(),
+                fields: fields.to_vec(),
+                properties: properties.to_vec(),
+            },
+        )?;
+        Ok(())
+    }
+
+    pub fn on_index_drop(
+        &self,
+        txn_id: TransactionId,
+        space_id: u64,
+        index_name: &str,
+        index_type: &str,
+    ) -> Result<(), SyncError> {
+        self.stage_event(
+            txn_id,
+            OutboxPayload::DropIndex {
+                space_id,
+                index_name: index_name.to_string(),
+                index_type: index_type.to_string(),
             },
         )?;
         Ok(())
@@ -791,6 +878,23 @@ impl SyncManager {
         Ok(())
     }
 
+    /// Return the durable projection frontier used as the lower bound for
+    /// committed-WAL replay after an outbox restore.
+    pub fn outbox_materialized_lsn(
+        &self,
+    ) -> Result<Option<crate::core::types::CommitLsn>, SyncError> {
+        let Some(outbox) = &self.sqlite_outbox else {
+            return Ok(None);
+        };
+        self.execute_sync(|| async {
+            outbox
+                .materialized_lsn()
+                .await
+                .map(Some)
+                .map_err(SyncError::PersistenceError)
+        })
+    }
+
     /// Create a crash-safe immutable snapshot of the SQLite projection.
     pub fn create_outbox_snapshot(
         &self,
@@ -807,6 +911,49 @@ impl SyncManager {
                 .await
                 .map_err(SyncError::PersistenceError)
         })
+    }
+
+    pub fn wait_for_minimum_lsn(
+        &self,
+        target: &crate::core::types::TargetId,
+        index_id: u64,
+        generation: u64,
+        minimum_lsn: crate::core::types::CommitLsn,
+        timeout_ms: u64,
+    ) -> Result<bool, SyncError> {
+        let Some(outbox) = &self.sqlite_outbox else {
+            return Err(SyncError::PersistenceError("SQLite outbox is not configured".to_string()));
+        };
+        self.execute_sync(|| async {
+            outbox
+                .wait_for_minimum_lsn(target, index_id, generation, minimum_lsn, timeout_ms)
+                .await
+                .map_err(SyncError::PersistenceError)
+        })
+    }
+
+    pub fn create_checkpoint_outbox_snapshot(
+        &self,
+    ) -> Result<crate::sync::OutboxSnapshot, SyncError> {
+        let Some(outbox) = &self.sqlite_outbox else {
+            return Err(SyncError::PersistenceError(
+                "SQLite outbox is not configured".to_string(),
+            ));
+        };
+        let materialized_lsn = self.execute_sync(|| async {
+            outbox
+                .materialized_lsn()
+                .await
+                .map_err(SyncError::PersistenceError)
+        })?;
+        let database_parent = outbox.path().parent().ok_or_else(|| {
+            SyncError::PersistenceError("SQLite outbox path has no parent".to_string())
+        })?;
+        let work_dir = database_parent.parent().unwrap_or(database_parent);
+        let destination = work_dir
+            .join("outbox_snapshots")
+            .join(format!("outbox_snapshot_{}.sqlite", materialized_lsn.get()));
+        self.create_outbox_snapshot(destination)
     }
 
     pub fn verify_outbox_snapshot(snapshot: &crate::sync::OutboxSnapshot) -> Result<(), SyncError> {
@@ -1056,6 +1203,23 @@ fn event_to_intent(
                 edge_type: stable_hash(edge_type.as_bytes()) as u32,
                 ranking: 0,
             },
+            IndexOperation::Delete,
+        ),
+        OutboxPayload::CreateIndex {
+            index_name,
+            index_type: _,
+            ..
+        } => (
+            index_name.as_str(),
+            EntityRef::Vertex(VertexId::from_int64(0)),
+            IndexOperation::Upsert,
+        ),
+        OutboxPayload::DropIndex {
+            index_name,
+            ..
+        } => (
+            index_name.as_str(),
+            EntityRef::Vertex(VertexId::from_int64(0)),
             IndexOperation::Delete,
         ),
     };

@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use log::warn;
 use parking_lot::RwLock;
 
 use super::super::state::GlobalState;
@@ -951,7 +950,7 @@ fn build_index_scan_plan(
     let projection = match projection {
         IndexProjection::RowIdOnly => None,
         IndexProjection::Columns(columns) => Some(columns.clone()),
-        IndexProjection::AllColumns => None,
+        IndexProjection::AllColumns => Some(Vec::new()),
     };
     let read_timestamp = storage
         .read()
@@ -959,10 +958,18 @@ fn build_index_scan_plan(
         .map(|context| context.read_timestamp)
         .unwrap_or(MAX_TIMESTAMP);
 
+    // A manifest shard is bounded by complete native-index keys, including
+    // space and index prefixes. A predicate value alone cannot safely form a
+    // shard selector. Storage derives complete key bounds from the predicate
+    // and intersects them with the manifest; a physical PartitionView bridge
+    // can provide a narrower selector once it can encode those full keys.
+    let partition = graphdb_storage::storage::PartitionSelector::All;
+
     Ok(IndexScanPlan {
         space: space_name.to_string(),
         index_id,
         predicate: physical_predicate,
+        partition,
         projection,
         limit: None,
         offset: 0,
@@ -1005,11 +1012,10 @@ fn next_index_chunk(
                             match guard.get_vertex(space_name, &vid) {
                                 Ok(Some(vertex)) => output_rows.push(make_vertex_row(vertex)),
                                 Ok(None) => {
-                                    // Stale row — cursor should have filtered this.
-                                    // The storage cursor is responsible for entity version
-                                    // consistency; query layer must not silently drop.
-                                    warn!(
-                                        "Index cursor yielded stale vertex {} in space {}",
+                                    // Cursor stale_checker should have filtered this.
+                                    debug_assert!(
+                                        false,
+                                        "cursor yielded stale vertex {} in space {}",
                                         vid, space_name
                                     );
                                 }
@@ -1030,8 +1036,9 @@ fn next_index_chunk(
                             match guard.get_vertex(space_name, &vid) {
                                 Ok(Some(vertex)) => output_rows.push(make_vertex_row(vertex)),
                                 Ok(None) => {
-                                    warn!(
-                                        "Index cursor yielded stale vertex {} in space {}",
+                                    debug_assert!(
+                                        false,
+                                        "cursor yielded stale vertex {} in space {}",
                                         vid, space_name
                                     );
                                 }

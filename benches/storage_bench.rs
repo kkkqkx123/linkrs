@@ -235,20 +235,18 @@ fn bench_real_edge_insert(c: &mut Criterion) {
             let dst = (src + 1) % 100;
             next_id += 1;
             storage
-            .insert_edge(
-                "bench",
-                Edge {
-                    src: VertexId::from_int64(src),
-                    dst: VertexId::from_int64(dst),
-                    edge_type: "Link".to_string(),
-                    ranking: next_id,
-                    props: HashMap::new(),
-                },
-            )
-            .expect("edge insert");
-            black_box(
-                (),
-            );
+                .insert_edge(
+                    "bench",
+                    Edge {
+                        src: VertexId::from_int64(src),
+                        dst: VertexId::from_int64(dst),
+                        edge_type: "Link".to_string(),
+                        ranking: next_id,
+                        props: HashMap::new(),
+                    },
+                )
+                .expect("edge insert");
+            black_box(());
         });
     });
     group.finish();

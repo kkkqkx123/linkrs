@@ -536,21 +536,51 @@ impl StorageReader for GraphStorage {
 
         if let Some(index) = tag_indexes.into_iter().find(|index| index.id == index_id) {
             let space_id = self.ctx.schema_manager().get_space_id(&plan.space)?;
+            let space_name = plan.space.clone();
+            let ctx = self.ctx.clone();
+            let stale_checker: Option<
+                Arc<dyn Fn(&crate::core::wal::EntityRef, Option<Timestamp>) -> bool + Send + Sync>,
+            > = Some(Arc::new(
+                move |entity_ref, _entity_version| match entity_ref {
+                    crate::core::wal::EntityRef::Vertex(vid) => {
+                        reader::get_vertex(&*ctx, &space_name, vid)
+                            .ok()
+                            .flatten()
+                            .is_some()
+                    }
+                    crate::core::wal::EntityRef::Edge { .. } => true,
+                },
+            ));
             let cursor = self
                 .ctx
                 .index_data_manager()
                 .read()
-                .open_tag_index_cursor(space_id, &index, plan)?;
+                .open_tag_index_cursor_full(space_id, &index, plan, stale_checker, None)?;
             return Ok(Box::new(cursor));
         }
 
         if let Some(index) = edge_indexes.into_iter().find(|index| index.id == index_id) {
             let space_id = self.ctx.schema_manager().get_space_id(&plan.space)?;
+            let space_name = plan.space.clone();
+            let ctx = self.ctx.clone();
+            let stale_checker: Option<
+                Arc<dyn Fn(&crate::core::wal::EntityRef, Option<Timestamp>) -> bool + Send + Sync>,
+            > = Some(Arc::new(
+                move |entity_ref, _entity_version| match entity_ref {
+                    crate::core::wal::EntityRef::Vertex(vid) => {
+                        reader::get_vertex(&*ctx, &space_name, vid)
+                            .ok()
+                            .flatten()
+                            .is_some()
+                    }
+                    crate::core::wal::EntityRef::Edge { .. } => true,
+                },
+            ));
             let cursor = self
                 .ctx
                 .index_data_manager()
                 .read()
-                .open_edge_index_cursor(space_id, &index, plan)?;
+                .open_edge_index_cursor_full(space_id, &index, plan, stale_checker, None)?;
             return Ok(Box::new(cursor));
         }
 
@@ -793,29 +823,61 @@ impl StorageSchemaOps for GraphStorage {
     }
 
     fn create_tag_index(&mut self, space: &str, index: &Index) -> Result<bool, StorageError> {
-        index_manager::create_tag_index(&self.ctx, space, index)
+        schema_writer::create_tag_index(&self.ctx, space, index)
     }
 
     fn drop_tag_index(&mut self, space: &str, index_name: &str) -> Result<bool, StorageError> {
-        index_manager::drop_tag_index(&self.ctx, space, index_name)
+        schema_writer::drop_tag_index(&self.ctx, space, index_name)
     }
 
     fn rebuild_tag_index(&mut self, space: &str, index_name: &str) -> Result<bool, StorageError> {
-        let vertices = reader::scan_vertices(&self.ctx, space)?;
-        index_manager::rebuild_tag_index(&self.ctx, space, index_name, &vertices)
+        let snapshot_timestamp = self.ctx.get_read_timestamp();
+        let start_lsn = index_manager::current_wal_lsn(&self.ctx);
+        let snapshot_ctx = self.ctx.with_operation_context(StorageOperationContext {
+            transaction_id: None,
+            read_timestamp: snapshot_timestamp,
+            write_timestamp: None,
+            read_only: true,
+            auto_commit: false,
+        });
+        let vertices = reader::scan_vertices(&snapshot_ctx, space)?;
+        index_manager::rebuild_tag_index(
+            &self.ctx,
+            space,
+            index_name,
+            &vertices,
+            crate::core::types::SnapshotTimestamp::new(u64::from(snapshot_timestamp)),
+            start_lsn,
+        )
     }
 
     fn create_edge_index(&mut self, space: &str, index: &Index) -> Result<bool, StorageError> {
-        index_manager::create_edge_index(&self.ctx, space, index)
+        schema_writer::create_edge_index(&self.ctx, space, index)
     }
 
     fn drop_edge_index(&mut self, space: &str, index_name: &str) -> Result<bool, StorageError> {
-        index_manager::drop_edge_index(&self.ctx, space, index_name)
+        schema_writer::drop_edge_index(&self.ctx, space, index_name)
     }
 
     fn rebuild_edge_index(&mut self, space: &str, index_name: &str) -> Result<bool, StorageError> {
-        let edges = reader::scan_all_edges(&self.ctx, space)?;
-        index_manager::rebuild_edge_index(&self.ctx, space, index_name, &edges)
+        let snapshot_timestamp = self.ctx.get_read_timestamp();
+        let start_lsn = index_manager::current_wal_lsn(&self.ctx);
+        let snapshot_ctx = self.ctx.with_operation_context(StorageOperationContext {
+            transaction_id: None,
+            read_timestamp: snapshot_timestamp,
+            write_timestamp: None,
+            read_only: true,
+            auto_commit: false,
+        });
+        let edges = reader::scan_all_edges(&snapshot_ctx, space)?;
+        index_manager::rebuild_edge_index(
+            &self.ctx,
+            space,
+            index_name,
+            &edges,
+            crate::core::types::SnapshotTimestamp::new(u64::from(snapshot_timestamp)),
+            start_lsn,
+        )
     }
 }
 
@@ -980,7 +1042,6 @@ impl crate::storage::StorageCommitOps for GraphStorage {
         sync_manager: &crate::sync::SyncManager,
     ) -> StorageResult<usize> {
         use crate::transaction::wal::{collect_committed_transactions, LocalWalParser, WalParser};
-        use graphdb_sync::sync::outbox_recovery::{find_latest_snapshot, restore_snapshot_sync};
         let Some(paths) = self.ctx.storage_paths() else {
             return Ok(0);
         };
@@ -988,37 +1049,16 @@ impl crate::storage::StorageCommitOps for GraphStorage {
             return Ok(0);
         }
 
-        // Determine outbox database path and snapshot directory
-        let outbox_dir = paths.root().join("sync");
-        let outbox_db = outbox_dir.join("outbox.sqlite");
-        let snapshot_dir = paths.outbox_snapshot_dir();
-
-        // Step 1: Recover outbox database from snapshot if needed (sync only)
-        let snapshot_lsn = if !outbox_db.exists() && snapshot_dir.exists() {
-            match find_latest_snapshot(&snapshot_dir) {
-                Some(snapshot) => {
-                    log::info!(
-                        "Restoring outbox from snapshot at LSN {}",
-                        snapshot.materialized_lsn
-                    );
-                    if let Err(e) = restore_snapshot_sync(&snapshot, &outbox_db) {
-                        log::warn!("Failed to restore outbox snapshot: {} (will replay all)", e);
-                        None
-                    } else {
-                        Some(snapshot.materialized_lsn)
-                    }
-                }
-                None => {
-                    log::warn!("No valid outbox snapshot found, will replay all from WAL");
-                    None
-                }
-            }
-        } else if outbox_db.exists() {
-            // Database exists, find latest snapshot as optimization reference
-            find_latest_snapshot(&snapshot_dir).map(|s| s.materialized_lsn)
-        } else {
-            None
-        };
+        // SyncManager restores the same root-level outbox snapshot before it
+        // opens `outbox/outbox.sqlite`. Only the SQLite projection's durable
+        // frontier is a valid WAL replay lower bound; a merely discovered
+        // snapshot must never cause replay to skip data.
+        let snapshot_lsn = sync_manager.outbox_materialized_lsn().map_err(|error| {
+            StorageError::db_error(format!(
+                "Failed to read outbox materialization frontier: {}",
+                error
+            ))
+        })?;
 
         // Step 2: Parse committed WAL transactions
         let mut parser = LocalWalParser::new();

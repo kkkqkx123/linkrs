@@ -23,6 +23,18 @@ pub enum OutboxPayload {
         dst: Value,
         edge_type: String,
     },
+    CreateIndex {
+        space_id: u64,
+        index_name: String,
+        index_type: String,
+        fields: Vec<(String, Value)>,
+        properties: Vec<String>,
+    },
+    DropIndex {
+        space_id: u64,
+        index_name: String,
+        index_type: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -118,6 +118,10 @@ pub enum WalOpType {
     OutboxIntent = 21,
     TransactionCommit = 22,
     TransactionAbort = 23,
+    CreateTagIndex = 24,
+    DropTagIndex = 25,
+    CreateEdgeIndex = 26,
+    DropEdgeIndex = 27,
 }
 
 impl TryFrom<u8> for WalOpType {
@@ -149,6 +153,10 @@ impl TryFrom<u8> for WalOpType {
             21 => Ok(WalOpType::OutboxIntent),
             22 => Ok(WalOpType::TransactionCommit),
             23 => Ok(WalOpType::TransactionAbort),
+            24 => Ok(WalOpType::CreateTagIndex),
+            25 => Ok(WalOpType::DropTagIndex),
+            26 => Ok(WalOpType::CreateEdgeIndex),
+            27 => Ok(WalOpType::DropEdgeIndex),
             _ => Err(WalError::InvalidOpType(value)),
         }
     }
@@ -181,6 +189,10 @@ impl fmt::Display for WalOpType {
             WalOpType::OutboxIntent => write!(f, "OutboxIntent"),
             WalOpType::TransactionCommit => write!(f, "TransactionCommit"),
             WalOpType::TransactionAbort => write!(f, "TransactionAbort"),
+            WalOpType::CreateTagIndex => write!(f, "CreateTagIndex"),
+            WalOpType::DropTagIndex => write!(f, "DropTagIndex"),
+            WalOpType::CreateEdgeIndex => write!(f, "CreateEdgeIndex"),
+            WalOpType::DropEdgeIndex => write!(f, "DropEdgeIndex"),
         }
     }
 }

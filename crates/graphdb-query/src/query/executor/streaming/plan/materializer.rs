@@ -394,17 +394,18 @@ impl PhysicalPlanMaterializer {
     fn type_compatible(value: &crate::core::Value, expected_type: &crate::core::DataType) -> bool {
         use crate::core::DataType;
         use crate::core::Value;
-        matches!((value, expected_type),
-            (Value::Null(_), _) |
-            (Value::Bool(_), DataType::Bool) |
-            (Value::Int(_), DataType::Int | DataType::BigInt) |
-            (Value::BigInt(_), DataType::BigInt | DataType::Int) |
-            (Value::Float(_), DataType::Float | DataType::Double) |
-            (Value::Double(_), DataType::Double | DataType::Float) |
-            (Value::String(_), DataType::String) |
-            (Value::Date(_), DataType::Date) |
-            (Value::Time(_), DataType::Time) |
-            (Value::DateTime(_), DataType::DateTime)
+        matches!(
+            (value, expected_type),
+            (Value::Null(_), _)
+                | (Value::Bool(_), DataType::Bool)
+                | (Value::Int(_), DataType::Int | DataType::BigInt)
+                | (Value::BigInt(_), DataType::BigInt | DataType::Int)
+                | (Value::Float(_), DataType::Float | DataType::Double)
+                | (Value::Double(_), DataType::Double | DataType::Float)
+                | (Value::String(_), DataType::String)
+                | (Value::Date(_), DataType::Date)
+                | (Value::Time(_), DataType::Time)
+                | (Value::DateTime(_), DataType::DateTime)
         )
     }
 

@@ -1,12 +1,13 @@
 use crate::core::error::storage::StorageErrorKind;
-use crate::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo};
+use crate::core::types::{EdgeTypeInfo, Index, PropertyDef, SpaceInfo, TagInfo};
 use crate::core::{StorageError, StorageResult};
 use crate::storage::engine::params::CreateEdgeTypeParams;
 use crate::storage::types::StoragePropertyDef;
 use crate::transaction::wal::{
-    AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeTypeRedo,
-    CreateSpaceRedo, CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeTypeRedo,
-    DeleteVertexPropRedo, DeleteVertexTypeRedo, DropSpaceRedo, WalOpType,
+    AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
+    CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
+    DeleteEdgePropRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo, DeleteVertexTypeRedo,
+    DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo, WalOpType,
 };
 
 use super::context::GraphStorageContext;
@@ -30,6 +31,21 @@ fn append_schema_redo<T: serde::Serialize>(
     let result = ctx.append_wal_redo(op_type, timestamp, redo);
     ctx.release_write_timestamp(timestamp);
     result
+}
+
+fn validate_index_space(
+    ctx: &GraphStorageContext,
+    space: &str,
+    index: &Index,
+) -> StorageResult<u64> {
+    let space_id = ctx.schema_manager().get_space_id(space)?;
+    if index.space_id != space_id {
+        return Err(StorageError::invalid_operation(format!(
+            "Index {} belongs to space {}, not space {}",
+            index.name, index.space_id, space_id
+        )));
+    }
+    Ok(space_id)
 }
 
 pub(crate) fn create_space(
@@ -130,6 +146,88 @@ pub(crate) fn alter_space_comment(
     )?;
 
     ctx.schema_manager().alter_space_comment(space_id, comment)
+}
+
+pub(crate) fn create_tag_index(
+    ctx: &GraphStorageContext,
+    space: &str,
+    index: &Index,
+) -> StorageResult<bool> {
+    let space_id = validate_index_space(ctx, space, index)?;
+    append_schema_redo(
+        ctx,
+        WalOpType::CreateTagIndex,
+        &CreateTagIndexRedo {
+            space_id,
+            index_name: index.name.clone(),
+            fields: index
+                .fields
+                .iter()
+                .map(|f| (f.name.clone(), String::new()))
+                .collect(),
+            properties: index.properties.clone(),
+            is_unique: index.is_unique,
+        },
+    )?;
+    super::index_manager::create_tag_index(ctx, space, index)
+}
+
+pub(crate) fn drop_tag_index(
+    ctx: &GraphStorageContext,
+    space: &str,
+    index_name: &str,
+) -> StorageResult<bool> {
+    let space_id = ctx.schema_manager().get_space_id(space)?;
+    append_schema_redo(
+        ctx,
+        WalOpType::DropTagIndex,
+        &DropTagIndexRedo {
+            space_id,
+            index_name: index_name.to_string(),
+        },
+    )?;
+    super::index_manager::drop_tag_index(ctx, space, index_name)
+}
+
+pub(crate) fn create_edge_index(
+    ctx: &GraphStorageContext,
+    space: &str,
+    index: &Index,
+) -> StorageResult<bool> {
+    let space_id = validate_index_space(ctx, space, index)?;
+    append_schema_redo(
+        ctx,
+        WalOpType::CreateEdgeIndex,
+        &CreateEdgeIndexRedo {
+            space_id,
+            index_name: index.name.clone(),
+            fields: index
+                .fields
+                .iter()
+                .map(|f| (f.name.clone(), String::new()))
+                .collect(),
+            properties: index.properties.clone(),
+            is_unique: index.is_unique,
+        },
+    )?;
+    super::index_manager::create_edge_index(ctx, space, index)
+}
+
+pub(crate) fn drop_edge_index(
+    ctx: &GraphStorageContext,
+    space: &str,
+    index_name: &str,
+) -> StorageResult<bool> {
+    let space_id = ctx.schema_manager().get_space_id(space)?;
+    append_schema_redo(
+        ctx,
+        WalOpType::DropEdgeIndex,
+        &DropEdgeIndexRedo {
+            space_id,
+            index_name: index_name.to_string(),
+        },
+    )?;
+    super::index_manager::drop_edge_index(ctx, space, index_name)
 }
 
 pub(crate) fn create_tag(

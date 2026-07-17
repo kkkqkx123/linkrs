@@ -100,6 +100,58 @@ pub fn find_latest_snapshot(snapshot_dir: &Path) -> Option<OutboxSnapshot> {
     None
 }
 
+/// Attempt to recover the live outbox database from the latest available snapshot.
+///
+/// This is the top-level recovery entry point. It checks whether the live database
+/// is healthy; if not, it finds and restores the latest valid snapshot, then returns
+/// the snapshot LSN so the caller can replay remaining committed WAL intents.
+///
+/// Returns `Ok(Some(snapshot_lsn))` if recovery was performed, `Ok(None)` if the
+/// live database was already healthy, or an error if recovery failed.
+pub fn recover_outbox(
+    live_path: &Path,
+    snapshot_dir: &Path,
+) -> Result<Option<CommitLsn>, String> {
+    if live_database_exists(live_path) {
+        return Ok(None);
+    }
+
+    log::warn!(
+        "Live outbox database {} not found; attempting recovery from snapshots",
+        live_path.display()
+    );
+
+    let restored_lsn = restore_latest_snapshot(live_path, snapshot_dir)?;
+    Ok(Some(restored_lsn))
+}
+
+/// Restore the most recent valid snapshot regardless of whether a live
+/// database currently exists. Callers use this after detecting corruption in
+/// an existing SQLite file.
+pub fn restore_latest_snapshot(
+    live_path: &Path,
+    snapshot_dir: &Path,
+) -> Result<CommitLsn, String> {
+    let snapshot = find_latest_snapshot(snapshot_dir).ok_or_else(|| {
+        format!(
+            "No valid outbox snapshot found in {}",
+            snapshot_dir.display()
+        )
+    })?;
+
+    let restored_lsn = snapshot.materialized_lsn;
+    log::info!(
+        "Restoring outbox snapshot at LSN {} from {}",
+        restored_lsn.get(),
+        snapshot.path.display()
+    );
+
+    restore_snapshot_sync(&snapshot, live_path)?;
+
+    log::info!("Outbox recovery completed at LSN {}", restored_lsn.get());
+    Ok(restored_lsn)
+}
+
 /// Restore an outbox snapshot to the live database path synchronously.
 ///
 /// This is a sync version of `SqliteOutbox::restore_snapshot` for use

@@ -171,6 +171,75 @@ impl<S: StorageClient> SyncWrapper<S> {
         }
         Ok(())
     }
+
+    fn stage_index_create(
+        &self,
+        index: &crate::core::types::Index,
+        index_type: &str,
+    ) -> Result<(), StorageError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        let Some(sync_manager) = self.get_sync_manager() else {
+            return Ok(());
+        };
+        let transaction_id = self.get_current_txn_id().ok_or_else(|| {
+            StorageError::db_error(
+                "Synchronized schema changes require an operation transaction context".to_string(),
+            )
+        })?;
+        let fields = index
+            .fields
+            .iter()
+            .map(|field| (field.name.clone(), field.value_type.clone()))
+            .collect::<Vec<_>>();
+        sync_manager
+            .on_index_create(
+                transaction_id,
+                index.space_id,
+                &index.name,
+                index_type,
+                &fields,
+                &index.properties,
+            )
+            .map_err(|error| {
+                StorageError::db_error(format!("Failed to stage index creation intent: {error}"))
+            })
+    }
+
+    fn validate_schema_sync_context(&self) -> Result<(), StorageError> {
+        if self.enabled && self.get_sync_manager().is_some() && self.get_current_txn_id().is_none()
+        {
+            return Err(StorageError::db_error(
+                "Synchronized schema changes require an operation transaction context".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn stage_index_drop(
+        &self,
+        space_id: u64,
+        index_name: &str,
+        index_type: &str,
+    ) -> Result<(), StorageError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        let Some(sync_manager) = self.get_sync_manager() else {
+            return Ok(());
+        };
+        let transaction_id = self.get_current_txn_id().ok_or_else(|| {
+            StorageError::db_error(
+                "Synchronized schema changes require an operation transaction context".to_string(),
+            )
+        })?;
+        sync_manager
+            .on_index_drop(transaction_id, space_id, index_name, index_type)
+            .map_err(|error| {
+                StorageError::db_error(format!("Failed to stage index drop intent: {error}"))
+            })
+    }
 }
 
 impl<S: StorageClient + 'static> crate::transaction::TransactionCommitSink for SyncWrapper<S> {
@@ -563,21 +632,59 @@ impl<S: StorageClient + 'static> StorageSchemaOps for SyncWrapper<S> {
             deletions: Vec<String>,
         ) -> Result<bool, StorageError>;
         fn drop_edge_type(&mut self, space: &str, edge: &str) -> Result<bool, StorageError>;
-        fn create_tag_index(
-            &mut self,
-            space: &str,
-            info: &crate::core::types::Index,
-        ) -> Result<bool, StorageError>;
-        fn drop_tag_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError>;
         fn rebuild_tag_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError>;
-        fn create_edge_index(
-            &mut self,
-            space: &str,
-            info: &crate::core::types::Index,
-        ) -> Result<bool, StorageError>;
-        fn drop_edge_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError>;
         fn rebuild_edge_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError>;
     );
+
+    fn create_tag_index(
+        &mut self,
+        space: &str,
+        info: &crate::core::types::Index,
+    ) -> Result<bool, StorageError> {
+        self.validate_schema_sync_context()?;
+        let result = self.inner.create_tag_index(space, info)?;
+        if result {
+            self.stage_index_create(info, "tag")?;
+        }
+        self.commit_auto_transaction()?;
+        Ok(result)
+    }
+
+    fn drop_tag_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError> {
+        let space_id = self.inner.get_space_id(space)?;
+        self.validate_schema_sync_context()?;
+        let result = self.inner.drop_tag_index(space, index)?;
+        if result {
+            self.stage_index_drop(space_id, index, "tag")?;
+        }
+        self.commit_auto_transaction()?;
+        Ok(result)
+    }
+
+    fn create_edge_index(
+        &mut self,
+        space: &str,
+        info: &crate::core::types::Index,
+    ) -> Result<bool, StorageError> {
+        self.validate_schema_sync_context()?;
+        let result = self.inner.create_edge_index(space, info)?;
+        if result {
+            self.stage_index_create(info, "edge")?;
+        }
+        self.commit_auto_transaction()?;
+        Ok(result)
+    }
+
+    fn drop_edge_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError> {
+        let space_id = self.inner.get_space_id(space)?;
+        self.validate_schema_sync_context()?;
+        let result = self.inner.drop_edge_index(space, index)?;
+        if result {
+            self.stage_index_drop(space_id, index, "edge")?;
+        }
+        self.commit_auto_transaction()?;
+        Ok(result)
+    }
 }
 
 impl<S: StorageClient + 'static> StorageAuthOps for SyncWrapper<S> {
@@ -632,6 +739,20 @@ impl<S: StorageClient + 'static> StoragePersistenceOps for SyncWrapper<S> {
     fn create_checkpoint(
         &self,
     ) -> crate::core::StorageResult<Option<crate::storage::CheckpointStats>> {
+        if self.enabled {
+            let manager = self.sync_manager.as_ref().ok_or_else(|| {
+                StorageError::invalid_operation(
+                    "Synchronization is enabled without an outbox manager",
+                )
+            })?;
+            manager
+                .create_checkpoint_outbox_snapshot()
+                .map_err(|error| {
+                    StorageError::db_error(format!(
+                        "Failed to create checkpoint outbox snapshot: {error}"
+                    ))
+                })?;
+        }
         self.inner.create_checkpoint()
     }
 

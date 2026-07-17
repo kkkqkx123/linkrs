@@ -37,7 +37,8 @@ pub use dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueCon
 pub use manager::{EdgeProps, EdgeRef, OutboxConsumerConfig, SyncError, SyncManager};
 pub use outbox::{OutboxEvent, OutboxPayload, OutboxStats};
 pub use outbox_recovery::{
-    find_latest_snapshot, live_database_exists, restore_snapshot_sync, verify_live_database,
+    find_latest_snapshot, live_database_exists, recover_outbox, restore_latest_snapshot,
+    restore_snapshot_sync, verify_live_database,
 };
 #[cfg(feature = "fulltext-search")]
 pub use receiver::FulltextReceiver;

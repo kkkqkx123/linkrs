@@ -16,9 +16,7 @@ use vector_client::VectorManager;
 use crate::api::server::{GraphService, HttpServer};
 use crate::config::Config;
 use crate::core::error::DBResult;
-use crate::storage::{
-    GraphStorage, MetricsStorage, StorageCommitOps, SyncWrapper,
-};
+use crate::storage::{GraphStorage, MetricsStorage, StorageCommitOps, SyncWrapper};
 use crate::transaction::{TransactionManager, TransactionManagerConfig};
 
 /// Start the service using the user configuration directory.

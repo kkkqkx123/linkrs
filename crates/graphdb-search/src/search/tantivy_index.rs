@@ -258,6 +258,23 @@ impl TantivySearchEngine {
         Ok(())
     }
 
+    pub async fn commit_with_payload(&self, payload: String) -> Result<(), SearchError> {
+        self.with_writer(move |writer| {
+            let mut commit = writer.prepare_commit()?;
+            commit.set_payload(&payload);
+            commit.commit()?;
+            Ok(())
+        })
+        .await?;
+        self.reader.reload()?;
+        self.refresh_stats_cache();
+        Ok(())
+    }
+
+    pub fn commit_payload(&self) -> Result<Option<String>, SearchError> {
+        Ok(self.index.load_metas()?.payload)
+    }
+
     pub async fn rollback(&self) -> Result<(), SearchError> {
         self.with_writer(move |_writer| Ok(())).await
     }

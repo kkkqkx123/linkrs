@@ -80,6 +80,8 @@ pub struct OutboxSnapshotRef {
 /// Reference to a native index manifest
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IndexManifestRef {
+    /// Logical namespace of the index.
+    pub space_id: u64,
     /// Index identifier
     pub index_id: u64,
     /// Index generation
@@ -94,7 +96,7 @@ pub struct IndexManifestRef {
 
 impl CheckpointManifest {
     /// Current manifest format version
-    pub const CURRENT_FORMAT_VERSION: u32 = 1;
+    pub const CURRENT_FORMAT_VERSION: u32 = 2;
 
     /// Create a new checkpoint manifest from component snapshots.
     ///
@@ -197,6 +199,29 @@ impl CheckpointManifest {
             return Err(
                 "Outbox LSN is non-zero but outbox snapshot reference is missing".to_string(),
             );
+        }
+
+        if !self.storage_snapshot.path.exists() {
+            return Err(format!(
+                "Storage snapshot does not exist: {}",
+                self.storage_snapshot.path.display()
+            ));
+        }
+        if let Some(snapshot) = &self.outbox_snapshot {
+            verify_file_reference(
+                &snapshot.path,
+                snapshot.size_bytes,
+                snapshot.checksum,
+                "outbox snapshot",
+            )?;
+        }
+        for manifest in &self.index_manifests {
+            verify_file_reference(
+                &manifest.path,
+                manifest.size_bytes,
+                manifest.checksum,
+                "index manifest",
+            )?;
         }
 
         Ok(())
@@ -323,10 +348,19 @@ impl CheckpointManifestManager {
 
         manifests.sort_by_key(|(id, _)| std::cmp::Reverse(*id));
 
-        manifests
-            .first()
-            .map(|(_, path)| CheckpointManifest::load(path))
-            .transpose()
+        for (_, path) in manifests {
+            match CheckpointManifest::load(&path) {
+                Ok(manifest) => return Ok(Some(manifest)),
+                Err(error) => {
+                    log::warn!(
+                        "Skipping invalid checkpoint manifest {}: {}",
+                        path.display(),
+                        error
+                    );
+                }
+            }
+        }
+        Ok(None)
     }
 
     /// Load a specific manifest by checkpoint ID
@@ -388,6 +422,23 @@ impl CheckpointManifestManager {
 
         Ok(removed)
     }
+}
+
+fn verify_file_reference(
+    path: &Path,
+    expected_size: u64,
+    expected_checksum: u32,
+    kind: &str,
+) -> Result<(), String> {
+    let bytes = std::fs::read(path)
+        .map_err(|error| format!("Failed to read {kind} {}: {error}", path.display()))?;
+    if bytes.len() as u64 != expected_size {
+        return Err(format!("{kind} size mismatch: {}", path.display()));
+    }
+    if crc32fast::hash(&bytes) != expected_checksum {
+        return Err(format!("{kind} checksum mismatch: {}", path.display()));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

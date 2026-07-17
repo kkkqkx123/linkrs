@@ -121,7 +121,8 @@ pub(crate) fn bidir_bfs_shortest_path(
                 if current_npath.len() >= cfg.max_depth {
                     continue;
                 }
-                if let Ok(edges) = storage.get_node_edges(cfg.space_name, &current_id, forward_dir) {
+                if let Ok(edges) = storage.get_node_edges(cfg.space_name, &current_id, forward_dir)
+                {
                     let filtered: Vec<&Edge> = if let Some(types) = cfg.edge_type_filter {
                         edges
                             .iter()
@@ -184,7 +185,8 @@ pub(crate) fn bidir_bfs_shortest_path(
                     continue;
                 }
 
-                if let Ok(edges) = storage.get_node_edges(cfg.space_name, &current_id, backward_dir) {
+                if let Ok(edges) = storage.get_node_edges(cfg.space_name, &current_id, backward_dir)
+                {
                     let filtered: Vec<&Edge> = if let Some(types) = cfg.edge_type_filter {
                         edges
                             .iter()

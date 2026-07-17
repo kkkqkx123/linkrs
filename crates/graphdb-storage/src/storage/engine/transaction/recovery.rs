@@ -1,6 +1,6 @@
 use crate::core::error::storage::StorageErrorKind;
 use crate::core::types::{
-    DataType, EdgeTypeInfo, LabelId, PropertyDef, SpaceInfo, TagInfo, Timestamp, VertexId,
+    DataType, EdgeTypeInfo, Index, LabelId, PropertyDef, SpaceInfo, TagInfo, Timestamp, VertexId,
 };
 use crate::core::wal::traits::RecoveryApplier;
 use crate::core::{StorageError, StorageResult, Value};
@@ -8,13 +8,15 @@ use crate::storage::edge::EdgeStrategy;
 use crate::storage::engine::graph_storage::GraphStorageContext;
 use crate::storage::engine::params::{CreateEdgeTypeParams, EdgeOperationParams};
 use crate::storage::engine::transaction::{AddEdgeParams, TransactionOps};
+use crate::storage::index::{EdgeIndexOps, VertexIndexOps};
 use crate::storage::types::StoragePropertyDef;
 use crate::transaction::codec::bytes_to_value;
 use crate::transaction::wal::{
-    AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeTypeRedo,
-    CreateSpaceRedo, CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo,
-    DeleteVertexPropRedo, DeleteVertexTypeRedo, DropSpaceRedo, InsertEdgeRedo, RenameEdgePropRedo,
-    RenameVertexPropRedo, UpdateEdgePropRedo,
+    AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo,
+    CreateEdgeIndexRedo, CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo,
+    CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo,
+    DeleteVertexPropRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo,
+    InsertEdgeRedo, RenameEdgePropRedo, RenameVertexPropRedo, UpdateEdgePropRedo,
 };
 use graphdb_core::core::metadata::IndexMetadataManager;
 
@@ -674,6 +676,110 @@ impl RecoveryApplier for GraphStorageContext {
         self.schema_manager()
             .update_edge_type(&space_name, &edge_type)?;
         self.rename_edge_property(redo.edge_label, &redo.old_name, &redo.new_name)?;
+        Ok(())
+    }
+
+    fn replay_create_tag_index(
+        &self,
+        redo: &CreateTagIndexRedo,
+        _ts: Timestamp,
+    ) -> StorageResult<()> {
+        let index = Index::new(crate::core::types::IndexConfig {
+            id: 0,
+            name: redo.index_name.clone(),
+            space_id: redo.space_id,
+            schema_name: String::new(),
+            fields: redo
+                .fields
+                .iter()
+                .map(|(name, _typ)| {
+                    crate::core::types::IndexField::new(
+                        name.clone(),
+                        crate::core::Value::String(String::new()),
+                        true,
+                    )
+                })
+                .collect(),
+            properties: redo.properties.clone(),
+            index_type: crate::core::types::IndexType::TagIndex,
+            is_unique: redo.is_unique,
+            partial_condition: None,
+        });
+        match self
+            .index_metadata_manager()
+            .create_tag_index(redo.space_id, &index)
+        {
+            Ok(_) => {}
+            Err(e) => log::warn!("create_tag_index replay: {}", e),
+        }
+        let data_mgr = self.index_data_manager().write();
+        let _ = data_mgr.register_native_index(redo.space_id, &index);
+        Ok(())
+    }
+
+    fn replay_drop_tag_index(
+        &self,
+        redo: &DropTagIndexRedo,
+        _ts: Timestamp,
+    ) -> StorageResult<()> {
+        let _ = self
+            .index_metadata_manager()
+            .drop_tag_index(redo.space_id, &redo.index_name);
+        let data_mgr = self.index_data_manager().write();
+        let _ = data_mgr.clear_tag_index(redo.space_id, &redo.index_name);
+        data_mgr.unregister_native_index(redo.space_id, &redo.index_name);
+        Ok(())
+    }
+
+    fn replay_create_edge_index(
+        &self,
+        redo: &CreateEdgeIndexRedo,
+        _ts: Timestamp,
+    ) -> StorageResult<()> {
+        let index = Index::new(crate::core::types::IndexConfig {
+            id: 0,
+            name: redo.index_name.clone(),
+            space_id: redo.space_id,
+            schema_name: String::new(),
+            fields: redo
+                .fields
+                .iter()
+                .map(|(name, _typ)| {
+                    crate::core::types::IndexField::new(
+                        name.clone(),
+                        crate::core::Value::String(String::new()),
+                        true,
+                    )
+                })
+                .collect(),
+            properties: redo.properties.clone(),
+            index_type: crate::core::types::IndexType::EdgeIndex,
+            is_unique: redo.is_unique,
+            partial_condition: None,
+        });
+        match self
+            .index_metadata_manager()
+            .create_edge_index(redo.space_id, &index)
+        {
+            Ok(_) => {}
+            Err(e) => log::warn!("create_edge_index replay: {}", e),
+        }
+        let data_mgr = self.index_data_manager().write();
+        let _ = data_mgr.register_native_index(redo.space_id, &index);
+        Ok(())
+    }
+
+    fn replay_drop_edge_index(
+        &self,
+        redo: &DropEdgeIndexRedo,
+        _ts: Timestamp,
+    ) -> StorageResult<()> {
+        let _ = self
+            .index_metadata_manager()
+            .drop_edge_index(redo.space_id, &redo.index_name);
+        let data_mgr = self.index_data_manager().write();
+        let _ = data_mgr.clear_edge_index(redo.space_id, &redo.index_name);
+        data_mgr.unregister_native_index(redo.space_id, &redo.index_name);
         Ok(())
     }
 }

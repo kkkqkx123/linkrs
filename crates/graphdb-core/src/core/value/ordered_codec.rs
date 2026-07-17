@@ -150,12 +150,9 @@ impl OrderedCodec {
             }
             TAG_STRING | TAG_BLOB => {
                 // Terminator-based: scan for 0x00 byte (the terminator).
-                let term_rel = bytes[1..]
-                    .iter()
-                    .position(|b| *b == 0)
-                    .ok_or_else(|| {
-                        StorageError::deserialize_error("missing string/blob terminator")
-                    })?;
+                let term_rel = bytes[1..].iter().position(|b| *b == 0).ok_or_else(|| {
+                    StorageError::deserialize_error("missing string/blob terminator")
+                })?;
                 let term_abs = 1 + term_rel;
                 let data = bytes[1..term_abs].to_vec();
                 let end = term_abs + 1;
@@ -380,10 +377,17 @@ impl OrderedCodec {
     pub fn prefix_bounds(&self, value: &Value) -> Result<(Vec<u8>, Vec<u8>), StorageError> {
         match value {
             // Fixed-length types: simple upper bound from the encoded form.
-            Value::Null(_) | Value::Empty | Value::Bool(_)
-            | Value::SmallInt(_) | Value::Int(_) | Value::BigInt(_)
-            | Value::Float(_) | Value::Double(_)
-            | Value::Date(_) | Value::Time(_) | Value::DateTime(_)
+            Value::Null(_)
+            | Value::Empty
+            | Value::Bool(_)
+            | Value::SmallInt(_)
+            | Value::Int(_)
+            | Value::BigInt(_)
+            | Value::Float(_)
+            | Value::Double(_)
+            | Value::Date(_)
+            | Value::Time(_)
+            | Value::DateTime(_)
             | Value::Uuid(_) => {
                 let lower = self.encode(value)?;
                 let upper = Self::prefix_upper_bound(&lower);
@@ -754,7 +758,10 @@ mod tests {
     fn test_string_order_aa_less_than_b() {
         let aa = codec().encode(&Value::String("aa".to_string())).unwrap();
         let b = codec().encode(&Value::String("b".to_string())).unwrap();
-        assert!(aa < b, "encoded('aa') < encoded('b') must hold for semantic ordering");
+        assert!(
+            aa < b,
+            "encoded('aa') < encoded('b') must hold for semantic ordering"
+        );
     }
 
     #[test]
@@ -808,16 +815,8 @@ mod tests {
         for suffix in &["", "a", "aa", "az"] {
             let s_val = format!("a{}", suffix);
             let enc = codec().encode(&Value::String(s_val.clone())).unwrap();
-            assert!(
-                enc.as_slice() >= lower.as_slice(),
-                "{:?} >= lower",
-                s_val
-            );
-            assert!(
-                enc.as_slice() < upper.as_slice(),
-                "{:?} < upper",
-                s_val
-            );
+            assert!(enc.as_slice() >= lower.as_slice(), "{:?} >= lower", s_val);
+            assert!(enc.as_slice() < upper.as_slice(), "{:?} < upper", s_val);
         }
 
         // "b" is excluded
@@ -852,9 +851,7 @@ mod tests {
 
     #[test]
     fn test_prefix_bounds_int() {
-        let (lower, upper) = codec()
-            .prefix_bounds(&Value::Int(42))
-            .unwrap();
+        let (lower, upper) = codec().prefix_bounds(&Value::Int(42)).unwrap();
         assert!(lower < upper);
         // No other int with bytes starting with 42 exists (fixed-length),
         // so upper should follow right after lower
@@ -878,7 +875,10 @@ mod tests {
             assert!(
                 enc_a < enc_b,
                 "ordered_codec: {:?} < {:?} should hold, but enc({:?}) >= enc({:?})",
-                a, b, a, b
+                a,
+                b,
+                a,
+                b
             );
         }
     }
@@ -894,7 +894,9 @@ mod tests {
         assert_eq!(upper, vec![TAG_BLOB, 0x02, 0x00]);
 
         // Blob starting with [0x01, 0xFF] should be within bounds
-        let test = codec().encode(&Value::Blob(vec![0x01, 0xFF, 0x01])).unwrap();
+        let test = codec()
+            .encode(&Value::Blob(vec![0x01, 0xFF, 0x01]))
+            .unwrap();
         assert!(test.as_slice() < upper.as_slice(), "0x01,0xFF,0x01 < upper");
         // Blob starting with [0x02] should be outside bounds
         let next = codec().encode(&Value::Blob(vec![0x02])).unwrap();

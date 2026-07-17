@@ -164,6 +164,7 @@ pub struct IndexScanPlan {
     pub space: String,
     pub index_id: u64,
     pub predicate: IndexPredicate,
+    pub partition: PartitionSelector,
     pub projection: Option<Vec<String>>,
     pub limit: Option<usize>,
     pub offset: usize,
