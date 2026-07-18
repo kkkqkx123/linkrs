@@ -138,7 +138,13 @@ impl PhysicalPlanMaterializer {
                 QueryError::execution(format!("Operator {:?} not found in plan arena", op_id))
             })?;
 
-            let base = OperatorBase::new(op_spec.operator_id.0 as i64);
+            let plan_node_id = op_spec
+                .logical_node_id
+                .map(|logical_id| logical_id.0)
+                .unwrap_or(op_spec.operator_id.0 as i64);
+            let base = OperatorBase::new(plan_node_id)
+                .with_physical_operator_id(op_spec.operator_id)
+                .with_output_layout(Arc::new(op_spec.output_layout.clone()));
 
             let exec = match &op_spec.spec {
                 OperatorKindSpec::Source(src_spec) => {

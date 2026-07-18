@@ -565,7 +565,7 @@ impl SourceOperator {
             Self::StorageScanVertices {
                 space_name,
                 cursor,
-                col_names,
+                col_names: _,
                 projected_properties,
                 ..
             } => loop {
@@ -594,10 +594,8 @@ impl SourceOperator {
                 };
                 if !rows.is_empty() {
                     let reservation = reserve_memory(base, &rows)?;
-                    let mut chunk = DataChunk::new_with_layout(
-                        rows,
-                        Arc::new(SlotLayout::from_names(col_names)),
-                    );
+                    let mut chunk =
+                        DataChunk::new_with_layout(rows, Arc::clone(&base.output_layout));
                     if let Some(r) = reservation {
                         chunk = chunk.with_memory_reservation(r);
                     }
@@ -609,7 +607,7 @@ impl SourceOperator {
             Self::StorageScanEdges {
                 space_name,
                 cursor,
-                col_names,
+                col_names: _,
                 ..
             } => loop {
                 base.ensure_not_cancelled()?;
@@ -626,10 +624,8 @@ impl SourceOperator {
                 let rows = batch.into_iter().map(make_edge_row).collect::<Vec<_>>();
                 if !rows.is_empty() {
                     let reservation = reserve_memory(base, &rows)?;
-                    let mut chunk = DataChunk::new_with_layout(
-                        rows,
-                        Arc::new(SlotLayout::from_names(col_names)),
-                    );
+                    let mut chunk =
+                        DataChunk::new_with_layout(rows, Arc::clone(&base.output_layout));
                     if let Some(r) = reservation {
                         chunk = chunk.with_memory_reservation(r);
                     }
@@ -642,7 +638,7 @@ impl SourceOperator {
                 storage,
                 space_name,
                 vertex_ids,
-            } => {
+            } => loop {
                 let storage_ref = storage.as_ref().ok_or_else(|| {
                     QueryError::execution("GetVertices requires storage".to_string())
                 })?;
@@ -683,15 +679,15 @@ impl SourceOperator {
                 }
                 if !rows.is_empty() {
                     let reservation = reserve_memory(base, &rows)?;
-                    let mut chunk = DataChunk::from_rows(rows);
+                    let mut chunk = DataChunk::new_with_layout(rows, base.output_layout.clone());
                     if let Some(r) = reservation {
                         chunk = chunk.with_memory_reservation(r);
                     }
                     return Ok(Some(chunk));
                 }
-                // No vertices resolved in this batch — loop back for next range
-                Ok(None)
-            }
+                // No vertices resolved in this batch — consume later ranges
+                // before reporting the source as exhausted.
+            },
             Self::GetEdges {
                 space_name, cursor, ..
             } => {
@@ -708,7 +704,7 @@ impl SourceOperator {
                 let rows = batch.into_iter().map(make_edge_row).collect::<Vec<_>>();
                 if !rows.is_empty() {
                     let reservation = reserve_memory(base, &rows)?;
-                    let mut chunk = DataChunk::from_rows(rows);
+                    let mut chunk = DataChunk::new_with_layout(rows, base.output_layout.clone());
                     if let Some(r) = reservation {
                         chunk = chunk.with_memory_reservation(r);
                     }
@@ -829,7 +825,8 @@ impl SourceOperator {
                             *position = end;
                             if !rows.is_empty() {
                                 let reservation = reserve_memory(base, &rows)?;
-                                let mut chunk = DataChunk::from_rows(rows);
+                                let mut chunk =
+                                    DataChunk::new_with_layout(rows, base.output_layout.clone());
                                 if let Some(r) = reservation {
                                     chunk = chunk.with_memory_reservation(r);
                                 }
@@ -899,8 +896,8 @@ impl SourceOperator {
                     return Ok(None);
                 }
                 *emitted = true;
-                let layout = Arc::new(SlotLayout::from_names(&[]));
-                let chunk = DataChunk::new_with_layout(vec![Vec::new()], layout);
+                let chunk =
+                    DataChunk::new_with_layout(vec![Vec::new()], Arc::clone(&base.output_layout));
                 Ok(Some(chunk))
             }
             Self::Argument => {
@@ -910,7 +907,9 @@ impl SourceOperator {
                 let frame = rt.take_correlation_frame();
                 match frame {
                     Some((layout, row)) => {
-                        let chunk = DataChunk::new_with_layout(vec![row], layout);
+                        let _ = layout;
+                        let chunk =
+                            DataChunk::new_with_layout(vec![row], Arc::clone(&base.output_layout));
                         Ok(Some(chunk))
                     }
                     None => Ok(None),
@@ -1122,7 +1121,12 @@ fn next_buffer_chunk(
     let rows = buffer[*current_index..end].to_vec();
     *current_index = end;
     let reservation = reserve_memory(base, &rows)?;
-    let mut chunk = DataChunk::new_with_layout(rows, Arc::new(SlotLayout::from_names(col_names)));
+    let layout = if col_names.is_empty() {
+        Arc::clone(&base.output_layout)
+    } else {
+        Arc::new(SlotLayout::from_names(col_names))
+    };
+    let mut chunk = DataChunk::new_with_layout(rows, layout);
     if let Some(reservation) = reservation {
         chunk = chunk.with_memory_reservation(reservation);
     }

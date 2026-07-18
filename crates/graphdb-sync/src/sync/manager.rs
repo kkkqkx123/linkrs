@@ -231,17 +231,22 @@ impl SyncManager {
                     }
                     Ok(None) => {}
                     Err(e) => {
-                        log::warn!("Outbox recovery attempted but failed: {}. Starting fresh.", e);
+                        log::warn!(
+                            "Outbox recovery attempted but failed: {}. Starting fresh.",
+                            e
+                        );
                     }
                 }
             }
         }
 
-        let open_outbox = || self.execute_sync(|| async {
-            SqliteOutbox::open(&sqlite_path)
-                .await
-                .map_err(SyncError::PersistenceError)
-        });
+        let open_outbox = || {
+            self.execute_sync(|| async {
+                SqliteOutbox::open(&sqlite_path)
+                    .await
+                    .map_err(SyncError::PersistenceError)
+            })
+        };
         let outbox = match open_outbox() {
             Ok(outbox) => outbox,
             Err(error) if snapshot_dir.is_dir() => {
@@ -818,7 +823,9 @@ impl SyncManager {
     /// Return durable outbox delivery and index-generation diagnostics.
     pub fn sync_diagnostics(&self) -> Result<crate::sync::SyncDiagnostics, SyncError> {
         let Some(outbox) = &self.sqlite_outbox else {
-            return Err(SyncError::PersistenceError("SQLite outbox is not configured".to_string()));
+            return Err(SyncError::PersistenceError(
+                "SQLite outbox is not configured".to_string(),
+            ));
         };
         self.execute_sync(|| async {
             outbox
@@ -855,7 +862,9 @@ impl SyncManager {
         timeout_ms: u64,
     ) -> Result<bool, SyncError> {
         let Some(outbox) = &self.sqlite_outbox else {
-            return Err(SyncError::PersistenceError("SQLite outbox is not configured".to_string()));
+            return Err(SyncError::PersistenceError(
+                "SQLite outbox is not configured".to_string(),
+            ));
         };
         self.execute_sync(|| async {
             outbox
@@ -1147,10 +1156,7 @@ fn event_to_intent(
             EntityRef::Vertex(VertexId::from_int64(0)),
             IndexOperation::Upsert,
         ),
-        OutboxPayload::DropIndex {
-            index_name,
-            ..
-        } => (
+        OutboxPayload::DropIndex { index_name, .. } => (
             index_name.as_str(),
             EntityRef::Vertex(VertexId::from_int64(0)),
             IndexOperation::Delete,

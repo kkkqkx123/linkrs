@@ -13,14 +13,25 @@ use super::super::operators::spec::{
     ApplySpec, BlockingSpec, DdlSpec, ExchangeSpec, FulltextSpec, GraphSpec, JoinSpec,
     RecursiveFragmentSpec, SetSpec, SinkSpec, SourceSpec, TxnSpec, UnarySpec, VectorSpec,
 };
-use super::super::slot::SlotLayout;
+use super::super::slot::{combine_layouts, SlotLayout};
 use super::context::PhysicalPlanBuildContext;
 use super::node::PhysicalNode;
 use super::properties::{PhysicalProperties, PipelineKind};
+
+/// Allowed call-sites for `PhysicalNode` construction and materialization.
+/// Phase A audit: any production path hitting PhysicalNode outside this list
+/// must be treated as a bug.
+#[cfg(debug_assertions)]
+const PHYSICAL_NODE_ALLOWED_SITES: &[&str] = &[
+    "arena_builder.rs",       // from_physical_node conversion (legacy IR)
+    "node.rs",                // definition + materialize
+    // operator_plan_builder/*.rs — these construct PhysicalNode trees
+    // Tests are always allowed.
+];
 use super::types::{
-    CapabilitySet, FragmentGraph, FragmentId, FragmentKind, FragmentSpec, LogicalNodeId,
-    OperatorKindSpec, OutputContract, PhysicalOperatorId, PhysicalOperatorIdAllocator,
-    PhysicalOperatorSpec, PhysicalPlan, PlanCompatibility,
+    CapabilitySet, FragmentGraph, FragmentId, FragmentKind, FragmentSpec, InputContract,
+    LogicalNodeId, OperatorKindSpec, OutputContract, PhysicalOperatorId,
+    PhysicalOperatorIdAllocator, PhysicalOperatorSpec, PhysicalPlan, PlanCompatibility,
 };
 use crate::query::executor::base::ExecutionContext;
 use crate::query::executor::build_error::PlanBuildError;
@@ -85,16 +96,19 @@ impl PhysicalPlanBuilder {
             &mut frag_alloc,
         )?;
 
+        Self::propagate_layouts(&mut operators, &fragments)?;
+
         let output = operators
             .iter()
             .find(|op| op.operator_id == root_op_id)
-            .map(|op| Self::output_contract(&op.spec))
+            .map(|op| Self::output_contract(&op.spec, op.output_layout.clone()))
             .unwrap_or_else(|| OutputContract {
                 output_layout: super::super::slot::SlotLayout::new(vec![]),
                 always_produces_row: false,
                 nullability: Vec::new(),
                 ordering: Vec::new(),
-                streamable: true,
+                delivery_streamable: true,
+                pipeline_mode: super::types::PipelineMode::Pipelined,
             });
 
         let plan = PhysicalPlan {
@@ -137,9 +151,11 @@ impl PhysicalPlanBuilder {
                     operator_id: op_id,
                     logical_node_id: Some(LogicalNodeId(*id)),
                     spec: OperatorKindSpec::Source(spec.clone()),
+                    input_contract: InputContract::NoInput,
                     input_layout: None,
                     output_layout,
                     properties: Self::convert_properties(props),
+                    state_ownership: super::types::StateOwnership::TreeLocal,
                     estimated_cardinality: None,
                     explain_name: source_explain_name(spec),
                 });
@@ -166,9 +182,11 @@ impl PhysicalPlanBuilder {
                     operator_id: op_id,
                     logical_node_id: Some(LogicalNodeId(*id)),
                     spec: OperatorKindSpec::Unary(spec.clone()),
+                    input_contract: InputContract::NoInput,
                     input_layout: None,
                     output_layout: SlotLayout::new(vec![]),
                     properties: Self::convert_properties(props),
+                    state_ownership: super::types::StateOwnership::TreeLocal,
                     estimated_cardinality: None,
                     explain_name: unary_explain_name(spec),
                 });
@@ -191,9 +209,11 @@ impl PhysicalPlanBuilder {
                     operator_id: op_id,
                     logical_node_id: Some(LogicalNodeId(*id)),
                     spec: OperatorKindSpec::Blocking(spec.clone()),
+                    input_contract: InputContract::NoInput,
                     input_layout: None,
                     output_layout: SlotLayout::new(vec![]),
                     properties: Self::convert_properties(props),
+                    state_ownership: super::types::StateOwnership::TreeLocal,
                     estimated_cardinality: None,
                     explain_name: blocking_explain_name(spec),
                 });
@@ -219,9 +239,11 @@ impl PhysicalPlanBuilder {
                     operator_id: op_id,
                     logical_node_id: Some(LogicalNodeId(*id)),
                     spec: OperatorKindSpec::Join(spec.clone()),
+                    input_contract: InputContract::NoInput,
                     input_layout: None,
                     output_layout: SlotLayout::new(vec![]),
                     properties: Self::convert_properties(props),
+                    state_ownership: super::types::StateOwnership::TreeLocal,
                     estimated_cardinality: None,
                     explain_name: join_explain_name(spec),
                 });
@@ -249,9 +271,11 @@ impl PhysicalPlanBuilder {
                     operator_id: op_id,
                     logical_node_id: Some(LogicalNodeId(*id)),
                     spec: OperatorKindSpec::Graph(spec.clone()),
+                    input_contract: InputContract::NoInput,
                     input_layout: None,
                     output_layout: SlotLayout::new(vec![]),
                     properties: Self::convert_properties(props),
+                    state_ownership: super::types::StateOwnership::TreeLocal,
                     estimated_cardinality: None,
                     explain_name: graph_explain_name(spec),
                 });
@@ -279,9 +303,11 @@ impl PhysicalPlanBuilder {
                     operator_id: op_id,
                     logical_node_id: Some(LogicalNodeId(*id)),
                     spec: OperatorKindSpec::RecursiveFragment(spec.clone()),
+                    input_contract: InputContract::NoInput,
                     input_layout: None,
                     output_layout: SlotLayout::new(vec![]),
                     properties: Self::convert_properties(props),
+                    state_ownership: super::types::StateOwnership::TreeLocal,
                     estimated_cardinality: None,
                     explain_name: recursive_fragment_explain_name(spec),
                 });
@@ -309,9 +335,11 @@ impl PhysicalPlanBuilder {
                     operator_id: op_id,
                     logical_node_id: Some(LogicalNodeId(*id)),
                     spec: OperatorKindSpec::Sink(spec.clone()),
+                    input_contract: InputContract::NoInput,
                     input_layout: None,
                     output_layout: SlotLayout::new(vec![]),
                     properties: Self::convert_properties(props),
+                    state_ownership: super::types::StateOwnership::TreeLocal,
                     estimated_cardinality: None,
                     explain_name: sink_explain_name(spec),
                 });
@@ -341,9 +369,11 @@ impl PhysicalPlanBuilder {
                     operator_id: op_id,
                     logical_node_id: Some(LogicalNodeId(*id)),
                     spec: OperatorKindSpec::Set(spec.clone()),
+                    input_contract: InputContract::NoInput,
                     input_layout: None,
                     output_layout: SlotLayout::new(vec![]),
                     properties: Self::convert_properties(props),
+                    state_ownership: super::types::StateOwnership::TreeLocal,
                     estimated_cardinality: None,
                     explain_name: set_explain_name(spec),
                 });
@@ -373,9 +403,11 @@ impl PhysicalPlanBuilder {
                     operator_id: op_id,
                     logical_node_id: Some(LogicalNodeId(*id)),
                     spec: OperatorKindSpec::Apply(spec.clone()),
+                    input_contract: InputContract::NoInput,
                     input_layout: None,
                     output_layout: SlotLayout::new(vec![]),
                     properties: Self::convert_properties(props),
+                    state_ownership: super::types::StateOwnership::TreeLocal,
                     estimated_cardinality: None,
                     explain_name: apply_explain_name(spec),
                 });
@@ -407,9 +439,11 @@ impl PhysicalPlanBuilder {
                     operator_id: op_id,
                     logical_node_id: Some(LogicalNodeId(*id)),
                     spec: OperatorKindSpec::Exchange(spec.clone()),
+                    input_contract: InputContract::NoInput,
                     input_layout: None,
                     output_layout: SlotLayout::new(vec![]),
                     properties: Self::convert_properties(props),
+                    state_ownership: super::types::StateOwnership::TreeLocal,
                     estimated_cardinality: None,
                     explain_name: exchange_explain_name(spec),
                 });
@@ -437,9 +471,11 @@ impl PhysicalPlanBuilder {
                     operator_id: op_id,
                     logical_node_id: Some(LogicalNodeId(*id)),
                     spec: OperatorKindSpec::Ddl(spec.clone()),
+                    input_contract: InputContract::NoInput,
                     input_layout: None,
                     output_layout: SlotLayout::new(vec![]),
                     properties: Self::convert_properties(props),
+                    state_ownership: super::types::StateOwnership::TreeLocal,
                     estimated_cardinality: None,
                     explain_name: ddl_explain_name(spec),
                 });
@@ -467,9 +503,11 @@ impl PhysicalPlanBuilder {
                     operator_id: op_id,
                     logical_node_id: Some(LogicalNodeId(*id)),
                     spec: OperatorKindSpec::Fulltext(spec.clone()),
+                    input_contract: InputContract::NoInput,
                     input_layout: None,
                     output_layout: SlotLayout::new(vec![]),
                     properties: Self::convert_properties(props),
+                    state_ownership: super::types::StateOwnership::TreeLocal,
                     estimated_cardinality: None,
                     explain_name: fulltext_explain_name(spec),
                 });
@@ -497,9 +535,11 @@ impl PhysicalPlanBuilder {
                     operator_id: op_id,
                     logical_node_id: Some(LogicalNodeId(*id)),
                     spec: OperatorKindSpec::Vector(spec.clone()),
+                    input_contract: InputContract::NoInput,
                     input_layout: None,
                     output_layout: SlotLayout::new(vec![]),
                     properties: Self::convert_properties(props),
+                    state_ownership: super::types::StateOwnership::TreeLocal,
                     estimated_cardinality: None,
                     explain_name: vector_explain_name(spec),
                 });
@@ -527,9 +567,11 @@ impl PhysicalPlanBuilder {
                     operator_id: op_id,
                     logical_node_id: Some(LogicalNodeId(*id)),
                     spec: OperatorKindSpec::Txn(spec.clone()),
+                    input_contract: InputContract::NoInput,
                     input_layout: None,
                     output_layout: SlotLayout::new(vec![]),
                     properties: Self::convert_properties(props),
+                    state_ownership: super::types::StateOwnership::TreeLocal,
                     estimated_cardinality: None,
                     explain_name: txn_explain_name(spec),
                 });
@@ -553,14 +595,220 @@ impl PhysicalPlanBuilder {
         props.clone()
     }
 
-    fn output_contract(_spec: &OperatorKindSpec) -> OutputContract {
+    fn output_contract(spec: &OperatorKindSpec, output_layout: SlotLayout) -> OutputContract {
         OutputContract {
-            output_layout: SlotLayout::new(vec![]),
+            output_layout,
             always_produces_row: false,
             nullability: Vec::new(),
             ordering: Vec::new(),
-            streamable: true,
+            delivery_streamable: true,
+            pipeline_mode: match spec {
+                OperatorKindSpec::Blocking(_)
+                | OperatorKindSpec::Exchange(
+                    ExchangeSpec::Barrier | ExchangeSpec::Materialize { .. },
+                ) => super::types::PipelineMode::Blocking,
+                _ => super::types::PipelineMode::Pipelined,
+            },
         }
+    }
+
+    /// Populate every arena operator's input and output layout after the
+    /// fragment graph is assembled.  This keeps schema an immutable plan
+    /// property instead of allowing executors to infer it from their first
+    /// non-empty chunk.
+    fn propagate_layouts(
+        operators: &mut [PhysicalOperatorSpec],
+        fragments: &[FragmentSpec],
+    ) -> Result<(), PlanBuildError> {
+        let mut layouts: HashMap<PhysicalOperatorId, SlotLayout> = operators
+            .iter()
+            .filter_map(|operator| match &operator.spec {
+                OperatorKindSpec::Source(spec) => {
+                    Some((operator.operator_id, source_output_layout(spec)))
+                }
+                _ => None,
+            })
+            .collect();
+
+        for fragment in fragments {
+            let fragment_inputs = fragment
+                .inputs
+                .iter()
+                .map(|input_id| {
+                    let root = fragments.get(input_id.0).ok_or_else(|| {
+                        PlanBuildError::unsupported("PhysicalPlan", 0, "input fragment not found")
+                    })?;
+                    layouts.get(&root.root_operator).cloned().ok_or_else(|| {
+                        PlanBuildError::unsupported("PhysicalPlan", 0, "input layout not available")
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut previous = None;
+
+            for operator_id in &fragment.operators {
+                let operator = operators.get_mut(operator_id.0).ok_or_else(|| {
+                    PlanBuildError::unsupported("PhysicalPlan", 0, "operator not found")
+                })?;
+                let input_layouts = previous
+                    .clone()
+                    .map(|layout| vec![layout])
+                    .unwrap_or_else(|| fragment_inputs.clone());
+                operator.input_layout = input_layouts.first().cloned();
+                let output_layout = infer_output_layout(&operator.spec, &input_layouts);
+                operator.output_layout = output_layout.clone();
+                layouts.insert(*operator_id, output_layout.clone());
+                previous = Some(output_layout);
+            }
+        }
+        Ok(())
+    }
+}
+
+fn input_layout(inputs: &[SlotLayout]) -> SlotLayout {
+    inputs
+        .first()
+        .cloned()
+        .unwrap_or_else(|| SlotLayout::new(Vec::new()))
+}
+
+fn layout_with_added_names(
+    input: &SlotLayout,
+    names: impl IntoIterator<Item = String>,
+) -> SlotLayout {
+    let mut all_names = input.names();
+    all_names.extend(names);
+    SlotLayout::from_names(&all_names)
+}
+
+fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]) -> SlotLayout {
+    let input = input_layout(inputs);
+    match spec {
+        OperatorKindSpec::Source(spec) => source_output_layout(spec),
+        OperatorKindSpec::Unary(UnarySpec::Project {
+            output_col_names, ..
+        }) => SlotLayout::from_names(output_col_names),
+        OperatorKindSpec::Unary(UnarySpec::Assign { assignments }) => {
+            layout_with_added_names(&input, assignments.iter().map(|(name, _)| name.clone()))
+        }
+        OperatorKindSpec::Unary(UnarySpec::Remove { columns_to_remove }) => {
+            let names = input
+                .names()
+                .into_iter()
+                .filter(|name| !columns_to_remove.contains(name))
+                .collect::<Vec<_>>();
+            SlotLayout::from_names(&names)
+        }
+        OperatorKindSpec::Unary(UnarySpec::AppendVertices { vertex_properties }) => {
+            layout_with_added_names(
+                &input,
+                vertex_properties.iter().map(|(name, _)| name.clone()),
+            )
+        }
+        OperatorKindSpec::Blocking(
+            BlockingSpec::Aggregate {
+                output_col_names, ..
+            }
+            | BlockingSpec::PartialAggregate {
+                output_col_names, ..
+            }
+            | BlockingSpec::FinalAggregate {
+                output_col_names, ..
+            },
+        ) => SlotLayout::from_names(output_col_names),
+        OperatorKindSpec::Blocking(BlockingSpec::RollUpApply { rollup_expressions }) => {
+            layout_with_added_names(
+                &input,
+                (0..rollup_expressions.len()).map(|index| format!("rollup_{index}")),
+            )
+        }
+        OperatorKindSpec::Join(JoinSpec::SemiJoin { .. }) => input,
+        OperatorKindSpec::Join(_) => inputs
+            .get(1)
+            .map(|right| combine_layouts(&input, right))
+            .unwrap_or(input),
+        OperatorKindSpec::Apply(ApplySpec::Apply {
+            kind:
+                super::super::operators::spec::ApplyKind::Standard
+                | super::super::operators::spec::ApplyKind::Single,
+            ..
+        }) => inputs
+            .get(1)
+            .map(|right| combine_layouts(&input, right))
+            .unwrap_or(input),
+        OperatorKindSpec::Apply(ApplySpec::RollUpApply { collect_column, .. }) => {
+            layout_with_added_names(
+                &input,
+                [collect_column
+                    .clone()
+                    .unwrap_or_else(|| "rollup".to_string())],
+            )
+        }
+        OperatorKindSpec::Apply(ApplySpec::PatternApply { .. })
+        | OperatorKindSpec::Apply(ApplySpec::Apply { .. })
+        | OperatorKindSpec::Set(_)
+        | OperatorKindSpec::Exchange(_)
+        | OperatorKindSpec::Sink(_)
+        | OperatorKindSpec::Ddl(_)
+        | OperatorKindSpec::Txn(_)
+        | OperatorKindSpec::Unary(_)
+        | OperatorKindSpec::Blocking(_) => input,
+        OperatorKindSpec::Graph(GraphSpec::Expand { .. } | GraphSpec::ExpandAll { .. }) => {
+            layout_with_added_names(
+                &input,
+                [
+                    "_expand_edge_type".to_string(),
+                    "_expand_direction".to_string(),
+                ],
+            )
+        }
+        OperatorKindSpec::Graph(GraphSpec::Traverse { .. }) => layout_with_added_names(
+            &input,
+            [
+                "_traverse_edge_type".to_string(),
+                "_traverse_direction".to_string(),
+                "_traverse_depth".to_string(),
+            ],
+        ),
+        OperatorKindSpec::Graph(GraphSpec::ShortestPath { .. }) => {
+            layout_with_added_names(&input, ["_shortest_path".to_string()])
+        }
+        OperatorKindSpec::Graph(GraphSpec::BFSShortest { .. }) => {
+            layout_with_added_names(&input, ["_bfs_shortest".to_string()])
+        }
+        OperatorKindSpec::Graph(GraphSpec::AllPaths { .. }) => {
+            layout_with_added_names(&input, ["_all_paths".to_string()])
+        }
+        OperatorKindSpec::Graph(GraphSpec::MultiShortestPath { .. }) => {
+            layout_with_added_names(&input, ["_multi_shortest_path".to_string()])
+        }
+        OperatorKindSpec::RecursiveFragment(RecursiveFragmentSpec::ShortestPath { .. }) => {
+            layout_with_added_names(&input, ["_shortest_path".to_string()])
+        }
+        OperatorKindSpec::RecursiveFragment(RecursiveFragmentSpec::MultiShortestPath {
+            ..
+        }) => layout_with_added_names(&input, ["_multi_shortest_path".to_string()]),
+        OperatorKindSpec::RecursiveFragment(RecursiveFragmentSpec::BFSShortest { .. }) => {
+            layout_with_added_names(&input, ["_bfs_path".to_string()])
+        }
+        OperatorKindSpec::RecursiveFragment(RecursiveFragmentSpec::AllPaths { .. }) => {
+            layout_with_added_names(&input, ["_all_paths".to_string()])
+        }
+        OperatorKindSpec::Graph(GraphSpec::BiExpand { .. } | GraphSpec::BiTraverse { .. }) => input,
+        OperatorKindSpec::Fulltext(FulltextSpec::FulltextManage { .. })
+        | OperatorKindSpec::Vector(VectorSpec::VectorManage { .. }) => SlotLayout::from_names(&[
+            "action".to_string(),
+            "name".to_string(),
+            "status".to_string(),
+        ]),
+        OperatorKindSpec::Fulltext(
+            FulltextSpec::FulltextSearch { .. }
+            | FulltextSpec::FulltextLookup { .. }
+            | FulltextSpec::MatchFulltext { .. },
+        ) => SlotLayout::from_names(&["doc_id".to_string(), "score".to_string()]),
+        OperatorKindSpec::Vector(
+            VectorSpec::VectorSearch { .. } | VectorSpec::VectorMatch { .. },
+        ) => SlotLayout::from_names(&["id".to_string(), "score".to_string()]),
+        OperatorKindSpec::Vector(VectorSpec::VectorLookup { .. }) => input,
     }
 }
 
@@ -574,9 +822,9 @@ fn source_output_layout(spec: &SourceSpec) -> SlotLayout {
         SourceSpec::StorageScanVertices { col_names, .. } => SlotLayout::from_names(col_names),
         SourceSpec::ScanEdges { col_names, .. } => SlotLayout::from_names(col_names),
         SourceSpec::StorageScanEdges { col_names, .. } => SlotLayout::from_names(col_names),
-        SourceSpec::GetVertices { .. } => SlotLayout::new(vec![]),
-        SourceSpec::GetEdges { .. } => SlotLayout::new(vec![]),
-        SourceSpec::GetNeighbors { .. } => SlotLayout::new(vec![]),
+        SourceSpec::GetVertices { .. } => SlotLayout::from_names(&["vertex".to_string()]),
+        SourceSpec::GetEdges { .. } => SlotLayout::from_names(&["edge".to_string()]),
+        SourceSpec::GetNeighbors { .. } => SlotLayout::from_names(&["vertex".to_string()]),
         SourceSpec::EdgeIndexScan { .. } => SlotLayout::new(vec![]),
         SourceSpec::IndexScan { output_layout, .. } => (**output_layout).clone(),
         SourceSpec::LookupIndex { output_layout, .. } => (**output_layout).clone(),
@@ -841,5 +1089,40 @@ mod tests {
         let result =
             QueryExecutionInstance::instantiate_plan(plan_arc, bindings, ResultSink::Discard, None);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn propagates_layout_through_blocking_pipeline_and_output_contract() {
+        let source = PhysicalNode::Source(
+            1,
+            SourceSpec::ScanVertices {
+                rows: vec![vec![crate::core::Value::Int(1)]],
+                col_names: vec!["vertex_id".to_string()],
+            },
+            PhysicalProperties::single_streaming(),
+        );
+        let node = PhysicalNode::Blocking(
+            2,
+            Box::new(source),
+            BlockingSpec::Materialize,
+            PhysicalProperties::single_blocking_with_budget(),
+        );
+        let ctx = PhysicalPlanBuildContext::new();
+
+        let plan = PhysicalPlanBuilder::from_physical_node(&node, &ctx).unwrap();
+        let source = plan.operator(PhysicalOperatorId(0)).unwrap();
+        let materialize = plan.operator(PhysicalOperatorId(1)).unwrap();
+
+        assert_eq!(source.output_layout.names(), vec!["vertex_id"]);
+        assert_eq!(
+            materialize.input_layout.as_ref().unwrap().names(),
+            vec!["vertex_id"]
+        );
+        assert_eq!(materialize.output_layout.names(), vec!["vertex_id"]);
+        assert_eq!(plan.output.output_layout.names(), vec!["vertex_id"]);
+        assert_eq!(
+            plan.output.pipeline_mode,
+            super::super::types::PipelineMode::Blocking
+        );
     }
 }

@@ -11,7 +11,6 @@ use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::executor::ValueRowContext;
 use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::operators::base::OperatorLifecycle;
-use crate::query::executor::streaming::slot::{combine_layouts, SlotLayout};
 
 use super::{build_combined_names, close_common, evaluate_join_key};
 
@@ -48,7 +47,7 @@ pub(super) fn next_hash_join(
         *left_consumed = true;
     }
 
-    if let Some(left_chunk) = left.advance()? {
+    while let Some(left_chunk) = left.advance()? {
         let left_col_names = left_chunk.col_names();
         let mut result_rows = Vec::new();
 
@@ -81,21 +80,15 @@ pub(super) fn next_hash_join(
             }
         }
 
-        if result_rows.is_empty() {
-            Ok(None)
-        } else {
-            let left_layout = left_chunk.get_layout();
-            let right_layout = Arc::new(SlotLayout::from_names(&build_combined_names(
-                &[],
-                right_col_names,
-                all_right_rows.first().map(|r| r.len()).unwrap_or(0),
+        if !result_rows.is_empty() {
+            return Ok(Some(DataChunk::new_with_layout(
+                result_rows,
+                Arc::clone(&base.output_layout),
             )));
-            let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
-            Ok(Some(DataChunk::new_with_layout(result_rows, layout)))
         }
-    } else {
-        Ok(None)
     }
+
+    Ok(None)
 }
 
 pub(super) fn next_hash_left_join(
@@ -131,7 +124,7 @@ pub(super) fn next_hash_left_join(
         *left_consumed = true;
     }
 
-    if let Some(left_chunk) = left.advance()? {
+    while let Some(left_chunk) = left.advance()? {
         let left_col_names = left_chunk.col_names();
         let mut result_rows = Vec::new();
 
@@ -172,37 +165,32 @@ pub(super) fn next_hash_left_join(
                 }
             } else {
                 let mut unmatched_row = left_row.clone();
-                for _ in 0..all_right_rows.first().map(|r| r.len()).unwrap_or(0) {
+                let right_width = base
+                    .output_layout
+                    .len()
+                    .checked_sub(left_row.len())
+                    .ok_or_else(|| {
+                        QueryError::execution(
+                            "HashLeftJoin planned output layout is narrower than its left input"
+                                .to_string(),
+                        )
+                    })?;
+                for _ in 0..right_width {
                     unmatched_row.push(Value::Null(crate::core::value::NullType::Null));
                 }
                 result_rows.push(unmatched_row);
             }
         }
 
-        if result_rows.is_empty() {
-            Ok(None)
-        } else {
-            let left_layout = left_chunk.get_layout();
-            let right_layout = if right_col_names.is_empty() {
-                Arc::new(SlotLayout::from_names(
-                    &all_right_rows
-                        .first()
-                        .map(|r| {
-                            (0..r.len())
-                                .map(|i| format!("right_{}", i))
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default(),
-                ))
-            } else {
-                Arc::new(SlotLayout::from_names(right_col_names))
-            };
-            let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
-            Ok(Some(DataChunk::new_with_layout(result_rows, layout)))
+        if !result_rows.is_empty() {
+            return Ok(Some(DataChunk::new_with_layout(
+                result_rows,
+                Arc::clone(&base.output_layout),
+            )));
         }
-    } else {
-        Ok(None)
     }
+
+    Ok(None)
 }
 
 pub(super) fn close(
@@ -210,8 +198,6 @@ pub(super) fn close(
     memory_tracker: &mut MemoryTracker,
     build_side_hash: &mut HashMap<Vec<Value>, Vec<Vec<Value>>>,
     all_right_rows: &mut Vec<Vec<Value>>,
-    left: &mut StreamingExecutor,
-    right: &mut StreamingExecutor,
 ) -> Result<(), QueryError> {
     close_common(
         lifecycle,
@@ -220,7 +206,5 @@ pub(super) fn close(
             build_side_hash.clear();
             all_right_rows.clear();
         },
-        left,
-        right,
     )
 }

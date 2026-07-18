@@ -26,19 +26,21 @@ pub(super) fn handle(
     }
 
     let cancel_token = base.runtime.as_ref().map(|rt| rt.cancel_token());
-    let chunk = input.advance()?;
-    if let Some(chunk) = chunk {
+    while let Some(chunk) = input.advance()? {
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
-            common::expand_on_chunk(
+            if let Some(output) = common::expand_on_chunk(
                 chunk,
+                Arc::clone(&base.output_layout),
                 &*reader,
                 space_name,
                 edge_types,
                 direction,
                 filter_expr,
-                cancel_token,
-            )
+                cancel_token.clone(),
+            )? {
+                return Ok(Some(output));
+            }
         } else {
             let mut new_cols: Vec<ColumnInfo> = chunk
                 .schema
@@ -69,11 +71,15 @@ pub(super) fn handle(
                 .map(|c| c.name.clone())
                 .collect::<Vec<_>>();
             rows.retain(|row| common::row_passes_filter(row, &out_col_names, filter_expr));
-            Ok(Some(DataChunk::new(rows, schema)))
+            if !rows.is_empty() {
+                return Ok(Some(DataChunk::new_with_layout(
+                    rows,
+                    Arc::clone(&base.output_layout),
+                )));
+            }
         }
-    } else {
-        Ok(None)
     }
+    Ok(None)
 }
 
 pub(super) fn handle_all(
@@ -90,19 +96,21 @@ pub(super) fn handle_all(
     }
 
     let cancel_token = base.runtime.as_ref().map(|rt| rt.cancel_token());
-    let chunk = input.advance()?;
-    if let Some(chunk) = chunk {
+    while let Some(chunk) = input.advance()? {
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
-            common::expand_on_chunk(
+            if let Some(output) = common::expand_on_chunk(
                 chunk,
+                Arc::clone(&base.output_layout),
                 &*reader,
                 space_name,
                 edge_types,
                 direction,
                 filter_expr,
-                cancel_token,
-            )
+                cancel_token.clone(),
+            )? {
+                return Ok(Some(output));
+            }
         } else {
             let mut new_cols: Vec<ColumnInfo> = chunk
                 .schema
@@ -127,9 +135,13 @@ pub(super) fn handle_all(
                 row.push(Value::String(edge_types.join("/")));
                 row.push(Value::String(format!("{:?}", direction).to_lowercase()));
             }
-            Ok(Some(DataChunk::new(rows, schema)))
+            if !rows.is_empty() {
+                return Ok(Some(DataChunk::new_with_layout(
+                    rows,
+                    Arc::clone(&base.output_layout),
+                )));
+            }
         }
-    } else {
-        Ok(None)
     }
+    Ok(None)
 }

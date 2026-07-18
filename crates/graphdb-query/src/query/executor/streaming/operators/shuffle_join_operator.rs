@@ -8,7 +8,7 @@ use crate::query::executor::base::MemoryTracker;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::join_helpers::{
-    build_combined_layout_from_schemas, evaluate_join_key, evaluate_residual_condition,
+    evaluate_join_key, evaluate_residual_condition,
 };
 use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::slot::SlotLayout;
@@ -190,7 +190,9 @@ impl HashShuffleJoinOperator {
                         self.phase = ShufflePhase::Exhausted;
                         return Ok(None);
                     }
-                    if let Some(chunk) = self.process_bucket_chunked(current)? {
+                    if let Some(chunk) =
+                        self.process_bucket_chunked(current, &base.output_layout)?
+                    {
                         return Ok(Some(chunk));
                     }
                     self.release_bucket(current);
@@ -214,6 +216,7 @@ impl HashShuffleJoinOperator {
     fn process_bucket_chunked(
         &mut self,
         bucket_idx: usize,
+        output_layout: &Arc<SlotLayout>,
     ) -> Result<Option<DataChunk>, QueryError> {
         let bucket = &mut self.buckets[bucket_idx];
 
@@ -227,7 +230,14 @@ impl HashShuffleJoinOperator {
             bucket.right_hash = Some(hash);
         }
 
-        let right_width = self.right_schema.len();
+        let right_width = output_layout
+            .len()
+            .checked_sub(self.left_schema.len())
+            .ok_or_else(|| {
+                QueryError::execution(
+                    "HashShuffleJoin output layout is narrower than its left input".to_string(),
+                )
+            })?;
         let mut chunk_rows = Vec::with_capacity(CHUNK_SIZE);
 
         while bucket.current_left_index < bucket.left_rows.len() {
@@ -248,12 +258,11 @@ impl HashShuffleJoinOperator {
                         joined.extend(right_row.clone());
                         chunk_rows.push(joined);
                         if chunk_rows.len() >= CHUNK_SIZE {
-                            let layout = build_combined_layout_from_schemas(
-                                &self.left_schema,
-                                &self.right_schema,
-                            );
                             bucket.current_right_index += 1;
-                            return Ok(Some(DataChunk::new_with_layout(chunk_rows, layout)));
+                            return Ok(Some(DataChunk::new_with_layout(
+                                chunk_rows,
+                                Arc::clone(output_layout),
+                            )));
                         }
                     }
                     bucket.current_right_index += 1;
@@ -267,13 +276,12 @@ impl HashShuffleJoinOperator {
                     ]);
                     chunk_rows.push(joined);
                     if chunk_rows.len() >= CHUNK_SIZE {
-                        let layout = build_combined_layout_from_schemas(
-                            &self.left_schema,
-                            &self.right_schema,
-                        );
                         bucket.current_left_index += 1;
                         bucket.current_right_index = 0;
-                        return Ok(Some(DataChunk::new_with_layout(chunk_rows, layout)));
+                        return Ok(Some(DataChunk::new_with_layout(
+                            chunk_rows,
+                            Arc::clone(output_layout),
+                        )));
                     }
                 }
                 bucket.current_right_index = 0;
@@ -296,12 +304,11 @@ impl HashShuffleJoinOperator {
                             joined.extend(right_row.clone());
                             chunk_rows.push(joined);
                             if chunk_rows.len() >= CHUNK_SIZE {
-                                let layout = build_combined_layout_from_schemas(
-                                    &self.left_schema,
-                                    &self.right_schema,
-                                );
                                 bucket.current_match_offset = Some(i + 1);
-                                return Ok(Some(DataChunk::new_with_layout(chunk_rows, layout)));
+                                return Ok(Some(DataChunk::new_with_layout(
+                                    chunk_rows,
+                                    Arc::clone(output_layout),
+                                )));
                             }
                         }
                     }
@@ -315,12 +322,11 @@ impl HashShuffleJoinOperator {
                     ]);
                     chunk_rows.push(joined);
                     if chunk_rows.len() >= CHUNK_SIZE {
-                        let layout = build_combined_layout_from_schemas(
-                            &self.left_schema,
-                            &self.right_schema,
-                        );
                         bucket.current_left_index += 1;
-                        return Ok(Some(DataChunk::new_with_layout(chunk_rows, layout)));
+                        return Ok(Some(DataChunk::new_with_layout(
+                            chunk_rows,
+                            Arc::clone(output_layout),
+                        )));
                     }
                 }
             } else if self.join_kind == HashJoinKind::Left {
@@ -331,10 +337,11 @@ impl HashShuffleJoinOperator {
                 ]);
                 chunk_rows.push(joined);
                 if chunk_rows.len() >= CHUNK_SIZE {
-                    let layout =
-                        build_combined_layout_from_schemas(&self.left_schema, &self.right_schema);
                     bucket.current_left_index += 1;
-                    return Ok(Some(DataChunk::new_with_layout(chunk_rows, layout)));
+                    return Ok(Some(DataChunk::new_with_layout(
+                        chunk_rows,
+                        Arc::clone(output_layout),
+                    )));
                 }
             }
 
@@ -344,8 +351,10 @@ impl HashShuffleJoinOperator {
         if chunk_rows.is_empty() {
             Ok(None)
         } else {
-            let layout = build_combined_layout_from_schemas(&self.left_schema, &self.right_schema);
-            Ok(Some(DataChunk::new_with_layout(chunk_rows, layout)))
+            Ok(Some(DataChunk::new_with_layout(
+                chunk_rows,
+                Arc::clone(output_layout),
+            )))
         }
     }
 
@@ -370,54 +379,25 @@ impl HashShuffleJoinOperator {
 
     pub fn stop(
         &mut self,
-        _base: &mut OperatorBase,
-        left_trees: &mut [StreamingExecutor],
-        right_trees: &mut [StreamingExecutor],
+        base: &mut OperatorBase,
+        _left_trees: &mut [StreamingExecutor],
+        _right_trees: &mut [StreamingExecutor],
     ) -> Result<(), QueryError> {
-        let mut first_error = None;
-        for tree in left_trees.iter_mut() {
-            if let Err(e) = tree.stop() {
-                if first_error.is_none() {
-                    first_error = Some(e);
-                }
-            }
-        }
-        for tree in right_trees.iter_mut() {
-            if let Err(e) = tree.stop() {
-                if first_error.is_none() {
-                    first_error = Some(e);
-                }
-            }
-        }
-        first_error.map_or(Ok(()), Err)
+        base.lifecycle.mark_stopped();
+        Ok(())
     }
 
     pub fn close(
         &mut self,
         base: &mut OperatorBase,
-        left_trees: &mut [StreamingExecutor],
-        right_trees: &mut [StreamingExecutor],
+        _left_trees: &mut [StreamingExecutor],
+        _right_trees: &mut [StreamingExecutor],
     ) -> Result<(), QueryError> {
         if base.lifecycle.can_close() {
             self.memory_tracker.reset();
             self.buckets.clear();
-            let mut first_error = None;
-            for tree in left_trees.iter_mut() {
-                if let Err(e) = tree.close() {
-                    if first_error.is_none() {
-                        first_error = Some(e);
-                    }
-                }
-            }
-            for tree in right_trees.iter_mut() {
-                if let Err(e) = tree.close() {
-                    if first_error.is_none() {
-                        first_error = Some(e);
-                    }
-                }
-            }
             base.lifecycle.mark_closed();
-            first_error.map_or(Ok(()), Err)
+            Ok(())
         } else {
             Ok(())
         }

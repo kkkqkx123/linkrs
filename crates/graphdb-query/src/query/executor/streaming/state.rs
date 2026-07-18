@@ -65,14 +65,19 @@ pub enum LocalState {
 
 // ── Index key types ─────────────────────────────────────────────────────────
 
-/// Key for indexing global state: the physical operator ID.
+/// Key for indexing global state: the physical operator ID and partition.
+/// `None` identifies global or non-partitioned state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct GlobalStateKey(pub crate::query::executor::streaming::plan::types::PhysicalOperatorId);
+pub struct GlobalStateKey(
+    pub crate::query::executor::streaming::plan::types::PhysicalOperatorId,
+    pub Option<usize>,
+);
 
-/// Key for indexing local state: operator ID + task (partition) ID.
+/// Key for indexing local state: operator ID + partition ID + task ID.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LocalStateKey(
     pub crate::query::executor::streaming::plan::types::PhysicalOperatorId,
+    pub Option<usize>,
     pub TaskId,
 );
 

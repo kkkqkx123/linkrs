@@ -60,20 +60,12 @@ fn close_common(
     lifecycle: &mut OperatorLifecycle,
     memory_tracker: &mut MemoryTracker,
     clear: impl FnOnce(),
-    left: &mut StreamingExecutor,
-    right: &mut StreamingExecutor,
 ) -> Result<(), QueryError> {
     if lifecycle.can_close() {
         memory_tracker.reset();
         clear();
-        let left_err = left.close().err();
-        let right_err = right.close().err();
         lifecycle.mark_closed();
-        match (left_err, right_err) {
-            (Some(e), _) => Err(e),
-            (_, Some(e)) => Err(e),
-            _ => Ok(()),
-        }
+        Ok(())
     } else {
         Ok(())
     }
@@ -477,9 +469,9 @@ impl JoinOperator {
 
     pub fn stop(
         &mut self,
-        _base: &mut OperatorBase,
-        left: &mut StreamingExecutor,
-        right: &mut StreamingExecutor,
+        base: &mut OperatorBase,
+        _left: &mut StreamingExecutor,
+        _right: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
         match self {
             Self::HashJoin { .. }
@@ -491,8 +483,8 @@ impl JoinOperator {
             | Self::FullOuterJoin { .. }
             | Self::CrossJoin { .. }
             | Self::SemiJoin { .. } => {
-                left.stop()?;
-                right.stop()
+                base.lifecycle.mark_stopped();
+                Ok(())
             }
         }
     }
@@ -500,8 +492,8 @@ impl JoinOperator {
     pub fn close(
         &mut self,
         base: &mut OperatorBase,
-        left: &mut StreamingExecutor,
-        right: &mut StreamingExecutor,
+        _left: &mut StreamingExecutor,
+        _right: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
         match self {
             Self::HashJoin {
@@ -514,8 +506,6 @@ impl JoinOperator {
                 memory_tracker,
                 build_side_hash,
                 all_right_rows,
-                left,
-                right,
             ),
             Self::HashLeftJoin {
                 build_side_hash,
@@ -527,8 +517,6 @@ impl JoinOperator {
                 memory_tracker,
                 build_side_hash,
                 all_right_rows,
-                left,
-                right,
             ),
             Self::NestedLoopJoin {
                 build_side_tuples,
@@ -538,8 +526,6 @@ impl JoinOperator {
                 &mut base.lifecycle,
                 memory_tracker,
                 build_side_tuples,
-                left,
-                right,
             ),
             Self::InnerJoin {
                 build_side_tuples,
@@ -549,8 +535,6 @@ impl JoinOperator {
                 &mut base.lifecycle,
                 memory_tracker,
                 build_side_tuples,
-                left,
-                right,
             ),
             Self::LeftJoin {
                 build_side_tuples,
@@ -560,8 +544,6 @@ impl JoinOperator {
                 &mut base.lifecycle,
                 memory_tracker,
                 build_side_tuples,
-                left,
-                right,
             ),
             Self::RightJoin {
                 build_side_tuples,
@@ -571,8 +553,6 @@ impl JoinOperator {
                 &mut base.lifecycle,
                 memory_tracker,
                 build_side_tuples,
-                left,
-                right,
             ),
             Self::FullOuterJoin {
                 left_rows,
@@ -584,8 +564,6 @@ impl JoinOperator {
                 memory_tracker,
                 left_rows,
                 right_rows,
-                left,
-                right,
             ),
             Self::CrossJoin {
                 all_left_rows,
@@ -597,8 +575,6 @@ impl JoinOperator {
                 memory_tracker,
                 all_left_rows,
                 all_right_rows,
-                left,
-                right,
             ),
             Self::SemiJoin {
                 right_rows,
@@ -608,8 +584,6 @@ impl JoinOperator {
                 &mut base.lifecycle,
                 memory_tracker,
                 right_rows,
-                left,
-                right,
             ),
         }
     }

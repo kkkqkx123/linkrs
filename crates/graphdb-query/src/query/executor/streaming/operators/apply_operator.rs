@@ -8,7 +8,7 @@ use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::join_helpers::evaluate_join_key;
 use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::operators::spec::{ApplyKind, ApplySpec};
-use crate::query::executor::streaming::slot::{combine_layouts, SlotLayout};
+use crate::query::executor::streaming::slot::SlotLayout;
 
 #[derive(Debug)]
 pub enum ApplyOperator {
@@ -106,22 +106,15 @@ impl ApplyOperator {
                 memory_tracker,
             } => {
                 materialize_right(base, right, right_rows, right_layout, memory_tracker)?;
+                let output_layout = Arc::clone(&base.output_layout);
                 let right_rows = right_rows.as_deref().unwrap_or_default();
                 let right_layout = right_layout
                     .as_ref()
                     .cloned()
-                    .unwrap_or_else(|| Arc::new(SlotLayout::from_names(&[])));
+                    .unwrap_or_else(|| Arc::new(SlotLayout::new(Vec::new())));
                 loop {
                     let Some(left_chunk) = left.advance()? else {
                         return Ok(None);
-                    };
-                    let output_layout = match kind {
-                        ApplyKind::Semi | ApplyKind::Anti | ApplyKind::All => {
-                            left_chunk.get_layout()
-                        }
-                        ApplyKind::Standard | ApplyKind::Single => {
-                            Arc::new(combine_layouts(&left_chunk.get_layout(), &right_layout))
-                        }
                     };
                     let mut output = Vec::new();
                     for left_row in left_chunk.rows {
@@ -171,7 +164,10 @@ impl ApplyOperator {
                         }
                     }
                     if !output.is_empty() {
-                        return Ok(Some(DataChunk::new_with_layout(output, output_layout)));
+                        return Ok(Some(DataChunk::new_with_layout(
+                            output,
+                            Arc::clone(&output_layout),
+                        )));
                     }
                 }
             }
@@ -183,11 +179,12 @@ impl ApplyOperator {
                 memory_tracker,
             } => {
                 materialize_right(base, right, right_rows, right_layout, memory_tracker)?;
+                let output_layout = Arc::clone(&base.output_layout);
                 let right_rows = right_rows.as_deref().unwrap_or_default();
                 let right_layout = right_layout
                     .as_ref()
                     .cloned()
-                    .unwrap_or_else(|| Arc::new(SlotLayout::from_names(&[])));
+                    .unwrap_or_else(|| Arc::new(SlotLayout::new(Vec::new())));
                 loop {
                     let Some(left_chunk) = left.advance()? else {
                         return Ok(None);
@@ -217,7 +214,10 @@ impl ApplyOperator {
                         }
                     }
                     if !output.is_empty() {
-                        return Ok(Some(DataChunk::new_with_layout(output, left_chunk.layout)));
+                        return Ok(Some(DataChunk::new_with_layout(
+                            output,
+                            Arc::clone(&output_layout),
+                        )));
                     }
                 }
             }
@@ -229,14 +229,12 @@ impl ApplyOperator {
                 memory_tracker,
             } => {
                 materialize_right(base, right, right_rows, right_layout, memory_tracker)?;
-                let Some(left_chunk) = left.advance()? else {
-                    return Ok(None);
-                };
+                let output_layout = Arc::clone(&base.output_layout);
                 let right_rows = right_rows.as_deref().unwrap_or_default();
                 let right_layout = right_layout
                     .as_ref()
                     .cloned()
-                    .unwrap_or_else(|| Arc::new(SlotLayout::from_names(&[])));
+                    .unwrap_or_else(|| Arc::new(SlotLayout::new(Vec::new())));
                 let collect_slot = collect_column
                     .as_deref()
                     .map(|column| {
@@ -247,60 +245,62 @@ impl ApplyOperator {
                         })
                     })
                     .transpose()?;
-                let mut names = left_chunk.layout.names();
-                names.push(
-                    collect_column
-                        .clone()
-                        .unwrap_or_else(|| "rollup".to_string()),
-                );
-                let output_layout = Arc::new(SlotLayout::from_names(&names));
-                let mut output = Vec::with_capacity(left_chunk.rows.len());
-                for left_row in left_chunk.rows {
-                    base.ensure_not_cancelled()?;
-                    let matches = matching_rows(
-                        &left_row,
-                        &left_chunk.layout,
-                        right_rows,
-                        &right_layout,
-                        compare_columns,
-                    )?;
-                    let values = matches
-                        .into_iter()
-                        .map(|row| {
-                            collect_slot
-                                .and_then(|slot| row.get(slot).cloned())
-                                .unwrap_or_else(|| {
-                                    Value::List(Box::new(crate::core::value::List {
-                                        values: row.clone(),
-                                    }))
-                                })
-                        })
-                        .collect();
-                    let mut row = left_row;
-                    row.push(Value::List(Box::new(crate::core::value::List { values })));
-                    output.push(row);
+                loop {
+                    let Some(left_chunk) = left.advance()? else {
+                        return Ok(None);
+                    };
+                    let mut output = Vec::with_capacity(left_chunk.rows.len());
+                    for left_row in left_chunk.rows {
+                        base.ensure_not_cancelled()?;
+                        let matches = matching_rows(
+                            &left_row,
+                            &left_chunk.layout,
+                            right_rows,
+                            &right_layout,
+                            compare_columns,
+                        )?;
+                        let values = matches
+                            .into_iter()
+                            .map(|row| {
+                                collect_slot
+                                    .and_then(|slot| row.get(slot).cloned())
+                                    .unwrap_or_else(|| {
+                                        Value::List(Box::new(crate::core::value::List {
+                                            values: row.clone(),
+                                        }))
+                                    })
+                            })
+                            .collect();
+                        let mut row = left_row;
+                        row.push(Value::List(Box::new(crate::core::value::List { values })));
+                        output.push(row);
+                    }
+                    if !output.is_empty() {
+                        return Ok(Some(DataChunk::new_with_layout(
+                            output,
+                            Arc::clone(&output_layout),
+                        )));
+                    }
                 }
-                Ok(Some(DataChunk::new_with_layout(output, output_layout)))
             }
         }
     }
 
     pub fn stop(
         &mut self,
-        _base: &mut OperatorBase,
-        left: &mut StreamingExecutor,
-        right: &mut StreamingExecutor,
+        base: &mut OperatorBase,
+        _left: &mut StreamingExecutor,
+        _right: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
-        let left_error = left.stop().err();
-        let right_error = right.stop().err();
-        close_result(left_error, right_error)
+        base.lifecycle.mark_stopped();
+        Ok(())
     }
 
     pub fn close(
         &mut self,
         base: &mut OperatorBase,
-        left: &mut StreamingExecutor,
-        right: &mut StreamingExecutor,
+        _left: &mut StreamingExecutor,
+        _right: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
         if !base.lifecycle.can_close() {
             return Ok(());
@@ -329,10 +329,8 @@ impl ApplyOperator {
                 memory_tracker.reset();
             }
         }
-        let left_error = left.close().err();
-        let right_error = right.close().err();
         base.lifecycle.mark_closed();
-        close_result(left_error, right_error)
+        Ok(())
     }
 }
 
@@ -411,21 +409,27 @@ fn close_result(left: Option<QueryError>, right: Option<QueryError>) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::query::executor::streaming::builder::StreamingExecutorBuilder;
+    use crate::query::executor::streaming::operators::source_operator::SourceOperator;
+
+    fn scan(rows: Vec<Vec<Value>>, col_names: Vec<String>) -> StreamingExecutor {
+        let layout = Arc::new(SlotLayout::from_names(&col_names));
+        StreamingExecutor::Source(
+            OperatorBase::new(0).with_output_layout(layout),
+            SourceOperator::ScanVertices {
+                buffer: rows,
+                current_index: 0,
+                col_names,
+            },
+        )
+    }
 
     fn execute_apply(
         spec: ApplySpec,
         left_rows: Vec<Vec<Value>>,
         right_rows: Vec<Vec<Value>>,
     ) -> Result<Vec<Vec<Value>>, QueryError> {
-        let left = StreamingExecutorBuilder::build_simple_scan_with_col_names(
-            left_rows,
-            vec!["id".to_string()],
-        )?;
-        let right = StreamingExecutorBuilder::build_simple_scan_with_col_names(
-            right_rows,
-            vec!["id".to_string()],
-        )?;
+        let left = scan(left_rows, vec!["id".to_string()]);
+        let right = scan(right_rows, vec!["id".to_string()]);
         let budget = MemoryBudget::default_budget();
         let operator = ApplyOperator::from_spec(&spec, &budget);
         let mut executor = StreamingExecutor::Apply(
@@ -479,5 +483,41 @@ mod tests {
             vec![vec![Value::Int(1)], vec![Value::Int(1)]],
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn apply_uses_the_planned_output_layout() {
+        let left = scan(vec![vec![Value::Int(7)]], vec!["left_input".to_string()]);
+        let right = scan(vec![vec![Value::Int(7)]], vec!["left_input".to_string()]);
+        let output_layout = Arc::new(SlotLayout::from_names(&[
+            "planned_left".to_string(),
+            "planned_right".to_string(),
+        ]));
+        let operator = ApplyOperator::from_spec(
+            &ApplySpec::Apply {
+                kind: ApplyKind::Standard,
+                correlated_columns: vec!["left_input".to_string()],
+            },
+            &MemoryBudget::default_budget(),
+        );
+        let mut executor = StreamingExecutor::Apply(
+            OperatorBase::new(3).with_output_layout(output_layout),
+            Box::new(left),
+            Box::new(right),
+            operator,
+        );
+
+        executor.open().expect("apply should open");
+        let chunk = executor
+            .advance()
+            .expect("apply should advance")
+            .expect("apply should produce a row");
+        executor.close().expect("apply should close");
+
+        assert_eq!(chunk.rows, vec![vec![Value::Int(7), Value::Int(7)]]);
+        assert_eq!(
+            chunk.layout.names(),
+            vec!["planned_left".to_string(), "planned_right".to_string()]
+        );
     }
 }

@@ -6,6 +6,7 @@ use super::super::state::{
     GlobalState, GlobalStateKey, LocalState, LocalStateKey, StateArenaSet, TaskId,
 };
 use crate::query::executor::streaming::plan::types::PhysicalOperatorId;
+use crate::query::executor::streaming::slot::SlotLayout;
 
 /// Explicit operator lifecycle state machine.
 ///
@@ -93,13 +94,13 @@ pub struct OperatorBase {
     /// Source operators use this value directly; unary/blocking operators
     /// pass through whatever they receive from their child.
     pub chunk_size: usize,
-    /// Index into the [`StateArenaSet`] on [`ExecutionRuntime`] for this
-    /// operator's mutable runtime state.
-    ///
-    /// Assigned during materialization.  The operator creates its typed
-    /// state variant at this index during `open()`, then reads/updates it
-    /// during `next()` and cleans up during `close()`.
-    pub state_index: usize,
+    /// Unique physical identity used for this operator's mutable runtime
+    /// state. Production materialization must provide the arena-assigned ID.
+    pub physical_operator_id: PhysicalOperatorId,
+    /// Immutable output layout supplied by the physical plan.  Operators use
+    /// this for chunks they construct themselves, including empty-result
+    /// paths, rather than inferring schema from data rows.
+    pub output_layout: Arc<SlotLayout>,
 }
 
 impl OperatorBase {
@@ -111,7 +112,8 @@ impl OperatorBase {
             is_global: false,
             partition_id: None,
             chunk_size: 1024,
-            state_index: 0,
+            physical_operator_id: PhysicalOperatorId(plan_node_id.unsigned_abs() as usize),
+            output_layout: Arc::new(SlotLayout::new(Vec::new())),
         }
     }
 
@@ -126,9 +128,22 @@ impl OperatorBase {
             .lock()
     }
 
+    /// Override the legacy tree-node identity with the arena-assigned physical
+    /// operator identity. This is required by production materialization.
+    pub fn with_physical_operator_id(mut self, operator_id: PhysicalOperatorId) -> Self {
+        self.physical_operator_id = operator_id;
+        self
+    }
+
+    /// Attach the output contract layout during physical-plan materialization.
+    pub fn with_output_layout(mut self, output_layout: Arc<SlotLayout>) -> Self {
+        self.output_layout = output_layout;
+        self
+    }
+
     /// Return the [`GlobalStateKey`] for this operator's slot.
     pub fn state_key(&self) -> GlobalStateKey {
-        GlobalStateKey(PhysicalOperatorId(self.state_index))
+        GlobalStateKey(self.physical_operator_id, self.partition_id)
     }
 
     /// Take the [`GlobalState`] out of the arena (for cleanup).
@@ -154,7 +169,7 @@ impl OperatorBase {
 
     /// Return the [`LocalStateKey`] for this operator + task.
     pub fn local_state_key(&self, task_id: TaskId) -> LocalStateKey {
-        LocalStateKey(PhysicalOperatorId(self.state_index), task_id)
+        LocalStateKey(self.physical_operator_id, self.partition_id, task_id)
     }
 
     /// Insert a [`LocalState`] into the arena for a given task.
@@ -208,7 +223,7 @@ impl OperatorBase {
     }
 
     pub fn profile_key(&self) -> OperatorProfileKey {
-        OperatorProfileKey::new(self.plan_node_id, self.partition_id)
+        OperatorProfileKey::new(self.physical_operator_id, self.partition_id)
     }
 
     pub fn ensure_not_cancelled(&self) -> Result<(), crate::core::error::QueryError> {
@@ -240,5 +255,29 @@ impl OperatorBase {
     /// Convenience accessor for the spill manager from the runtime.
     pub fn spill_manager(&self) -> Option<Arc<SpillManager>> {
         self.runtime.as_ref().and_then(|rt| rt.get_spill_manager())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OperatorBase;
+    use crate::query::executor::streaming::plan::types::PhysicalOperatorId;
+
+    #[test]
+    fn state_keys_include_physical_operator_and_partition() {
+        let global = OperatorBase::new(10).with_physical_operator_id(PhysicalOperatorId(7));
+        let partition_zero = OperatorBase::new(10)
+            .with_physical_operator_id(PhysicalOperatorId(7))
+            .with_partition(0);
+        let partition_one = OperatorBase::new(10)
+            .with_physical_operator_id(PhysicalOperatorId(7))
+            .with_partition(1);
+
+        assert_ne!(global.state_key(), partition_zero.state_key());
+        assert_ne!(partition_zero.state_key(), partition_one.state_key());
+        assert_ne!(
+            partition_zero.local_state_key(0),
+            partition_zero.local_state_key(1)
+        );
     }
 }

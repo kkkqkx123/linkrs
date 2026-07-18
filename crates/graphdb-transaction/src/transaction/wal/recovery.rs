@@ -9,13 +9,13 @@ use postcard::from_bytes;
 use crate::core::types::Timestamp;
 use crate::core::{StorageError, StorageResult};
 use crate::transaction::wal::{
-    AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo,
-    CreateEdgeIndexRedo, CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo,
-    CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo,
-    DeleteVertexPropRedo, DeleteVertexRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo,
-    DropTagIndexRedo, InsertEdgeRedo, InsertVertexRedo, LocalWalParser, Lsn, ParallelWalParser,
-    ParsedWalEntry, RecoveryResult, RenameEdgePropRedo, RenameVertexPropRedo, UpdateEdgePropRedo,
-    UpdateVertexPropRedo, WalOpType, WalParser, WalRecoveryMode,
+    AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
+    CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
+    DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo, DeleteVertexRedo,
+    DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo, InsertEdgeRedo,
+    InsertVertexRedo, LocalWalParser, Lsn, ParallelWalParser, ParsedWalEntry, RecoveryResult,
+    RenameEdgePropRedo, RenameVertexPropRedo, UpdateEdgePropRedo, UpdateVertexPropRedo, WalOpType,
+    WalParser, WalRecoveryMode,
 };
 
 /// Recovery configuration
@@ -430,58 +430,50 @@ impl RecoveryManager {
                     applier.replay_compact(ts)?;
                     self.stats.wal_entries_replayed += 1;
                 }
-                WalOpType::CreateTagIndex => {
-                    match self.deserialize_create_tag_index(payload) {
-                        Ok(redo) => {
-                            applier.replay_create_tag_index(&redo, ts)?;
-                            self.stats.wal_entries_replayed += 1;
-                            self.stats.last_lsn = entry.lsn;
-                        }
-                        Err(e) => {
-                            log::warn!("Failed to deserialize CreateTagIndex redo: {}", e);
-                            self.stats.errors_encountered += 1;
-                        }
+                WalOpType::CreateTagIndex => match self.deserialize_create_tag_index(payload) {
+                    Ok(redo) => {
+                        applier.replay_create_tag_index(&redo, ts)?;
+                        self.stats.wal_entries_replayed += 1;
+                        self.stats.last_lsn = entry.lsn;
                     }
-                }
-                WalOpType::DropTagIndex => {
-                    match self.deserialize_drop_tag_index(payload) {
-                        Ok(redo) => {
-                            applier.replay_drop_tag_index(&redo, ts)?;
-                            self.stats.wal_entries_replayed += 1;
-                            self.stats.last_lsn = entry.lsn;
-                        }
-                        Err(e) => {
-                            log::warn!("Failed to deserialize DropTagIndex redo: {}", e);
-                            self.stats.errors_encountered += 1;
-                        }
+                    Err(e) => {
+                        log::warn!("Failed to deserialize CreateTagIndex redo: {}", e);
+                        self.stats.errors_encountered += 1;
                     }
-                }
-                WalOpType::CreateEdgeIndex => {
-                    match self.deserialize_create_edge_index(payload) {
-                        Ok(redo) => {
-                            applier.replay_create_edge_index(&redo, ts)?;
-                            self.stats.wal_entries_replayed += 1;
-                            self.stats.last_lsn = entry.lsn;
-                        }
-                        Err(e) => {
-                            log::warn!("Failed to deserialize CreateEdgeIndex redo: {}", e);
-                            self.stats.errors_encountered += 1;
-                        }
+                },
+                WalOpType::DropTagIndex => match self.deserialize_drop_tag_index(payload) {
+                    Ok(redo) => {
+                        applier.replay_drop_tag_index(&redo, ts)?;
+                        self.stats.wal_entries_replayed += 1;
+                        self.stats.last_lsn = entry.lsn;
                     }
-                }
-                WalOpType::DropEdgeIndex => {
-                    match self.deserialize_drop_edge_index(payload) {
-                        Ok(redo) => {
-                            applier.replay_drop_edge_index(&redo, ts)?;
-                            self.stats.wal_entries_replayed += 1;
-                            self.stats.last_lsn = entry.lsn;
-                        }
-                        Err(e) => {
-                            log::warn!("Failed to deserialize DropEdgeIndex redo: {}", e);
-                            self.stats.errors_encountered += 1;
-                        }
+                    Err(e) => {
+                        log::warn!("Failed to deserialize DropTagIndex redo: {}", e);
+                        self.stats.errors_encountered += 1;
                     }
-                }
+                },
+                WalOpType::CreateEdgeIndex => match self.deserialize_create_edge_index(payload) {
+                    Ok(redo) => {
+                        applier.replay_create_edge_index(&redo, ts)?;
+                        self.stats.wal_entries_replayed += 1;
+                        self.stats.last_lsn = entry.lsn;
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to deserialize CreateEdgeIndex redo: {}", e);
+                        self.stats.errors_encountered += 1;
+                    }
+                },
+                WalOpType::DropEdgeIndex => match self.deserialize_drop_edge_index(payload) {
+                    Ok(redo) => {
+                        applier.replay_drop_edge_index(&redo, ts)?;
+                        self.stats.wal_entries_replayed += 1;
+                        self.stats.last_lsn = entry.lsn;
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to deserialize DropEdgeIndex redo: {}", e);
+                        self.stats.errors_encountered += 1;
+                    }
+                },
             }
         }
 

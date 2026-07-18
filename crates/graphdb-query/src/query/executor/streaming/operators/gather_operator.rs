@@ -158,8 +158,14 @@ impl GatherOperator {
                 while *current_index < input_count(children, handle) {
                     base.ensure_not_cancelled()?;
                     if let Some(chunk) = advance_input(children, handle, *current_index)? {
+                        if chunk.is_empty() {
+                            continue;
+                        }
                         validate_schema(*current_index, &chunk, col_names)?;
-                        return Ok(Some(chunk));
+                        return Ok(Some(DataChunk::new_with_layout(
+                            chunk.rows,
+                            Arc::clone(&base.output_layout),
+                        )));
                     }
                     *current_index += 1;
                 }
@@ -204,9 +210,10 @@ impl GatherOperator {
                 if result_rows.is_empty() {
                     Ok(None)
                 } else {
-                    let layout =
-                        Arc::new(SlotLayout::from_names(col_names.as_deref().unwrap_or(&[])));
-                    Ok(Some(DataChunk::new_with_layout(result_rows, layout)))
+                    Ok(Some(DataChunk::new_with_layout(
+                        result_rows,
+                        Arc::clone(&base.output_layout),
+                    )))
                 }
             }
         }
@@ -214,19 +221,20 @@ impl GatherOperator {
 
     pub fn stop(
         &mut self,
-        _base: &mut OperatorBase,
-        children: &mut [StreamingExecutor],
+        base: &mut OperatorBase,
+        _children: &mut [StreamingExecutor],
     ) -> Result<(), QueryError> {
         if let Some(mut handle) = Self::take_handle(self) {
             return handle.stop_and_join();
         }
-        stop_children(children)
+        base.lifecycle.mark_stopped();
+        Ok(())
     }
 
     pub fn close(
         &mut self,
         base: &mut OperatorBase,
-        children: &mut [StreamingExecutor],
+        _children: &mut [StreamingExecutor],
     ) -> Result<(), QueryError> {
         if let Self::MergeSort {
             inputs,
@@ -248,7 +256,7 @@ impl GatherOperator {
             Ok(())
         };
         base.lifecycle.mark_closed();
-        parallel_result.and(close_children(children).map_or(Ok(()), Err))
+        parallel_result
     }
 
     fn set_handle(op: &mut Self, h: Option<PartitionHandle>) {
@@ -451,26 +459,15 @@ fn close_children(children: &mut [StreamingExecutor]) -> Option<QueryError> {
     first_error
 }
 
-fn stop_children(children: &mut [StreamingExecutor]) -> Result<(), QueryError> {
-    let mut first_error = None;
-    for child in children.iter_mut() {
-        if let Err(error) = child.stop() {
-            if first_error.is_none() {
-                first_error = Some(error);
-            }
-        }
-    }
-    first_error.map_or(Ok(()), Err)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::query::executor::streaming::operators::source_operator::SourceOperator;
 
     fn source(values: &[i64], column: &str) -> StreamingExecutor {
+        let layout = Arc::new(SlotLayout::from_names(&[column.to_string()]));
         StreamingExecutor::Source(
-            OperatorBase::new(1),
+            OperatorBase::new(1).with_output_layout(layout),
             SourceOperator::ScanVertices {
                 buffer: values
                     .iter()
@@ -483,8 +480,11 @@ mod tests {
     }
 
     fn merge_executor(children: Vec<StreamingExecutor>, limit: Option<usize>) -> StreamingExecutor {
+        let layout = Arc::new(SlotLayout::from_names(&["value".to_string()]));
         StreamingExecutor::Gather(
-            OperatorBase::new(i64::MIN).with_global(true),
+            OperatorBase::new(i64::MIN)
+                .with_global(true)
+                .with_output_layout(layout),
             children,
             GatherOperator::merge_sort(
                 vec![Expression::Variable("value".to_string())],
@@ -555,7 +555,8 @@ mod tests {
     #[test]
     fn concatenate_rejects_incompatible_partition_schema() {
         let mut executor = StreamingExecutor::Gather(
-            OperatorBase::new(10),
+            OperatorBase::new(10)
+                .with_output_layout(Arc::new(SlotLayout::from_names(&["id".to_string()]))),
             vec![source(&[1], "id"), source(&[2], "other_id")],
             GatherOperator::concatenate(),
         );

@@ -1,19 +1,14 @@
 //! QueryExecutionInstance: single-entry instantiation point for physical plans.
 //!
-//! The target production entry path:
+//! The production entry path:
 //!
 //! ```text
-//! Arc<PhysicalPlan> + QueryBindings + ResultSink + Scheduler
-//!     → QueryExecutionInstance::instantiate
+//! Arc<PhysicalPlan> + QueryBindings + ResultSink
+//!     → QueryExecutionInstance::instantiate_plan
 //!     → ExecutionRuntime (created once, shared by engine/operators/handle)
-//!     → operator tree (materialized per invocation)
+//!     → operator tree (materialized from arena plan)
 //!     → delivery via ResultSink
 //! ```
-//!
-//! Until the PhysicalPlan arena → StreamingExecutor bridge is built (M2),
-//! `instantiate` accepts a [`PhysicalNode`] tree alongside the plan for
-//! materialization.  Once the bridge exists, the `PhysicalNode` parameter
-//! is removed and `instantiate` becomes the sole production path.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -24,11 +19,9 @@ use super::engine::StreamingExecutionEngine;
 use super::plan::materializer::PhysicalPlanMaterializer;
 use super::plan::types::PhysicalPlan;
 use super::plan::validator::PhysicalPlanValidator;
-use super::pool::MorselWorkerPool;
 use super::result_utils::convert_chunks_to_dataset;
-use super::runtime::{ExecutionRuntime, QueryIdentity};
+use super::runtime::ExecutionRuntime;
 use super::stream_result::StreamingQueryResult;
-use super::PhysicalNode;
 use crate::core::error::QueryError;
 use crate::core::Value;
 use crate::query::executor::base::{ExecutionResult, MemoryBudget};
@@ -165,13 +158,10 @@ pub struct QueryExecutionInstance {
 }
 
 impl QueryExecutionInstance {
-    /// Instantiate from a [`PhysicalPlan`] arena (production path).
+    /// Instantiate from a [`PhysicalPlan`] arena (sole production path).
     ///
     /// Uses [`PhysicalPlanMaterializer`] to convert the arena plan into an
     /// operator tree, then wraps it with runtime, engine, and sink.
-    ///
-    /// This is the sole production path.  The old [`PhysicalNode`]-based
-    /// [`instantiate`](Self::instantiate) exists only for the transition.
     ///
     /// M2.8: when a [`QueryRegistry`] is provided, the query is registered
     /// with a unique non-zero ID and the guard is stored in the instance.
@@ -224,51 +214,6 @@ impl QueryExecutionInstance {
         })
     }
 
-    /// Instantiate from a [`PhysicalNode`] tree (transition path).
-    ///
-    /// Takes an already-built `PhysicalNode` and wraps it with plan metadata,
-    /// bindings, runtime, and sink.  This is the working path until the
-    /// [`PhysicalPlan`] arena → operator bridge is ready.
-    ///
-    /// The `plan` argument is used for validation and metadata; the
-    /// `physical_node` is materialized into the executable operator tree.
-    pub fn instantiate(
-        plan: Arc<PhysicalPlan>,
-        physical_node: PhysicalNode,
-        bindings: QueryBindings,
-        sink: ResultSink,
-        scheduler: Option<MorselWorkerPool>,
-    ) -> Result<Self, QueryError> {
-        // Phase 1: validate the plan (structural).
-        PhysicalPlanValidator::validate(&plan)?;
-
-        // Phase 2: create runtime from bindings.
-        let runtime = Self::create_runtime(&bindings, scheduler)?;
-
-        // Phase 3: materialize the operator tree from PhysicalNode.
-        let executor = physical_node.materialize(
-            Some(runtime.clone()),
-            &bindings.memory_budget,
-            bindings.chunk_size,
-        );
-
-        // Phase 4: set up the engine.
-        let mut engine = StreamingExecutionEngine::new();
-        engine.set_max_workers(bindings.max_workers);
-        engine.set_max_buffered_chunks(bindings.max_buffered_chunks);
-        engine.set_runtime(runtime.clone());
-        engine.register_executor(0, executor);
-
-        Ok(Self {
-            plan,
-            _bindings: bindings,
-            runtime,
-            engine: Some(engine),
-            sink,
-            _registry_guard: None,
-        })
-    }
-
     /// Return a reference to the execution runtime.
     pub fn runtime(&self) -> &Arc<ExecutionRuntime> {
         &self.runtime
@@ -299,7 +244,8 @@ impl QueryExecutionInstance {
             .take()
             .ok_or_else(|| QueryError::execution("Engine already consumed".to_string()))?;
         let chunks = engine.execute()?;
-        let dataset = convert_chunks_to_dataset(chunks, None)?;
+        let dataset =
+            convert_chunks_to_dataset(chunks, Some(self.plan.output.output_layout.names()))?;
         Ok(ExecutionResult::DataSet { data: dataset })
     }
 
@@ -318,7 +264,11 @@ impl QueryExecutionInstance {
             .take()
             .ok_or_else(|| QueryError::execution("Engine already consumed".to_string()))?;
         let stream = engine.into_stream()?;
-        Ok(StreamingQueryResult::new(stream, self.runtime.clone()))
+        Ok(StreamingQueryResult::new_with_schema(
+            stream,
+            self.runtime.clone(),
+            self.plan.output.output_layout.names(),
+        ))
     }
 
     /// Execute with a discard sink (for side-effect-only commands).
@@ -339,39 +289,6 @@ impl QueryExecutionInstance {
     /// Cancel the running query.
     pub fn cancel(&self) {
         self.runtime.cancel();
-    }
-
-    // ── Private helpers ──
-
-    fn create_runtime(
-        bindings: &QueryBindings,
-        scheduler: Option<MorselWorkerPool>,
-    ) -> Result<Arc<ExecutionRuntime>, QueryError> {
-        let runtime = ExecutionRuntime::new(
-            QueryIdentity {
-                query_id: bindings.query_id,
-                session_id: None,
-                space_name: bindings.space_name.clone(),
-            },
-            bindings.memory_budget.clone(),
-            bindings.storage.clone(),
-            #[cfg(feature = "fulltext-search")]
-            bindings.fulltext_manager.clone(),
-            #[cfg(feature = "qdrant")]
-            bindings.vector_coordinator.clone(),
-        );
-
-        // M6: shared scheduler takes priority.
-        if let Some(ref ss) = bindings.shared_scheduler {
-            runtime.set_shared_scheduler(Some(ss.clone()));
-        } else if let Some(pool) = scheduler {
-            runtime.set_worker_pool(Some(pool));
-        } else if bindings.max_workers > 1 {
-            let pool = MorselWorkerPool::new(bindings.max_workers);
-            runtime.set_worker_pool(Some(pool));
-        }
-
-        Ok(Arc::new(runtime))
     }
 }
 

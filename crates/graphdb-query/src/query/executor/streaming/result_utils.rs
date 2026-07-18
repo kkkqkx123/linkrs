@@ -25,10 +25,9 @@ pub fn convert_chunks_to_dataset(
         return Ok(DataSet::with_columns(names));
     }
 
-    let col_names = if let Some(names) = col_names {
-        names
-    } else {
-        chunks[0].col_names()
+    let col_names = match col_names {
+        Some(names) if !names.is_empty() => names,
+        _ => chunks[0].col_names(),
     };
 
     let expected_cols = col_names.len();

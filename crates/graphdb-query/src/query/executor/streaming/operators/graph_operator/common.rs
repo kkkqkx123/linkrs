@@ -7,7 +7,7 @@ use crate::core::types::storage_ids::VertexId;
 use crate::core::{EdgeDirection, Value};
 use crate::query::executor::expression::evaluator::traits::ExpressionContext;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
-use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
+use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::context::ValueRowContext;
 use crate::query::executor::streaming::slot::SlotLayout;
 use crate::query::executor::traversal::config::TraversalConfig;
@@ -36,6 +36,7 @@ pub(super) fn row_passes_filter(
 
 pub(super) fn expand_on_chunk(
     chunk: DataChunk,
+    output_layout: Arc<SlotLayout>,
     reader: &dyn QueryStorage,
     space_name: &str,
     edge_types: &[String],
@@ -87,31 +88,12 @@ pub(super) fn expand_on_chunk(
         return Ok(None);
     }
 
-    let mut new_cols: Vec<ColumnInfo> = col_names
-        .iter()
-        .map(|n| ColumnInfo {
-            name: n.clone(),
-            data_type: "string".to_string(),
-        })
-        .collect();
-    new_cols.push(ColumnInfo {
-        name: "_expand_vertex".to_string(),
-        data_type: "vertex".to_string(),
-    });
-    new_cols.push(ColumnInfo {
-        name: "_expand_edge_type".to_string(),
-        data_type: "string".to_string(),
-    });
-    new_cols.push(ColumnInfo {
-        name: "_expand_direction".to_string(),
-        data_type: "string".to_string(),
-    });
-    let schema = Arc::new(Schema::new(new_cols));
-    Ok(Some(DataChunk::new(out_rows, schema)))
+    Ok(Some(DataChunk::new_with_layout(out_rows, output_layout)))
 }
 
 pub(super) fn traverse_on_chunk(
     chunk: DataChunk,
+    output_layout: Arc<SlotLayout>,
     reader: &dyn QueryStorage,
     config: &TraversalConfig,
     visited: &mut VisitedSet,
@@ -165,29 +147,5 @@ pub(super) fn traverse_on_chunk(
         return Ok(None);
     }
 
-    let mut new_cols: Vec<ColumnInfo> = col_names
-        .iter()
-        .map(|n| ColumnInfo {
-            name: n.clone(),
-            data_type: "string".to_string(),
-        })
-        .collect();
-    new_cols.push(ColumnInfo {
-        name: "_traverse_vertex".to_string(),
-        data_type: "vertex".to_string(),
-    });
-    new_cols.push(ColumnInfo {
-        name: "_traverse_edge_type".to_string(),
-        data_type: "string".to_string(),
-    });
-    new_cols.push(ColumnInfo {
-        name: "_traverse_direction".to_string(),
-        data_type: "string".to_string(),
-    });
-    new_cols.push(ColumnInfo {
-        name: "_traverse_depth".to_string(),
-        data_type: "bigint".to_string(),
-    });
-    let schema = Arc::new(Schema::new(new_cols));
-    Ok(Some(DataChunk::new(out_rows, schema)))
+    Ok(Some(DataChunk::new_with_layout(out_rows, output_layout)))
 }

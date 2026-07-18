@@ -12,7 +12,6 @@ use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::executor::ValueRowContext;
 use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::operators::base::OperatorLifecycle;
-use crate::query::executor::streaming::slot::{combine_layouts, SlotLayout};
 
 use super::{build_combined_names, close_common};
 
@@ -42,7 +41,7 @@ pub(super) fn next_inner_join(
         *left_consumed = true;
     }
 
-    if let Some(left_chunk) = left.advance()? {
+    while let Some(left_chunk) = left.advance()? {
         let left_col_names = left_chunk.col_names();
         let mut result_rows = Vec::new();
 
@@ -70,21 +69,15 @@ pub(super) fn next_inner_join(
             }
         }
 
-        if result_rows.is_empty() {
-            Ok(None)
-        } else {
-            let left_layout = left_chunk.get_layout();
-            let right_layout = Arc::new(SlotLayout::from_names(&build_combined_names(
-                &[],
-                right_col_names,
-                build_side_tuples.first().map(|r| r.len()).unwrap_or(0),
+        if !result_rows.is_empty() {
+            return Ok(Some(DataChunk::new_with_layout(
+                result_rows,
+                Arc::clone(&base.output_layout),
             )));
-            let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
-            Ok(Some(DataChunk::new_with_layout(result_rows, layout)))
         }
-    } else {
-        Ok(None)
     }
+
+    Ok(None)
 }
 
 pub(super) fn next_left_join(
@@ -113,7 +106,7 @@ pub(super) fn next_left_join(
         *left_consumed = true;
     }
 
-    if let Some(left_chunk) = left.advance()? {
+    while let Some(left_chunk) = left.advance()? {
         let left_col_names = left_chunk.col_names();
         let mut result_rows = Vec::new();
 
@@ -144,7 +137,17 @@ pub(super) fn next_left_join(
 
             if !matched {
                 let mut unmatched_row = left_row.clone();
-                for _ in 0..build_side_tuples.first().map(|r| r.len()).unwrap_or(0) {
+                let right_width = base
+                    .output_layout
+                    .len()
+                    .checked_sub(left_row.len())
+                    .ok_or_else(|| {
+                        QueryError::execution(
+                            "LeftJoin planned output layout is narrower than its left input"
+                                .to_string(),
+                        )
+                    })?;
+                for _ in 0..right_width {
                     unmatched_row.push(Value::Null(crate::core::value::NullType::Null));
                 }
                 result_rows.push(unmatched_row);
@@ -152,20 +155,14 @@ pub(super) fn next_left_join(
         }
 
         if result_rows.is_empty() {
-            Ok(None)
-        } else {
-            let left_layout = left_chunk.get_layout();
-            let right_layout = Arc::new(SlotLayout::from_names(&build_combined_names(
-                &[],
-                right_col_names,
-                build_side_tuples.first().map(|r| r.len()).unwrap_or(0),
-            )));
-            let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
-            Ok(Some(DataChunk::new_with_layout(result_rows, layout)))
+            continue;
         }
-    } else {
-        Ok(None)
+        return Ok(Some(DataChunk::new_with_layout(
+            result_rows,
+            Arc::clone(&base.output_layout),
+        )));
     }
+    Ok(None)
 }
 
 pub(super) fn next_right_join(
@@ -194,7 +191,7 @@ pub(super) fn next_right_join(
         *right_consumed = true;
     }
 
-    if let Some(right_chunk) = right.advance()? {
+    while let Some(right_chunk) = right.advance()? {
         let right_cols = right_chunk.col_names();
         let mut result_rows = Vec::new();
 
@@ -225,7 +222,17 @@ pub(super) fn next_right_join(
 
             if !matched {
                 let mut unmatched_row = Vec::new();
-                for _ in 0..build_side_tuples.first().map(|r| r.len()).unwrap_or(0) {
+                let left_width = base
+                    .output_layout
+                    .len()
+                    .checked_sub(right_row.len())
+                    .ok_or_else(|| {
+                        QueryError::execution(
+                            "RightJoin planned output layout is narrower than its right input"
+                                .to_string(),
+                        )
+                    })?;
+                for _ in 0..left_width {
                     unmatched_row.push(Value::Null(crate::core::value::NullType::Null));
                 }
                 unmatched_row.extend(right_row.clone());
@@ -234,24 +241,14 @@ pub(super) fn next_right_join(
         }
 
         if result_rows.is_empty() {
-            Ok(None)
-        } else {
-            let left_layout = if let Some(first_left) = build_side_tuples.first() {
-                Arc::new(SlotLayout::from_names(&build_combined_names(
-                    right_col_names,
-                    &[],
-                    first_left.len(),
-                )))
-            } else {
-                Arc::new(SlotLayout::from_names(&[]))
-            };
-            let right_layout = Arc::new(SlotLayout::from_names(&right_cols));
-            let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
-            Ok(Some(DataChunk::new_with_layout(result_rows, layout)))
+            continue;
         }
-    } else {
-        Ok(None)
+        return Ok(Some(DataChunk::new_with_layout(
+            result_rows,
+            Arc::clone(&base.output_layout),
+        )));
     }
+    Ok(None)
 }
 
 pub(super) fn next_full_outer_join(
@@ -293,7 +290,6 @@ pub(super) fn next_full_outer_join(
             }
 
             FullOuterJoinPhase::ProbeLeft => {
-                let right_col_count = right_rows.first().map(|r| r.len()).unwrap_or(0);
                 let mut all_results = Vec::new();
 
                 for left_row in left_rows.iter() {
@@ -331,7 +327,13 @@ pub(super) fn next_full_outer_join(
 
                     if !matched {
                         let mut unmatched_row = left_row.clone();
-                        for _ in 0..right_col_count {
+                        let right_width = base.output_layout.len().checked_sub(left_row.len()).ok_or_else(|| {
+                            QueryError::execution(
+                                "FullOuterJoin planned output layout is narrower than its left input"
+                                    .to_string(),
+                            )
+                        })?;
+                        for _ in 0..right_width {
                             unmatched_row.push(Value::Null(crate::core::value::NullType::Null));
                         }
                         all_results.push(unmatched_row);
@@ -340,23 +342,12 @@ pub(super) fn next_full_outer_join(
 
                 *phase = FullOuterJoinPhase::EmitUnmatchedRight;
                 if !all_results.is_empty() {
-                    let left_layout = Arc::new(SlotLayout::from_names(
-                        &(0..left_rows.first().map(|r| r.len()).unwrap_or(0))
-                            .map(|i| format!("col_{}", i))
-                            .collect::<Vec<_>>(),
-                    ));
-                    let right_layout = Arc::new(SlotLayout::from_names(&build_combined_names(
-                        &[],
-                        right_col_names,
-                        right_col_count,
-                    )));
-                    let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
                     let rows: Vec<Vec<Value>> = all_results.into_iter().collect();
                     if !rows.is_empty() {
                         *result_iter = Some(rows.into_iter());
                         return Ok(Some(DataChunk::new_with_layout(
                             result_iter.as_mut().unwrap().collect::<Vec<_>>(),
-                            layout,
+                            Arc::clone(&base.output_layout),
                         )));
                     }
                 }
@@ -366,28 +357,25 @@ pub(super) fn next_full_outer_join(
                 if let Some(iter) = result_iter {
                     let rows: Vec<Vec<Value>> = iter.collect();
                     if !rows.is_empty() {
-                        let left_layout = Arc::new(SlotLayout::from_names(
-                            &(0..left_rows.first().map(|r| r.len()).unwrap_or(0))
-                                .map(|i| format!("col_{}", i))
-                                .collect::<Vec<_>>(),
-                        ));
-                        let right_layout = Arc::new(SlotLayout::from_names(&build_combined_names(
-                            &[],
-                            right_col_names,
-                            right_rows.first().map(|r| r.len()).unwrap_or(0),
+                        return Ok(Some(DataChunk::new_with_layout(
+                            rows,
+                            Arc::clone(&base.output_layout),
                         )));
-                        let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
-                        return Ok(Some(DataChunk::new_with_layout(rows, layout)));
                     }
                     *result_iter = None;
                 }
 
-                let left_col_count = left_rows.first().map(|r| r.len()).unwrap_or(0);
                 let mut unmatched = Vec::new();
                 for (right_idx, right_row) in right_rows.iter().enumerate() {
                     if !matched_right_indices.contains(&right_idx) {
                         let mut row = Vec::new();
-                        for _ in 0..left_col_count {
+                        let left_width = base.output_layout.len().checked_sub(right_row.len()).ok_or_else(|| {
+                            QueryError::execution(
+                                "FullOuterJoin planned output layout is narrower than its right input"
+                                    .to_string(),
+                            )
+                        })?;
+                        for _ in 0..left_width {
                             row.push(Value::Null(crate::core::value::NullType::Null));
                         }
                         row.extend(right_row.clone());
@@ -398,18 +386,10 @@ pub(super) fn next_full_outer_join(
                 if unmatched.is_empty() {
                     return Ok(None);
                 }
-                let left_layout = Arc::new(SlotLayout::from_names(
-                    &(0..left_col_count)
-                        .map(|i| format!("col_{}", i))
-                        .collect::<Vec<_>>(),
-                ));
-                let right_layout = Arc::new(SlotLayout::from_names(&build_combined_names(
-                    &[],
-                    right_col_names,
-                    right_rows.first().map(|r| r.len()).unwrap_or(0),
+                return Ok(Some(DataChunk::new_with_layout(
+                    unmatched,
+                    Arc::clone(&base.output_layout),
                 )));
-                let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
-                return Ok(Some(DataChunk::new_with_layout(unmatched, layout)));
             }
         }
     }
@@ -420,8 +400,6 @@ pub(super) fn close_full_outer(
     memory_tracker: &mut MemoryTracker,
     left_rows: &mut Vec<Vec<Value>>,
     right_rows: &mut Vec<Vec<Value>>,
-    left: &mut StreamingExecutor,
-    right: &mut StreamingExecutor,
 ) -> Result<(), QueryError> {
     close_common(
         lifecycle,
@@ -430,7 +408,5 @@ pub(super) fn close_full_outer(
             left_rows.clear();
             right_rows.clear();
         },
-        left,
-        right,
     )
 }

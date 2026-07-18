@@ -7,7 +7,7 @@ use crate::core::types::expr::Expression;
 use crate::core::Value;
 #[cfg(not(feature = "fulltext-search"))]
 use crate::query::core::NodeType;
-use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
+use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::operators::base::OperatorBase;
 #[cfg(feature = "fulltext-search")]
@@ -33,31 +33,22 @@ fn fulltext_command_index_name(cmd: &FulltextManageNode) -> Option<&str> {
     }
 }
 
-fn make_manage_result(action: &str, name: Option<&str>, status: &str) -> DataChunk {
+fn make_manage_result(
+    output_layout: Arc<crate::query::executor::streaming::slot::SlotLayout>,
+    action: &str,
+    name: Option<&str>,
+    status: &str,
+) -> DataChunk {
     let name_val = name
         .map(|n| Value::String(n.to_string()))
         .unwrap_or(Value::Null(crate::core::NullType::Null));
-    let schema = Arc::new(Schema::new(vec![
-        ColumnInfo {
-            name: "action".to_string(),
-            data_type: "string".to_string(),
-        },
-        ColumnInfo {
-            name: "name".to_string(),
-            data_type: "string".to_string(),
-        },
-        ColumnInfo {
-            name: "status".to_string(),
-            data_type: "string".to_string(),
-        },
-    ]));
-    DataChunk::new(
+    DataChunk::new_with_layout(
         vec![vec![
             Value::String(action.to_string()),
             name_val,
             Value::String(status.to_string()),
         ]],
-        schema,
+        output_layout,
     )
 }
 
@@ -233,12 +224,14 @@ impl FulltextOperator {
                                     })?;
                                 }
                                 Some(make_manage_result(
+                                    Arc::clone(&base.output_layout),
                                     "create_fulltext_index",
                                     Some(&node.index_name),
                                     "created",
                                 ))
                             } else {
                                 Some(make_manage_result(
+                                    Arc::clone(&base.output_layout),
                                     "create_fulltext_index",
                                     Some(&node.index_name),
                                     "no-manager",
@@ -272,12 +265,14 @@ impl FulltextOperator {
                                     })?;
                                 }
                                 Some(make_manage_result(
+                                    Arc::clone(&base.output_layout),
                                     "drop_fulltext_index",
                                     Some(&node.index_name),
                                     "dropped",
                                 ))
                             } else {
                                 Some(make_manage_result(
+                                    Arc::clone(&base.output_layout),
                                     "drop_fulltext_index",
                                     Some(&node.index_name),
                                     "no-manager",
@@ -320,6 +315,7 @@ impl FulltextOperator {
                                     ))
                                 } else {
                                     Some(make_manage_result(
+                                        Arc::clone(&base.output_layout),
                                         "describe_fulltext_index",
                                         Some(&node.index_name),
                                         "not-found",
@@ -327,6 +323,7 @@ impl FulltextOperator {
                                 }
                             } else {
                                 Some(make_manage_result(
+                                    Arc::clone(&base.output_layout),
                                     "describe_fulltext_index",
                                     Some(&node.index_name),
                                     "no-manager",
@@ -381,9 +378,13 @@ impl FulltextOperator {
                                         ]
                                     })
                                     .collect();
-                                Some(DataChunk::new(rows, schema))
+                                Some(DataChunk::new_with_layout(
+                                    rows,
+                                    Arc::clone(&base.output_layout),
+                                ))
                             } else {
                                 Some(make_manage_result(
+                                    Arc::clone(&base.output_layout),
                                     "show_fulltext_indexes",
                                     None,
                                     "no-manager",
@@ -402,6 +403,7 @@ impl FulltextOperator {
 
                 #[cfg(not(feature = "fulltext-search"))]
                 Ok(Some(make_manage_result(
+                    Arc::clone(&base.output_layout),
                     fulltext_command_name(command),
                     fulltext_command_index_name(command),
                     "fulltext-search feature disabled",
@@ -446,7 +448,10 @@ impl FulltextOperator {
                         return if rows.is_empty() {
                             Ok(None)
                         } else {
-                            Ok(Some(DataChunk::from_rows(rows)))
+                            Ok(Some(DataChunk::new_with_layout(
+                                rows,
+                                base.output_layout.clone(),
+                            )))
                         };
                     }
                 }
@@ -495,7 +500,10 @@ impl FulltextOperator {
                         return if rows.is_empty() {
                             Ok(None)
                         } else {
-                            Ok(Some(DataChunk::from_rows(rows)))
+                            Ok(Some(DataChunk::new_with_layout(
+                                rows,
+                                base.output_layout.clone(),
+                            )))
                         };
                     }
                 }
@@ -542,7 +550,10 @@ impl FulltextOperator {
                         return if rows.is_empty() {
                             Ok(None)
                         } else {
-                            Ok(Some(DataChunk::from_rows(rows)))
+                            Ok(Some(DataChunk::new_with_layout(
+                                rows,
+                                base.output_layout.clone(),
+                            )))
                         };
                     }
                 }
@@ -568,7 +579,6 @@ impl FulltextOperator {
             | FulltextOperator::FulltextLookup { .. }
             | FulltextOperator::MatchFulltext { .. } => {
                 if base.lifecycle.can_close() {
-                    input.stop()?;
                     base.lifecycle.mark_stopped();
                 }
                 Ok(())
@@ -579,7 +589,7 @@ impl FulltextOperator {
     pub fn close(
         &mut self,
         base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
+        _input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
         match self {
             FulltextOperator::FulltextManage { .. }
@@ -587,7 +597,6 @@ impl FulltextOperator {
             | FulltextOperator::FulltextLookup { .. }
             | FulltextOperator::MatchFulltext { .. } => {
                 if base.lifecycle.can_close() {
-                    input.close()?;
                     base.lifecycle.mark_closed();
                 }
                 Ok(())

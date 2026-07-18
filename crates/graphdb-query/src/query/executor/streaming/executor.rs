@@ -11,6 +11,7 @@ use crate::query::executor::base::{MemoryTracker, Spillable};
 pub use super::context::ValueRowContext;
 pub use super::helpers::{aggregation, comparison, conversion};
 pub use super::operators::base::OperatorBase;
+use super::operators::base::OperatorLifecycle;
 use super::operators::state::ExchangeState;
 
 use super::operators::apply_operator::ApplyOperator;
@@ -389,6 +390,7 @@ impl StreamingExecutor {
                 .operators
                 .entry(self.profile_key())
                 .or_insert_with(|| OperatorProfile {
+                    physical_operator_id: self.base().physical_operator_id,
                     node_id: self.plan_node_id(),
                     partition_id: self.base().partition_id,
                     name: name.to_string(),
@@ -455,6 +457,18 @@ impl StreamingExecutor {
                 if bytes > entry.peak_memory_bytes {
                     entry.peak_memory_bytes = bytes;
                 }
+            }
+        }
+    }
+
+    /// Record spilled bytes and spill count in profile for this operator.
+    pub fn record_profile_spill(&self, spilled_bytes: u64, spill_count: u64) {
+        if let Some(rt) = &self.base().runtime {
+            let key = self.profile_key();
+            let mut profile = rt.profile().lock();
+            if let Some(entry) = profile.operators.get_mut(&key) {
+                entry.spilled_bytes += spilled_bytes;
+                entry.spill_count += spill_count;
             }
         }
     }
@@ -596,38 +610,63 @@ impl StreamingExecutor {
             self.base_mut().lifecycle.mark_exhausted();
         }
         self.record_profile_timing("next", elapsed);
+        if result.is_err() {
+            self.base_mut().lifecycle.mark_failed();
+            if let Err(close_error) = self.close_tree() {
+                log::warn!(
+                    "Failed to close streaming executor tree after next error: {}",
+                    close_error
+                );
+            }
+        }
         result
     }
 
     /// Stop the executor (signal no more input needed).
     pub fn stop(&mut self) -> Result<(), QueryError> {
+        if matches!(
+            self.base().lifecycle,
+            OperatorLifecycle::Stopped | OperatorLifecycle::Closed
+        ) {
+            return Ok(());
+        }
         let start = Instant::now();
         let result = dispatch!(self, stop);
         let elapsed = start.elapsed().as_micros() as u64;
         self.record_profile_timing("stop", elapsed);
+        if result.is_ok() {
+            self.base_mut().lifecycle.mark_stopped();
+        }
         result
     }
 
     /// Close the executor (clean up resources).
     pub fn close(&mut self) -> Result<(), QueryError> {
+        if matches!(self.base().lifecycle, OperatorLifecycle::Closed) {
+            return Ok(());
+        }
+        // Capture spill metrics before operator close clears state.
+        let peak = self.peak_memory_bytes();
+        let spilled = self.spilled_size();
+        let sc = self.spill_count();
         let start = Instant::now();
         let result = dispatch!(self, close);
         let elapsed = start.elapsed().as_micros() as u64;
         self.record_profile_timing("close", elapsed);
-        let peak = self.peak_memory_bytes();
         if peak > 0 {
             self.record_profile_peak_memory(peak);
+        }
+        if spilled > 0 || sc > 0 {
+            self.record_profile_spill(spilled, sc);
+        }
+        if result.is_ok() {
+            self.base_mut().lifecycle.mark_closed();
         }
         result
     }
 
-    /// Close every node in this executor tree, even when an ancestor never
-    /// reached its `opened` state.  This is the failure-cleanup counterpart to
-    /// `open()` and is deliberately post-order so a partially opened child is
-    /// released before its parent clears state.
-    ///
-    /// The first close error is returned after all nodes have been given a
-    /// chance to release their resources.
+    /// Close the executor tree in post-order. Individual operators only
+    /// release their own state; this is the sole recursive owner.
     pub fn close_tree(&mut self) -> Result<(), QueryError> {
         let mut first_error = None;
         for child in self.children_mut() {
@@ -645,9 +684,8 @@ impl StreamingExecutor {
         first_error.map_or(Ok(()), Err)
     }
 
-    /// Stop every node in this executor tree. Individual operator stop methods
-    /// may return after their first child error, so this wrapper continues with
-    /// every descendant before returning the first observed error.
+    /// Stop the executor tree. The root is signalled before recursively
+    /// stopping children so coordinator operators can cancel worker handles.
     pub fn stop_tree(&mut self) -> Result<(), QueryError> {
         let mut first_error = self.stop().err();
         for child in self.children_mut() {
@@ -703,12 +741,19 @@ impl Spillable for StreamingExecutor {
     }
 
     fn spilled_size(&self) -> u64 {
-        // Report directly from the operator at this node.  Per-operator
-        // tracking through OperatorProfile handles the full tree view.
         match self {
             Self::Blocking(_, _, op) => op.spilled_bytes(),
             Self::Join(_, _, _, op) => op.spilled_bytes(),
             Self::Set(_, _, _, op) => op.spilled_bytes(),
+            _ => 0,
+        }
+    }
+
+    fn spill_count(&self) -> u64 {
+        match self {
+            Self::Blocking(_, _, op) => op.spill_count(),
+            Self::Join(_, _, _, op) => 0,
+            Self::Set(_, _, _, op) => 0,
             _ => 0,
         }
     }
@@ -887,5 +932,79 @@ mod tests {
         for child in executor.children_mut() {
             assert!(!child.opened());
         }
+    }
+
+    #[test]
+    fn test_sort_spill_records_profile_metrics() {
+        use crate::query::executor::base::MemoryBudget;
+        use crate::query::executor::streaming::operators::spec::BlockingSpec;
+        use crate::query::executor::streaming::plan::types::PhysicalOperatorId;
+        use crate::query::executor::streaming::spill::{SpillConfig, SpillManager};
+        use crate::query::executor::streaming::slot::SlotLayout;
+        use std::sync::Arc;
+
+        // Build a runtime with a tiny memory budget so Sort spills immediately.
+        let budget = MemoryBudget::new(128); // ~3 rows before spill
+        let rt = Arc::new(ExecutionRuntime::new(
+            super::super::runtime::QueryIdentity {
+                query_id: 999,
+                session_id: None,
+                space_name: None,
+            },
+            budget.clone(),
+            None,
+        ));
+
+        let sm = Arc::new(SpillManager::new(SpillConfig::default(), 999).unwrap());
+        rt.set_spill_manager(Some(sm));
+
+        // Build input scan
+        let rows: Vec<Vec<Value>> = (0..50)
+            .map(|i| vec![Value::BigInt(50 - i as i64)])
+            .collect();
+        let scan = Box::new(scan_executor(rows, vec!["val".to_string()]));
+
+        let output_layout = Arc::new(SlotLayout::new(vec![]));
+        let mut executor = StreamingExecutor::Blocking(
+            OperatorBase::new(10)
+                .with_runtime(Some(rt.clone()))
+                .with_physical_operator_id(PhysicalOperatorId(42))
+                .with_output_layout(output_layout),
+            scan,
+            BlockingOperator::from_spec(
+                &BlockingSpec::Sort {
+                    sort_expressions: vec![crate::core::types::expr::Expression::variable(
+                        "val".to_string(),
+                    )],
+                    sort_directions: vec![SortDirection::Ascending],
+                },
+                &budget,
+            ),
+        );
+
+        executor.open().unwrap();
+        while let Some(_chunk) = executor.advance().unwrap() {}
+        executor.close().unwrap();
+
+        // Verify profile has spill metrics recorded.
+        let prof = rt.profile().lock();
+        let key = OperatorProfileKey::new(PhysicalOperatorId(42), None);
+        let entry = prof.operators.get(&key).expect("profile entry exists");
+        assert!(
+            entry.spilled_bytes > 0,
+            "expected spilled_bytes > 0, got {}",
+            entry.spilled_bytes
+        );
+        assert!(
+            entry.spill_count > 0,
+            "expected spill_count > 0, got {}",
+            entry.spill_count
+        );
+        assert!(
+            entry.peak_memory_bytes > 0,
+            "expected peak_memory_bytes > 0, got {}",
+            entry.peak_memory_bytes
+        );
+        assert_eq!(entry.output_rows, 50);
     }
 }

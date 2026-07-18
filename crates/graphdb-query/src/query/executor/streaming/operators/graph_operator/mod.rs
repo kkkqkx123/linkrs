@@ -597,7 +597,6 @@ impl GraphOperator {
                 | Self::AllPaths { .. }
                 | Self::MultiShortestPath { .. }
                 | Self::Subgraph { .. } => {
-                    input.stop()?;
                     base.lifecycle.mark_stopped();
                 }
             }
@@ -608,7 +607,7 @@ impl GraphOperator {
     pub fn close(
         &mut self,
         base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
+        _input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
         if base.lifecycle.can_close() {
             match self {
@@ -623,7 +622,6 @@ impl GraphOperator {
                 | Self::AllPaths { .. }
                 | Self::MultiShortestPath { .. }
                 | Self::Subgraph { .. } => {
-                    input.close()?;
                     base.lifecycle.mark_closed();
                 }
             }

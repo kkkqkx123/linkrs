@@ -395,7 +395,11 @@ impl IndexDataManagerImpl {
         index_root.join("generation_build.json")
     }
 
-    fn save_build_state(&self, index_root: &Path, state: &GenerationBuildState) -> StorageResult<()> {
+    fn save_build_state(
+        &self,
+        index_root: &Path,
+        state: &GenerationBuildState,
+    ) -> StorageResult<()> {
         std::fs::create_dir_all(index_root)?;
         let path = self.build_state_path(index_root);
         let temporary = path.with_extension("tmp");
@@ -456,9 +460,7 @@ impl IndexDataManagerImpl {
                 self.save_build_state(index_root, &completed)?;
                 self.remove_build_state(index_root)?;
             } else {
-                log::warn!(
-                    "Split in Publishing state but no manifest found; discarding"
-                );
+                log::warn!("Split in Publishing state but no manifest found; discarding");
                 self.remove_build_state(index_root)?;
             }
         }

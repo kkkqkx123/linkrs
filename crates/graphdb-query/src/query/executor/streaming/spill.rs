@@ -604,11 +604,23 @@ impl HashPartitionSpiller {
     /// Insert a row into the appropriate partition.
     pub fn insert_row(&mut self, row: &[Value], manager: &SpillManager) -> Result<(), QueryError> {
         let partition = hash_row_partition(row, self.config.num_partitions) as usize;
+        self.insert_row_to_partition(row, partition, manager)
+    }
+
+    /// Insert a row into a specific partition (caller computes the hash).
+    ///
+    /// Useful when the caller needs to partition by a derived key
+    /// (e.g., group key for aggregate) rather than the row itself.
+    pub fn insert_row_to_partition(
+        &mut self,
+        row: &[Value],
+        partition: usize,
+        manager: &SpillManager,
+    ) -> Result<(), QueryError> {
         if let Some(Some(writer)) = self.writers.get_mut(partition) {
             writer.write_row(row)?;
             self.counts[partition] += 1;
 
-            // Check for skew: if one partition exceeds the limit, repartition
             if self.counts[partition] > self.config.max_rows_per_partition
                 && self.recursion_depth < self.config.max_recursion_depth
             {
@@ -636,25 +648,48 @@ impl HashPartitionSpiller {
     /// re-hashing with an increased partition count.
     fn repartition(&mut self, manager: &SpillManager) -> Result<(), QueryError> {
         self.recursion_depth += 1;
-        let old_count = self.config.num_partitions;
+        let _old_count = self.config.num_partitions;
         self.config.num_partitions = self.config.num_partitions.saturating_mul(2);
+
+        // Finalize current writers to get run files
+        let old_runs = self.finalize_current()?;
 
         // Create new writers for doubled partitions
         let mut new_writers = Vec::with_capacity(self.config.num_partitions as usize);
         for _ in 0..self.config.num_partitions {
             new_writers.push(Some(manager.create_run_writer(self.schema_fingerprint)?));
         }
+        let mut new_counts = vec![0u64; self.config.num_partitions as usize];
 
-        // Read back and rehash the overflowing partition
-        for _i in 0..old_count as usize {
-            // We don't re-read existing files during repartition in this simplified version
-            // Instead, we just double the partition count going forward
-            // A full implementation would re-read and rehash existing data
+        // Read back and rehash all old partitions into new partitions
+        for old_run in old_runs.into_iter().flatten() {
+            let mut reader = RunReader::open(&old_run)?;
+            while let Some(row) = reader.read_row()? {
+                let partition = hash_row_partition(&row, self.config.num_partitions) as usize;
+                if let Some(Some(writer)) = new_writers.get_mut(partition) {
+                    writer.write_row(&row)?;
+                    new_counts[partition] += 1;
+                }
+            }
+            // Delete old partition file
+            let _ = std::fs::remove_file(&old_run.path);
         }
 
         self.writers = new_writers;
-        self.counts = vec![0; self.config.num_partitions as usize];
+        self.counts = new_counts;
         Ok(())
+    }
+
+    /// Finalize all current partition writers and return the run metadata.
+    fn finalize_current(&mut self) -> Result<Vec<Option<SpilledRun>>, QueryError> {
+        let mut runs = Vec::with_capacity(self.writers.len());
+        for writer in self.writers.drain(..) {
+            match writer {
+                Some(w) => runs.push(Some(w.finalize()?)),
+                None => runs.push(None),
+            }
+        }
+        Ok(runs)
     }
 
     /// Current partition row counts.

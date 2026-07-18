@@ -178,8 +178,14 @@ impl ExchangeOperator {
                     base.ensure_not_cancelled()?;
                     if let Some(chunk) = advance_input(children, &mut self.handle, *current_index)?
                     {
+                        if chunk.is_empty() {
+                            continue;
+                        }
                         validate_schema(*current_index, &chunk, col_names)?;
-                        return Ok(Some(chunk));
+                        return Ok(Some(DataChunk::new_with_layout(
+                            chunk.rows,
+                            Arc::clone(&base.output_layout),
+                        )));
                     }
                     *current_index += 1;
                 }
@@ -223,9 +229,10 @@ impl ExchangeOperator {
                 if result_rows.is_empty() {
                     Ok(None)
                 } else {
-                    let layout =
-                        Arc::new(SlotLayout::from_names(col_names.as_deref().unwrap_or(&[])));
-                    Ok(Some(DataChunk::new_with_layout(result_rows, layout)))
+                    Ok(Some(DataChunk::new_with_layout(
+                        result_rows,
+                        Arc::clone(&base.output_layout),
+                    )))
                 }
             }
             ExchangeState::RepartitionHash {
@@ -261,9 +268,10 @@ impl ExchangeOperator {
                             result_rows.push(buckets[*current_bucket][*current_row].clone());
                             *current_row += 1;
                         }
-                        let layout =
-                            Arc::new(SlotLayout::from_names(col_names.as_deref().unwrap_or(&[])));
-                        return Ok(Some(DataChunk::new_with_layout(result_rows, layout)));
+                        return Ok(Some(DataChunk::new_with_layout(
+                            result_rows,
+                            Arc::clone(&base.output_layout),
+                        )));
                     }
                     *current_bucket += 1;
                     *current_row = 0;
@@ -284,7 +292,8 @@ impl ExchangeOperator {
                         loop {
                             base.ensure_not_cancelled()?;
                             match advance_input(children, &mut self.handle, i)? {
-                                Some(chunk) => buffered_chunks.push(chunk),
+                                Some(chunk) if !chunk.is_empty() => buffered_chunks.push(chunk),
+                                Some(_) => continue,
                                 None => break,
                             }
                         }
@@ -310,12 +319,11 @@ impl ExchangeOperator {
                     }
                 }
 
-                let col_names: Vec<String> = buffered_chunks
-                    .first()
-                    .map(|c| c.col_names())
-                    .unwrap_or_default();
-                let layout = Arc::new(SlotLayout::from_names(&col_names));
-                let result = DataChunk::new_with_layout(result_rows, layout);
+                if result_rows.is_empty() {
+                    return Ok(None);
+                }
+                let result =
+                    DataChunk::new_with_layout(result_rows, Arc::clone(&base.output_layout));
 
                 // Advance consumer. When all consumers have been served, reset
                 // chunk tracking so the next consumer starts from the beginning.
@@ -350,9 +358,10 @@ impl ExchangeOperator {
                     if all_rows.is_empty() {
                         return Ok(None);
                     }
-                    let layout =
-                        Arc::new(SlotLayout::from_names(col_names.as_deref().unwrap_or(&[])));
-                    return Ok(Some(DataChunk::new_with_layout(all_rows, layout)));
+                    return Ok(Some(DataChunk::new_with_layout(
+                        all_rows,
+                        Arc::clone(&base.output_layout),
+                    )));
                 }
                 Ok(None)
             }
@@ -390,34 +399,37 @@ impl ExchangeOperator {
                     *position += 1;
                 }
 
-                let layout = Arc::new(SlotLayout::from_names(col_names.as_deref().unwrap_or(&[])));
-                Ok(Some(DataChunk::new_with_layout(result_rows, layout)))
+                Ok(Some(DataChunk::new_with_layout(
+                    result_rows,
+                    Arc::clone(&base.output_layout),
+                )))
             }
         }
     }
 
     pub fn stop(
         &mut self,
-        _base: &mut OperatorBase,
-        children: &mut [StreamingExecutor],
+        base: &mut OperatorBase,
+        _children: &mut [StreamingExecutor],
     ) -> Result<(), QueryError> {
         if let Some(handle) = self.handle.as_mut() {
             return handle.stop_and_join();
         }
-        stop_children(children)
+        base.lifecycle.mark_stopped();
+        Ok(())
     }
 
     pub fn close(
         &mut self,
         base: &mut OperatorBase,
-        children: &mut [StreamingExecutor],
+        _children: &mut [StreamingExecutor],
     ) -> Result<(), QueryError> {
         if let Some(handle) = self.handle.as_mut() {
             let _ = handle.stop_and_join();
             self.handle = None;
         }
         base.lifecycle.mark_closed();
-        close_children(children).map_or(Ok(()), Err)
+        Ok(())
     }
 }
 
@@ -656,38 +668,15 @@ fn validate_schema(
     Ok(())
 }
 
-fn close_children(children: &mut [StreamingExecutor]) -> Option<QueryError> {
-    let mut first_error = None;
-    for child in children.iter_mut() {
-        if let Err(error) = child.close() {
-            if first_error.is_none() {
-                first_error = Some(error);
-            }
-        }
-    }
-    first_error
-}
-
-fn stop_children(children: &mut [StreamingExecutor]) -> Result<(), QueryError> {
-    let mut first_error = None;
-    for child in children.iter_mut() {
-        if let Err(error) = child.stop() {
-            if first_error.is_none() {
-                first_error = Some(error);
-            }
-        }
-    }
-    first_error.map_or(Ok(()), Err)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::query::executor::streaming::operators::source_operator::SourceOperator;
 
     fn source(values: &[i64], column: &str) -> StreamingExecutor {
+        let layout = Arc::new(SlotLayout::from_names(&[column.to_string()]));
         StreamingExecutor::Source(
-            OperatorBase::new(1),
+            OperatorBase::new(1).with_output_layout(layout),
             SourceOperator::ScanVertices {
                 buffer: values.iter().map(|v| vec![Value::BigInt(*v)]).collect(),
                 current_index: 0,

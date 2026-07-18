@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::Arc;
 
 use super::super::operators::spec::{
     ApplySpec, BlockingSpec, DdlSpec, ExchangeSpec, FulltextSpec, GraphSpec, JoinSpec,
@@ -32,7 +33,7 @@ use super::properties::PhysicalProperties;
 ///
 /// Allocated from a unified arena.  Never equal to a logical node ID, even
 /// when the operator originates from a single logical node (1:1 or 1:N split).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct PhysicalOperatorId(pub usize);
 
 impl PhysicalOperatorId {
@@ -80,6 +81,13 @@ pub enum SortOrder {
     Descending,
 }
 
+/// Whether an operator can produce output before consuming all of its input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PipelineMode {
+    Pipelined,
+    Blocking,
+}
+
 /// Describes the result shape that a plan (or fragment) delivers.
 ///
 /// This is the immutable contract stored in the cached plan, not bound to
@@ -100,10 +108,12 @@ pub struct OutputContract {
     /// When non-empty, length matches `output_layout.len()`; columns not
     /// participating in the ordering are marked `None`.
     pub ordering: Vec<Option<SortOrder>>,
-    /// Whether the result supports streaming (true) or requires
-    /// materialisation (false, e.g. for blocking aggregators without
-    /// spill).
-    pub streamable: bool,
+    /// Whether the result can be delivered through the pull-based chunk API.
+    /// Blocking operators remain deliverable as a stream after their internal
+    /// work completes.
+    pub delivery_streamable: bool,
+    /// Whether first output depends on complete input consumption.
+    pub pipeline_mode: PipelineMode,
 }
 
 // ── Plan compatibility (cache validation) ───────────────────────────────────
@@ -127,6 +137,12 @@ pub struct PlanCompatibility {
 }
 
 /// Bitmask-style set of capabilities that a plan may require.
+///
+/// Capability bits for progressive parallelism enablement (4 batches):
+/// - `PARALLEL_BASIC`: partition-local Source and Unary operators (filter, project).
+/// - `PARALLEL_BLOCKING`: blocking operators (sort, distinct, aggregate).
+/// - `PARALLEL_JOIN`: multi-input operators (join, set, apply).
+/// - `PARALLEL_FULL`: all operators including exchange, graph, DDL, sink, txn.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CapabilitySet {
     bits: u64,
@@ -134,6 +150,20 @@ pub struct CapabilitySet {
 
 impl CapabilitySet {
     pub const EMPTY: CapabilitySet = CapabilitySet { bits: 0 };
+
+    /// Batch 1: Source and Unary operators.
+    pub const PARALLEL_BASIC: CapabilitySet = CapabilitySet { bits: 1 << 0 };
+    /// Batch 2: Blocking operators (sort, distinct, aggregate).
+    pub const PARALLEL_BLOCKING: CapabilitySet = CapabilitySet { bits: 1 << 1 };
+    /// Batch 3: Multi-input operators (join, set, apply).
+    pub const PARALLEL_JOIN: CapabilitySet = CapabilitySet { bits: 1 << 2 };
+    /// Batch 4: All remaining operators (exchange, graph, sink, ddl, txn, fulltext, vector).
+    pub const PARALLEL_FULL: CapabilitySet = CapabilitySet { bits: 1 << 3 };
+
+    /// All parallel capability bits OR'd together.
+    pub const PARALLEL_ALL: CapabilitySet = CapabilitySet {
+        bits: (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3),
+    };
 
     pub const fn new(bits: u64) -> Self {
         Self { bits }
@@ -145,6 +175,12 @@ impl CapabilitySet {
 
     pub fn is_empty(&self) -> bool {
         self.bits == 0
+    }
+
+    /// Returns true if this capability set includes any parallel execution
+    /// capability.
+    pub fn has_parallel(&self) -> bool {
+        self.bits & Self::PARALLEL_ALL.bits != 0
     }
 }
 
@@ -209,6 +245,79 @@ impl FragmentGraph {
     }
 }
 
+// ── Input contract (typed input ports) ──────────────────────────────────────
+
+/// Label for a side of a partitioned or binary input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PartitionSide {
+    Left,
+    Right,
+    Unary,
+}
+
+/// Describes one input to a physical operator from another fragment.
+///
+/// Replaces the unlabeled `Vec<FragmentId>` approach.  Each input carries
+/// its fragment reference, layout contract, and physical properties so that
+/// left/right semantics are explicit at the plan level.
+#[derive(Debug, Clone)]
+pub struct FragmentInput {
+    pub fragment: FragmentId,
+    pub layout: Arc<SlotLayout>,
+    pub properties: super::properties::PhysicalProperties,
+}
+
+/// A single partition within a partitioned input group.
+#[derive(Debug, Clone)]
+pub struct PartitionInput {
+    pub partition_id: usize,
+    pub fragment: FragmentId,
+    pub layout: Arc<SlotLayout>,
+    pub properties: super::properties::PhysicalProperties,
+}
+
+/// Typed input port specification for a physical operator.
+///
+/// This replaces the reliance on unlabeled `FragmentSpec.inputs` vectors
+/// and stack-order guessing of left/right ports.
+#[derive(Debug, Clone)]
+pub enum InputContract {
+    /// Operator produces data without consuming any input.
+    NoInput,
+    /// Single upstream input (source-like: Filter, Project, Sink, etc.).
+    UnaryInput(FragmentInput),
+    /// Two distinct labeled inputs (left and right) for Join, Set, Apply.
+    BinaryInputs {
+        left: FragmentInput,
+        right: FragmentInput,
+    },
+    /// Multiple partitioned inputs (Gather, Exchange, HashShuffleJoin).
+    PartitionedInputs {
+        side: PartitionSide,
+        members: Vec<PartitionInput>,
+    },
+}
+
+// ── State ownership ─────────────────────────────────────────────────────────
+
+/// Declares where an operator's mutable state is owned.
+///
+/// Used by the validator and runtime to ensure that state, profile,
+/// reservations, spill files, and workers are managed by the correct owner
+/// and never leaked or double-freed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StateOwnership {
+    /// State is embedded in the operator enum variant itself (inline).
+    /// No runtime or shared state arena involvement.
+    TreeLocal,
+    /// State is owned by the global [`ExecutionRuntime`] state arena
+    /// (shared across all operators of the same physical identity).
+    GlobalRuntime,
+    /// State is owned by a task-local scheduler (partition-local,
+    /// worker-local, or fragment-local).
+    TaskLocal,
+}
+
 // ── Operator spec (arena-stored) ────────────────────────────────────────────
 
 /// Immutable configuration of a single physical operator in the arena.
@@ -221,9 +330,15 @@ pub struct PhysicalOperatorSpec {
     pub operator_id: PhysicalOperatorId,
     pub logical_node_id: Option<LogicalNodeId>,
     pub spec: OperatorKindSpec,
+    /// Typed input port contract.  Replaces unlabeled `FragmentSpec.inputs`.
+    /// When set, the materializer uses this instead of `fragment.inputs` order.
+    pub input_contract: InputContract,
+    /// Deprecated: use `input_contract` instead.  Kept for transition.
     pub input_layout: Option<SlotLayout>,
     pub output_layout: SlotLayout,
     pub properties: PhysicalProperties,
+    /// Where this operator's mutable state is owned.
+    pub state_ownership: StateOwnership,
     pub estimated_cardinality: Option<f64>,
     pub explain_name: &'static str,
 }

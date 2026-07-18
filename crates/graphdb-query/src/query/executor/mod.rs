@@ -17,7 +17,7 @@ pub use base::{
 pub use streaming::{
     combine_layouts, DataChunk, ExecutionRuntime, OperatorProfile, PartitionView, ProfileCollector,
     QueryIdentity, ResourceOwner, ResultStream, SlotId, SlotInfo, SlotLayout,
-    StreamingExecutionEngine, StreamingExecutor, StreamingExecutorBuilder, StreamingQueryResult,
+    StreamingExecutionEngine, StreamingExecutor, StreamingQueryResult,
 };
 
 // Re-export explain/profile executors

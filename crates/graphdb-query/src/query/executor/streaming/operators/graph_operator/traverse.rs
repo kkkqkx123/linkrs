@@ -32,8 +32,7 @@ pub(super) fn handle_traverse(
     }
 
     let cancel_token = base.runtime.as_ref().map(|rt| rt.cancel_token());
-    let chunk = input.advance()?;
-    if let Some(chunk) = chunk {
+    while let Some(chunk) = input.advance()? {
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
             let tc = TraversalConfig::traverse(
@@ -43,7 +42,16 @@ pub(super) fn handle_traverse(
                 max_depth,
                 edge_types.to_vec(),
             );
-            common::traverse_on_chunk(chunk, &*reader, &tc, visited, cancel_token)
+            if let Some(output) = common::traverse_on_chunk(
+                chunk,
+                Arc::clone(&base.output_layout),
+                &*reader,
+                &tc,
+                visited,
+                cancel_token.clone(),
+            )? {
+                return Ok(Some(output));
+            }
         } else {
             let mut new_cols: Vec<ColumnInfo> = chunk
                 .schema
@@ -73,11 +81,15 @@ pub(super) fn handle_traverse(
                 row.push(Value::String(format!("{:?}", direction).to_lowercase()));
                 row.push(Value::BigInt(1));
             }
-            Ok(Some(DataChunk::new(rows, schema)))
+            if !rows.is_empty() {
+                return Ok(Some(DataChunk::new_with_layout(
+                    rows,
+                    Arc::clone(&base.output_layout),
+                )));
+            }
         }
-    } else {
-        Ok(None)
     }
+    Ok(None)
 }
 
 pub(super) fn handle_traverse_all(
@@ -100,7 +112,7 @@ pub(super) fn handle_bi_expand(
     if !base.lifecycle.is_opened() {
         return Err(QueryError::execution("BiExpand not opened".to_string()));
     }
-    if let Some(chunk) = input.advance()? {
+    while let Some(chunk) = input.advance()? {
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
             let dir = EdgeDirection::Both;
@@ -137,7 +149,7 @@ pub(super) fn handle_bi_expand(
             }
 
             if out_rows.is_empty() {
-                return Ok(None);
+                continue;
             }
             let mut new_cols: Vec<ColumnInfo> = col_names
                 .iter()
@@ -159,13 +171,17 @@ pub(super) fn handle_bi_expand(
                 data_type: "string".to_string(),
             });
             let schema = Arc::new(Schema::new(new_cols));
-            Ok(Some(DataChunk::new(out_rows, schema)))
+            return Ok(Some(DataChunk::new_with_layout(
+                out_rows,
+                Arc::clone(&base.output_layout),
+            )));
         } else {
-            Ok(Some(chunk))
+            if !chunk.is_empty() {
+                return Ok(Some(chunk));
+            }
         }
-    } else {
-        Ok(None)
     }
+    Ok(None)
 }
 
 pub(super) fn handle_bi_traverse(
@@ -181,8 +197,7 @@ pub(super) fn handle_bi_traverse(
     if !base.lifecycle.is_opened() {
         return Err(QueryError::execution("BiTraverse not opened".to_string()));
     }
-    let chunk = input.advance()?;
-    if let Some(chunk) = chunk {
+    while let Some(chunk) = input.advance()? {
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
             let dir = EdgeDirection::Both;
@@ -242,7 +257,7 @@ pub(super) fn handle_bi_traverse(
             }
 
             if out_rows.is_empty() {
-                return Ok(None);
+                continue;
             }
             let mut new_cols: Vec<ColumnInfo> = col_names
                 .iter()
@@ -268,11 +283,15 @@ pub(super) fn handle_bi_traverse(
                 data_type: "bigint".to_string(),
             });
             let schema = Arc::new(Schema::new(new_cols));
-            Ok(Some(DataChunk::new(out_rows, schema)))
+            return Ok(Some(DataChunk::new_with_layout(
+                out_rows,
+                Arc::clone(&base.output_layout),
+            )));
         } else {
-            Ok(Some(chunk))
+            if !chunk.is_empty() {
+                return Ok(Some(chunk));
+            }
         }
-    } else {
-        Ok(None)
     }
+    Ok(None)
 }

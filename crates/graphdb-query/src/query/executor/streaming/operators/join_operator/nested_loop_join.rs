@@ -10,7 +10,6 @@ use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::executor::ValueRowContext;
 use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::operators::base::OperatorLifecycle;
-use crate::query::executor::streaming::slot::{combine_layouts, SlotLayout};
 
 use super::{build_combined_names, close_common};
 
@@ -40,7 +39,7 @@ pub(super) fn next_nested_loop_join(
         *left_consumed = true;
     }
 
-    if let Some(left_chunk) = left.advance()? {
+    while let Some(left_chunk) = left.advance()? {
         let left_col_names = left_chunk.col_names();
         let mut result_rows = Vec::new();
 
@@ -77,29 +76,21 @@ pub(super) fn next_nested_loop_join(
             }
         }
 
-        if result_rows.is_empty() {
-            Ok(None)
-        } else {
-            let left_layout = left_chunk.get_layout();
-            let right_layout = Arc::new(SlotLayout::from_names(&build_combined_names(
-                &[],
-                right_col_names,
-                build_side_tuples.first().map(|r| r.len()).unwrap_or(0),
+        if !result_rows.is_empty() {
+            return Ok(Some(DataChunk::new_with_layout(
+                result_rows,
+                Arc::clone(&base.output_layout),
             )));
-            let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
-            Ok(Some(DataChunk::new_with_layout(result_rows, layout)))
         }
-    } else {
-        Ok(None)
     }
+
+    Ok(None)
 }
 
 pub(super) fn close(
     lifecycle: &mut OperatorLifecycle,
     memory_tracker: &mut MemoryTracker,
     build_side_tuples: &mut Vec<Vec<Value>>,
-    left: &mut StreamingExecutor,
-    right: &mut StreamingExecutor,
 ) -> Result<(), QueryError> {
     close_common(
         lifecycle,
@@ -107,7 +98,5 @@ pub(super) fn close(
         || {
             build_side_tuples.clear();
         },
-        left,
-        right,
     )
 }

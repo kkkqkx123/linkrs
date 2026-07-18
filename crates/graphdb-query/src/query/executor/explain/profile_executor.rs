@@ -11,8 +11,12 @@ use parking_lot::RwLock;
 use crate::core::error::{DBError, DBResult as ExecutorDBResult, QueryError};
 use crate::core::Value;
 use crate::query::executor::base::{BaseExecutor, ExecutionResult, Executor, ExecutorStats};
+use crate::query::executor::streaming::plan::PhysicalPlanBuilder;
 use crate::query::executor::streaming::runtime::ExecutionRuntime;
-use crate::query::executor::streaming::StreamingQueryExecutor;
+use crate::query::executor::streaming::{
+    PhysicalPlanBuildContext, PhysicalPlanValidator, QueryBindings, QueryExecutionInstance,
+    ResultSink, TransactionScope,
+};
 use crate::query::parser::ast::stmt::ExplainFormat;
 use crate::query::planning::plan::explain::{DescribeVisitor, PlanDescription, ProfilingStats};
 use crate::query::planning::plan::ExecutionPlan;
@@ -84,14 +88,22 @@ impl<S: QueryStorage + Send + 'static> ProfileExecutor<S> {
         exec_context.max_workers = self.inner_plan.max_workers.max(1);
         exec_context.max_buffered_chunks = self.inner_plan.max_buffered_chunks.max(1);
 
-        let mut streaming_executor = StreamingQueryExecutor::new();
-        streaming_executor
-            .from_plan_node(root_node, &exec_context)
-            .map_err(DBError::from)?;
-
-        let runtime = streaming_executor.runtime().cloned();
-
-        let result = streaming_executor.execute().map_err(DBError::from)?;
+        let mut build_context = PhysicalPlanBuildContext::from_execution_context(&exec_context);
+        let plan = Arc::new(
+            PhysicalPlanBuilder::build(root_node, &mut build_context, &exec_context)
+                .map_err(|error| DBError::from(QueryError::execution(error.to_string())))?,
+        );
+        PhysicalPlanValidator::validate(&plan)
+            .map_err(|error| DBError::from(QueryError::execution(error.to_string())))?;
+        let mut bindings = QueryBindings::from_context(&exec_context, TransactionScope::None);
+        bindings.query_id = exec_context.query_id;
+        let mut instance =
+            QueryExecutionInstance::instantiate_plan(plan, bindings, ResultSink::Materialize, None)
+                .map_err(|error| DBError::from(QueryError::execution(error.to_string())))?;
+        let runtime = Some(instance.runtime().clone());
+        let result = instance
+            .execute()
+            .map_err(|error| DBError::from(QueryError::execution(error.to_string())))?;
 
         let exec_time_us = start.elapsed().as_micros() as u64;
         let mut executor_stats = ExecutorStats {

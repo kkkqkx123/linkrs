@@ -84,23 +84,27 @@ pub enum SinkOperator {
     },
 }
 
-fn make_modify_result(op: &str, count: u64) -> DataChunk {
-    let schema = Arc::new(Schema::new(vec![
-        ColumnInfo {
-            name: "operation".to_string(),
-            data_type: "string".to_string(),
+fn make_modify_result(
+    output_layout: Arc<crate::query::executor::streaming::slot::SlotLayout>,
+    op: &str,
+    count: u64,
+) -> DataChunk {
+    let num_cols = output_layout.len().max(2);
+    let mut row = vec![
+        Value::String(op.to_string()),
+        Value::BigInt(count as i64),
+    ];
+    row.resize(num_cols, Value::Null(crate::core::NullType::Null));
+    DataChunk::new_with_layout(
+        vec![row],
+        if output_layout.len() >= 2 {
+            output_layout
+        } else {
+            Arc::new(crate::query::executor::streaming::slot::SlotLayout::from_names(&[
+                "operation".to_string(),
+                "count".to_string(),
+            ]))
         },
-        ColumnInfo {
-            name: "rows_affected".to_string(),
-            data_type: "bigint".to_string(),
-        },
-    ]));
-    DataChunk::new(
-        vec![vec![
-            Value::String(op.to_string()),
-            Value::BigInt(count as i64),
-        ]],
-        schema,
     )
 }
 
@@ -325,7 +329,12 @@ impl SinkOperator {
                     }
                     Ok(Some(chunk))
                 } else {
-                    Ok(Some(make_modify_result("insert_vertices", *rows_inserted)))
+                    base.lifecycle.mark_exhausted();
+                    Ok(Some(make_modify_result(
+                        Arc::clone(&base.output_layout),
+                        "insert_vertices",
+                        *rows_inserted,
+                    )))
                 }
             }
 
@@ -377,7 +386,12 @@ impl SinkOperator {
                     }
                     Ok(Some(chunk))
                 } else {
-                    Ok(Some(make_modify_result("insert_edges", *rows_inserted)))
+                    base.lifecycle.mark_exhausted();
+                    Ok(Some(make_modify_result(
+                        Arc::clone(&base.output_layout),
+                        "insert_edges",
+                        *rows_inserted,
+                    )))
                 }
             }
 
@@ -423,7 +437,12 @@ impl SinkOperator {
                     }
                     Ok(Some(chunk))
                 } else {
-                    Ok(Some(make_modify_result("update_vertices", *rows_updated)))
+                    base.lifecycle.mark_exhausted();
+                    Ok(Some(make_modify_result(
+                        Arc::clone(&base.output_layout),
+                        "update_vertices",
+                        *rows_updated,
+                    )))
                 }
             }
 
@@ -481,7 +500,12 @@ impl SinkOperator {
                     }
                     Ok(Some(chunk))
                 } else {
-                    Ok(Some(make_modify_result("update_edges", *rows_updated)))
+                    base.lifecycle.mark_exhausted();
+                    Ok(Some(make_modify_result(
+                        Arc::clone(&base.output_layout),
+                        "update_edges",
+                        *rows_updated,
+                    )))
                 }
             }
 
@@ -518,7 +542,12 @@ impl SinkOperator {
                     }
                     Ok(Some(chunk))
                 } else {
-                    Ok(Some(make_modify_result("delete_vertices", *rows_deleted)))
+                    base.lifecycle.mark_exhausted();
+                    Ok(Some(make_modify_result(
+                        Arc::clone(&base.output_layout),
+                        "delete_vertices",
+                        *rows_deleted,
+                    )))
                 }
             }
 
@@ -568,7 +597,12 @@ impl SinkOperator {
                     }
                     Ok(Some(chunk))
                 } else {
-                    Ok(Some(make_modify_result("delete_edges", *rows_deleted)))
+                    base.lifecycle.mark_exhausted();
+                    Ok(Some(make_modify_result(
+                        Arc::clone(&base.output_layout),
+                        "delete_edges",
+                        *rows_deleted,
+                    )))
                 }
             }
 
@@ -620,7 +654,12 @@ impl SinkOperator {
                     }
                     Ok(Some(chunk))
                 } else {
-                    Ok(Some(make_modify_result("delete_edges", *rows_deleted)))
+                    base.lifecycle.mark_exhausted();
+                    Ok(Some(make_modify_result(
+                        Arc::clone(&base.output_layout),
+                        "delete_edges",
+                        *rows_deleted,
+                    )))
                 }
             }
 
@@ -658,7 +697,9 @@ impl SinkOperator {
                     }
                     Ok(Some(chunk))
                 } else {
+                    base.lifecycle.mark_exhausted();
                     Ok(Some(make_modify_result(
+                        Arc::clone(&base.output_layout),
                         "pipe_delete_vertices",
                         *rows_deleted,
                     )))
@@ -706,7 +747,12 @@ impl SinkOperator {
                     *rows_deleted += count;
                 }
 
-                Ok(Some(make_modify_result("delete_tags", *rows_deleted)))
+                base.lifecycle.mark_exhausted();
+                Ok(Some(make_modify_result(
+                    Arc::clone(&base.output_layout),
+                    "delete_tags",
+                    *rows_deleted,
+                )))
             }
         }
     }
@@ -724,7 +770,6 @@ impl SinkOperator {
             | SinkOperator::DeleteVertices { .. }
             | SinkOperator::DeleteEdges { .. } => {
                 if base.lifecycle.can_close() {
-                    input.stop()?;
                     base.lifecycle.mark_stopped();
                 }
                 Ok(())
@@ -732,7 +777,7 @@ impl SinkOperator {
             SinkOperator::PipeDeleteVertices { .. }
             | SinkOperator::PipeDeleteEdges { .. }
             | SinkOperator::DeleteTags { .. } => {
-                input.stop()?;
+                base.lifecycle.mark_stopped();
                 Ok(())
             }
         }
@@ -741,10 +786,9 @@ impl SinkOperator {
     pub fn close(
         &mut self,
         base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
+        _input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
         if base.lifecycle.can_close() {
-            input.close()?;
             base.lifecycle.mark_closed();
         }
         Ok(())

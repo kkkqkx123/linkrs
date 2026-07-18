@@ -6,11 +6,11 @@ use crate::core::error::StorageResult;
 use crate::core::types::{LabelId, Timestamp, VertexId};
 
 use super::redo::{
-    AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo,
-    CreateEdgeIndexRedo, CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo,
-    CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo,
-    DeleteVertexPropRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo,
-    InsertEdgeRedo, RenameEdgePropRedo, RenameVertexPropRedo, UpdateEdgePropRedo,
+    AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
+    CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
+    DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo,
+    DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo, InsertEdgeRedo,
+    RenameEdgePropRedo, RenameVertexPropRedo, UpdateEdgePropRedo,
 };
 use super::types::WalResult;
 
@@ -135,7 +135,11 @@ pub trait RecoveryApplier {
     // System Operations
     // ========================================================================
 
-    fn replay_create_tag_index(&self, redo: &CreateTagIndexRedo, ts: Timestamp) -> StorageResult<()>;
+    fn replay_create_tag_index(
+        &self,
+        redo: &CreateTagIndexRedo,
+        ts: Timestamp,
+    ) -> StorageResult<()>;
 
     fn replay_drop_tag_index(&self, redo: &DropTagIndexRedo, ts: Timestamp) -> StorageResult<()>;
 

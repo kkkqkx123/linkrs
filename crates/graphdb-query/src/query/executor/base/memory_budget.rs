@@ -279,6 +279,11 @@ pub trait Spillable {
     /// Number of bytes currently spilled to disk.
     fn spilled_size(&self) -> u64;
 
+    /// Number of discrete spill operations (runs/files) written to disk.
+    fn spill_count(&self) -> u64 {
+        0
+    }
+
     /// Whether this operator has spilled data to disk.
     fn has_spilled(&self) -> bool {
         self.spilled_size() > 0

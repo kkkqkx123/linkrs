@@ -5,7 +5,7 @@ use parking_lot::RwLock;
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::Value;
-use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
+use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::planning::plan::core::nodes::management::manage_node_enums::VectorManageNode;
@@ -13,31 +13,22 @@ use crate::storage::QueryStorage;
 #[cfg(feature = "qdrant")]
 use crate::sync::VectorSyncCoordinator;
 
-fn make_manage_result(action: &str, name: Option<&str>, status: &str) -> DataChunk {
+fn make_manage_result(
+    output_layout: Arc<crate::query::executor::streaming::slot::SlotLayout>,
+    action: &str,
+    name: Option<&str>,
+    status: &str,
+) -> DataChunk {
     let name_val = name
         .map(|n| Value::String(n.to_string()))
         .unwrap_or(Value::Null(crate::core::NullType::Null));
-    let schema = Arc::new(Schema::new(vec![
-        ColumnInfo {
-            name: "action".to_string(),
-            data_type: "string".to_string(),
-        },
-        ColumnInfo {
-            name: "name".to_string(),
-            data_type: "string".to_string(),
-        },
-        ColumnInfo {
-            name: "status".to_string(),
-            data_type: "string".to_string(),
-        },
-    ]));
-    DataChunk::new(
+    DataChunk::new_with_layout(
         vec![vec![
             Value::String(action.to_string()),
             name_val,
             Value::String(status.to_string()),
         ]],
-        schema,
+        output_layout,
     )
 }
 
@@ -227,6 +218,7 @@ impl VectorOperator {
                                 });
                                 match res {
                                     Ok(_) => Ok(Some(make_manage_result(
+                                        Arc::clone(&base.output_layout),
                                         "create_vector_index",
                                         Some(&node.index_name),
                                         "created",
@@ -235,6 +227,7 @@ impl VectorOperator {
                                 }
                             } else {
                                 Ok(Some(make_manage_result(
+                                    Arc::clone(&base.output_layout),
                                     "create_vector_index",
                                     Some(&node.index_name),
                                     "no-coordinator",
@@ -245,6 +238,7 @@ impl VectorOperator {
                         {
                             let _ = (storage, space_name);
                             Ok(Some(make_manage_result(
+                                Arc::clone(&base.output_layout),
                                 "create_vector_index",
                                 Some(&node.index_name),
                                 "qdrant feature disabled",
@@ -264,6 +258,7 @@ impl VectorOperator {
                         {
                             let _ = (storage, space_name);
                             Ok(Some(make_manage_result(
+                                Arc::clone(&base.output_layout),
                                 "drop_vector_index",
                                 Some(&node.index_name),
                                 "qdrant feature disabled",
@@ -319,7 +314,10 @@ impl VectorOperator {
                         return if rows.is_empty() {
                             Ok(None)
                         } else {
-                            Ok(Some(DataChunk::from_rows(rows)))
+                            Ok(Some(DataChunk::new_with_layout(
+                                rows,
+                                base.output_layout.clone(),
+                            )))
                         };
                     }
                 }
@@ -386,7 +384,10 @@ impl VectorOperator {
                         return if rows.is_empty() {
                             Ok(None)
                         } else {
-                            Ok(Some(DataChunk::from_rows(rows)))
+                            Ok(Some(DataChunk::new_with_layout(
+                                rows,
+                                base.output_layout.clone(),
+                            )))
                         };
                     }
                 }
@@ -412,7 +413,6 @@ impl VectorOperator {
             | VectorOperator::VectorLookup { .. }
             | VectorOperator::VectorMatch { .. } => {
                 if base.lifecycle.can_close() {
-                    input.stop()?;
                     base.lifecycle.mark_stopped();
                 }
                 Ok(())
@@ -423,7 +423,7 @@ impl VectorOperator {
     pub fn close(
         &mut self,
         base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
+        _input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
         match self {
             VectorOperator::VectorManage { .. }
@@ -431,7 +431,6 @@ impl VectorOperator {
             | VectorOperator::VectorLookup { .. }
             | VectorOperator::VectorMatch { .. } => {
                 if base.lifecycle.can_close() {
-                    input.close()?;
                     base.lifecycle.mark_closed();
                 }
                 Ok(())

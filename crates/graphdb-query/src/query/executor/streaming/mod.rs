@@ -10,27 +10,23 @@
 //! - ExecutionRuntime: Per-query runtime (cancel, memory, profile, resources)
 //! - ResultStream: Streaming result handle
 
-pub mod builder;
 pub mod chunk;
 pub mod context;
 pub mod coordinator;
 pub mod engine;
 pub mod executor;
-pub mod factory;
+
 pub mod helpers;
 pub mod instance;
 pub mod join_helpers;
 pub mod memory_pool;
 pub mod operator_plan_builder;
 pub mod operators;
-pub mod parallel_safety;
 pub mod parameters;
 pub mod partition;
-mod partition_builder;
 pub mod plan;
 pub mod pool;
 pub mod query_registry;
-pub mod result_boundary;
 pub mod result_utils;
 pub mod runtime;
 pub mod slot;
@@ -40,17 +36,16 @@ pub mod stream;
 pub mod stream_result;
 pub mod transaction_scope;
 
-pub use builder::StreamingExecutorBuilder;
 pub use chunk::{ChunkView, DataChunk};
 pub use context::BorrowedRowContext;
 pub use engine::StreamingExecutionEngine;
 pub use executor::StreamingExecutor;
-pub use factory::StreamingQueryExecutor;
+
 pub use operators::base::OperatorBase;
 pub use operators::spec::{BlockingSpec, ExchangeSpec, JoinSpec, SourceSpec, UnarySpec};
 pub use operators::state::{BlockingState, ExchangeState, JoinState, SourceState, UnaryState};
 pub use partition::PartitionView;
-pub use plan::node::PhysicalNode;
+
 pub use result_utils::{chunks_to_execution_result, convert_chunks_to_dataset};
 pub use runtime::{
     ExecutionRuntime, OperatorProfile, OperatorProfileKey, ProfileCollector, QueryFinishGuard,
@@ -88,9 +83,6 @@ pub use transaction_scope::{
     CancelReason, SessionTransactionController, TransactionCommandResult, TransactionId,
     TransactionScope, TransactionState,
 };
-
-// ── M4: Result boundary types ──
-pub use result_boundary::{ChunkOrDone, ResultBoundary, ResultBoundaryGuard};
 
 // ── M4: Memory pool types ──
 pub use memory_pool::{

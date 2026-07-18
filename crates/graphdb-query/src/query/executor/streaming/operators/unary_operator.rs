@@ -38,6 +38,7 @@ pub enum UnaryOperator {
     Unwind {
         unwind_column: String,
         col_index: Option<usize>,
+        layout: Option<Arc<SlotLayout>>,
         all_rows: Vec<Vec<Value>>,
         current_row_index: usize,
         current_unwind_index: usize,
@@ -80,6 +81,7 @@ impl UnaryOperator {
             super::spec::UnarySpec::Unwind { unwind_column } => Self::Unwind {
                 unwind_column: unwind_column.clone(),
                 col_index: None,
+                layout: None,
                 all_rows: Vec::new(),
                 current_row_index: 0,
                 current_unwind_index: 0,
@@ -118,7 +120,7 @@ impl UnaryOperator {
 
     pub fn next(
         &mut self,
-        _base: &mut OperatorBase,
+        base: &mut OperatorBase,
         input: &mut StreamingExecutor,
     ) -> Result<Option<DataChunk>, QueryError> {
         match self {
@@ -154,7 +156,11 @@ impl UnaryOperator {
                             }
                         }
                         if !selected.is_empty() {
-                            return Ok(Some(chunk.take_indices(&selected)));
+                            let selected_chunk = chunk.take_indices(&selected);
+                            return Ok(Some(DataChunk::new_with_layout(
+                                selected_chunk.rows,
+                                Arc::clone(&base.output_layout),
+                            )));
                         }
                     }
                     None => return Ok(None),
@@ -162,17 +168,10 @@ impl UnaryOperator {
             },
             Self::Project {
                 output_expressions,
-                output_col_names,
-            } => {
+                output_col_names: _,
+            } => loop {
                 if let Some(chunk) = input.advance()? {
-                    let input_col_names = chunk.col_names();
                     let input_layout = chunk.get_layout();
-                    let output_col_names_final: Vec<String> = if output_col_names.is_empty() {
-                        input_col_names.clone()
-                    } else {
-                        output_col_names.clone()
-                    };
-                    let layout = Arc::new(SlotLayout::from_names(&output_col_names_final));
                     let mut projected_rows = Vec::new();
                     for row in chunk.rows {
                         let mut context = ValueRowContext::new(row, input_layout.clone());
@@ -190,11 +189,16 @@ impl UnaryOperator {
                         }
                         projected_rows.push(projected_row);
                     }
-                    Ok(Some(DataChunk::new_with_layout(projected_rows, layout)))
+                    if !projected_rows.is_empty() {
+                        return Ok(Some(DataChunk::new_with_layout(
+                            projected_rows,
+                            Arc::clone(&base.output_layout),
+                        )));
+                    }
                 } else {
-                    Ok(None)
+                    return Ok(None);
                 }
-            }
+            },
             Self::Limit {
                 offset,
                 limit,
@@ -226,7 +230,10 @@ impl UnaryOperator {
                         chunk.rows.truncate(remaining_limit);
                     }
                     *consumed += chunk.rows.len() as u32;
-                    return Ok(Some(chunk));
+                    return Ok(Some(DataChunk::new_with_layout(
+                        chunk.rows,
+                        Arc::clone(&base.output_layout),
+                    )));
                 }
             }
             Self::Dedup { seen_rows } => {
@@ -238,12 +245,15 @@ impl UnaryOperator {
                         }
                     }
                     if !result_rows.is_empty() {
-                        return Ok(Some(DataChunk::from_rows(result_rows)));
+                        return Ok(Some(DataChunk::new_with_layout(
+                            result_rows,
+                            Arc::clone(&base.output_layout),
+                        )));
                     }
                 }
                 Ok(None)
             }
-            Self::Assign { assignments } => {
+            Self::Assign { assignments } => loop {
                 if let Some(chunk) = input.advance()? {
                     let layout = chunk.get_layout();
                     let mut result_rows = vec![];
@@ -260,19 +270,22 @@ impl UnaryOperator {
                         }
                         result_rows.push(new_row);
                     }
-                    Ok(Some(DataChunk::from_rows(result_rows)))
+                    if !result_rows.is_empty() {
+                        return Ok(Some(DataChunk::new_with_layout(
+                            result_rows,
+                            Arc::clone(&base.output_layout),
+                        )));
+                    }
                 } else {
-                    Ok(None)
+                    return Ok(None);
                 }
-            }
-            Self::Remove { columns_to_remove } => {
+            },
+            Self::Remove { columns_to_remove } => loop {
                 if let Some(chunk) = input.advance()? {
                     let col_names = chunk.col_names();
-                    let mut new_col_names = vec![];
                     let mut indices_to_keep = vec![];
                     for (idx, col_name) in col_names.iter().enumerate() {
                         if !columns_to_remove.contains(col_name) {
-                            new_col_names.push(col_name.clone());
                             indices_to_keep.push(idx);
                         }
                     }
@@ -286,14 +299,20 @@ impl UnaryOperator {
                         }
                         result_rows.push(new_row);
                     }
-                    Ok(Some(DataChunk::from_rows(result_rows)))
+                    if !result_rows.is_empty() {
+                        return Ok(Some(DataChunk::new_with_layout(
+                            result_rows,
+                            Arc::clone(&base.output_layout),
+                        )));
+                    }
                 } else {
-                    Ok(None)
+                    return Ok(None);
                 }
-            }
+            },
             Self::Unwind {
                 unwind_column,
                 col_index,
+                layout,
                 all_rows,
                 current_row_index,
                 current_unwind_index,
@@ -303,6 +322,7 @@ impl UnaryOperator {
                         let col_names = chunk.col_names();
                         let idx = col_names.iter().position(|c| c == unwind_column.as_str());
                         *col_index = idx;
+                        *layout = Some(chunk.get_layout());
                         *all_rows = chunk.rows;
                         *current_row_index = 0;
                         *current_unwind_index = 0;
@@ -323,7 +343,10 @@ impl UnaryOperator {
                                     let mut result_row = row.clone();
                                     result_row[*idx] = items[*current_unwind_index].clone();
                                     *current_unwind_index += 1;
-                                    return Ok(Some(DataChunk::from_rows(vec![result_row])));
+                                    return Ok(Some(DataChunk::new_with_layout(
+                                        vec![result_row],
+                                        Arc::clone(&base.output_layout),
+                                    )));
                                 }
                             }
                         }
@@ -333,7 +356,7 @@ impl UnaryOperator {
                 }
                 Ok(None)
             }
-            Self::AppendVertices { vertex_properties } => {
+            Self::AppendVertices { vertex_properties } => loop {
                 if let Some(chunk) = input.advance()? {
                     let layout = chunk.get_layout();
                     let mut result_rows = Vec::new();
@@ -348,30 +371,39 @@ impl UnaryOperator {
                         }
                         result_rows.push(new_row);
                     }
-                    Ok(Some(DataChunk::from_rows(result_rows)))
+                    if !result_rows.is_empty() {
+                        return Ok(Some(DataChunk::new_with_layout(
+                            result_rows,
+                            Arc::clone(&base.output_layout),
+                        )));
+                    }
                 } else {
-                    Ok(None)
+                    return Ok(None);
                 }
-            }
+            },
             Self::Sample { count, consumed } => {
                 if *consumed >= *count {
                     return Ok(None);
                 }
-                match input.advance()? {
-                    Some(chunk) => {
-                        let remaining = (*count - *consumed) as usize;
-                        let layout = chunk.get_layout();
-                        let take_count = chunk.rows.len().min(remaining);
-                        let rows: Vec<Vec<Value>> =
-                            chunk.rows.into_iter().take(take_count).collect();
-                        *consumed += take_count as u64;
-                        if !rows.is_empty() {
-                            Ok(Some(DataChunk::new_with_layout(rows, layout)))
-                        } else {
-                            Ok(None)
+                loop {
+                    match input.advance()? {
+                        Some(chunk) => {
+                            let remaining = (*count - *consumed) as usize;
+                            let take_count = chunk.rows.len().min(remaining);
+                            let rows: Vec<Vec<Value>> =
+                                chunk.rows.into_iter().take(take_count).collect();
+                            *consumed += take_count as u64;
+                            if !rows.is_empty() {
+                                return Ok(Some(DataChunk::new_with_layout(
+                                    rows,
+                                    Arc::clone(&base.output_layout),
+                                )));
+                            } else {
+                                continue;
+                            }
                         }
+                        None => return Ok(None),
                     }
-                    None => Ok(None),
                 }
             }
         }
@@ -379,48 +411,21 @@ impl UnaryOperator {
 
     pub fn stop(
         &mut self,
-        _base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
+        base: &mut OperatorBase,
+        _input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
-        match self {
-            Self::Filter { .. }
-            | Self::Project { .. }
-            | Self::Limit { .. }
-            | Self::Dedup { .. }
-            | Self::Assign { .. }
-            | Self::Remove { .. }
-            | Self::Unwind { .. }
-            | Self::AppendVertices { .. }
-            | Self::Sample { .. } => input.stop(),
-        }
+        base.lifecycle.mark_stopped();
+        Ok(())
     }
 
     pub fn close(
         &mut self,
-        _base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
+        base: &mut OperatorBase,
+        _input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
-        match self {
-            Self::Filter { .. }
-            | Self::Project { .. }
-            | Self::Limit { .. }
-            | Self::Dedup { .. }
-            | Self::Unwind { .. }
-            | Self::AppendVertices { .. }
-            | Self::Sample { .. } => {
-                if _base.lifecycle.can_close() {
-                    input.close()?;
-                    _base.lifecycle.mark_closed();
-                }
-                Ok(())
-            }
-            Self::Assign { .. } | Self::Remove { .. } => {
-                if _base.lifecycle.can_close() {
-                    input.close()?;
-                    _base.lifecycle.mark_closed();
-                }
-                Ok(())
-            }
+        if base.lifecycle.can_close() {
+            base.lifecycle.mark_closed();
         }
+        Ok(())
     }
 }

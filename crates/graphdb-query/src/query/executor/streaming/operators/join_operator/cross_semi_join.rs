@@ -10,9 +10,8 @@ use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::executor::ValueRowContext;
 use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::operators::base::OperatorLifecycle;
-use crate::query::executor::streaming::slot::{combine_layouts, SlotLayout};
 
-use super::{build_combined_names, close_common};
+use super::close_common;
 
 pub(super) fn next_cross_join(
     all_left_rows: &mut Vec<Vec<Value>>,
@@ -69,18 +68,10 @@ pub(super) fn next_cross_join(
     if result_rows.is_empty() {
         Ok(None)
     } else {
-        let left_layout = Arc::new(SlotLayout::from_names(
-            &(0..all_left_rows.first().map(|r| r.len()).unwrap_or(0))
-                .map(|i| format!("col_{}", i))
-                .collect::<Vec<_>>(),
-        ));
-        let right_layout = Arc::new(SlotLayout::from_names(&build_combined_names(
-            &[],
-            right_col_names,
-            all_right_rows.first().map(|r| r.len()).unwrap_or(0),
-        )));
-        let layout = Arc::new(combine_layouts(&left_layout, &right_layout));
-        Ok(Some(DataChunk::new_with_layout(result_rows, layout)))
+        Ok(Some(DataChunk::new_with_layout(
+            result_rows,
+            Arc::clone(&base.output_layout),
+        )))
     }
 }
 
@@ -104,7 +95,7 @@ pub(super) fn next_semi_join(
         *right_consumed = true;
     }
 
-    if let Some(left_chunk) = left.advance()? {
+    while let Some(left_chunk) = left.advance()? {
         let left_col_names = left_chunk.col_names();
         let mut result_rows = Vec::new();
 
@@ -133,15 +124,15 @@ pub(super) fn next_semi_join(
             }
         }
 
-        if result_rows.is_empty() {
-            Ok(None)
-        } else {
-            let left_layout = left_chunk.get_layout();
-            Ok(Some(DataChunk::new_with_layout(result_rows, left_layout)))
+        if !result_rows.is_empty() {
+            return Ok(Some(DataChunk::new_with_layout(
+                result_rows,
+                Arc::clone(&base.output_layout),
+            )));
         }
-    } else {
-        Ok(None)
     }
+
+    Ok(None)
 }
 
 pub(super) fn close_cross(
@@ -149,8 +140,6 @@ pub(super) fn close_cross(
     memory_tracker: &mut MemoryTracker,
     all_left_rows: &mut Vec<Vec<Value>>,
     all_right_rows: &mut Vec<Vec<Value>>,
-    left: &mut StreamingExecutor,
-    right: &mut StreamingExecutor,
 ) -> Result<(), QueryError> {
     close_common(
         lifecycle,
@@ -159,8 +148,6 @@ pub(super) fn close_cross(
             all_left_rows.clear();
             all_right_rows.clear();
         },
-        left,
-        right,
     )
 }
 
@@ -168,8 +155,6 @@ pub(super) fn close_semi(
     lifecycle: &mut OperatorLifecycle,
     memory_tracker: &mut MemoryTracker,
     right_rows: &mut Vec<Vec<Value>>,
-    left: &mut StreamingExecutor,
-    right: &mut StreamingExecutor,
 ) -> Result<(), QueryError> {
     close_common(
         lifecycle,
@@ -177,7 +162,5 @@ pub(super) fn close_semi(
         || {
             right_rows.clear();
         },
-        left,
-        right,
     )
 }

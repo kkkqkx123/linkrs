@@ -92,7 +92,7 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
         {
             let order_str = orders
                 .iter()
-                .map(|o| format!("{} {:?}", o.column, o.direction))
+                .map(|o| format!("slot#{} {}", o.slot, if o.ascending { "ASC" } else { "DESC" }))
                 .collect::<Vec<_>>()
                 .join(", ");
             if !order_str.is_empty() {
@@ -105,7 +105,10 @@ pub fn physical_plan_to_plan_description(plan: &PhysicalPlan) -> PlanDescription
         ) = &props.distribution
         {
             if !keys.is_empty() {
-                pairs.push(Pair::new("hash_keys", keys.join(", ")));
+                pairs.push(Pair::new(
+                    "hash_slots",
+                    keys.iter().map(|s| format!("slot#{}", s)).collect::<Vec<_>>().join(", "),
+                ));
             }
         }
 

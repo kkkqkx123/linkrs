@@ -9,9 +9,10 @@ use crate::query::executor::base::{ExecutionContext, ExecutionResult};
 use crate::query::executor::streaming::instance::{
     QueryBindings, QueryExecutionInstance, ResultSink,
 };
+use crate::core::types::TransactionId;
 use crate::query::executor::streaming::plan::PhysicalPlan;
 use crate::query::executor::streaming::transaction_scope::TransactionScope;
-use crate::query::executor::streaming::{StreamingQueryExecutor, StreamingQueryResult};
+use crate::query::executor::streaming::StreamingQueryResult;
 use crate::query::validator::ValidatedStatement;
 use crate::query::QueryContext;
 use crate::query::QueryRequestContext;
@@ -136,25 +137,20 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         }
 
         let execute_start = Instant::now();
-        let (physical_plan, optimized_plan) = self.compile(query_context.clone(), &validated)?;
-
-        let result = if optimized_plan.partition_spec().is_some() {
-            self.execute_plan(query_context.clone(), optimized_plan)?
+        let (physical_plan, _) = self.compile(query_context.clone(), &validated)?;
+        let txn_scope = if is_dml {
+            TransactionScope::auto_commit(crate::core::types::TransactionId::new(
+                next_transaction_id(),
+            ))
         } else {
-            let txn_scope = if is_dml {
-                TransactionScope::auto_commit(crate::core::types::TransactionId::new(
-                    next_transaction_id(),
-                ))
-            } else {
-                TransactionScope::None
-            };
-            self.execute_compiled_with_scope(
-                physical_plan.clone(),
-                query_context.clone(),
-                ResultSink::Materialize,
-                txn_scope,
-            )?
+            TransactionScope::None
         };
+        let result = self.execute_compiled_with_scope(
+            physical_plan.clone(),
+            query_context.clone(),
+            ResultSink::Materialize,
+            txn_scope,
+        )?;
         let execution_time_ms = execute_start.elapsed().as_millis() as f64;
 
         let should_cache = !matches!(
@@ -240,13 +236,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             _ => {}
         }
 
-        let (physical_plan, optimized_plan) = self.compile(query_context.clone(), &validated)?;
-
-        if optimized_plan.partition_spec().is_some() {
-            self.execute_plan_to_stream(query_context, optimized_plan)
-        } else {
-            self.execute_compiled_stream(physical_plan, query_context)
-        }
+        let (physical_plan, _) = self.compile(query_context.clone(), &validated)?;
+        self.execute_compiled_stream(physical_plan, query_context)
     }
 
     pub fn execute_query_with_request(
@@ -266,7 +257,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             self.validate_query_with_context(parser_result.ast.clone(), query_context.clone())?;
         let validated = ValidatedStatement::new(parser_result.ast.clone(), validation_info);
 
-        match validated.ast.stmt() {
+        let stmt = validated.ast.stmt().clone();
+        match &stmt {
             crate::query::parser::ast::Stmt::Explain(explain_stmt) => {
                 return self.execute_explain(explain_stmt, query_context);
             }
@@ -276,13 +268,26 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             _ => {}
         }
 
-        let (physical_plan, optimized_plan) = self.compile(query_context.clone(), &validated)?;
-
-        if optimized_plan.partition_spec().is_some() {
-            self.execute_plan(query_context, optimized_plan)
+        let (physical_plan, _) = self.compile(query_context.clone(), &validated)?;
+        let scope = if Self::statement_requires_auto_commit(&stmt) {
+            TransactionScope::auto_commit(TransactionId(next_transaction_id()))
         } else {
-            self.execute_compiled(physical_plan, query_context, ResultSink::Materialize)
-        }
+            TransactionScope::None
+        };
+        self.execute_compiled_with_scope(physical_plan, query_context, ResultSink::Materialize, scope)
+    }
+
+    /// Check if a statement needs an auto-commit transaction scope.
+    fn statement_requires_auto_commit(stmt: &crate::query::parser::ast::Stmt) -> bool {
+        matches!(
+            stmt,
+            crate::query::parser::ast::Stmt::Insert(..)
+                | crate::query::parser::ast::Stmt::Update(..)
+                | crate::query::parser::ast::Stmt::Delete(..)
+                | crate::query::parser::ast::Stmt::Set(..)
+                | crate::query::parser::ast::Stmt::Remove(..)
+                | crate::query::parser::ast::Stmt::Merge(..)
+        )
     }
 
     pub fn execute_query_with_metrics(
@@ -435,25 +440,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let physical_plan = self.build_physical_plan(&optimized_plan, &query_context)?;
 
         let execute_start = Instant::now();
-        let has_partition = optimized_plan.partition_spec().is_some();
-        let result = if has_partition {
-            match self.execute_plan(query_context, optimized_plan) {
-                Ok(result) => result,
-                Err(e) => {
-                    profile.stages.execute_us = execute_start.elapsed().as_micros() as u64;
-                    let error_info = ErrorInfo::new(
-                        ErrorType::ExecutionError,
-                        QueryPhase::Execute,
-                        e.to_string(),
-                    );
-                    profile.mark_failed_with_info(error_info.clone());
-                    profile.total_duration_us = total_start.elapsed().as_micros() as u64;
-                    self.stats_manager
-                        .record_failed_query(profile.clone(), error_info);
-                    return Err(e);
-                }
-            }
-        } else {
+        let result =
             match self.execute_compiled(physical_plan, query_context, ResultSink::Materialize) {
                 Ok(result) => result,
                 Err(e) => {
@@ -469,8 +456,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                         .record_failed_query(profile.clone(), error_info);
                     return Err(e);
                 }
-            }
-        };
+            };
 
         profile.stages.execute_us = execute_start.elapsed().as_micros() as u64;
         profile.result_count = result.count();
@@ -502,6 +488,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         sink: ResultSink,
         transaction_scope: TransactionScope,
     ) -> DBResult<ExecutionResult> {
+        if matches!(sink, ResultSink::Stream) {
+            return Err(DBError::from(QueryError::execution(
+                "Use execute_compiled_stream for streaming sink".to_string(),
+            )));
+        }
+
         let exec_ctx = self.build_execution_context(&query_context);
         let mut bindings = QueryBindings::from_context(&exec_ctx, transaction_scope);
         bindings.query_id = exec_ctx.query_id;
@@ -524,14 +516,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     .map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;
                 Ok(ExecutionResult::Empty)
             }
-            ResultSink::Stream => {
-                let _ = instance
-                    .into_stream()
-                    .map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;
-                Err(DBError::from(QueryError::execution(
-                    "Use execute_compiled_stream for streaming sink".to_string(),
-                )))
-            }
+            ResultSink::Stream => unreachable!("stream sink is rejected before instantiation"),
         }
     }
 
@@ -606,142 +591,5 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             context.space_name = Some(space_name.clone());
         }
         context
-    }
-
-    pub(crate) fn execute_physical_plan(
-        &self,
-        physical_plan: Arc<PhysicalPlan>,
-        query_context: Arc<QueryContext>,
-    ) -> DBResult<ExecutionResult> {
-        let exec_ctx = self.build_execution_context(&query_context);
-        let mut bindings = QueryBindings::from_context(&exec_ctx, TransactionScope::None);
-        bindings.query_id = exec_ctx.query_id;
-
-        let mut instance = QueryExecutionInstance::instantiate_plan(
-            physical_plan,
-            bindings,
-            ResultSink::Materialize,
-            self.query_registry.clone(),
-        )
-        .map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;
-
-        instance
-            .execute()
-            .map_err(|e| DBError::from(QueryError::execution(e.to_string())))
-    }
-
-    #[allow(clippy::field_reassign_with_default)]
-    pub(crate) fn execute_plan(
-        &mut self,
-        query_context: Arc<QueryContext>,
-        plan: crate::query::planning::plan::ExecutionPlan,
-    ) -> DBResult<ExecutionResult> {
-        let has_partition = plan.partition_spec().is_some();
-
-        if !has_partition {
-            let physical_plan = self.build_physical_plan(&plan, &query_context)?;
-            return self.execute_physical_plan(physical_plan, query_context);
-        }
-
-        log::debug!("Executing with StreamingExecutor (partitioned fallback)");
-
-        let root_node = plan.root.as_ref().ok_or_else(|| {
-            DBError::from(QueryError::execution("Empty execution plan".to_string()))
-        })?;
-
-        let mut executor = StreamingQueryExecutor::new();
-        let context = self.build_execution_context(&query_context);
-        let partition_spec = plan.partition_spec().unwrap();
-        let physical_plan = crate::query::planning::plan::PartitionedPhysicalPlan::from_logical(
-            root_node.clone(),
-            partition_spec.clone(),
-        );
-        executor
-            .from_partitioned_physical_plan(&physical_plan, &context)
-            .map_err(|e| {
-                DBError::from(QueryError::execution(format!(
-                    "Failed to create streaming executor: {}",
-                    e
-                )))
-            })?;
-
-        executor.execute().map_err(|e| {
-            DBError::from(QueryError::execution(format!(
-                "Streaming execution failed: {:?}",
-                e
-            )))
-        })
-    }
-
-    #[allow(clippy::field_reassign_with_default)]
-    pub fn execute_plan_to_stream(
-        &mut self,
-        query_context: Arc<QueryContext>,
-        plan: crate::query::planning::plan::ExecutionPlan,
-    ) -> DBResult<StreamingQueryResult> {
-        let has_partition = plan.partition_spec().is_some();
-
-        if !has_partition {
-            let physical_plan = self.build_physical_plan(&plan, &query_context)?;
-            let exec_ctx = self.build_execution_context(&query_context);
-            let mut bindings = QueryBindings::from_context(&exec_ctx, TransactionScope::None);
-            bindings.query_id = exec_ctx.query_id;
-
-            let instance = QueryExecutionInstance::instantiate_plan(
-                physical_plan,
-                bindings,
-                ResultSink::Stream,
-                self.query_registry.clone(),
-            )
-            .map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;
-
-            return instance
-                .into_stream()
-                .map_err(|e| DBError::from(QueryError::execution(e.to_string())));
-        }
-
-        log::debug!("Executing with StreamingExecutor (stream, partitioned fallback)");
-
-        let root_node = plan.root.as_ref().ok_or_else(|| {
-            DBError::from(QueryError::execution("Empty execution plan".to_string()))
-        })?;
-
-        let mut executor = StreamingQueryExecutor::new();
-        let context = self.build_execution_context(&query_context);
-        let partition_spec = plan.partition_spec().unwrap();
-        let physical_plan = crate::query::planning::plan::PartitionedPhysicalPlan::from_logical(
-            root_node.clone(),
-            partition_spec.clone(),
-        );
-        executor
-            .from_partitioned_physical_plan(&physical_plan, &context)
-            .map_err(|e| {
-                DBError::from(QueryError::execution(format!(
-                    "Failed to create streaming executor: {}",
-                    e
-                )))
-            })?;
-
-        let runtime = executor.runtime().cloned().ok_or_else(|| {
-            DBError::from(QueryError::execution(
-                "No execution runtime available".to_string(),
-            ))
-        })?;
-
-        let stream = executor.into_stream().map_err(|e| {
-            DBError::from(QueryError::execution(format!(
-                "Failed to create result stream: {}",
-                e
-            )))
-        })?;
-
-        let result = StreamingQueryResult::new(stream, runtime);
-
-        let col_names = root_node.col_names().to_vec();
-        if !col_names.is_empty() {
-            result.set_fallback_column_names(col_names);
-        }
-
-        Ok(result)
     }
 }

@@ -25,8 +25,7 @@ pub(super) fn handle(
     if !base.lifecycle.is_opened() {
         return Err(QueryError::execution("Subgraph not opened".to_string()));
     }
-    let chunk = input.advance()?;
-    if let Some(chunk) = chunk {
+    while let Some(chunk) = input.advance()? {
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
             let col_names = chunk.col_names();
@@ -101,7 +100,7 @@ pub(super) fn handle(
             }
 
             if out_rows.is_empty() {
-                return Ok(None);
+                continue;
             }
             let mut new_cols: Vec<ColumnInfo> = col_names
                 .iter()
@@ -123,11 +122,15 @@ pub(super) fn handle(
                 data_type: "string".to_string(),
             });
             let schema = Arc::new(Schema::new(new_cols));
-            Ok(Some(DataChunk::new(out_rows, schema)))
+            return Ok(Some(DataChunk::new_with_layout(
+                out_rows,
+                Arc::clone(&base.output_layout),
+            )));
         } else {
-            Ok(Some(chunk))
+            if !chunk.is_empty() {
+                return Ok(Some(chunk));
+            }
         }
-    } else {
-        Ok(None)
     }
+    Ok(None)
 }

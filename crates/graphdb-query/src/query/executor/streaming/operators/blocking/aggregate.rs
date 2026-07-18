@@ -4,13 +4,20 @@ use crate::core::types::operators::AggregateFunction;
 use crate::core::value::NullType;
 use crate::core::Value;
 use crate::query::executor::streaming::helpers::accumulator_states::AggregateAccumulator;
-use crate::query::executor::streaming::spill::SpilledFile;
+use crate::query::executor::streaming::spill::{HashPartitionSpiller, SpilledFile, SpilledRun};
 
 #[derive(Debug)]
 pub struct AggregateState {
     pub all_rows: Vec<Vec<Value>>,
     pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
     pub spill_files: Vec<SpilledFile>,
+    pub partition_spiller: Option<HashPartitionSpiller>,
+    pub spilled_runs: Vec<Option<SpilledRun>>,
+    pub current_partition: usize,
+    pub has_spilled: bool,
+    /// True once the final aggregate result has been fully emitted.
+    pub output_complete: bool,
+    pub col_names: Vec<String>,
 }
 
 #[derive(Debug)]

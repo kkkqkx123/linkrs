@@ -12,7 +12,10 @@
 use std::collections::HashSet;
 
 use super::properties::{MemoryPolicy, Ordering, PipelineKind};
-use super::types::{FragmentId, OperatorKindSpec, PhysicalOperatorId, PhysicalPlan};
+use super::types::{
+    FragmentId, FragmentKind, InputContract, OperatorKindSpec, PhysicalOperatorId, PhysicalPlan,
+    StateOwnership,
+};
 use crate::core::error::QueryError;
 
 /// The two validation tiers.
@@ -83,6 +86,12 @@ impl PhysicalPlanValidator {
         Self::check_memory_policy(plan, &mut result);
         Self::check_root_output_contract(plan, &mut result);
         Self::check_capability_set(plan, &mut result);
+        Self::check_output_layout_width(plan, &mut result);
+        Self::check_fragment_exchange_layout(plan, &mut result);
+        Self::check_input_contract_consistency(plan, &mut result);
+        Self::check_state_ownership(plan, &mut result);
+        Self::check_fragment_parallelism(plan, &mut result);
+        Self::check_partition_parallelism(plan, &mut result);
 
         // M3.6: Additional structural integrity checks.
         Self::check_fragment_kind_matches(plan, &mut result);
@@ -401,6 +410,42 @@ impl PhysicalPlanValidator {
         }
     }
 
+    /// Each operator's output layout slots must have non-empty type info
+    /// (unless the operator is a command or Start source).
+    fn check_output_layout_width(plan: &PhysicalPlan, result: &mut ValidationResult) {
+        for op in &plan.operators {
+            if op.output_layout.is_empty() {
+                continue;
+            }
+            for slot in &op.output_layout.slots {
+                if slot.data_type.is_none() {
+                    let is_command = matches!(
+                        &op.spec,
+                        OperatorKindSpec::Ddl(_) | OperatorKindSpec::Txn(_)
+                    );
+                    if !is_command {
+                        result.warnings.push(format!(
+                            "Operator {:?} ({}) output slot '{}' has no data type",
+                            op.operator_id, op.explain_name, slot.name
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Exchange fragments must have an exchange_layout set.
+    fn check_fragment_exchange_layout(plan: &PhysicalPlan, result: &mut ValidationResult) {
+        for fragment in plan.fragments.fragments() {
+            if fragment.kind == FragmentKind::Exchange && fragment.exchange_layout.is_none() {
+                result.warnings.push(format!(
+                    "Exchange fragment {:?} has no exchange_layout",
+                    fragment.id
+                ));
+            }
+        }
+    }
+
     // ── M3.6: Additional structural integrity checks ──
 
     /// Fragment kind should be consistent with the root operator type.
@@ -489,6 +534,51 @@ impl PhysicalPlanValidator {
         }
     }
 
+    /// Input contract matches spec kind and fragment inputs.
+    fn check_input_contract_consistency(plan: &PhysicalPlan, result: &mut ValidationResult) {
+        for op in &plan.operators {
+            // NoInput should not have fragment inputs.
+            if let InputContract::NoInput = &op.input_contract {
+                for fragment in plan.fragments.fragments() {
+                    if fragment.root_operator == op.operator_id && !fragment.inputs.is_empty() {
+                        result.warnings.push(format!(
+                            "Operator {:?} ({}) has NoInput contract but its fragment {:?} has {} inputs",
+                            op.operator_id, op.explain_name, fragment.id, fragment.inputs.len()
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    /// State ownership must match operator kind.
+    ///
+    /// Blocking operators (Sort, Aggregate, Distinct, etc.) must be
+    /// `GlobalRuntime` or `TaskLocal` — they own spill/state arenas
+    /// that outlive individual `next()` calls.
+    fn check_state_ownership(plan: &PhysicalPlan, result: &mut ValidationResult) {
+        for op in &plan.operators {
+            let is_blocking = matches!(&op.spec, OperatorKindSpec::Blocking(_));
+            let is_exchange = matches!(&op.spec, OperatorKindSpec::Exchange(_));
+
+            match op.state_ownership {
+                StateOwnership::TreeLocal => {
+                    // TreeLocal is fine for source, unary, join, set, apply,
+                    // sink, graph, txn, fulltext, vector, ddl.
+                    if is_blocking || is_exchange {
+                        result.warnings.push(format!(
+                            "Operator {:?} ({}) is blocking/exchange but has TreeLocal state ownership",
+                            op.operator_id, op.explain_name
+                        ));
+                    }
+                }
+                StateOwnership::GlobalRuntime | StateOwnership::TaskLocal => {
+                    // These are expected for blocking/exchange operators.
+                }
+            }
+        }
+    }
+
     /// Check operator spec internal consistency.
     ///
     /// M3.6: validations that catch spec-level errors before execution.
@@ -502,6 +592,60 @@ impl PhysicalPlanValidator {
                         result.warnings.push(format!(
                             "Source operator {:?} ({}) is root of fragment {:?} which has inputs",
                             op.operator_id, op.explain_name, fragment.id
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Fragment parallelism consistency: each operator's min_workers must be
+    /// <= max_workers, and within the same fragment all operators should have
+    /// compatible parallelism settings.
+    fn check_fragment_parallelism(plan: &PhysicalPlan, result: &mut ValidationResult) {
+        for op in &plan.operators {
+            let p = &op.properties.parallelism;
+            if p.min_workers > p.max_workers {
+                result.errors.push(format!(
+                    "Operator {:?} ({}) has min_workers {} > max_workers {}",
+                    op.operator_id, op.explain_name, p.min_workers, p.max_workers
+                ));
+            }
+            if p.min_workers < 1 {
+                result.errors.push(format!(
+                    "Operator {:?} ({}) has min_workers {} < 1",
+                    op.operator_id, op.explain_name, p.min_workers
+                ));
+            }
+        }
+    }
+
+    /// Validate that PartitionedInputs have consistent parallelism across all
+    /// partition members.
+    fn check_partition_parallelism(plan: &PhysicalPlan, result: &mut ValidationResult) {
+        for op in &plan.operators {
+            if let InputContract::PartitionedInputs {
+                side: _,
+                members,
+            } = &op.input_contract
+            {
+                if members.is_empty() {
+                    result.warnings.push(format!(
+                        "Operator {:?} ({}) has empty PartitionedInputs",
+                        op.operator_id, op.explain_name
+                    ));
+                    continue;
+                }
+                let base_workers = members[0].properties.parallelism.max_workers;
+                for member in members {
+                    if member.properties.parallelism.max_workers != base_workers {
+                        result.warnings.push(format!(
+                            "Operator {:?} ({}) has partition member {:?} with {} workers, expected {}",
+                            op.operator_id,
+                            op.explain_name,
+                            member.fragment,
+                            member.properties.parallelism.max_workers,
+                            base_workers
                         ));
                     }
                 }

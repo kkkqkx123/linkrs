@@ -4,14 +4,14 @@
 //! distribution, ordering, pipeline kind, parallelism, and memory policy.
 //! Used in the cost model, optimizer, and parallel execution planning.
 
-use super::super::executor::SortDirection;
+use super::super::slot::SlotId;
 
 /// Data distribution strategy for the output of a physical node.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Distribution {
     Single,
     Broadcast,
-    HashPartitioned(Vec<String>),
+    HashPartitioned(Vec<SlotId>),
 }
 
 /// Output ordering guarantee.
@@ -23,8 +23,8 @@ pub enum Ordering {
 
 #[derive(Debug, Clone)]
 pub struct SortOrder {
-    pub column: String,
-    pub direction: SortDirection,
+    pub slot: SlotId,
+    pub ascending: bool,
 }
 
 /// Whether the operator is streaming (produces incremental results)

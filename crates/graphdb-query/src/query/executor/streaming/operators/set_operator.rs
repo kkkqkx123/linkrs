@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use crate::core::error::QueryError;
 use crate::core::Value;
@@ -119,7 +120,6 @@ impl SetOperator {
                 base.ensure_not_cancelled()?;
                 if !*left_consumed {
                     if let Some(chunk) = left.advance()? {
-                        let layout = chunk.get_layout();
                         let mut result_rows = Vec::new();
                         for row in chunk.rows {
                             let row_str = format!("{:?}", row);
@@ -130,7 +130,10 @@ impl SetOperator {
                             }
                         }
                         if !result_rows.is_empty() {
-                            return Ok(Some(DataChunk::new_with_layout(result_rows, layout)));
+                            return Ok(Some(DataChunk::new_with_layout(
+                                result_rows,
+                                Arc::clone(&base.output_layout),
+                            )));
                         }
                         continue;
                     } else {
@@ -139,7 +142,6 @@ impl SetOperator {
                 }
 
                 if let Some(chunk) = right.advance()? {
-                    let layout = chunk.get_layout();
                     let mut result_rows = Vec::new();
                     for row in chunk.rows {
                         let row_str = format!("{:?}", row);
@@ -150,24 +152,41 @@ impl SetOperator {
                         }
                     }
                     if !result_rows.is_empty() {
-                        return Ok(Some(DataChunk::new_with_layout(result_rows, layout)));
+                        return Ok(Some(DataChunk::new_with_layout(
+                            result_rows,
+                            Arc::clone(&base.output_layout),
+                        )));
                     }
                     continue;
                 }
                 return Ok(None);
             },
 
-            Self::UnionAll { left_consumed, .. } => {
+            Self::UnionAll { left_consumed, .. } => loop {
                 if !*left_consumed {
                     if let Some(chunk) = left.advance()? {
-                        return Ok(Some(chunk));
+                        if !chunk.is_empty() {
+                            return Ok(Some(DataChunk::new_with_layout(
+                                chunk.rows,
+                                Arc::clone(&base.output_layout),
+                            )));
+                        }
                     } else {
                         *left_consumed = true;
                     }
                 }
 
-                right.advance()
-            }
+                if let Some(chunk) = right.advance()? {
+                    if !chunk.is_empty() {
+                        return Ok(Some(DataChunk::new_with_layout(
+                            chunk.rows,
+                            Arc::clone(&base.output_layout),
+                        )));
+                    }
+                } else {
+                    return Ok(None);
+                }
+            },
 
             Self::Intersect {
                 left_rows,
@@ -209,7 +228,10 @@ impl SetOperator {
                 if result_rows.is_empty() {
                     Ok(None)
                 } else {
-                    Ok(Some(DataChunk::from_rows(result_rows)))
+                    Ok(Some(DataChunk::new_with_layout(
+                        result_rows,
+                        Arc::clone(&base.output_layout),
+                    )))
                 }
             }
 
@@ -241,7 +263,10 @@ impl SetOperator {
                     if result_rows.is_empty() {
                         continue;
                     }
-                    return Ok(Some(DataChunk::from_rows(result_rows)));
+                    return Ok(Some(DataChunk::new_with_layout(
+                        result_rows,
+                        Arc::clone(&base.output_layout),
+                    )));
                 }
                 return Ok(None);
             },
@@ -277,7 +302,10 @@ impl SetOperator {
                             }
                         }
                         if !result_rows.is_empty() {
-                            return Ok(Some(DataChunk::from_rows(result_rows)));
+                            return Ok(Some(DataChunk::new_with_layout(
+                                result_rows,
+                                Arc::clone(&base.output_layout),
+                            )));
                         }
                         continue;
                     }
@@ -289,30 +317,19 @@ impl SetOperator {
 
     pub fn stop(
         &mut self,
-        _base: &mut OperatorBase,
-        left: &mut StreamingExecutor,
-        right: &mut StreamingExecutor,
+        base: &mut OperatorBase,
+        _left: &mut StreamingExecutor,
+        _right: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
-        match self {
-            Self::Union { .. }
-            | Self::UnionAll { .. }
-            | Self::Intersect { .. }
-            | Self::Except { .. } => {
-                left.stop()?;
-                right.stop()
-            }
-            Self::Minus { .. } => {
-                left.stop()?;
-                Ok(())
-            }
-        }
+        base.lifecycle.mark_stopped();
+        Ok(())
     }
 
     pub fn close(
         &mut self,
         base: &mut OperatorBase,
-        left: &mut StreamingExecutor,
-        right: &mut StreamingExecutor,
+        _left: &mut StreamingExecutor,
+        _right: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
         match self {
             Self::Union {
@@ -323,28 +340,16 @@ impl SetOperator {
                 if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     seen_rows.clear();
-                    let left_err = left.close().err();
-                    let right_err = right.close().err();
                     base.lifecycle.mark_closed();
-                    match (left_err, right_err) {
-                        (Some(e), _) => Err(e),
-                        (_, Some(e)) => Err(e),
-                        _ => Ok(()),
-                    }
+                    Ok(())
                 } else {
                     Ok(())
                 }
             }
             Self::UnionAll { .. } => {
                 if base.lifecycle.can_close() {
-                    let left_err = left.close().err();
-                    let right_err = right.close().err();
                     base.lifecycle.mark_closed();
-                    match (left_err, right_err) {
-                        (Some(e), _) => Err(e),
-                        (_, Some(e)) => Err(e),
-                        _ => Ok(()),
-                    }
+                    Ok(())
                 } else {
                     Ok(())
                 }
@@ -359,14 +364,8 @@ impl SetOperator {
                     memory_tracker.reset();
                     left_rows.clear();
                     right_rows.clear();
-                    let left_err = left.close().err();
-                    let right_err = right.close().err();
                     base.lifecycle.mark_closed();
-                    match (left_err, right_err) {
-                        (Some(e), _) => Err(e),
-                        (_, Some(e)) => Err(e),
-                        _ => Ok(()),
-                    }
+                    Ok(())
                 } else {
                     Ok(())
                 }
@@ -379,14 +378,8 @@ impl SetOperator {
                 if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     exclude_rows.clear();
-                    let left_err = left.close().err();
-                    let right_err = right.close().err();
                     base.lifecycle.mark_closed();
-                    match (left_err, right_err) {
-                        (Some(e), _) => Err(e),
-                        (_, Some(e)) => Err(e),
-                        _ => Ok(()),
-                    }
+                    Ok(())
                 } else {
                     Ok(())
                 }
@@ -398,12 +391,8 @@ impl SetOperator {
             } => {
                 memory_tracker.reset();
                 exclude_rows.clear();
-                let left_err = left.close().err();
                 base.lifecycle.mark_closed();
-                match left_err {
-                    Some(e) => Err(e),
-                    None => Ok(()),
-                }
+                Ok(())
             }
         }
     }

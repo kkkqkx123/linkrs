@@ -125,6 +125,14 @@ impl DataChunk {
     /// Create a DataChunk with explicit SlotLayout.
     /// Schema is derived from the layout's slot metadata.
     pub fn new_with_layout(rows: Vec<Vec<Value>>, layout: Arc<SlotLayout>) -> Self {
+        debug_assert!(
+            layout.is_empty()
+                || rows.is_empty()
+                || rows.iter().all(|row| row.len() == layout.len()),
+            "DataChunk::new_with_layout: row width {} does not match layout width {}",
+            rows.first().map(Vec::len).unwrap_or(0),
+            layout.len()
+        );
         let columns: Vec<ColumnInfo> = layout
             .slots
             .iter()

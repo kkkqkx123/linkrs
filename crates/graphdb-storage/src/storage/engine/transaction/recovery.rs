@@ -12,11 +12,11 @@ use crate::storage::index::{EdgeIndexOps, VertexIndexOps};
 use crate::storage::types::StoragePropertyDef;
 use crate::transaction::codec::bytes_to_value;
 use crate::transaction::wal::{
-    AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo,
-    CreateEdgeIndexRedo, CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo,
-    CreateVertexTypeRedo, DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo,
-    DeleteVertexPropRedo, DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo,
-    InsertEdgeRedo, RenameEdgePropRedo, RenameVertexPropRedo, UpdateEdgePropRedo,
+    AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
+    CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
+    DeleteEdgePropRedo, DeleteEdgeRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo,
+    DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo, InsertEdgeRedo,
+    RenameEdgePropRedo, RenameVertexPropRedo, UpdateEdgePropRedo,
 };
 use graphdb_core::core::metadata::IndexMetadataManager;
 
@@ -717,11 +717,7 @@ impl RecoveryApplier for GraphStorageContext {
         Ok(())
     }
 
-    fn replay_drop_tag_index(
-        &self,
-        redo: &DropTagIndexRedo,
-        _ts: Timestamp,
-    ) -> StorageResult<()> {
+    fn replay_drop_tag_index(&self, redo: &DropTagIndexRedo, _ts: Timestamp) -> StorageResult<()> {
         let _ = self
             .index_metadata_manager()
             .drop_tag_index(redo.space_id, &redo.index_name);

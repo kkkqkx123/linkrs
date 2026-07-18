@@ -7,6 +7,7 @@ use parking_lot::Mutex;
 
 use parking_lot::RwLock;
 
+use super::plan::types::PhysicalOperatorId;
 use super::query_registry::{CancelToken, QueryId, QueryRegistry};
 use super::slot::SlotLayout;
 use super::spill::SpillManager;
@@ -30,6 +31,7 @@ pub struct QueryIdentity {
 /// Per-operator profile snapshot
 #[derive(Debug, Clone, Default)]
 pub struct OperatorProfile {
+    pub physical_operator_id: PhysicalOperatorId,
     pub node_id: i64,
     pub partition_id: Option<usize>,
     pub name: String,
@@ -45,18 +47,22 @@ pub struct OperatorProfile {
 
 /// Identifies an operator instance in a partitioned executor tree.
 ///
-/// A plan node occurs once per local partition, so `node_id` alone is not a
-/// unique profile key. Global and gather operators use `None`.
+/// A physical operator occurs once per local partition. Logical node IDs may
+/// be shared by multiple physical operators, so they are display metadata and
+/// cannot identify a profile entry. Global and gather operators use `None`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OperatorProfileKey {
-    pub node_id: i64,
+    pub physical_operator_id: PhysicalOperatorId,
     pub partition_id: Option<usize>,
 }
 
 impl OperatorProfileKey {
-    pub const fn new(node_id: i64, partition_id: Option<usize>) -> Self {
+    pub const fn new(
+        physical_operator_id: PhysicalOperatorId,
+        partition_id: Option<usize>,
+    ) -> Self {
         Self {
-            node_id,
+            physical_operator_id,
             partition_id,
         }
     }
@@ -103,7 +109,7 @@ impl ProfileCollector {
     }
 
     pub fn record_operator_profile(&mut self, profile: OperatorProfile) {
-        let key = OperatorProfileKey::new(profile.node_id, profile.partition_id);
+        let key = OperatorProfileKey::new(profile.physical_operator_id, profile.partition_id);
         self.operators.insert(key, profile);
     }
 
@@ -130,7 +136,8 @@ impl ProfileCollector {
                     .operators
                     .entry(*key)
                     .or_insert_with(|| OperatorProfile {
-                        node_id: key.node_id,
+                        physical_operator_id: key.physical_operator_id,
+                        node_id: op.node_id,
                         partition_id: key.partition_id,
                         name: op.name.clone(),
                         ..OperatorProfile::default()
@@ -248,7 +255,7 @@ pub struct ExecutionRuntime {
     ///
     /// Operators create/read/update their typed state here during
     /// `open()` / `next()` / `close()`, indexed by [`PhysicalOperatorId`]
-    /// stored in [`OperatorBase::state_index`](super::operators::base::OperatorBase).
+    /// stored in [`OperatorBase::physical_operator_id`](super::operators::base::OperatorBase).
     pub state_arena: Mutex<StateArenaSet>,
 
     /// Correlation frame for [`Argument`](super::operators::source_operator::SourceOperator::Argument)
@@ -673,6 +680,7 @@ mod tests {
     fn test_partition_profile_aggregation_preserves_partition_identity() {
         let mut first = ProfileCollector::new();
         first.record_operator_profile(OperatorProfile {
+            physical_operator_id: PhysicalOperatorId(7),
             node_id: 7,
             partition_id: Some(0),
             name: "ScanVertices".to_string(),
@@ -682,6 +690,7 @@ mod tests {
         });
         let mut second = ProfileCollector::new();
         second.record_operator_profile(OperatorProfile {
+            physical_operator_id: PhysicalOperatorId(7),
             node_id: 7,
             partition_id: Some(1),
             name: "ScanVertices".to_string(),
@@ -697,7 +706,7 @@ mod tests {
         assert_eq!(
             aggregate
                 .operators
-                .get(&OperatorProfileKey::new(7, Some(0)))
+                .get(&OperatorProfileKey::new(PhysicalOperatorId(7), Some(0)))
                 .expect("partition zero profile")
                 .output_rows,
             2
@@ -705,7 +714,7 @@ mod tests {
         assert_eq!(
             aggregate
                 .operators
-                .get(&OperatorProfileKey::new(7, Some(1)))
+                .get(&OperatorProfileKey::new(PhysicalOperatorId(7), Some(1)))
                 .expect("partition one profile")
                 .peak_memory_bytes,
             20

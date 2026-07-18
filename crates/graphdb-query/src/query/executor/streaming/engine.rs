@@ -21,6 +21,8 @@ use crate::core::types::expr::Expression;
 use crate::query::executor::base::{MemoryBudget, MemoryTracker};
 use crate::query::executor::streaming::plan::types::SyntheticNodeIdAllocator;
 use crate::query::executor::streaming::pool::MorselWorkerPool;
+use crate::query::executor::streaming::slot::SlotLayout;
+use crate::query::executor::streaming::spill::{SpillConfig, SpillManager};
 
 /// Streaming execution engine
 ///
@@ -50,6 +52,8 @@ pub struct StreamingExecutionEngine {
     /// Allocator for synthetic node IDs (Gather, Start sources, etc.).
     /// Replaces hardcoded sentinel values to avoid collision with real IDs.
     synthetic_id_alloc: SyntheticNodeIdAllocator,
+    /// Spill configuration for blocking operators that support disk spill.
+    spill_config: SpillConfig,
 }
 
 impl StreamingExecutionEngine {
@@ -63,6 +67,7 @@ impl StreamingExecutionEngine {
             max_buffered_chunks: 10,
             runtime: None,
             synthetic_id_alloc: SyntheticNodeIdAllocator::new(),
+            spill_config: SpillConfig::default(),
         }
     }
 
@@ -89,6 +94,17 @@ impl StreamingExecutionEngine {
     /// Returns the maximum number of worker threads.
     pub fn max_workers(&self) -> usize {
         self.max_workers
+    }
+
+    /// Set the spill configuration for blocking operators.
+    pub fn set_spill_config(&mut self, config: SpillConfig) {
+        self.spill_config = config;
+        if let Some(rt) = &self.runtime {
+            let qid = rt.query_id().query_id;
+            if let Ok(manager) = SpillManager::new(self.spill_config.clone(), qid) {
+                rt.set_spill_manager(Some(Arc::new(manager)));
+            }
+        }
     }
 
     /// Set the bounded output capacity used by P8 worker channels.
@@ -189,12 +205,15 @@ impl StreamingExecutionEngine {
             ));
         }
         let partition_count = local_trees.len();
+        let output_layout = Arc::clone(&local_trees[0].base().output_layout);
         for (partition_id, tree) in local_trees.iter_mut().enumerate() {
             tree.set_partition_id(partition_id);
         }
         let gather_id = self.synthetic_id_alloc.allocate();
         let mut gather = StreamingExecutor::Gather(
-            OperatorBase::new(gather_id).with_global(true),
+            OperatorBase::new(gather_id)
+                .with_global(true)
+                .with_output_layout(output_layout),
             local_trees,
             gather_mode,
         );
@@ -246,8 +265,9 @@ impl StreamingExecutionEngine {
         let local_sorts = local_trees
             .into_iter()
             .map(|input| {
+                let output_layout = Arc::clone(&input.base().output_layout);
                 StreamingExecutor::Blocking(
-                    OperatorBase::new(local_sort_id),
+                    OperatorBase::new(local_sort_id).with_output_layout(output_layout),
                     Box::new(input),
                     BlockingOperator::Sort {
                         sort_expressions: sort_expressions.clone(),
@@ -291,6 +311,8 @@ impl StreamingExecutionEngine {
         }
 
         let partition_count = left_local_trees.len();
+        let left_layout = Arc::clone(&left_local_trees[0].base().output_layout);
+        let right_layout = Arc::clone(&right_local_trees[0].base().output_layout);
         for (partition_id, tree) in left_local_trees.iter_mut().enumerate() {
             tree.set_partition_id(partition_id);
         }
@@ -301,12 +323,16 @@ impl StreamingExecutionEngine {
         let left_gather_id = self.synthetic_id_alloc.allocate();
         let right_gather_id = self.synthetic_id_alloc.allocate();
         let mut left_gather = StreamingExecutor::Gather(
-            OperatorBase::new(left_gather_id).with_global(true),
+            OperatorBase::new(left_gather_id)
+                .with_global(true)
+                .with_output_layout(left_layout),
             left_local_trees,
             GatherOperator::concatenate(),
         );
         let mut right_gather = StreamingExecutor::Gather(
-            OperatorBase::new(right_gather_id).with_global(true),
+            OperatorBase::new(right_gather_id)
+                .with_global(true)
+                .with_output_layout(right_layout),
             right_local_trees,
             GatherOperator::concatenate(),
         );
@@ -392,6 +418,15 @@ impl StreamingExecutionEngine {
         if self.max_workers > 1 && runtime.get_shared_scheduler().is_none() {
             let pool = MorselWorkerPool::new(self.max_workers);
             runtime.set_worker_pool(Some(pool));
+        } else if self.max_workers == 1 && runtime.get_shared_scheduler().is_none() {
+            runtime.set_worker_pool(None);
+        }
+        runtime.set_max_buffered_chunks(self.max_buffered_chunks);
+        if runtime.get_spill_manager().is_none() {
+            let qid = runtime.query_id().query_id;
+            if let Ok(manager) = SpillManager::new(self.spill_config.clone(), qid) {
+                runtime.set_spill_manager(Some(Arc::new(manager)));
+            }
         }
         self.runtime = Some(runtime);
     }
@@ -613,6 +648,11 @@ mod tests {
     use super::*;
     use crate::core::Value;
 
+    fn operator_base(plan_node_id: i64, col_names: &[String]) -> OperatorBase {
+        OperatorBase::new(plan_node_id)
+            .with_output_layout(Arc::new(SlotLayout::from_names(col_names)))
+    }
+
     fn create_test_buffer(count: usize) -> Vec<Vec<Value>> {
         (0..count)
             .map(|i| {
@@ -626,7 +666,7 @@ mod tests {
 
     fn scan_executor(rows: Vec<Vec<Value>>, col_names: Vec<String>) -> StreamingExecutor {
         StreamingExecutor::Source(
-            OperatorBase::new(0),
+            operator_base(0, &col_names),
             SourceOperator::ScanVertices {
                 buffer: rows,
                 current_index: 0,
@@ -753,6 +793,56 @@ mod tests {
         assert_eq!(total, 10);
     }
 
+    #[test]
+    fn hash_join_skips_unmatched_probe_chunks_before_later_match() {
+        use super::super::operators::join_operator::JoinOperator;
+        use crate::core::types::expr::Expression;
+
+        let left = StreamingExecutor::Source(
+            operator_base(1, &["id".to_string()]).with_chunk_size(1),
+            SourceOperator::ScanVertices {
+                buffer: vec![vec![Value::BigInt(1)], vec![Value::BigInt(2)]],
+                current_index: 0,
+                col_names: vec!["id".to_string()],
+            },
+        );
+        let right = StreamingExecutor::Source(
+            operator_base(2, &["id".to_string()]).with_chunk_size(1),
+            SourceOperator::ScanVertices {
+                buffer: vec![vec![Value::BigInt(2)]],
+                current_index: 0,
+                col_names: vec!["id".to_string()],
+            },
+        );
+        let join = StreamingExecutor::Join(
+            operator_base(3, &["left_id".to_string(), "right_id".to_string()]),
+            Box::new(left),
+            Box::new(right),
+            JoinOperator::HashJoin {
+                join_condition: None,
+                hash_keys: vec![Expression::Variable("id".to_string())],
+                probe_keys: vec![Expression::Variable("id".to_string())],
+                build_side_hash: std::collections::HashMap::new(),
+                all_right_rows: Vec::new(),
+                left_consumed: false,
+                memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
+                right_col_names: Vec::new(),
+            },
+        );
+
+        let mut engine = StreamingExecutionEngine::new();
+        engine.register_executor(0, join);
+        let chunks = engine.execute().expect("hash join should execute");
+
+        assert_eq!(
+            chunks
+                .iter()
+                .flat_map(|chunk| chunk.rows.iter())
+                .collect::<Vec<_>>(),
+            vec![&vec![Value::BigInt(2), Value::BigInt(2)]]
+        );
+    }
+
     // ── Partition execution tests ──
 
     fn partitioned_scan_executor(
@@ -761,7 +851,7 @@ mod tests {
         col_names: Vec<String>,
     ) -> StreamingExecutor {
         StreamingExecutor::Source(
-            OperatorBase::new(0),
+            operator_base(0, &col_names),
             SourceOperator::ScanVertices {
                 buffer: rows,
                 current_index: 0,
@@ -913,8 +1003,8 @@ mod tests {
         engine
             .build_partitioned_executor(
                 vec![
-                    partitioned_scan_executor(create_test_buffer(2), 0, vec!["id".to_string()]),
-                    partitioned_scan_executor(create_test_buffer(3), 1, vec!["id".to_string()]),
+                    partitioned_scan_executor(create_test_buffer(2), 0, vec!["id".to_string(), "name".to_string()]),
+                    partitioned_scan_executor(create_test_buffer(3), 1, vec!["id".to_string(), "name".to_string()]),
                 ],
                 GatherOperator::concatenate(),
                 None,
@@ -928,14 +1018,20 @@ mod tests {
         let profile = runtime.profile().lock();
         assert!(profile
             .operators
-            .contains_key(&super::super::runtime::OperatorProfileKey::new(0, Some(0))));
-        assert!(profile
-            .operators
-            .contains_key(&super::super::runtime::OperatorProfileKey::new(0, Some(1))));
+            .contains_key(&super::super::runtime::OperatorProfileKey::new(
+                super::super::plan::types::PhysicalOperatorId(0),
+                Some(0),
+            )));
         assert!(profile
             .operators
             .contains_key(&super::super::runtime::OperatorProfileKey::new(
-                i64::MIN,
+                super::super::plan::types::PhysicalOperatorId(0),
+                Some(1),
+            )));
+        assert!(profile
+            .operators
+            .contains_key(&super::super::runtime::OperatorProfileKey::new(
+                super::super::plan::types::PhysicalOperatorId(i64::MIN.unsigned_abs() as usize),
                 None
             )));
     }
@@ -950,7 +1046,7 @@ mod tests {
         engine
             .build_partitioned_executor(
                 vec![
-                    partitioned_scan_executor(create_test_buffer(1_500), 0, vec!["id".to_string()]),
+                    partitioned_scan_executor(create_test_buffer(1_500), 0, vec!["id".to_string(), "name".to_string()]),
                     partitioned_scan_executor(
                         (1_500..3_000)
                             .map(|value| {
@@ -961,7 +1057,7 @@ mod tests {
                             })
                             .collect(),
                         1,
-                        vec!["id".to_string()],
+                        vec!["id".to_string(), "name".to_string()],
                     ),
                 ],
                 GatherOperator::concatenate(),
@@ -995,8 +1091,8 @@ mod tests {
         engine
             .build_partitioned_executor(
                 vec![
-                    partitioned_scan_executor(create_test_buffer(5_000), 0, vec!["id".to_string()]),
-                    partitioned_scan_executor(create_test_buffer(5_000), 1, vec!["id".to_string()]),
+                    partitioned_scan_executor(create_test_buffer(5_000), 0, vec!["id".to_string(), "name".to_string()]),
+                    partitioned_scan_executor(create_test_buffer(5_000), 1, vec!["id".to_string(), "name".to_string()]),
                 ],
                 GatherOperator::concatenate(),
                 None,
@@ -1081,8 +1177,12 @@ mod tests {
     #[test]
     fn partitioned_aggregate_runs_once_after_gathering_all_partitions() {
         let mut engine = StreamingExecutionEngine::new();
+        let result_layout = Arc::new(SlotLayout::from_names(&[
+            "COUNT".to_string(),
+            "SUM".to_string(),
+        ]));
         let global = StreamingExecutor::Blocking(
-            OperatorBase::new(40),
+            OperatorBase::new(40).with_output_layout(result_layout),
             Box::new(scan_executor(Vec::new(), vec!["amount".to_string()])),
             BlockingOperator::Aggregate {
                 group_by_expressions: Vec::new(),
@@ -1134,8 +1234,9 @@ mod tests {
     #[test]
     fn partitioned_dedup_removes_duplicates_across_partitions() {
         let mut engine = StreamingExecutionEngine::new();
+        let result_layout = Arc::new(SlotLayout::from_names(&["id".to_string()]));
         let global = StreamingExecutor::Blocking(
-            OperatorBase::new(41),
+            OperatorBase::new(41).with_output_layout(result_layout),
             Box::new(scan_executor(Vec::new(), vec!["id".to_string()])),
             BlockingOperator::Distinct {
                 memory_tracker: MemoryTracker::new(MemoryBudget::default_budget()),
@@ -1162,7 +1263,9 @@ mod tests {
             .expect("partitioned dedup tree should build");
 
         let chunks = engine.execute().expect("partitioned dedup should execute");
-        assert_eq!(extract_ids(&chunks), vec![1, 2, 3]);
+        let mut ids = extract_ids(&chunks);
+        ids.sort();
+        assert_eq!(ids, vec![1, 2, 3]);
         assert_eq!(chunks[0].col_names(), vec!["id"]);
     }
 
@@ -1216,8 +1319,14 @@ mod tests {
         use super::super::operators::join_operator::JoinOperator;
 
         let mut engine = StreamingExecutionEngine::new();
+        let join_layout = Arc::new(SlotLayout::from_names(&[
+            "id".to_string(),
+            "left".to_string(),
+            "id".to_string(),
+            "right".to_string(),
+        ]));
         let global_join = StreamingExecutor::Join(
-            OperatorBase::new(43),
+            OperatorBase::new(43).with_output_layout(join_layout),
             Box::new(scan_executor(
                 Vec::new(),
                 vec!["id".to_string(), "left".to_string()],

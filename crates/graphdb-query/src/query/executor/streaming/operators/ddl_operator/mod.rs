@@ -8,10 +8,47 @@ use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::operators::spec::MigrateAction;
+use crate::query::executor::streaming::slot::{SlotInfo, SlotLayout};
 use crate::query::planning::plan::core::nodes::management::manage_node_enums::{
     EdgeManageNode, IndexManageNode, SpaceManageNode, TagManageNode, UserManageNode,
 };
 use crate::storage::{QueryStorage, StorageSchemaOps};
+
+/// Pre-computed layout for DDL manage result chunks (action, name, status).
+fn manage_result_layout() -> Arc<SlotLayout> {
+    use std::sync::OnceLock;
+    static LAYOUT: OnceLock<Arc<SlotLayout>> = OnceLock::new();
+    LAYOUT
+        .get_or_init(|| {
+            Arc::new(SlotLayout::new(vec![
+                SlotInfo {
+                    slot_id: 0,
+                    name: "action".to_string(),
+                    alias: None,
+                    data_type: Some(crate::core::DataType::String),
+                    nullable: false,
+                    origin: None,
+                },
+                SlotInfo {
+                    slot_id: 1,
+                    name: "name".to_string(),
+                    alias: None,
+                    data_type: Some(crate::core::DataType::String),
+                    nullable: true,
+                    origin: None,
+                },
+                SlotInfo {
+                    slot_id: 2,
+                    name: "status".to_string(),
+                    alias: None,
+                    data_type: Some(crate::core::DataType::String),
+                    nullable: false,
+                    origin: None,
+                },
+            ]))
+        })
+        .clone()
+}
 
 mod auth_executor;
 mod maintenance_executor;
@@ -21,27 +58,13 @@ fn make_manage_result(action: &str, name: Option<&str>, status: &str) -> DataChu
     let name_val = name
         .map(|n| Value::String(n.to_string()))
         .unwrap_or(Value::Null(NullType::Null));
-    let schema = Arc::new(Schema::new(vec![
-        ColumnInfo {
-            name: "action".to_string(),
-            data_type: "string".to_string(),
-        },
-        ColumnInfo {
-            name: "name".to_string(),
-            data_type: "string".to_string(),
-        },
-        ColumnInfo {
-            name: "status".to_string(),
-            data_type: "string".to_string(),
-        },
-    ]));
-    DataChunk::new(
+    DataChunk::new_with_layout(
         vec![vec![
             Value::String(action.to_string()),
             name_val,
             Value::String(status.to_string()),
         ]],
-        schema,
+        manage_result_layout(),
     )
 }
 
@@ -337,7 +360,6 @@ impl DdlOperator {
             | DdlOperator::Analyze { .. }
             | DdlOperator::Migrate { .. } => {
                 if base.lifecycle.can_close() {
-                    input.stop()?;
                     base.lifecycle.mark_stopped();
                 }
                 Ok(())
@@ -348,7 +370,7 @@ impl DdlOperator {
     pub fn close(
         &mut self,
         base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
+        _input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
         match self {
             DdlOperator::SpaceManage { .. }
@@ -361,7 +383,6 @@ impl DdlOperator {
             | DdlOperator::Analyze { .. }
             | DdlOperator::Migrate { .. } => {
                 if base.lifecycle.can_close() {
-                    input.close()?;
                     base.lifecycle.mark_closed();
                 }
                 Ok(())

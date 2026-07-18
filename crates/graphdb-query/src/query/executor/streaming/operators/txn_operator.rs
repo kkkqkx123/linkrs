@@ -74,7 +74,8 @@ impl TxnOperator {
                     crate::query::executor::streaming::TransactionScope::ExplicitBorrowed {
                         transaction_id, ..
                     } => Ok(Some(
-                        TransactionCommandResult::begin(transaction_id).into_data_chunk(),
+                        TransactionCommandResult::begin(transaction_id)
+                            .into_data_chunk(Arc::clone(&base.output_layout)),
                     )),
                     _ => Err(QueryError::execution(
                         "BEGIN: no active transaction found; API layer must call begin before executing this plan".to_string(),
@@ -90,7 +91,8 @@ impl TxnOperator {
                 let txn_id = ctrl.begin_commit()?;
                 ctrl.commit_finalize();
                 Ok(Some(
-                    TransactionCommandResult::commit(txn_id).into_data_chunk(),
+                    TransactionCommandResult::commit(txn_id)
+                        .into_data_chunk(Arc::clone(&base.output_layout)),
                 ))
             }
             Self::Rollback { emitted } => {
@@ -102,7 +104,8 @@ impl TxnOperator {
                 let txn_id = ctrl.begin_rollback()?;
                 ctrl.rollback_finalize();
                 Ok(Some(
-                    TransactionCommandResult::rollback(txn_id).into_data_chunk(),
+                    TransactionCommandResult::rollback(txn_id)
+                        .into_data_chunk(Arc::clone(&base.output_layout)),
                 ))
             }
         }
@@ -110,54 +113,57 @@ impl TxnOperator {
 
     pub fn stop(
         &mut self,
-        _base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
+        base: &mut OperatorBase,
+        _input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
-        input.stop()
+        base.lifecycle.mark_stopped();
+        Ok(())
     }
 
     pub fn close(
         &mut self,
-        _base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
+        base: &mut OperatorBase,
+        _input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
-        if _base.lifecycle.can_close() {
-            input.close()?;
-            _base.lifecycle.mark_closed();
+        if base.lifecycle.can_close() {
+            base.lifecycle.mark_closed();
         }
         Ok(())
     }
 }
 
 impl TransactionCommandResult {
-    fn into_data_chunk(self) -> DataChunk {
+    fn into_data_chunk(
+        self,
+        output_layout: Arc<crate::query::executor::streaming::slot::SlotLayout>,
+    ) -> DataChunk {
         let message = Value::String(self.message);
         let command = Value::String(self.command.to_string());
-        let schema = Arc::new(crate::query::executor::streaming::chunk::Schema::new(vec![
-            crate::query::executor::streaming::chunk::ColumnInfo {
-                name: "command".to_string(),
-                data_type: "string".to_string(),
-            },
-            crate::query::executor::streaming::chunk::ColumnInfo {
-                name: "result".to_string(),
-                data_type: "string".to_string(),
-            },
-        ]));
-        DataChunk::new(vec![vec![command, message]], schema)
+        DataChunk::new_with_layout(vec![vec![command, message]], output_layout)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::query::executor::streaming::builder::StreamingExecutorBuilder;
+    use crate::query::executor::streaming::operators::source_operator::SourceOperator;
     use crate::query::executor::streaming::operators::spec::TxnSpec;
     use crate::query::executor::streaming::runtime::ExecutionRuntime;
 
+    fn input() -> StreamingExecutor {
+        StreamingExecutor::Source(
+            OperatorBase::new(0),
+            SourceOperator::ScanVertices {
+                buffer: Vec::new(),
+                current_index: 0,
+                col_names: Vec::new(),
+            },
+        )
+    }
+
     #[test]
     fn transaction_command_requires_controller() {
-        let input =
-            StreamingExecutorBuilder::build_simple_scan(vec![]).expect("test source should build");
+        let input = input();
         let operator = TxnOperator::from_spec(&TxnSpec::BeginTransaction);
         let mut executor = StreamingExecutor::Txn(OperatorBase::new(1), Box::new(input), operator);
         executor.open().expect("should open");
@@ -172,8 +178,7 @@ mod tests {
 
     #[test]
     fn transaction_command_emits_once() {
-        let input =
-            StreamingExecutorBuilder::build_simple_scan(vec![]).expect("test source should build");
+        let input = input();
         let operator = TxnOperator::from_spec(&TxnSpec::BeginTransaction);
         let mut executor = StreamingExecutor::Txn(OperatorBase::new(1), Box::new(input), operator);
 
@@ -197,8 +202,7 @@ mod tests {
 
     #[test]
     fn test_commit_without_active_transaction() {
-        let input =
-            StreamingExecutorBuilder::build_simple_scan(vec![]).expect("test source should build");
+        let input = input();
         let operator = TxnOperator::from_spec(&TxnSpec::Commit);
         let mut executor = StreamingExecutor::Txn(OperatorBase::new(1), Box::new(input), operator);
 

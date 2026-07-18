@@ -61,8 +61,18 @@ enum StreamState {
 impl StreamingQueryResult {
     /// Wrap a [`ResultStream`] into a thread-safe handle.
     pub fn new(stream: ResultStream, runtime: Arc<ExecutionRuntime>) -> Self {
+        Self::new_with_schema(stream, runtime, Vec::new())
+    }
+
+    /// Wrap a stream with the schema fixed by the physical output contract.
+    /// This keeps empty results observable without waiting for a first chunk.
+    pub fn new_with_schema(
+        stream: ResultStream,
+        runtime: Arc<ExecutionRuntime>,
+        col_names: Vec<String>,
+    ) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(StreamState::Streaming(stream, None))),
+            inner: Arc::new(Mutex::new(StreamState::Streaming(stream, Some(col_names)))),
             runtime,
             on_drop: Arc::new(Mutex::new(None)),
             dropped: Arc::new(AtomicBool::new(false)),

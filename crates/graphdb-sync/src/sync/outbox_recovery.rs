@@ -108,10 +108,7 @@ pub fn find_latest_snapshot(snapshot_dir: &Path) -> Option<OutboxSnapshot> {
 ///
 /// Returns `Ok(Some(snapshot_lsn))` if recovery was performed, `Ok(None)` if the
 /// live database was already healthy, or an error if recovery failed.
-pub fn recover_outbox(
-    live_path: &Path,
-    snapshot_dir: &Path,
-) -> Result<Option<CommitLsn>, String> {
+pub fn recover_outbox(live_path: &Path, snapshot_dir: &Path) -> Result<Option<CommitLsn>, String> {
     if live_database_exists(live_path) {
         return Ok(None);
     }
@@ -128,10 +125,7 @@ pub fn recover_outbox(
 /// Restore the most recent valid snapshot regardless of whether a live
 /// database currently exists. Callers use this after detecting corruption in
 /// an existing SQLite file.
-pub fn restore_latest_snapshot(
-    live_path: &Path,
-    snapshot_dir: &Path,
-) -> Result<CommitLsn, String> {
+pub fn restore_latest_snapshot(live_path: &Path, snapshot_dir: &Path) -> Result<CommitLsn, String> {
     let snapshot = find_latest_snapshot(snapshot_dir).ok_or_else(|| {
         format!(
             "No valid outbox snapshot found in {}",

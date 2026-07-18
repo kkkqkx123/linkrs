@@ -1,5 +1,7 @@
 use std::hash::Hasher;
 
+use std::sync::Arc;
+
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::value::NullType;
@@ -9,11 +11,13 @@ use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::executor::SortDirection;
 use crate::query::executor::streaming::executor::ValueRowContext;
 use crate::query::executor::streaming::helpers::compare_values;
+use crate::query::executor::streaming::slot::SlotLayout;
 use crate::query::executor::streaming::spill::{RunReader, SpillManager, SpilledFile, SpilledRun};
 
 #[derive(Debug)]
 pub struct SortState {
     pub col_names: Vec<String>,
+    pub input_layout: Option<Arc<SlotLayout>>,
     pub all_rows: Vec<Vec<Value>>,
     pub row_iter: Option<std::vec::IntoIter<Vec<Value>>>,
     pub spill_files: Vec<SpilledFile>,
@@ -39,6 +43,7 @@ pub struct RunBuffer {
 pub struct TopNState {
     pub all_rows: Vec<Vec<Value>>,
     pub col_names: Vec<String>,
+    pub input_layout: Option<Arc<SlotLayout>>,
     pub result_iter: Option<std::vec::IntoIter<Vec<Value>>>,
 }
 

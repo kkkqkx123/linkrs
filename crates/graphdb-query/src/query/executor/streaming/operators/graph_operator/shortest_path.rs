@@ -30,8 +30,7 @@ pub(super) fn handle_shortest_path(
     if !base.lifecycle.is_opened() {
         return Err(QueryError::execution("ShortestPath not opened".to_string()));
     }
-    let chunk = input.advance()?;
-    if let Some(chunk) = chunk {
+    while let Some(chunk) = input.advance()? {
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
             let col_names = chunk.col_names();
@@ -84,7 +83,7 @@ pub(super) fn handle_shortest_path(
             }
 
             if out_rows.is_empty() {
-                return Ok(None);
+                continue;
             }
             let mut new_cols: Vec<ColumnInfo> = col_names
                 .iter()
@@ -98,13 +97,17 @@ pub(super) fn handle_shortest_path(
                 data_type: "path".to_string(),
             });
             let schema = Arc::new(Schema::new(new_cols));
-            Ok(Some(DataChunk::new(out_rows, schema)))
+            return Ok(Some(DataChunk::new_with_layout(
+                out_rows,
+                Arc::clone(&base.output_layout),
+            )));
         } else {
-            Ok(Some(chunk))
+            if !chunk.is_empty() {
+                return Ok(Some(chunk));
+            }
         }
-    } else {
-        Ok(None)
     }
+    Ok(None)
 }
 
 pub(super) fn handle_bfs_shortest(
@@ -119,8 +122,7 @@ pub(super) fn handle_bfs_shortest(
     if !base.lifecycle.is_opened() {
         return Err(QueryError::execution("BFSShortest not opened".to_string()));
     }
-    let chunk = input.advance()?;
-    if let Some(chunk) = chunk {
+    while let Some(chunk) = input.advance()? {
         if let Some(storage_lock) = storage {
             let reader = storage_lock.read();
             let col_names = chunk.col_names();
@@ -174,7 +176,7 @@ pub(super) fn handle_bfs_shortest(
             }
 
             if out_rows.is_empty() {
-                return Ok(None);
+                continue;
             }
             let mut new_cols: Vec<ColumnInfo> = col_names
                 .iter()
@@ -188,11 +190,15 @@ pub(super) fn handle_bfs_shortest(
                 data_type: "path".to_string(),
             });
             let schema = Arc::new(Schema::new(new_cols));
-            Ok(Some(DataChunk::new(out_rows, schema)))
+            return Ok(Some(DataChunk::new_with_layout(
+                out_rows,
+                Arc::clone(&base.output_layout),
+            )));
         } else {
-            Ok(Some(chunk))
+            if !chunk.is_empty() {
+                return Ok(Some(chunk));
+            }
         }
-    } else {
-        Ok(None)
     }
+    Ok(None)
 }
