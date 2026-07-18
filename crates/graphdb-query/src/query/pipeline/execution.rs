@@ -65,6 +65,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 TransactionScope::auto_commit(crate::core::types::TransactionId::new(
                     next_transaction_id(),
                 ))
+            } else if cached_plan.is_transaction {
+                TransactionScope::CommandScope
             } else {
                 TransactionScope::None
             };
@@ -109,6 +111,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 | crate::query::parser::ast::Stmt::Delete(_)
                 | crate::query::parser::ast::Stmt::Merge(_)
         );
+        let is_transaction = Self::statement_is_transaction(validated.ast.stmt());
         let is_ddl = matches!(
             validated.ast.stmt(),
             crate::query::parser::ast::Stmt::Create(_)
@@ -142,6 +145,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             TransactionScope::auto_commit(crate::core::types::TransactionId::new(
                 next_transaction_id(),
             ))
+        } else if is_transaction {
+            TransactionScope::CommandScope
         } else {
             TransactionScope::None
         };
@@ -186,6 +191,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 schema_version,
                 index_version,
                 is_dml,
+                is_transaction,
             );
             self.plan_cache.record_execution_with_space(
                 query_text,
@@ -271,6 +277,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let (physical_plan, _) = self.compile(query_context.clone(), &validated)?;
         let scope = if Self::statement_requires_auto_commit(&stmt) {
             TransactionScope::auto_commit(TransactionId(next_transaction_id()))
+        } else if Self::statement_is_transaction(&stmt) {
+            TransactionScope::CommandScope
         } else {
             TransactionScope::None
         };
@@ -287,6 +295,16 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 | crate::query::parser::ast::Stmt::Set(..)
                 | crate::query::parser::ast::Stmt::Remove(..)
                 | crate::query::parser::ast::Stmt::Merge(..)
+        )
+    }
+
+    /// Check if a statement is a transaction control statement (BEGIN/COMMIT/ROLLBACK).
+    fn statement_is_transaction(stmt: &crate::query::parser::ast::Stmt) -> bool {
+        matches!(
+            stmt,
+            crate::query::parser::ast::Stmt::BeginTransaction(..)
+                | crate::query::parser::ast::Stmt::CommitTransaction(..)
+                | crate::query::parser::ast::Stmt::RollbackTransaction(..)
         )
     }
 
@@ -495,6 +513,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         }
 
         let exec_ctx = self.build_execution_context(&query_context);
+        let is_command_scope = matches!(transaction_scope, TransactionScope::CommandScope);
         let mut bindings = QueryBindings::from_context(&exec_ctx, transaction_scope);
         bindings.query_id = exec_ctx.query_id;
 
@@ -505,6 +524,24 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             self.query_registry.clone(),
         )
         .map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;
+
+        // Set up SessionTransactionController for transaction control statements.
+        // For BEGIN, we create/reset the controller and begin tracking.
+        // For COMMIT/ROLLBACK, we reuse the controller from BEGIN.
+        if is_command_scope {
+            let mut ctrl_guard = self.session_controller.write();
+            let controller = if ctrl_guard.as_ref().is_some_and(|c| c.is_active()) {
+                ctrl_guard.clone().unwrap()
+            } else {
+                let ctrl = Arc::new(crate::query::executor::streaming::SessionTransactionController::new());
+                let txn_id = crate::core::types::TransactionId::new(next_transaction_id());
+                ctrl.begin_tracking(txn_id, true).ok();
+                *ctrl_guard = Some(ctrl.clone());
+                ctrl
+            };
+            drop(ctrl_guard);
+            instance.runtime().set_session_controller(controller);
+        }
 
         match sink {
             ResultSink::Materialize => instance

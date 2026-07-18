@@ -70,13 +70,15 @@ pub(super) fn expand_on_chunk(
 
             while let Some(event) = runtime.next_event() {
                 let mut out_row = row.clone();
+                if let Some(ref edge) = event.edge {
+                    out_row.push(Value::Edge(Box::new(edge.clone())));
+                } else {
+                    out_row.push(Value::Null(crate::core::NullType::Null));
+                }
                 out_row.push(Value::Vertex(Box::new(event.vertex)));
-                out_row.push(Value::String(edge_types.join("/")));
-                out_row.push(Value::String(format!("{:?}", direction).to_lowercase()));
                 let mut out_col_names = col_names.clone();
-                out_col_names.push("_expand_vertex".to_string());
-                out_col_names.push("_expand_edge_type".to_string());
-                out_col_names.push("_expand_direction".to_string());
+                out_col_names.push("_expand_edge".to_string());
+                out_col_names.push("_expand_dst".to_string());
                 if row_passes_filter(&out_row, &out_col_names, filter_expr) {
                     out_rows.push(out_row);
                 }

@@ -219,7 +219,8 @@ pub struct ExecutionRuntime {
     /// Optional reference to the global QueryManager for KILL QUERY.
     query_manager: Option<Arc<QueryManager>>,
     /// M2: Session-level transaction controller for transaction commands.
-    session_controller: Option<Arc<SessionTransactionController>>,
+    /// Behind a RwLock for interior mutability (set after runtime is shared).
+    session_controller: parking_lot::RwLock<Option<Arc<SessionTransactionController>>>,
     /// M2: Transaction scope for this execution (set by bindings).
     transaction_scope: Option<TransactionScope>,
     /// M2: Optional reference to the [`QueryRegistry`] for KILL QUERY.
@@ -289,7 +290,7 @@ impl ExecutionRuntime {
             profile: Arc::new(Mutex::new(ProfileCollector::new())),
             resource_owner: Arc::new(Mutex::new(ResourceOwner::new())),
             query_manager: None,
-            session_controller: None,
+            session_controller: parking_lot::RwLock::new(None),
             transaction_scope: None,
             query_registry: None,
             registry_query_id: None,
@@ -379,13 +380,13 @@ impl ExecutionRuntime {
     }
 
     /// Set the session-level transaction controller for transaction commands.
-    pub fn set_session_controller(&mut self, ctrl: Arc<SessionTransactionController>) {
-        self.session_controller = Some(ctrl);
+    pub fn set_session_controller(&self, ctrl: Arc<SessionTransactionController>) {
+        *self.session_controller.write() = Some(ctrl);
     }
 
     /// Return the session-level transaction controller, if set.
-    pub fn session_controller(&self) -> Option<&Arc<SessionTransactionController>> {
-        self.session_controller.as_ref()
+    pub fn session_controller(&self) -> Option<Arc<SessionTransactionController>> {
+        self.session_controller.read().clone()
     }
 
     /// Set the transaction scope for this execution.

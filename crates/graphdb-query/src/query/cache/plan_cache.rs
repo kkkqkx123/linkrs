@@ -246,6 +246,8 @@ pub struct CachedPlan {
     pub dependent_tables: Vec<String>,
     /// Whether the plan performs DML (requires a write transaction scope).
     pub is_dml: bool,
+    /// Whether the plan is a transaction control statement (BEGIN/COMMIT/ROLLBACK).
+    pub is_transaction: bool,
 }
 
 impl CachedPlan {
@@ -482,6 +484,7 @@ impl QueryPlanCache {
             None,
             None,
             false,
+            false,
         );
     }
 
@@ -501,6 +504,7 @@ impl QueryPlanCache {
             None,
             None,
             None,
+            false,
             false,
         );
     }
@@ -527,6 +531,7 @@ impl QueryPlanCache {
         schema_version: Option<u64>,
         index_version: Option<u64>,
         is_dml: bool,
+        is_transaction: bool,
     ) {
         let query_bytes = query.len();
         let param_type_sig = Self::compute_param_type_signature(&param_positions);
@@ -563,6 +568,7 @@ impl QueryPlanCache {
             current_ttl,
             dependent_tables,
             is_dml,
+            is_transaction,
         });
 
         let is_update = self.cache.contains_key(&key);

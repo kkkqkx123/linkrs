@@ -57,7 +57,19 @@ pub fn build_scan_node(
         }
 
         PlanNodeEnum::GetVertices(get_node) => {
-            let vertex_ids = get_node.src_ref().constant_value().map(|v| vec![v]);
+            let vertex_ids = get_node.src_ref().constant_value().map(|v| vec![v]).or_else(|| {
+                let src_vids = get_node.src_vids();
+                if src_vids.is_empty() {
+                    None
+                } else {
+                    Some(
+                        src_vids
+                            .split(',')
+                            .map(|s| crate::core::Value::String(s.trim().to_string()))
+                            .collect::<Vec<_>>(),
+                    )
+                }
+            });
             Ok(PhysicalNode::Source(
                 node.id(),
                 SourceSpec::GetVertices {

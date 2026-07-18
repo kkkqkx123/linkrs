@@ -752,18 +752,23 @@ fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]) -> SlotLa
         | OperatorKindSpec::Txn(_)
         | OperatorKindSpec::Unary(_)
         | OperatorKindSpec::Blocking(_) => input,
-        OperatorKindSpec::Graph(GraphSpec::Expand { .. } | GraphSpec::ExpandAll { .. }) => {
-            layout_with_added_names(
-                &input,
-                [
-                    "_expand_edge_type".to_string(),
-                    "_expand_direction".to_string(),
-                ],
-            )
+        OperatorKindSpec::Graph(GraphSpec::Expand { col_names, .. } | GraphSpec::ExpandAll { col_names, .. }) => {
+            if col_names.len() == 3 {
+                SlotLayout::from_names(col_names)
+            } else {
+                layout_with_added_names(
+                    &input,
+                    [
+                        "_expand_edge".to_string(),
+                        "_expand_dst".to_string(),
+                    ],
+                )
+            }
         }
         OperatorKindSpec::Graph(GraphSpec::Traverse { .. }) => layout_with_added_names(
             &input,
             [
+                "_traverse_vertex".to_string(),
                 "_traverse_edge_type".to_string(),
                 "_traverse_direction".to_string(),
                 "_traverse_depth".to_string(),

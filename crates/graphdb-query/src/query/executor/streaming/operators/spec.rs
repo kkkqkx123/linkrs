@@ -291,11 +291,13 @@ pub enum GraphSpec {
         edge_types: Vec<String>,
         direction: EdgeDirection,
         filter_expr: Option<Expression>,
+        col_names: Vec<String>,
     },
     ExpandAll {
         edge_types: Vec<String>,
         direction: EdgeDirection,
         filter_expr: Option<Expression>,
+        col_names: Vec<String>,
     },
     Traverse {
         edge_types: Vec<String>,

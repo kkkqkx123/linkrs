@@ -37,7 +37,6 @@ impl TxnOperator {
         base.runtime
             .as_ref()
             .and_then(|rt| rt.session_controller())
-            .cloned()
             .ok_or_else(|| {
                 QueryError::execution(
                     "Transaction controller not available in execution runtime".to_string(),

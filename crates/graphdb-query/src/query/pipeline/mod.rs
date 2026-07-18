@@ -10,6 +10,7 @@ use crate::core::metadata::index_manager::IndexMetadataManager;
 use crate::core::metadata::SchemaManager;
 use crate::core::StatsManager;
 use crate::query::executor::streaming::query_registry::QueryRegistry;
+use crate::query::executor::streaming::SessionTransactionController;
 use crate::query::optimizer::OptimizerEngine;
 use crate::query::planning::{ParameterizedQueryHandler, PlanCacheConfig, QueryPlanCache};
 #[cfg(feature = "fulltext-search")]
@@ -37,6 +38,7 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     pub(crate) sync_manager: Option<Arc<SyncManager>>,
     pub(crate) schema_generation: Arc<AtomicU64>,
     pub(crate) query_registry: Option<Arc<QueryRegistry>>,
+    pub(crate) session_controller: parking_lot::RwLock<Option<Arc<SessionTransactionController>>>,
 }
 
 fn next_transaction_id() -> u64 {
@@ -78,6 +80,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             sync_manager: None,
             schema_generation: Arc::new(AtomicU64::new(0)),
             query_registry: None,
+            session_controller: parking_lot::RwLock::new(None),
         }
     }
 
@@ -118,6 +121,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             sync_manager: None,
             schema_generation: Arc::new(AtomicU64::new(0)),
             query_registry: None,
+            session_controller: parking_lot::RwLock::new(None),
         }
     }
 

@@ -208,6 +208,7 @@ impl GraphOperator {
                 edge_types,
                 direction,
                 filter_expr,
+                ..
             } => Self::Expand {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
@@ -219,6 +220,7 @@ impl GraphOperator {
                 edge_types,
                 direction,
                 filter_expr,
+                ..
             } => Self::ExpandAll {
                 storage: storage.clone(),
                 space_name: space_name.clone(),

@@ -1,7 +1,7 @@
 use super::QueryPipelineManager;
 use crate::core::error::{DBError, DBResult, QueryError};
 use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::query::executor::base::{BaseExecutor, ExecutionResult, Executor};
+use crate::query::executor::base::{BaseExecutor, ExecutionContext, ExecutionResult, Executor};
 use crate::query::executor::explain::ProfileExecutor;
 use crate::query::executor::streaming::instance::{
     QueryBindings, QueryExecutionInstance, ResultSink,
@@ -148,11 +148,19 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             DBError::from(QueryError::execution("Storage not available".to_string()))
         })?;
 
-        let base = BaseExecutor::new(
+        let mut base_ctx = ExecutionContext::default();
+        if let Some(ref space_name) = qctx.space_name() {
+            base_ctx.space_name = Some(space_name.clone());
+        }
+        if let Some(ref space_info) = qctx.space_info() {
+            base_ctx.space_name = Some(space_info.space_name.clone());
+        }
+
+        let base = BaseExecutor::with_context(
             -1,
             "ProfileExecutor".to_string(),
             storage,
-            Arc::new(ExpressionAnalysisContext::new()),
+            base_ctx,
         );
 
         let mut profile_executor =

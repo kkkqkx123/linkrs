@@ -514,13 +514,20 @@ pub(super) fn execute_index_manage(
         return Ok(None);
     }
     let index_name = extract_index_manage_name(command);
+
+    // Resolve space_id from space_name to avoid space ID mismatch
+    let resolved_space_id = storage
+        .as_ref()
+        .and_then(|lock| lock.read().get_space_id(space_name).ok())
+        .unwrap_or(0);
+
     let result = match command {
         IndexManageNode::CreateTagIndex(_) => super::exec_ddl(storage, |s| {
             let idx_name = index_name.as_deref().unwrap_or("unnamed");
             let info = Index::new(IndexConfig {
                 id: 0,
                 name: idx_name.to_string(),
-                space_id: 0,
+                space_id: resolved_space_id,
                 schema_name: space_name.to_string(),
                 fields: vec![],
                 properties: vec![],
@@ -537,7 +544,7 @@ pub(super) fn execute_index_manage(
             let info = Index::new(IndexConfig {
                 id: 0,
                 name: idx_name.to_string(),
-                space_id: 0,
+                space_id: resolved_space_id,
                 schema_name: space_name.to_string(),
                 fields: vec![],
                 properties: vec![],

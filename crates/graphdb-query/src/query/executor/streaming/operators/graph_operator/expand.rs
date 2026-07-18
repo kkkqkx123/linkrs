@@ -52,18 +52,20 @@ pub(super) fn handle(
                 })
                 .collect();
             new_cols.push(ColumnInfo {
-                name: "_expand_edge_type".to_string(),
-                data_type: "string".to_string(),
+                name: "_expand_edge".to_string(),
+                data_type: "edge".to_string(),
             });
             new_cols.push(ColumnInfo {
-                name: "_expand_direction".to_string(),
-                data_type: "string".to_string(),
+                name: "_expand_dst".to_string(),
+                data_type: "vertex".to_string(),
             });
             let schema = Arc::new(Schema::new(new_cols));
             let mut rows = chunk.rows;
             for row in rows.iter_mut() {
-                row.push(Value::String(edge_types.join("/")));
-                row.push(Value::String(format!("{:?}", direction).to_lowercase()));
+                row.push(Value::Null(crate::core::NullType::Null));
+                row.push(Value::Vertex(Box::new(
+                    crate::core::vertex_edge_path::Vertex::default(),
+                )));
             }
             let out_col_names = schema
                 .columns
@@ -122,18 +124,20 @@ pub(super) fn handle_all(
                 })
                 .collect();
             new_cols.push(ColumnInfo {
-                name: "_expand_edge_type".to_string(),
-                data_type: "string".to_string(),
+                name: "_expand_edge".to_string(),
+                data_type: "edge".to_string(),
             });
             new_cols.push(ColumnInfo {
-                name: "_expand_direction".to_string(),
-                data_type: "string".to_string(),
+                name: "_expand_dst".to_string(),
+                data_type: "vertex".to_string(),
             });
             let schema = Arc::new(Schema::new(new_cols));
             let mut rows = chunk.rows;
             for row in rows.iter_mut() {
-                row.push(Value::String(edge_types.join("/")));
-                row.push(Value::String(format!("{:?}", direction).to_lowercase()));
+                row.push(Value::Null(crate::core::NullType::Null));
+                row.push(Value::Vertex(Box::new(
+                    crate::core::vertex_edge_path::Vertex::default(),
+                )));
             }
             if !rows.is_empty() {
                 return Ok(Some(DataChunk::new_with_layout(

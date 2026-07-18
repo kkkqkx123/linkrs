@@ -8,7 +8,7 @@ use crate::query::executor::streaming::plan::node::PhysicalNode;
 use crate::query::executor::streaming::plan::properties::PhysicalProperties;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::{
-    MultipleInputNode, SingleInputNode,
+    MultipleInputNode, PlanNode, SingleInputNode,
 };
 
 pub fn build_graph_node(
@@ -32,6 +32,7 @@ pub fn build_graph_node(
                 .filter()
                 .map(super::contextual_to_expression)
                 .transpose()?;
+            let col_names = expand_node.col_names().to_vec();
             Ok(PhysicalNode::Graph(
                 node.id(),
                 Box::new(input_phys),
@@ -39,6 +40,7 @@ pub fn build_graph_node(
                     edge_types,
                     direction,
                     filter_expr,
+                    col_names,
                 },
                 PhysicalProperties::single_streaming(),
             ))
@@ -64,6 +66,7 @@ pub fn build_graph_node(
                 .filter()
                 .map(super::contextual_to_expression)
                 .transpose()?;
+            let col_names = expand_all_node.col_names().to_vec();
             Ok(PhysicalNode::Graph(
                 node.id(),
                 Box::new(input_phys),
@@ -71,6 +74,7 @@ pub fn build_graph_node(
                     edge_types,
                     direction,
                     filter_expr,
+                    col_names,
                 },
                 PhysicalProperties::single_streaming(),
             ))
