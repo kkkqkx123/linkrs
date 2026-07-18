@@ -160,19 +160,20 @@ pub(crate) fn create_tag_index(
         .get_space(space)?
         .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?
         .space_id;
-    if index.space_id != space_id {
-        return Err(StorageError::invalid_operation(format!(
-            "Index {} belongs to space {}, not space {}",
-            index.name, index.space_id, space_id
-        )));
-    }
+    let mut index = index.clone();
+    index.space_id = space_id;
     let created = ctx
         .index_metadata_manager()
-        .create_tag_index(space_id, index)?;
+        .create_tag_index(space_id, &index)?;
     if created {
+        // Retrieve the stored index to get the assigned ID.
+        let stored = ctx
+            .index_metadata_manager()
+            .get_tag_index(space_id, &index.name)?
+            .unwrap_or(index);
         ctx.index_data_manager()
             .read()
-            .register_native_index(space_id, index)?;
+            .register_native_index(space_id, &stored)?;
     }
     Ok(created)
 }
@@ -431,11 +432,8 @@ pub(crate) fn rebuild_tag_index(
     // Establish the publish fence by excluding native-index writers. The active
     // MVCC history is the native change log for writes after snapshot_ts.
     let manager = ctx.index_data_manager().write();
-    let (active_forward, active_reverse) = manager.active_index_data(
-        space_id,
-        u64::try_from(index.id)
-            .map_err(|_| StorageError::invalid_operation("Index ID cannot be negative"))?,
-    )?;
+    let (active_forward, active_reverse) =
+        manager.active_index_data(space_id, index.id)?;
     let forward_prefix = KeyBuilder::build_vertex_index_prefix(space_id, index_name).0;
     let (merged_forward, merged_reverse) = merge_rebuilt_partition(
         active_forward,
@@ -467,11 +465,9 @@ pub(crate) fn rebuild_tag_index(
         .map(|paths| paths.indexes_dir())
         .ok_or_else(|| StorageError::db_error("No work directory configured".to_string()))?;
     std::fs::create_dir_all(&index_dir)?;
-    let index_id = u64::try_from(index.id)
-        .map_err(|_| StorageError::invalid_operation("Index ID cannot be negative".to_string()))?;
     let index_root = index_dir
         .join(space_id.to_string())
-        .join(index_id.to_string());
+        .join(index.id.to_string());
     let gen_dir = index_root.join(format!("generation-{}", generation.get()));
     std::fs::create_dir_all(&gen_dir)?;
     let persisted_forward = merged_forward
@@ -496,7 +492,7 @@ pub(crate) fn rebuild_tag_index(
 
     let manifest = IndexManifest::new(
         space_id,
-        index_id,
+        index.id,
         generation,
         manifest_epoch,
         vec![IndexShard {
@@ -721,11 +717,8 @@ pub(crate) fn rebuild_edge_index(
     )?;
 
     let manager = ctx.index_data_manager().write();
-    let (active_forward, active_reverse) = manager.active_index_data(
-        space_id,
-        u64::try_from(index.id)
-            .map_err(|_| StorageError::invalid_operation("Index ID cannot be negative"))?,
-    )?;
+    let (active_forward, active_reverse) =
+        manager.active_index_data(space_id, index.id)?;
     let forward_prefix = KeyBuilder::build_edge_index_prefix(space_id, index_name).0;
     let (merged_forward, merged_reverse) = merge_rebuilt_partition(
         active_forward,
@@ -757,11 +750,9 @@ pub(crate) fn rebuild_edge_index(
         .map(|paths| paths.indexes_dir())
         .ok_or_else(|| StorageError::db_error("No work directory configured".to_string()))?;
     std::fs::create_dir_all(&index_dir)?;
-    let index_id = u64::try_from(index.id)
-        .map_err(|_| StorageError::invalid_operation("Index ID cannot be negative".to_string()))?;
     let index_root = index_dir
         .join(space_id.to_string())
-        .join(index_id.to_string());
+        .join(index.id.to_string());
     let gen_dir = index_root.join(format!("generation-{}", generation.get()));
     std::fs::create_dir_all(&gen_dir)?;
     let persisted_forward = merged_forward
@@ -786,7 +777,7 @@ pub(crate) fn rebuild_edge_index(
 
     let manifest = IndexManifest::new(
         space_id,
-        index_id,
+        index.id,
         generation,
         manifest_epoch,
         vec![IndexShard {

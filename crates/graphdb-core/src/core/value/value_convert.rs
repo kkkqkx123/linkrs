@@ -674,6 +674,54 @@ impl Value {
                     ))
                 }
             },
+            DataType::VectorDense(dim) => match self {
+                Value::Null(_) | Value::Empty => Value::Null(NullType::Null),
+                Value::Vector(v) => {
+                    let actual_dim = v.dimension();
+                    if actual_dim == *dim {
+                        Value::Vector(v.clone())
+                    } else {
+                        return Err(StorageError::type_mismatch(
+                            DataType::VectorDense(*dim),
+                            DataType::VectorDense(actual_dim),
+                        ));
+                    }
+                }
+                Value::List(list) => {
+                    if list.len() != *dim {
+                        return Err(StorageError::type_mismatch(
+                            DataType::VectorDense(*dim),
+                            self.data_type(),
+                        ));
+                    }
+                    let vec_data: Option<Vec<f32>> = list
+                        .iter()
+                        .map(|v| match v {
+                            Value::Float(f) => Some(*f),
+                            Value::Double(d) => Some(*d as f32),
+                            Value::Int(i) => Some(*i as f32),
+                            Value::SmallInt(i) => Some(*i as f32),
+                            Value::BigInt(i) => Some(*i as f32),
+                            _ => None,
+                        })
+                        .collect();
+                    match vec_data {
+                        Some(data) => Value::vector(data),
+                        None => {
+                            return Err(StorageError::type_mismatch(
+                                target.clone(),
+                                self.data_type(),
+                            ))
+                        }
+                    }
+                }
+                _ => {
+                    return Err(StorageError::type_mismatch(
+                        target.clone(),
+                        self.data_type(),
+                    ))
+                }
+            },
             _ => Value::Null(NullType::BadData),
         };
 

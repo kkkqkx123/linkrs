@@ -42,46 +42,68 @@ pub(super) fn expand_on_chunk(
     edge_types: &[String],
     direction: EdgeDirection,
     filter_expr: &Option<Expression>,
+    col_names_template: Vec<String>,
+    src_vids: Vec<Value>,
     cancel_token: Option<Arc<AtomicBool>>,
 ) -> Result<Option<DataChunk>, QueryError> {
-    let col_names = chunk.col_names();
+    let chunk_col_names = chunk.col_names();
 
-    let mut out_rows = Vec::new();
+    // Build the list of seed vertex IDs: from the chunk rows, or from explicit src_vids.
+    let mut seed_vids: Vec<VertexId> = Vec::new();
+    let mut seed_rows: Vec<Vec<Value>> = Vec::new();
+
     for row in &chunk.rows {
         let context = ValueRowContext::new(row.clone(), chunk.get_layout());
         let vid_val = context
             .get_variable("vid")
+            .or_else(|| context.get_variable("src"))
             .or_else(|| row.first().cloned())
             .unwrap_or(Value::Null(crate::core::NullType::Null));
 
         if let Ok(vid) = VertexId::try_from(&vid_val) {
-            let config = TraversalConfig::expand(space_name.to_string(), direction);
-            let runtime_reader = TraversalGraphReader::new(reader);
-            let mut runtime = TraversalRuntime::new(runtime_reader, config);
-            if let Some(token) = cancel_token.clone() {
-                runtime.set_cancel_token(token);
-            }
+            seed_vids.push(vid);
+            seed_rows.push(row.clone());
+        }
+    }
 
-            if let Ok(Some(vertex)) = reader.get_vertex(space_name, &vid) {
-                runtime.seed_from_vertex(vertex);
+    // If no valid vids came from the input chunk but src_vids are provided, use those.
+    if seed_vids.is_empty() && !src_vids.is_empty() {
+        for vid_val in &src_vids {
+            if let Ok(vid) = VertexId::try_from(vid_val) {
+                seed_vids.push(vid);
+                seed_rows.push(Vec::new());
+            }
+        }
+    }
+
+    let mut out_rows = Vec::new();
+    for (vid, row) in seed_vids.iter().zip(seed_rows.iter()) {
+        let config = TraversalConfig::expand(space_name.to_string(), direction, edge_types.to_vec());
+        let runtime_reader = TraversalGraphReader::new(reader);
+        let mut runtime = TraversalRuntime::new(runtime_reader, config);
+        if let Some(token) = cancel_token.clone() {
+            runtime.set_cancel_token(token);
+        }
+
+        if let Ok(Some(vertex)) = reader.get_vertex(space_name, vid) {
+            runtime.seed_from_vertex(vertex);
+        } else {
+            continue;
+        }
+
+        while let Some(event) = runtime.next_event() {
+            let mut out_row = row.clone();
+            if let Some(ref edge) = event.edge {
+                out_row.push(Value::Edge(Box::new(edge.clone())));
             } else {
-                continue;
+                out_row.push(Value::Null(crate::core::NullType::Null));
             }
-
-            while let Some(event) = runtime.next_event() {
-                let mut out_row = row.clone();
-                if let Some(ref edge) = event.edge {
-                    out_row.push(Value::Edge(Box::new(edge.clone())));
-                } else {
-                    out_row.push(Value::Null(crate::core::NullType::Null));
-                }
-                out_row.push(Value::Vertex(Box::new(event.vertex)));
-                let mut out_col_names = col_names.clone();
-                out_col_names.push("_expand_edge".to_string());
-                out_col_names.push("_expand_dst".to_string());
-                if row_passes_filter(&out_row, &out_col_names, filter_expr) {
-                    out_rows.push(out_row);
-                }
+            out_row.push(Value::Vertex(Box::new(event.vertex)));
+            let mut out_col_names = col_names_template.clone();
+            out_col_names.push("_expand_edge".to_string());
+            out_col_names.push("_expand_dst".to_string());
+            if row_passes_filter(&out_row, &out_col_names, filter_expr) {
+                out_rows.push(out_row);
             }
         }
     }

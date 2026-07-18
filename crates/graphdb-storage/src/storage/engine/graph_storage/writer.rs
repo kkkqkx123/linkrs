@@ -1029,26 +1029,38 @@ fn update_vertex_indexes(
 ) -> StorageResult<()> {
     let indexes = index_metadata_manager.list_tag_indexes(space_id)?;
     for index in indexes {
-        if index.schema_name == tag_name {
-            // Check unique constraint before inserting.
-            // A unique index must not have an existing entry with the same
-            // property value for a different vertex.
-            if index.is_unique {
-                let index_data = ctx.index_data_manager();
-                for (_prop_name, prop_value) in props {
-                    let existing = index_data
-                        .read()
-                        .lookup_tag_index(space_id, &index, prop_value)?;
-                    if !existing.is_empty() && !existing.contains(vertex_id) {
-                        return Err(StorageError::conflict(format!(
-                            "Unique index '{}' violated: value {:?} already exists",
-                            index.name, prop_value
-                        )));
-                    }
+        if index.schema_name != tag_name {
+            continue;
+        }
+        // Only index properties that this index covers.
+        let filtered_props: Vec<(String, Value)> = if index.properties.is_empty() {
+            props.to_vec()
+        } else {
+            props
+                .iter()
+                .filter(|(name, _)| index.properties.contains(name))
+                .cloned()
+                .collect()
+        };
+        if filtered_props.is_empty() {
+            continue;
+        }
+        // Check unique constraint before inserting.
+        if index.is_unique {
+            let index_data = ctx.index_data_manager();
+            for (_prop_name, prop_value) in &filtered_props {
+                let existing = index_data
+                    .read()
+                    .lookup_tag_index(space_id, &index, prop_value)?;
+                if !existing.is_empty() && !existing.contains(vertex_id) {
+                    return Err(StorageError::conflict(format!(
+                        "Unique index '{}' violated: value {:?} already exists",
+                        index.name, prop_value
+                    )));
                 }
             }
-            ctx.update_vertex_indexes_mvcc(space_id, vertex_id, &index.name, props, ts)?;
         }
+        ctx.update_vertex_indexes_mvcc(space_id, vertex_id, &index.name, &filtered_props, ts)?;
     }
     Ok(())
 }

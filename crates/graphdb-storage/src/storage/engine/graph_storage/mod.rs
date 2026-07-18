@@ -23,7 +23,7 @@ pub use context::GraphStorageContext;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::core::metadata::SchemaManager;
+use crate::core::metadata::{IndexMetadataManager, SchemaManager};
 use crate::core::stats::StatsManager;
 use crate::core::types::{
     CompactConfig, EdgeTypeInfo, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo,
@@ -527,13 +527,7 @@ impl StorageReader for GraphStorage {
     ) -> Result<Box<dyn IndexCursor<Row = IndexRow>>, StorageError> {
         let tag_indexes = self.list_tag_indexes(&plan.space)?;
         let edge_indexes = self.list_edge_indexes(&plan.space)?;
-        let index_id = i32::try_from(plan.index_id).map_err(|_| {
-            StorageError::not_found(format!(
-                "Index {} is outside metadata ID range",
-                plan.index_id
-            ))
-        })?;
-
+        let index_id = plan.index_id;
         if let Some(index) = tag_indexes.into_iter().find(|index| index.id == index_id) {
             let space_id = self.ctx.schema_manager().get_space_id(&plan.space)?;
             let space_name = plan.space.clone();
@@ -999,6 +993,10 @@ impl StoragePersistenceOps for GraphStorage {
 impl StorageSchemaContextOps for GraphStorage {
     fn get_schema_manager(&self) -> Option<Arc<SchemaManager>> {
         Some(self.ctx.schema_manager().clone())
+    }
+
+    fn get_index_metadata_manager(&self) -> Option<Arc<dyn IndexMetadataManager>> {
+        Some(self.ctx.index_metadata_manager().clone())
     }
 }
 

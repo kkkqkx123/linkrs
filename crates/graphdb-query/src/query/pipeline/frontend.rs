@@ -54,6 +54,14 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             validator.set_schema_manager(schema_manager.clone());
         }
 
+        if let Some(ref index_manager) = self.index_manager {
+            validator.set_index_metadata_manager(index_manager.clone());
+        } else if let Some(ref storage) = self.storage {
+            if let Some(index_manager) = storage.read().get_index_metadata_manager() {
+                validator.set_index_metadata_manager(index_manager);
+            }
+        }
+
         let validation_result = validator.validate(ast.clone(), qctx);
 
         if validation_result.success {

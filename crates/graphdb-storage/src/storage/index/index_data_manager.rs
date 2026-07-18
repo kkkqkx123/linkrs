@@ -217,8 +217,7 @@ impl IndexDataManagerImpl {
                 index.name, index.space_id, space_id
             )));
         }
-        let index_id = u64::try_from(index.id)
-            .map_err(|_| StorageError::invalid_operation("Index ID cannot be negative"))?;
+        let index_id = index.id;
         let identity = IndexIdentity { space_id, index_id };
         self.index_aliases
             .write()

@@ -1,4 +1,5 @@
 use crate::core::error::StorageError;
+use crate::core::metadata::IndexMetadataManager;
 use crate::core::types::{
     EdgeTypeInfo, EdgeTypeSchema, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo,
     PropertyDef, SpaceInfo, TagInfo, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
@@ -256,6 +257,10 @@ impl StoragePersistenceOps for MockStorage {
 impl StorageSchemaContextOps for MockStorage {
     fn get_schema_manager(&self) -> Option<Arc<crate::core::metadata::SchemaManager>> {
         Some(self.schema_manager.clone())
+    }
+
+    fn get_index_metadata_manager(&self) -> Option<Arc<dyn IndexMetadataManager>> {
+        None
     }
 }
 

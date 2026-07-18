@@ -40,8 +40,8 @@ pub enum BoundIndexPredicate {
     /// Range scan: `column BETWEEN begin AND end`
     Range {
         column: String,
-        begin: Value,
-        end: Value,
+        begin: Option<Value>,
+        end: Option<Value>,
         include_begin: bool,
         include_end: bool,
     },
@@ -298,6 +298,7 @@ pub enum GraphSpec {
         direction: EdgeDirection,
         filter_expr: Option<Expression>,
         col_names: Vec<String>,
+        src_vids: Vec<Value>,
     },
     Traverse {
         edge_types: Vec<String>,

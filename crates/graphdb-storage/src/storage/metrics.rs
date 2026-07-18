@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::core::metadata::SchemaManager;
+use crate::core::metadata::{IndexMetadataManager, SchemaManager};
 use crate::core::stats::StatsManager;
 use crate::core::types::{
     EdgeTypeInfo, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo, PropertyDef,
@@ -319,6 +319,7 @@ impl<S: StorageClient> StoragePersistenceOps for MetricsStorage<S> {
 impl<S: StorageClient + StorageSchemaContextOps> StorageSchemaContextOps for MetricsStorage<S> {
     forward_methods!(inner;
         fn get_schema_manager(&self) -> Option<Arc<SchemaManager>>;
+        fn get_index_metadata_manager(&self) -> Option<Arc<dyn IndexMetadataManager>>;
     );
 }
 

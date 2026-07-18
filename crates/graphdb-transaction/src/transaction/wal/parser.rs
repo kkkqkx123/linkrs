@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::core::types::Timestamp;
 use crate::core::wal::types::{
-    Lsn, RecordType, UpdateWalUnit, WalCompression, WalError, WalFileHeader, WalHeader,
+    Lsn, RecordType, UpdateWalUnit, WalCompression, WalError, WalFileHeader, WalHeader, WalOpType,
     WalRecoveryMode, WalResult, WAL_FILE_HEADER_SIZE, WAL_HEADER_SIZE,
 };
 
@@ -222,9 +222,19 @@ impl ParallelWalParser {
             let header = match WalHeader::from_bytes(&buffer[offset..offset + WAL_HEADER_SIZE]) {
                 Some(h) => h,
                 None => {
-                    result.corrupted_count += 1;
-                    offset += 1;
-                    continue;
+                    match recovery_mode {
+                        WalRecoveryMode::AbortOnCorruption => {
+                            return Err(WalError::Corrupted(format!(
+                                "Invalid WAL header at offset {}",
+                                offset
+                            )));
+                        }
+                        _ => {
+                            result.corrupted_count += 1;
+                            offset += 1;
+                            continue;
+                        }
+                    }
                 }
             };
 
@@ -246,6 +256,17 @@ impl ParallelWalParser {
                     _ => {
                         result.corrupted_count += 1;
                         break;
+                    }
+                }
+            }
+
+            if let Err(error) = WalOpType::try_from(header.op_type) {
+                match recovery_mode {
+                    WalRecoveryMode::AbortOnCorruption => return Err(error),
+                    _ => {
+                        result.corrupted_count += 1;
+                        offset = payload_end;
+                        continue;
                     }
                 }
             }
@@ -661,9 +682,19 @@ impl LocalWalParser {
             let header = match WalHeader::from_bytes(&buffer[offset..offset + WAL_HEADER_SIZE]) {
                 Some(h) => h,
                 None => {
-                    self.corrupted_count += 1;
-                    offset += 1;
-                    continue;
+                    match self.recovery_mode {
+                        WalRecoveryMode::AbortOnCorruption => {
+                            return Err(WalError::Corrupted(format!(
+                                "Invalid WAL header at offset {}",
+                                offset
+                            )));
+                        }
+                        _ => {
+                            self.corrupted_count += 1;
+                            offset += 1;
+                            continue;
+                        }
+                    }
                 }
             };
 
@@ -685,6 +716,17 @@ impl LocalWalParser {
                     _ => {
                         self.corrupted_count += 1;
                         break;
+                    }
+                }
+            }
+
+            if let Err(error) = WalOpType::try_from(header.op_type) {
+                match self.recovery_mode {
+                    WalRecoveryMode::AbortOnCorruption => return Err(error),
+                    _ => {
+                        self.corrupted_count += 1;
+                        offset = payload_end;
+                        continue;
                     }
                 }
             }

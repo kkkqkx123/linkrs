@@ -36,6 +36,8 @@ pub enum GraphOperator {
         edge_types: Vec<String>,
         direction: EdgeDirection,
         filter_expr: Option<Expression>,
+        col_names: Vec<String>,
+        src_vids: Vec<Value>,
     },
     Traverse {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
@@ -220,13 +222,16 @@ impl GraphOperator {
                 edge_types,
                 direction,
                 filter_expr,
-                ..
+                col_names,
+                src_vids,
             } => Self::ExpandAll {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 edge_types: edge_types.clone(),
                 direction: *direction,
                 filter_expr: filter_expr.clone(),
+                col_names: col_names.clone(),
+                src_vids: src_vids.clone(),
             },
             GraphSpec::Traverse {
                 edge_types,
@@ -406,12 +411,16 @@ impl GraphOperator {
                 edge_types,
                 direction,
                 filter_expr,
+                col_names,
+                src_vids,
             } => expand::handle_all(
                 &*storage,
                 &*space_name,
                 &*edge_types,
                 *direction,
                 &*filter_expr,
+                col_names.clone(),
+                src_vids.clone(),
                 base,
                 input,
             ),

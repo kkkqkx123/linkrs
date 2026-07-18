@@ -36,15 +36,9 @@ fn append_schema_redo<T: serde::Serialize>(
 fn validate_index_space(
     ctx: &GraphStorageContext,
     space: &str,
-    index: &Index,
+    _index: &Index,
 ) -> StorageResult<u64> {
     let space_id = ctx.schema_manager().get_space_id(space)?;
-    if index.space_id != space_id {
-        return Err(StorageError::invalid_operation(format!(
-            "Index {} belongs to space {}, not space {}",
-            index.name, index.space_id, space_id
-        )));
-    }
     Ok(space_id)
 }
 

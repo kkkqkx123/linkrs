@@ -184,9 +184,12 @@ impl RecoveryManager {
 
             let op_type = match WalOpType::try_from(entry.header.op_type) {
                 Ok(t) => t,
-                Err(_) => {
+                Err(error) => {
                     self.stats.errors_encountered += 1;
-                    continue;
+                    return Err(StorageError::wal_error(format!(
+                        "Invalid WAL operation at {}: {}",
+                        entry.lsn, error
+                    )));
                 }
             };
 
@@ -201,10 +204,11 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => {
-                        log::warn!("Failed to deserialize InsertVertex redo: {}", e);
-                        self.stats.errors_encountered += 1;
-                    }
+                    Err(e) => return Err(self.recovery_deserialize_error(
+                        entry.lsn,
+                        WalOpType::InsertVertex,
+                        e,
+                    )),
                 },
                 WalOpType::InsertEdge => match self.deserialize_insert_edge(payload) {
                     Ok(redo) => {
@@ -212,10 +216,11 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => {
-                        log::warn!("Failed to deserialize InsertEdge redo: {}", e);
-                        self.stats.errors_encountered += 1;
-                    }
+                    Err(e) => return Err(self.recovery_deserialize_error(
+                        entry.lsn,
+                        WalOpType::InsertEdge,
+                        e,
+                    )),
                 },
                 WalOpType::UpdateVertexProp => match self.deserialize_update_vertex_prop(payload) {
                     Ok(redo) => {
@@ -229,10 +234,11 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => {
-                        log::warn!("Failed to deserialize UpdateVertexProp redo: {}", e);
-                        self.stats.errors_encountered += 1;
-                    }
+                    Err(e) => return Err(self.recovery_deserialize_error(
+                        entry.lsn,
+                        WalOpType::UpdateVertexProp,
+                        e,
+                    )),
                 },
                 WalOpType::UpdateEdgeProp => match self.deserialize_update_edge_prop(payload) {
                     Ok(redo) => {
@@ -240,10 +246,11 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => {
-                        log::warn!("Failed to deserialize UpdateEdgeProp redo: {}", e);
-                        self.stats.errors_encountered += 1;
-                    }
+                    Err(e) => return Err(self.recovery_deserialize_error(
+                        entry.lsn,
+                        WalOpType::UpdateEdgeProp,
+                        e,
+                    )),
                 },
                 WalOpType::DeleteVertex => match self.deserialize_delete_vertex(payload) {
                     Ok(redo) => {
@@ -251,10 +258,11 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => {
-                        log::warn!("Failed to deserialize DeleteVertex redo: {}", e);
-                        self.stats.errors_encountered += 1;
-                    }
+                    Err(e) => return Err(self.recovery_deserialize_error(
+                        entry.lsn,
+                        WalOpType::DeleteVertex,
+                        e,
+                    )),
                 },
                 WalOpType::DeleteEdge => match self.deserialize_delete_edge(payload) {
                     Ok(redo) => {
@@ -262,10 +270,11 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => {
-                        log::warn!("Failed to deserialize DeleteEdge redo: {}", e);
-                        self.stats.errors_encountered += 1;
-                    }
+                    Err(e) => return Err(self.recovery_deserialize_error(
+                        entry.lsn,
+                        WalOpType::DeleteEdge,
+                        e,
+                    )),
                 },
                 WalOpType::CreateVertexType => match self.deserialize_create_vertex_type(payload) {
                     Ok(redo) => {
@@ -273,10 +282,11 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => {
-                        log::warn!("Failed to deserialize CreateVertexType redo: {}", e);
-                        self.stats.errors_encountered += 1;
-                    }
+                    Err(e) => return Err(self.recovery_deserialize_error(
+                        entry.lsn,
+                        WalOpType::CreateVertexType,
+                        e,
+                    )),
                 },
                 WalOpType::CreateEdgeType => match self.deserialize_create_edge_type(payload) {
                     Ok(redo) => {
@@ -284,10 +294,11 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => {
-                        log::warn!("Failed to deserialize CreateEdgeType redo: {}", e);
-                        self.stats.errors_encountered += 1;
-                    }
+                    Err(e) => return Err(self.recovery_deserialize_error(
+                        entry.lsn,
+                        WalOpType::CreateEdgeType,
+                        e,
+                    )),
                 },
                 WalOpType::DeleteVertexType => match self.deserialize_delete_vertex_type(payload) {
                     Ok(redo) => {
@@ -295,10 +306,11 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => {
-                        log::warn!("Failed to deserialize DeleteVertexType redo: {}", e);
-                        self.stats.errors_encountered += 1;
-                    }
+                    Err(e) => return Err(self.recovery_deserialize_error(
+                        entry.lsn,
+                        WalOpType::DeleteVertexType,
+                        e,
+                    )),
                 },
                 WalOpType::DeleteEdgeType => match self.deserialize_delete_edge_type(payload) {
                     Ok(redo) => {
@@ -306,10 +318,11 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => {
-                        log::warn!("Failed to deserialize DeleteEdgeType redo: {}", e);
-                        self.stats.errors_encountered += 1;
-                    }
+                    Err(e) => return Err(self.recovery_deserialize_error(
+                        entry.lsn,
+                        WalOpType::DeleteEdgeType,
+                        e,
+                    )),
                 },
                 WalOpType::CreateSpace => match self.deserialize_create_space(payload) {
                     Ok(redo) => {
@@ -317,10 +330,11 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => {
-                        log::warn!("Failed to deserialize CreateSpace redo: {}", e);
-                        self.stats.errors_encountered += 1;
-                    }
+                    Err(e) => return Err(self.recovery_deserialize_error(
+                        entry.lsn,
+                        WalOpType::CreateSpace,
+                        e,
+                    )),
                 },
                 WalOpType::DropSpace => match self.deserialize_drop_space(payload) {
                     Ok(redo) => {
@@ -328,10 +342,11 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => {
-                        log::warn!("Failed to deserialize DropSpace redo: {}", e);
-                        self.stats.errors_encountered += 1;
-                    }
+                    Err(e) => return Err(self.recovery_deserialize_error(
+                        entry.lsn,
+                        WalOpType::DropSpace,
+                        e,
+                    )),
                 },
                 WalOpType::ClearSpace => match self.deserialize_clear_space(payload) {
                     Ok(redo) => {
@@ -339,10 +354,11 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => {
-                        log::warn!("Failed to deserialize ClearSpace redo: {}", e);
-                        self.stats.errors_encountered += 1;
-                    }
+                    Err(e) => return Err(self.recovery_deserialize_error(
+                        entry.lsn,
+                        WalOpType::ClearSpace,
+                        e,
+                    )),
                 },
                 WalOpType::AlterSpaceComment => {
                     match self.deserialize_alter_space_comment(payload) {
@@ -351,10 +367,11 @@ impl RecoveryManager {
                             self.stats.wal_entries_replayed += 1;
                             self.stats.last_lsn = entry.lsn;
                         }
-                        Err(e) => {
-                            log::warn!("Failed to deserialize AlterSpaceComment redo: {}", e);
-                            self.stats.errors_encountered += 1;
-                        }
+                        Err(e) => return Err(self.recovery_deserialize_error(
+                            entry.lsn,
+                            WalOpType::AlterSpaceComment,
+                            e,
+                        )),
                     }
                 }
                 WalOpType::OutboxIntent
@@ -366,10 +383,11 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => {
-                        log::warn!("Failed to deserialize AddVertexProp redo: {}", e);
-                        self.stats.errors_encountered += 1;
-                    }
+                    Err(e) => return Err(self.recovery_deserialize_error(
+                        entry.lsn,
+                        WalOpType::AddVertexProp,
+                        e,
+                    )),
                 },
                 WalOpType::AddEdgeProp => match self.deserialize_add_edge_prop(payload) {
                     Ok(redo) => {
@@ -377,10 +395,11 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => {
-                        log::warn!("Failed to deserialize AddEdgeProp redo: {}", e);
-                        self.stats.errors_encountered += 1;
-                    }
+                    Err(e) => return Err(self.recovery_deserialize_error(
+                        entry.lsn,
+                        WalOpType::AddEdgeProp,
+                        e,
+                    )),
                 },
                 WalOpType::DeleteVertexProp => match self.deserialize_delete_vertex_prop(payload) {
                     Ok(redo) => {
@@ -388,10 +407,11 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => {
-                        log::warn!("Failed to deserialize DeleteVertexProp redo: {}", e);
-                        self.stats.errors_encountered += 1;
-                    }
+                    Err(e) => return Err(self.recovery_deserialize_error(
+                        entry.lsn,
+                        WalOpType::DeleteVertexProp,
+                        e,
+                    )),
                 },
                 WalOpType::DeleteEdgeProp => match self.deserialize_delete_edge_prop(payload) {
                     Ok(redo) => {
@@ -399,10 +419,11 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => {
-                        log::warn!("Failed to deserialize DeleteEdgeProp redo: {}", e);
-                        self.stats.errors_encountered += 1;
-                    }
+                    Err(e) => return Err(self.recovery_deserialize_error(
+                        entry.lsn,
+                        WalOpType::DeleteEdgeProp,
+                        e,
+                    )),
                 },
                 WalOpType::RenameVertexProp => match self.deserialize_rename_vertex_prop(payload) {
                     Ok(redo) => {
@@ -410,10 +431,11 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => {
-                        log::warn!("Failed to deserialize RenameVertexProp redo: {}", e);
-                        self.stats.errors_encountered += 1;
-                    }
+                    Err(e) => return Err(self.recovery_deserialize_error(
+                        entry.lsn,
+                        WalOpType::RenameVertexProp,
+                        e,
+                    )),
                 },
                 WalOpType::RenameEdgeProp => match self.deserialize_rename_edge_prop(payload) {
                     Ok(redo) => {
@@ -421,10 +443,11 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => {
-                        log::warn!("Failed to deserialize RenameEdgeProp redo: {}", e);
-                        self.stats.errors_encountered += 1;
-                    }
+                    Err(e) => return Err(self.recovery_deserialize_error(
+                        entry.lsn,
+                        WalOpType::RenameEdgeProp,
+                        e,
+                    )),
                 },
                 WalOpType::Compact => {
                     applier.replay_compact(ts)?;
@@ -436,10 +459,11 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => {
-                        log::warn!("Failed to deserialize CreateTagIndex redo: {}", e);
-                        self.stats.errors_encountered += 1;
-                    }
+                    Err(e) => return Err(self.recovery_deserialize_error(
+                        entry.lsn,
+                        WalOpType::CreateTagIndex,
+                        e,
+                    )),
                 },
                 WalOpType::DropTagIndex => match self.deserialize_drop_tag_index(payload) {
                     Ok(redo) => {
@@ -447,10 +471,11 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => {
-                        log::warn!("Failed to deserialize DropTagIndex redo: {}", e);
-                        self.stats.errors_encountered += 1;
-                    }
+                    Err(e) => return Err(self.recovery_deserialize_error(
+                        entry.lsn,
+                        WalOpType::DropTagIndex,
+                        e,
+                    )),
                 },
                 WalOpType::CreateEdgeIndex => match self.deserialize_create_edge_index(payload) {
                     Ok(redo) => {
@@ -458,10 +483,11 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => {
-                        log::warn!("Failed to deserialize CreateEdgeIndex redo: {}", e);
-                        self.stats.errors_encountered += 1;
-                    }
+                    Err(e) => return Err(self.recovery_deserialize_error(
+                        entry.lsn,
+                        WalOpType::CreateEdgeIndex,
+                        e,
+                    )),
                 },
                 WalOpType::DropEdgeIndex => match self.deserialize_drop_edge_index(payload) {
                     Ok(redo) => {
@@ -469,15 +495,29 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => {
-                        log::warn!("Failed to deserialize DropEdgeIndex redo: {}", e);
-                        self.stats.errors_encountered += 1;
-                    }
+                    Err(e) => return Err(self.recovery_deserialize_error(
+                        entry.lsn,
+                        WalOpType::DropEdgeIndex,
+                        e,
+                    )),
                 },
             }
         }
 
         Ok(())
+    }
+
+    fn recovery_deserialize_error(
+        &mut self,
+        lsn: Lsn,
+        op_type: WalOpType,
+        error: StorageError,
+    ) -> StorageError {
+        self.stats.errors_encountered += 1;
+        StorageError::wal_error(format!(
+            "Failed to deserialize {} at {}: {}",
+            op_type, lsn, error
+        ))
     }
 
     fn deserialize_insert_vertex(&self, payload: &[u8]) -> StorageResult<InsertVertexRedo> {

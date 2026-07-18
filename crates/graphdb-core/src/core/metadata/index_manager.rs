@@ -4,6 +4,7 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 const INDEX_FORMAT_VERSION: u32 = 1;
@@ -56,6 +57,7 @@ pub trait IndexMetadataManager: Send + Sync + std::fmt::Debug {
 pub struct IndexManager {
     tag_indexes: Arc<RwLock<HashMap<(u64, String), Index>>>,
     edge_indexes: Arc<RwLock<HashMap<(u64, String), Index>>>,
+    next_index_id: AtomicU64,
 }
 
 impl std::fmt::Debug for IndexManager {
@@ -72,6 +74,7 @@ impl IndexManager {
         Self {
             tag_indexes: Arc::new(RwLock::new(HashMap::new())),
             edge_indexes: Arc::new(RwLock::new(HashMap::new())),
+            next_index_id: AtomicU64::new(1),
         }
     }
 
@@ -139,13 +142,22 @@ impl IndexManager {
         self.tag_indexes.write().clear();
         self.edge_indexes.write().clear();
 
+        let mut max_id = 0;
         for (space_id, name, index) in snapshot.tag_indexes {
+            if index.id > max_id {
+                max_id = index.id;
+            }
             self.tag_indexes.write().insert((space_id, name), index);
         }
 
         for (space_id, name, index) in snapshot.edge_indexes {
+            if index.id > max_id {
+                max_id = index.id;
+            }
             self.edge_indexes.write().insert((space_id, name), index);
         }
+
+        self.next_index_id.store(max_id + 1, Ordering::SeqCst);
 
         Ok(())
     }
@@ -166,6 +178,9 @@ impl IndexMetadataManager for IndexManager {
         }
         let mut index_with_space_id = index.clone();
         index_with_space_id.space_id = space_id;
+        if index_with_space_id.id == 0 {
+            index_with_space_id.id = self.next_index_id.fetch_add(1, Ordering::SeqCst);
+        }
         indexes.insert(key, index_with_space_id);
         Ok(true)
     }
@@ -208,6 +223,9 @@ impl IndexMetadataManager for IndexManager {
         }
         let mut index_with_space_id = index.clone();
         index_with_space_id.space_id = space_id;
+        if index_with_space_id.id == 0 {
+            index_with_space_id.id = self.next_index_id.fetch_add(1, Ordering::SeqCst);
+        }
         indexes.insert(key, index_with_space_id);
         Ok(true)
     }

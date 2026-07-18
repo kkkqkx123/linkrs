@@ -1,4 +1,4 @@
-use crate::core::metadata::SchemaManager;
+use crate::core::metadata::{IndexMetadataManager, SchemaManager};
 use crate::core::types::TransactionId;
 use crate::core::types::{
     CompactConfig, EdgeTypeInfo, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo,
@@ -391,6 +391,7 @@ pub trait StoragePersistenceOps: Send + Sync + std::fmt::Debug {
 /// Access to persistent schema context shared with higher-level components.
 pub trait StorageSchemaContextOps: Send + Sync + std::fmt::Debug {
     fn get_schema_manager(&self) -> Option<Arc<SchemaManager>>;
+    fn get_index_metadata_manager(&self) -> Option<Arc<dyn IndexMetadataManager>>;
 }
 
 /// Immutable context bound to one storage operation scope.

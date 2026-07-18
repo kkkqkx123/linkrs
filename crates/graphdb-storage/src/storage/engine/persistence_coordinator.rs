@@ -415,7 +415,7 @@ impl PersistenceCoordinator {
 
         let wal_lsn = {
             match &self.wal_manager {
-                Some(wal) => wal.read().current_lsn(),
+                Some(wal) => wal.read().durable_lsn(),
                 None => Lsn::ZERO,
             }
         };

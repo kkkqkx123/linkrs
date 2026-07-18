@@ -756,13 +756,31 @@ fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]) -> SlotLa
             if col_names.len() == 3 {
                 SlotLayout::from_names(col_names)
             } else {
-                layout_with_added_names(
+                let base = layout_with_added_names(
                     &input,
                     [
                         "_expand_edge".to_string(),
                         "_expand_dst".to_string(),
                     ],
-                )
+                );
+                // Add extra col_names (e.g., edge type alias "friend") as aliases
+                // on the edge slot so YIELD friend.name can resolve.
+                if col_names.len() > 3 {
+                    let edge_slot_id = base.resolve("_expand_edge").unwrap_or(0);
+                    let mut slots = base.slots;
+                    let mut name_to_slot = base.name_to_slot;
+                    for extra_name in col_names.iter().skip(3) {
+                        if let Some(slot) = slots.get_mut(edge_slot_id) {
+                            if slot.alias.is_none() {
+                                slot.alias = Some(extra_name.clone());
+                            }
+                        }
+                        name_to_slot.insert(extra_name.clone(), edge_slot_id);
+                    }
+                    SlotLayout { slots, name_to_slot }
+                } else {
+                    base
+                }
             }
         }
         OperatorKindSpec::Graph(GraphSpec::Traverse { .. }) => layout_with_added_names(

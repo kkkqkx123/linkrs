@@ -3,7 +3,7 @@
 //! Decorator pattern implementation that wraps any StorageClient to automatically
 //! synchronize storage operations with external index systems (fulltext, vector).
 
-use crate::core::metadata::SchemaManager;
+use crate::core::metadata::{IndexMetadataManager, SchemaManager};
 use crate::core::types::{EdgeTypeInfo, TagInfo, VertexId};
 use crate::core::{Edge, StorageError, Value, Vertex};
 use crate::storage::{
@@ -771,6 +771,7 @@ impl<S: StorageClient + StorageSchemaContextOps + 'static> StorageSchemaContextO
 {
     forward_storage_methods!(inner;
         fn get_schema_manager(&self) -> Option<Arc<SchemaManager>>;
+        fn get_index_metadata_manager(&self) -> Option<Arc<dyn IndexMetadataManager>>;
     );
 }
 

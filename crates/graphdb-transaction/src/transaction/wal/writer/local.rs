@@ -802,6 +802,11 @@ impl LocalWalWriter {
         Lsn::new(self.last_synced_lsn.load(Ordering::SeqCst))
     }
 
+    /// Get the latest LSN known to be durable according to the configured sync policy.
+    pub fn durable_lsn(&self) -> Lsn {
+        self.last_synced_lsn()
+    }
+
     pub fn file_start_lsn(&self) -> Lsn {
         self.file_start_lsn
     }
@@ -831,9 +836,19 @@ impl LocalWalWriter {
     }
 
     pub fn truncate(&mut self, lsn: Lsn) -> WalResult<usize> {
-        self.set_current_lsn(lsn);
-        if self.file.is_some() {
-            self.refresh_file_header()?;
+        let durable_lsn = self.durable_lsn();
+        if lsn > durable_lsn {
+            return Err(WalError::InvalidOperation(format!(
+                "Cannot truncate WAL at {} beyond durable LSN {}",
+                lsn, durable_lsn
+            )));
+        }
+
+        if lsn == self.current_lsn() {
+            self.set_current_lsn(lsn);
+            if self.file.is_some() {
+                self.refresh_file_header()?;
+            }
         }
 
         self.reclaim_before_checkpoint()
@@ -885,6 +900,8 @@ impl WalWriter for LocalWalWriter {
             let mut parser = LocalWalParser::new();
             if parser.open(&self.wal_uri).is_ok() {
                 self.current_lsn
+                    .store(parser.last_lsn().as_u64(), Ordering::SeqCst);
+                self.last_synced_lsn
                     .store(parser.last_lsn().as_u64(), Ordering::SeqCst);
             }
         }

@@ -514,6 +514,8 @@ pub(super) fn execute_index_manage(
         return Ok(None);
     }
     let index_name = extract_index_manage_name(command);
+    let target_name = extract_index_target_name(command);
+    let index_properties = extract_index_properties(command);
 
     // Resolve space_id from space_name to avoid space ID mismatch
     let resolved_space_id = storage
@@ -524,13 +526,18 @@ pub(super) fn execute_index_manage(
     let result = match command {
         IndexManageNode::CreateTagIndex(_) => super::exec_ddl(storage, |s| {
             let idx_name = index_name.as_deref().unwrap_or("unnamed");
+            let schema = target_name.as_deref().unwrap_or(space_name);
+            let fields: Vec<crate::core::types::IndexField> = index_properties
+                .iter()
+                .map(|p| crate::core::types::IndexField::new(p.clone(), crate::core::Value::Null(crate::core::value::NullType::Null), true))
+                .collect();
             let info = Index::new(IndexConfig {
                 id: 0,
                 name: idx_name.to_string(),
                 space_id: resolved_space_id,
-                schema_name: space_name.to_string(),
-                fields: vec![],
-                properties: vec![],
+                schema_name: schema.to_string(),
+                fields,
+                properties: index_properties.clone(),
                 index_type: IndexType::TagIndex,
                 is_unique: false,
                 partial_condition: None,
@@ -541,13 +548,18 @@ pub(super) fn execute_index_manage(
         }),
         IndexManageNode::CreateEdgeIndex(_) => super::exec_ddl(storage, |s| {
             let idx_name = index_name.as_deref().unwrap_or("unnamed");
+            let schema = target_name.as_deref().unwrap_or(space_name);
+            let fields: Vec<crate::core::types::IndexField> = index_properties
+                .iter()
+                .map(|p| crate::core::types::IndexField::new(p.clone(), crate::core::Value::Null(crate::core::value::NullType::Null), true))
+                .collect();
             let info = Index::new(IndexConfig {
                 id: 0,
                 name: idx_name.to_string(),
                 space_id: resolved_space_id,
-                schema_name: space_name.to_string(),
-                fields: vec![],
-                properties: vec![],
+                schema_name: schema.to_string(),
+                fields,
+                properties: index_properties,
                 index_type: IndexType::EdgeIndex,
                 is_unique: false,
                 partial_condition: None,
@@ -850,6 +862,24 @@ fn extract_edge_manage_properties(node: &EdgeManageNode) -> Vec<PropertyDef> {
     match node {
         EdgeManageNode::Create(node) => node.info().properties.clone(),
         _ => Vec::new(),
+    }
+}
+
+fn extract_index_properties(node: &IndexManageNode) -> Vec<String> {
+    use IndexManageNode::*;
+    match node {
+        CreateTagIndex(node) => node.info().properties.clone(),
+        CreateEdgeIndex(node) => node.info().properties.clone(),
+        _ => Vec::new(),
+    }
+}
+
+fn extract_index_target_name(node: &IndexManageNode) -> Option<String> {
+    use IndexManageNode::*;
+    match node {
+        CreateTagIndex(node) => Some(node.info().target_name.clone()).filter(|s| !s.is_empty()),
+        CreateEdgeIndex(node) => Some(node.info().target_name.clone()).filter(|s| !s.is_empty()),
+        _ => None,
     }
 }
 

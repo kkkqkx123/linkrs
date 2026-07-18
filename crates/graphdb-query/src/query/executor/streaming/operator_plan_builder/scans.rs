@@ -112,16 +112,7 @@ pub fn build_scan_node(
 
         PlanNodeEnum::IndexScan(scan_node) => {
             let index_name = scan_node.index_name().to_string();
-            if scan_node.scan_limits().is_empty() {
-                return Err(PlanBuildError::capability(
-                    "typed_index_predicate",
-                    format!(
-                        "IndexScan '{}' cannot execute a residual filter without a typed scan limit",
-                        index_name
-                    ),
-                ));
-            }
-            if scan_node.filter().is_some() {
+            if scan_node.filter().is_some() && scan_node.scan_limits().is_empty() {
                 return Err(PlanBuildError::capability(
                     "index_residual_filter",
                     format!(
@@ -131,8 +122,7 @@ pub fn build_scan_node(
                 ));
             }
             // Build a BoundIndexPredicate from the first scan limit.
-            // Values are already typed (Value enum, not String), preserving
-            // the original type from the planner.
+            // When scan_limits is empty, fall back to a full index scan.
             let predicate = scan_node
                 .scan_limits()
                 .first()
@@ -148,8 +138,8 @@ pub fn build_scan_node(
                         crate::query::planning::plan::core::nodes::access::index_scan::ScanType::Range => {
                             BoundIndexPredicate::Range {
                                 column,
-                                begin: limit.begin_value.clone().unwrap_or(crate::core::Value::Null(crate::core::value::NullType::Null)),
-                                end: limit.end_value.clone().unwrap_or(crate::core::Value::Null(crate::core::value::NullType::Null)),
+                                begin: limit.begin_value.clone(),
+                                end: limit.end_value.clone(),
                                 include_begin: limit.include_begin,
                                 include_end: limit.include_end,
                             }
@@ -178,7 +168,7 @@ pub fn build_scan_node(
                 SourceSpec::IndexScan {
                     space_name: context.space_name.clone().unwrap_or_default(),
                     index_name,
-                    index_id: scan_node.index_id() as u64,
+                    index_id: scan_node.index_id(),
                     predicate,
                     projection,
                     residual_filter: None,

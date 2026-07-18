@@ -2,12 +2,38 @@ use crate::core::types::expr::Expression;
 use crate::core::Value;
 use crate::query::executor::base::ExecutionContext;
 use crate::query::executor::build_error::PlanBuildError;
+use crate::query::executor::expression::functions::global_registry;
 use crate::query::executor::streaming::operators::spec::SinkSpec;
 use crate::query::executor::streaming::operators::spec::SourceSpec;
 use crate::query::executor::streaming::plan::node::PhysicalNode;
 use crate::query::executor::streaming::plan::properties::PhysicalProperties;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
+
+fn eval_expr_to_value(expr: &Expression) -> Option<Value> {
+    match expr {
+        Expression::Literal(value) => Some(value.clone()),
+        Expression::Vector(data) => Some(Value::vector(data.clone())),
+        Expression::List(elements) => {
+            let vals: Option<Vec<Value>> = elements.iter().map(eval_expr_to_value).collect();
+            vals.map(|v| Value::list(crate::core::value::list::List::from(v)))
+        }
+        Expression::Function { name, args } => {
+            let arg_vals: Vec<Value> = args.iter().map(eval_expr_to_value).collect::<Option<Vec<_>>>()?;
+            global_registry().execute(name, &arg_vals).ok()
+        }
+        Expression::Binary { left, op, right } => {
+            let l = eval_expr_to_value(left)?;
+            let r = eval_expr_to_value(right)?;
+            crate::query::executor::expression::evaluator::operations::BinaryOperationEvaluator::evaluate(&l, op, &r).ok()
+        }
+        Expression::Unary { op, operand } => {
+            let v = eval_expr_to_value(operand)?;
+            crate::query::executor::expression::evaluator::operations::UnaryOperationEvaluator::evaluate(op, &v).ok()
+        }
+        _ => None,
+    }
+}
 
 fn contextual_to_value(
     expr: &crate::core::types::expr::ContextualExpression,
@@ -17,12 +43,18 @@ fn contextual_to_value(
     }
     match expr.get_expression() {
         Some(Expression::Literal(value)) => Ok(value),
-        _ => Err(PlanBuildError::expression(
-            "ContextualExpression",
-            0,
-            format!("{:?}", expr),
-            "Standalone data modification requires constant values, got expression",
-        )),
+        Some(ref expr) => {
+            if let Some(value) = eval_expr_to_value(expr) {
+                return Ok(value);
+            }
+            Err(PlanBuildError::expression(
+                "ContextualExpression",
+                0,
+                format!("{:?}", expr),
+                "Standalone data modification requires constant values, got expression",
+            ))
+        }
+        None => unreachable!(),
     }
 }
 

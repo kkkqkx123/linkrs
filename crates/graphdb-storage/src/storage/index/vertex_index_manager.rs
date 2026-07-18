@@ -577,6 +577,7 @@ impl IndexCursor for VertexIndexCursor {
                     self.stale_skipped += 1;
                     continue;
                 }
+
                 if let Some(ref prange) = self.partition_id_range {
                     let vid = match &entity_ref {
                         crate::core::wal::EntityRef::Vertex(vid) => vid,

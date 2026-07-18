@@ -46,7 +46,7 @@ pub fn build_graph_node(
             ))
         }
 
-        PlanNodeEnum::ExpandAll(expand_all_node) => {
+            PlanNodeEnum::ExpandAll(expand_all_node) => {
             let input_plan = expand_all_node.inputs().first().ok_or_else(|| {
                 PlanBuildError::missing_value(
                     "ExpandAll",
@@ -67,6 +67,7 @@ pub fn build_graph_node(
                 .map(super::contextual_to_expression)
                 .transpose()?;
             let col_names = expand_all_node.col_names().to_vec();
+            let src_vids = expand_all_node.src_vids().to_vec();
             Ok(PhysicalNode::Graph(
                 node.id(),
                 Box::new(input_phys),
@@ -75,6 +76,7 @@ pub fn build_graph_node(
                     direction,
                     filter_expr,
                     col_names,
+                    src_vids,
                 },
                 PhysicalProperties::single_streaming(),
             ))

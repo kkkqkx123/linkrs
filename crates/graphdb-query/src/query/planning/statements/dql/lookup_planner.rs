@@ -95,7 +95,7 @@ impl Planner for LookupPlanner {
                 .collect();
 
             selected_index = Some(Index {
-                id: 1,
+                id: hint.index_id,
                 name: hint.index_name.clone(),
                 space_id,
                 schema_name: hint.table_name.clone(),
@@ -158,12 +158,20 @@ impl Planner for LookupPlanner {
             .map(|h| h.is_edge)
             .unwrap_or(false);
 
+        // Extract the tag/edge name from the LOOKUP target for col_names
+        let target_name = match &lookup_stmt.target {
+            crate::query::parser::ast::LookupTarget::Tag(name) => name.clone(),
+            crate::query::parser::ast::LookupTarget::Edge(name) => name.clone(),
+            crate::query::parser::ast::LookupTarget::Unspecified(name) => name.clone(),
+        };
+
         // 4. Create the appropriate scan node based on whether it's an edge or tag lookup
         let mut current_node: PlanNodeEnum = if is_edge {
             let mut edge_index_scan_node =
                 EdgeIndexScanNode::new(space_id, &schema_name, &index_name);
             edge_index_scan_node.set_scan_type(scan_type);
             edge_index_scan_node.set_scan_limits(scan_limits);
+            edge_index_scan_node.set_col_names(vec![target_name.clone()]);
 
             // Set limit from yield clause
             if let Some(ref yield_clause) = lookup_stmt.yield_clause {
@@ -179,6 +187,10 @@ impl Planner for LookupPlanner {
 
             // 5. Setting scan limitations and the columns to be returned
             index_scan_node.set_scan_limits(scan_limits);
+            // Set col_names so the output layout has a named slot that
+            // YIELD/Filter expressions like `person.name` can resolve via TagProperty.
+            index_scan_node.set_col_names(vec![target_name.clone()]);
+            index_scan_node.set_return_columns(vec![target_name]);
 
             // 5.1 Set limit from yield clause
             if let Some(ref yield_clause) = lookup_stmt.yield_clause {
@@ -398,6 +410,7 @@ impl LookupPlanner {
 
     fn extract_property_name(expr: &Expression) -> Option<String> {
         match expr {
+            Expression::TagProperty { property, .. } => Some(property.clone()),
             Expression::Property { property, .. } => Some(property.clone()),
             Expression::Variable(name) => {
                 if name.contains('.') {

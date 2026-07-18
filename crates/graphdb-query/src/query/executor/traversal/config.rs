@@ -52,11 +52,11 @@ pub struct TraversalConfig {
 }
 
 impl TraversalConfig {
-    pub fn expand(space_name: String, direction: EdgeDirection) -> Self {
+    pub fn expand(space_name: String, direction: EdgeDirection, edge_types: Vec<String>) -> Self {
         Self {
             kind: TraversalKind::Expand,
             direction,
-            edge_types: Vec::new(),
+            edge_types,
             min_depth: 1,
             max_depth: 1,
             limit: usize::MAX,

@@ -140,7 +140,7 @@ define_plan_node! {
     pub struct IndexScanNode {
         space_id: u64,
         tag_id: i32,
-        index_id: i32,
+        index_id: u64,
         index_name: String,
         schema_name: String,
         scan_type: ScanType,
@@ -158,7 +158,7 @@ impl IndexScanNode {
     pub fn new(
         space_id: u64,
         tag_id: i32,
-        index_id: i32,
+        index_id: u64,
         index_name: String,
         schema_name: String,
         scan_type: ScanType,
@@ -185,7 +185,7 @@ impl IndexScanNode {
     pub fn new_with_str(
         space_id: u64,
         tag_id: i32,
-        index_id: i32,
+        index_id: u64,
         index_name: &str,
         schema_name: &str,
         scan_type: &str,
@@ -236,7 +236,7 @@ impl IndexScanNode {
         self.tag_id
     }
 
-    pub fn index_id(&self) -> i32 {
+    pub fn index_id(&self) -> u64 {
         self.index_id
     }
 

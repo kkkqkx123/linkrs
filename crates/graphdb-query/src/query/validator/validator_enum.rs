@@ -43,6 +43,7 @@ use crate::query::validator::statements::get_subgraph_validator::GetSubgraphVali
 use crate::query::validator::statements::go_validator::GoValidator;
 use crate::query::validator::statements::insert_edges_validator::InsertEdgesValidator;
 use crate::query::validator::statements::insert_vertices_validator::InsertVerticesValidator;
+use crate::core::metadata::IndexMetadataManager;
 use crate::query::validator::statements::lookup_validator::LookupValidator;
 use crate::query::validator::statements::match_validator::MatchValidator;
 use crate::query::validator::statements::merge_validator::MergeValidator;
@@ -592,6 +593,13 @@ impl Validator {
             Validator::InsertVertices(v) => v.set_schema_manager(schema_manager),
             Validator::InsertEdges(v) => v.set_schema_manager(schema_manager),
             _ => {}
+        }
+    }
+
+    /// Set index metadata manager for validators that need it
+    pub fn set_index_metadata_manager(&mut self, index_manager: Arc<dyn IndexMetadataManager>) {
+        if let Validator::Lookup(v) = self {
+            v.set_index_metadata_manager(index_manager);
         }
     }
 

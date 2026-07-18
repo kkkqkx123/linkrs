@@ -947,8 +947,8 @@ fn build_index_scan_plan(
             include_end,
             ..
         } => IndexPredicate::Range {
-            lower: Some(begin.clone()),
-            upper: Some(end.clone()),
+            lower: begin.clone(),
+            upper: end.clone(),
             include_lower: *include_begin,
             include_upper: *include_end,
         },

@@ -62,6 +62,15 @@ impl WalManager {
         }
     }
 
+    /// Return the latest WAL position confirmed durable by the writer.
+    pub fn durable_lsn(&self) -> Lsn {
+        if let Some(ref writer) = self.local_writer {
+            writer.read().durable_lsn()
+        } else {
+            Lsn::ZERO
+        }
+    }
+
     pub fn sync(&self) -> StorageResult<()> {
         if let Some(ref writer) = self.local_writer {
             writer

@@ -26,8 +26,10 @@ pub(crate) struct GraphVertexCursor {
     ctx: Arc<GraphStorageContext>,
     space: String,
     tags: TagCache,
+    /// Index into `tags.labels` indicating which table is currently being scanned.
+    current_table_idx: usize,
+    /// Current internal ID within the current table.
     current_internal_id: u32,
-    max_internal_id: u32,
     limit: Option<usize>,
     offset_remaining: usize,
     emitted: usize,
@@ -36,6 +38,8 @@ pub(crate) struct GraphVertexCursor {
     exhausted: bool,
     /// Read timestamp captured when the cursor is opened.
     ts: Timestamp,
+    /// Per-table max internal IDs, parallel to `tags.labels`.
+    table_max_ids: Vec<u32>,
 }
 
 impl std::fmt::Debug for GraphVertexCursor {
@@ -44,7 +48,7 @@ impl std::fmt::Debug for GraphVertexCursor {
             .field("space", &self.space)
             .field("tags", &self.tags.labels.len())
             .field("current_internal_id", &self.current_internal_id)
-            .field("max_internal_id", &self.max_internal_id)
+            .field("current_table_idx", &self.current_table_idx)
             .field("limit", &self.limit)
             .field("offset_remaining", &self.offset_remaining)
             .field("exhausted", &self.exhausted)
@@ -79,30 +83,38 @@ impl GraphVertexCursor {
                 .collect(),
         };
 
-        let max_internal_id = ctx.data_store().with_vertex_tables(|tables| {
-            tags.labels
+        let (exhausted, table_max_ids) = ctx.data_store().with_vertex_tables(|tables| {
+            let max_ids: Vec<u32> = tags
+                .labels
                 .iter()
-                .filter_map(|label_id| tables.get(label_id))
-                .map(|t| t.total_count() as u32)
-                .max()
-                .unwrap_or(0)
+                .map(|label_id| {
+                    tables
+                        .get(label_id)
+                        .map(|t| t.total_count() as u32)
+                        .unwrap_or(0)
+                })
+                .collect();
+            let done = max_ids.iter().all(|&count| count == 0);
+            (done, max_ids)
         });
 
         Ok(Self {
             ctx,
             space,
             tags,
+            current_table_idx: 0,
             current_internal_id: 0,
-            max_internal_id,
             limit: options.limit,
             offset_remaining: options.offset,
             emitted: 0,
             id_range: options.vertex_id_range.clone(),
             projection: options.projection.clone(),
-            exhausted: max_internal_id == 0,
+            exhausted,
             ts,
+            table_max_ids,
         })
     }
+
 }
 
 impl VertexCursor for GraphVertexCursor {
@@ -119,7 +131,21 @@ impl VertexCursor for GraphVertexCursor {
         let projection = &self.projection;
         let batch = data_store.with_vertex_tables(|tables| {
             let mut batch = Vec::new();
-            while batch.len() < batch_size && self.current_internal_id < self.max_internal_id {
+
+            while batch.len() < batch_size && !self.exhausted {
+                // Advance past exhausted tables.
+                while self.current_table_idx < tags.labels.len()
+                    && self.current_internal_id >= self.table_max_ids[self.current_table_idx]
+                {
+                    self.current_table_idx += 1;
+                    self.current_internal_id = 0;
+                }
+
+                if self.current_table_idx >= tags.labels.len() {
+                    self.exhausted = true;
+                    break;
+                }
+
                 let internal_id = self.current_internal_id;
                 self.current_internal_id += 1;
 
@@ -129,63 +155,50 @@ impl VertexCursor for GraphVertexCursor {
                     }
                 }
 
-                let mut merged_vid = None;
-                let mut merged_tags: Vec<Tag> = Vec::new();
-                let mut all_properties: HashMap<String, Value> = HashMap::new();
-
-                for label_id in &tags.labels {
-                    if let Some(table) = tables.get(label_id) {
-                        if let Some(record) = table.get_by_internal_id(internal_id, ts) {
-                            if merged_vid.is_none() {
-                                merged_vid = Some(record.vid);
-                            }
-                            let tag_name = tags
-                                .names
-                                .get(label_id)
-                                .map(|s| s.as_str())
-                                .unwrap_or("unknown");
-                            let props: HashMap<String, Value> = record
-                                .properties
-                                .iter()
-                                .filter(|(name, _)| {
-                                    projection.as_ref().is_none_or(|projection| {
-                                        projection.iter().any(|p| p == name)
-                                    })
+                let label_id = tags.labels[self.current_table_idx];
+                if let Some(table) = tables.get(&label_id) {
+                    if let Some(record) = table.get_by_internal_id(internal_id, ts) {
+                        let vid = record.vid;
+                        let tag_name = tags
+                            .names
+                            .get(&label_id)
+                            .map(|s| s.as_str())
+                            .unwrap_or("unknown");
+                        let props: HashMap<String, Value> = record
+                            .properties
+                            .iter()
+                            .filter(|(name, _)| {
+                                projection.as_ref().is_none_or(|projection| {
+                                    projection.iter().any(|p| name == p)
                                 })
-                                .cloned()
-                                .collect();
-                            merged_tags.push(Tag::new(tag_name.to_string(), props.clone()));
-                            all_properties.extend(props);
-                        }
-                    }
-                }
+                            })
+                            .cloned()
+                            .collect();
+                        let vertex_tag = Tag::new(tag_name.to_string(), props.clone());
 
-                if let Some(vid) = merged_vid {
-                    if self.offset_remaining > 0 {
-                        self.offset_remaining -= 1;
-                        continue;
-                    }
-                    batch.push(Vertex {
-                        vid,
-                        id: internal_id as i64,
-                        tags: merged_tags,
-                        properties: all_properties,
-                    });
-                    self.emitted += 1;
-                    if let Some(limit) = self.limit {
-                        if self.emitted >= limit {
-                            self.exhausted = true;
-                            break;
+                        if self.offset_remaining > 0 {
+                            self.offset_remaining -= 1;
+                            continue;
+                        }
+
+                        batch.push(Vertex {
+                            vid,
+                            id: internal_id as i64,
+                            tags: vec![vertex_tag],
+                            properties: props,
+                        });
+                        self.emitted += 1;
+                        if let Some(limit) = self.limit {
+                            if self.emitted >= limit {
+                                self.exhausted = true;
+                                break;
+                            }
                         }
                     }
                 }
             }
             batch
         });
-
-        if self.current_internal_id >= self.max_internal_id {
-            self.exhausted = true;
-        }
 
         Ok(batch)
     }

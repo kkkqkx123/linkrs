@@ -512,7 +512,13 @@ impl WalHeader {
         let is_update = bytes[offset] != 0;
         offset += 1;
 
-        let record_type = RecordType::from_u8(bytes[offset]);
+        let record_type = match bytes[offset] {
+            0 => RecordType::Full,
+            1 => RecordType::First,
+            2 => RecordType::Middle,
+            3 => RecordType::Last,
+            _ => return None,
+        };
         offset += 1;
 
         // Skip padding
@@ -602,13 +608,18 @@ impl From<postcard::Error> for WalError {
 
 pub type WalResult<T> = Result<T, WalError>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WalRecoveryMode {
     AbortOnCorruption,
-    #[default]
     SkipCorruption,
     WalOnly,
     ErrorIfMissing,
+}
+
+impl Default for WalRecoveryMode {
+    fn default() -> Self {
+        Self::AbortOnCorruption
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

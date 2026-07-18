@@ -37,6 +37,8 @@ pub(super) fn handle(
                 edge_types,
                 direction,
                 filter_expr,
+                Vec::new(),
+                Vec::new(),
                 cancel_token.clone(),
             )? {
                 return Ok(Some(output));
@@ -90,6 +92,8 @@ pub(super) fn handle_all(
     edge_types: &[String],
     direction: EdgeDirection,
     filter_expr: &Option<Expression>,
+    col_names: Vec<String>,
+    src_vids: Vec<Value>,
     base: &mut OperatorBase,
     input: &mut StreamingExecutor,
 ) -> Result<Option<DataChunk>, QueryError> {
@@ -109,6 +113,8 @@ pub(super) fn handle_all(
                 edge_types,
                 direction,
                 filter_expr,
+                col_names.clone(),
+                src_vids.clone(),
                 cancel_token.clone(),
             )? {
                 return Ok(Some(output));

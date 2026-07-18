@@ -253,6 +253,8 @@ pub enum HintSeverity {
 pub struct IndexHint {
     /// Index name
     pub index_name: String,
+    /// Index ID in storage
+    pub index_id: u64,
     /// Table/Tag Name
     pub table_name: String,
     /// Index column

@@ -320,7 +320,7 @@ impl PlanNodeFactory {
     pub fn create_index_scan(
         space_id: u64,
         tag_id: i32,
-        index_id: i32,
+        index_id: u64,
         index_name: &str,
         scan_type: &str,
     ) -> Result<PlanNodeEnum, crate::query::planning::planner::PlannerError> {

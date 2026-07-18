@@ -379,6 +379,75 @@ impl LookupValidator {
         }
         outputs
     }
+
+    /// Extract column names referenced in a WHERE expression.
+    fn extract_where_columns(filter: &Option<ContextualExpression>) -> Vec<String> {
+        let mut cols = Vec::new();
+        if let Some(expr) = filter {
+            if let Some(inner) = expr.get_expression() {
+                Self::collect_property_names(&inner, &mut cols);
+            }
+        }
+        cols
+    }
+
+    fn collect_property_names(expr: &crate::core::Expression, cols: &mut Vec<String>) {
+        match expr {
+            crate::core::Expression::Binary { left, op: _, right } => {
+                Self::collect_property_names(left, cols);
+                Self::collect_property_names(right, cols);
+            }
+            crate::core::Expression::Property { property, .. } => {
+                if !cols.contains(property) {
+                    cols.push(property.clone());
+                }
+            }
+            crate::core::Expression::Variable(name) => {
+                let col = if name.contains('.') {
+                    name.split('.').nth(1).unwrap_or(name).to_string()
+                } else {
+                    name.clone()
+                };
+                if !cols.contains(&col) {
+                    cols.push(col);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Select the best index for a tag/edge, preferring one that covers
+    /// the WHERE clause columns.
+    fn select_best_index(
+        indexes: Vec<crate::core::types::Index>,
+        label: &str,
+        where_columns: &[String],
+    ) -> (String, u64, Vec<String>) {
+        let matching: Vec<_> = indexes
+            .into_iter()
+            .filter(|idx| idx.schema_name == label)
+            .collect();
+
+        if matching.is_empty() {
+            return (String::new(), 0, Vec::new());
+        }
+
+        // Prefer an index whose columns match the WHERE predicate columns.
+        for idx in &matching {
+            let idx_cols: Vec<String> =
+                idx.fields.iter().map(|f| f.name.clone()).collect();
+            if !idx_cols.is_empty()
+                && where_columns.iter().all(|c| idx_cols.contains(c))
+            {
+                return (idx.name.clone(), idx.id, idx_cols);
+            }
+        }
+
+        // Fallback: first matching index.
+        let idx = matching.into_iter().next().unwrap();
+        let cols: Vec<String> = idx.fields.iter().map(|f| f.name.clone()).collect();
+        (idx.name, idx.id, cols)
+    }
 }
 
 /// LOOKUP information parsed from AST
@@ -443,39 +512,26 @@ impl StatementValidator for LookupValidator {
         // Get space_id
         let space_id = ctx.space_id().unwrap_or(0);
 
-        // Find index name and columns from index manager
-        let (index_name, index_columns) = if let Some(ref index_mgr) = self.index_metadata_manager {
+        // Extract column names referenced in the WHERE clause for index selection.
+        let where_columns = Self::extract_where_columns(&parsed_info.filter_expression);
+
+        // Find index name, id, and columns from index manager
+        let (index_name, index_id, index_columns) = if let Some(ref index_mgr) = self.index_metadata_manager {
             if is_edge {
                 // Find edge index for this edge type
                 match index_mgr.list_edge_indexes(space_id) {
-                    Ok(indexes) => indexes
-                        .into_iter()
-                        .find(|idx| idx.schema_name == parsed_info.label)
-                        .map(|idx| {
-                            let cols: Vec<String> =
-                                idx.fields.iter().map(|f| f.name.clone()).collect();
-                            (idx.name, cols)
-                        })
-                        .unwrap_or_default(),
-                    Err(_) => (String::new(), Vec::new()),
+                    Ok(indexes) => Self::select_best_index(indexes, &parsed_info.label, &where_columns),
+                    Err(_) => (String::new(), 0, Vec::new()),
                 }
             } else {
                 // Find tag index for this tag
                 match index_mgr.list_tag_indexes(space_id) {
-                    Ok(indexes) => indexes
-                        .into_iter()
-                        .find(|idx| idx.schema_name == parsed_info.label)
-                        .map(|idx| {
-                            let cols: Vec<String> =
-                                idx.fields.iter().map(|f| f.name.clone()).collect();
-                            (idx.name, cols)
-                        })
-                        .unwrap_or_default(),
-                    Err(_) => (String::new(), Vec::new()),
+                    Ok(indexes) => Self::select_best_index(indexes, &parsed_info.label, &where_columns),
+                    Err(_) => (String::new(), 0, Vec::new()),
                 }
             }
         } else {
-            (String::new(), Vec::new())
+            (String::new(), 0, Vec::new())
         };
 
         // Store verification results
@@ -497,6 +553,7 @@ impl StatementValidator for LookupValidator {
             variable_definitions: HashMap::new(),
             index_hints: vec![IndexHint {
                 index_name,
+                index_id,
                 table_name: parsed_info.label,
                 columns: index_columns,
                 applicable_conditions: Vec::new(),

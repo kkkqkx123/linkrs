@@ -35,7 +35,7 @@ impl<S> ExecutorConfig<S> {
 pub struct IndexScanConfig {
     pub space_id: u64,
     pub tag_id: i32,
-    pub index_id: i32,
+    pub index_id: u64,
     pub index_name: String,
     pub schema_name: String,
     pub scan_type: String,
