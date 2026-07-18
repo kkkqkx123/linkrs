@@ -51,15 +51,15 @@ pub type CompactTransactionResult<T> = Result<T, CompactTransactionError>;
 /// let mut txn = CompactTransaction::new(&mut graph, &version_manager, &mut wal_writer, true, 0.8)?;
 /// txn.commit()?;
 /// ```
-pub struct CompactTransaction<'a, T: CompactTarget + ?Sized> {
+pub struct CompactTransaction<'a, T: CompactTarget + ?Sized, W: WalWriter> {
     graph: &'a T,
     version_manager: &'a VersionManager,
-    wal_writer: &'a mut dyn WalWriter,
+    wal_writer: &'a mut W,
     config: CompactConfig,
     timestamp: Timestamp,
 }
 
-impl<'a, T: CompactTarget + ?Sized> CompactTransaction<'a, T> {
+impl<'a, T: CompactTarget + ?Sized, W: WalWriter> CompactTransaction<'a, T, W> {
     /// Create a new compact transaction
     ///
     /// # Arguments
@@ -70,7 +70,7 @@ impl<'a, T: CompactTarget + ?Sized> CompactTransaction<'a, T> {
     pub fn new(
         graph: &'a T,
         version_manager: &'a VersionManager,
-        wal_writer: &'a mut dyn WalWriter,
+        wal_writer: &'a mut W,
         config: &CompactConfig,
     ) -> CompactTransactionResult<Self> {
         let timestamp = version_manager.acquire_update_timestamp()?;
@@ -156,7 +156,7 @@ impl<'a, T: CompactTarget + ?Sized> CompactTransaction<'a, T> {
     }
 }
 
-impl<'a, T: CompactTarget + ?Sized> Drop for CompactTransaction<'a, T> {
+impl<'a, T: CompactTarget + ?Sized, W: WalWriter> Drop for CompactTransaction<'a, T, W> {
     fn drop(&mut self) {
         if self.timestamp != RELEASED_TIMESTAMP {
             self.version_manager
@@ -167,9 +167,18 @@ impl<'a, T: CompactTarget + ?Sized> Drop for CompactTransaction<'a, T> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::wal::writer::DummyWalWriter;
+    use super::super::wal::writer::{LocalWalWriter, WalWriter};
     use super::*;
     use crate::core::types::{CompactConfig, CompactResult};
+    use tempfile::TempDir;
+
+    fn open_test_wal() -> (TempDir, LocalWalWriter) {
+        let directory = tempfile::tempdir().expect("Failed to create temporary WAL directory");
+        let path = directory.path().to_string_lossy().to_string();
+        let mut writer = LocalWalWriter::new(&path, 0);
+        writer.open().expect("Failed to open test WAL");
+        (directory, writer)
+    }
 
     struct MockCompactTarget;
 
@@ -187,7 +196,7 @@ mod tests {
     fn test_compact_transaction_basic() {
         let vm = VersionManager::new();
         let target = MockCompactTarget;
-        let mut wal = DummyWalWriter::new();
+        let (_wal_dir, mut wal) = open_test_wal();
 
         let config = CompactConfig::with_fixed_ratio(true, 0.8);
         let txn = CompactTransaction::new(&target, &vm, &mut wal, &config)
@@ -202,7 +211,7 @@ mod tests {
     fn test_compact_transaction_commit() {
         let vm = VersionManager::new();
         let target = MockCompactTarget;
-        let mut wal = DummyWalWriter::new();
+        let (_wal_dir, mut wal) = open_test_wal();
 
         let config = CompactConfig::with_fixed_ratio(true, 0.8);
         let txn = CompactTransaction::new(&target, &vm, &mut wal, &config)
@@ -217,7 +226,7 @@ mod tests {
     fn test_compact_transaction_abort() {
         let vm = VersionManager::new();
         let target = MockCompactTarget;
-        let mut wal = DummyWalWriter::new();
+        let (_wal_dir, mut wal) = open_test_wal();
 
         let config = CompactConfig::with_fixed_ratio(true, 0.8);
         let txn = CompactTransaction::new(&target, &vm, &mut wal, &config)
@@ -232,7 +241,7 @@ mod tests {
     fn test_compact_transaction_reserve_ratio_clamp() {
         let vm = VersionManager::new();
         let target = MockCompactTarget;
-        let mut wal = DummyWalWriter::new();
+        let (_wal_dir, mut wal) = open_test_wal();
 
         let config = CompactConfig::with_fixed_ratio(true, 1.5);
         let txn = CompactTransaction::new(&target, &vm, &mut wal, &config)
@@ -245,7 +254,7 @@ mod tests {
     fn test_compact_transaction_storage_stats() {
         let vm = VersionManager::new();
         let target = MockCompactTarget;
-        let mut wal = DummyWalWriter::new();
+        let (_wal_dir, mut wal) = open_test_wal();
 
         let config = CompactConfig::with_fixed_ratio(true, 0.8);
         let txn = CompactTransaction::new(&target, &vm, &mut wal, &config)

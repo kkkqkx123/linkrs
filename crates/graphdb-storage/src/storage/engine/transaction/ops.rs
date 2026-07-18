@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use crate::core::types::{ColumnId, LabelId, Timestamp, VertexId};
 use crate::core::Value;
 use crate::storage::edge::UpdateEdgePropertyByOffsetParams;
-use crate::transaction::codec::{bytes_to_value, property_value_to_value};
+use crate::transaction::codec::property_value_to_value;
 use crate::transaction::insert_transaction::{InsertTransactionError, InsertTransactionResult};
 use crate::transaction::undo_log::{PropertyValue, UndoLogError, UndoLogResult};
 
@@ -88,25 +88,20 @@ impl TransactionOps {
         vertex_tables: &mut HashMap<LabelId, VertexTable>,
         label: LabelId,
         vid: VertexId,
-        properties: &[(String, Vec<u8>)],
+        properties: &[(String, Value)],
         ts: Timestamp,
     ) -> InsertTransactionResult<VertexId> {
-        let props: Vec<(String, Value)> = properties
-            .iter()
-            .filter_map(|(k, v)| bytes_to_value(v).map(|val| (k.clone(), val)))
-            .collect();
-
         let table = vertex_tables
             .get_mut(&label)
             .ok_or(InsertTransactionError::LabelNotFound(label))?;
 
         let internal_id = if let Some(int_id) = vid.as_int64() {
             table
-                .insert_by_i64(int_id, &props, ts)
+                .insert_by_i64(int_id, properties, ts)
                 .map_err(|e| InsertTransactionError::SchemaError(e.to_string()))?
         } else if let Some(str_id) = vid.as_str() {
             table
-                .insert(str_id, &props, ts)
+                .insert(str_id, properties, ts)
                 .map_err(|e| InsertTransactionError::SchemaError(e.to_string()))?
         } else {
             return Err(InsertTransactionError::SerializationError(
@@ -121,7 +116,7 @@ impl TransactionOps {
         edge_tables: &mut HashMap<EdgeTableKey, EdgeStore>,
         vertex_tables: &HashMap<LabelId, VertexTable>,
         params: AddEdgeParams,
-        properties: &[(String, Vec<u8>)],
+        properties: &[(String, Value)],
         ts: Timestamp,
     ) -> InsertTransactionResult<()> {
         let src_table = vertex_tables
@@ -138,11 +133,6 @@ impl TransactionOps {
             InsertTransactionError::VertexNotFound(VertexId::from_int64(params.dst_vid as i64)),
         )?;
 
-        let props: Vec<(String, Value)> = properties
-            .iter()
-            .filter_map(|(k, v)| bytes_to_value(v).map(|val| (k.clone(), val)))
-            .collect();
-
         let _src_id_str = match &src_external {
             crate::storage::vertex::IdKey::Text(s) => s.clone(),
             crate::storage::vertex::IdKey::Int(i) => i.to_string(),
@@ -158,7 +148,7 @@ impl TransactionOps {
             .ok_or(InsertTransactionError::LabelNotFound(params.edge_label))?;
 
         edge_table
-            .insert_edge(params.src_vid, params.dst_vid, params.rank, &props, ts)
+            .insert_edge(params.src_vid, params.dst_vid, params.rank, properties, ts)
             .map_err(|e| InsertTransactionError::SchemaError(e.to_string()))?;
 
         Ok(())

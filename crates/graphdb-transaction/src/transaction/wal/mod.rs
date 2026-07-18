@@ -64,7 +64,7 @@ pub use recovery::{RecoveryApplier, RecoveryConfig, RecoveryManager, RecoverySta
 
 // Re-export fundamental types from core for backward compatibility
 pub use crate::core::types::{ColumnId, EdgeId, LabelId, Timestamp, VertexId};
-pub use writer::{DummyWalWriter, LocalWalWriter, WalWriter, WalWriterFactory};
+pub use writer::{LocalWalWriter, WalWriter};
 
 #[cfg(test)]
 mod tests {

@@ -731,6 +731,7 @@ impl Default for RecoveryManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::Value;
     use crate::transaction::wal::writer::LocalWalWriter;
     use crate::transaction::wal::writer::WalWriter;
     use crate::transaction::wal::{
@@ -771,7 +772,7 @@ mod tests {
             &self,
             label: LabelId,
             vid: VertexId,
-            _properties: &[(String, Vec<u8>)],
+            _properties: &[(String, Value)],
             ts: Timestamp,
         ) -> StorageResult<()> {
             self.replayed_vertices
@@ -787,7 +788,7 @@ mod tests {
                 label: LabelId,
                 vid: VertexId,
                 prop_name: &str,
-                value: &[u8],
+                value: &Value,
                 ts: Timestamp
             ),
             replay_update_edge_prop(redo: &UpdateEdgePropRedo, ts: Timestamp),
@@ -830,11 +831,7 @@ mod tests {
         let redo = InsertVertexRedo {
             label,
             vid: VertexId::from_int64(vid),
-            properties: vec![(
-                "name".to_string(),
-                to_allocvec(&name.to_string())
-                    .map_err(|e| StorageError::serialize_error(e.to_string()))?,
-            )],
+            properties: vec![("name".to_string(), Value::String(name.to_string()))],
         };
 
         let payload =
@@ -871,7 +868,7 @@ mod tests {
         let first_redo = InsertVertexRedo {
             label: 1,
             vid: VertexId::from_int64(1001),
-            properties: vec![("name".to_string(), b"Alice".to_vec())],
+            properties: vec![("name".to_string(), Value::String("Alice".to_string()))],
         };
         let first_payload = to_allocvec(&first_redo).expect("Failed to serialize first redo");
         let first_lsn = writer
@@ -889,7 +886,7 @@ mod tests {
         let second_redo = InsertVertexRedo {
             label: 1,
             vid: VertexId::from_int64(1002),
-            properties: vec![("name".to_string(), b"Bob".to_vec())],
+            properties: vec![("name".to_string(), Value::String("Bob".to_string()))],
         };
         let second_payload = to_allocvec(&second_redo).expect("Failed to serialize second redo");
         let second_lsn = writer
@@ -974,7 +971,7 @@ mod tests {
         let redo = InsertVertexRedo {
             label: 1,
             vid: VertexId::from_int64(1002),
-            properties: vec![("name".to_string(), b"uncommitted".to_vec())],
+            properties: vec![("name".to_string(), Value::String("uncommitted".to_string()))],
         };
         writer
             .append_entry(

@@ -54,8 +54,3 @@ pub use stats::{
 
 // Session statistics type
 pub use session_stats::SessionStatistics;
-
-pub use types::dump_restore::{
-    CompressionType, DumpConfig, DumpError, DumpFormat, DumpMetadata, RestoreConfig, RestoreError,
-    RestoreStats, SpaceDumpInfo,
-};

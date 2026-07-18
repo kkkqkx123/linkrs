@@ -147,7 +147,8 @@ impl CheckpointManifest {
     fn compute_checksum(&self) -> u32 {
         let mut clone = self.clone();
         clone.manifest_checksum = 0;
-        let bytes = postcard::to_allocvec(&clone).unwrap_or_default();
+        let bytes = postcard::to_allocvec(&clone)
+            .expect("postcard serialization of derived struct should not fail");
         crc32fast::hash(&bytes)
     }
 
@@ -156,7 +157,8 @@ impl CheckpointManifest {
         let expected = self.manifest_checksum;
         let mut clone = self.clone();
         clone.manifest_checksum = 0;
-        let bytes = postcard::to_allocvec(&clone).unwrap_or_default();
+        let bytes = postcard::to_allocvec(&clone)
+            .expect("postcard serialization of derived struct should not fail");
         let computed = crc32fast::hash(&bytes);
         computed == expected
     }

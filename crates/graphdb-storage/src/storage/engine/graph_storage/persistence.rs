@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::core::types::{CompactConfig, CompactTarget};
-use crate::core::{StorageError, StorageResult};
+use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::engine::paths::StoragePaths;
 use crate::storage::engine::persistence_coordinator::{
     CheckpointData, CheckpointInfo, CheckpointStats,
@@ -721,7 +721,7 @@ mod tests {
         let redo = InsertVertexRedo {
             label,
             vid: VertexId::from_int64(vid),
-            properties: vec![("name".to_string(), name.as_bytes().to_vec())],
+            properties: vec![("name".to_string(), Value::String(name.to_string()))],
         };
         let payload =
             to_allocvec(&redo).map_err(|e| StorageError::serialize_error(e.to_string()))?;
@@ -804,7 +804,7 @@ mod tests {
         let first_redo = InsertVertexRedo {
             label: 1,
             vid: VertexId::from_int64(1001),
-            properties: vec![("name".to_string(), b"Alice".to_vec())],
+            properties: vec![("name".to_string(), Value::String("Alice".to_string()))],
         };
         let first_payload = to_allocvec(&first_redo).expect("Failed to serialize first redo");
         writer
@@ -815,7 +815,7 @@ mod tests {
         let second_redo = InsertVertexRedo {
             label: 1,
             vid: VertexId::from_int64(1002),
-            properties: vec![("name".to_string(), b"Bob".to_vec())],
+            properties: vec![("name".to_string(), Value::String("Bob".to_string()))],
         };
         let second_payload = to_allocvec(&second_redo).expect("Failed to serialize second redo");
         writer

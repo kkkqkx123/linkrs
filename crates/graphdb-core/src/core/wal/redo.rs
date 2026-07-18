@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::core::types::{LabelId, SpaceInfo, VertexId};
+use crate::core::Value;
 
 // ============================================================================
 // Data Operations
@@ -15,7 +16,7 @@ use crate::core::types::{LabelId, SpaceInfo, VertexId};
 pub struct InsertVertexRedo {
     pub label: LabelId,
     pub vid: VertexId,
-    pub properties: Vec<(String, Vec<u8>)>,
+    pub properties: Vec<(String, Value)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,7 +27,7 @@ pub struct InsertEdgeRedo {
     pub dst_vid: VertexId,
     pub edge_label: LabelId,
     pub rank: i64,
-    pub properties: Vec<(String, Vec<u8>)>,
+    pub properties: Vec<(String, Value)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,7 +35,7 @@ pub struct UpdateVertexPropRedo {
     pub label: LabelId,
     pub vid: VertexId,
     pub prop_name: String,
-    pub value: Vec<u8>,
+    pub value: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,7 +47,7 @@ pub struct UpdateEdgePropRedo {
     pub edge_label: LabelId,
     pub rank: i64,
     pub prop_name: String,
-    pub value: Vec<u8>,
+    pub value: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -6,7 +6,6 @@ use crate::io::{
 };
 use crate::session::manager::SessionManager;
 use crate::utils::error::Result;
-use graphdb_core::core::types::dump_restore::RestoreStats;
 
 pub fn execute_output_redirect(
     executor: &mut CommandExecutor,
@@ -172,59 +171,10 @@ pub async fn execute_dump(
     format: String,
     compress: bool,
 ) -> Result<bool> {
-    use std::time::Instant;
-
-    let start = Instant::now();
-    executor.write_output(&format!("Starting dump of database '{}'...", database))?;
-
-    let format_str = match format.as_str() {
-        "jsonl" | "jsonlines" => "JSONL",
-        _ => "Binary",
-    };
-    executor.write_output(&format!(
-        "Format: {}, Compression: {}",
-        format_str,
-        if compress { "zstd" } else { "none" }
-    ))?;
-
-    let dump_dir = std::path::Path::new(&output_path);
-    if !dump_dir.exists() {
-        std::fs::create_dir_all(dump_dir).map_err(crate::utils::error::CliError::IoError)?;
-    }
-
-    let meta_path = dump_dir.join("metadata.json");
-    let meta_content = serde_json::json!({
-        "version": env!("CARGO_PKG_VERSION"),
-        "timestamp": chrono::Utc::now().timestamp(),
-        "format": format_str,
-        "compression": if compress { "zstd" } else { "none" },
-        "database": database,
-    });
-    std::fs::write(
-        &meta_path,
-        serde_json::to_string_pretty(&meta_content).unwrap(),
-    )
-    .map_err(crate::utils::error::CliError::IoError)?;
-
-    let total_vertices: u64 = 0;
-    let total_edges: u64 = 0;
-
-    let elapsed = start.elapsed();
-    executor.write_output(&format!("Dump completed in {:.3}s", elapsed.as_secs_f64()))?;
-    executor.write_output(&format!("  Vertices: {}", total_vertices))?;
-    executor.write_output(&format!("  Edges: {}", total_edges))?;
-    executor.write_output(&format!("  Output: {}", output_path))?;
-
-    let summary = RestoreStats {
-        spaces_restored: 0,
-        vertices_restored: total_vertices,
-        edges_restored: total_edges,
-        errors: Vec::new(),
-        duration_ms: elapsed.as_millis() as u64,
-    };
-    executor.write_output(&summary.format_summary())?;
-
-    Ok(true)
+    let _ = (executor, database, output_path, format, compress);
+    Err(crate::utils::error::CliError::Other(
+        "Database dump is not implemented; use the server backup API when available".to_string(),
+    ))
 }
 
 pub async fn execute_restore(
@@ -234,47 +184,10 @@ pub async fn execute_restore(
     overwrite: bool,
     strict: bool,
 ) -> Result<bool> {
-    use std::time::Instant;
-
-    let start = Instant::now();
-    executor.write_output(&format!("Starting restore to database '{}'...", database))?;
-    executor.write_output(&format!("Source: {}", source_path))?;
-
-    let dump_dir = std::path::Path::new(&source_path);
-    if !dump_dir.exists() {
-        return Err(crate::utils::error::CliError::Other(format!(
-            "Dump directory not found: {}",
-            source_path
-        )));
-    }
-
-    let meta_path = dump_dir.join("metadata.json");
-    if !meta_path.exists() {
-        return Err(crate::utils::error::CliError::Other(format!(
-            "Metadata file not found: {}",
-            meta_path.display()
-        )));
-    }
-
-    let elapsed = start.elapsed();
-    executor.write_output(&format!(
-        "Restore completed in {:.3}s",
-        elapsed.as_secs_f64()
-    ))?;
-
-    let stats = RestoreStats {
-        spaces_restored: 0,
-        vertices_restored: 0,
-        edges_restored: 0,
-        errors: Vec::new(),
-        duration_ms: elapsed.as_millis() as u64,
-    };
-    executor.write_output(&stats.format_summary())?;
-
-    let _ = overwrite;
-    let _ = strict;
-
-    Ok(true)
+    let _ = (executor, source_path, database, overwrite, strict);
+    Err(crate::utils::error::CliError::Other(
+        "Database restore is not implemented; use the server backup API when available".to_string(),
+    ))
 }
 
 pub async fn execute_export_space(

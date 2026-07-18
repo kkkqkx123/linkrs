@@ -10,7 +10,6 @@ use crate::storage::engine::params::{CreateEdgeTypeParams, EdgeOperationParams};
 use crate::storage::engine::transaction::{AddEdgeParams, TransactionOps};
 use crate::storage::index::{EdgeIndexOps, VertexIndexOps};
 use crate::storage::types::StoragePropertyDef;
-use crate::transaction::codec::bytes_to_value;
 use crate::transaction::wal::{
     AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
     CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
@@ -29,7 +28,7 @@ impl RecoveryApplier for GraphStorageContext {
         &self,
         label: LabelId,
         vid: VertexId,
-        properties: &[(String, Vec<u8>)],
+        properties: &[(String, Value)],
         ts: Timestamp,
     ) -> StorageResult<()> {
         self.data_store().with_vertex_tables_mut(|vertex_tables| {
@@ -113,22 +112,16 @@ impl RecoveryApplier for GraphStorageContext {
         label: LabelId,
         vid: VertexId,
         prop_name: &str,
-        value: &[u8],
+        value: &Value,
         ts: Timestamp,
     ) -> StorageResult<()> {
-        let prop_value = bytes_to_value(value).ok_or_else(|| {
-            StorageError::deserialize_error(
-                "Failed to decode property value in WAL recovery".to_string(),
-            )
-        })?;
-
         self.data_store().with_vertex_tables_mut(|vertex_tables| {
             Ok(TransactionOps::update_vertex_property_by_vid(
                 vertex_tables,
                 label,
                 vid,
                 prop_name,
-                &prop_value,
+                value,
                 ts,
             )?)
         })?;
@@ -142,12 +135,6 @@ impl RecoveryApplier for GraphStorageContext {
         redo: &UpdateEdgePropRedo,
         ts: Timestamp,
     ) -> StorageResult<()> {
-        let prop_value = bytes_to_value(&redo.value).ok_or_else(|| {
-            StorageError::deserialize_error(
-                "Failed to decode property value in WAL recovery".to_string(),
-            )
-        })?;
-
         let params = EdgeOperationParams {
             src_label: redo.src_label,
             src_id: redo.src_vid,
@@ -164,7 +151,7 @@ impl RecoveryApplier for GraphStorageContext {
                 &catalog.vertex_tables,
                 params,
                 &redo.prop_name,
-                &prop_value,
+                &redo.value,
                 ts,
             )?;
         }
@@ -934,7 +921,7 @@ impl GraphStorageContext {
         &self,
         label: LabelId,
         vid: VertexId,
-        properties: &[(String, Vec<u8>)],
+        properties: &[(String, Value)],
         ts: Timestamp,
     ) -> StorageResult<()> {
         let Some((space_name, tag_info)) = self.schema_manager().find_tag_by_id(label) else {
@@ -944,18 +931,20 @@ impl GraphStorageContext {
             return Ok(());
         };
         let space_id = space_info.space_id;
-        let props: Vec<(String, Value)> = properties
-            .iter()
-            .filter_map(|(name, bytes)| bytes_to_value(bytes).map(|val| (name.clone(), val)))
-            .collect();
-        if props.is_empty() {
+        if properties.is_empty() {
             return Ok(());
         }
         let indexes = self.index_metadata_manager().list_tag_indexes(space_id)?;
         let vid_value = Value::from(vid);
         for index in indexes {
             if index.schema_name == tag_info.tag_name {
-                self.update_vertex_indexes_mvcc(space_id, &vid_value, &index.name, &props, ts)?;
+                self.update_vertex_indexes_mvcc(
+                    space_id,
+                    &vid_value,
+                    &index.name,
+                    properties,
+                    ts,
+                )?;
             }
         }
         Ok(())

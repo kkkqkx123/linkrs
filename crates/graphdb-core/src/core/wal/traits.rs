@@ -4,6 +4,7 @@
 
 use crate::core::error::StorageResult;
 use crate::core::types::{LabelId, Timestamp, VertexId};
+use crate::core::Value;
 
 use super::redo::{
     AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
@@ -40,7 +41,7 @@ pub trait RecoveryApplier {
         &self,
         label: LabelId,
         vid: VertexId,
-        properties: &[(String, Vec<u8>)],
+        properties: &[(String, Value)],
         ts: Timestamp,
     ) -> StorageResult<()>;
 
@@ -51,7 +52,7 @@ pub trait RecoveryApplier {
         label: LabelId,
         vid: VertexId,
         prop_name: &str,
-        value: &[u8],
+        value: &Value,
         ts: Timestamp,
     ) -> StorageResult<()>;
 

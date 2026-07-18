@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 
 use super::compression::{self as compression_mod, create_compressor, Compressor};
 use super::sync::{elapsed_since, should_sync};
-use crate::core::wal::traits::WalWriter;
 use crate::core::types::Timestamp;
+use crate::core::wal::traits::WalWriter;
 use crate::core::wal::types::{
     ArchiveMode, Lsn, RecordType, WalCompression, WalConfig, WalError, WalFileHeader, WalHeader,
     WalOpType, WalResult, WalStats, WAL_FILE_HEADER_SIZE, WAL_HEADER_SIZE, WAL_MAX_RECORD_SIZE,

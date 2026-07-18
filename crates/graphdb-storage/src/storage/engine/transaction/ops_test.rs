@@ -62,12 +62,8 @@ mod tests {
             ("name".to_string(), Value::String("Alice".to_string())),
             ("age".to_string(), Value::BigInt(30)),
         ];
-        let props_bytes: Vec<(String, Vec<u8>)> = properties
-            .iter()
-            .map(|(k, v)| (k.clone(), crate::transaction::codec::value_to_bytes(v)))
-            .collect();
 
-        let result = TransactionOps::add_vertex(&mut vertex_tables, 0, vid, &props_bytes, 1);
+        let result = TransactionOps::add_vertex(&mut vertex_tables, 0, vid, &properties, 1);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), VertexId::from_int64(0));
 
@@ -88,12 +84,8 @@ mod tests {
             ("name".to_string(), Value::String("Alice".to_string())),
             ("age".to_string(), Value::BigInt(30)),
         ];
-        let props_bytes: Vec<(String, Vec<u8>)> = properties
-            .iter()
-            .map(|(k, v)| (k.clone(), crate::transaction::codec::value_to_bytes(v)))
-            .collect();
 
-        let result = TransactionOps::add_vertex(&mut vertex_tables, 0, vid, &props_bytes, 1);
+        let result = TransactionOps::add_vertex(&mut vertex_tables, 0, vid, &properties, 1);
         assert!(result.is_ok());
 
         let table = vertex_tables.get(&0).unwrap();
@@ -233,10 +225,7 @@ mod tests {
             &mut vertex_tables,
             0,
             vid,
-            &[(
-                "name".to_string(),
-                crate::transaction::codec::value_to_bytes(&Value::String("Alice".to_string())),
-            )],
+            &[("name".to_string(), Value::String("Alice".to_string()))],
             1,
         )
         .unwrap();
@@ -339,10 +328,7 @@ mod tests {
             &mut vertex_tables,
             0,
             VertexId::from_int64(1),
-            &[(
-                "name".to_string(),
-                crate::transaction::codec::value_to_bytes(&Value::String("Alice".to_string())),
-            )],
+            &[("name".to_string(), Value::String("Alice".to_string()))],
             1,
         )
         .unwrap();

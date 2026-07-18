@@ -11,7 +11,6 @@
 //!
 //! - **ReadTransaction**: Read-only snapshot transaction
 //! - **InsertTransaction**: Insert-only transaction for adding data
-//! - **UpdateTransaction**: Update transaction for DDL/DML operations
 //! - **CompactTransaction**: Compaction transaction for storage optimization
 //!
 //! ## Usage Example
@@ -47,7 +46,6 @@ pub mod rollback;
 pub mod snapshot_tracker;
 pub mod types;
 pub mod undo_log;
-pub mod update_transaction;
 pub mod wal;
 
 #[cfg(test)]
@@ -92,18 +90,12 @@ pub use undo_log::{
     RemoveVertexUndo, UndoLogEntry, UndoLogError, UndoLogManager, UndoLogResult, UndoTarget,
     UpdateEdgePropUndo, UpdateVertexPropUndo,
 };
-pub use update_transaction::{
-    AddEdgePropertiesParam, AddVertexPropertiesParam, CreateEdgeTypeParam, CreateVertexTypeParam,
-    DeleteEdgePropertiesParam, DeleteVertexPropertiesParam, PropertyDefinition,
-    RenamePropertiesParam, UpdateTarget, UpdateTransaction, UpdateTransactionError,
-    UpdateTransactionResult,
-};
 pub use wal::{
-    ColumnId, CreateEdgeTypeRedo, CreateVertexTypeRedo, DeleteEdgeRedo, DeleteVertexRedo,
-    DummyWalWriter, EdgeId, InsertEdgeRedo, InsertVertexRedo, LabelId, LocalWalParser,
-    LocalWalWriter, Timestamp, UpdateEdgePropRedo, UpdateVertexPropRedo, UpdateWalUnit, VertexId,
-    WalConfig, WalContentUnit, WalEntryIter, WalError, WalHeader, WalOpType, WalParser,
-    WalParserFactory, WalResult, WalWriter, WalWriterFactory,
+    ColumnId, CreateEdgeTypeRedo, CreateVertexTypeRedo, DeleteEdgeRedo, DeleteVertexRedo, EdgeId,
+    InsertEdgeRedo, InsertVertexRedo, LabelId, LocalWalParser, LocalWalWriter, Timestamp,
+    UpdateEdgePropRedo, UpdateVertexPropRedo, UpdateWalUnit, VertexId, WalConfig, WalContentUnit,
+    WalEntryIter, WalError, WalHeader, WalOpType, WalParser, WalParserFactory, WalResult,
+    WalWriter,
 };
 
 /// Transaction Management Module Version

@@ -16,6 +16,7 @@ use super::wal::{EdgeId, LabelId, Timestamp};
 use crate::core::types::VertexId;
 use crate::core::wal::redo::{InsertEdgeRedo, InsertVertexRedo};
 use crate::core::wal::types::{WalHeader, WalOpType};
+use crate::core::Value;
 
 /// Insert transaction error
 #[derive(Debug, Clone, thiserror::Error)]
@@ -67,10 +68,10 @@ pub type InsertTransactionResult<T> = Result<T, InsertTransactionError>;
 /// txn.add_vertex(label, id, properties)?;
 /// txn.commit()?;
 /// ```
-pub struct InsertTransaction<'a, T: InsertTarget + ?Sized> {
+pub struct InsertTransaction<'a, T: InsertTarget + ?Sized, W: WalWriter> {
     graph: &'a mut T,
     version_manager: &'a VersionManager,
-    wal_writer: &'a mut dyn WalWriter,
+    wal_writer: &'a mut W,
     timestamp: Timestamp,
     wal_buffer: Vec<u8>,
     added_vertices: HashMap<LabelId, VertexId>,
@@ -85,7 +86,7 @@ pub struct AddEdgeInsertParam<'a> {
     pub dst_vid: VertexId,
     pub edge_label: LabelId,
     pub rank: i64,
-    pub properties: &'a [(String, Vec<u8>)],
+    pub properties: &'a [(String, Value)],
     pub ts: Timestamp,
 }
 
@@ -95,7 +96,7 @@ pub trait InsertTarget: Send + Sync {
         &mut self,
         label: LabelId,
         vid: VertexId,
-        properties: &[(String, Vec<u8>)],
+        properties: &[(String, Value)],
         ts: Timestamp,
     ) -> InsertTransactionResult<VertexId>;
 
@@ -121,14 +122,14 @@ pub trait InsertTarget: Send + Sync {
     fn lid_num(&self, label: LabelId) -> usize;
 }
 
-impl<'a, T: InsertTarget + ?Sized> InsertTransaction<'a, T> {
+impl<'a, T: InsertTarget + ?Sized, W: WalWriter> InsertTransaction<'a, T, W> {
     /// Create a new insert transaction
     ///
     /// Acquires an insert timestamp from the version manager.
     pub fn new(
         graph: &'a mut T,
         version_manager: &'a VersionManager,
-        wal_writer: &'a mut dyn WalWriter,
+        wal_writer: &'a mut W,
     ) -> InsertTransactionResult<Self> {
         let timestamp = version_manager.acquire_insert_timestamp();
         let wal_buffer = vec![0; WalHeader::SIZE];
@@ -189,7 +190,7 @@ impl<'a, T: InsertTarget + ?Sized> InsertTransaction<'a, T> {
         &mut self,
         label: LabelId,
         vid: VertexId,
-        properties: &[(String, Vec<u8>)],
+        properties: &[(String, Value)],
     ) -> InsertTransactionResult<VertexId> {
         let expected_types = self.graph.get_vertex_property_types(label);
         if expected_types.len() != properties.len() {
@@ -404,7 +405,7 @@ impl<'a, T: InsertTarget + ?Sized> InsertTransaction<'a, T> {
     }
 }
 
-impl<'a, T: InsertTarget + ?Sized> Drop for InsertTransaction<'a, T> {
+impl<'a, T: InsertTarget + ?Sized, W: WalWriter> Drop for InsertTransaction<'a, T, W> {
     fn drop(&mut self) {
         if self.timestamp != RELEASED_TIMESTAMP {
             self.version_manager
@@ -421,8 +422,17 @@ impl From<InsertTransactionError> for crate::core::error::StorageError {
 
 #[cfg(test)]
 mod tests {
-    use super::super::wal::writer::DummyWalWriter;
+    use super::super::wal::writer::{LocalWalWriter, WalWriter};
     use super::*;
+    use tempfile::TempDir;
+
+    fn open_test_wal() -> (TempDir, LocalWalWriter) {
+        let directory = tempfile::tempdir().expect("Failed to create temporary WAL directory");
+        let path = directory.path().to_string_lossy().to_string();
+        let mut writer = LocalWalWriter::new(&path, 0);
+        writer.open().expect("Failed to open test WAL");
+        (directory, writer)
+    }
 
     struct MockInsertTarget;
 
@@ -431,7 +441,7 @@ mod tests {
             &mut self,
             _label: LabelId,
             _vid: VertexId,
-            _properties: &[(String, Vec<u8>)],
+            _properties: &[(String, Value)],
             _ts: Timestamp,
         ) -> InsertTransactionResult<VertexId> {
             Ok(VertexId::from_int64(1))
@@ -485,7 +495,7 @@ mod tests {
     fn test_insert_transaction_basic() {
         let vm = VersionManager::new();
         let mut target = MockInsertTarget;
-        let mut wal = DummyWalWriter::new();
+        let (_wal_dir, mut wal) = open_test_wal();
 
         let txn = InsertTransaction::new(&mut target, &vm, &mut wal)
             .expect("Failed to create insert transaction");
@@ -497,7 +507,7 @@ mod tests {
     fn test_insert_transaction_commit() {
         let vm = VersionManager::new();
         let mut target = MockInsertTarget;
-        let mut wal = DummyWalWriter::new();
+        let (_wal_dir, mut wal) = open_test_wal();
 
         let txn = InsertTransaction::new(&mut target, &vm, &mut wal)
             .expect("Failed to create insert transaction");
@@ -511,7 +521,7 @@ mod tests {
     fn test_insert_transaction_abort() {
         let vm = VersionManager::new();
         let mut target = MockInsertTarget;
-        let mut wal = DummyWalWriter::new();
+        let (_wal_dir, mut wal) = open_test_wal();
 
         let txn = InsertTransaction::new(&mut target, &vm, &mut wal)
             .expect("Failed to create insert transaction");

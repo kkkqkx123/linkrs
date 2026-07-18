@@ -33,7 +33,6 @@ pub mod memory_estimation;
 
 // C API type definitions (behind feature gate)
 pub mod c_api;
-pub mod dump_restore;
 
 use serde::{Deserialize, Serialize};
 

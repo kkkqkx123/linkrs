@@ -12,7 +12,7 @@ use crate::core::wal::types::WalOpType;
 use crate::core::{Edge, EdgeDirection, StorageError, StorageResult, Value, Vertex};
 use crate::storage::engine::params::{EdgeOperationParams, InsertEdgeParams};
 use crate::storage::index::index_data_manager::VertexIndexOps;
-use crate::transaction::codec::value_to_bytes;
+
 
 use super::context::GraphStorageContext;
 use super::ops::{edge_label_id, endpoint_label_id, tag_label_id};
@@ -80,10 +80,7 @@ fn insert_vertex_at_timestamp(
         let redo = InsertVertexRedo {
             label: label_id,
             vid: vertex.vid,
-            properties: props
-                .iter()
-                .map(|(name, value)| (name.clone(), value_to_bytes(value)))
-                .collect(),
+            properties: props.clone(),
         };
         ctx.append_wal_redo(WalOpType::InsertVertex, ts, &redo)?;
 
@@ -179,7 +176,7 @@ pub(crate) fn update_vertex(
                     label: label_id,
                     vid: vertex.vid,
                     prop_name: prop_name.clone(),
-                    value: value_to_bytes(value),
+                    value: value.clone(),
                 };
                 ctx.append_wal_redo(WalOpType::UpdateVertexProp, ts, &redo)?;
 
@@ -445,10 +442,7 @@ fn insert_edge_at_timestamp(
         dst_vid: edge.dst,
         edge_label: edge_label_id,
         rank: edge.ranking,
-        properties: props
-            .iter()
-            .map(|(name, value)| (name.clone(), value_to_bytes(value)))
-            .collect(),
+        properties: props.clone(),
     };
     ctx.append_wal_redo(WalOpType::InsertEdge, ts, &redo)?;
 

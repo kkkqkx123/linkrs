@@ -19,9 +19,3 @@ pub use progress::ProgressBar;
 pub use schema_io::{SchemaExportFormat, SchemaExporter, SchemaImporter, SchemaIoConfig};
 pub use space_export::{SpaceExportConfig, SpaceExportStats, SpaceExporter};
 pub use streaming::{ExportStream, StreamingExport};
-
-pub mod dump;
-pub mod restore;
-
-pub use dump::{CliDumpConfig, CliDumpFormat};
-pub use restore::CliRestoreConfig;

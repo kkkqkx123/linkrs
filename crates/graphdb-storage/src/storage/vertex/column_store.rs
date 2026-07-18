@@ -327,7 +327,7 @@ impl ColumnStorage for VariableWidthColumn {
 
         let bytes = &self.data[start + 8..start + 8 + len];
         if matches!(self.data_type, DataType::Geography) {
-            serde_json::from_slice::<crate::core::value::Geography>(bytes)
+            postcard::from_bytes::<crate::core::value::Geography>(bytes)
                 .ok()
                 .map(Value::Geography)
         } else if matches!(self.data_type, DataType::Vector) {
@@ -615,12 +615,12 @@ fn write_variable_value(data: &mut Vec<u8>, value: &Value) -> StorageResult<()> 
             data.extend_from_slice(bytes);
         }
         Value::Geography(geo) => {
-            let json = serde_json::to_vec(geo).map_err(|e| {
+            let bytes = postcard::to_allocvec(geo).map_err(|e| {
                 StorageError::invalid_input(format!("Failed to serialize Geography: {}", e))
             })?;
-            let len = json.len() as u64;
+            let len = bytes.len() as u64;
             data.extend_from_slice(&len.to_le_bytes());
-            data.extend_from_slice(&json);
+            data.extend_from_slice(&bytes);
         }
         Value::Vector(vec) => {
             let dense = vec.to_dense();

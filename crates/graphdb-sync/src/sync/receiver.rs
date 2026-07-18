@@ -28,6 +28,9 @@ pub struct FulltextReceiver {
     apply_lock: Mutex<()>,
 }
 
+// FulltextReceiver state is stored via tantivy's commit payload API, which
+// only accepts `&str`. JSON is used here (not postcard) because tantivy's
+// `set_payload` requires valid UTF-8 strings and we cannot store raw binary.
 #[cfg(feature = "fulltext-search")]
 #[derive(serde::Serialize, serde::Deserialize)]
 struct FulltextCommitState {
@@ -198,9 +201,9 @@ impl VectorReceiver {
     pub fn open(path: impl Into<std::path::PathBuf>) -> Self {
         let path: std::path::PathBuf = path.into();
         let state_path = Self::state_file_path(&path);
-        let state = std::fs::read_to_string(&state_path)
+        let state = std::fs::read(&state_path)
             .ok()
-            .and_then(|s| serde_json::from_str::<VectorCommitState>(&s).ok())
+            .and_then(|bytes| postcard::from_bytes::<VectorCommitState>(&bytes).ok())
             .unwrap_or(VectorCommitState {
                 applied_lsn: 0,
                 receipts: HashSet::new(),
@@ -213,7 +216,7 @@ impl VectorReceiver {
     }
 
     fn state_file_path(recovery_dir: &std::path::Path) -> std::path::PathBuf {
-        recovery_dir.join("vector_receiver_state.json")
+        recovery_dir.join("vector_receiver_state.bin")
     }
 
     async fn persist_state(&self, state: &VectorCommitState) -> Result<(), String> {
@@ -222,8 +225,8 @@ impl VectorReceiver {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let temporary = path.with_extension("tmp");
-        let json = serde_json::to_string(state).map_err(|e| e.to_string())?;
-        std::fs::write(&temporary, &json).map_err(|e| e.to_string())?;
+        let bytes = postcard::to_allocvec(state).map_err(|e| e.to_string())?;
+        std::fs::write(&temporary, &bytes).map_err(|e| e.to_string())?;
         std::fs::File::open(&temporary)
             .and_then(|f| f.sync_all())
             .map_err(|e| e.to_string())?;
