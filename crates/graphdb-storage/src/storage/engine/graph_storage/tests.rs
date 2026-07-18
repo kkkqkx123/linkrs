@@ -9,9 +9,9 @@ mod tests {
     use crate::core::DataType;
     use crate::core::{Edge, EdgeDirection, RoleType, Value, Vertex};
     use crate::storage::{
-        GraphStorage, ScanOptions, StorageAdmin, StorageAuthOps, StorageOperationContext,
-        StorageOperationContextOps, StoragePersistenceOps, StorageReader, StorageSchemaOps,
-        StorageWriter,
+        GraphStorage, PersistenceConfig, PropertyGraphConfig, ResourceConfig, ScanOptions,
+        StorageAdmin, StorageAuthOps, StorageOperationContext, StorageOperationContextOps,
+        StoragePersistenceOps, StorageReader, StorageSchemaOps, StorageWriter,
     };
 
     fn create_test_storage() -> GraphStorage {
@@ -23,6 +23,26 @@ mod tests {
         let storage = GraphStorage::new_with_path(temp_dir.path().to_path_buf())
             .expect("Failed to create persistent GraphStorage");
         (temp_dir, storage)
+    }
+
+    #[test]
+    fn persistent_storage_retains_caller_resource_config() {
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let mut property_config = PropertyGraphConfig::test();
+        property_config.resources = ResourceConfig {
+            max_memory_bytes: 32 * 1024 * 1024,
+            index_memory_bytes: 8 * 1024 * 1024,
+            ..property_config.resources.clone()
+        };
+        let persistence_config = PersistenceConfig::for_work_dir(temp_dir.path())
+            .with_property_graph_config(property_config);
+        let storage =
+            GraphStorage::new_with_persistence(temp_dir.path().to_path_buf(), persistence_config)
+                .expect("Failed to create persistent storage");
+
+        let resources = storage.resource_snapshot();
+        assert_eq!(resources.budget.max_memory_bytes, 32 * 1024 * 1024);
+        assert_eq!(resources.budget.index_memory_bytes, 8 * 1024 * 1024);
     }
 
     fn setup_space(storage: &mut GraphStorage) -> u64 {

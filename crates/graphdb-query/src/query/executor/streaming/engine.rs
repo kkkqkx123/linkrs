@@ -1003,8 +1003,16 @@ mod tests {
         engine
             .build_partitioned_executor(
                 vec![
-                    partitioned_scan_executor(create_test_buffer(2), 0, vec!["id".to_string(), "name".to_string()]),
-                    partitioned_scan_executor(create_test_buffer(3), 1, vec!["id".to_string(), "name".to_string()]),
+                    partitioned_scan_executor(
+                        create_test_buffer(2),
+                        0,
+                        vec!["id".to_string(), "name".to_string()],
+                    ),
+                    partitioned_scan_executor(
+                        create_test_buffer(3),
+                        1,
+                        vec!["id".to_string(), "name".to_string()],
+                    ),
                 ],
                 GatherOperator::concatenate(),
                 None,
@@ -1046,7 +1054,11 @@ mod tests {
         engine
             .build_partitioned_executor(
                 vec![
-                    partitioned_scan_executor(create_test_buffer(1_500), 0, vec!["id".to_string(), "name".to_string()]),
+                    partitioned_scan_executor(
+                        create_test_buffer(1_500),
+                        0,
+                        vec!["id".to_string(), "name".to_string()],
+                    ),
                     partitioned_scan_executor(
                         (1_500..3_000)
                             .map(|value| {
@@ -1091,8 +1103,16 @@ mod tests {
         engine
             .build_partitioned_executor(
                 vec![
-                    partitioned_scan_executor(create_test_buffer(5_000), 0, vec!["id".to_string(), "name".to_string()]),
-                    partitioned_scan_executor(create_test_buffer(5_000), 1, vec!["id".to_string(), "name".to_string()]),
+                    partitioned_scan_executor(
+                        create_test_buffer(5_000),
+                        0,
+                        vec!["id".to_string(), "name".to_string()],
+                    ),
+                    partitioned_scan_executor(
+                        create_test_buffer(5_000),
+                        1,
+                        vec!["id".to_string(), "name".to_string()],
+                    ),
                 ],
                 GatherOperator::concatenate(),
                 None,

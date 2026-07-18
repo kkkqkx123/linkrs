@@ -82,6 +82,15 @@ impl RecoveryManager {
         self.stats.last_lsn = self.config.start_lsn.unwrap_or(Lsn::ZERO);
 
         let wal_result = self.parse_wal_files()?;
+        self.stats.errors_encountered = wal_result
+            .corrupted_count
+            .saturating_add(wal_result.skipped_count);
+        if self.stats.errors_encountered > 0 {
+            log::warn!(
+                "WAL recovery found {} recoverable tail/corruption markers",
+                self.stats.errors_encountered
+            );
+        }
 
         self.restore_from_checkpoint(&wal_result)?;
 
@@ -204,11 +213,13 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => return Err(self.recovery_deserialize_error(
-                        entry.lsn,
-                        WalOpType::InsertVertex,
-                        e,
-                    )),
+                    Err(e) => {
+                        return Err(self.recovery_deserialize_error(
+                            entry.lsn,
+                            WalOpType::InsertVertex,
+                            e,
+                        ))
+                    }
                 },
                 WalOpType::InsertEdge => match self.deserialize_insert_edge(payload) {
                     Ok(redo) => {
@@ -216,11 +227,13 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => return Err(self.recovery_deserialize_error(
-                        entry.lsn,
-                        WalOpType::InsertEdge,
-                        e,
-                    )),
+                    Err(e) => {
+                        return Err(self.recovery_deserialize_error(
+                            entry.lsn,
+                            WalOpType::InsertEdge,
+                            e,
+                        ))
+                    }
                 },
                 WalOpType::UpdateVertexProp => match self.deserialize_update_vertex_prop(payload) {
                     Ok(redo) => {
@@ -234,11 +247,13 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => return Err(self.recovery_deserialize_error(
-                        entry.lsn,
-                        WalOpType::UpdateVertexProp,
-                        e,
-                    )),
+                    Err(e) => {
+                        return Err(self.recovery_deserialize_error(
+                            entry.lsn,
+                            WalOpType::UpdateVertexProp,
+                            e,
+                        ))
+                    }
                 },
                 WalOpType::UpdateEdgeProp => match self.deserialize_update_edge_prop(payload) {
                     Ok(redo) => {
@@ -246,11 +261,13 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => return Err(self.recovery_deserialize_error(
-                        entry.lsn,
-                        WalOpType::UpdateEdgeProp,
-                        e,
-                    )),
+                    Err(e) => {
+                        return Err(self.recovery_deserialize_error(
+                            entry.lsn,
+                            WalOpType::UpdateEdgeProp,
+                            e,
+                        ))
+                    }
                 },
                 WalOpType::DeleteVertex => match self.deserialize_delete_vertex(payload) {
                     Ok(redo) => {
@@ -258,11 +275,13 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => return Err(self.recovery_deserialize_error(
-                        entry.lsn,
-                        WalOpType::DeleteVertex,
-                        e,
-                    )),
+                    Err(e) => {
+                        return Err(self.recovery_deserialize_error(
+                            entry.lsn,
+                            WalOpType::DeleteVertex,
+                            e,
+                        ))
+                    }
                 },
                 WalOpType::DeleteEdge => match self.deserialize_delete_edge(payload) {
                     Ok(redo) => {
@@ -270,11 +289,13 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => return Err(self.recovery_deserialize_error(
-                        entry.lsn,
-                        WalOpType::DeleteEdge,
-                        e,
-                    )),
+                    Err(e) => {
+                        return Err(self.recovery_deserialize_error(
+                            entry.lsn,
+                            WalOpType::DeleteEdge,
+                            e,
+                        ))
+                    }
                 },
                 WalOpType::CreateVertexType => match self.deserialize_create_vertex_type(payload) {
                     Ok(redo) => {
@@ -282,11 +303,13 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => return Err(self.recovery_deserialize_error(
-                        entry.lsn,
-                        WalOpType::CreateVertexType,
-                        e,
-                    )),
+                    Err(e) => {
+                        return Err(self.recovery_deserialize_error(
+                            entry.lsn,
+                            WalOpType::CreateVertexType,
+                            e,
+                        ))
+                    }
                 },
                 WalOpType::CreateEdgeType => match self.deserialize_create_edge_type(payload) {
                     Ok(redo) => {
@@ -294,11 +317,13 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => return Err(self.recovery_deserialize_error(
-                        entry.lsn,
-                        WalOpType::CreateEdgeType,
-                        e,
-                    )),
+                    Err(e) => {
+                        return Err(self.recovery_deserialize_error(
+                            entry.lsn,
+                            WalOpType::CreateEdgeType,
+                            e,
+                        ))
+                    }
                 },
                 WalOpType::DeleteVertexType => match self.deserialize_delete_vertex_type(payload) {
                     Ok(redo) => {
@@ -306,11 +331,13 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => return Err(self.recovery_deserialize_error(
-                        entry.lsn,
-                        WalOpType::DeleteVertexType,
-                        e,
-                    )),
+                    Err(e) => {
+                        return Err(self.recovery_deserialize_error(
+                            entry.lsn,
+                            WalOpType::DeleteVertexType,
+                            e,
+                        ))
+                    }
                 },
                 WalOpType::DeleteEdgeType => match self.deserialize_delete_edge_type(payload) {
                     Ok(redo) => {
@@ -318,11 +345,13 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => return Err(self.recovery_deserialize_error(
-                        entry.lsn,
-                        WalOpType::DeleteEdgeType,
-                        e,
-                    )),
+                    Err(e) => {
+                        return Err(self.recovery_deserialize_error(
+                            entry.lsn,
+                            WalOpType::DeleteEdgeType,
+                            e,
+                        ))
+                    }
                 },
                 WalOpType::CreateSpace => match self.deserialize_create_space(payload) {
                     Ok(redo) => {
@@ -330,11 +359,13 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => return Err(self.recovery_deserialize_error(
-                        entry.lsn,
-                        WalOpType::CreateSpace,
-                        e,
-                    )),
+                    Err(e) => {
+                        return Err(self.recovery_deserialize_error(
+                            entry.lsn,
+                            WalOpType::CreateSpace,
+                            e,
+                        ))
+                    }
                 },
                 WalOpType::DropSpace => match self.deserialize_drop_space(payload) {
                     Ok(redo) => {
@@ -342,11 +373,13 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => return Err(self.recovery_deserialize_error(
-                        entry.lsn,
-                        WalOpType::DropSpace,
-                        e,
-                    )),
+                    Err(e) => {
+                        return Err(self.recovery_deserialize_error(
+                            entry.lsn,
+                            WalOpType::DropSpace,
+                            e,
+                        ))
+                    }
                 },
                 WalOpType::ClearSpace => match self.deserialize_clear_space(payload) {
                     Ok(redo) => {
@@ -354,11 +387,13 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => return Err(self.recovery_deserialize_error(
-                        entry.lsn,
-                        WalOpType::ClearSpace,
-                        e,
-                    )),
+                    Err(e) => {
+                        return Err(self.recovery_deserialize_error(
+                            entry.lsn,
+                            WalOpType::ClearSpace,
+                            e,
+                        ))
+                    }
                 },
                 WalOpType::AlterSpaceComment => {
                     match self.deserialize_alter_space_comment(payload) {
@@ -367,11 +402,13 @@ impl RecoveryManager {
                             self.stats.wal_entries_replayed += 1;
                             self.stats.last_lsn = entry.lsn;
                         }
-                        Err(e) => return Err(self.recovery_deserialize_error(
-                            entry.lsn,
-                            WalOpType::AlterSpaceComment,
-                            e,
-                        )),
+                        Err(e) => {
+                            return Err(self.recovery_deserialize_error(
+                                entry.lsn,
+                                WalOpType::AlterSpaceComment,
+                                e,
+                            ))
+                        }
                     }
                 }
                 WalOpType::OutboxIntent
@@ -383,11 +420,13 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => return Err(self.recovery_deserialize_error(
-                        entry.lsn,
-                        WalOpType::AddVertexProp,
-                        e,
-                    )),
+                    Err(e) => {
+                        return Err(self.recovery_deserialize_error(
+                            entry.lsn,
+                            WalOpType::AddVertexProp,
+                            e,
+                        ))
+                    }
                 },
                 WalOpType::AddEdgeProp => match self.deserialize_add_edge_prop(payload) {
                     Ok(redo) => {
@@ -395,11 +434,13 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => return Err(self.recovery_deserialize_error(
-                        entry.lsn,
-                        WalOpType::AddEdgeProp,
-                        e,
-                    )),
+                    Err(e) => {
+                        return Err(self.recovery_deserialize_error(
+                            entry.lsn,
+                            WalOpType::AddEdgeProp,
+                            e,
+                        ))
+                    }
                 },
                 WalOpType::DeleteVertexProp => match self.deserialize_delete_vertex_prop(payload) {
                     Ok(redo) => {
@@ -407,11 +448,13 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => return Err(self.recovery_deserialize_error(
-                        entry.lsn,
-                        WalOpType::DeleteVertexProp,
-                        e,
-                    )),
+                    Err(e) => {
+                        return Err(self.recovery_deserialize_error(
+                            entry.lsn,
+                            WalOpType::DeleteVertexProp,
+                            e,
+                        ))
+                    }
                 },
                 WalOpType::DeleteEdgeProp => match self.deserialize_delete_edge_prop(payload) {
                     Ok(redo) => {
@@ -419,11 +462,13 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => return Err(self.recovery_deserialize_error(
-                        entry.lsn,
-                        WalOpType::DeleteEdgeProp,
-                        e,
-                    )),
+                    Err(e) => {
+                        return Err(self.recovery_deserialize_error(
+                            entry.lsn,
+                            WalOpType::DeleteEdgeProp,
+                            e,
+                        ))
+                    }
                 },
                 WalOpType::RenameVertexProp => match self.deserialize_rename_vertex_prop(payload) {
                     Ok(redo) => {
@@ -431,11 +476,13 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => return Err(self.recovery_deserialize_error(
-                        entry.lsn,
-                        WalOpType::RenameVertexProp,
-                        e,
-                    )),
+                    Err(e) => {
+                        return Err(self.recovery_deserialize_error(
+                            entry.lsn,
+                            WalOpType::RenameVertexProp,
+                            e,
+                        ))
+                    }
                 },
                 WalOpType::RenameEdgeProp => match self.deserialize_rename_edge_prop(payload) {
                     Ok(redo) => {
@@ -443,11 +490,13 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => return Err(self.recovery_deserialize_error(
-                        entry.lsn,
-                        WalOpType::RenameEdgeProp,
-                        e,
-                    )),
+                    Err(e) => {
+                        return Err(self.recovery_deserialize_error(
+                            entry.lsn,
+                            WalOpType::RenameEdgeProp,
+                            e,
+                        ))
+                    }
                 },
                 WalOpType::Compact => {
                     applier.replay_compact(ts)?;
@@ -459,11 +508,13 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => return Err(self.recovery_deserialize_error(
-                        entry.lsn,
-                        WalOpType::CreateTagIndex,
-                        e,
-                    )),
+                    Err(e) => {
+                        return Err(self.recovery_deserialize_error(
+                            entry.lsn,
+                            WalOpType::CreateTagIndex,
+                            e,
+                        ))
+                    }
                 },
                 WalOpType::DropTagIndex => match self.deserialize_drop_tag_index(payload) {
                     Ok(redo) => {
@@ -471,11 +522,13 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => return Err(self.recovery_deserialize_error(
-                        entry.lsn,
-                        WalOpType::DropTagIndex,
-                        e,
-                    )),
+                    Err(e) => {
+                        return Err(self.recovery_deserialize_error(
+                            entry.lsn,
+                            WalOpType::DropTagIndex,
+                            e,
+                        ))
+                    }
                 },
                 WalOpType::CreateEdgeIndex => match self.deserialize_create_edge_index(payload) {
                     Ok(redo) => {
@@ -483,11 +536,13 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => return Err(self.recovery_deserialize_error(
-                        entry.lsn,
-                        WalOpType::CreateEdgeIndex,
-                        e,
-                    )),
+                    Err(e) => {
+                        return Err(self.recovery_deserialize_error(
+                            entry.lsn,
+                            WalOpType::CreateEdgeIndex,
+                            e,
+                        ))
+                    }
                 },
                 WalOpType::DropEdgeIndex => match self.deserialize_drop_edge_index(payload) {
                     Ok(redo) => {
@@ -495,11 +550,13 @@ impl RecoveryManager {
                         self.stats.wal_entries_replayed += 1;
                         self.stats.last_lsn = entry.lsn;
                     }
-                    Err(e) => return Err(self.recovery_deserialize_error(
-                        entry.lsn,
-                        WalOpType::DropEdgeIndex,
-                        e,
-                    )),
+                    Err(e) => {
+                        return Err(self.recovery_deserialize_error(
+                            entry.lsn,
+                            WalOpType::DropEdgeIndex,
+                            e,
+                        ))
+                    }
                 },
             }
         }

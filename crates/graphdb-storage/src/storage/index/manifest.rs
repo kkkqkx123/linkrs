@@ -1,15 +1,19 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 
-use crate::core::types::{CommitLsn, IndexGeneration, ManifestEpoch, SnapshotTimestamp};
+use crate::core::types::{CommitLsn, IndexGeneration, SnapshotTimestamp};
 use crate::core::{StorageError, StorageResult};
 use crate::storage::cursor::PartitionSelector;
 
-const MANIFEST_FORMAT_VERSION: u16 = 2;
+const MANIFEST_FORMAT_VERSION: u16 = 3;
+
+const DEFAULT_MAX_RETIRED: usize = 100;
+const DEFAULT_MAX_HOLD_DURATION_SECS: u64 = 3600;
 
 // ── Crash-safe generation rebuild state machine ──
 
@@ -42,8 +46,6 @@ pub enum GenerationState {
 pub struct GenerationBuildState {
     /// The new generation number being built.
     pub generation: IndexGeneration,
-    /// Manifest epoch reserved for this publication attempt.
-    pub manifest_epoch: ManifestEpoch,
     /// MVCC timestamp used by the fixed snapshot scan.
     pub snapshot_timestamp: SnapshotTimestamp,
     /// WAL LSN at which the snapshot was taken. Catch-up replays entries > this.
@@ -60,13 +62,11 @@ pub struct GenerationBuildState {
 impl GenerationBuildState {
     pub fn new(
         generation: IndexGeneration,
-        manifest_epoch: ManifestEpoch,
         snapshot_timestamp: SnapshotTimestamp,
         start_lsn: CommitLsn,
     ) -> Self {
         Self {
             generation,
-            manifest_epoch,
             snapshot_timestamp,
             start_lsn,
             barrier_lsn: None,
@@ -160,6 +160,8 @@ pub struct IndexShard {
     pub lower: Option<Vec<u8>>,
     pub upper: Option<Vec<u8>>,
     pub checkpoint_file: PathBuf,
+    #[serde(default)]
+    pub checksum: Option<u32>,
 }
 
 impl IndexShard {
@@ -198,6 +200,42 @@ impl IndexShard {
         }
         Ok(())
     }
+
+    pub fn compute_checksum(&self) -> StorageResult<Option<u32>> {
+        if self.checkpoint_file.as_os_str().is_empty() {
+            return Ok(None);
+        }
+        if self.checkpoint_file.is_dir() {
+            return Ok(None);
+        }
+        let data = match std::fs::read(&self.checkpoint_file) {
+            Ok(data) => data,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => {
+                return Err(StorageError::db_error(format!(
+                    "Read checkpoint for checksum: {}: {e}",
+                    self.checkpoint_file.display()
+                )));
+            }
+        };
+        Ok(Some(crc32fast::hash(&data)))
+    }
+
+    pub fn verify_checksum(&self) -> StorageResult<()> {
+        let Some(expected) = self.checksum else {
+            return Ok(());
+        };
+        let Some(actual) = self.compute_checksum()? else {
+            return Ok(());
+        };
+        if actual != expected {
+            return Err(StorageError::db_error(format!(
+                "Shard {} checksum mismatch: expected {expected:#010x}, got {actual:#010x}",
+                self.shard_id
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// The persisted routing table for one immutable index generation.
@@ -209,7 +247,6 @@ pub struct IndexManifest {
     pub space_id: u64,
     pub index_id: u64,
     pub generation: IndexGeneration,
-    pub epoch: ManifestEpoch,
     pub shards: Vec<IndexShard>,
 }
 
@@ -218,7 +255,6 @@ impl IndexManifest {
         space_id: u64,
         index_id: u64,
         generation: IndexGeneration,
-        epoch: ManifestEpoch,
         shards: Vec<IndexShard>,
     ) -> Result<Self, String> {
         let manifest = Self {
@@ -226,7 +262,6 @@ impl IndexManifest {
             space_id,
             index_id,
             generation,
-            epoch,
             shards,
         };
         manifest.validate()?;
@@ -323,8 +358,9 @@ impl IndexManifest {
             StorageError::db_error("Index manifest path has no parent".to_string())
         })?;
         std::fs::create_dir_all(parent)?;
+        let with_checksums = self.with_checksums()?;
         let temporary = path.with_extension("tmp");
-        let bytes = serde_json::to_vec(self).map_err(|error| {
+        let bytes = postcard::to_allocvec(&with_checksums).map_err(|error| {
             StorageError::db_error(format!("Serialize index manifest: {error}"))
         })?;
         {
@@ -340,10 +376,22 @@ impl IndexManifest {
 
     pub fn load(path: &Path) -> StorageResult<Self> {
         let bytes = std::fs::read(path)?;
-        let manifest: Self = serde_json::from_slice(&bytes)
+        let manifest: Self = postcard::from_bytes(&bytes)
             .map_err(|error| StorageError::db_error(format!("Read index manifest: {error}")))?;
         manifest.validate().map_err(StorageError::db_error)?;
+        for shard in &manifest.shards {
+            shard.verify_checksum()?;
+        }
         Ok(manifest)
+    }
+
+    /// Returns a clone with checksums computed from checkpoint files.
+    pub fn with_checksums(&self) -> StorageResult<Self> {
+        let mut clone = self.clone();
+        for shard in &mut clone.shards {
+            shard.checksum = shard.compute_checksum()?;
+        }
+        Ok(clone)
     }
 }
 
@@ -360,6 +408,7 @@ impl ManifestHandle {
 #[derive(Debug)]
 struct RetiredManifest {
     manifest: Arc<IndexManifest>,
+    retired_at: Instant,
 }
 
 /// Publishes immutable manifests and fences reclamation with reader handles.
@@ -369,31 +418,53 @@ pub struct ManifestCatalog {
     retired: Mutex<Vec<RetiredManifest>>,
     published: AtomicU64,
     reclaimed_files: AtomicU64,
+    max_retired: usize,
+    max_hold_duration: Duration,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ManifestCatalogStats {
-    pub active_epoch: ManifestEpoch,
     pub active_generation: IndexGeneration,
     pub active_readers: u64,
     pub retired_generations: u64,
     pub published_manifests: u64,
     pub reclaimed_files: u64,
+    pub oldest_retired_age_secs: u64,
 }
 
 impl ManifestCatalog {
     pub fn new(manifest: IndexManifest) -> Result<Self, String> {
+        Self::with_options(
+            manifest,
+            DEFAULT_MAX_RETIRED,
+            Duration::from_secs(DEFAULT_MAX_HOLD_DURATION_SECS),
+        )
+    }
+
+    pub fn with_options(
+        manifest: IndexManifest,
+        max_retired: usize,
+        max_hold_duration: Duration,
+    ) -> Result<Self, String> {
         manifest.validate()?;
         Ok(Self {
             active: RwLock::new(Arc::new(manifest)),
             retired: Mutex::new(Vec::new()),
             published: AtomicU64::new(0),
             reclaimed_files: AtomicU64::new(0),
+            max_retired,
+            max_hold_duration,
         })
     }
 
     pub fn acquire(&self) -> ManifestHandle {
-        ManifestHandle(Arc::clone(&self.active.read()))
+        let guard = self.active.read();
+        #[cfg(debug_assertions)]
+        {
+            let count = Arc::strong_count(&guard);
+            log::trace!("ManifestCatalog acquire: readers={}", count + 1);
+        }
+        ManifestHandle(Arc::clone(&guard))
     }
 
     pub fn publish(&self, manifest: IndexManifest) -> Result<ManifestHandle, String> {
@@ -402,18 +473,43 @@ impl ManifestCatalog {
         if manifest.index_id != active.index_id {
             return Err("Cannot publish a manifest for another index".to_string());
         }
-        if manifest.epoch <= active.epoch {
-            return Err("Index manifest epoch must increase".to_string());
-        }
-        if manifest.generation < active.generation {
-            return Err("Index generation cannot move backwards".to_string());
+        if manifest.generation <= active.generation {
+            return Err("Index generation must increase".to_string());
         }
 
         let next = Arc::new(manifest);
         let previous = std::mem::replace(&mut *active, Arc::clone(&next));
-        self.retired
-            .lock()
-            .push(RetiredManifest { manifest: previous });
+        #[cfg(debug_assertions)]
+        {
+            log::trace!(
+                "ManifestCatalog publish: gen={}, active_readers={}",
+                next.generation,
+                Arc::strong_count(&next) - 1,
+            );
+        }
+
+        let mut retired = self.retired.lock();
+        let now = Instant::now();
+        if retired.len() >= self.max_retired {
+            retired.retain(|e| {
+                if now.duration_since(e.retired_at) > self.max_hold_duration {
+                    log::warn!(
+                        "Force-reclaiming retired manifest (gen {}) after {:?}",
+                        e.manifest.generation,
+                        now.duration_since(e.retired_at)
+                    );
+                    self.reclaimed_files
+                        .fetch_add(e.manifest.shards.len() as u64, Ordering::Relaxed);
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        retired.push(RetiredManifest {
+            manifest: previous,
+            retired_at: Instant::now(),
+        });
         self.published.fetch_add(1, Ordering::Relaxed);
         Ok(ManifestHandle(next))
     }
@@ -433,38 +529,56 @@ impl ManifestCatalog {
     }
 
     /// Returns fully retired manifests after their last cursor handle is gone.
-    /// Callers use the generation identity to retire matching in-memory data
-    /// before deleting the returned checkpoint files.
+    /// Also force-reclaims manifests that exceeded the configured hold duration.
     pub fn take_reclaimable_manifests(&self) -> Vec<IndexManifest> {
         let mut retired = self.retired.lock();
+        let now = Instant::now();
         let mut manifests = Vec::new();
+        #[cfg(debug_assertions)]
+        {
+            for entry in retired.iter() {
+                let count = Arc::strong_count(&entry.manifest);
+                if count > 1 {
+                    log::trace!(
+                        "ManifestCatalog: retired gen {} has {} readers (age {:?})",
+                        entry.manifest.generation,
+                        count - 1,
+                        now.duration_since(entry.retired_at),
+                    );
+                }
+            }
+        }
         retired.retain(|entry| {
-            if Arc::strong_count(&entry.manifest) == 1 {
+            if Arc::strong_count(&entry.manifest) == 1
+                || now.duration_since(entry.retired_at) > self.max_hold_duration
+            {
                 manifests.push((*entry.manifest).clone());
                 false
             } else {
                 true
             }
         });
-        self.reclaimed_files.fetch_add(
-            manifests
-                .iter()
-                .map(|manifest| manifest.shards.len() as u64)
-                .sum(),
-            Ordering::Relaxed,
-        );
+        let total = manifests.iter().map(|m| m.shards.len() as u64).sum();
+        self.reclaimed_files.fetch_add(total, Ordering::Relaxed);
         manifests
     }
 
     pub fn stats(&self) -> ManifestCatalogStats {
         let active = self.active.read();
+        let retired = self.retired.lock();
+        let now = Instant::now();
+        let oldest_age = retired
+            .iter()
+            .map(|e| now.duration_since(e.retired_at).as_secs())
+            .max()
+            .unwrap_or(0);
         ManifestCatalogStats {
-            active_epoch: active.epoch,
             active_generation: active.generation,
             active_readers: Arc::strong_count(&active).saturating_sub(1) as u64,
-            retired_generations: self.retired.lock().len() as u64,
+            retired_generations: retired.len() as u64,
             published_manifests: self.published.load(Ordering::Relaxed),
             reclaimed_files: self.reclaimed_files.load(Ordering::Relaxed),
+            oldest_retired_age_secs: oldest_age,
         }
     }
 }
@@ -472,9 +586,10 @@ impl ManifestCatalog {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::time::Duration;
 
     use super::{IndexManifest, IndexShard, ManifestCatalog};
-    use crate::core::types::{IndexGeneration, ManifestEpoch};
+    use crate::core::types::IndexGeneration;
     use crate::storage::cursor::PartitionSelector;
 
     fn shard(shard_id: u32, lower: Option<&[u8]>, upper: Option<&[u8]>) -> IndexShard {
@@ -483,18 +598,13 @@ mod tests {
             lower: lower.map(<[u8]>::to_vec),
             upper: upper.map(<[u8]>::to_vec),
             checkpoint_file: format!("{shard_id}.index").into(),
+            checksum: None,
         }
     }
 
-    fn manifest(epoch: u64, shards: Vec<IndexShard>) -> IndexManifest {
-        IndexManifest::new(
-            1,
-            1,
-            IndexGeneration::new(epoch),
-            ManifestEpoch::new(epoch),
-            shards,
-        )
-        .expect("manifest should be valid")
+    fn manifest(generation: u64, shards: Vec<IndexShard>) -> IndexManifest {
+        IndexManifest::new(1, 1, IndexGeneration::new(generation), shards)
+            .expect("manifest should be valid")
     }
 
     #[test]
@@ -531,7 +641,6 @@ mod tests {
             1,
             1,
             IndexGeneration::new(1),
-            ManifestEpoch::new(1),
             vec![shard(0, None, Some(b"m")), shard(1, Some(b"n"), None)],
         );
         assert!(result.is_err());
@@ -561,9 +670,65 @@ mod tests {
     }
 
     #[test]
+    fn force_reclaim_expired_retired_manifests() {
+        let catalog = ManifestCatalog::with_options(
+            manifest(1, vec![shard(0, None, None)]),
+            100,
+            Duration::from_millis(50),
+        )
+        .expect("catalog should be valid");
+        let old_reader = catalog.acquire();
+        catalog
+            .publish(manifest(
+                2,
+                vec![shard(0, None, Some(b"m")), shard(1, Some(b"m"), None)],
+            ))
+            .expect("new manifest should publish");
+
+        assert!(catalog.take_reclaimable_files().is_empty());
+        assert_eq!(catalog.stats().retired_generations, 1);
+
+        std::thread::sleep(Duration::from_millis(100));
+
+        assert_eq!(
+            catalog.take_reclaimable_files(),
+            vec![PathBuf::from("0.index")]
+        );
+        assert_eq!(catalog.stats().retired_generations, 0);
+        assert_eq!(catalog.stats().reclaimed_files, 1);
+
+        drop(old_reader);
+    }
+
+    #[test]
+    fn publish_expired_eviction_allows_overage_then_reclaims() {
+        let catalog = ManifestCatalog::with_options(
+            manifest(1, vec![shard(0, None, None)]),
+            1,
+            Duration::from_millis(50),
+        )
+        .expect("catalog should be valid");
+        let old_reader = catalog.acquire();
+        catalog
+            .publish(manifest(2, vec![shard(0, None, None)]))
+            .expect("second manifest should publish");
+
+        std::thread::sleep(Duration::from_millis(100));
+
+        catalog
+            .publish(manifest(3, vec![shard(0, None, None)]))
+            .expect("third manifest should publish");
+
+        assert_eq!(catalog.stats().retired_generations, 1);
+        assert_eq!(catalog.stats().reclaimed_files, 1);
+
+        drop(old_reader);
+    }
+
+    #[test]
     fn persisted_manifest_roundtrips_and_rejects_unknown_version() {
         let directory = tempfile::tempdir().expect("temporary directory should be created");
-        let path = directory.path().join("manifest.json");
+        let path = directory.path().join("manifest.bin");
         let manifest = manifest(1, vec![shard(0, None, None)]);
         manifest.store(&path).expect("manifest should persist");
         assert_eq!(
@@ -574,5 +739,33 @@ mod tests {
         let mut unsupported = manifest;
         unsupported.format_version += 1;
         assert!(unsupported.validate().is_err());
+    }
+
+    #[test]
+    fn manifest_checksum_verifies_on_load() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let checkpoint_path = directory.path().join("checkpoint.bin");
+        std::fs::write(&checkpoint_path, b"test checkpoint data").expect("write checkpoint");
+
+        let shard_obj = IndexShard {
+            shard_id: 0,
+            lower: None,
+            upper: None,
+            checkpoint_file: checkpoint_path.clone(),
+            checksum: None,
+        };
+        let manifest = IndexManifest::new(1, 1, IndexGeneration::new(1), vec![shard_obj])
+            .expect("manifest should be valid");
+
+        let manifest_path = directory.path().join("manifest.bin");
+        manifest
+            .store(&manifest_path)
+            .expect("store should succeed");
+
+        let loaded = IndexManifest::load(&manifest_path).expect("load should succeed");
+        assert!(loaded.shards[0].checksum.is_some());
+
+        std::fs::write(&checkpoint_path, b"corrupted data").expect("corrupt checkpoint");
+        assert!(IndexManifest::load(&manifest_path).is_err());
     }
 }

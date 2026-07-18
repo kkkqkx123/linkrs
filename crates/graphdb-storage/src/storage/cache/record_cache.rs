@@ -27,6 +27,15 @@ pub struct RecordCache {
     eviction_callback: Arc<Mutex<Option<EvictionCallback>>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct RecordCacheStats {
+    pub vertex: CacheStats,
+    pub id_index: CacheStats,
+    pub vertex_weighted_size: u64,
+    pub id_index_weighted_size: u64,
+    pub max_memory: usize,
+}
+
 impl std::fmt::Debug for RecordCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RecordCache")
@@ -45,6 +54,13 @@ impl RecordCache {
     }
 
     pub fn with_config(config: RecordCacheConfig) -> Self {
+        let config = match config.validate() {
+            Ok(()) => config,
+            Err(error) => {
+                log::warn!("Invalid record cache configuration: {error}; using defaults");
+                RecordCacheConfig::default()
+            }
+        };
         let max_memory = config.max_memory as u64;
         let total_ratio = config.memory_ratio.0 + config.memory_ratio.1;
 
@@ -57,7 +73,7 @@ impl RecordCache {
             0
         };
 
-        let vertex_memory = base_vertex_memory;
+        let vertex_memory = base_vertex_memory.saturating_sub(high_priority_extra);
         let id_index_memory = base_id_index_memory + high_priority_extra;
 
         let vertex_stats = Arc::new(CacheStats::new());
@@ -109,6 +125,9 @@ impl RecordCache {
             .eviction_listener(move |_key, _value, cause| {
                 stats.record_eviction();
                 let cause = EvictionCause::from(cause);
+                if cause == EvictionCause::Expired {
+                    stats.record_expiration();
+                }
                 if let Some(guard) = eviction_callback.try_lock() {
                     if let Some(ref callback) = *guard {
                         callback("vertex", cause);
@@ -145,6 +164,9 @@ impl RecordCache {
             .eviction_listener(move |_key, _value, cause| {
                 stats.record_eviction();
                 let cause = EvictionCause::from(cause);
+                if cause == EvictionCause::Expired {
+                    stats.record_expiration();
+                }
                 if let Some(guard) = eviction_callback.try_lock() {
                     if let Some(ref callback) = *guard {
                         callback("id_index", cause);
@@ -208,11 +230,13 @@ impl RecordCache {
                 cached_at_ts: ts,
             },
         );
+        self.id_index_stats.record_insertion();
     }
 
     pub fn remove_id_index(&self, label_id: u32, external_id: &str) {
         let key = IdIndexCacheKey::new(label_id, external_id.to_string());
         if self.id_index_cache.remove(&key).is_some() {
+            self.id_index_stats.record_invalidation();
             self.notify_eviction("id_index", EvictionCause::Explicit);
         }
     }
@@ -238,10 +262,12 @@ impl RecordCache {
 
     pub fn insert_vertex(&self, key: VertexCacheKey, vertex: CachedVertex) {
         self.vertex_cache.insert(key, vertex);
+        self.vertex_stats.record_insertion();
     }
 
     pub fn remove_vertex(&self, key: &VertexCacheKey) {
         if self.vertex_cache.remove(key).is_some() {
+            self.vertex_stats.record_invalidation();
             self.notify_eviction("vertex", EvictionCause::Explicit);
         }
     }
@@ -257,6 +283,7 @@ impl RecordCache {
             .vertex_cache
             .invalidate_entries_if(move |k, _| k.label_id == label_id);
         self.vertex_cache.run_pending_tasks();
+        self.vertex_stats.record_invalidation();
     }
 
     /// Invalidate all ID index entries for a given label.
@@ -265,6 +292,7 @@ impl RecordCache {
             .id_index_cache
             .invalidate_entries_if(move |k, _| k.label_id == label_id);
         self.id_index_cache.run_pending_tasks();
+        self.id_index_stats.record_invalidation();
     }
 
     pub fn clear(&self) {
@@ -272,6 +300,18 @@ impl RecordCache {
         self.id_index_cache.invalidate_all();
         self.vertex_cache.run_pending_tasks();
         self.id_index_cache.run_pending_tasks();
+        self.vertex_stats.record_invalidation();
+        self.id_index_stats.record_invalidation();
+    }
+
+    pub fn stats(&self) -> RecordCacheStats {
+        RecordCacheStats {
+            vertex: self.vertex_stats.as_ref().clone(),
+            id_index: self.id_index_stats.as_ref().clone(),
+            vertex_weighted_size: self.vertex_cache.weighted_size(),
+            id_index_weighted_size: self.id_index_cache.weighted_size(),
+            max_memory: self.config.max_memory,
+        }
     }
 }
 

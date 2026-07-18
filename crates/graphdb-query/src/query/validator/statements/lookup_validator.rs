@@ -434,11 +434,8 @@ impl LookupValidator {
 
         // Prefer an index whose columns match the WHERE predicate columns.
         for idx in &matching {
-            let idx_cols: Vec<String> =
-                idx.fields.iter().map(|f| f.name.clone()).collect();
-            if !idx_cols.is_empty()
-                && where_columns.iter().all(|c| idx_cols.contains(c))
-            {
+            let idx_cols: Vec<String> = idx.fields.iter().map(|f| f.name.clone()).collect();
+            if !idx_cols.is_empty() && where_columns.iter().all(|c| idx_cols.contains(c)) {
                 return (idx.name.clone(), idx.id, idx_cols);
             }
         }
@@ -516,23 +513,28 @@ impl StatementValidator for LookupValidator {
         let where_columns = Self::extract_where_columns(&parsed_info.filter_expression);
 
         // Find index name, id, and columns from index manager
-        let (index_name, index_id, index_columns) = if let Some(ref index_mgr) = self.index_metadata_manager {
-            if is_edge {
-                // Find edge index for this edge type
-                match index_mgr.list_edge_indexes(space_id) {
-                    Ok(indexes) => Self::select_best_index(indexes, &parsed_info.label, &where_columns),
-                    Err(_) => (String::new(), 0, Vec::new()),
+        let (index_name, index_id, index_columns) =
+            if let Some(ref index_mgr) = self.index_metadata_manager {
+                if is_edge {
+                    // Find edge index for this edge type
+                    match index_mgr.list_edge_indexes(space_id) {
+                        Ok(indexes) => {
+                            Self::select_best_index(indexes, &parsed_info.label, &where_columns)
+                        }
+                        Err(_) => (String::new(), 0, Vec::new()),
+                    }
+                } else {
+                    // Find tag index for this tag
+                    match index_mgr.list_tag_indexes(space_id) {
+                        Ok(indexes) => {
+                            Self::select_best_index(indexes, &parsed_info.label, &where_columns)
+                        }
+                        Err(_) => (String::new(), 0, Vec::new()),
+                    }
                 }
             } else {
-                // Find tag index for this tag
-                match index_mgr.list_tag_indexes(space_id) {
-                    Ok(indexes) => Self::select_best_index(indexes, &parsed_info.label, &where_columns),
-                    Err(_) => (String::new(), 0, Vec::new()),
-                }
-            }
-        } else {
-            (String::new(), 0, Vec::new())
-        };
+                (String::new(), 0, Vec::new())
+            };
 
         // Store verification results
         self.validated_result = Some(ValidatedLookup {

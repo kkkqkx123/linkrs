@@ -78,7 +78,8 @@ pub(super) fn expand_on_chunk(
 
     let mut out_rows = Vec::new();
     for (vid, row) in seed_vids.iter().zip(seed_rows.iter()) {
-        let config = TraversalConfig::expand(space_name.to_string(), direction, edge_types.to_vec());
+        let config =
+            TraversalConfig::expand(space_name.to_string(), direction, edge_types.to_vec());
         let runtime_reader = TraversalGraphReader::new(reader);
         let mut runtime = TraversalRuntime::new(runtime_reader, config);
         if let Some(token) = cancel_token.clone() {

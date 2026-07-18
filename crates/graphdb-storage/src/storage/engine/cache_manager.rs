@@ -4,19 +4,31 @@
 
 use crate::core::types::{LabelId, Timestamp};
 use crate::storage::cache::{
-    CachedVertex, RecordCache, RecordCacheConfig, SharedRecordCache, VertexCacheKey,
+    CachedVertex, RecordCache, RecordCacheConfig, RecordCacheStats, SharedRecordCache,
+    VertexCacheKey,
 };
+use crate::storage::engine::config::ResourceConfig;
+use crate::storage::engine::resource_budget::{MemoryAccounting, MemoryCategory};
+use std::sync::Arc;
 
 /// Manager for storage caches
 pub struct CacheManager {
     pub record_cache: Option<SharedRecordCache>,
+    accounting: Arc<MemoryAccounting>,
 }
 
 impl CacheManager {
-    pub fn new(enable_cache: bool, cache_memory: usize) -> Self {
+    pub fn new(
+        enable_cache: bool,
+        cache_memory: usize,
+        resources: &ResourceConfig,
+        accounting: Arc<MemoryAccounting>,
+    ) -> Self {
         let record_cache = if enable_cache {
             let config = RecordCacheConfig {
                 max_memory: cache_memory,
+                ttl: resources.cache_ttl,
+                tti: resources.cache_tti,
                 ..Default::default()
             };
             Some(SharedRecordCache::new(RecordCache::with_config(config)))
@@ -24,7 +36,19 @@ impl CacheManager {
             None
         };
 
-        Self { record_cache }
+        Self {
+            record_cache,
+            accounting,
+        }
+    }
+
+    pub fn refresh_memory_usage(&self) -> Option<RecordCacheStats> {
+        let stats = self.record_cache.as_ref().map(|cache| cache.stats())?;
+        let bytes = stats
+            .vertex_weighted_size
+            .saturating_add(stats.id_index_weighted_size);
+        self.accounting.report_usage(MemoryCategory::Cache, bytes);
+        Some(stats)
     }
 
     pub fn clear_cache(&self) {

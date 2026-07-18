@@ -14,6 +14,7 @@ use parking_lot::RwLock;
 use postcard::to_allocvec;
 use serde::Serialize;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// Unified WAL manager that wraps LocalWalWriter
@@ -23,6 +24,16 @@ use std::sync::Arc;
 pub struct WalManager {
     local_writer: Option<Arc<RwLock<LocalWalWriter>>>,
     config: WalConfig,
+    sync_count: AtomicU64,
+    sync_failures: AtomicU64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WalMetrics {
+    pub accepted_lsn: Lsn,
+    pub durable_lsn: Lsn,
+    pub sync_count: u64,
+    pub sync_failures: u64,
 }
 
 impl WalManager {
@@ -30,6 +41,8 @@ impl WalManager {
         Self {
             local_writer: None,
             config: WalConfig::default(),
+            sync_count: AtomicU64::new(0),
+            sync_failures: AtomicU64::new(0),
         }
     }
 
@@ -37,6 +50,8 @@ impl WalManager {
         Self {
             local_writer: None,
             config,
+            sync_count: AtomicU64::new(0),
+            sync_failures: AtomicU64::new(0),
         }
     }
 
@@ -71,12 +86,30 @@ impl WalManager {
         }
     }
 
+    pub fn metrics(&self) -> WalMetrics {
+        WalMetrics {
+            accepted_lsn: self.current_lsn(),
+            durable_lsn: self.durable_lsn(),
+            sync_count: self.sync_count.load(Ordering::Relaxed),
+            sync_failures: self.sync_failures.load(Ordering::Relaxed),
+        }
+    }
+
     pub fn sync(&self) -> StorageResult<()> {
         if let Some(ref writer) = self.local_writer {
-            writer
+            let result = writer
                 .write()
                 .sync()
-                .map_err(|e| StorageError::wal_error(format!("Failed to sync WAL: {:?}", e)))?;
+                .map_err(|e| StorageError::wal_error(format!("Failed to sync WAL: {:?}", e)));
+            match result {
+                Ok(()) => {
+                    self.sync_count.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(error) => {
+                    self.sync_failures.fetch_add(1, Ordering::Relaxed);
+                    return Err(error);
+                }
+            }
         }
         Ok(())
     }
@@ -143,6 +176,22 @@ impl WalManager {
         Ok(())
     }
 
+    /// Restore the logical WAL baseline covered by a durable checkpoint.
+    pub fn set_recovery_baseline_lsn(&self, lsn: Lsn) -> StorageResult<()> {
+        if let Some(ref writer) = self.local_writer {
+            writer
+                .write()
+                .set_recovery_baseline_lsn(lsn)
+                .map_err(|e| {
+                    StorageError::wal_error(format!(
+                        "Failed to restore WAL recovery baseline: {:?}",
+                        e
+                    ))
+                })?;
+        }
+        Ok(())
+    }
+
     pub fn truncate(&self, lsn: Lsn) -> StorageResult<()> {
         if let Some(ref writer) = self.local_writer {
             writer
@@ -175,5 +224,21 @@ mod tests {
             .expect("Failed to open WAL");
 
         assert!(manager.writer().is_some());
+    }
+
+    #[test]
+    fn test_wal_metrics_track_syncs() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let mut manager = WalManager::new();
+        manager
+            .open(temp_dir.path(), 0)
+            .expect("Failed to open WAL");
+
+        manager.sync().expect("WAL sync should succeed");
+        let metrics = manager.metrics();
+        assert_eq!(metrics.sync_count, 1);
+        assert_eq!(metrics.sync_failures, 0);
+        assert_eq!(metrics.accepted_lsn, manager.current_lsn());
+        assert_eq!(metrics.durable_lsn, manager.durable_lsn());
     }
 }

@@ -82,6 +82,19 @@ fn test_id_index_cache() {
 }
 
 #[test]
+fn test_cache_metrics_include_insertions_and_precise_invalidations() {
+    let cache = RecordCache::new();
+    cache.insert_id_index(1, "user", 42, 0);
+    assert_eq!(cache.get_id_index(1, "user", 0), Some(42));
+    cache.remove_id_index(1, "user");
+
+    let stats = cache.stats();
+    assert_eq!(stats.id_index.insertions(), 1);
+    assert_eq!(stats.id_index.invalidations(), 1);
+    assert_eq!(stats.id_index.hits(), 1);
+}
+
+#[test]
 fn test_cache_config_with_ttl() {
     use std::time::Duration;
 

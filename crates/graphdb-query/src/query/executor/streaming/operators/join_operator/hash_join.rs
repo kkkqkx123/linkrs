@@ -199,12 +199,8 @@ pub(super) fn close(
     build_side_hash: &mut HashMap<Vec<Value>, Vec<Vec<Value>>>,
     all_right_rows: &mut Vec<Vec<Value>>,
 ) -> Result<(), QueryError> {
-    close_common(
-        lifecycle,
-        memory_tracker,
-        || {
-            build_side_hash.clear();
-            all_right_rows.clear();
-        },
-    )
+    close_common(lifecycle, memory_tracker, || {
+        build_side_hash.clear();
+        all_right_rows.clear();
+    })
 }

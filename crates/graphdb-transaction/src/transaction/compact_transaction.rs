@@ -11,7 +11,6 @@ use super::wal::Timestamp;
 use crate::core::types::{
     CompactConfig, CompactError, CompactStats, CompactTarget, CompactionStrategy,
 };
-use crate::core::wal::types::WalHeader;
 
 /// Compact transaction error
 #[derive(Debug, Clone, thiserror::Error)]
@@ -58,7 +57,6 @@ pub struct CompactTransaction<'a, T: CompactTarget + ?Sized> {
     wal_writer: &'a mut dyn WalWriter,
     config: CompactConfig,
     timestamp: Timestamp,
-    wal_buffer: Vec<u8>,
 }
 
 impl<'a, T: CompactTarget + ?Sized> CompactTransaction<'a, T> {
@@ -76,15 +74,12 @@ impl<'a, T: CompactTarget + ?Sized> CompactTransaction<'a, T> {
         config: &CompactConfig,
     ) -> CompactTransactionResult<Self> {
         let timestamp = version_manager.acquire_update_timestamp()?;
-        let wal_buffer = vec![0; WalHeader::SIZE];
-
         Ok(Self {
             graph,
             version_manager,
             wal_writer,
             config: config.clone(),
             timestamp,
-            wal_buffer,
         })
     }
 
@@ -120,19 +115,13 @@ impl<'a, T: CompactTarget + ?Sized> CompactTransaction<'a, T> {
             return Ok(());
         }
 
-        let header = WalHeader::new(
-            crate::core::wal::types::WalOpType::Compact,
-            self.timestamp,
-            0,
-        );
-        let header_bytes = header.as_bytes();
-        self.wal_buffer[..WalHeader::SIZE].copy_from_slice(&header_bytes);
-
         self.wal_writer
-            .append(&self.wal_buffer)
+            .append_entry(
+                crate::core::wal::types::WalOpType::Compact,
+                self.timestamp,
+                &[],
+            )
             .map_err(|e| CompactTransactionError::WalError(e.to_string()))?;
-
-        self.wal_buffer.clear();
 
         log::info!("Starting compaction at timestamp {}", self.timestamp);
 
@@ -160,7 +149,6 @@ impl<'a, T: CompactTarget + ?Sized> CompactTransaction<'a, T> {
     /// Reverts the timestamp without performing compaction.
     pub fn abort(mut self) -> CompactTransactionResult<()> {
         if self.timestamp != RELEASED_TIMESTAMP {
-            self.wal_buffer.clear();
             self.version_manager.revert_update_timestamp(self.timestamp);
             self.timestamp = RELEASED_TIMESTAMP;
         }

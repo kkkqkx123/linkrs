@@ -42,7 +42,9 @@ macro_rules! numeric_version_type {
 
 numeric_version_type!(CommitLsn, "lsn:");
 numeric_version_type!(IndexGeneration, "generation:");
-numeric_version_type!(ManifestEpoch, "manifest:");
+/// Alias for backward compatibility. New code should use `IndexGeneration`
+/// directly for manifest epoch tracking.
+pub use IndexGeneration as ManifestEpoch;
 numeric_version_type!(LeaseEpoch, "lease:");
 numeric_version_type!(SnapshotTimestamp, "snapshot:");
 

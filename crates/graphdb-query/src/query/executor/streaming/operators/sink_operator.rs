@@ -90,20 +90,19 @@ fn make_modify_result(
     count: u64,
 ) -> DataChunk {
     let num_cols = output_layout.len().max(2);
-    let mut row = vec![
-        Value::String(op.to_string()),
-        Value::BigInt(count as i64),
-    ];
+    let mut row = vec![Value::String(op.to_string()), Value::BigInt(count as i64)];
     row.resize(num_cols, Value::Null(crate::core::NullType::Null));
     DataChunk::new_with_layout(
         vec![row],
         if output_layout.len() >= 2 {
             output_layout
         } else {
-            Arc::new(crate::query::executor::streaming::slot::SlotLayout::from_names(&[
-                "operation".to_string(),
-                "count".to_string(),
-            ]))
+            Arc::new(
+                crate::query::executor::streaming::slot::SlotLayout::from_names(&[
+                    "operation".to_string(),
+                    "count".to_string(),
+                ]),
+            )
         },
     )
 }

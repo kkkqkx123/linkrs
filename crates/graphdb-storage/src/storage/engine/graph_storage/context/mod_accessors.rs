@@ -1,5 +1,7 @@
 use crate::core::stats::StatsManager;
 use crate::core::types::{LabelId, TableId, Timestamp};
+use crate::storage::engine::resource_budget::{MemoryCategory, ResourceSnapshot};
+use crate::storage::index::IndexGcOps;
 use crate::storage::StorageOperationContext;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -120,6 +122,80 @@ impl GraphStorageContext {
                 .sum::<usize>()
         });
         vertices + edges
+    }
+
+    pub fn resource_snapshot(&self) -> ResourceSnapshot {
+        self.persistent
+            .resource_accounting
+            .report_usage(MemoryCategory::Data, self.used_storage_size() as u64);
+        let index_bytes = self
+            .persistent
+            .index_data_manager
+            .read()
+            .memory_usage_bytes();
+        self.persistent
+            .resource_accounting
+            .report_usage(MemoryCategory::Index, index_bytes);
+        let tombstone_count = self.persistent.index_data_manager.read().tombstone_count();
+        let tombstone_memory_bytes = (tombstone_count as u64).saturating_mul(64);
+        self.persistent
+            .resource_accounting
+            .report_usage(MemoryCategory::Mvcc, tombstone_memory_bytes);
+        let _ = self.persistent.cache_manager.refresh_memory_usage();
+        let mut snapshot = self.persistent.resource_accounting.snapshot();
+        snapshot.active_snapshots = self
+            .persistent
+            .version_manager
+            .snapshot_tracker()
+            .active_count();
+        snapshot.oldest_snapshot_ts = self
+            .persistent
+            .version_manager
+            .snapshot_tracker()
+            .cleanup_threshold();
+        snapshot.tombstone_count = tombstone_count;
+        snapshot.tombstone_memory_bytes = tombstone_memory_bytes;
+        snapshot
+    }
+
+    pub fn check_write_admission(&self) -> crate::core::StorageResult<()> {
+        let snapshot = self.resource_snapshot();
+        if snapshot.hard_limit_exceeded() {
+            return Err(crate::core::StorageError::capacity_exceeded());
+        }
+        let resources = &self.persistent.config.resources;
+        if snapshot.tombstone_count >= resources.max_tombstones
+            || snapshot.tombstone_memory_bytes >= resources.max_tombstone_bytes
+        {
+            return Err(crate::core::StorageError::capacity_exceeded());
+        }
+        if snapshot.soft_limit_exceeded() {
+            log::debug!(
+                "Storage memory is above the soft limit: {} / {} bytes",
+                snapshot.total_current_bytes,
+                snapshot.budget.max_memory_bytes
+            );
+        }
+        Ok(())
+    }
+
+    pub fn check_snapshot_admission(&self) -> crate::core::StorageResult<()> {
+        let active = self
+            .persistent
+            .version_manager
+            .snapshot_tracker()
+            .active_count();
+        if active >= self.persistent.config.resources.max_active_snapshots {
+            return Err(crate::core::StorageError::capacity_exceeded());
+        }
+        Ok(())
+    }
+
+    pub fn wal_metrics(&self) -> Option<crate::storage::WalMetrics> {
+        let persistence = self.persistent.persistence.as_ref()?;
+        let wal = persistence.read().wal_manager()?;
+        let metrics = wal.read().metrics();
+        Some(metrics)
     }
 
     pub(crate) fn is_open_flag(&self) -> &std::sync::atomic::AtomicBool {

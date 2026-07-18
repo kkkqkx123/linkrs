@@ -43,11 +43,8 @@ where
 /// and surviving vertices should remain.
 #[test]
 fn test_compact_reclaims_deleted_vertex_space() {
-    let dir = std::env::temp_dir()
-        .join("graphdb_storage_compact_test")
-        .join("reclaim");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let temp_dir = common::create_test_workdir();
+    let dir = temp_dir.path();
 
     let storage = compact_and_reopen(&dir, |s| {
         s.delete_vertex("test_space", &VertexId::from_int64(1))
@@ -65,18 +62,13 @@ fn test_compact_reclaims_deleted_vertex_space() {
         .get_vertex("test_space", &VertexId::from_int64(2))
         .unwrap()
         .is_some());
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Compact after multiple delete operations preserves survivors.
 #[test]
 fn test_compact_after_multiple_operations() {
-    let dir = std::env::temp_dir()
-        .join("graphdb_storage_compact_test")
-        .join("multi");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let temp_dir = common::create_test_workdir();
+    let dir = temp_dir.path();
 
     let storage = compact_and_reopen(&dir, |s| {
         // Insert more vertices
@@ -115,36 +107,26 @@ fn test_compact_after_multiple_operations() {
             i
         );
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Compact on clean state (no deletions) preserves all data.
 #[test]
 fn test_compact_clean_state() {
-    let dir = std::env::temp_dir()
-        .join("graphdb_storage_compact_test")
-        .join("clean");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let temp_dir = common::create_test_workdir();
+    let dir = temp_dir.path();
 
     let storage = compact_and_reopen(&dir, |_| {});
 
     // All data intact
     common::verify_test_data(&storage, "test_space");
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Persist + compact + reload should preserve data integrity
 /// (existing roundtrip test adapted to new pattern).
 #[test]
 fn test_compact_persistent_roundtrip() {
-    let dir = std::env::temp_dir()
-        .join("graphdb_storage_compact_test")
-        .join("roundtrip");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let temp_dir = common::create_test_workdir();
+    let dir = temp_dir.path();
 
     let storage = compact_and_reopen(&dir, |s| {
         // Delete Bob
@@ -180,6 +162,4 @@ fn test_compact_persistent_roundtrip() {
         "Edge after compact: {:?}",
         edge.as_ref().map(|e| e.properties())
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }

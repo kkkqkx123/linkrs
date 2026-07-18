@@ -28,11 +28,8 @@ fn save_and_checkpoint(storage: &mut graphdb_storage::storage::GraphStorage) {
 /// the data is recovered via WAL.
 #[test]
 fn test_crash_without_flush_loses_uncommitted_data() {
-    let dir = std::env::temp_dir()
-        .join("graphdb_storage_wal_test")
-        .join("crash_no_flush");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let temp_dir = common::create_test_workdir();
+    let dir = temp_dir.path();
 
     let vid: VertexId;
     {
@@ -65,18 +62,13 @@ fn test_crash_without_flush_loses_uncommitted_data() {
             "WAL should have replayed the extra vertex insert"
         );
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Test recovery of edge insertions after crash.
 #[test]
 fn test_crash_recovery_replays_edge_insert() {
-    let dir = std::env::temp_dir()
-        .join("graphdb_storage_wal_test")
-        .join("edge_recovery");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let temp_dir = common::create_test_workdir();
+    let dir = temp_dir.path();
 
     {
         let mut storage = common::create_persistent_storage(&dir);
@@ -113,18 +105,13 @@ fn test_crash_recovery_replays_edge_insert() {
             .unwrap();
         assert!(charlie.is_some(), "Vertex should be recovered via WAL");
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Test recovery of vertex deletion after crash.
 #[test]
 fn test_crash_recovery_replays_vertex_delete() {
-    let dir = std::env::temp_dir()
-        .join("graphdb_storage_wal_test")
-        .join("delete_recovery");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let temp_dir = common::create_test_workdir();
+    let dir = temp_dir.path();
 
     {
         let mut storage = common::create_persistent_storage(&dir);
@@ -154,18 +141,13 @@ fn test_crash_recovery_replays_vertex_delete() {
             .unwrap();
         assert!(bob.is_some(), "Bob should still exist");
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Test recovery of schema DDL operations after crash.
 #[test]
 fn test_crash_recovery_replays_tag_creation() {
-    let dir = std::env::temp_dir()
-        .join("graphdb_storage_wal_test")
-        .join("schema_recovery");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let temp_dir = common::create_test_workdir();
+    let dir = temp_dir.path();
 
     {
         let mut storage = common::create_persistent_storage(&dir);
@@ -182,18 +164,13 @@ fn test_crash_recovery_replays_tag_creation() {
         let tag = storage.get_tag("test_space", "Person").unwrap();
         assert!(tag.is_some(), "Tag should be recovered via WAL replay");
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Test recovery of edge deletion after crash.
 #[test]
 fn test_crash_recovery_replays_edge_delete() {
-    let dir = std::env::temp_dir()
-        .join("graphdb_storage_wal_test")
-        .join("edge_delete_recovery");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let temp_dir = common::create_test_workdir();
+    let dir = temp_dir.path();
 
     {
         let mut storage = common::create_persistent_storage(&dir);
@@ -227,18 +204,13 @@ fn test_crash_recovery_replays_edge_delete() {
             .unwrap();
         assert!(edge.is_none(), "WAL should have replayed the edge delete");
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Multiple crash-recovery cycles to ensure WAL position tracking works.
 #[test]
 fn test_multiple_crash_recovery_cycles() {
-    let dir = std::env::temp_dir()
-        .join("graphdb_storage_wal_test")
-        .join("multi_cycle");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let temp_dir = common::create_test_workdir();
+    let dir = temp_dir.path();
 
     // Cycle 1: setup schema, save+checkpoint, insert Alice, crash
     {
@@ -276,19 +248,14 @@ fn test_multiple_crash_recovery_cycles() {
             .unwrap()
             .is_some());
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Test that schema version history is rebuilt during recovery.
 /// This test verifies P1: schema changes recorded in WAL are used to rebuild version_history.
 #[test]
 fn test_schema_version_history_recovery() {
-    let dir = std::env::temp_dir()
-        .join("graphdb_storage_wal_test")
-        .join("schema_version_recovery");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let temp_dir = common::create_test_workdir();
+    let dir = temp_dir.path();
 
     let version_before_recovery: u64;
     {
@@ -327,6 +294,4 @@ fn test_schema_version_history_recovery() {
             "Schema version history should be accessible after recovery"
         );
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }

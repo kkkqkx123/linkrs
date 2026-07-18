@@ -317,7 +317,7 @@ impl WalFileHeader {
     }
 
     pub fn is_valid(&self) -> bool {
-        self.magic == WAL_MAGIC
+        self.magic == WAL_MAGIC && self.version == WAL_VERSION
     }
 
     pub fn salts(&self) -> (u32, u32) {

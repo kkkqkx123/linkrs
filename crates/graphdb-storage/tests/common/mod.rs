@@ -15,6 +15,12 @@ pub fn create_in_memory_storage() -> GraphStorage {
     GraphStorage::new().expect("Failed to create in-memory GraphStorage")
 }
 
+/// Create an isolated persistent work directory for a filesystem-backed test.
+#[allow(dead_code)]
+pub fn create_test_workdir() -> tempfile::TempDir {
+    tempfile::tempdir().expect("Failed to create isolated test work directory")
+}
+
 /// Create a persistent storage at the given path.
 #[allow(dead_code)]
 pub fn create_persistent_storage(path: &Path) -> GraphStorage {

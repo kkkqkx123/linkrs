@@ -75,6 +75,62 @@ pub struct StorageConfig {
     /// Statistics collection interval (seconds)
     #[serde(default = "default_statistics_interval")]
     pub statistics_interval_secs: u64,
+
+    /// Total storage memory budget in bytes.
+    #[serde(default = "default_max_memory_bytes")]
+    pub max_memory_bytes: u64,
+
+    /// Independent native-index memory budget in bytes.
+    #[serde(default = "default_index_memory_bytes")]
+    pub index_memory_bytes: u64,
+
+    /// Soft memory pressure ratio.
+    #[serde(default = "default_memory_soft_ratio")]
+    pub memory_soft_ratio: f64,
+
+    /// Hard memory admission ratio.
+    #[serde(default = "default_memory_hard_ratio")]
+    pub memory_hard_ratio: f64,
+
+    /// Maximum number of active snapshots.
+    #[serde(default = "default_max_active_snapshots")]
+    pub max_active_snapshots: usize,
+
+    /// Maximum snapshot age in seconds.
+    #[serde(default = "default_max_snapshot_age_secs")]
+    pub max_snapshot_age_secs: u64,
+
+    /// Maximum number of retained tombstones.
+    #[serde(default = "default_max_tombstones")]
+    pub max_tombstones: usize,
+
+    /// Maximum estimated tombstone memory in bytes.
+    #[serde(default = "default_max_tombstone_bytes")]
+    pub max_tombstone_bytes: u64,
+
+    /// Number of index entries processed per GC pass.
+    #[serde(default = "default_index_gc_batch")]
+    pub index_gc_batch: usize,
+
+    /// Maximum maintenance operation duration in seconds.
+    #[serde(default = "default_operation_timeout_secs")]
+    pub operation_timeout_secs: u64,
+
+    /// Number of dirty operations that triggers a flush request.
+    #[serde(default = "default_dirty_flush_operations")]
+    pub dirty_flush_operations: u64,
+
+    /// Estimated dirty bytes that triggers a flush request.
+    #[serde(default = "default_dirty_flush_bytes")]
+    pub dirty_flush_bytes: u64,
+
+    /// Record cache TTL in seconds. Zero disables TTL.
+    #[serde(default = "default_cache_ttl_secs")]
+    pub cache_ttl_secs: u64,
+
+    /// Record cache TTI in seconds. Zero disables TTI.
+    #[serde(default = "default_cache_tti_secs")]
+    pub cache_tti_secs: u64,
 }
 
 fn default_compression_level() -> u32 {
@@ -93,6 +149,62 @@ fn default_true() -> bool {
     true
 }
 
+fn default_max_memory_bytes() -> u64 {
+    512 * 1024 * 1024
+}
+
+fn default_index_memory_bytes() -> u64 {
+    128 * 1024 * 1024
+}
+
+fn default_memory_soft_ratio() -> f64 {
+    0.80
+}
+
+fn default_memory_hard_ratio() -> f64 {
+    0.95
+}
+
+fn default_max_active_snapshots() -> usize {
+    1_000
+}
+
+fn default_max_snapshot_age_secs() -> u64 {
+    300
+}
+
+fn default_max_tombstones() -> usize {
+    1_000_000
+}
+
+fn default_max_tombstone_bytes() -> u64 {
+    256 * 1024 * 1024
+}
+
+fn default_index_gc_batch() -> usize {
+    10_000
+}
+
+fn default_operation_timeout_secs() -> u64 {
+    30
+}
+
+fn default_dirty_flush_operations() -> u64 {
+    50_000
+}
+
+fn default_dirty_flush_bytes() -> u64 {
+    64 * 1024 * 1024
+}
+
+fn default_cache_ttl_secs() -> u64 {
+    60
+}
+
+fn default_cache_tti_secs() -> u64 {
+    300
+}
+
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
@@ -103,6 +215,20 @@ impl Default for StorageConfig {
             max_db_size: 0, // Unlimited
             auto_statistics: true,
             statistics_interval_secs: default_statistics_interval(),
+            max_memory_bytes: default_max_memory_bytes(),
+            index_memory_bytes: default_index_memory_bytes(),
+            memory_soft_ratio: default_memory_soft_ratio(),
+            memory_hard_ratio: default_memory_hard_ratio(),
+            max_active_snapshots: default_max_active_snapshots(),
+            max_snapshot_age_secs: default_max_snapshot_age_secs(),
+            max_tombstones: default_max_tombstones(),
+            max_tombstone_bytes: default_max_tombstone_bytes(),
+            index_gc_batch: default_index_gc_batch(),
+            operation_timeout_secs: default_operation_timeout_secs(),
+            dirty_flush_operations: default_dirty_flush_operations(),
+            dirty_flush_bytes: default_dirty_flush_bytes(),
+            cache_ttl_secs: default_cache_ttl_secs(),
+            cache_tti_secs: default_cache_tti_secs(),
         }
     }
 }
@@ -112,6 +238,35 @@ impl StorageConfig {
     pub fn validate(&self) -> Result<(), String> {
         if self.compression_level > 9 {
             return Err("Compression level must be between 0 and 9".to_string());
+        }
+        if self.max_memory_bytes == 0
+            || self.index_memory_bytes == 0
+            || self.index_memory_bytes > self.max_memory_bytes
+        {
+            return Err(
+                "memory budgets must be positive and index_memory_bytes cannot exceed max_memory_bytes"
+                    .to_string(),
+            );
+        }
+        if !self.memory_soft_ratio.is_finite()
+            || !self.memory_hard_ratio.is_finite()
+            || !(0.0..=1.0).contains(&self.memory_soft_ratio)
+            || !(0.0..=1.0).contains(&self.memory_hard_ratio)
+            || self.memory_soft_ratio == 0.0
+            || self.memory_soft_ratio >= self.memory_hard_ratio
+        {
+            return Err("memory ratios must satisfy 0 < soft < hard <= 1".to_string());
+        }
+        if self.max_active_snapshots == 0
+            || self.max_snapshot_age_secs == 0
+            || self.max_tombstones == 0
+            || self.max_tombstone_bytes == 0
+            || self.index_gc_batch == 0
+            || self.operation_timeout_secs == 0
+            || self.dirty_flush_operations == 0
+            || self.dirty_flush_bytes == 0
+        {
+            return Err("storage resource limits must be greater than 0".to_string());
         }
         Ok(())
     }

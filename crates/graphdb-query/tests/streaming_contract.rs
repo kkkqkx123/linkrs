@@ -8,15 +8,15 @@
 //! mid-stream empty chunk, cancel, early stop.
 
 use graphdb_query::core::types::expr::Expression;
+use graphdb_query::core::DataType;
 use graphdb_query::core::Value;
 use graphdb_query::query::executor::base::MemoryBudget;
 use graphdb_query::query::executor::streaming::executor::StreamingExecutor;
 use graphdb_query::query::executor::streaming::operators::base::OperatorBase;
+use graphdb_query::query::executor::streaming::operators::blocking::BlockingOperator;
 use graphdb_query::query::executor::streaming::operators::source_operator::SourceOperator;
 use graphdb_query::query::executor::streaming::operators::unary_operator::UnaryOperator;
-use graphdb_query::query::executor::streaming::operators::blocking::BlockingOperator;
 use graphdb_query::query::executor::streaming::slot::SlotLayout;
-use graphdb_query::core::DataType;
 
 // ── Helpers ──
 
@@ -104,7 +104,10 @@ fn contract_empty_input_returns_none() {
 #[test]
 fn contract_first_row_null() {
     let data = vec![
-        vec![Value::Null(Default::default()), Value::String("null_id".to_string())],
+        vec![
+            Value::Null(Default::default()),
+            Value::String("null_id".to_string()),
+        ],
         vec![Value::Int(1), Value::String("a".to_string())],
     ];
     let exec = make_scan(data.clone());
@@ -119,9 +122,7 @@ fn contract_first_row_null() {
 
 #[test]
 fn contract_none_is_permanent_eof() {
-    let data = vec![
-        vec![Value::Int(1), Value::String("a".to_string())],
-    ];
+    let data = vec![vec![Value::Int(1), Value::String("a".to_string())]];
     let exec = make_scan(data);
     let rows = collect_all(exec);
     assert_eq!(rows.len(), 1);
@@ -164,9 +165,7 @@ fn contract_early_stop() {
 
 #[test]
 fn contract_close_without_open() {
-    let mut exec = make_scan(vec![
-        vec![Value::Int(1), Value::String("a".to_string())],
-    ]);
+    let mut exec = make_scan(vec![vec![Value::Int(1), Value::String("a".to_string())]]);
     // close_tree should not panic on never-opened tree.
     exec.close_tree().unwrap();
 }
@@ -175,9 +174,7 @@ fn contract_close_without_open() {
 
 #[test]
 fn contract_double_close() {
-    let mut exec = make_scan(vec![
-        vec![Value::Int(1), Value::String("a".to_string())],
-    ]);
+    let mut exec = make_scan(vec![vec![Value::Int(1), Value::String("a".to_string())]]);
     exec.open().unwrap();
     let _ = exec.advance().unwrap();
     exec.close().unwrap();

@@ -1,24 +1,21 @@
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use crate::core::{DataType, Value};
     use crate::storage::engine::graph_storage::GraphStorageContext;
     use crate::storage::types::StoragePropertyDef;
+    use tempfile::TempDir;
 
-    fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir()
-            .join("graphdb_persistence_test")
-            .join(name);
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn temp_dir(name: &str) -> TempDir {
+        tempfile::Builder::new()
+            .prefix(&format!("graphdb_persistence_{name}_"))
+            .tempdir()
+            .expect("temporary persistence directory should be created")
     }
 
     #[test]
     fn test_flush_tables_to_dir_custom_path() {
         let dir = temp_dir("flush_custom");
-        let data_dir = dir.join("custom_data");
+        let data_dir = dir.path().join("custom_data");
 
         let graph = GraphStorageContext::new();
 
@@ -47,8 +44,5 @@ mod tests {
 
         assert!(data_dir.join("vertices").exists());
         assert!(data_dir.join("edges").exists());
-
-        // Cleanup
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

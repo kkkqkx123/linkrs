@@ -522,38 +522,22 @@ impl JoinOperator {
                 build_side_tuples,
                 memory_tracker,
                 ..
-            } => nested_loop_join::close(
-                &mut base.lifecycle,
-                memory_tracker,
-                build_side_tuples,
-            ),
+            } => nested_loop_join::close(&mut base.lifecycle, memory_tracker, build_side_tuples),
             Self::InnerJoin {
                 build_side_tuples,
                 memory_tracker,
                 ..
-            } => nested_loop_join::close(
-                &mut base.lifecycle,
-                memory_tracker,
-                build_side_tuples,
-            ),
+            } => nested_loop_join::close(&mut base.lifecycle, memory_tracker, build_side_tuples),
             Self::LeftJoin {
                 build_side_tuples,
                 memory_tracker,
                 ..
-            } => nested_loop_join::close(
-                &mut base.lifecycle,
-                memory_tracker,
-                build_side_tuples,
-            ),
+            } => nested_loop_join::close(&mut base.lifecycle, memory_tracker, build_side_tuples),
             Self::RightJoin {
                 build_side_tuples,
                 memory_tracker,
                 ..
-            } => nested_loop_join::close(
-                &mut base.lifecycle,
-                memory_tracker,
-                build_side_tuples,
-            ),
+            } => nested_loop_join::close(&mut base.lifecycle, memory_tracker, build_side_tuples),
             Self::FullOuterJoin {
                 left_rows,
                 right_rows,
@@ -580,11 +564,7 @@ impl JoinOperator {
                 right_rows,
                 memory_tracker,
                 ..
-            } => cross_semi_join::close_semi(
-                &mut base.lifecycle,
-                memory_tracker,
-                right_rows,
-            ),
+            } => cross_semi_join::close_semi(&mut base.lifecycle, memory_tracker, right_rows),
         }
     }
 

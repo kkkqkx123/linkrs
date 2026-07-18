@@ -19,7 +19,10 @@ fn eval_expr_to_value(expr: &Expression) -> Option<Value> {
             vals.map(|v| Value::list(crate::core::value::list::List::from(v)))
         }
         Expression::Function { name, args } => {
-            let arg_vals: Vec<Value> = args.iter().map(eval_expr_to_value).collect::<Option<Vec<_>>>()?;
+            let arg_vals: Vec<Value> = args
+                .iter()
+                .map(eval_expr_to_value)
+                .collect::<Option<Vec<_>>>()?;
             global_registry().execute(name, &arg_vals).ok()
         }
         Expression::Binary { left, op, right } => {

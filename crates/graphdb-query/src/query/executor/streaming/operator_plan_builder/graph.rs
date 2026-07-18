@@ -46,7 +46,7 @@ pub fn build_graph_node(
             ))
         }
 
-            PlanNodeEnum::ExpandAll(expand_all_node) => {
+        PlanNodeEnum::ExpandAll(expand_all_node) => {
             let input_plan = expand_all_node.inputs().first().ok_or_else(|| {
                 PlanBuildError::missing_value(
                     "ExpandAll",

@@ -359,7 +359,6 @@ mod tests {
     use super::super::super::*;
     use crate::core::Value;
     use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
-    use std::fs;
 
     fn create_edge_table() -> TimeTravelEdgeStore {
         let schema = EdgeSchema {
@@ -403,12 +402,11 @@ mod tests {
             .insert_edge(2, 3, 0, &[("weight".to_string(), Value::Double(3.5))], ts)
             .unwrap();
 
-        let temp_dir = std::env::temp_dir().join("edge_table_test_flush_load");
-        let _ = fs::remove_dir_all(&temp_dir);
+        let temp_dir = tempfile::tempdir().expect("temporary edge table directory");
 
         table
             .flush(
-                &temp_dir,
+                temp_dir.path(),
                 crate::storage::compression::CompressionType::Zstd { level: 3 },
             )
             .expect("flush should succeed");
@@ -427,7 +425,9 @@ mod tests {
             schema_version: 1,
         };
         let mut loaded_table = TimeTravelEdgeStore::new(schema2).unwrap();
-        loaded_table.load(&temp_dir).expect("load should succeed");
+        loaded_table
+            .load(temp_dir.path())
+            .expect("load should succeed");
 
         assert_eq!(loaded_table.out_edges(1, ts).len(), 2);
         assert_eq!(loaded_table.out_edges(2, ts).len(), 1);
@@ -438,8 +438,6 @@ mod tests {
             .expect("delete_edge should work after load");
         assert!(deleted);
         assert!(!loaded_table.has_edge(1, 3, 0, ts + 1));
-
-        let _ = fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
@@ -468,12 +466,11 @@ mod tests {
         table.freeze_csr_only(150);
         table.delete_edge(1, 2, 0, 200).unwrap();
 
-        let temp_dir = std::env::temp_dir().join("edge_table_test_segments_tombstones");
-        let _ = fs::remove_dir_all(&temp_dir);
+        let temp_dir = tempfile::tempdir().expect("temporary edge table directory");
 
         table
             .flush(
-                &temp_dir,
+                temp_dir.path(),
                 crate::storage::compression::CompressionType::Zstd { level: 3 },
             )
             .expect("flush should succeed");
@@ -492,15 +489,15 @@ mod tests {
             schema_version: 1,
         };
         let mut loaded_table = TimeTravelEdgeStore::new(schema2).unwrap();
-        loaded_table.load(&temp_dir).expect("load should succeed");
+        loaded_table
+            .load(temp_dir.path())
+            .expect("load should succeed");
 
         assert_eq!(loaded_table.out_segments.len(), 1);
         assert_eq!(loaded_table.in_segments.len(), 1);
         assert!(loaded_table.has_edge(1, 2, 0, 150));
         assert!(!loaded_table.has_edge(1, 2, 0, 250));
         assert!(loaded_table.has_edge(1, 3, 0, 250));
-
-        let _ = fs::remove_dir_all(&temp_dir);
     }
 
     #[test]

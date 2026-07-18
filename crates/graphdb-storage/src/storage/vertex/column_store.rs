@@ -549,7 +549,10 @@ fn write_fixed_value(
     if offset + required_size > data.len() {
         return Err(StorageError::invalid_input(format!(
             "Column data buffer too small: offset={}, required_size={}, data_len={}, element_size={}",
-            offset, required_size, data.len(), element_size
+            offset,
+            required_size,
+            data.len(),
+            element_size
         )));
     }
 

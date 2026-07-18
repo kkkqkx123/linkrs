@@ -1,7 +1,5 @@
 use crate::core::metadata::index_manager::IndexMetadataManager;
-use crate::core::types::{
-    CommitLsn, Index, IndexGeneration, IndexStatus, ManifestEpoch, SnapshotTimestamp,
-};
+use crate::core::types::{CommitLsn, Index, IndexGeneration, IndexStatus, SnapshotTimestamp};
 use crate::core::wal::EntityRef;
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::index::generic_index_manager::GenericIndexManager;
@@ -350,11 +348,11 @@ fn build_vertex_index_data(
 }
 
 /// Get a fresh generation number derived from the active manifest's generation + 1.
-fn next_generation_and_epoch(
+fn next_generation(
     ctx: &GraphStorageContext,
     space_id: u64,
     index_name: &str,
-) -> StorageResult<(IndexGeneration, ManifestEpoch)> {
+) -> StorageResult<IndexGeneration> {
     let index_id = {
         let mgr = ctx.index_data_manager().read();
         let alias = mgr.index_alias(space_id, index_name);
@@ -362,19 +360,18 @@ fn next_generation_and_epoch(
     };
     let Some(index_id) = index_id else {
         // No manifest catalog yet; start at generation 1.
-        return Ok((IndexGeneration::new(1), ManifestEpoch::new(1)));
+        return Ok(IndexGeneration::new(1));
     };
     let catalog = ctx
         .index_data_manager()
         .read()
         .manifest_catalog(space_id, index_id);
     let Some(catalog) = catalog else {
-        return Ok((IndexGeneration::new(1), ManifestEpoch::new(1)));
+        return Ok(IndexGeneration::new(1));
     };
     let stats = catalog.stats();
-    Ok((
-        IndexGeneration::new(stats.active_generation.get().saturating_add(1)),
-        ManifestEpoch::new(stats.active_epoch.get().saturating_add(1)),
+    Ok(IndexGeneration::new(
+        stats.active_generation.get().saturating_add(1),
     ))
 }
 
@@ -398,10 +395,9 @@ pub(crate) fn rebuild_tag_index(
     // ── Phase: Building ────────────────────────────────────────────────────
     // Record the WAL LSN at snapshot time so the catch-up phase knows where
     // to begin replaying committed writes.
-    let (generation, manifest_epoch) = next_generation_and_epoch(ctx, space_id, index_name)?;
+    let generation = next_generation(ctx, space_id, index_name)?;
 
-    let mut build_state =
-        GenerationBuildState::new(generation, manifest_epoch, snapshot_timestamp, start_lsn);
+    let mut build_state = GenerationBuildState::new(generation, snapshot_timestamp, start_lsn);
     save_generation_build_state(ctx, space_id, index_name, &build_state)?;
 
     ctx.index_metadata_manager().set_tag_index_status(
@@ -432,8 +428,7 @@ pub(crate) fn rebuild_tag_index(
     // Establish the publish fence by excluding native-index writers. The active
     // MVCC history is the native change log for writes after snapshot_ts.
     let manager = ctx.index_data_manager().write();
-    let (active_forward, active_reverse) =
-        manager.active_index_data(space_id, index.id)?;
+    let (active_forward, active_reverse) = manager.active_index_data(space_id, index.id)?;
     let forward_prefix = KeyBuilder::build_vertex_index_prefix(space_id, index_name).0;
     let (merged_forward, merged_reverse) = merge_rebuilt_partition(
         active_forward,
@@ -494,18 +489,18 @@ pub(crate) fn rebuild_tag_index(
         space_id,
         index.id,
         generation,
-        manifest_epoch,
         vec![IndexShard {
             shard_id: 0,
             lower: None,
             upper: None,
             checkpoint_file: gen_dir.clone(),
+            checksum: None,
         }],
     )
     .map_err(StorageError::db_error)?;
 
     fail_if_generation_fault_is_injected(GenerationFaultPoint::ManifestRename)?;
-    manifest.store(&index_root.join("manifest.json"))?;
+    manifest.store(&index_root.join("manifest.bin"))?;
     manager.publish_generation_data(manifest.clone(), persisted_forward, persisted_reverse)?;
     log::info!(
         "Published new generation {} for index {} (space {})",
@@ -686,10 +681,9 @@ pub(crate) fn rebuild_edge_index(
     resolve_crash_recovery(ctx, space_id, index_name)?;
 
     // ── Phase: Building ────────────────────────────────────────────────────
-    let (generation, manifest_epoch) = next_generation_and_epoch(ctx, space_id, index_name)?;
+    let generation = next_generation(ctx, space_id, index_name)?;
 
-    let mut build_state =
-        GenerationBuildState::new(generation, manifest_epoch, snapshot_timestamp, start_lsn);
+    let mut build_state = GenerationBuildState::new(generation, snapshot_timestamp, start_lsn);
     save_generation_build_state(ctx, space_id, index_name, &build_state)?;
 
     ctx.index_metadata_manager().set_edge_index_status(
@@ -717,8 +711,7 @@ pub(crate) fn rebuild_edge_index(
     )?;
 
     let manager = ctx.index_data_manager().write();
-    let (active_forward, active_reverse) =
-        manager.active_index_data(space_id, index.id)?;
+    let (active_forward, active_reverse) = manager.active_index_data(space_id, index.id)?;
     let forward_prefix = KeyBuilder::build_edge_index_prefix(space_id, index_name).0;
     let (merged_forward, merged_reverse) = merge_rebuilt_partition(
         active_forward,
@@ -779,18 +772,18 @@ pub(crate) fn rebuild_edge_index(
         space_id,
         index.id,
         generation,
-        manifest_epoch,
         vec![IndexShard {
             shard_id: 0,
             lower: None,
             upper: None,
             checkpoint_file: gen_dir.clone(),
+            checksum: None,
         }],
     )
     .map_err(StorageError::db_error)?;
 
     fail_if_generation_fault_is_injected(GenerationFaultPoint::ManifestRename)?;
-    manifest.store(&index_root.join("manifest.json"))?;
+    manifest.store(&index_root.join("manifest.bin"))?;
     manager.publish_generation_data(manifest.clone(), persisted_forward, persisted_reverse)?;
     log::info!(
         "Published new generation {} for edge index {} (space {})",
@@ -862,8 +855,7 @@ pub(crate) fn lookup_edge_index(
 #[cfg(test)]
 mod tests {
     use crate::core::types::{
-        CommitLsn, Index, IndexConfig, IndexField, IndexGeneration, IndexType, ManifestEpoch,
-        SnapshotTimestamp,
+        CommitLsn, Index, IndexConfig, IndexField, IndexGeneration, IndexType, SnapshotTimestamp,
     };
     use crate::core::StorageError;
     use crate::core::Value;
@@ -877,7 +869,6 @@ mod tests {
     fn generation_state(generation: u64, start_lsn: u64) -> GenerationBuildState {
         GenerationBuildState::new(
             IndexGeneration::new(generation),
-            ManifestEpoch::new(generation),
             SnapshotTimestamp::new(start_lsn),
             CommitLsn::new(start_lsn),
         )

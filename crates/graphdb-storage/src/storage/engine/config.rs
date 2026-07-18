@@ -17,10 +17,120 @@ pub struct FlushConfig {
 impl Default for FlushConfig {
     fn default() -> Self {
         Self {
-            flush_threshold: 1000,
-            flush_interval: Duration::from_secs(60),
+            flush_threshold: 50_000,
+            flush_interval: Duration::from_secs(30),
             compression: CompressionType::Zstd { level: 3 },
         }
+    }
+}
+
+/// Resource and maintenance limits shared by the storage engine components.
+#[derive(Debug, Clone)]
+pub struct ResourceConfig {
+    /// Hard total memory budget for the storage instance.
+    pub max_memory_bytes: u64,
+    /// Independent budget reserved for native indexes.
+    pub index_memory_bytes: u64,
+    /// Ratio at which background maintenance should be scheduled.
+    pub memory_soft_ratio: f64,
+    /// Ratio at which new work receives a capacity error.
+    pub memory_hard_ratio: f64,
+    /// Maximum number of active snapshot registrations.
+    pub max_active_snapshots: usize,
+    /// Maximum age allowed for a snapshot before it is rejected by the owner.
+    pub max_snapshot_age: Duration,
+    /// Maximum number of MVCC tombstones before backpressure is required.
+    pub max_tombstones: usize,
+    /// Maximum estimated tombstone memory.
+    pub max_tombstone_bytes: u64,
+    /// Number of index entries processed by one incremental GC pass.
+    pub index_gc_batch: usize,
+    /// Maximum duration for one maintenance operation.
+    pub operation_timeout: Duration,
+    /// Number of dirty operations that triggers a flush request.
+    pub dirty_flush_operations: u64,
+    /// Estimated dirty bytes that triggers a flush request.
+    pub dirty_flush_bytes: u64,
+    /// Record cache time-to-live.
+    pub cache_ttl: Option<Duration>,
+    /// Record cache time-to-idle.
+    pub cache_tti: Option<Duration>,
+}
+
+impl Default for ResourceConfig {
+    fn default() -> Self {
+        Self {
+            max_memory_bytes: 512 * 1024 * 1024,
+            index_memory_bytes: 128 * 1024 * 1024,
+            memory_soft_ratio: 0.80,
+            memory_hard_ratio: 0.95,
+            max_active_snapshots: 1_000,
+            max_snapshot_age: Duration::from_secs(300),
+            max_tombstones: 1_000_000,
+            max_tombstone_bytes: 256 * 1024 * 1024,
+            index_gc_batch: 10_000,
+            operation_timeout: Duration::from_secs(30),
+            dirty_flush_operations: 50_000,
+            dirty_flush_bytes: 64 * 1024 * 1024,
+            cache_ttl: Some(Duration::from_secs(60)),
+            cache_tti: Some(Duration::from_secs(300)),
+        }
+    }
+}
+
+impl ResourceConfig {
+    pub fn validate(&self) -> Result<(), StorageError> {
+        crate::storage::engine::resource_budget::MemoryBudget::new(
+            self.max_memory_bytes,
+            self.index_memory_bytes,
+            self.memory_soft_ratio,
+            self.memory_hard_ratio,
+        )?;
+        if self.max_active_snapshots == 0 {
+            return Err(StorageError::new(
+                StorageErrorKind::InvalidInput,
+                "max_active_snapshots must be greater than 0",
+            ));
+        }
+        if self.max_snapshot_age.is_zero() {
+            return Err(StorageError::new(
+                StorageErrorKind::InvalidInput,
+                "max_snapshot_age must be greater than 0",
+            ));
+        }
+        if self.max_tombstones == 0 || self.max_tombstone_bytes == 0 {
+            return Err(StorageError::new(
+                StorageErrorKind::InvalidInput,
+                "tombstone limits must be greater than 0",
+            ));
+        }
+        if self.index_gc_batch == 0 {
+            return Err(StorageError::new(
+                StorageErrorKind::InvalidInput,
+                "index_gc_batch must be greater than 0",
+            ));
+        }
+        if self.operation_timeout.is_zero() {
+            return Err(StorageError::new(
+                StorageErrorKind::InvalidInput,
+                "operation_timeout must be greater than 0",
+            ));
+        }
+        if self.dirty_flush_operations == 0 || self.dirty_flush_bytes == 0 {
+            return Err(StorageError::new(
+                StorageErrorKind::InvalidInput,
+                "dirty flush limits must be greater than 0",
+            ));
+        }
+        for (name, duration) in [("cache_ttl", self.cache_ttl), ("cache_tti", self.cache_tti)] {
+            if duration.is_some_and(|value| value.is_zero()) {
+                return Err(StorageError::new(
+                    StorageErrorKind::InvalidInput,
+                    format!("{name} must be greater than 0 when configured"),
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -305,6 +415,7 @@ pub struct PropertyGraphConfig {
     pub enable_cache: bool,
     pub cache_memory: usize,
     pub flush_config: FlushConfig,
+    pub resources: ResourceConfig,
     pub freeze: FreezeConfig,
     pub merge_config: MergeConfig,
 }
@@ -315,6 +426,7 @@ impl Default for PropertyGraphConfig {
             enable_cache: true,
             cache_memory: 128 * 1024 * 1024,
             flush_config: FlushConfig::default(),
+            resources: ResourceConfig::default(),
             freeze: FreezeConfig::default(),
             merge_config: MergeConfig::default(),
         }
@@ -331,6 +443,11 @@ impl PropertyGraphConfig {
             enable_cache: true,
             cache_memory: 64 * 1024 * 1024, // 64MB for dev
             flush_config: FlushConfig::default(),
+            resources: ResourceConfig {
+                max_memory_bytes: 256 * 1024 * 1024,
+                index_memory_bytes: 64 * 1024 * 1024,
+                ..Default::default()
+            },
             freeze: freeze.clone(),
             merge_config: MergeConfig {
                 enable_adaptive_merge: false,
@@ -349,6 +466,7 @@ impl PropertyGraphConfig {
             enable_cache: true,
             cache_memory: 128 * 1024 * 1024,
             flush_config: FlushConfig::default(),
+            resources: ResourceConfig::default(),
             freeze: freeze.clone(),
             merge_config: MergeConfig {
                 enable_adaptive_merge: true,
@@ -369,6 +487,11 @@ impl PropertyGraphConfig {
             enable_cache: true,
             cache_memory: 256 * 1024 * 1024,
             flush_config: FlushConfig::default(),
+            resources: ResourceConfig {
+                max_memory_bytes: 1024 * 1024 * 1024,
+                index_memory_bytes: 256 * 1024 * 1024,
+                ..Default::default()
+            },
             freeze: freeze.clone(),
             merge_config: MergeConfig {
                 enable_adaptive_merge: true,
@@ -391,6 +514,11 @@ impl PropertyGraphConfig {
             flush_config: FlushConfig {
                 flush_threshold: 100000,
                 flush_interval: Duration::from_secs(3600),
+                ..Default::default()
+            },
+            resources: ResourceConfig {
+                max_memory_bytes: 64 * 1024 * 1024,
+                index_memory_bytes: 16 * 1024 * 1024,
                 ..Default::default()
             },
             freeze: FreezeConfig {
@@ -420,6 +548,13 @@ impl PropertyGraphConfig {
                 "cache_memory must be > 0 when cache is enabled",
             ));
         }
+        if self.enable_cache && self.cache_memory as u64 > self.resources.max_memory_bytes {
+            return Err(StorageError::new(
+                StorageErrorKind::InvalidInput,
+                "cache_memory cannot exceed max_memory_bytes",
+            ));
+        }
+        self.resources.validate()?;
         if self.flush_config.flush_threshold == 0 {
             return Err(StorageError::new(
                 StorageErrorKind::InvalidInput,
@@ -668,6 +803,19 @@ mod tests {
     fn test_property_graph_config_validate() {
         let config = PropertyGraphConfig::default();
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_resource_config_rejects_invalid_budget_relationships() {
+        let config = PropertyGraphConfig {
+            resources: ResourceConfig {
+                index_memory_bytes: 1024,
+                max_memory_bytes: 512,
+                ..Default::default()
+            },
+            ..PropertyGraphConfig::default()
+        };
+        assert!(config.validate().is_err());
     }
 
     #[test]

@@ -141,14 +141,10 @@ pub(super) fn close_cross(
     all_left_rows: &mut Vec<Vec<Value>>,
     all_right_rows: &mut Vec<Vec<Value>>,
 ) -> Result<(), QueryError> {
-    close_common(
-        lifecycle,
-        memory_tracker,
-        || {
-            all_left_rows.clear();
-            all_right_rows.clear();
-        },
-    )
+    close_common(lifecycle, memory_tracker, || {
+        all_left_rows.clear();
+        all_right_rows.clear();
+    })
 }
 
 pub(super) fn close_semi(
@@ -156,11 +152,7 @@ pub(super) fn close_semi(
     memory_tracker: &mut MemoryTracker,
     right_rows: &mut Vec<Vec<Value>>,
 ) -> Result<(), QueryError> {
-    close_common(
-        lifecycle,
-        memory_tracker,
-        || {
-            right_rows.clear();
-        },
-    )
+    close_common(lifecycle, memory_tracker, || {
+        right_rows.clear();
+    })
 }

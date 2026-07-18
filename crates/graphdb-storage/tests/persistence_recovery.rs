@@ -21,11 +21,8 @@ use graphdb_storage::storage::{
 
 #[test]
 fn test_flush_after_vertex_update() {
-    let dir = std::env::temp_dir()
-        .join("graphdb_storage_persist_test")
-        .join("flush_update");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let temp_dir = common::create_test_workdir();
+    let dir = temp_dir.path();
 
     {
         let mut storage = common::create_persistent_storage(&dir);
@@ -62,17 +59,12 @@ fn test_flush_after_vertex_update() {
             .unwrap();
         assert_eq!(alice.properties.get("age"), Some(&Value::BigInt(31)));
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_flush_after_edge_delete() {
-    let dir = std::env::temp_dir()
-        .join("graphdb_storage_persist_test")
-        .join("flush_edge_delete");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let temp_dir = common::create_test_workdir();
+    let dir = temp_dir.path();
 
     {
         let mut storage = common::create_persistent_storage(&dir);
@@ -110,17 +102,12 @@ fn test_flush_after_edge_delete() {
             .unwrap();
         assert!(edge.is_none(), "Edge should be deleted after reload");
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_flush_with_index_metadata() {
-    let dir = std::env::temp_dir()
-        .join("graphdb_storage_persist_test")
-        .join("flush_index");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let temp_dir = common::create_test_workdir();
+    let dir = temp_dir.path();
 
     {
         let mut storage = common::create_persistent_storage(&dir);
@@ -152,17 +139,12 @@ fn test_flush_with_index_metadata() {
         let indexes = storage.list_tag_indexes("test_space").unwrap();
         assert!(!indexes.is_empty(), "Index metadata should survive flush");
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn test_flush_and_reload_empty_storage() {
-    let dir = std::env::temp_dir()
-        .join("graphdb_storage_persist_test")
-        .join("flush_empty");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let temp_dir = common::create_test_workdir();
+    let dir = temp_dir.path();
 
     {
         let mut storage = common::create_persistent_storage(&dir);
@@ -175,6 +157,4 @@ fn test_flush_and_reload_empty_storage() {
         let storage = common::open_persistent_storage(&dir);
         assert!(storage.space_exists("test_space"));
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }

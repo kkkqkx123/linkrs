@@ -92,11 +92,7 @@ pub(super) fn close(
     memory_tracker: &mut MemoryTracker,
     build_side_tuples: &mut Vec<Vec<Value>>,
 ) -> Result<(), QueryError> {
-    close_common(
-        lifecycle,
-        memory_tracker,
-        || {
-            build_side_tuples.clear();
-        },
-    )
+    close_common(lifecycle, memory_tracker, || {
+        build_side_tuples.clear();
+    })
 }

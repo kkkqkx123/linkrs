@@ -39,14 +39,19 @@ pub use cursor::{
     IndexCursor, IndexPredicate, IndexRow, IndexScanPlan, PartitionSelector, PropertyBatchReader,
     ScanOptions, ScanTarget, VecEdgeCursor, VecVertexCursor, VertexCursor,
 };
-pub use engine::config::PropertyGraphConfig;
+pub use engine::config::{PropertyGraphConfig, ResourceConfig};
 pub use engine::graph_storage::GraphStorage;
 pub use engine::persistence_coordinator::{
-    CatalogLockDiagnostic, CheckpointStats, PersistenceDiagnostics, PersistenceFaultPoint,
-    SnapshotStats,
+    CatalogLockDiagnostic, CheckpointStats, PersistenceConfig, PersistenceDiagnostics,
+    PersistenceFaultPoint, SnapshotStats,
+};
+pub use engine::resource_budget::{
+    MemoryAccounting, MemoryBudget, MemoryCategory, MemoryReservation, MemoryUsage,
+    ResourceSnapshot,
 };
 pub use engine::sync_wrapper::SyncWrapper;
 pub use engine::transaction::UndoTarget;
+pub use engine::WalMetrics;
 pub use index::{IndexManifest, IndexShard, ManifestCatalog, ManifestCatalogStats, ManifestHandle};
 pub use metrics::MetricsStorage;
 pub use schema::{ChangeDetails, ChangeLog, LabelVersionHistory, PropertyChange, SchemaObjectType};

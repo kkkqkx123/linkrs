@@ -401,12 +401,8 @@ pub(super) fn close_full_outer(
     left_rows: &mut Vec<Vec<Value>>,
     right_rows: &mut Vec<Vec<Value>>,
 ) -> Result<(), QueryError> {
-    close_common(
-        lifecycle,
-        memory_tracker,
-        || {
-            left_rows.clear();
-            right_rows.clear();
-        },
-    )
+    close_common(lifecycle, memory_tracker, || {
+        left_rows.clear();
+        right_rows.clear();
+    })
 }

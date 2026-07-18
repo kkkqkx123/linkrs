@@ -87,6 +87,25 @@ impl ShardRuntime {
             &self.reverse.read(),
         )
     }
+
+    pub(crate) fn memory_usage_bytes(&self) -> u64 {
+        fn map_size(map: &BTreeMap<SecondaryIndexKey, IndexRecord>) -> u64 {
+            map.iter()
+                .map(|(key, record)| {
+                    let included_columns = record
+                        .included_columns
+                        .iter()
+                        .map(|(name, value)| name.capacity() as u64 + value.estimated_size() as u64)
+                        .sum::<u64>();
+                    std::mem::size_of::<IndexRecord>() as u64
+                        + key.capacity() as u64
+                        + included_columns
+                })
+                .sum()
+        }
+
+        map_size(&self.forward.read()) + map_size(&self.reverse.read())
+    }
 }
 
 pub(crate) struct GenerationRuntime {
@@ -134,6 +153,13 @@ impl GenerationRuntime {
     pub(crate) fn shards(&self) -> impl Iterator<Item = Arc<ShardRuntime>> + '_ {
         self.shards.values().cloned()
     }
+
+    pub(crate) fn memory_usage_bytes(&self) -> u64 {
+        self.shards
+            .values()
+            .map(|shard| shard.memory_usage_bytes())
+            .sum()
+    }
 }
 
 /// The sole mutable native-index data owner for one index.
@@ -179,6 +205,14 @@ impl IndexRuntime {
 
     pub(crate) fn generations(&self) -> Vec<Arc<GenerationRuntime>> {
         self.generations.read().values().cloned().collect()
+    }
+
+    pub(crate) fn memory_usage_bytes(&self) -> u64 {
+        self.generations
+            .read()
+            .values()
+            .map(|generation| generation.memory_usage_bytes())
+            .sum()
     }
 
     pub(crate) fn read_fence(&self) -> parking_lot::RwLockReadGuard<'_, ()> {

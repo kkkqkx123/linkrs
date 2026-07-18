@@ -18,6 +18,7 @@ pub struct CacheStats {
     expirations: AtomicU64,
     insertions: AtomicU64,
     rejections: AtomicU64,
+    invalidations: AtomicU64,
 }
 
 impl CacheStats {
@@ -47,6 +48,10 @@ impl CacheStats {
 
     pub fn record_rejection(&self) {
         self.rejections.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_invalidation(&self) {
+        self.invalidations.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn record_hits(&self, count: u64) {
@@ -81,6 +86,10 @@ impl CacheStats {
         self.rejections.load(Ordering::Relaxed)
     }
 
+    pub fn invalidations(&self) -> u64 {
+        self.invalidations.load(Ordering::Relaxed)
+    }
+
     pub fn total_requests(&self) -> u64 {
         self.hits() + self.misses()
     }
@@ -100,6 +109,7 @@ impl CacheStats {
         self.expirations.store(0, Ordering::Relaxed);
         self.insertions.store(0, Ordering::Relaxed);
         self.rejections.store(0, Ordering::Relaxed);
+        self.invalidations.store(0, Ordering::Relaxed);
     }
 }
 
@@ -112,6 +122,7 @@ impl Clone for CacheStats {
             expirations: AtomicU64::new(self.expirations()),
             insertions: AtomicU64::new(self.insertions()),
             rejections: AtomicU64::new(self.rejections()),
+            invalidations: AtomicU64::new(self.invalidations()),
         }
     }
 }

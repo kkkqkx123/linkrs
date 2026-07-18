@@ -12,6 +12,7 @@ use crate::query::validator::validator_trait::{
 use crate::query::QueryContext;
 
 // Import the specific validator.
+use crate::core::metadata::IndexMetadataManager;
 use crate::query::validator::assignment_validator::AssignmentValidator;
 use crate::query::validator::clauses::group_by_validator::GroupByValidator;
 use crate::query::validator::clauses::limit_validator::LimitValidator;
@@ -43,7 +44,6 @@ use crate::query::validator::statements::get_subgraph_validator::GetSubgraphVali
 use crate::query::validator::statements::go_validator::GoValidator;
 use crate::query::validator::statements::insert_edges_validator::InsertEdgesValidator;
 use crate::query::validator::statements::insert_vertices_validator::InsertVerticesValidator;
-use crate::core::metadata::IndexMetadataManager;
 use crate::query::validator::statements::lookup_validator::LookupValidator;
 use crate::query::validator::statements::match_validator::MatchValidator;
 use crate::query::validator::statements::merge_validator::MergeValidator;

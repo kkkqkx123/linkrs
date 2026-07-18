@@ -12,13 +12,20 @@ use super::redo::{
     DeleteVertexTypeRedo, DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo, InsertEdgeRedo,
     RenameEdgePropRedo, RenameVertexPropRedo, UpdateEdgePropRedo,
 };
-use super::types::WalResult;
+use super::types::{WalOpType, WalResult};
 
 /// WAL writer trait
 pub trait WalWriter: Send + Sync {
     fn open(&mut self) -> WalResult<()>;
     fn close(&mut self);
     fn append(&mut self, data: &[u8]) -> WalResult<bool>;
+    /// Append one logical WAL record and let the writer assign its LSN chain.
+    fn append_entry(
+        &mut self,
+        op_type: WalOpType,
+        timestamp: Timestamp,
+        payload: &[u8],
+    ) -> WalResult<bool>;
     fn sync(&self) -> WalResult<()>;
 }
 

@@ -3,7 +3,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::core::wal::traits::WalWriter;
-use crate::core::wal::types::WalResult;
+use crate::core::wal::types::{WalOpType, WalResult};
+use crate::core::types::Timestamp;
 
 /// Dummy WAL writer (no-op, for read-only mode)
 pub struct DummyWalWriter {
@@ -35,6 +36,15 @@ impl WalWriter for DummyWalWriter {
     }
 
     fn append(&mut self, _data: &[u8]) -> WalResult<bool> {
+        Ok(true)
+    }
+
+    fn append_entry(
+        &mut self,
+        _op_type: WalOpType,
+        _timestamp: Timestamp,
+        _payload: &[u8],
+    ) -> WalResult<bool> {
         Ok(true)
     }
 

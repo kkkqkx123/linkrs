@@ -114,7 +114,6 @@ impl GraphVertexCursor {
             table_max_ids,
         })
     }
-
 }
 
 impl VertexCursor for GraphVertexCursor {
@@ -168,9 +167,9 @@ impl VertexCursor for GraphVertexCursor {
                             .properties
                             .iter()
                             .filter(|(name, _)| {
-                                projection.as_ref().is_none_or(|projection| {
-                                    projection.iter().any(|p| name == p)
-                                })
+                                projection
+                                    .as_ref()
+                                    .is_none_or(|projection| projection.iter().any(|p| name == p))
                             })
                             .cloned()
                             .collect();

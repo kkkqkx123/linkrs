@@ -14,6 +14,7 @@ use crate::storage::engine::config::PropertyGraphConfig;
 use crate::storage::engine::data_store::GraphDataStore;
 use crate::storage::engine::paths::StoragePaths;
 use crate::storage::engine::persistence_coordinator::PersistenceCoordinator;
+use crate::storage::engine::resource_budget::{MemoryAccounting, MemoryBudget};
 use crate::storage::index::{IndexDataManagerImpl, IndexGcConfig, IndexGcManager};
 use crate::storage::vertex::IdKey;
 use crate::storage::StorageOperationContext;
@@ -31,6 +32,7 @@ type CoreComponents = (
     Arc<IndexManager>,
     Arc<VersionManager>,
     Arc<UserStorage>,
+    Arc<MemoryAccounting>,
 );
 
 #[derive(Clone)]
@@ -81,6 +83,7 @@ struct GraphStoragePersistent {
     version_manager: Arc<VersionManager>,
     user_storage: Arc<UserStorage>,
     persistence: Option<Arc<RwLock<PersistenceCoordinator>>>,
+    resource_accounting: Arc<MemoryAccounting>,
     layout: GraphStorageLayout,
     stats_manager: Option<Arc<StatsManager>>,
     next_auto_transaction_id: Arc<AtomicU64>,
@@ -93,11 +96,26 @@ struct GraphStoragePersistent {
 }
 
 impl GraphStoragePersistent {
-    fn build_core_components() -> CoreComponents {
-        let config = PropertyGraphConfig::default();
-        let cache_manager = Arc::new(CacheManager::new(config.enable_cache, config.cache_memory));
+    fn dirty_flush_threshold(config: &PropertyGraphConfig) -> usize {
+        match usize::try_from(config.resources.dirty_flush_operations) {
+            Ok(value) => value,
+            Err(_) => usize::MAX,
+        }
+    }
+
+    fn build_core_components(
+        config: &PropertyGraphConfig,
+        index_root: Option<PathBuf>,
+    ) -> CoreComponents {
+        let resource_accounting = Self::new_resource_accounting(config);
+        let cache_manager = Arc::new(CacheManager::new(
+            config.enable_cache,
+            config.cache_memory,
+            &config.resources,
+            resource_accounting.clone(),
+        ));
         let table_tracker = Arc::new(TableTracker::with_config(TableTrackerConfig {
-            flush_threshold: config.flush_config.flush_threshold,
+            flush_threshold: Self::dirty_flush_threshold(config),
             flush_interval: config.flush_config.flush_interval,
         }));
 
@@ -107,11 +125,16 @@ impl GraphStoragePersistent {
             table_tracker,
             Arc::new(AtomicBool::new(true)),
             Arc::new(Mutex::new(Vec::new())),
-            Arc::new(RwLock::new(IndexDataManagerImpl::new())),
+            Arc::new(RwLock::new(
+                index_root.map_or_else(IndexDataManagerImpl::new, |root| {
+                    IndexDataManagerImpl::new_with_root(root)
+                }),
+            )),
             Arc::new(SchemaManager::new()),
             Arc::new(IndexManager::new()),
             Arc::new(VersionManager::new()),
             Arc::new(UserStorage::new()),
+            resource_accounting,
         )
     }
 
@@ -121,9 +144,15 @@ impl GraphStoragePersistent {
     }
 
     fn from_validated_config(config: PropertyGraphConfig) -> Self {
-        let cache_manager = CacheManager::new(config.enable_cache, config.cache_memory);
+        let resource_accounting = Self::new_resource_accounting(&config);
+        let cache_manager = CacheManager::new(
+            config.enable_cache,
+            config.cache_memory,
+            &config.resources,
+            resource_accounting.clone(),
+        );
         let table_tracker = Arc::new(TableTracker::with_config(TableTrackerConfig {
-            flush_threshold: config.flush_config.flush_threshold,
+            flush_threshold: Self::dirty_flush_threshold(&config),
             flush_interval: config.flush_config.flush_interval,
         }));
 
@@ -140,6 +169,7 @@ impl GraphStoragePersistent {
             version_manager: Arc::new(VersionManager::new()),
             user_storage: Arc::new(UserStorage::new()),
             persistence: None,
+            resource_accounting,
             layout: GraphStorageLayout::new(),
             stats_manager: None,
             next_auto_transaction_id: Arc::new(AtomicU64::new(1 << 63)),
@@ -151,10 +181,23 @@ impl GraphStoragePersistent {
         Self::from_validated_config(PropertyGraphConfig::default())
     }
 
+    fn new_resource_accounting(config: &PropertyGraphConfig) -> Arc<MemoryAccounting> {
+        let resources = &config.resources;
+        let budget = MemoryBudget::from_validated(
+            resources.max_memory_bytes,
+            resources.index_memory_bytes,
+            resources.memory_soft_ratio,
+            resources.memory_hard_ratio,
+        );
+        Arc::new(MemoryAccounting::new(budget))
+    }
+
     fn new_with_persistence(
         path: PathBuf,
         config: crate::storage::engine::PersistenceConfig,
     ) -> crate::core::StorageResult<Self> {
+        let property_graph_config = config.property_graph_config.clone();
+        property_graph_config.validate()?;
         let (
             data_store,
             cache_manager,
@@ -166,7 +209,11 @@ impl GraphStoragePersistent {
             index_metadata_manager,
             version_manager,
             user_storage,
-        ) = Self::build_core_components();
+            resource_accounting,
+        ) = Self::build_core_components(
+            &property_graph_config,
+            Some(StoragePaths::new(path.clone()).indexes_dir()),
+        );
 
         let persistence = PersistenceCoordinator::new(config).map(|p| Arc::new(RwLock::new(p)))?;
 
@@ -174,7 +221,7 @@ impl GraphStoragePersistent {
             data_store,
             cache_manager,
             table_tracker,
-            config: PropertyGraphConfig::default(),
+            config: property_graph_config,
             is_open,
             last_compacted_vertices,
             index_data_manager,
@@ -183,6 +230,7 @@ impl GraphStoragePersistent {
             version_manager,
             user_storage,
             persistence: Some(persistence),
+            resource_accounting,
             layout: GraphStorageLayout::new_with_path(path),
             stats_manager: None,
             next_auto_transaction_id: Arc::new(AtomicU64::new(1 << 63)),

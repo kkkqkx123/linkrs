@@ -939,8 +939,8 @@ mod tests {
         use crate::query::executor::base::MemoryBudget;
         use crate::query::executor::streaming::operators::spec::BlockingSpec;
         use crate::query::executor::streaming::plan::types::PhysicalOperatorId;
-        use crate::query::executor::streaming::spill::{SpillConfig, SpillManager};
         use crate::query::executor::streaming::slot::SlotLayout;
+        use crate::query::executor::streaming::spill::{SpillConfig, SpillManager};
         use std::sync::Arc;
 
         // Build a runtime with a tiny memory budget so Sort spills immediately.

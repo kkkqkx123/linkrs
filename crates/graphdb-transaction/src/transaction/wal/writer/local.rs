@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use super::compression::{self as compression_mod, create_compressor, Compressor};
 use super::sync::{elapsed_since, should_sync};
 use crate::core::wal::traits::WalWriter;
+use crate::core::types::Timestamp;
 use crate::core::wal::types::{
     ArchiveMode, Lsn, RecordType, WalCompression, WalConfig, WalError, WalFileHeader, WalHeader,
     WalOpType, WalResult, WalStats, WAL_FILE_HEADER_SIZE, WAL_HEADER_SIZE, WAL_MAX_RECORD_SIZE,
@@ -815,6 +816,39 @@ impl LocalWalWriter {
         self.current_lsn.store(lsn.as_u64(), Ordering::SeqCst);
     }
 
+    /// Establish a recovered logical WAL baseline when the durable prefix has
+    /// already been moved into a checkpoint and the remaining WAL segment is
+    /// empty. The empty segment must start at the recovered LSN; otherwise the
+    /// first record appended after restart would have an invalid prev_lsn chain.
+    pub fn set_recovery_baseline_lsn(&mut self, lsn: Lsn) -> WalResult<()> {
+        let current_lsn = self.current_lsn();
+        if lsn <= current_lsn {
+            return Ok(());
+        }
+
+        if self.file_used > WAL_FILE_HEADER_SIZE {
+            return Err(WalError::InvalidOperation(format!(
+                "Cannot advance WAL baseline to {} while the active segment contains records",
+                lsn
+            )));
+        }
+
+        self.current_lsn.store(lsn.as_u64(), Ordering::SeqCst);
+        self.last_synced_lsn.store(lsn.as_u64(), Ordering::SeqCst);
+
+        if let Some(header) = self.file_header {
+            let updated_header = WalFileHeader {
+                start_lsn: lsn.as_u64(),
+                ..header
+            };
+            self.persist_file_header(updated_header, false)?;
+        } else {
+            self.file_start_lsn = lsn;
+        }
+
+        Ok(())
+    }
+
     pub fn file_size(&self) -> usize {
         self.file_size
     }
@@ -984,6 +1018,15 @@ impl WalWriter for LocalWalWriter {
         }
 
         Ok(true)
+    }
+
+    fn append_entry(
+        &mut self,
+        op_type: WalOpType,
+        timestamp: Timestamp,
+        payload: &[u8],
+    ) -> WalResult<bool> {
+        LocalWalWriter::append_entry(self, op_type, timestamp, payload)
     }
 
     fn sync(&self) -> WalResult<()> {
@@ -1299,6 +1342,10 @@ mod tests {
         }
 
         assert_ne!(writer.current_lsn(), writer.last_synced_lsn());
+        assert_eq!(writer.durable_lsn(), writer.last_synced_lsn());
+
+        let pending_lsn = writer.current_lsn();
+        assert!(writer.truncate(pending_lsn).is_err());
 
         writer.sync().expect("Failed to sync");
         assert_eq!(writer.current_lsn(), writer.last_synced_lsn());
@@ -1453,5 +1500,28 @@ mod tests {
             .count();
 
         assert!(wal_files >= 1);
+    }
+
+    #[test]
+    fn test_recovery_baseline_updates_empty_segment_header() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let wal_path = temp_dir.path().to_string_lossy().to_string();
+
+        let mut writer = LocalWalWriter::new(&wal_path, 0);
+        writer.open().expect("WAL should open");
+
+        let baseline = Lsn::new(1234);
+        writer
+            .set_recovery_baseline_lsn(baseline)
+            .expect("baseline should be accepted for an empty segment");
+        assert_eq!(writer.current_lsn(), baseline);
+        assert_eq!(writer.durable_lsn(), baseline);
+        assert_eq!(writer.file_start_lsn(), baseline);
+
+        writer
+            .append_entry(WalOpType::InsertVertex, 1, b"payload")
+            .expect("append after recovery baseline should succeed");
+        writer.sync().expect("WAL sync should succeed");
+        assert!(writer.current_lsn() > baseline);
     }
 }

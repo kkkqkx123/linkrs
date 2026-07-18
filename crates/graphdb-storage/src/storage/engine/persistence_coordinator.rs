@@ -41,6 +41,7 @@ use graphdb_sync::sync::checkpoint_manifest::{
 
 use crate::core::types::Timestamp;
 use crate::core::{StorageError, StorageResult};
+use crate::storage::engine::config::PropertyGraphConfig;
 use crate::storage::engine::snapshot_manager::{SnapshotManager, SnapshotOptions};
 use crate::storage::engine::WalManager;
 use crate::transaction::wal::{CheckpointManager, Lsn, SyncPolicy, WalConfig};
@@ -119,6 +120,8 @@ pub struct PersistenceConfig {
     pub enable_wal: bool,
     /// Synchronization policy for WAL write-ahead logging
     pub sync_policy: Option<SyncPolicy>,
+    /// Property graph resource and maintenance configuration.
+    pub property_graph_config: PropertyGraphConfig,
 }
 
 impl Default for PersistenceConfig {
@@ -136,6 +139,7 @@ impl Default for PersistenceConfig {
             snapshot_interval: Duration::from_secs(3600),
             enable_wal: true,
             sync_policy: Some(SyncPolicy::EveryWrite),
+            property_graph_config: PropertyGraphConfig::default(),
         }
     }
 }
@@ -150,8 +154,14 @@ impl PersistenceConfig {
             snapshot_dir: path.join("snapshots"),
             enable_wal: true,
             sync_policy: Some(SyncPolicy::EveryWrite),
+            property_graph_config: PropertyGraphConfig::default(),
             ..Default::default()
         }
+    }
+
+    pub fn with_property_graph_config(mut self, config: PropertyGraphConfig) -> Self {
+        self.property_graph_config = config;
+        self
     }
 }
 
@@ -415,7 +425,14 @@ impl PersistenceCoordinator {
 
         let wal_lsn = {
             match &self.wal_manager {
-                Some(wal) => wal.read().durable_lsn(),
+                Some(wal) => {
+                    // A checkpoint is a durability fence. Flush any accepted
+                    // WAL bytes before exporting the in-memory state so the
+                    // checkpoint data and its WAL boundary describe the same
+                    // durable prefix.
+                    wal.read().sync()?;
+                    wal.read().durable_lsn()
+                }
                 None => Lsn::ZERO,
             }
         };
@@ -453,10 +470,28 @@ impl PersistenceCoordinator {
             std::fs::remove_dir_all(&temporary_dir)?;
         }
         if checkpoint_dir.exists() {
-            return Err(StorageError::invalid_operation(format!(
-                "checkpoint {} already exists",
-                checkpoint.seq
-            )));
+            let is_published = self
+                .manifest_manager
+                .load(checkpoint.seq)
+                .map_err(|error| {
+                    StorageError::db_error(format!(
+                        "Failed to inspect existing checkpoint {}: {}",
+                        checkpoint.seq, error
+                    ))
+                })?
+                .is_some();
+            if is_published {
+                return Err(StorageError::invalid_operation(format!(
+                    "checkpoint {} already exists",
+                    checkpoint.seq
+                )));
+            }
+
+            // A directory without a published manifest is not a recoverable
+            // checkpoint. It may be a stale directory left by an interrupted
+            // recovery attempt, so remove it before reusing the sequence.
+            std::fs::remove_dir_all(&checkpoint_dir)?;
+            Self::sync_directory(&self.config.checkpoint_dir)?;
         }
         std::fs::create_dir(&temporary_dir)?;
 
@@ -716,8 +751,7 @@ impl PersistenceCoordinator {
 
             if let Some(ref wal) = self.wal_manager {
                 wal.read().set_checkpoint_seq(info.checkpoint_id)?;
-                wal.read()
-                    .truncate(Lsn::new(published_manifest.safe_lsn.get()))?;
+                wal.read().set_recovery_baseline_lsn(info.lsn)?;
             }
 
             return Ok(Some(info));
@@ -948,9 +982,6 @@ impl PersistenceCoordinator {
     }
 
     pub fn mark_checkpointed(&self, lsn: Lsn) {
-        if let Some(ref wal) = self.wal_manager {
-            let _ = wal.read().set_current_lsn(lsn);
-        }
         *self.last_checkpoint_lsn.write() = lsn;
         *self.last_checkpoint_time.write() = Instant::now();
         *self.last_flush_lsn.write() = lsn;
@@ -1138,6 +1169,7 @@ mod tests {
             snapshot_interval: Duration::from_secs(3600),
             enable_wal: true,
             sync_policy: Some(SyncPolicy::EveryWrite),
+            property_graph_config: PropertyGraphConfig::default(),
         };
 
         let coordinator =
@@ -1148,8 +1180,8 @@ mod tests {
         {
             let wal = coordinator.wal_manager().expect("WAL should be enabled");
             wal.write()
-                .truncate(Lsn::new(12))
-                .expect("Failed to update LSN");
+                .set_current_lsn(Lsn::new(12))
+                .expect("test LSN should be accepted");
         }
 
         assert!(coordinator.should_flush());
@@ -1176,6 +1208,7 @@ mod tests {
             snapshot_interval: Duration::from_secs(3600),
             enable_wal: true,
             sync_policy: Some(SyncPolicy::EveryWrite),
+            property_graph_config: PropertyGraphConfig::default(),
         };
 
         let coordinator =
@@ -1184,8 +1217,8 @@ mod tests {
         {
             let wal = coordinator.wal_manager().expect("WAL should be enabled");
             wal.write()
-                .truncate(Lsn::new(12))
-                .expect("Failed to update LSN");
+                .set_current_lsn(Lsn::new(12))
+                .expect("test LSN should be accepted");
         }
 
         coordinator.mark_checkpointed(Lsn::new(24));
@@ -1196,8 +1229,9 @@ mod tests {
                 .expect("WAL should be enabled")
                 .read()
                 .current_lsn(),
-            Lsn::new(24)
+            Lsn::new(12)
         );
+        assert_eq!(*coordinator.last_checkpoint_lsn.read(), Lsn::new(24));
     }
 
     #[test]
@@ -1216,6 +1250,7 @@ mod tests {
             snapshot_interval: Duration::ZERO,
             enable_wal: false,
             sync_policy: None,
+            property_graph_config: PropertyGraphConfig::default(),
         };
         std::fs::create_dir_all(&config.data_dir).expect("Failed to create main data dir");
         std::fs::write(config.data_dir.join("stale.txt"), b"stale")

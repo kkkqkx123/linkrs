@@ -7,8 +7,7 @@
 //! Supports MVCC (Multi-Version Concurrency Control) for snapshot isolation.
 
 use crate::core::types::{
-    CommitLsn, Index, IndexGeneration, IndexType, ManifestEpoch, SnapshotTimestamp, Timestamp,
-    MAX_TIMESTAMP,
+    CommitLsn, Index, IndexGeneration, IndexType, SnapshotTimestamp, Timestamp, MAX_TIMESTAMP,
 };
 use crate::core::wal::EntityRef;
 use crate::core::{StorageError, StorageResult, Value};
@@ -192,6 +191,7 @@ pub trait IndexGcOps: Send + Sync {
 
 #[derive(Clone)]
 pub struct IndexDataManagerImpl {
+    index_root: Option<PathBuf>,
     manifest_catalogs: Arc<RwLock<HashMap<IndexIdentity, Arc<ManifestCatalog>>>>,
     runtimes: Arc<RwLock<HashMap<IndexIdentity, Arc<IndexRuntime>>>>,
     index_aliases: Arc<RwLock<HashMap<(u64, String), u64>>>,
@@ -201,13 +201,43 @@ pub struct IndexDataManagerImpl {
 
 impl IndexDataManagerImpl {
     pub fn new() -> Self {
+        Self::new_with_optional_root(None)
+    }
+
+    /// Create an index manager whose checkpoint files are rooted at `index_root`.
+    ///
+    /// Persistent storage must provide this root so index files never resolve
+    /// relative to the process working directory. The root is also useful for
+    /// filesystem-backed tests, which can point it at a `tempfile::TempDir`.
+    pub fn new_with_root(index_root: impl Into<PathBuf>) -> Self {
+        Self::new_with_optional_root(Some(index_root.into()))
+    }
+
+    fn new_with_optional_root(index_root: Option<PathBuf>) -> Self {
         Self {
+            index_root,
             manifest_catalogs: Arc::new(RwLock::new(HashMap::new())),
             runtimes: Arc::new(RwLock::new(HashMap::new())),
             index_aliases: Arc::new(RwLock::new(HashMap::new())),
             index_types: Arc::new(RwLock::new(HashMap::new())),
             restored_generations: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    fn initial_checkpoint_path(&self, space_id: u64, index_id: u64) -> PathBuf {
+        let relative = PathBuf::from(format!("{space_id}/{index_id}/generation-1/shard-0"));
+        match self.index_root.as_ref() {
+            Some(root) => root.join(relative),
+            None => PathBuf::from("memory-index").join(relative),
+        }
+    }
+
+    pub fn memory_usage_bytes(&self) -> u64 {
+        self.runtimes
+            .read()
+            .values()
+            .map(|runtime| runtime.memory_usage_bytes())
+            .sum()
     }
 
     pub fn register_native_index(&self, space_id: u64, index: &Index) -> StorageResult<()> {
@@ -231,15 +261,12 @@ impl IndexDataManagerImpl {
                 space_id,
                 index_id,
                 IndexGeneration::new(1),
-                ManifestEpoch::new(1),
                 vec![IndexShard {
                     shard_id: 0,
                     lower: None,
                     upper: None,
-                    checkpoint_file: format!(
-                        "native_index/{space_id}/{index_id}/generation-1/shard-0"
-                    )
-                    .into(),
+                    checkpoint_file: self.initial_checkpoint_path(space_id, index_id),
+                    checksum: None,
                 }],
             )
             .map_err(StorageError::db_error)?;
@@ -391,7 +418,7 @@ impl IndexDataManagerImpl {
     }
 
     fn build_state_path(&self, index_root: &Path) -> PathBuf {
-        index_root.join("generation_build.json")
+        index_root.join("generation_build.bin")
     }
 
     fn save_build_state(
@@ -403,7 +430,7 @@ impl IndexDataManagerImpl {
         let path = self.build_state_path(index_root);
         let temporary = path.with_extension("tmp");
         let serialized =
-            serde_json::to_vec(state).map_err(|e| StorageError::serialize_error(e.to_string()))?;
+            postcard::to_allocvec(state).map_err(|e| StorageError::serialize_error(e.to_string()))?;
         {
             let mut file = std::fs::File::create(&temporary)?;
             file.write_all(&serialized)?;
@@ -422,7 +449,7 @@ impl IndexDataManagerImpl {
             return Ok(None);
         }
         let bytes = std::fs::read(&path)?;
-        let state: GenerationBuildState = serde_json::from_slice(&bytes)
+        let state: GenerationBuildState = postcard::from_bytes(&bytes)
             .map_err(|e| StorageError::deserialize_error(e.to_string()))?;
         Ok(Some(state))
     }
@@ -451,7 +478,7 @@ impl IndexDataManagerImpl {
             self.remove_build_state(index_root)?;
         }
         if matches!(build_state.state, GenerationState::Publishing) {
-            let manifest_path = index_root.join("manifest.json");
+            let manifest_path = index_root.join("manifest.bin");
             if manifest_path.exists() {
                 log::info!("Completing split build from Publishing state");
                 let mut completed = build_state;
@@ -473,6 +500,11 @@ impl IndexDataManagerImpl {
         boundary: Vec<u8>,
         barrier_lsn: CommitLsn,
     ) -> StorageResult<()> {
+        if self.index_root.is_none() {
+            return Err(StorageError::invalid_operation(
+                "Native index splitting requires a persistent index root",
+            ));
+        }
         if boundary.is_empty() {
             return Err(StorageError::invalid_operation(
                 "Index split boundary cannot be empty",
@@ -502,7 +534,6 @@ impl IndexDataManagerImpl {
         }
 
         let generation = IndexGeneration::new(current.generation.get().saturating_add(1));
-        let epoch = ManifestEpoch::new(current.epoch.get().saturating_add(1));
         let next_shard_id = current
             .shards
             .iter()
@@ -527,12 +558,8 @@ impl IndexDataManagerImpl {
 
         // ── Phase: Building ──────────────────────────────────────────────
         self.resolve_split_crash_recovery(index_root)?;
-        let mut build_state = GenerationBuildState::new(
-            generation,
-            epoch,
-            SnapshotTimestamp::new(0),
-            CommitLsn::ZERO,
-        );
+        let mut build_state =
+            GenerationBuildState::new(generation, SnapshotTimestamp::new(0), CommitLsn::ZERO);
         self.save_build_state(index_root, &build_state)?;
 
         let next_generation_dir = index_root.join(format!("generation-{}", generation.get()));
@@ -555,16 +582,18 @@ impl IndexDataManagerImpl {
                     lower: shard.lower.clone(),
                     upper: Some(boundary.clone()),
                     checkpoint_file: shard_a_path,
+                    checksum: None,
                 },
                 IndexShard {
                     shard_id: next_shard_id,
                     lower: Some(boundary.clone()),
                     upper: shard.upper.clone(),
                     checkpoint_file: shard_b_path,
+                    checksum: None,
                 },
             ],
         );
-        let next = IndexManifest::new(space_id, index_id, generation, epoch, shards)
+        let next = IndexManifest::new(space_id, index_id, generation, shards)
             .map_err(StorageError::db_error)?;
         let active = runtime
             .generation(current.generation)
@@ -674,6 +703,11 @@ impl IndexDataManagerImpl {
     }
 
     pub fn flush<P: AsRef<Path>>(&self, path: P) -> StorageResult<()> {
+        if self.index_root.is_none() && !self.manifest_catalogs.read().is_empty() {
+            return Err(StorageError::invalid_operation(
+                "Flushing native indexes requires a persistent index root",
+            ));
+        }
         let path = path.as_ref();
         let manifest_dir = path.join("native_index_manifests");
         std::fs::create_dir_all(&manifest_dir)?;
@@ -705,7 +739,7 @@ impl IndexDataManagerImpl {
             let mut catalogs = self.manifest_catalogs.write();
             for entry in std::fs::read_dir(manifest_dir)? {
                 let manifest_path = entry?.path();
-                if manifest_path.extension().and_then(|value| value.to_str()) != Some("json") {
+                if manifest_path.extension().and_then(|value| value.to_str()) != Some("bin") {
                     continue;
                 }
                 let manifest = IndexManifest::load(&manifest_path)?;
@@ -719,7 +753,7 @@ impl IndexDataManagerImpl {
             }
         }
         for entry in std::fs::read_dir(path)? {
-            let candidate = entry?.path().join("manifest.json");
+            let candidate = entry?.path().join("manifest.bin");
             if !candidate.is_file() {
                 continue;
             }
@@ -1511,14 +1545,10 @@ impl IndexGcOps for IndexDataManagerImpl {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::types::{
-        CommitLsn, Index, IndexConfig, IndexField, IndexGeneration, IndexType, ManifestEpoch,
-        MAX_TIMESTAMP,
-    };
+    use crate::core::types::{CommitLsn, Index, IndexConfig, IndexField, IndexType, MAX_TIMESTAMP};
     use crate::core::Value;
     use crate::storage::index::generic_index_manager::GenericIndexManager;
     use crate::storage::index::key_codec::{KeyBuilder, VertexIndexKeyGen};
-    use crate::storage::index::manifest::{IndexManifest, IndexShard};
     use crate::storage::index::*;
 
     fn create_test_index(name: &str, schema_name: &str) -> Index {
@@ -1623,7 +1653,7 @@ mod tests {
     #[test]
     fn split_writes_only_the_selected_index_to_each_shard() {
         let directory = tempfile::tempdir().expect("create temporary index directory");
-        let manager = IndexDataManagerImpl::new();
+        let manager = IndexDataManagerImpl::new_with_root(directory.path().join("indexes"));
         let first_index = create_test_index("first", "person");
         let mut second_index = create_test_index("second", "person");
         second_index.id = 2;
@@ -1633,27 +1663,6 @@ mod tests {
         manager
             .register_native_index(1, &second_index)
             .expect("register second index");
-
-        let catalog = manager
-            .manifest_catalog(1, 1)
-            .expect("first index manifest");
-        catalog
-            .publish(
-                IndexManifest::new(
-                    1,
-                    1,
-                    IndexGeneration::new(1),
-                    ManifestEpoch::new(2),
-                    vec![IndexShard {
-                        shard_id: 0,
-                        lower: None,
-                        upper: None,
-                        checkpoint_file: directory.path().join("first/generation-1"),
-                    }],
-                )
-                .expect("valid manifest"),
-            )
-            .expect("publish test manifest");
 
         manager
             .update_vertex_indexes_mvcc(
@@ -1694,6 +1703,7 @@ mod tests {
             .split_native_index(1, 1, boundary, CommitLsn::new(100))
             .expect("split first index");
 
+        let catalog = manager.manifest_catalog(1, 1).expect("catalog exists");
         let manifest = catalog.acquire();
         assert_eq!(manifest.manifest().shards.len(), 2);
         let first_prefix = KeyBuilder::build_vertex_index_prefix(1, "first").0;

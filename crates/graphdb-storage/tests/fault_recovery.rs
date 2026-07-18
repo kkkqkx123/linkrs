@@ -10,9 +10,8 @@ use graphdb_storage::storage::{StorageAdmin, StoragePersistenceOps, StorageReade
 /// Test: Recovery after partial write during vertex insertion
 #[test]
 fn test_recovery_partial_vertex_write() {
-    let dir = std::env::temp_dir().join("graphdb_fault_vertex_partial");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let temp_dir = common::create_test_workdir();
+    let dir = temp_dir.path();
 
     {
         let mut storage = common::create_persistent_storage(&dir);
@@ -52,16 +51,13 @@ fn test_recovery_partial_vertex_write() {
             assert!(!v.tags.is_empty(), "Recovered vertex should have tags");
         }
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Test: Recovery after concurrent operations crash
 #[test]
 fn test_recovery_after_concurrent_crash() {
-    let dir = std::env::temp_dir().join("graphdb_fault_concurrent_crash");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let temp_dir = common::create_test_workdir();
+    let dir = temp_dir.path();
 
     {
         let mut storage = common::create_persistent_storage(&dir);
@@ -99,16 +95,13 @@ fn test_recovery_after_concurrent_crash() {
             vertices.len()
         );
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Test: Recovery of index state after crash
 #[test]
 fn test_recovery_index_state_after_crash() {
-    let dir = std::env::temp_dir().join("graphdb_fault_index_recovery");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let temp_dir = common::create_test_workdir();
+    let dir = temp_dir.path();
 
     {
         let mut storage = common::create_persistent_storage(&dir);
@@ -150,16 +143,13 @@ fn test_recovery_index_state_after_crash() {
 
         println!("Index recovery result: {:?}", result);
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Test: Recovery of deleted vertices after crash
 #[test]
 fn test_recovery_deleted_vertex_integrity() {
-    let dir = std::env::temp_dir().join("graphdb_fault_delete_recovery");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let temp_dir = common::create_test_workdir();
+    let dir = temp_dir.path();
 
     {
         let mut storage = common::create_persistent_storage(&dir);
@@ -209,16 +199,13 @@ fn test_recovery_deleted_vertex_integrity() {
             "Recovered state should be consistent"
         );
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Test: Multiple crash-recovery cycles maintain consistency
 #[test]
 fn test_multiple_crash_recovery_cycles() {
-    let dir = std::env::temp_dir().join("graphdb_fault_multi_cycle");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let temp_dir = common::create_test_workdir();
+    let dir = temp_dir.path();
 
     for cycle in 0..3 {
         {
@@ -253,6 +240,4 @@ fn test_multiple_crash_recovery_cycles() {
             println!("Cycle {}: Recovered {} vertices", cycle, vertices.len());
         }
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }

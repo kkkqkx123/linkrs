@@ -513,11 +513,8 @@ fn test_batch_insert_failure_rollback_consistency() {
 ///
 #[test]
 fn test_multi_cycle_flush_and_load() {
-    let dir = std::env::temp_dir()
-        .join("graphdb_storage_int_test")
-        .join("multi_cycle_flush");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let temp_dir = common::create_test_workdir();
+    let dir = temp_dir.path();
 
     // Cycle 1: Initial setup and save to disk (includes schema + data)
     {
@@ -616,8 +613,6 @@ fn test_multi_cycle_flush_and_load() {
             .expect("Edge Alice->Dave should survive");
         assert_eq!(edge_14.ranking, 0);
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ── Scenario 8: Clear Space ──

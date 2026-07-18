@@ -2,6 +2,7 @@ use super::next_transaction_id;
 use super::QueryPipelineManager;
 use crate::core::error::{DBError, DBResult, QueryError};
 use crate::core::types::SpaceInfo;
+use crate::core::types::TransactionId;
 use crate::core::{
     ErrorInfo, ErrorType, MetricType, QueryMetrics, QueryPhase, QueryProfile, StatsManager,
 };
@@ -9,7 +10,6 @@ use crate::query::executor::base::{ExecutionContext, ExecutionResult};
 use crate::query::executor::streaming::instance::{
     QueryBindings, QueryExecutionInstance, ResultSink,
 };
-use crate::core::types::TransactionId;
 use crate::query::executor::streaming::plan::PhysicalPlan;
 use crate::query::executor::streaming::transaction_scope::TransactionScope;
 use crate::query::executor::streaming::StreamingQueryResult;
@@ -282,7 +282,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         } else {
             TransactionScope::None
         };
-        self.execute_compiled_with_scope(physical_plan, query_context, ResultSink::Materialize, scope)
+        self.execute_compiled_with_scope(
+            physical_plan,
+            query_context,
+            ResultSink::Materialize,
+            scope,
+        )
     }
 
     /// Check if a statement needs an auto-commit transaction scope.
@@ -533,7 +538,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             let controller = if ctrl_guard.as_ref().is_some_and(|c| c.is_active()) {
                 ctrl_guard.clone().unwrap()
             } else {
-                let ctrl = Arc::new(crate::query::executor::streaming::SessionTransactionController::new());
+                let ctrl = Arc::new(
+                    crate::query::executor::streaming::SessionTransactionController::new(),
+                );
                 let txn_id = crate::core::types::TransactionId::new(next_transaction_id());
                 ctrl.begin_tracking(txn_id, true).ok();
                 *ctrl_guard = Some(ctrl.clone());

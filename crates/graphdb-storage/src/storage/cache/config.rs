@@ -26,9 +26,30 @@ impl Default for RecordCacheConfig {
         Self {
             max_memory: 128 * 1024 * 1024,
             memory_ratio: (70, 30),
-            ttl: Some(Duration::from_secs(3600)),
+            ttl: Some(Duration::from_secs(60)),
             tti: Some(Duration::from_secs(300)),
             high_priority_ratio: 0.1,
         }
+    }
+}
+
+impl RecordCacheConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.max_memory == 0 {
+            return Err("max_memory must be greater than 0".to_string());
+        }
+        if self.memory_ratio.0 == 0 && self.memory_ratio.1 == 0 {
+            return Err("memory_ratio must contain a positive component".to_string());
+        }
+        if !self.high_priority_ratio.is_finite() || !(0.0..=1.0).contains(&self.high_priority_ratio)
+        {
+            return Err("high_priority_ratio must be between 0 and 1".to_string());
+        }
+        if self.ttl.is_some_and(|duration| duration.is_zero())
+            || self.tti.is_some_and(|duration| duration.is_zero())
+        {
+            return Err("cache expiration durations must be greater than 0".to_string());
+        }
+        Ok(())
     }
 }

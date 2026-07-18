@@ -529,7 +529,13 @@ pub(super) fn execute_index_manage(
             let schema = target_name.as_deref().unwrap_or(space_name);
             let fields: Vec<crate::core::types::IndexField> = index_properties
                 .iter()
-                .map(|p| crate::core::types::IndexField::new(p.clone(), crate::core::Value::Null(crate::core::value::NullType::Null), true))
+                .map(|p| {
+                    crate::core::types::IndexField::new(
+                        p.clone(),
+                        crate::core::Value::Null(crate::core::value::NullType::Null),
+                        true,
+                    )
+                })
                 .collect();
             let info = Index::new(IndexConfig {
                 id: 0,
@@ -551,7 +557,13 @@ pub(super) fn execute_index_manage(
             let schema = target_name.as_deref().unwrap_or(space_name);
             let fields: Vec<crate::core::types::IndexField> = index_properties
                 .iter()
-                .map(|p| crate::core::types::IndexField::new(p.clone(), crate::core::Value::Null(crate::core::value::NullType::Null), true))
+                .map(|p| {
+                    crate::core::types::IndexField::new(
+                        p.clone(),
+                        crate::core::Value::Null(crate::core::value::NullType::Null),
+                        true,
+                    )
+                })
                 .collect();
             let info = Index::new(IndexConfig {
                 id: 0,

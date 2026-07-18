@@ -8,6 +8,7 @@ pub mod graph_storage;
 pub(crate) mod params;
 pub mod paths;
 pub mod persistence_coordinator;
+pub mod resource_budget;
 pub mod snapshot_manager;
 pub mod sync_wrapper;
 pub mod transaction;
@@ -20,4 +21,4 @@ mod persistence_test;
 
 pub use params::{EdgeOperationParams, InsertEdgeParams};
 pub use persistence_coordinator::PersistenceConfig;
-pub use wal_manager::WalManager;
+pub use wal_manager::{WalManager, WalMetrics};

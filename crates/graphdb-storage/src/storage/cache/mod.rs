@@ -16,5 +16,5 @@ mod types;
 mod record_cache_test;
 
 pub use config::RecordCacheConfig;
-pub use record_cache::{RecordCache, SharedRecordCache};
+pub use record_cache::{RecordCache, RecordCacheStats, SharedRecordCache};
 pub use types::{CachedVertex, VertexCacheKey};

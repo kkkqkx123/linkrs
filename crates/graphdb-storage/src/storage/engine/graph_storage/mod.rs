@@ -116,6 +116,24 @@ impl GraphStorage {
     /// data first and then replays any remaining WAL entries if recovery is needed.
     pub fn open(path: PathBuf) -> StorageResult<Self> {
         let config = PersistenceConfig::for_work_dir(&path);
+        Self::open_with_persistence_config(path, config)
+    }
+
+    /// Open persistent storage with an explicit property graph configuration.
+    pub fn open_with_config(
+        path: PathBuf,
+        property_config: crate::storage::engine::config::PropertyGraphConfig,
+    ) -> StorageResult<Self> {
+        let config =
+            PersistenceConfig::for_work_dir(&path).with_property_graph_config(property_config);
+        Self::open_with_persistence_config(path, config)
+    }
+
+    /// Open persistent storage using a fully specified persistence contract.
+    pub fn open_with_persistence_config(
+        path: PathBuf,
+        config: PersistenceConfig,
+    ) -> StorageResult<Self> {
         let storage = Self::new_with_persistence(path, config)?;
         let _ = persistence::initialize_with_recovery(&storage.ctx)?;
         Ok(storage)
@@ -177,6 +195,21 @@ impl GraphStorage {
 
     pub fn get_freeze_stats(&self) -> Option<FreezeStats> {
         self.ctx.get_freeze_stats()
+    }
+
+    /// Return current and peak memory usage by storage ownership category.
+    pub fn resource_snapshot(&self) -> crate::storage::ResourceSnapshot {
+        self.ctx.resource_snapshot()
+    }
+
+    /// Return WAL durability positions and sync counters when WAL is enabled.
+    pub fn wal_metrics(&self) -> Option<crate::storage::WalMetrics> {
+        self.ctx.wal_metrics()
+    }
+
+    /// Check whether another active snapshot may be registered.
+    pub fn check_snapshot_admission(&self) -> StorageResult<()> {
+        self.ctx.check_snapshot_admission()
     }
 
     pub fn trigger_background_freeze(&self) -> StorageResult<()> {
@@ -616,22 +649,26 @@ impl GraphStorage {
 
 impl StorageWriter for GraphStorage {
     fn insert_vertex(&mut self, space: &str, vertex: Vertex) -> Result<VertexId, StorageError> {
+        self.ctx.check_write_admission()?;
         let result = writer::insert_vertex(&self.ctx, space, vertex)?;
         self.commit_auto_if_needed()?;
         Ok(result)
     }
 
     fn update_vertex(&mut self, space: &str, vertex: Vertex) -> Result<(), StorageError> {
+        self.ctx.check_write_admission()?;
         writer::update_vertex(&self.ctx, space, vertex)?;
         self.commit_auto_if_needed()
     }
 
     fn delete_vertex(&mut self, space: &str, id: &VertexId) -> Result<(), StorageError> {
+        self.ctx.check_write_admission()?;
         writer::delete_vertex(&self.ctx, space, id)?;
         self.commit_auto_if_needed()
     }
 
     fn delete_vertex_with_edges(&mut self, space: &str, id: &VertexId) -> Result<(), StorageError> {
+        self.ctx.check_write_admission()?;
         writer::delete_vertex_with_edges(&self.ctx, space, id)?;
         self.commit_auto_if_needed()
     }
@@ -641,6 +678,7 @@ impl StorageWriter for GraphStorage {
         space: &str,
         vertices: Vec<Vertex>,
     ) -> Result<Vec<VertexId>, StorageError> {
+        self.ctx.check_write_admission()?;
         let result = writer::batch_insert_vertices(&self.ctx, space, vertices)?;
         self.commit_auto_if_needed()?;
         Ok(result)
@@ -652,17 +690,20 @@ impl StorageWriter for GraphStorage {
         vertex_id: &VertexId,
         tag_names: &[String],
     ) -> Result<usize, StorageError> {
+        self.ctx.check_write_admission()?;
         let result = writer::delete_tags(&self.ctx, space, vertex_id, tag_names)?;
         self.commit_auto_if_needed()?;
         Ok(result)
     }
 
     fn insert_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
+        self.ctx.check_write_admission()?;
         writer::insert_edge(&self.ctx, space, edge)?;
         self.commit_auto_if_needed()
     }
 
     fn update_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
+        self.ctx.check_write_admission()?;
         writer::update_edge(&self.ctx, space, edge)?;
         self.commit_auto_if_needed()
     }
@@ -675,11 +716,13 @@ impl StorageWriter for GraphStorage {
         edge_type: &str,
         rank: i64,
     ) -> Result<(), StorageError> {
+        self.ctx.check_write_admission()?;
         writer::delete_edge(&self.ctx, space, src, dst, edge_type, rank)?;
         self.commit_auto_if_needed()
     }
 
     fn batch_insert_edges(&mut self, space: &str, edges: Vec<Edge>) -> Result<(), StorageError> {
+        self.ctx.check_write_admission()?;
         writer::batch_insert_edges(&self.ctx, space, edges)?;
         self.commit_auto_if_needed()
     }
@@ -689,6 +732,7 @@ impl StorageWriter for GraphStorage {
         space: &str,
         info: &InsertVertexInfo,
     ) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         let result = writer::insert_vertex_data(&self.ctx, space, info)?;
         self.commit_auto_if_needed()?;
         Ok(result)
@@ -699,12 +743,14 @@ impl StorageWriter for GraphStorage {
         space: &str,
         info: &InsertEdgeInfo,
     ) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         let result = writer::insert_edge_data(&self.ctx, space, info)?;
         self.commit_auto_if_needed()?;
         Ok(result)
     }
 
     fn delete_vertex_data(&mut self, space: &str, vertex_id: &str) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         let result = writer::delete_vertex_data(&self.ctx, space, vertex_id)?;
         self.commit_auto_if_needed()?;
         Ok(result)
@@ -717,6 +763,7 @@ impl StorageWriter for GraphStorage {
         dst: &str,
         rank: i64,
     ) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         let result = writer::delete_edge_data(&self.ctx, space, src, dst, rank)?;
         self.commit_auto_if_needed()?;
         Ok(result)
@@ -728,6 +775,7 @@ impl StorageWriter for GraphStorage {
         space_id: u64,
         info: &UpdateInfo,
     ) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         let result = writer::update_data(&self.ctx, space, space_id, info)?;
         self.commit_auto_if_needed()?;
         Ok(result)

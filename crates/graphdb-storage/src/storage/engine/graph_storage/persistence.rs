@@ -99,6 +99,25 @@ pub(crate) fn bootstrap_from_disk(ctx: &GraphStorageContext) -> StorageResult<()
 
     let checkpoint_info = load_latest_checkpoint(ctx)?;
     if let Some(ref info) = checkpoint_info {
+        // A fully materialized checkpoint may have reclaimed every WAL record
+        // from the active segment. Re-establish the logical WAL baseline so a
+        // subsequent truncate or append does not treat the empty segment as
+        // durable LSN zero.
+        if let Some(persistence) = ctx.persistence() {
+            let coordinator = persistence.read();
+            if let Some(wal_manager) = coordinator.wal_manager() {
+                wal_manager
+                    .write()
+                    .set_recovery_baseline_lsn(info.lsn)
+                    .map_err(|error| {
+                        StorageError::wal_error(format!(
+                            "Failed to restore WAL checkpoint baseline: {}",
+                            error
+                        ))
+                    })?;
+            }
+        }
+
         // Initialize the version manager with the checkpoint timestamp so that
         // persisted data (written at timestamps <= checkpoint timestamp) is visible
         // after reload. Without this, the fresh version manager's read_ts=1 would

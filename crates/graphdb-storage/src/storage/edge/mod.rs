@@ -173,7 +173,7 @@ impl EdgeSchema {
             None => {
                 return Err(crate::core::StorageError::invalid_operation(
                     "Identifier cannot be empty".to_string(),
-                ))
+                ));
             }
         };
 

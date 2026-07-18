@@ -624,11 +624,7 @@ impl PhysicalPlanValidator {
     /// partition members.
     fn check_partition_parallelism(plan: &PhysicalPlan, result: &mut ValidationResult) {
         for op in &plan.operators {
-            if let InputContract::PartitionedInputs {
-                side: _,
-                members,
-            } = &op.input_contract
-            {
+            if let InputContract::PartitionedInputs { side: _, members } = &op.input_contract {
                 if members.is_empty() {
                     result.warnings.push(format!(
                         "Operator {:?} ({}) has empty PartitionedInputs",

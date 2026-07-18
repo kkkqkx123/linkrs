@@ -4,6 +4,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 #[cfg(feature = "qdrant")]
 use log::warn;
@@ -16,7 +17,10 @@ use vector_client::VectorManager;
 use crate::api::server::{GraphService, HttpServer};
 use crate::config::Config;
 use crate::core::error::DBResult;
-use crate::storage::{GraphStorage, MetricsStorage, StorageCommitOps, SyncWrapper};
+use crate::storage::{
+    GraphStorage, MetricsStorage, PersistenceConfig, PropertyGraphConfig, ResourceConfig,
+    StorageCommitOps, SyncWrapper,
+};
 use crate::transaction::{TransactionManager, TransactionManagerConfig};
 
 /// Start the service using the user configuration directory.
@@ -56,7 +60,14 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
     );
 
     let storage_path = PathBuf::from(config.storage_path());
-    let mut graph_storage = GraphStorage::open(storage_path)?;
+    let mut persistence_config = PersistenceConfig::for_work_dir(&storage_path)
+        .with_property_graph_config(property_graph_config_from_config(&config.storage));
+    if config.storage.checkpoint_interval_secs > 0 {
+        persistence_config.auto_checkpoint_interval =
+            Duration::from_secs(config.storage.checkpoint_interval_secs);
+    }
+    let mut graph_storage =
+        GraphStorage::open_with_persistence_config(storage_path, persistence_config)?;
     graph_storage = graph_storage.set_stats_manager(stats_manager.clone());
     let inner_storage = Arc::new(MetricsStorage::new(graph_storage, stats_manager.clone()));
     info!(
@@ -362,6 +373,36 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
 
     info!("Shutting down GraphDB service...");
     Ok(())
+}
+
+fn property_graph_config_from_config(
+    storage: &crate::config::StorageConfig,
+) -> PropertyGraphConfig {
+    let mut config = PropertyGraphConfig::default();
+    let cache_memory = match usize::try_from(storage.max_memory_bytes) {
+        Ok(value) => value.min(config.cache_memory),
+        Err(_) => config.cache_memory,
+    };
+    config.cache_memory = cache_memory;
+    config.resources = ResourceConfig {
+        max_memory_bytes: storage.max_memory_bytes,
+        index_memory_bytes: storage.index_memory_bytes,
+        memory_soft_ratio: storage.memory_soft_ratio,
+        memory_hard_ratio: storage.memory_hard_ratio,
+        max_active_snapshots: storage.max_active_snapshots,
+        max_snapshot_age: Duration::from_secs(storage.max_snapshot_age_secs),
+        max_tombstones: storage.max_tombstones,
+        max_tombstone_bytes: storage.max_tombstone_bytes,
+        index_gc_batch: storage.index_gc_batch,
+        operation_timeout: Duration::from_secs(storage.operation_timeout_secs),
+        dirty_flush_operations: storage.dirty_flush_operations,
+        dirty_flush_bytes: storage.dirty_flush_bytes,
+        cache_ttl: (storage.cache_ttl_secs > 0)
+            .then(|| Duration::from_secs(storage.cache_ttl_secs)),
+        cache_tti: (storage.cache_tti_secs > 0)
+            .then(|| Duration::from_secs(storage.cache_tti_secs)),
+    };
+    config
 }
 
 /// Execute a single query directly (for CLI / quick testing).

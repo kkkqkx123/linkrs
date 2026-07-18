@@ -101,7 +101,7 @@ impl KeyParser {
             _ => {
                 return Err(StorageError::db_error(
                     "Invalid edge type encoding".to_string(),
-                ))
+                ));
             }
         };
         pos += consumed4;
@@ -113,7 +113,7 @@ impl KeyParser {
             _ => {
                 return Err(StorageError::db_error(
                     "Invalid ranking encoding".to_string(),
-                ))
+                ));
             }
         };
 

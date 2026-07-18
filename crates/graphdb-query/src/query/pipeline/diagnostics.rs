@@ -156,12 +156,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             base_ctx.space_name = Some(space_info.space_name.clone());
         }
 
-        let base = BaseExecutor::with_context(
-            -1,
-            "ProfileExecutor".to_string(),
-            storage,
-            base_ctx,
-        );
+        let base = BaseExecutor::with_context(-1, "ProfileExecutor".to_string(), storage, base_ctx);
 
         let mut profile_executor =
             ProfileExecutor::new(base, optimized_plan, profile_stmt.format.clone());

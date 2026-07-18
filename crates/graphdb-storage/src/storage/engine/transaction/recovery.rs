@@ -834,9 +834,9 @@ impl GraphStorageContext {
                         TransactionOps::resolve_vertex_id(dst_table, redo.dst_vid, ts).ok_or_else(
                             || {
                                 StorageError::db_error(format!(
-                        "Destination vertex not found during recovery: label={}, vid={:?}",
-                        redo.dst_label, redo.dst_vid
-                    ))
+                            "Destination vertex not found during recovery: label={}, vid={:?}",
+                            redo.dst_label, redo.dst_vid
+                        ))
                             },
                         )?;
                     Ok((src_internal, dst_internal))

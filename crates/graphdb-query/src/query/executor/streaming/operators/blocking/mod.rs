@@ -2209,16 +2209,10 @@ impl BlockingOperator {
         match self {
             Self::Sort { state, .. } => state.as_ref().map_or(0, |s| s.runs.len() as u64),
             Self::Aggregate { state, .. } => state.as_ref().map_or(0, |s| {
-                s.spilled_runs
-                    .iter()
-                    .filter_map(|r| r.as_ref())
-                    .count() as u64
+                s.spilled_runs.iter().filter_map(|r| r.as_ref()).count() as u64
             }),
             Self::Distinct { state, .. } => state.as_ref().map_or(0, |s| {
-                s.spilled_runs
-                    .iter()
-                    .filter_map(|r| r.as_ref())
-                    .count() as u64
+                s.spilled_runs.iter().filter_map(|r| r.as_ref()).count() as u64
             }),
             _ => 0,
         }

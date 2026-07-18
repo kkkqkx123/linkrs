@@ -216,48 +216,56 @@ impl ParallelWalParser {
 
         let file_start_lsn = file_header.start_lsn();
         let mut fragment_buffer = FragmentBuffer::new();
+        let mut expected_prev_lsn = file_start_lsn;
 
         let mut offset = WAL_FILE_HEADER_SIZE;
         while offset + WAL_HEADER_SIZE <= buffer.len() {
             let header = match WalHeader::from_bytes(&buffer[offset..offset + WAL_HEADER_SIZE]) {
                 Some(h) => h,
-                None => {
-                    match recovery_mode {
-                        WalRecoveryMode::AbortOnCorruption => {
-                            return Err(WalError::Corrupted(format!(
-                                "Invalid WAL header at offset {}",
-                                offset
-                            )));
-                        }
-                        _ => {
-                            result.corrupted_count += 1;
-                            offset += 1;
-                            continue;
-                        }
+                None => match recovery_mode {
+                    WalRecoveryMode::AbortOnCorruption => {
+                        return Err(WalError::Corrupted(format!(
+                            "Invalid WAL header at offset {}",
+                            offset
+                        )));
                     }
-                }
+                    _ => {
+                        result.corrupted_count += 1;
+                        offset += 1;
+                        continue;
+                    }
+                },
             };
 
             if header.timestamp == 0 && header.length == 0 && header.lsn == 0 {
                 break;
             }
 
+            let expected_lsn = header
+                .prev_lsn()
+                .as_u64()
+                .checked_add(WAL_HEADER_SIZE as u64)
+                .and_then(|lsn| lsn.checked_add(header.length as u64))
+                .ok_or_else(|| WalError::Corrupted(format!("LSN overflow at offset {}", offset)))?;
+            if header.prev_lsn() != expected_prev_lsn || header.lsn() != Lsn::new(expected_lsn) {
+                return Err(WalError::Corrupted(format!(
+                    "Invalid LSN chain at offset {}: expected prev {}, got prev {}, lsn {}",
+                    offset,
+                    expected_prev_lsn,
+                    header.prev_lsn(),
+                    header.lsn()
+                )));
+            }
+
             let payload_start = offset + WAL_HEADER_SIZE;
             let payload_end = payload_start + header.length as usize;
 
             if payload_end > buffer.len() {
-                match recovery_mode {
-                    WalRecoveryMode::AbortOnCorruption => {
-                        return Err(WalError::Corrupted(format!(
-                            "Truncated entry at offset {}",
-                            offset
-                        )));
-                    }
-                    _ => {
-                        result.corrupted_count += 1;
-                        break;
-                    }
-                }
+                // A valid header followed by an incomplete payload is a torn
+                // final record. Earlier records remain recoverable, but the
+                // tail must be reported rather than silently ignored.
+                result.corrupted_count += 1;
+                break;
             }
 
             if let Err(error) = WalOpType::try_from(header.op_type) {
@@ -312,6 +320,7 @@ impl ParallelWalParser {
 
             let record_type = header.record_type;
             let entry_lsn = header.lsn();
+            expected_prev_lsn = entry_lsn;
 
             if record_type == RecordType::Full {
                 result.all_entries.push(ParsedWalEntry {
@@ -676,48 +685,56 @@ impl LocalWalParser {
 
         let file_start_lsn = file_header.start_lsn();
         self.file_headers.push(file_header);
+        let mut expected_prev_lsn = file_start_lsn;
 
         let mut offset = WAL_FILE_HEADER_SIZE;
         while offset + WAL_HEADER_SIZE <= buffer.len() {
             let header = match WalHeader::from_bytes(&buffer[offset..offset + WAL_HEADER_SIZE]) {
                 Some(h) => h,
-                None => {
-                    match self.recovery_mode {
-                        WalRecoveryMode::AbortOnCorruption => {
-                            return Err(WalError::Corrupted(format!(
-                                "Invalid WAL header at offset {}",
-                                offset
-                            )));
-                        }
-                        _ => {
-                            self.corrupted_count += 1;
-                            offset += 1;
-                            continue;
-                        }
+                None => match self.recovery_mode {
+                    WalRecoveryMode::AbortOnCorruption => {
+                        return Err(WalError::Corrupted(format!(
+                            "Invalid WAL header at offset {}",
+                            offset
+                        )));
                     }
-                }
+                    _ => {
+                        self.corrupted_count += 1;
+                        offset += 1;
+                        continue;
+                    }
+                },
             };
 
             if header.timestamp == 0 && header.length == 0 && header.lsn == 0 {
                 break;
             }
 
+            let expected_lsn = header
+                .prev_lsn()
+                .as_u64()
+                .checked_add(WAL_HEADER_SIZE as u64)
+                .and_then(|lsn| lsn.checked_add(header.length as u64))
+                .ok_or_else(|| WalError::Corrupted(format!("LSN overflow at offset {}", offset)))?;
+            if header.prev_lsn() != expected_prev_lsn || header.lsn() != Lsn::new(expected_lsn) {
+                return Err(WalError::Corrupted(format!(
+                    "Invalid LSN chain at offset {}: expected prev {}, got prev {}, lsn {}",
+                    offset,
+                    expected_prev_lsn,
+                    header.prev_lsn(),
+                    header.lsn()
+                )));
+            }
+
             let payload_start = offset + WAL_HEADER_SIZE;
             let payload_end = payload_start + header.length as usize;
 
             if payload_end > buffer.len() {
-                match self.recovery_mode {
-                    WalRecoveryMode::AbortOnCorruption => {
-                        return Err(WalError::Corrupted(format!(
-                            "Truncated entry at offset {}",
-                            offset
-                        )));
-                    }
-                    _ => {
-                        self.corrupted_count += 1;
-                        break;
-                    }
-                }
+                // A valid header followed by an incomplete payload is a torn
+                // final record. Earlier records remain recoverable, but the
+                // tail must be reported rather than silently ignored.
+                self.corrupted_count += 1;
+                break;
             }
 
             if let Err(error) = WalOpType::try_from(header.op_type) {
@@ -769,6 +786,7 @@ impl LocalWalParser {
 
             let record_type = header.record_type;
             let entry_lsn = header.lsn();
+            expected_prev_lsn = entry_lsn;
 
             if record_type == RecordType::Full {
                 self.all_entries.push(ParsedWalEntry {
@@ -971,7 +989,25 @@ mod tests {
     use crate::core::wal::types::WalConfig;
     use crate::transaction::wal::writer::{LocalWalWriter, WalWriter};
     use crate::transaction::wal::WalOpType;
+    use std::fs::OpenOptions;
+    use std::io::{Read, Seek, SeekFrom, Write};
     use tempfile::TempDir;
+
+    fn wal_file(dir: &std::path::Path) -> std::path::PathBuf {
+        std::fs::read_dir(dir)
+            .expect("WAL directory should be readable")
+            .map(|entry| {
+                entry
+                    .expect("WAL directory entry should be readable")
+                    .path()
+            })
+            .find(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("thread_") && name.contains("_wal_"))
+            })
+            .expect("WAL file should exist")
+    }
 
     #[test]
     fn test_wal_parser() {
@@ -1085,6 +1121,108 @@ mod tests {
         let mut parser = LocalWalParser::with_recovery_mode(WalRecoveryMode::ErrorIfMissing);
         let result = parser.open(&wal_path);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn default_recovery_mode_rejects_checksum_corruption() {
+        let temp_dir = TempDir::new().expect("temporary directory should be created");
+        let wal_path = temp_dir.path().to_string_lossy().to_string();
+
+        let mut writer =
+            LocalWalWriter::with_config(&wal_path, 0, WalConfig::new().with_checksum(true));
+        writer.open().expect("WAL should open");
+        writer
+            .append_entry(WalOpType::InsertVertex, 1, b"payload")
+            .expect("WAL entry should append");
+        writer.sync().expect("WAL should sync");
+        writer.close();
+
+        let path = wal_file(temp_dir.path());
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .expect("WAL file should open");
+        file.seek(SeekFrom::Start(
+            (WAL_FILE_HEADER_SIZE + WAL_HEADER_SIZE) as u64,
+        ))
+        .expect("payload offset should be valid");
+        let mut byte = [0u8; 1];
+        file.read_exact(&mut byte).expect("payload should exist");
+        byte[0] ^= 0xFF;
+        file.seek(SeekFrom::Start(
+            (WAL_FILE_HEADER_SIZE + WAL_HEADER_SIZE) as u64,
+        ))
+        .expect("payload offset should be valid");
+        file.write_all(&byte).expect("payload should be corrupted");
+        file.sync_all().expect("corruption should be durable");
+
+        let mut parser = LocalWalParser::new();
+        assert!(parser.open(&wal_path).is_err());
+    }
+
+    #[test]
+    fn default_recovery_mode_rejects_unknown_operation_type() {
+        let temp_dir = TempDir::new().expect("temporary directory should be created");
+        let wal_path = temp_dir.path().to_string_lossy().to_string();
+
+        let mut writer =
+            LocalWalWriter::with_config(&wal_path, 0, WalConfig::new().with_checksum(false));
+        writer.open().expect("WAL should open");
+        writer
+            .append_entry(WalOpType::InsertVertex, 1, b"payload")
+            .expect("WAL entry should append");
+        writer.sync().expect("WAL should sync");
+        writer.close();
+
+        let path = wal_file(temp_dir.path());
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .expect("WAL file should open");
+        file.seek(SeekFrom::Start((WAL_FILE_HEADER_SIZE + 4) as u64))
+            .expect("operation type offset should be valid");
+        file.write_all(&[255])
+            .expect("operation type should be corrupted");
+        file.sync_all().expect("corruption should be durable");
+
+        let mut parser = LocalWalParser::new();
+        assert!(parser.open(&wal_path).is_err());
+    }
+
+    #[test]
+    fn torn_tail_is_reported_but_prior_entries_remain_parseable() {
+        let temp_dir = TempDir::new().expect("temporary directory should be created");
+        let wal_path = temp_dir.path().to_string_lossy().to_string();
+
+        let mut writer =
+            LocalWalWriter::with_config(&wal_path, 0, WalConfig::new().with_checksum(true));
+        writer.open().expect("WAL should open");
+        writer
+            .append_entry(WalOpType::InsertVertex, 1, b"first")
+            .expect("first WAL entry should append");
+        writer
+            .append_entry(WalOpType::InsertVertex, 2, b"second")
+            .expect("second WAL entry should append");
+        let used = writer.file_used();
+        writer.sync().expect("WAL should sync");
+        writer.close();
+
+        let path = wal_file(temp_dir.path());
+        let file = OpenOptions::new()
+            .write(true)
+            .open(path)
+            .expect("WAL file should open");
+        file.set_len((used - 1) as u64)
+            .expect("WAL tail should be truncated");
+
+        let mut parser = LocalWalParser::new();
+        parser
+            .open(&wal_path)
+            .expect("torn tail should be recoverable");
+        assert_eq!(parser.all_entries.len(), 1);
+        assert_eq!(parser.corrupted_count(), 1);
     }
 
     #[test]

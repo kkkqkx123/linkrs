@@ -23,10 +23,10 @@ use super::properties::{PhysicalProperties, PipelineKind};
 /// must be treated as a bug.
 #[cfg(debug_assertions)]
 const PHYSICAL_NODE_ALLOWED_SITES: &[&str] = &[
-    "arena_builder.rs",       // from_physical_node conversion (legacy IR)
-    "node.rs",                // definition + materialize
-    // operator_plan_builder/*.rs — these construct PhysicalNode trees
-    // Tests are always allowed.
+    "arena_builder.rs", // from_physical_node conversion (legacy IR)
+    "node.rs",          // definition + materialize
+                        // operator_plan_builder/*.rs — these construct PhysicalNode trees
+                        // Tests are always allowed.
 ];
 use super::types::{
     CapabilitySet, FragmentGraph, FragmentId, FragmentKind, FragmentSpec, InputContract,
@@ -752,16 +752,15 @@ fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]) -> SlotLa
         | OperatorKindSpec::Txn(_)
         | OperatorKindSpec::Unary(_)
         | OperatorKindSpec::Blocking(_) => input,
-        OperatorKindSpec::Graph(GraphSpec::Expand { col_names, .. } | GraphSpec::ExpandAll { col_names, .. }) => {
+        OperatorKindSpec::Graph(
+            GraphSpec::Expand { col_names, .. } | GraphSpec::ExpandAll { col_names, .. },
+        ) => {
             if col_names.len() == 3 {
                 SlotLayout::from_names(col_names)
             } else {
                 let base = layout_with_added_names(
                     &input,
-                    [
-                        "_expand_edge".to_string(),
-                        "_expand_dst".to_string(),
-                    ],
+                    ["_expand_edge".to_string(), "_expand_dst".to_string()],
                 );
                 // Add extra col_names (e.g., edge type alias "friend") as aliases
                 // on the edge slot so YIELD friend.name can resolve.
@@ -777,7 +776,10 @@ fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]) -> SlotLa
                         }
                         name_to_slot.insert(extra_name.clone(), edge_slot_id);
                     }
-                    SlotLayout { slots, name_to_slot }
+                    SlotLayout {
+                        slots,
+                        name_to_slot,
+                    }
                 } else {
                     base
                 }

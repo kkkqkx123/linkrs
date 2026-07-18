@@ -8,6 +8,19 @@ use crate::storage::engine::transaction::{
     UpdateEdgePropertyUndoParams,
 };
 
+fn checked_internal_vertex_id(vid: &crate::core::types::VertexId) -> UndoLogResult<u32> {
+    let value = vid.as_int64().ok_or_else(|| {
+        UndoLogError::UndoFailed(format!(
+            "Cannot encode non-integer vertex ID in an edge undo record: {vid}"
+        ))
+    })?;
+    u32::try_from(value).map_err(|_| {
+        UndoLogError::UndoFailed(format!(
+            "Vertex ID {value} does not fit in the edge undo record"
+        ))
+    })
+}
+
 impl UndoTarget for GraphStorageContext {
     fn delete_vertex_type(&self, label: LabelId) -> UndoLogResult<()> {
         self.data_store()
@@ -41,9 +54,9 @@ impl UndoTarget for GraphStorageContext {
     fn delete_edge(&self, edge_ctx: EdgeDeletionContext) -> UndoLogResult<()> {
         let params = DeleteEdgeParams {
             src_label: edge_ctx.edge_id.src_label,
-            src_vid: edge_ctx.edge_id.src_vid.as_int64().unwrap_or(0) as u32,
+            src_vid: checked_internal_vertex_id(&edge_ctx.edge_id.src_vid)?,
             dst_label: edge_ctx.edge_id.dst_label,
-            dst_vid: edge_ctx.edge_id.dst_vid.as_int64().unwrap_or(0) as u32,
+            dst_vid: checked_internal_vertex_id(&edge_ctx.edge_id.dst_vid)?,
             edge_label: edge_ctx.edge_id.edge_label,
             rank: edge_ctx.edge_id.rank,
         };
@@ -95,9 +108,9 @@ impl UndoTarget for GraphStorageContext {
     ) -> UndoLogResult<()> {
         let params = UpdateEdgePropertyUndoParams {
             src_label: edge_id.src_label,
-            src_vid: edge_id.src_vid.as_int64().unwrap_or(0) as u32,
+            src_vid: checked_internal_vertex_id(&edge_id.src_vid)?,
             dst_label: edge_id.dst_label,
-            dst_vid: edge_id.dst_vid.as_int64().unwrap_or(0) as u32,
+            dst_vid: checked_internal_vertex_id(&edge_id.dst_vid)?,
             edge_label: edge_id.edge_label,
             rank: edge_id.rank,
         };
@@ -131,8 +144,8 @@ impl UndoTarget for GraphStorageContext {
             src_label: edge_ctx.edge_id.src_label,
             dst_label: edge_ctx.edge_id.dst_label,
             edge_label: edge_ctx.edge_id.edge_label,
-            src_vid: edge_ctx.edge_id.src_vid.as_int64().unwrap_or(0) as u32,
-            dst_vid: edge_ctx.edge_id.dst_vid.as_int64().unwrap_or(0) as u32,
+            src_vid: checked_internal_vertex_id(&edge_ctx.edge_id.src_vid)?,
+            dst_vid: checked_internal_vertex_id(&edge_ctx.edge_id.dst_vid)?,
             rank: edge_ctx.edge_id.rank,
         };
         self.data_store()
@@ -321,5 +334,23 @@ impl UndoTarget for GraphStorageContext {
             self.mark_edge_modified(label);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::checked_internal_vertex_id;
+    use crate::core::types::VertexId;
+
+    #[test]
+    fn checked_internal_vertex_id_rejects_non_integer_ids() {
+        assert!(checked_internal_vertex_id(&VertexId::from_string("vertex-a")).is_err());
+    }
+
+    #[test]
+    fn checked_internal_vertex_id_rejects_values_outside_u32() {
+        assert!(
+            checked_internal_vertex_id(&VertexId::from_int64(i64::from(u32::MAX) + 1)).is_err()
+        );
     }
 }

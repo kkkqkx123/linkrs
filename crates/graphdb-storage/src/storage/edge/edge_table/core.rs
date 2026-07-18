@@ -1081,7 +1081,11 @@ impl TimeTravelEdgeStore {
         if out_epv > 0 || in_epv > 0 {
             log::trace!(
                 "EdgeTable[{}] memory: {} bytes (mutable={}), MultiSingle edges_per_vertex (out={}, in={})",
-                self.label, total, mutable, out_epv, in_epv
+                self.label,
+                total,
+                mutable,
+                out_epv,
+                in_epv
             );
         }
         total
