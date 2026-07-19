@@ -17,4 +17,4 @@ mod record_cache_test;
 
 pub use config::RecordCacheConfig;
 pub use record_cache::{RecordCache, RecordCacheStats, SharedRecordCache};
-pub use types::{CachedVertex, VertexCacheKey};
+pub use types::{CachedVertex, EvictionCallbackWithSize, VertexCacheKey};

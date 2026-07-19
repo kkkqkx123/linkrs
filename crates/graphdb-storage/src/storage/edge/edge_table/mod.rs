@@ -17,8 +17,11 @@ pub mod core;
 pub mod freeze;
 pub mod merge;
 pub mod mvcc;
+pub mod page_state;
 pub mod persistence;
+pub mod residency;
 pub mod segment;
+pub mod segment_eviction;
 pub mod snapshot;
 pub mod stats;
 
@@ -515,7 +518,7 @@ impl core::TimeTravelEdgeStore {
             if segment.deletion_info.all_deleted_before(ts)
                 && segment
                     .deletion_info
-                    .all_edges_deleted(segment.csr.edge_count())
+                    .all_edges_deleted(segment.csr.read().edge_count())
             {
                 continue;
             }
@@ -810,7 +813,10 @@ impl core::TimeTravelEdgeStore {
                 .chain(
                     self.out_segments
                         .iter()
-                        .flat_map(|segment| segment.csr.iter().map(|(_, nbr)| nbr.edge_id.0 + 1)),
+                        .flat_map(|segment| {
+                            let csr = segment.csr.read();
+                            csr.iter().map(|(_, nbr)| nbr.edge_id.0 + 1).collect::<Vec<_>>()
+                        }),
                 )
                 .max()
                 .unwrap_or(0);

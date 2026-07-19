@@ -46,7 +46,7 @@ pub fn merge_selected_segments_with_deletion_filter(
         min_create_ts = min_create_ts.min(seg.create_ts_min);
         max_create_ts = max_create_ts.max(seg.create_ts_max);
 
-        for (edge_position, (src, immutable_nbr)) in seg.csr.iter().enumerate() {
+        for (edge_position, (src, immutable_nbr)) in seg.csr.read().iter().enumerate() {
             let edge_id = seg.recover_edge_id(immutable_nbr, edge_position);
 
             // Skip physically deleted edges if minimum snapshot ts is provided
@@ -235,7 +235,7 @@ fn merge_adaptive_impl(
             };
 
             let score = (age_score + deletion_score) / 2.0;
-            (idx, score, seg.csr.edge_count())
+            (idx, score, seg.csr.read().edge_count())
         })
         .collect();
 
@@ -273,7 +273,7 @@ fn merge_adaptive_impl(
         max_create_ts = max_create_ts.max(seg.create_ts_max);
         merged_deletion_info = merged_deletion_info.merge(&seg.deletion_info);
 
-        for (edge_position, (src, immutable_nbr)) in seg.csr.iter().enumerate() {
+        for (edge_position, (src, immutable_nbr)) in seg.csr.read().iter().enumerate() {
             let src_u32 = src.as_int64().unwrap_or(0) as u32;
             let edge_id = seg.recover_edge_id(immutable_nbr, edge_position);
             let nbr = Nbr::new(
@@ -341,13 +341,14 @@ pub fn merge_in_place(
             segment.create_ts_min.saturating_sub(current_create_ts_max)
         };
 
-        let total_edge_count = current_entries.len() + segment.csr.edge_count() as usize;
-        let bytes_per_edge = segment.csr.bytes_per_edge();
+        let csr = segment.csr.read();
+        let total_edge_count = current_entries.len() + csr.edge_count() as usize;
+        let bytes_per_edge = csr.bytes_per_edge();
         let estimated_size = total_edge_count * bytes_per_edge;
         let size_ok = estimated_size <= size_threshold;
 
         if time_gap <= time_threshold && size_ok && !current_entries.is_empty() {
-            for (edge_position, (src, immutable_nbr)) in segment.csr.iter().enumerate() {
+            for (edge_position, (src, immutable_nbr)) in segment.csr.read().iter().enumerate() {
                 let src_u32 = src.as_int64().unwrap_or(0) as u32;
                 let edge_id = segment.recover_edge_id(immutable_nbr, edge_position);
                 let nbr = Nbr::new(
@@ -381,7 +382,7 @@ pub fn merge_in_place(
                 current_entries.clear();
             }
 
-            for (edge_position, (src, immutable_nbr)) in segment.csr.iter().enumerate() {
+            for (edge_position, (src, immutable_nbr)) in segment.csr.read().iter().enumerate() {
                 let src_u32 = src.as_int64().unwrap_or(0) as u32;
                 let edge_id = segment.recover_edge_id(immutable_nbr, edge_position);
                 let nbr = Nbr::new(
@@ -422,7 +423,7 @@ pub fn merge_in_place(
     for (idx, segment) in segments.iter().enumerate() {
         let del_pct = segment
             .deletion_info
-            .deletion_percentage(segment.csr.edge_count());
+            .deletion_percentage(segment.csr.read().edge_count());
         if del_pct > 0 {
             log::debug!("Merged segment[{}] deletion percentage: {}%", idx, del_pct);
         }
@@ -513,7 +514,7 @@ mod tests {
         let total_edges: usize = table
             .out_segments
             .iter()
-            .map(|s| s.csr.edge_count() as usize)
+            .map(|s| s.csr.read().edge_count() as usize)
             .sum();
         assert!(
             total_edges > 0,

@@ -267,6 +267,48 @@ impl MemoryAccounting {
         }
     }
 
+    /// Reserve memory with automatic spilling on hard-limit failure.
+    ///
+    /// If `try_reserve` fails with `CapacityExceeded`, invokes `spill_fn` to
+    /// free memory, then retries the reservation. If the spill fails or the
+    /// retry also fails, the original error is returned.
+    pub fn try_reserve_with_spill<F>(
+        self: &Arc<Self>,
+        category: MemoryCategory,
+        bytes: u64,
+        spill_fn: F,
+    ) -> StorageResult<MemoryReservation>
+    where
+        F: Fn() -> Option<u64>,
+    {
+        match self.try_reserve(category, bytes) {
+            Ok(reservation) => Ok(reservation),
+            Err(original_err) => {
+                if let Some(freed) = spill_fn() {
+                    if freed > 0 {
+                        return self.try_reserve(category, bytes);
+                    }
+                }
+                Err(original_err)
+            }
+        }
+    }
+
+    /// Release memory from a category. Called by MemoryReservation::Drop
+    /// and by the spiller after evicting segments.
+    pub(crate) fn release(&self, category: MemoryCategory, bytes: u64) {
+        self.current[category as usize].fetch_sub(bytes, Ordering::Relaxed);
+        self.total_current.fetch_sub(bytes, Ordering::Relaxed);
+    }
+
+    /// Release memory from a category (public wrapper for eviction callbacks).
+    ///
+    /// This is the public interface for components like the cache eviction
+    /// listener to report memory that was freed outside the reservation system.
+    pub fn release_category(&self, category: MemoryCategory, bytes: u64) {
+        self.release(category, bytes);
+    }
+
     pub fn snapshot(&self) -> ResourceSnapshot {
         ResourceSnapshot {
             budget: self.budget,
@@ -300,11 +342,6 @@ impl MemoryAccounting {
         if previous < self.budget.soft_limit_bytes && current >= self.budget.soft_limit_bytes {
             self.soft_limit_events.fetch_add(1, Ordering::Relaxed);
         }
-    }
-
-    fn release(&self, category: MemoryCategory, bytes: u64) {
-        self.current[category as usize].fetch_sub(bytes, Ordering::Relaxed);
-        self.total_current.fetch_sub(bytes, Ordering::Relaxed);
     }
 }
 

@@ -1,10 +1,11 @@
 //! Ordered key codec — order-preserving binary encoding for `Value`.
 //!
 //! The byte-level comparison of encoded values matches the semantic ordering
-//! of `Value` (as defined by `Value::cmp`).  This enables range and prefix
-//! scans on index keys without post-filtering.
+//! of values within the same index type. Distinct types are ordered by their
+//! stable type tags. This enables range and prefix scans on index keys without
+//! post-filtering while preserving the original value type in the key format.
 //!
-//! # Format (version 1)
+//! # Format (version 2)
 //!
 //! Each field starts with a type tag byte, followed by the encoded body.
 //! Fixed-length types encode to a fixed byte count; variable-length types
@@ -26,7 +27,7 @@ use crate::core::wal::EntityRef;
 use crate::core::{NullType, StorageError, Value};
 
 /// Current wire format version.
-pub const ORDERED_CODEC_VERSION: u8 = 0x01;
+pub const ORDERED_CODEC_VERSION: u8 = 0x02;
 
 // ── Type tags (1 byte) ──────────────────────────────────────────────────────
 
@@ -49,6 +50,7 @@ const TAG_VERTEX_ID: u8 = 0x0F;
 const TAG_EDGE_REF: u8 = 0x10;
 const TAG_UUID: u8 = 0x1A;
 const TAG_NULL_LAST: u8 = 0xFF;
+const NULL_KIND_EMPTY: u8 = 0xFF;
 
 /// Order-preserving codec for index keys.
 ///
@@ -105,7 +107,17 @@ impl OrderedCodec {
         let tag = bytes[0];
         match tag {
             TAG_EMPTY => Ok((Value::Empty, 1)),
-            TAG_NULL | TAG_NULL_LAST => Ok((Value::Null(NullType::Null), 1)),
+            TAG_NULL | TAG_NULL_LAST => {
+                if bytes.len() < 2 {
+                    return Err(StorageError::deserialize_error("truncated null value"));
+                }
+                let kind = bytes[1];
+                if tag == TAG_NULL_LAST && kind == NULL_KIND_EMPTY {
+                    Ok((Value::Empty, 2))
+                } else {
+                    Ok((Value::Null(decode_null_type(kind)?), 2))
+                }
+            }
             TAG_BOOL => {
                 if bytes.len() < 2 {
                     return Err(StorageError::deserialize_error("truncated bool"));
@@ -453,10 +465,15 @@ impl OrderedCodec {
     ) -> Result<(), StorageError> {
         match value {
             Value::Empty => {
-                buf.push(if null_last { TAG_NULL_LAST } else { TAG_EMPTY });
+                if null_last {
+                    buf.extend_from_slice(&[TAG_NULL_LAST, NULL_KIND_EMPTY]);
+                } else {
+                    buf.push(TAG_EMPTY);
+                }
             }
-            Value::Null(_) => {
+            Value::Null(null_type) => {
                 buf.push(if null_last { TAG_NULL_LAST } else { TAG_NULL });
+                buf.push(encode_null_type(null_type));
             }
             Value::Bool(b) => {
                 buf.push(TAG_BOOL);
@@ -562,6 +579,35 @@ fn encode_escaped_bytes(data: &[u8], buf: &mut Vec<u8>) {
     buf.extend_from_slice(&[0, 0]);
 }
 
+fn encode_null_type(null_type: &NullType) -> u8 {
+    match null_type {
+        NullType::Null => 0,
+        NullType::NaN => 1,
+        NullType::BadData => 2,
+        NullType::BadType => 3,
+        NullType::ErrOverflow => 4,
+        NullType::UnknownProp => 5,
+        NullType::DivByZero => 6,
+        NullType::OutOfRange => 7,
+    }
+}
+
+fn decode_null_type(code: u8) -> Result<NullType, StorageError> {
+    match code {
+        0 => Ok(NullType::Null),
+        1 => Ok(NullType::NaN),
+        2 => Ok(NullType::BadData),
+        3 => Ok(NullType::BadType),
+        4 => Ok(NullType::ErrOverflow),
+        5 => Ok(NullType::UnknownProp),
+        6 => Ok(NullType::DivByZero),
+        7 => Ok(NullType::OutOfRange),
+        _ => Err(StorageError::deserialize_error(format!(
+            "invalid null type code {code}"
+        ))),
+    }
+}
+
 fn decode_escaped_bytes(
     bytes: &[u8],
     mut position: usize,
@@ -620,23 +666,28 @@ fn encode_decimal(
             "Invalid decimal value {text}"
         )));
     }
-    while digits.first() == Some(&b'0') && digits.len() > 1 {
-        digits.remove(0);
-    }
-    while digits.last() == Some(&b'0') && digits.len() > 1 {
-        digits.pop();
-    }
     let is_zero = digits.iter().all(|digit| *digit == b'0');
-    if is_zero {
+    let (digit_exponent, negative) = if is_zero {
         digits.clear();
         digits.push(b'0');
-    }
-    let fractional_len = i32::try_from(fractional.len())
-        .map_err(|_| StorageError::serialize_error("Decimal fractional part is too long"))?;
-    let digit_exponent = i32::try_from(digits.len())
-        .map_err(|_| StorageError::serialize_error("Decimal significand is too long"))?
-        - fractional_len
-        + exponent10;
+        (i32::MIN, false)
+    } else {
+        let leading_zero_count = digits.iter().take_while(|digit| **digit == b'0').count();
+        let whole_len = i32::try_from(whole.len())
+            .map_err(|_| StorageError::serialize_error("Decimal integral part is too long"))?;
+        let leading_zero_count = i32::try_from(leading_zero_count)
+            .map_err(|_| StorageError::serialize_error("Decimal significand is too long"))?;
+        let digit_exponent = whole_len
+            .checked_add(exponent10)
+            .and_then(|value| value.checked_sub(leading_zero_count))
+            .ok_or_else(|| StorageError::serialize_error("Decimal exponent is out of range"))?;
+
+        digits.drain(..leading_zero_count as usize);
+        while digits.last() == Some(&b'0') {
+            digits.pop();
+        }
+        (digit_exponent, negative)
+    };
     let biased = (digit_exponent as u32) ^ 0x8000_0000;
     buf.push(TAG_DECIMAL);
     buf.push(u8::from(!negative));
@@ -685,26 +736,28 @@ fn decode_decimal(bytes: &[u8]) -> Result<(Value, usize), StorageError> {
         ));
     }
     position += 1;
+    if digits.iter().all(|digit| *digit == b'0') {
+        let value = "0"
+            .parse::<crate::core::value::Decimal128Value>()
+            .map_err(|error| {
+                StorageError::deserialize_error(format!("invalid decimal: {error}"))
+            })?;
+        return Ok((Value::Decimal128(value), position));
+    }
     let decimal_position = exponent;
+    let digit_count = i32::try_from(digits.len())
+        .map_err(|_| StorageError::deserialize_error("decimal significand is too long"))?;
+    let exponent10 = decimal_position
+        .checked_sub(digit_count)
+        .ok_or_else(|| StorageError::deserialize_error("decimal exponent is out of range"))?;
     let mut text = String::new();
     if sign == 0 && digits.iter().any(|digit| *digit != b'0') {
         text.push('-');
     }
-    if decimal_position <= 0 {
-        text.push_str("0.");
-        text.extend(std::iter::repeat_n('0', (-decimal_position) as usize));
-        text.extend(digits.iter().map(|digit| char::from(*digit)));
-    } else if decimal_position as usize >= digits.len() {
-        text.extend(digits.iter().map(|digit| char::from(*digit)));
-        text.extend(std::iter::repeat_n(
-            '0',
-            decimal_position as usize - digits.len(),
-        ));
-    } else {
-        let split = decimal_position as usize;
-        text.extend(digits[..split].iter().map(|digit| char::from(*digit)));
-        text.push('.');
-        text.extend(digits[split..].iter().map(|digit| char::from(*digit)));
+    text.extend(digits.iter().map(|digit| char::from(*digit)));
+    if exponent10 != 0 {
+        text.push('e');
+        text.push_str(&exponent10.to_string());
     }
     let value = text
         .parse::<crate::core::value::Decimal128Value>()
@@ -720,75 +773,92 @@ impl Default for OrderedCodec {
 
 // ── VertexId I/O ────────────────────────────────────────────────────────────
 
-/// Write a VertexId as fixed-size 16 bytes for order-preserving comparison.
-/// Format: [kind:1] [len:1] [data:14] (padded with zeros).
+/// Write a VertexId as fixed-size 33 bytes for order-preserving comparison.
+/// Format: [data:32] [len:1]. The zero padding keeps byte ordering identical
+/// to the raw VertexId bytes, including prefix relationships.
 fn write_vertex_id(vid: &VertexId, buf: &mut Vec<u8>) {
     let bytes = vid.as_bytes();
-    let kind: u8 = if vid.is_int64() { 0 } else { 1 };
-    buf.push(kind);
-    buf.push(bytes.len() as u8);
     buf.extend_from_slice(bytes);
-    let pad = 14usize.saturating_sub(bytes.len());
+    let pad = 32usize.saturating_sub(bytes.len());
     buf.extend(std::iter::repeat_n(0u8, pad));
+    buf.push(bytes.len() as u8);
 }
 
-/// Read a VertexId from 16 fixed-size bytes.
+/// Read a VertexId from 33 fixed-size bytes.
 fn read_vertex_id(bytes: &[u8]) -> Result<(VertexId, usize), StorageError> {
-    if bytes.len() < 16 {
+    if bytes.len() < 33 {
         return Err(StorageError::deserialize_error(
-            "truncated vertex id (need 16)",
+            "truncated vertex id (need 33)",
         ));
     }
-    let _kind = bytes[0];
-    let len = bytes[1] as usize;
-    let data = &bytes[2..2 + len.min(14)];
-    if _kind == 0 {
-        // i64: first 8 bytes of data
-        let mut arr = [0u8; 8];
-        arr.copy_from_slice(&data[..data.len().min(8)]);
-        let val = i64::from_be_bytes(arr);
-        Ok((VertexId::from_int64(val), 16))
-    } else {
-        let s = std::str::from_utf8(data).map_err(|e| {
-            StorageError::deserialize_error(format!("invalid vertex id UTF-8: {}", e))
-        })?;
-        Ok((VertexId::from_string(s.to_string()), 16))
+    let len = bytes[32] as usize;
+    if len > 32 {
+        return Err(StorageError::deserialize_error("invalid vertex id length"));
     }
+    if bytes[len..32].iter().any(|byte| *byte != 0) {
+        return Err(StorageError::deserialize_error(
+            "non-zero vertex id padding",
+        ));
+    }
+    let data = &bytes[..len];
+    Ok((VertexId::from_bytes(data.to_vec()), 33))
 }
 
 // ── IEEE 754 total-order encoding ───────────────────────────────────────────
 
 fn encode_f32_ordered(f: f32) -> u32 {
+    if f.is_nan() {
+        return 0;
+    }
+    if f == 0.0 {
+        return 0x8000_0001;
+    }
     let bits = f.to_bits();
-    if f.is_sign_negative() {
+    let ordered = if f.is_sign_negative() {
         !bits
     } else {
         bits ^ 0x8000_0000
-    }
+    };
+    ordered + 1
 }
 
 fn decode_f32_ordered(bits: u32) -> f32 {
-    if bits & 0x8000_0000 != 0 {
-        f32::from_bits(bits ^ 0x8000_0000)
+    if bits == 0 {
+        return f32::NAN;
+    }
+    let ordered = bits - 1;
+    if ordered & 0x8000_0000 != 0 {
+        f32::from_bits(ordered ^ 0x8000_0000)
     } else {
-        f32::from_bits(!bits)
+        f32::from_bits(!ordered)
     }
 }
 
 fn encode_f64_ordered(f: f64) -> u64 {
+    if f.is_nan() {
+        return 0;
+    }
+    if f == 0.0 {
+        return 0x8000_0000_0000_0001;
+    }
     let bits = f.to_bits();
-    if f.is_sign_negative() {
+    let ordered = if f.is_sign_negative() {
         !bits
     } else {
         bits ^ 0x8000_0000_0000_0000
-    }
+    };
+    ordered + 1
 }
 
 fn decode_f64_ordered(bits: u64) -> f64 {
-    if bits & 0x8000_0000_0000_0000 != 0 {
-        f64::from_bits(bits ^ 0x8000_0000_0000_0000)
+    if bits == 0 {
+        return f64::NAN;
+    }
+    let ordered = bits - 1;
+    if ordered & 0x8000_0000_0000_0000 != 0 {
+        f64::from_bits(ordered ^ 0x8000_0000_0000_0000)
     } else {
-        f64::from_bits(!bits)
+        f64::from_bits(!ordered)
     }
 }
 
@@ -808,6 +878,46 @@ mod tests {
         let enc = codec().encode(&v).unwrap();
         let dec = codec().decode(&enc).unwrap();
         assert_eq!(dec, v);
+    }
+
+    #[test]
+    fn test_null_variants_roundtrip_in_wire_order() {
+        let values = [
+            NullType::Null,
+            NullType::NaN,
+            NullType::BadData,
+            NullType::BadType,
+            NullType::ErrOverflow,
+            NullType::UnknownProp,
+            NullType::DivByZero,
+            NullType::OutOfRange,
+        ];
+        for pair in values.windows(2) {
+            let left = Value::Null(pair[0].clone());
+            let right = Value::Null(pair[1].clone());
+            assert_eq!(
+                codec()
+                    .encode(&left)
+                    .unwrap()
+                    .cmp(&codec().encode(&right).unwrap()),
+                std::cmp::Ordering::Less
+            );
+        }
+        for null_type in values {
+            let value = Value::Null(null_type);
+            assert_eq!(
+                codec().decode(&codec().encode(&value).unwrap()).unwrap(),
+                value
+            );
+        }
+    }
+
+    #[test]
+    fn test_null_last_preserves_empty_and_null_variants() {
+        for value in [Value::Empty, Value::Null(NullType::BadType)] {
+            let encoded = codec().encode_null_last(&value).unwrap();
+            assert_eq!(codec().decode(&encoded).unwrap(), value);
+        }
     }
 
     #[test]
@@ -899,6 +1009,48 @@ mod tests {
         let pos = codec().encode(&Value::Float(1.0)).unwrap();
         assert!(neg < zero, "-1 < 0");
         assert!(zero < pos, "0 < 1");
+    }
+
+    #[test]
+    fn test_float_special_values_follow_value_order() {
+        let nan = Value::Float(f32::NAN);
+        let negative_zero = Value::Float(-0.0);
+        let positive_zero = Value::Float(0.0);
+        let positive = Value::Float(1.0);
+
+        assert_eq!(
+            codec().encode(&negative_zero).unwrap(),
+            codec().encode(&positive_zero).unwrap()
+        );
+        assert_eq!(
+            codec()
+                .encode(&nan)
+                .unwrap()
+                .cmp(&codec().encode(&positive).unwrap()),
+            nan.cmp(&positive)
+        );
+        assert_eq!(codec().decode(&codec().encode(&nan).unwrap()).unwrap(), nan);
+    }
+
+    #[test]
+    fn test_double_special_values_follow_value_order() {
+        let nan = Value::Double(f64::NAN);
+        let negative_zero = Value::Double(-0.0);
+        let positive_zero = Value::Double(0.0);
+        let positive = Value::Double(1.0);
+
+        assert_eq!(
+            codec().encode(&negative_zero).unwrap(),
+            codec().encode(&positive_zero).unwrap()
+        );
+        assert_eq!(
+            codec()
+                .encode(&nan)
+                .unwrap()
+                .cmp(&codec().encode(&positive).unwrap()),
+            nan.cmp(&positive)
+        );
+        assert_eq!(codec().decode(&codec().encode(&nan).unwrap()).unwrap(), nan);
     }
 
     #[test]
@@ -1180,32 +1332,52 @@ mod tests {
     }
 
     #[test]
+    fn test_vertex_id_entity_roundtrip_supports_max_length() {
+        let vid = VertexId::from_string("12345678901234567890123456789012");
+        let entity = EntityRef::Vertex(vid);
+        let mut encoded = Vec::new();
+        codec().encode_entity(&entity, &mut encoded).unwrap();
+
+        let (decoded, consumed) = codec().decode_entity_bytes(&encoded).unwrap();
+        assert_eq!(decoded, entity);
+        assert_eq!(consumed, encoded.len());
+    }
+
+    #[test]
     fn ordered_codec_integer_property() {
-        let values = [
-            Value::SmallInt(i16::MIN),
-            Value::SmallInt(-1),
-            Value::SmallInt(0),
-            Value::SmallInt(i16::MAX),
-            Value::Int(i32::MIN),
-            Value::Int(-1),
-            Value::Int(0),
-            Value::Int(i32::MAX),
-            Value::BigInt(i64::MIN),
-            Value::BigInt(-1),
-            Value::BigInt(0),
-            Value::BigInt(i64::MAX),
+        let groups = [
+            vec![
+                Value::SmallInt(i16::MIN),
+                Value::SmallInt(-1),
+                Value::SmallInt(0),
+                Value::SmallInt(i16::MAX),
+            ],
+            vec![
+                Value::Int(i32::MIN),
+                Value::Int(-1),
+                Value::Int(0),
+                Value::Int(i32::MAX),
+            ],
+            vec![
+                Value::BigInt(i64::MIN),
+                Value::BigInt(-1),
+                Value::BigInt(0),
+                Value::BigInt(i64::MAX),
+            ],
         ];
-        for pair in values.windows(2) {
-            let semantic = pair[0].cmp(&pair[1]);
-            let encoded = codec()
-                .encode(&pair[0])
-                .unwrap()
-                .cmp(&codec().encode(&pair[1]).unwrap());
-            assert_eq!(
-                encoded, semantic,
-                "integer order changed for {:?} and {:?}",
-                pair[0], pair[1]
-            );
+        for values in groups {
+            for pair in values.windows(2) {
+                let semantic = pair[0].cmp(&pair[1]);
+                let encoded = codec()
+                    .encode(&pair[0])
+                    .unwrap()
+                    .cmp(&codec().encode(&pair[1]).unwrap());
+                assert_eq!(
+                    encoded, semantic,
+                    "integer order changed for {:?} and {:?}",
+                    pair[0], pair[1]
+                );
+            }
         }
     }
 
@@ -1240,10 +1412,12 @@ mod tests {
 
     #[test]
     fn ordered_codec_decimal_property() {
-        let values = ["-100.5", "-1.25", "0", "0.01", "1.2", "10", "100.5"]
-            .into_iter()
-            .map(|text| Value::Decimal128(text.parse().expect("decimal fixture should parse")))
-            .collect::<Vec<_>>();
+        let values = [
+            "-100.5", "-1.25", "-0.01", "0", "0.01", "0.1", "1.2", "1.20", "10", "100.5", "1e3",
+        ]
+        .into_iter()
+        .map(|text| Value::Decimal128(text.parse().expect("decimal fixture should parse")))
+        .collect::<Vec<_>>();
         for pair in values.windows(2) {
             assert_eq!(
                 codec()
@@ -1257,6 +1431,12 @@ mod tests {
                 pair[0]
             );
         }
+    }
+
+    #[test]
+    fn ordered_codec_rejects_unrepresentable_decimal_exponents() {
+        let bytes = [TAG_DECIMAL, 1, 0, 0, 0, 0, b'1', 0];
+        assert!(codec().decode(&bytes).is_err());
     }
 
     #[test]
@@ -1327,7 +1507,7 @@ mod tests {
                     .encode(&pair[0])
                     .unwrap()
                     .cmp(&codec().encode(&pair[1]).unwrap()),
-                pair[0].cmp(&pair[1]),
+                std::cmp::Ordering::Less,
                 "type order changed for {:?} and {:?}",
                 pair[0],
                 pair[1]

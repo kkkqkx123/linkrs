@@ -122,12 +122,12 @@ impl SnapshotBuilder {
         if segment.deletion_info.all_deleted_before(ts)
             && segment
                 .deletion_info
-                .all_edges_deleted(segment.csr.edge_count())
+                .all_edges_deleted(segment.csr.read().edge_count())
         {
             return;
         }
 
-        for (edge_position, (src, immutable_nbr)) in segment.csr.iter().enumerate() {
+        for (edge_position, (src, immutable_nbr)) in segment.csr.read().iter().enumerate() {
             let edge_id = segment.recover_edge_id(immutable_nbr, edge_position);
 
             if immutable_nbr.timestamp > ts {

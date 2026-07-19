@@ -153,7 +153,7 @@ impl CheckpointManifest {
         storage_snapshot: StorageSnapshotRef,
         outbox_snapshot: Option<OutboxSnapshotRef>,
         index_manifests: Vec<IndexManifestRef>,
-    ) -> Self {
+    ) -> Result<Self, String> {
         Self::new_with_outbox_state(
             checkpoint_id,
             storage_lsn,
@@ -172,7 +172,7 @@ impl CheckpointManifest {
         storage_snapshot: StorageSnapshotRef,
         outbox_snapshot: Option<OutboxSnapshotRef>,
         index_manifests: Vec<IndexManifestRef>,
-    ) -> Self {
+    ) -> Result<Self, String> {
         Self::new_with_outbox_state(
             checkpoint_id,
             storage_lsn,
@@ -190,7 +190,7 @@ impl CheckpointManifest {
         outbox_snapshot: Option<OutboxSnapshotRef>,
         index_manifests: Vec<IndexManifestRef>,
         outbox_enabled: bool,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let outbox_lsn = outbox_snapshot
             .as_ref()
             .map(|s| s.materialized_lsn)
@@ -224,28 +224,28 @@ impl CheckpointManifest {
             manifest_checksum: 0,
         };
 
-        manifest.manifest_checksum = manifest.compute_checksum();
-        manifest
+        manifest.manifest_checksum = manifest.compute_checksum()?;
+        Ok(manifest)
     }
 
     /// Compute checksum of the manifest (excluding the checksum field itself)
-    fn compute_checksum(&self) -> u32 {
+    fn compute_checksum(&self) -> Result<u32, String> {
         let mut clone = self.clone();
         clone.manifest_checksum = 0;
         let bytes = postcard::to_allocvec(&clone)
-            .expect("postcard serialization of derived struct should not fail");
-        crc32fast::hash(&bytes)
+            .map_err(|error| format!("Failed to serialize checkpoint manifest: {error}"))?;
+        Ok(crc32fast::hash(&bytes))
     }
 
     /// Verify the manifest checksum
-    pub fn verify_checksum(&self) -> bool {
+    pub fn verify_checksum(&self) -> Result<bool, String> {
         let expected = self.manifest_checksum;
         let mut clone = self.clone();
         clone.manifest_checksum = 0;
         let bytes = postcard::to_allocvec(&clone)
-            .expect("postcard serialization of derived struct should not fail");
+            .map_err(|error| format!("Failed to serialize checkpoint manifest: {error}"))?;
         let computed = crc32fast::hash(&bytes);
-        computed == expected
+        Ok(computed == expected)
     }
 
     /// Validate the manifest structure and references
@@ -257,7 +257,7 @@ impl CheckpointManifest {
             ));
         }
 
-        if !self.verify_checksum() {
+        if !self.verify_checksum()? {
             return Err("Manifest checksum verification failed".to_string());
         }
 
@@ -655,7 +655,8 @@ mod tests {
             storage_ref,
             Some(outbox_ref),
             Vec::new(),
-        );
+        )
+        .expect("checkpoint manifest should be created");
 
         assert!(manifest.validate().is_ok());
         assert_eq!(manifest.safe_lsn, CommitLsn::new(100));
@@ -681,7 +682,8 @@ mod tests {
                 materialized_lsn: CommitLsn::new(50),
             }),
             Vec::new(),
-        );
+        )
+        .expect("checkpoint manifest should be created");
         assert_eq!(manifest1.safe_lsn, CommitLsn::new(50));
 
         // Outbox LSN is lower
@@ -696,7 +698,8 @@ mod tests {
                 materialized_lsn: CommitLsn::new(20),
             }),
             Vec::new(),
-        );
+        )
+        .expect("checkpoint manifest should be created");
         assert_eq!(manifest2.safe_lsn, CommitLsn::new(20));
     }
 
@@ -709,7 +712,8 @@ mod tests {
             create_test_storage_snapshot_ref(temp_dir.path()),
             None,
             Vec::new(),
-        );
+        )
+        .expect("checkpoint manifest should be created");
 
         assert_eq!(manifest.safe_lsn, CommitLsn::ZERO);
         assert!(manifest.validate().is_ok());
@@ -727,7 +731,8 @@ mod tests {
             storage_ref,
             Some(outbox_ref),
             Vec::new(),
-        );
+        )
+        .expect("checkpoint manifest should be created");
 
         let manifest_path = temp_dir.path().join("test_manifest.postcard");
         manifest.save_atomic(&manifest_path).unwrap();
@@ -761,14 +766,16 @@ mod tests {
             storage_ref1,
             Some(outbox_ref.clone()),
             Vec::new(),
-        );
+        )
+        .expect("checkpoint manifest should be created");
         let manifest2 = CheckpointManifest::new(
             2,
             CommitLsn::new(100),
             storage_ref2,
             Some(outbox_ref),
             Vec::new(),
-        );
+        )
+        .expect("checkpoint manifest should be created");
 
         manager.publish(&manifest1).unwrap();
         manager.publish(&manifest2).unwrap();
@@ -790,12 +797,13 @@ mod tests {
         let storage_ref = create_test_storage_snapshot_ref(temp_dir.path());
 
         let mut manifest =
-            CheckpointManifest::new(1, CommitLsn::new(100), storage_ref, None, Vec::new());
+            CheckpointManifest::new(1, CommitLsn::new(100), storage_ref, None, Vec::new())
+                .expect("checkpoint manifest should be created");
 
-        assert!(manifest.verify_checksum());
+        assert!(manifest.verify_checksum().expect("checksum should compute"));
 
         // Corrupt the manifest
         manifest.checkpoint_id = 999;
-        assert!(!manifest.verify_checksum());
+        assert!(!manifest.verify_checksum().expect("checksum should compute"));
     }
 }

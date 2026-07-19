@@ -25,6 +25,7 @@ pub struct RecordCache {
     vertex_stats: Arc<CacheStats>,
     id_index_stats: Arc<CacheStats>,
     eviction_callback: Arc<Mutex<Option<EvictionCallback>>>,
+    eviction_callback_with_size: Arc<Mutex<Option<EvictionCallbackWithSize>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -47,6 +48,9 @@ impl std::fmt::Debug for RecordCache {
             .finish()
     }
 }
+
+/// Weigher function type for computing entry sizes.
+type WeigherFn<K, V> = Arc<dyn Fn(&K, &V) -> u32 + Send + Sync>;
 
 impl RecordCache {
     pub fn new() -> Self {
@@ -80,11 +84,32 @@ impl RecordCache {
         let id_index_stats = Arc::new(CacheStats::new());
 
         let eviction_callback = Arc::new(Mutex::new(None::<EvictionCallback>));
+        let eviction_callback_with_size =
+            Arc::new(Mutex::new(None::<EvictionCallbackWithSize>));
+
+        let vertex_weigher: WeigherFn<VertexCacheKey, CachedVertex> = Arc::new(
+            |_key: &VertexCacheKey, value: &CachedVertex| {
+                let key_size = std::mem::size_of::<VertexCacheKey>() as u32;
+                let value_size = value.estimated_size();
+                key_size.saturating_add(value_size)
+            },
+        );
+
+        let id_index_weigher: WeigherFn<IdIndexCacheKey, IdIndexCacheValue> = Arc::new(
+            |key: &IdIndexCacheKey, _value: &IdIndexCacheValue| {
+                let key_size = std::mem::size_of::<IdIndexCacheKey>() as u32
+                    + key.external_id.capacity() as u32;
+                let value_size = std::mem::size_of::<IdIndexCacheValue>() as u32;
+                key_size.saturating_add(value_size)
+            },
+        );
 
         let vertex_cache = Self::build_vertex_cache(
             vertex_memory,
             vertex_stats.clone(),
             eviction_callback.clone(),
+            eviction_callback_with_size.clone(),
+            vertex_weigher,
             config.ttl,
             config.tti,
         );
@@ -93,6 +118,8 @@ impl RecordCache {
             id_index_memory,
             id_index_stats.clone(),
             eviction_callback.clone(),
+            eviction_callback_with_size.clone(),
+            id_index_weigher,
             config.ttl,
             config.tti,
         );
@@ -104,29 +131,41 @@ impl RecordCache {
             vertex_stats,
             id_index_stats,
             eviction_callback,
+            eviction_callback_with_size,
         }
+    }
+
+    /// Install a memory-aware eviction callback that receives the byte size
+    /// of evicted entries. Used by CacheManager to synchronize with MemoryAccounting.
+    pub fn set_eviction_callback_with_size(&self, callback: EvictionCallbackWithSize) {
+        *self.eviction_callback_with_size.lock() = Some(callback);
     }
 
     fn build_vertex_cache(
         max_capacity: u64,
         stats: Arc<CacheStats>,
         eviction_callback: Arc<Mutex<Option<EvictionCallback>>>,
+        eviction_callback_with_size: Arc<Mutex<Option<EvictionCallbackWithSize>>>,
+        weigher: WeigherFn<VertexCacheKey, CachedVertex>,
         ttl: Option<std::time::Duration>,
         tti: Option<std::time::Duration>,
     ) -> Cache<VertexCacheKey, CachedVertex> {
+        let weigher_for_eviction = weigher.clone();
         let mut builder = Cache::builder()
             .max_capacity(max_capacity)
-            .weigher(|_key: &VertexCacheKey, value: &CachedVertex| {
-                let key_size = std::mem::size_of::<VertexCacheKey>() as u32;
-                let value_size = value.estimated_size();
-                key_size.saturating_add(value_size)
-            })
+            .weigher(move |k, v| weigher(k, v))
             .support_invalidation_closures()
-            .eviction_listener(move |_key, _value, cause| {
+            .eviction_listener(move |key, value, cause| {
                 stats.record_eviction();
                 let cause = EvictionCause::from(cause);
                 if cause == EvictionCause::Expired {
                     stats.record_expiration();
+                }
+                let bytes = weigher_for_eviction(&key, &value) as u64;
+                if let Some(guard) = eviction_callback_with_size.try_lock() {
+                    if let Some(ref callback) = *guard {
+                        callback("vertex", cause, bytes);
+                    }
                 }
                 if let Some(guard) = eviction_callback.try_lock() {
                     if let Some(ref callback) = *guard {
@@ -149,23 +188,27 @@ impl RecordCache {
         max_capacity: u64,
         stats: Arc<CacheStats>,
         eviction_callback: Arc<Mutex<Option<EvictionCallback>>>,
+        eviction_callback_with_size: Arc<Mutex<Option<EvictionCallbackWithSize>>>,
+        weigher: WeigherFn<IdIndexCacheKey, IdIndexCacheValue>,
         ttl: Option<std::time::Duration>,
         tti: Option<std::time::Duration>,
     ) -> Cache<IdIndexCacheKey, IdIndexCacheValue> {
+        let weigher_for_eviction = weigher.clone();
         let mut builder = Cache::builder()
             .max_capacity(max_capacity)
-            .weigher(|key: &IdIndexCacheKey, _value: &IdIndexCacheValue| {
-                let key_size = std::mem::size_of::<IdIndexCacheKey>() as u32
-                    + key.external_id.capacity() as u32;
-                let value_size = std::mem::size_of::<IdIndexCacheValue>() as u32;
-                key_size.saturating_add(value_size)
-            })
+            .weigher(move |k, v| weigher(k, v))
             .support_invalidation_closures()
-            .eviction_listener(move |_key, _value, cause| {
+            .eviction_listener(move |key, value, cause| {
                 stats.record_eviction();
                 let cause = EvictionCause::from(cause);
                 if cause == EvictionCause::Expired {
                     stats.record_expiration();
+                }
+                let bytes = weigher_for_eviction(&key, &value) as u64;
+                if let Some(guard) = eviction_callback_with_size.try_lock() {
+                    if let Some(ref callback) = *guard {
+                        callback("id_index", cause, bytes);
+                    }
                 }
                 if let Some(guard) = eviction_callback.try_lock() {
                     if let Some(ref callback) = *guard {

@@ -131,7 +131,7 @@ impl TimeTravelEdgeStore {
 
         // Collect valid offsets from out segments
         for segment in &self.out_segments {
-            for (_, nbr) in segment.csr.iter() {
+            for (_, nbr) in segment.csr.read().iter() {
                 if nbr.timestamp <= ts
                     && !self.mvcc.is_tombstoned(nbr.edge_id, ts)
                     && nbr.prop_offset > 0
@@ -150,7 +150,7 @@ impl TimeTravelEdgeStore {
 
         // Collect valid offsets from in segments
         for segment in &self.in_segments {
-            for (_, nbr) in segment.csr.iter() {
+            for (_, nbr) in segment.csr.read().iter() {
                 if nbr.timestamp <= ts
                     && !self.mvcc.is_tombstoned(nbr.edge_id, ts)
                     && nbr.prop_offset > 0
@@ -194,7 +194,7 @@ impl TimeTravelEdgeStore {
         let mut total_deleted_count = 0u64;
 
         for segment in self.out_segments.iter().chain(self.in_segments.iter()) {
-            let edge_count = segment.csr.edge_count();
+            let edge_count = segment.csr.read().edge_count();
             total_edge_count += edge_count;
 
             match segment.deletion_info {

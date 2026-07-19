@@ -3,6 +3,7 @@
 //! Immutable CSR for read-optimized edge storage.
 //! Uses contiguous storage for memory efficiency and cache locality.
 
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::core::{StorageError, StorageResult};
@@ -129,7 +130,7 @@ impl Csr {
     /// Returns (absolute_csr_position, edge) pairs. The position can be used with
     /// a CSR position-to-entry mapping to recover segment-level EdgeIds that may be
     /// stored separately from the edge data.
-    pub fn edges_of_with_position(&self, vid: u32) -> Vec<(usize, &ImmutableNbr)> {
+    pub fn edges_of_with_position(&self, vid: u32) -> Vec<(usize, ImmutableNbr)> {
         let vid_idx = vid as usize;
         if vid_idx >= self.vertex_capacity() {
             return Vec::new();
@@ -145,7 +146,7 @@ impl Csr {
         self.edges[start..end]
             .iter()
             .enumerate()
-            .map(|(i, edge)| (start + i, edge))
+            .map(|(i, edge)| (start + i, *edge))
             .collect()
     }
 
@@ -302,6 +303,25 @@ impl Csr {
         self.offsets.len() * std::mem::size_of::<u32>()
             + self.edges.len() * std::mem::size_of::<ImmutableNbr>()
             + std::mem::size_of::<Self>()
+    }
+
+    /// Serialize this CSR to a file for later reload (segment eviction).
+    /// Returns the number of bytes written.
+    pub fn dump_to_file(&self, path: &Path) -> StorageResult<u64> {
+        let data = self.dump();
+        let bytes = data.len() as u64;
+        std::fs::write(path, &data).map_err(|e| {
+            StorageError::io_error(format!("failed to write CSR spill file: {}", e))
+        })?;
+        Ok(bytes)
+    }
+
+    /// Load CSR data from a file, replacing current contents (segment reload).
+    pub fn load_from_file(&mut self, path: &Path) -> StorageResult<()> {
+        let data = std::fs::read(path).map_err(|e| {
+            StorageError::io_error(format!("failed to read CSR spill file: {}", e))
+        })?;
+        self.load(&data)
     }
 }
 

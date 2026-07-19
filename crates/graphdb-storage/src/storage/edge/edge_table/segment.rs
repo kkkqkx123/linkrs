@@ -3,8 +3,16 @@
 //! Segments represent frozen portions of the edge table, storing compressed sparse row (CSR)
 //! data with metadata for time-travel queries and MVCC support.
 
+use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use parking_lot::RwLock;
+
 use super::super::{Csr, CsrBase, EdgeId};
+use super::page_state::SegmentLockState;
+use super::residency::SegmentResidency;
 use crate::core::types::Timestamp;
+use crate::core::{StorageError, StorageResult};
 
 /// Deletion information for a CSR segment.
 ///
@@ -142,7 +150,7 @@ impl SegmentVersion {
         let mut crc = 0u32;
         crc = crc
             .wrapping_mul(31)
-            .wrapping_add(segment.csr.edge_count() as u32);
+            .wrapping_add(segment.csr.read().edge_count() as u32);
         crc = crc.wrapping_mul(31).wrapping_add(segment.create_ts_min);
         crc = crc.wrapping_mul(31).wrapping_add(segment.create_ts_max);
         crc
@@ -159,9 +167,8 @@ impl SegmentVersion {
 /// Saves ~15% memory by storing edge_ids separately, with O(1) recovery lookup
 pub const SEPARATE_EDGE_ID_STORAGE_THRESHOLD: usize = 10_000;
 
-#[derive(Debug)]
 pub struct CsrSegment {
-    pub csr: Csr,
+    pub csr: RwLock<Csr>,
     /// Edge creation time range: [create_ts_min, create_ts_max]
     pub create_ts_min: Timestamp,
     pub create_ts_max: Timestamp,
@@ -175,6 +182,12 @@ pub struct CsrSegment {
     /// None: direct mode (edge_id in ImmutableNbr)
     /// Some(...): optimized mode (edge_id stored separately, 15% memory savings)
     pub edge_ids: Option<Vec<EdgeId>>,
+    /// Residency state: whether CSR data is in memory or evicted to disk
+    pub residency: RwLock<SegmentResidency>,
+    /// Lock state for optimistic reads and write coordination
+    pub lock_state: SegmentLockState,
+    /// Last access timestamp for LRU eviction ordering
+    pub last_access_ts: AtomicU64,
 }
 
 impl CsrSegment {
@@ -195,13 +208,16 @@ impl CsrSegment {
         created_at_ts: Timestamp,
     ) -> Self {
         let mut seg = Self {
-            csr,
+            csr: RwLock::new(csr),
             create_ts_min,
             create_ts_max,
             deletion_info,
             version: SegmentVersion::new(),
             created_at_ts,
             edge_ids: None,
+            residency: RwLock::new(SegmentResidency::Resident),
+            lock_state: SegmentLockState::new(),
+            last_access_ts: AtomicU64::new(0),
         };
         seg.version.checksum = SegmentVersion::compute_checksum(&seg);
         seg
@@ -229,7 +245,7 @@ impl CsrSegment {
 
     /// Get deletion percentage (0.0-1.0) of this segment
     pub fn deletion_ratio(&self) -> f64 {
-        let edge_count = self.csr.edge_count();
+        let edge_count = self.csr.read().edge_count();
         if edge_count == 0 {
             0.0
         } else {
@@ -252,10 +268,129 @@ impl CsrSegment {
 
     /// Estimate memory usage of this segment in bytes
     pub fn estimated_bytes(&self) -> usize {
-        let csr_bytes = self.csr.used_memory_size();
+        let csr_bytes = self.csr.read().used_memory_size();
         let metadata_bytes =
             std::mem::size_of::<Timestamp>() * 2 + std::mem::size_of::<DeletionInfo>();
         csr_bytes + metadata_bytes
+    }
+
+    /// Returns true if this segment's CSR data is resident in memory.
+    pub fn is_resident(&self) -> bool {
+        self.residency.read().is_resident()
+    }
+
+    /// Begin eviction: CAS from Unlocked → Marked (first pass).
+    /// The segment remains readable by optimistic readers while marked.
+    /// Returns true if the segment was successfully marked.
+    pub fn begin_eviction(&self) -> bool {
+        self.lock_state.try_mark()
+    }
+
+    /// Complete eviction: CAS from Marked → Evicted, then dump CSR to spill file.
+    /// Returns the number of bytes written to the spill file.
+    pub fn finish_eviction(&self, spill_path: &Path) -> StorageResult<u64> {
+        if !self.lock_state.try_evict() {
+            return Err(StorageError::invalid_operation(
+                "segment is not in Marked state".to_string(),
+            ));
+        }
+
+        let mut residency = self.residency.write();
+        let mut csr = self.csr.write();
+        let bytes = csr.dump_to_file(spill_path)?;
+        *csr = Csr::new();
+        *residency = SegmentResidency::Evicted {
+            spill_path: spill_path.to_path_buf(),
+            spill_size: bytes,
+        };
+        Ok(bytes)
+    }
+
+    /// Evict this segment's CSR data to a spill file, freeing physical memory.
+    ///
+    /// Single-shot eviction: transitions the segment to Evicted and dumps CSR.
+    /// If the segment is Unlocked, it goes through Marked → Evicted atomically.
+    /// Returns error if the segment is locked by a writer.
+    pub fn evict_to_spill(&self, spill_path: &Path) -> StorageResult<u64> {
+        let residency = self.residency.read();
+        if !residency.is_resident() {
+            return Err(StorageError::invalid_operation(
+                "segment is already evicted".to_string(),
+            ));
+        }
+        drop(residency);
+
+        // If already Marked, complete the eviction
+        if self.lock_state.read_state() == super::page_state::SegmentState::Marked {
+            return self.finish_eviction(spill_path);
+        }
+
+        // Transition Unlocked → Evicted via Marked
+        if self.begin_eviction() {
+            return self.finish_eviction(spill_path);
+        }
+
+        Err(StorageError::invalid_operation(
+            "segment is locked by writer".to_string(),
+        ))
+    }
+
+    /// Reload this segment's CSR data from a spill file back into memory.
+    ///
+    /// Uses CAS to transition: Evicted → Unlocked.
+    pub fn reload_from_spill(&self) -> StorageResult<()> {
+        let residency = self.residency.read();
+        let spill_path = match &*residency {
+            SegmentResidency::Resident => {
+                return Err(StorageError::invalid_operation(
+                    "segment is already resident".to_string(),
+                ));
+            }
+            SegmentResidency::Evicted { spill_path, .. } => spill_path.clone(),
+        };
+        drop(residency);
+
+        let mut csr = self.csr.write();
+        csr.load_from_file(&spill_path)?;
+        drop(csr);
+
+        let mut residency = self.residency.write();
+        *residency = SegmentResidency::Resident;
+        self.lock_state.try_resurrect();
+        Ok(())
+    }
+
+    /// Attempt an optimistic read on this segment's CSR data.
+    ///
+    /// Returns `Some(result)` if the segment was Unlocked for the entire read,
+    /// or `None` if a writer was active or the state changed during the read.
+    /// On `None`, the caller should fall back to acquiring `self.csr.read()`.
+    pub fn try_optimistic_read<F, R>(&self, func: F) -> Option<R>
+    where
+        F: FnOnce(&Csr) -> R,
+    {
+        self.lock_state.try_optimistic_read(|| {
+            let csr = self.csr.read();
+            func(&csr)
+        })
+    }
+
+    /// Record an access for LRU tracking.
+    pub fn record_access(&self, clock_ts: u64) {
+        self.last_access_ts.store(clock_ts, Ordering::Relaxed);
+    }
+}
+
+impl std::fmt::Debug for CsrSegment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CsrSegment")
+            .field("create_ts_min", &self.create_ts_min)
+            .field("create_ts_max", &self.create_ts_max)
+            .field("deletion_info", &self.deletion_info)
+            .field("created_at_ts", &self.created_at_ts)
+            .field("residency", &self.residency)
+            .field("edge_count", &self.csr.read().edge_count())
+            .finish()
     }
 }
 

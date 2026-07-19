@@ -15,6 +15,7 @@ use crate::storage::engine::data_store::GraphDataStore;
 use crate::storage::engine::paths::StoragePaths;
 use crate::storage::engine::persistence_coordinator::PersistenceCoordinator;
 use crate::storage::engine::resource_budget::{MemoryAccounting, MemoryBudget};
+use crate::storage::engine::spiller::Spiller;
 use crate::storage::index::{IndexDataManagerImpl, IndexGcConfig, IndexGcManager};
 use crate::storage::vertex::IdKey;
 use crate::storage::StorageOperationContext;
@@ -64,6 +65,13 @@ impl GraphStorageLayout {
         self.work_dir.as_ref().cloned().map(StoragePaths::new)
     }
 
+    fn spill_dir(&self) -> PathBuf {
+        self.work_dir
+            .as_ref()
+            .map(|p| p.join("spill"))
+            .unwrap_or_else(|| PathBuf::from("/tmp/linkrs_spill"))
+    }
+
     fn db_path(&self) -> &str {
         &self.db_path
     }
@@ -84,6 +92,7 @@ struct GraphStoragePersistent {
     user_storage: Arc<UserStorage>,
     persistence: Option<Arc<RwLock<PersistenceCoordinator>>>,
     resource_accounting: Arc<MemoryAccounting>,
+    spiller: Arc<Spiller>,
     layout: GraphStorageLayout,
     stats_manager: Option<Arc<StatsManager>>,
     next_auto_transaction_id: Arc<AtomicU64>,
@@ -155,10 +164,13 @@ impl GraphStoragePersistent {
             flush_threshold: Self::dirty_flush_threshold(&config),
             flush_interval: config.flush_config.flush_interval,
         }));
+        let data_store = Arc::new(GraphDataStore::new());
+        let cache_manager = Arc::new(cache_manager);
+        let spiller = Self::new_spiller(&config, &resource_accounting, &data_store, &cache_manager);
 
         Self {
-            data_store: Arc::new(GraphDataStore::new()),
-            cache_manager: Arc::new(cache_manager),
+            data_store,
+            cache_manager,
             table_tracker,
             config,
             is_open: Arc::new(AtomicBool::new(true)),
@@ -170,6 +182,7 @@ impl GraphStoragePersistent {
             user_storage: Arc::new(UserStorage::new()),
             persistence: None,
             resource_accounting,
+            spiller,
             layout: GraphStorageLayout::new(),
             stats_manager: None,
             // SQLite stores transaction IDs in signed INTEGER columns for the
@@ -193,6 +206,22 @@ impl GraphStoragePersistent {
             resources.memory_hard_ratio,
         );
         Arc::new(MemoryAccounting::new(budget))
+    }
+
+    fn new_spiller(
+        config: &PropertyGraphConfig,
+        accounting: &Arc<MemoryAccounting>,
+        data_store: &Arc<GraphDataStore>,
+        cache_manager: &Arc<CacheManager>,
+    ) -> Arc<Spiller> {
+        let spill_dir = GraphStorageLayout::new().spill_dir();
+        Arc::new(Spiller::new(
+            spill_dir,
+            Arc::clone(accounting),
+            Arc::clone(data_store),
+            Arc::clone(cache_manager),
+            config.resources.spill_threshold_ratio,
+        ))
     }
 
     fn new_with_persistence(
@@ -224,6 +253,16 @@ impl GraphStoragePersistent {
             .write()
             .set_index_barrier_registry(barrier_registry);
 
+        let layout = GraphStorageLayout::new_with_path(path);
+        let spill_dir = layout.spill_dir();
+        let spiller = Arc::new(Spiller::new(
+            spill_dir,
+            Arc::clone(&resource_accounting),
+            Arc::clone(&data_store),
+            Arc::clone(&cache_manager),
+            property_graph_config.resources.spill_threshold_ratio,
+        ));
+
         Ok(Self {
             data_store,
             cache_manager,
@@ -238,7 +277,8 @@ impl GraphStoragePersistent {
             user_storage,
             persistence: Some(persistence),
             resource_accounting,
-            layout: GraphStorageLayout::new_with_path(path),
+            spiller,
+            layout,
             stats_manager: None,
             next_auto_transaction_id: Arc::new(AtomicU64::new(1 << 62)),
             staged_wal: Arc::new(dashmap::DashMap::new()),
@@ -387,8 +427,12 @@ impl std::fmt::Debug for GraphStorageContext {
 
 impl GraphStorageContext {
     pub fn new_with_config(config: PropertyGraphConfig) -> crate::core::StorageResult<Self> {
+        let persistent = GraphStoragePersistent::new_with_config(config)?;
+        if let Err(e) = persistent.spiller.cleanup_stale_files() {
+            log::warn!("Failed to clean up stale spill files: {}", e);
+        }
         Ok(Self {
-            persistent: GraphStoragePersistent::new_with_config(config)?,
+            persistent,
             runtime: GraphStorageRuntime::new(),
             operation_context: None,
             write_timestamp_lease: None,

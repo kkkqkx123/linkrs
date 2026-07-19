@@ -1062,6 +1062,7 @@ impl PersistenceCoordinator {
                 outbox_snapshot,
                 index_manifests,
             )
+            .map_err(StorageError::db_error)?
         } else {
             CheckpointManifest::new(
                 checkpoint.seq,
@@ -1070,6 +1071,7 @@ impl PersistenceCoordinator {
                 outbox_snapshot,
                 index_manifests,
             )
+            .map_err(StorageError::db_error)?
         };
 
         self.manifest_manager.publish(&manifest).map_err(|error| {

@@ -39,6 +39,17 @@ impl From<RemovalCause> for EvictionCause {
 /// Called from within Moka's internal locks. The callback must NOT access the same Moka cache.
 pub type EvictionCallback = Arc<dyn Fn(&str, EvictionCause) + Send + Sync>;
 
+/// Memory-aware eviction callback that receives the byte size of the evicted entry.
+///
+/// # Arguments
+/// - `cache_type`: "vertex" or "id_index"
+/// - `cause`: why the entry was evicted
+/// - `bytes`: estimated byte size of the evicted entry
+///
+/// # Deadlock warning
+/// Called from within Moka's internal locks. The callback must NOT access the same Moka cache.
+pub type EvictionCallbackWithSize = Arc<dyn Fn(&str, EvictionCause, u64) + Send + Sync>;
+
 /// Key for vertex cache: (label_id, internal_id)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct VertexCacheKey {

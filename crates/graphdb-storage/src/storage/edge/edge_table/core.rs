@@ -237,10 +237,10 @@ impl TimeTravelEdgeStore {
             }
 
             // Binary search for the specific edge in this segment
-            let positioned_edges = segment.csr.edges_of_with_position(src);
+            let positioned_edges = segment.csr.read().edges_of_with_position(src);
             for (position, edge) in positioned_edges {
                 if edge.neighbor == dst && edge.timestamp <= ts {
-                    let edge_id = segment.recover_edge_id(edge, position);
+                    let edge_id = segment.recover_edge_id(&edge, position);
                     if !self.mvcc.is_tombstoned(edge_id, ts) {
                         return Some(Nbr::new(
                             edge.neighbor,
@@ -287,9 +287,9 @@ impl TimeTravelEdgeStore {
                 continue;
             }
 
-            for (position, edge) in segment.csr.edges_of_with_position(src) {
+            for (position, edge) in segment.csr.read().edges_of_with_position(src) {
                 if edge.timestamp <= ts {
-                    let edge_id = segment.recover_edge_id(edge, position);
+                    let edge_id = segment.recover_edge_id(&edge, position);
                     if !self.mvcc.is_tombstoned(edge_id, ts) {
                         edges.push(Nbr::new(
                             edge.neighbor,
@@ -745,6 +745,7 @@ impl TimeTravelEdgeStore {
                 .map(|segment| {
                     segment
                         .csr
+                        .read()
                         .iter()
                         .filter(|(_, edge)| !self.mvcc.is_tombstoned(edge.edge_id, u32::MAX))
                         .count() as u64
@@ -1099,12 +1100,12 @@ impl TimeTravelEdgeStore {
         total += self
             .out_segments
             .iter()
-            .map(|segment| segment.csr.used_memory_size())
+            .map(|segment| segment.csr.read().used_memory_size())
             .sum::<usize>();
         total += self
             .in_segments
             .iter()
-            .map(|segment| segment.csr.used_memory_size())
+            .map(|segment| segment.csr.read().used_memory_size())
             .sum::<usize>();
         total += self.mvcc.tombstones.len() * std::mem::size_of::<(EdgeId, Timestamp)>();
         total += self.properties.used_memory_size();
@@ -1151,7 +1152,8 @@ impl TimeTravelEdgeStore {
     pub fn rebuild_sparse_vertex_indices(&mut self) {
         self.sparse_vertex_index_out.clear();
         for (seg_idx, seg) in self.out_segments.iter().enumerate() {
-            for (src_vid, _) in seg.csr.iter() {
+            let csr = seg.csr.read();
+            for (src_vid, _) in csr.iter() {
                 if let Some(vid) = src_vid.as_int64() {
                     self.sparse_vertex_index_out
                         .entry(vid as u32)
@@ -1168,7 +1170,8 @@ impl TimeTravelEdgeStore {
 
         self.sparse_vertex_index_in.clear();
         for (seg_idx, seg) in self.in_segments.iter().enumerate() {
-            for (src_vid, _) in seg.csr.iter() {
+            let csr = seg.csr.read();
+            for (src_vid, _) in csr.iter() {
                 if let Some(vid) = src_vid.as_int64() {
                     self.sparse_vertex_index_in
                         .entry(vid as u32)
@@ -1371,7 +1374,7 @@ impl<'a> EdgeTableScanIterator<'a> {
                     continue;
                 }
 
-                for (src_vid, edge) in segment.csr.iter() {
+                for (src_vid, edge) in segment.csr.read().iter() {
                     if edge.timestamp <= ts
                         && !table.mvcc.is_tombstoned(edge.edge_id, ts)
                         && seen.insert(edge.edge_id)

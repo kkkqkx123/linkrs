@@ -770,7 +770,8 @@ mod tests {
             storage_ref,
             None,
             Vec::new(),
-        );
+        )
+        .map_err(StorageError::db_error)?;
         let manager = CheckpointManifestManager::new(checkpoint_dir.join("manifests"));
         manager.init().map_err(StorageError::db_error)?;
         manager.publish(&manifest).map_err(StorageError::db_error)?;

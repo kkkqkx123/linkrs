@@ -117,6 +117,12 @@ impl GraphStorageContext {
 
         self.persistent.cache_manager.clear_cache();
 
+        if let Ok(freed) = self.trigger_segment_eviction() {
+            if freed > 0 {
+                log::info!("Segment eviction during maintenance freed {} bytes", freed);
+            }
+        }
+
         match self.trigger_background_freeze() {
             Ok(()) => {
                 if let Some(stats) = self.get_freeze_stats() {

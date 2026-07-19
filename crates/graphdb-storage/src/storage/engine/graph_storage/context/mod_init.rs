@@ -25,11 +25,16 @@ impl GraphStorageContext {
     }
 
     pub fn new_with_persistence(path: PathBuf, config: PersistenceConfig) -> StorageResult<Self> {
-        GraphStoragePersistent::new_with_persistence(path, config).map(|persistent| Self {
-            persistent,
-            runtime: GraphStorageRuntime::new(),
-            operation_context: None,
-            write_timestamp_lease: None,
+        GraphStoragePersistent::new_with_persistence(path, config).map(|persistent| {
+            if let Err(e) = persistent.spiller.cleanup_stale_files() {
+                log::warn!("Failed to clean up stale spill files: {}", e);
+            }
+            Self {
+                persistent,
+                runtime: GraphStorageRuntime::new(),
+                operation_context: None,
+                write_timestamp_lease: None,
+            }
         })
     }
 

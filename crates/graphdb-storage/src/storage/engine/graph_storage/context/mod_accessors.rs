@@ -366,4 +366,8 @@ impl GraphStorageContext {
     ) -> Vec<(crate::core::wal::redo::DeleteEdgeRedo, Timestamp)> {
         self.runtime.deferred_wal_ops.drain_deletes()
     }
+
+    pub fn spiller(&self) -> &std::sync::Arc<crate::storage::engine::spiller::Spiller> {
+        &self.persistent.spiller
+    }
 }

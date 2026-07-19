@@ -4,8 +4,8 @@
 
 use crate::core::types::{LabelId, Timestamp};
 use crate::storage::cache::{
-    CachedVertex, RecordCache, RecordCacheConfig, RecordCacheStats, SharedRecordCache,
-    VertexCacheKey,
+    CachedVertex, EvictionCallbackWithSize, RecordCache, RecordCacheConfig, RecordCacheStats,
+    SharedRecordCache, VertexCacheKey,
 };
 use crate::storage::engine::config::ResourceConfig;
 use crate::storage::engine::resource_budget::{MemoryAccounting, MemoryCategory};
@@ -31,7 +31,19 @@ impl CacheManager {
                 tti: resources.cache_tti,
                 ..Default::default()
             };
-            Some(SharedRecordCache::new(RecordCache::with_config(config)))
+            let cache = SharedRecordCache::new(RecordCache::with_config(config));
+
+            if resources.cache_eviction_sync {
+                let accounting_weak = Arc::downgrade(&accounting);
+                let callback: EvictionCallbackWithSize = Arc::new(move |_cache_type, _cause, bytes| {
+                    if let Some(acc) = accounting_weak.upgrade() {
+                        acc.release_category(MemoryCategory::Cache, bytes);
+                    }
+                });
+                cache.set_eviction_callback_with_size(callback);
+            }
+
+            Some(cache)
         } else {
             None
         };

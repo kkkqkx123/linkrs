@@ -28,9 +28,8 @@ pub struct FulltextReceiver {
     apply_lock: Mutex<()>,
 }
 
-// FulltextReceiver state is stored via tantivy's commit payload API, which
-// only accepts `&str`. JSON is used here (not postcard) because tantivy's
-// `set_payload` requires valid UTF-8 strings and we cannot store raw binary.
+// FulltextReceiver keeps JSON because Tantivy commit payloads accept only UTF-8
+// strings; this intentional exception is documented in docs/archive.
 #[cfg(feature = "fulltext-search")]
 #[derive(serde::Serialize, serde::Deserialize)]
 struct FulltextCommitState {

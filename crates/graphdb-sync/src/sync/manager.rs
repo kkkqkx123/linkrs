@@ -1588,7 +1588,8 @@ mod tests {
                 .expect("storage snapshot reference should be created"),
             Some(CheckpointManifest::outbox_snapshot_from(snapshot)),
             Vec::new(),
-        );
+        )
+        .expect("checkpoint manifest should be created");
         CheckpointManifestManager::new(root.join("checkpoint/manifests"))
             .publish(&manifest)
             .expect("checkpoint manifest should publish");

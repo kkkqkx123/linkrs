@@ -502,7 +502,9 @@ fn scan_segments(args: ScanArgs, seg_idx: usize) {
     }
 
     let segment = &args.store.out_segments[seg_count - 1 - seg_idx];
-    let mut iter = segment.csr.iter();
+    let csr = segment.csr.read();
+    let edges: Vec<_> = csr.iter().collect();
+    let mut iter = edges.iter();
 
     let mut skip = args.state.seg_raw_consumed;
     while skip > 0 {

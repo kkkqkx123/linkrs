@@ -84,7 +84,7 @@ pub fn flush_csr(
         let (delete_ts_min, delete_ts_max) = segment.deletion_range();
         file.write_all(&delete_ts_min.to_le_bytes())?;
         file.write_all(&delete_ts_max.to_le_bytes())?;
-        let data = segment.csr.dump();
+        let data = segment.csr.read().dump();
         file.write_all(&(data.len() as u64).to_le_bytes())?;
         file.write_all(&data)?;
 
@@ -284,7 +284,7 @@ pub fn load_csr(
                     cursor.read_exact(&mut edge_count_bytes)?;
                     let edge_count = u64::from_le_bytes(edge_count_bytes) as usize;
 
-                    let csr_edge_count = segment.csr.edge_count() as usize;
+                    let csr_edge_count = segment.csr.read().edge_count() as usize;
                     if edge_count != csr_edge_count {
                         return Err(StorageError::deserialize_error(format!(
                             "edge_ids count mismatch: stored={}, csr={}",

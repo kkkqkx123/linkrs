@@ -55,6 +55,12 @@ pub struct ResourceConfig {
     pub cache_ttl: Option<Duration>,
     /// Record cache time-to-idle.
     pub cache_tti: Option<Duration>,
+    /// Ratio of hard_limit at which the disk spiller proactively evicts cold data.
+    /// Must satisfy soft_ratio < spill_threshold_ratio <= 1.0.
+    pub spill_threshold_ratio: f64,
+    /// When true, every Moka cache eviction immediately decrements the memory
+    /// accounting counter, eliminating accounting lag between refresh intervals.
+    pub cache_eviction_sync: bool,
 }
 
 impl Default for ResourceConfig {
@@ -74,6 +80,8 @@ impl Default for ResourceConfig {
             dirty_flush_bytes: 64 * 1024 * 1024,
             cache_ttl: Some(Duration::from_secs(60)),
             cache_tti: Some(Duration::from_secs(300)),
+            spill_threshold_ratio: 0.90,
+            cache_eviction_sync: true,
         }
     }
 }
@@ -129,6 +137,18 @@ impl ResourceConfig {
                     format!("{name} must be greater than 0 when configured"),
                 ));
             }
+        }
+        if !self.spill_threshold_ratio.is_finite()
+            || self.spill_threshold_ratio <= self.memory_soft_ratio
+            || self.spill_threshold_ratio > 1.0
+        {
+            return Err(StorageError::new(
+                StorageErrorKind::InvalidInput,
+                format!(
+                    "spill_threshold_ratio ({}) must satisfy soft_ratio < spill_ratio <= 1.0",
+                    self.spill_threshold_ratio
+                ),
+            ));
         }
         Ok(())
     }
