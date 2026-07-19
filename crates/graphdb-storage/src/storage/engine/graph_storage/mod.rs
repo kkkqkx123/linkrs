@@ -873,6 +873,12 @@ impl StorageSchemaOps for GraphStorage {
     }
 
     fn rebuild_tag_index(&mut self, space: &str, index_name: &str) -> Result<bool, StorageError> {
+        // Keep the exclusive rebuild guard from the table snapshot through
+        // WAL catch-up and generation publication. Index writers take the
+        // read side in index_engine, so they cannot update the old generation
+        // after this snapshot has been taken.
+        let rebuild_gate = self.ctx.index_data_manager().read().rebuild_gate();
+        let _rebuild_guard = rebuild_gate.write();
         let snapshot_timestamp = self.ctx.get_read_timestamp();
         let start_lsn = index_manager::current_wal_lsn(&self.ctx);
         let snapshot_ctx = self.ctx.with_operation_context(StorageOperationContext {
@@ -902,6 +908,12 @@ impl StorageSchemaOps for GraphStorage {
     }
 
     fn rebuild_edge_index(&mut self, space: &str, index_name: &str) -> Result<bool, StorageError> {
+        // Keep the exclusive rebuild guard from the table snapshot through
+        // WAL catch-up and generation publication. Index writers take the
+        // read side in index_engine, so they cannot update the old generation
+        // after this snapshot has been taken.
+        let rebuild_gate = self.ctx.index_data_manager().read().rebuild_gate();
+        let _rebuild_guard = rebuild_gate.write();
         let snapshot_timestamp = self.ctx.get_read_timestamp();
         let start_lsn = index_manager::current_wal_lsn(&self.ctx);
         let snapshot_ctx = self.ctx.with_operation_context(StorageOperationContext {

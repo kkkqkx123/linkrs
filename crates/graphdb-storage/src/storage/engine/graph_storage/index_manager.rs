@@ -306,7 +306,9 @@ fn stable_hash(bytes: &[u8]) -> u64 {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x100000001b3);
     }
-    hash
+    // Index IDs are persisted in SQLite INTEGER columns, so keep the
+    // deterministic hash within the signed 64-bit range.
+    hash & (i64::MAX as u64)
 }
 
 fn record_changed_after(record: &IndexRecord, snapshot_timestamp: u32) -> bool {
@@ -337,16 +339,20 @@ where
         .iter()
         .map(|intent| &intent.mutation.entity_ref)
         .collect::<Vec<_>>();
+    let matches_changed_entity = |record: &IndexRecord| {
+        changed_entities.is_empty()
+            || record.entity_ref.as_ref().is_some_and(|entity| {
+                changed_entities
+                    .iter()
+                    .any(|candidate| *candidate == entity)
+            })
+    };
     let forward_changes: Vec<(Vec<u8>, IndexRecord)> = active_forward
         .iter()
         .filter(|(key, record)| {
             matches_forward(key)
                 && record_changed_after(record, snapshot_timestamp)
-                && record.entity_ref.as_ref().is_some_and(|entity| {
-                    changed_entities
-                        .iter()
-                        .any(|candidate| *candidate == entity)
-                })
+                && matches_changed_entity(record)
         })
         .map(|(key, record)| (key.clone(), record.clone()))
         .collect();
@@ -355,11 +361,7 @@ where
         .filter(|(key, record)| {
             matches_reverse(key)
                 && record_changed_after(record, snapshot_timestamp)
-                && record.entity_ref.as_ref().is_some_and(|entity| {
-                    changed_entities
-                        .iter()
-                        .any(|candidate| *candidate == entity)
-                })
+                && matches_changed_entity(record)
         })
         .map(|(key, record)| (key.clone(), record.clone()))
         .collect();
@@ -616,7 +618,12 @@ pub(crate) fn rebuild_tag_index(
     if let Some(manifest_path) = manifest_path {
         manifest.store(&manifest_path)?;
     }
-    manager.publish_generation_data(manifest.clone(), persisted_forward, persisted_reverse)?;
+    manager.publish_native_index(
+        manifest.clone(),
+        persisted_forward,
+        persisted_reverse,
+        barrier_lsn,
+    )?;
     log::info!(
         "Published new generation {} for index {} (space {})",
         generation,
@@ -902,7 +909,12 @@ pub(crate) fn rebuild_edge_index(
     if let Some(manifest_path) = manifest_path {
         manifest.store(&manifest_path)?;
     }
-    manager.publish_generation_data(manifest.clone(), persisted_forward, persisted_reverse)?;
+    manager.publish_native_index(
+        manifest.clone(),
+        persisted_forward,
+        persisted_reverse,
+        barrier_lsn,
+    )?;
     log::info!(
         "Published new generation {} for edge index {} (space {})",
         generation,
@@ -1107,6 +1119,110 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].transaction_id, transaction_id);
         assert_eq!(filtered[0].mutation.index_id, 7);
+    }
+
+    #[test]
+    fn concurrent_rebuild_and_writes_preserve_new_index_entries() {
+        use std::collections::HashMap;
+        use std::thread;
+
+        let temp_dir = tempfile::TempDir::new().expect("temporary directory should be created");
+        let mut storage = GraphStorage::new_with_path(temp_dir.path().to_path_buf())
+            .expect("persistent storage should be created");
+        let mut space = crate::core::types::SpaceInfo::new("test_space".to_string())
+            .with_vid_type(crate::core::DataType::BigInt);
+        storage
+            .create_space(&mut space)
+            .expect("space should be created");
+        let tag = crate::core::types::TagInfo::new("Person".to_string()).with_properties(vec![
+            crate::core::types::PropertyDef::new("name".to_string(), crate::core::DataType::String),
+        ]);
+        storage
+            .create_tag("test_space", &tag)
+            .expect("tag should be created");
+        let index = Index::new(IndexConfig {
+            id: 1,
+            name: "person_name_idx".to_string(),
+            space_id: 1,
+            schema_name: "Person".to_string(),
+            fields: vec![IndexField::new(
+                "name".to_string(),
+                Value::String(String::new()),
+                false,
+            )],
+            properties: Vec::new(),
+            index_type: IndexType::TagIndex,
+            is_unique: false,
+            partial_condition: None,
+        });
+        storage
+            .create_tag_index("test_space", &index)
+            .expect("index should be created");
+
+        for vertex_id in 0..500 {
+            let mut properties = HashMap::new();
+            properties.insert(
+                "name".to_string(),
+                Value::String(format!("initial-{vertex_id}")),
+            );
+            storage
+                .insert_vertex(
+                    "test_space",
+                    crate::core::Vertex::new(
+                        VertexId::from_int64(vertex_id),
+                        vec![crate::core::vertex_edge_path::Tag::new(
+                            "Person".to_string(),
+                            properties,
+                        )],
+                    ),
+                )
+                .expect("initial vertex should be inserted");
+        }
+
+        let rebuild_storage = storage.clone();
+        let writer_storage = storage.clone();
+        let rebuild = thread::spawn(move || {
+            let mut rebuild_storage = rebuild_storage;
+            rebuild_storage
+                .rebuild_tag_index("test_space", "person_name_idx")
+                .expect("rebuild should succeed");
+        });
+        let writer = thread::spawn(move || {
+            let mut writer_storage = writer_storage;
+            for vertex_id in 10_000..10_050 {
+                let mut properties = HashMap::new();
+                properties.insert(
+                    "name".to_string(),
+                    Value::String(format!("concurrent-{vertex_id}")),
+                );
+                writer_storage
+                    .insert_vertex(
+                        "test_space",
+                        crate::core::Vertex::new(
+                            VertexId::from_int64(vertex_id),
+                            vec![crate::core::vertex_edge_path::Tag::new(
+                                "Person".to_string(),
+                                properties,
+                            )],
+                        ),
+                    )
+                    .expect("concurrent vertex should be inserted");
+            }
+        });
+
+        rebuild.join().expect("rebuild thread should finish");
+        writer.join().expect("writer thread should finish");
+
+        for vertex_id in 10_000..10_050 {
+            let indexed = storage
+                .lookup_index(
+                    "test_space",
+                    "person_name_idx",
+                    &Value::String(format!("concurrent-{vertex_id}")),
+                )
+                .expect("index lookup should succeed");
+            assert_eq!(indexed, vec![Value::from(VertexId::from_int64(vertex_id))]);
+        }
     }
 
     #[test]

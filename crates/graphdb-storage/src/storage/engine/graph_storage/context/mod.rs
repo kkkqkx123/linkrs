@@ -219,6 +219,10 @@ impl GraphStoragePersistent {
         );
 
         let persistence = PersistenceCoordinator::new(config).map(|p| Arc::new(RwLock::new(p)))?;
+        let barrier_registry = index_data_manager.read().barrier_registry();
+        persistence
+            .write()
+            .set_index_barrier_registry(barrier_registry);
 
         Ok(Self {
             data_store,
@@ -291,8 +295,7 @@ struct WriteTimestampLease {
 
 impl Drop for WriteTimestampLease {
     fn drop(&mut self) {
-        self.version_manager
-            .release_write_timestamp(self.timestamp);
+        self.version_manager.release_write_timestamp(self.timestamp);
     }
 }
 

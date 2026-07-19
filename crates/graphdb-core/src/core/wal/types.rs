@@ -595,6 +595,9 @@ pub enum WalError {
 
     #[error("WAL is poisoned: {0}")]
     Poisoned(String),
+
+    #[error("Group commit timeout: sync leader did not complete within deadline")]
+    GroupCommitTimeout,
 }
 
 impl From<std::io::Error> for WalError {

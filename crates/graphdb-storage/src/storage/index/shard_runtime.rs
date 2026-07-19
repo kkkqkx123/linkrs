@@ -3,20 +3,23 @@
 //! Each manifest generation owns independent shard maps. This makes the
 //! manifest handle a real data-generation pin instead of metadata only.
 
-use crate::core::types::IndexGeneration;
+use crate::core::types::{CommitLsn, IndexGeneration};
 use crate::core::{StorageError, StorageResult};
 use crate::storage::index::generic_index_manager::GenericIndexManager;
 use crate::storage::index::index_data_manager::IndexRecord;
 use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
 use crate::storage::index::key_codec::IndexKeyGenerator;
 use crate::storage::index::manifest::IndexManifest;
-use parking_lot::RwLock;
+use parking_lot::{Condvar, Mutex, RwLock};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
 };
+
+/// Shared publish barriers used by native indexes and WAL truncation.
+pub(crate) type IndexBarrierRegistry = Arc<RwLock<HashMap<(u64, u64), CommitLsn>>>;
 
 pub(crate) type IndexMaps = (
     BTreeMap<SecondaryIndexKey, IndexRecord>,
@@ -166,6 +169,9 @@ impl GenerationRuntime {
 pub(crate) struct IndexRuntime {
     generations: RwLock<HashMap<IndexGeneration, Arc<GenerationRuntime>>>,
     publish_fence: RwLock<()>,
+    barrier_lsn: AtomicU64,
+    barrier_wait: Mutex<()>,
+    barrier_cv: Condvar,
 }
 
 impl IndexRuntime {
@@ -176,6 +182,9 @@ impl IndexRuntime {
                 Arc::new(GenerationRuntime::empty(manifest)),
             )])),
             publish_fence: RwLock::new(()),
+            barrier_lsn: AtomicU64::new(0),
+            barrier_wait: Mutex::new(()),
+            barrier_cv: Condvar::new(),
         }
     }
 
@@ -186,6 +195,9 @@ impl IndexRuntime {
                 Arc::new(GenerationRuntime::load::<K>(manifest)?),
             )])),
             publish_fence: RwLock::new(()),
+            barrier_lsn: AtomicU64::new(0),
+            barrier_wait: Mutex::new(()),
+            barrier_cv: Condvar::new(),
         })
     }
 
@@ -223,6 +235,39 @@ impl IndexRuntime {
         self.publish_fence.write()
     }
 
+    pub(crate) fn barrier_lsn(&self) -> CommitLsn {
+        CommitLsn::new(self.barrier_lsn.load(Ordering::Acquire))
+    }
+
+    /// Publish a barrier and wake writers or maintenance operations waiting
+    /// for the corresponding generation boundary.
+    pub(crate) fn establish_barrier_lsn(&self, barrier_lsn: CommitLsn) {
+        let mut current = self.barrier_lsn.load(Ordering::Acquire);
+        while barrier_lsn.get() > current {
+            match self.barrier_lsn.compare_exchange(
+                current,
+                barrier_lsn.get(),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(observed) => current = observed,
+            }
+        }
+        self.barrier_cv.notify_all();
+    }
+
+    /// Wait until this runtime has published at least `barrier_lsn`.
+    pub(crate) fn wait_for_barrier_lsn(&self, barrier_lsn: CommitLsn) {
+        if self.barrier_lsn() >= barrier_lsn {
+            return;
+        }
+        let mut guard = self.barrier_wait.lock();
+        while self.barrier_lsn() < barrier_lsn {
+            self.barrier_cv.wait(&mut guard);
+        }
+    }
+
     pub(crate) fn flush_generation<K: IndexKeyGenerator>(
         &self,
         manifest: &IndexManifest,
@@ -256,4 +301,50 @@ pub(crate) fn generation_from_maps(
         }
     }
     generation
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn manifest() -> IndexManifest {
+        IndexManifest::new(
+            1,
+            1,
+            IndexGeneration::new(1),
+            vec![crate::storage::index::manifest::IndexShard {
+                shard_id: 0,
+                lower: None,
+                upper: None,
+                checkpoint_file: PathBuf::from("memory-index"),
+                checksum: None,
+            }],
+        )
+        .expect("manifest should be valid")
+    }
+
+    #[test]
+    fn barrier_wait_is_released_by_publish_notification() {
+        let runtime = Arc::new(IndexRuntime::new(&manifest()));
+        let waiting = Arc::clone(&runtime);
+        let handle = std::thread::spawn(move || {
+            waiting.wait_for_barrier_lsn(CommitLsn::new(42));
+            waiting.barrier_lsn()
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        runtime.establish_barrier_lsn(CommitLsn::new(42));
+        assert_eq!(
+            handle.join().expect("barrier waiter should finish"),
+            CommitLsn::new(42)
+        );
+    }
+
+    #[test]
+    fn barrier_lsn_is_monotonic() {
+        let runtime = IndexRuntime::new(&manifest());
+        runtime.establish_barrier_lsn(CommitLsn::new(100));
+        runtime.establish_barrier_lsn(CommitLsn::new(50));
+        assert_eq!(runtime.barrier_lsn(), CommitLsn::new(100));
+    }
 }

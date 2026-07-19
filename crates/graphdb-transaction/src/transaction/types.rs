@@ -402,6 +402,8 @@ pub struct TransactionStats {
     pub aborted_transactions: AtomicU64,
     /// Timeout transactions
     pub timeout_transactions: AtomicU64,
+    /// Transactions aborted due to write-set conflicts
+    pub conflict_transactions: AtomicU64,
     /// Optional StatsManager for unified metrics
     stats_manager: Option<Arc<StatsManager>>,
 }
@@ -414,6 +416,7 @@ impl Default for TransactionStats {
             committed_transactions: AtomicU64::new(0),
             aborted_transactions: AtomicU64::new(0),
             timeout_transactions: AtomicU64::new(0),
+            conflict_transactions: AtomicU64::new(0),
             stats_manager: None,
         }
     }
@@ -431,6 +434,7 @@ impl TransactionStats {
             committed_transactions: AtomicU64::new(0),
             aborted_transactions: AtomicU64::new(0),
             timeout_transactions: AtomicU64::new(0),
+            conflict_transactions: AtomicU64::new(0),
             stats_manager: Some(stats_manager),
         }
     }
@@ -484,8 +488,21 @@ impl TransactionStats {
     }
 
     pub fn record_txn_conflict(&self) {
+        self.conflict_transactions.fetch_add(1, Ordering::Relaxed);
         if let Some(ref sm) = self.stats_manager {
             sm.add_value(MetricType::TxnConflictCount);
+        }
+    }
+
+    /// Get the conflict rate as a ratio (0.0 to 1.0).
+    /// Returns conflicts / total_transactions.
+    pub fn conflict_rate(&self) -> f64 {
+        let total = self.total_transactions.load(Ordering::Relaxed);
+        if total == 0 {
+            0.0
+        } else {
+            let conflicts = self.conflict_transactions.load(Ordering::Relaxed);
+            conflicts as f64 / total as f64
         }
     }
 }
@@ -615,6 +632,24 @@ mod tests {
 
         assert_eq!(stats.active_transactions.load(Ordering::Relaxed), 0);
         assert_eq!(stats.committed_transactions.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn test_conflict_rate_tracking() {
+        let stats = TransactionStats::new();
+
+        // 4 total, 1 conflict => 25% rate
+        for _ in 0..4 {
+            stats.increment_total();
+        }
+        stats.record_txn_conflict();
+
+        assert_eq!(stats.conflict_transactions.load(Ordering::Relaxed), 1);
+        assert!((stats.conflict_rate() - 0.25).abs() < f64::EPSILON);
+
+        // No transactions => 0.0
+        let empty = TransactionStats::new();
+        assert_eq!(empty.conflict_rate(), 0.0);
     }
 
     #[test]

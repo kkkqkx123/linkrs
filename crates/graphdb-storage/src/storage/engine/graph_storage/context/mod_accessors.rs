@@ -327,6 +327,10 @@ impl GraphStorageContext {
         } else {
             crate::core::types::CommitLsn::ZERO
         };
+        self.persistent
+            .index_data_manager
+            .read()
+            .advance_barriers(commit_lsn);
         self.persistent.staged_wal.remove(&transaction_id);
         Ok(commit_lsn)
     }

@@ -699,10 +699,10 @@ mod tests {
     use crate::core::DataType;
     use crate::storage::engine::PersistenceConfig;
     use crate::storage::types::StoragePropertyDef;
-    use graphdb_core::core::types::CommitLsn;
-    use graphdb_sync::sync::checkpoint_manifest::CheckpointManifest;
     use crate::transaction::wal::writer::WalWriter;
     use crate::transaction::wal::{InsertVertexRedo, LocalWalWriter, WalOpType};
+    use graphdb_core::core::types::CommitLsn;
+    use graphdb_sync::sync::checkpoint_manifest::CheckpointManifest;
     use postcard::to_allocvec;
     use std::fs;
     use std::io::Write;

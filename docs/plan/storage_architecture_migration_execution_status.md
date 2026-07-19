@@ -19,9 +19,17 @@
 6. 新增 `graphdb-transaction::wal::filter` 模块用于 generation rebuild 的 WAL 过滤
 7. 将 committed WAL intents 接入 vertex/edge generation rebuild，并按 `(start_lsn, barrier_lsn]` 回放
 8. 增加 generation rebuild 失败后重启恢复和 WAL 磁盘读取测试
+9. 修复同步测试的 WAL→SQLite→claim→apply 提交流程，并将持久化 index ID 限制在 SQLite signed INTEGER 范围内
+10. 完成 Barrier LSN 与 native index 写入、generation 发布和 WAL 截断的生产调用链集成
+11. 增加 rebuild gate 覆盖 snapshot 到 publish，并修复无 outbox intent 的并发 active-generation 变更保留
+
+其中 `rebuild_gate` 不是无效的兼容字段：rebuild 通过 RAII 持有它的写锁，
+vertex/edge 索引写入先持有同一 gate 的读锁，再解析 active generation 并修改索引。
+因此该写锁必须覆盖 snapshot、WAL catch-up 和 publish 全过程；删除它会允许 snapshot
+之后的写入继续落入旧 generation，随后被新 generation 发布覆盖。`publish_fence` 只保护
+manifest/runtime 的短发布区间，不能替代这个 rebuild gate。
 
 **仍不能标记整体完成的原因**：
-- Barrier LSN 未与写入路径集成
 - Split 的 crash-safe 不完整（仍使用 `snapshot_timestamp=0/start_lsn=0`）
 - Included columns MVCC 缺少更新/tombstone 完整测试
 
@@ -79,10 +87,10 @@
 | `cargo test -p graphdb-sync --lib -- --nocapture` | 56 passed | 默认 feature；包含 manifest、outbox、frontier、lease、snapshot 和损坏恢复。 |
 | `cargo test -p graphdb-sync --features fulltext-search --lib -- --nocapture` | 57 passed | fulltext feature；receiver 相关基础测试和 outbox 测试通过。 |
 | `cargo test -p graphdb-sync --features qdrant --lib -- --nocapture` | 58 passed | qdrant feature；包含 vector receipt/late-arrival 持久化测试。 |
-| `cargo test -p graphdb-storage --lib -- --nocapture` | 528 passed | 覆盖 storage 单元、checkpoint/outbox vertical slice、covering cursor。 |
-| `cargo test -p graphdb-storage --features fulltext-search --lib -- --nocapture` | 529 passed | 包含 WAL recovery 测试和 generation rebuild WAL catch-up。 |
+| `cargo test -p graphdb-storage --lib -- --nocapture` | 532 passed | 覆盖 storage 单元、checkpoint/outbox vertical slice、covering cursor 和 rebuild 并发 fence。 |
+| `cargo test -p graphdb-storage --features fulltext-search --lib -- --nocapture` | 533 passed | 包含 WAL recovery 测试和 generation rebuild WAL catch-up。 |
 | `cargo test -p graphdb-query --lib -- --nocapture` | 1460 passed | covering query 修改后的 query 单元测试。 |
-| `cargo test -p graphdb-transaction --lib -- --nocapture` | 194 passed | 事务、WAL batch、commit LSN、recovery 和 WAL intent filter 测试。 |
+| `cargo test -p graphdb-transaction --lib -- --nocapture` | 208 passed | 事务、WAL batch、commit LSN、recovery 和 WAL intent filter 测试。 |
 | `cargo test -p graphdb-storage --test '*' -- --nocapture` | 51 passed | storage 集成测试，包含 generation rebuild 重启恢复。 |
 
 ### 3.2 编译验证
@@ -101,6 +109,10 @@
 
 - 代码仍有既有 unused、dead-code、type-complexity 等 warning；本轮没有扩大 warning 清理范围。
 - 本轮涉及的 Rust 文件已通过 `rustfmt --edition 2021 --check`；全 workspace 的 `cargo fmt --check` 仍受既有未格式化改动影响。
+
+### 3.4 非阶段 1 阻塞项
+
+- `cargo test --quiet --test integration_sync --all-features -- --nocapture`：103 passed，2 failed；失败为 vector disabled-engine 测试仍要求提交报错，而当前实现明确将 disabled engine 作为 no-op。该路径不属于本阶段 WAL catch-up 生产调用链。
 
 ---
 
@@ -125,7 +137,7 @@
 | --- | --- | --- | --- |
 | 0 类型与协议冻结 | **已完成** ✅ | `CommitLsn`、`TargetId`、`IndexGeneration`、`ManifestEpoch`、`LeaseEpoch`、`IdempotencyKey` 等强类型。 | 无 |
 | 1 WAL 到持久 outbox | **已完成** ✅ | `append_transaction_batch`、batch checksum、commit record end LSN、committed recovery、SQLite schema/materialize/claim/lease/retry/frontier 已存在。 | 无 |
-| 2 真实 transport 与 generation barrier | **部分完成** ⚠️ | fulltext/vector receiver 有批量 apply、持久 receipt、applied LSN、duplicate/late-arrival 拒绝。 | 真实 outbox claim 到各 receiver 的 fulltext/vector E2E。 |
+| 2 真实 transport 与 generation barrier | **基本完成** ⚠️ | fulltext/vector receiver 有批量 apply、持久 receipt、applied LSN、duplicate/late-arrival 拒绝；native index barrier 已接入 runtime、写入、发布和 WAL truncate。 | 真实 outbox claim 到各 receiver 的 fulltext/vector E2E。 |
 | 3 combined checkpoint 与 WAL 回收 | **已完成** ✅ | SQLite snapshot 使用 `VACUUM INTO`、fsync、checksum、原子发布；combined manifest 作为 safe LSN 来源。 | 无 |
 | 4 ordered codec、typed predicate、统一 cursor | **部分完成** ⚠️ | OrderedCodec、typed predicate、fixed read timestamp vertex/edge cursor、storage stale checker 已存在。 | prefix/composite property tests。 |
 | 5 edge index、included columns、rebuild | **部分完成** ⚠️ | edge index DDL/写入/MVCC/cursor/included columns 数据结构、generation state machine 和 WAL catch-up rebuild 存在。 | included columns 更新/tombstone/MVCC 对照。 |
@@ -153,22 +165,22 @@
 - [x] `rebuild_edge_index` 从 WAL 读取 intents 而非内存 map
 - [x] 添加 crash recovery 测试通过
 
-### Phase 2：Barrier LSN 与写入路径集成
+### Phase 2：Barrier LSN 与写入路径集成（已完成 ✅）
 
 **目标**：实现 barrier fence，控制新 generation 发布后的写入可见性。
 
 **任务**：
-1. 修改 `IndexRuntime` 增加 `wait_for_barrier_lsn()`
-2. 修改 `publish_native_index()` 建立 barrier 后通知 runtime
-3. 修改 `insert_tag_index_entry()` 检查 active generation 的 barrier
-4. 修改 WAL manager 的 `truncate()` 检查 barrier
+1. ✅ 修改 `IndexRuntime` 增加 `wait_for_barrier_lsn()`，并维护单调 barrier LSN
+2. ✅ 修改 `publish_native_index()` 建立 barrier 后通知 runtime
+3. ✅ 修改 vertex/edge index entry 写入和删除路径检查 active generation 的 barrier
+4. ✅ 修改 WAL manager 的 `truncate()` 以最老 active index barrier 为上限
 
 **依赖**：Phase 1
 
 **验收标准**：
-- [ ] publish 后新写入对旧 generation 不可见
-- [ ] WAL truncate 不删除 barrier 之前的条目
-- [ ] 并发测试：rebuild 期间持续写入不丢失
+- [x] publish 后新写入对旧 generation 不可见
+- [x] WAL truncate 不删除 barrier 之前的条目
+- [x] 并发测试：rebuild 期间持续写入不丢失
 
 ### Phase 3：Online Split Crash-Safe 重构
 

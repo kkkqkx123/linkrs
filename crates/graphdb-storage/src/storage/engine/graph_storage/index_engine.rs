@@ -12,6 +12,11 @@ pub fn update_vertex_indexes_mvcc(
     props: &[(String, Value)],
     ts: Timestamp,
 ) -> StorageResult<()> {
+    // Acquire the rebuild gate before the manager write lock. Rebuilds use
+    // the same order, which keeps the snapshot/catch-up/publish protocol
+    // free of a lock inversion.
+    let rebuild_gate = ctx.index_data_manager().read().rebuild_gate();
+    let _write_gate = rebuild_gate.read();
     ctx.index_data_manager()
         .write()
         .update_vertex_indexes_mvcc(space_id, vertex_id, index_name, props, ts)
@@ -24,6 +29,8 @@ pub fn delete_vertex_indexes_mvcc(
     index_names: &[String],
     ts: Timestamp,
 ) -> StorageResult<()> {
+    let rebuild_gate = ctx.index_data_manager().read().rebuild_gate();
+    let _write_gate = rebuild_gate.read();
     ctx.index_data_manager().write().delete_vertex_indexes_mvcc(
         space_id,
         vertex_id,
@@ -43,6 +50,8 @@ pub fn update_edge_indexes_mvcc(
     props: &[(String, Value)],
     ts: Timestamp,
 ) -> StorageResult<()> {
+    let rebuild_gate = ctx.index_data_manager().read().rebuild_gate();
+    let _write_gate = rebuild_gate.read();
     ctx.index_data_manager().write().update_edge_indexes_mvcc(
         space_id, edge_src, edge_dst, edge_type, ranking, index_name, props, ts,
     )
@@ -58,6 +67,8 @@ pub fn delete_edge_indexes_mvcc(
     index_names: &[String],
     ts: Timestamp,
 ) -> StorageResult<()> {
+    let rebuild_gate = ctx.index_data_manager().read().rebuild_gate();
+    let _write_gate = rebuild_gate.read();
     ctx.index_data_manager().write().delete_edge_indexes_mvcc(
         space_id,
         edge_src,

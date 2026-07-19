@@ -19,7 +19,7 @@ use crate::storage::index::manifest::{
     GenerationBuildState, GenerationState, IndexManifest, IndexShard, ManifestCatalog,
 };
 use crate::storage::index::shard_runtime::{
-    generation_from_maps, GenerationRuntime, IndexMaps, IndexRuntime,
+    generation_from_maps, GenerationRuntime, IndexBarrierRegistry, IndexMaps, IndexRuntime,
 };
 use crate::storage::index::vertex_index_manager::VertexIndexManager;
 use parking_lot::RwLock;
@@ -198,6 +198,8 @@ pub struct IndexDataManagerImpl {
     index_types: Arc<RwLock<HashMap<IndexIdentity, IndexType>>>,
     index_definitions: Arc<RwLock<HashMap<IndexIdentity, Index>>>,
     restored_generations: Arc<RwLock<HashMap<IndexIdentity, IndexGeneration>>>,
+    barrier_registry: IndexBarrierRegistry,
+    rebuild_gate: Arc<RwLock<()>>,
 }
 
 impl IndexDataManagerImpl {
@@ -223,6 +225,8 @@ impl IndexDataManagerImpl {
             index_types: Arc::new(RwLock::new(HashMap::new())),
             index_definitions: Arc::new(RwLock::new(HashMap::new())),
             restored_generations: Arc::new(RwLock::new(HashMap::new())),
+            barrier_registry: Arc::new(RwLock::new(HashMap::new())),
+            rebuild_gate: Arc::new(RwLock::new(())),
         }
     }
 
@@ -334,6 +338,9 @@ impl IndexDataManagerImpl {
             self.index_types.write().remove(&identity);
             self.index_definitions.write().remove(&identity);
             self.restored_generations.write().remove(&identity);
+            self.barrier_registry
+                .write()
+                .remove(&(identity.space_id, identity.index_id));
         }
     }
 
@@ -350,6 +357,51 @@ impl IndexDataManagerImpl {
             .read()
             .get(&(space_id, index_name.to_string()))
             .copied()
+    }
+
+    pub(crate) fn barrier_registry(&self) -> IndexBarrierRegistry {
+        Arc::clone(&self.barrier_registry)
+    }
+
+    /// Return the gate shared by generation rebuilds and index writers.
+    ///
+    /// A rebuild holds its write side from snapshot acquisition through
+    /// publication. Every index mutation holds the read side before it
+    /// resolves the active generation, so a mutation cannot be stranded in a
+    /// retired generation.
+    pub(crate) fn rebuild_gate(&self) -> Arc<RwLock<()>> {
+        Arc::clone(&self.rebuild_gate)
+    }
+
+    fn record_barrier_lsn(&self, identity: IndexIdentity, barrier_lsn: CommitLsn) {
+        if barrier_lsn == CommitLsn::ZERO {
+            return;
+        }
+        let mut barriers = self.barrier_registry.write();
+        let entry = barriers
+            .entry((identity.space_id, identity.index_id))
+            .or_default();
+        if barrier_lsn > *entry {
+            *entry = barrier_lsn;
+        }
+    }
+
+    /// Advance all published index barriers after a committed transaction.
+    /// Index mutations are applied before the transaction commit is appended,
+    /// so the commit LSN is a safe durable watermark for every affected index.
+    pub(crate) fn advance_barriers(&self, commit_lsn: CommitLsn) {
+        if commit_lsn == CommitLsn::ZERO {
+            return;
+        }
+        for (identity, runtime) in self.runtimes.read().iter() {
+            runtime.establish_barrier_lsn(commit_lsn);
+            self.record_barrier_lsn(*identity, commit_lsn);
+        }
+    }
+
+    fn wait_for_active_barrier(&self, runtime: &IndexRuntime) {
+        let barrier_lsn = runtime.barrier_lsn();
+        runtime.wait_for_barrier_lsn(barrier_lsn);
     }
 
     fn runtime(&self, space_id: u64, index_id: u64) -> StorageResult<Arc<IndexRuntime>> {
@@ -389,8 +441,9 @@ impl IndexDataManagerImpl {
         space_id: u64,
         index_id: u64,
     ) -> StorageResult<IndexMaps> {
-        let (_handle, runtime, generation) = self.active_generation(space_id, index_id)?;
+        let runtime = self.runtime(space_id, index_id)?;
         let _fence = runtime.read_fence();
+        let (_handle, _runtime, generation) = self.active_generation(space_id, index_id)?;
         let mut forward = BTreeMap::new();
         let mut reverse = BTreeMap::new();
         for shard in generation.shards() {
@@ -401,14 +454,19 @@ impl IndexDataManagerImpl {
         Ok((forward, reverse))
     }
 
-    pub(crate) fn publish_generation_data(
+    pub(crate) fn publish_native_index(
         &self,
         manifest: IndexManifest,
         forward: BTreeMap<SecondaryIndexKey, IndexRecord>,
         reverse: BTreeMap<SecondaryIndexKey, IndexRecord>,
+        barrier_lsn: CommitLsn,
     ) -> StorageResult<()> {
         let runtime = self.runtime(manifest.space_id, manifest.index_id)?;
         let _fence = runtime.write_fence();
+        let identity = IndexIdentity {
+            space_id: manifest.space_id,
+            index_id: manifest.index_id,
+        };
         let mut maps = HashMap::new();
         let shard = manifest
             .shards
@@ -420,6 +478,9 @@ impl IndexDataManagerImpl {
             .ok_or_else(|| StorageError::not_found("Index manifest catalog is unavailable"))?
             .publish(manifest)
             .map_err(StorageError::db_error)?;
+        runtime.establish_barrier_lsn(barrier_lsn);
+        self.record_barrier_lsn(identity, barrier_lsn);
+        runtime.wait_for_barrier_lsn(barrier_lsn);
         Ok(())
     }
 
@@ -680,6 +741,9 @@ impl IndexDataManagerImpl {
         next.store(&index_root.join("manifest.json"))?;
         runtime.install_generation(next_runtime);
         catalog.publish(next).map_err(StorageError::db_error)?;
+        runtime.establish_barrier_lsn(barrier_lsn);
+        self.record_barrier_lsn(IndexIdentity { space_id, index_id }, barrier_lsn);
+        runtime.wait_for_barrier_lsn(barrier_lsn);
 
         // ── Phase: Active ────────────────────────────────────────────────
         build_state
@@ -929,8 +993,10 @@ impl IndexDataManagerImpl {
         let Some(index_id) = self.index_alias(space_id, index_name) else {
             return Ok(());
         };
-        let (manifest, runtime, generation) = self.active_generation(space_id, index_id)?;
+        let runtime = self.runtime(space_id, index_id)?;
         let _fence = runtime.read_fence();
+        self.wait_for_active_barrier(&runtime);
+        let (manifest, _runtime, generation) = self.active_generation(space_id, index_id)?;
         let reverse = KeyBuilder::build_vertex_reverse_key_v2(space_id, vertex_id, index_name)?;
         let reverse_end = KeyBuilder::build_range_end(&reverse);
         for shard in manifest
@@ -984,8 +1050,10 @@ impl IndexDataManagerImpl {
         let Some(index_id) = self.index_alias(space_id, index_name) else {
             return Ok(());
         };
-        let (manifest, runtime, generation) = self.active_generation(space_id, index_id)?;
+        let runtime = self.runtime(space_id, index_id)?;
         let _fence = runtime.read_fence();
+        self.wait_for_active_barrier(&runtime);
+        let (manifest, _runtime, generation) = self.active_generation(space_id, index_id)?;
         let reverse =
             KeyBuilder::build_edge_reverse_key(space_id, src, dst, edge_type, ranking, index_name)?;
         let reverse_end = KeyBuilder::build_range_end(&reverse);
@@ -1041,8 +1109,10 @@ impl IndexDataManagerImpl {
         index_type: IndexType,
         write_ts: Timestamp,
     ) -> StorageResult<()> {
-        let (manifest, runtime, generation) = self.active_generation(space_id, index_id)?;
+        let runtime = self.runtime(space_id, index_id)?;
         let _fence = runtime.read_fence();
+        self.wait_for_active_barrier(&runtime);
+        let (manifest, _runtime, generation) = self.active_generation(space_id, index_id)?;
         let prefix = match index_type {
             IndexType::TagIndex => KeyBuilder::build_vertex_index_prefix(space_id, index_name),
             IndexType::EdgeIndex => KeyBuilder::build_edge_index_prefix(space_id, index_name),
@@ -1222,6 +1292,7 @@ impl EdgeIndexOps for IndexDataManagerImpl {
         };
         let runtime = self.runtime(space_id, index_id)?;
         let _fence = runtime.read_fence();
+        self.wait_for_active_barrier(&runtime);
         let catalog = self
             .manifest_catalog(space_id, index_id)
             .ok_or_else(|| StorageError::not_found("Index manifest catalog is unavailable"))?;
@@ -1356,8 +1427,9 @@ impl EdgeIndexOps for IndexDataManagerImpl {
         let Some(index_id) = self.index_alias(space_id, &index.name) else {
             return Ok(Vec::new());
         };
-        let (manifest, runtime, generation) = self.active_generation(space_id, index_id)?;
+        let runtime = self.runtime(space_id, index_id)?;
         let _fence = runtime.read_fence();
+        let (manifest, _runtime, generation) = self.active_generation(space_id, index_id)?;
         let prefix = KeyBuilder::build_edge_index_prefix(space_id, &index.name);
         let end = KeyBuilder::build_range_end(&prefix);
         let mut seen = std::collections::HashSet::new();
@@ -1421,6 +1493,7 @@ impl VertexIndexOps for IndexDataManagerImpl {
         };
         let runtime = self.runtime(space_id, index_id)?;
         let _fence = runtime.read_fence();
+        self.wait_for_active_barrier(&runtime);
         let catalog = self
             .manifest_catalog(space_id, index_id)
             .ok_or_else(|| StorageError::not_found("Index manifest catalog is unavailable"))?;
@@ -1546,8 +1619,9 @@ impl VertexIndexOps for IndexDataManagerImpl {
         let Some(index_id) = self.index_alias(space_id, &index.name) else {
             return Ok(Vec::new());
         };
-        let (manifest, runtime, generation) = self.active_generation(space_id, index_id)?;
+        let runtime = self.runtime(space_id, index_id)?;
         let _fence = runtime.read_fence();
+        let (manifest, _runtime, generation) = self.active_generation(space_id, index_id)?;
         let prefix = KeyBuilder::build_vertex_index_prefix(space_id, &index.name);
         let end = KeyBuilder::build_range_end(&prefix);
         let mut seen = std::collections::HashSet::new();

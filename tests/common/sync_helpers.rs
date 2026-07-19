@@ -81,8 +81,9 @@ impl SyncTestHarness {
         // Create runtime for async operations
         let rt = tokio::runtime::Runtime::new()?;
 
-        // Start both target processors and the durable outbox consumer.
-        rt.block_on(sync_manager.start())?;
+        // Start target processors. The test commit helper drives one durable
+        // outbox claim synchronously so the runtime owns no long-lived worker.
+        rt.block_on(sync_coordinator.start_background_tasks());
 
         Ok(Self {
             storage,
@@ -458,7 +459,9 @@ impl SyncTestHarness {
 
     /// Wait for async processing
     pub fn wait_for_async(&self, duration_ms: u64) {
-        std::thread::sleep(Duration::from_millis(duration_ms));
+        self.rt.block_on(async {
+            tokio::time::sleep(Duration::from_millis(duration_ms)).await;
+        });
     }
 }
 

@@ -1363,7 +1363,11 @@ fn payload_to_intent(
     })
 }
 
-fn edge_entity_id(src: impl std::fmt::Display, dst: impl std::fmt::Display, ranking: i64) -> String {
+fn edge_entity_id(
+    src: impl std::fmt::Display,
+    dst: impl std::fmt::Display,
+    ranking: i64,
+) -> String {
     format!("{}->{}#{}", src, dst, ranking)
 }
 
@@ -1373,7 +1377,9 @@ fn stable_hash(bytes: &[u8]) -> u64 {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x100000001b3);
     }
-    hash
+    // Index IDs are persisted in SQLite INTEGER columns, so keep the
+    // deterministic hash within the signed 64-bit range.
+    hash & (i64::MAX as u64)
 }
 
 fn latest_manifest_outbox_snapshot(work_dir: &Path) -> Result<Option<OutboxSnapshot>, String> {

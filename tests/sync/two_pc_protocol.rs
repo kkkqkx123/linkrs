@@ -56,12 +56,15 @@ fn create_harness_with_paths(
     let sync_coordinator = Arc::new(SyncCoordinator::new(fulltext_manager.clone(), batch_config));
 
     // Create sync manager
-    let sync_manager = Arc::new(SyncManager::new(sync_coordinator.clone()));
+    let mut sync_manager = SyncManager::new(sync_coordinator.clone());
+    sync_manager.configure_outbox(db_path.with_extension("outbox"))?;
+    let sync_manager = Arc::new(sync_manager);
 
     // Create runtime for async operations
     let rt = tokio::runtime::Runtime::new()?;
 
-    // Start background tasks for batch processing
+    // Start target processors. The test commit helper drives one durable
+    // outbox claim synchronously so the runtime owns no long-lived worker.
     rt.block_on(sync_coordinator.start_background_tasks());
 
     Ok(SyncTestHarness {

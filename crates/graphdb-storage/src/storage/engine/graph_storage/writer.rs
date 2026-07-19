@@ -1032,12 +1032,7 @@ fn update_vertex_indexes(
         let indexed_props: Vec<(String, Value)> = index
             .fields
             .iter()
-            .filter_map(|field| {
-                props
-                    .iter()
-                    .find(|(name, _)| name == &field.name)
-                    .cloned()
-            })
+            .filter_map(|field| props.iter().find(|(name, _)| name == &field.name).cloned())
             .collect();
         if indexed_props.is_empty() {
             continue;

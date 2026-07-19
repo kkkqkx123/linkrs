@@ -4,8 +4,11 @@
 //! transaction start, commit, and abort. Uses MVCC version management for
 //! snapshot isolation.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
+
+use parking_lot::{Condvar, Mutex};
 
 use dashmap::DashMap;
 
@@ -18,8 +21,108 @@ use super::participant::TransactionCommitSink;
 use super::rollback::UndoLogRollback;
 use super::types::*;
 use super::undo_log::UndoTarget;
+use crate::core::types::Timestamp;
+use crate::core::wal::types::Lsn;
 use crate::core::stats::StatsManager;
 use crate::sync::SyncManager;
+
+/// Checkpoint coordination gate.
+///
+/// pauses new write transactions and waits for active writes to complete,
+/// then allows checkpoint to proceed. Modeled after Ladybug's checkpoint
+/// isolation where checkpoint blocks new writes and drains active ones.
+pub struct CheckpointGate {
+    /// When true, no new write transactions are allowed.
+    writing_paused: AtomicBool,
+    /// Number of active write transactions currently in-flight.
+    /// Used to determine when the gate has fully drained.
+    active_writes: AtomicU64,
+    /// Condvar for checkpoint thread to wait on until active_writes reaches 0.
+    condvar: Condvar,
+    /// Mutex protecting the condvar.
+    mutex: Mutex<()>,
+}
+
+impl CheckpointGate {
+    pub fn new() -> Self {
+        Self {
+            writing_paused: AtomicBool::new(false),
+            active_writes: AtomicU64::new(0),
+            condvar: Condvar::new(),
+            mutex: Mutex::new(()),
+        }
+    }
+
+    /// Attempt to acquire a write slot. Returns Err if writes are paused.
+    pub fn acquire_write(&self) -> Result<(), TransactionError> {
+        if self.writing_paused.load(Ordering::SeqCst) {
+            return Err(TransactionError::checkpoint_in_progress());
+        }
+        self.active_writes.fetch_add(1, Ordering::SeqCst);
+        // Re-check after incrementing: if paused between the two atomics, bail out.
+        if self.writing_paused.load(Ordering::SeqCst) {
+            self.active_writes.fetch_sub(1, Ordering::SeqCst);
+            return Err(TransactionError::checkpoint_in_progress());
+        }
+        Ok(())
+    }
+
+    /// Release a write slot (called when a write transaction commits or aborts).
+    pub fn release_write(&self) {
+        let prev = self.active_writes.fetch_sub(1, Ordering::SeqCst);
+        if prev == 1 {
+            // Last active write; wake up the checkpoint thread if waiting.
+            self.condvar.notify_all();
+        }
+    }
+
+    /// Pause new writes and wait for all active writes to complete.
+    /// Returns Err if the timeout elapses before all writes drain.
+    pub fn pause_writes_and_drain(&self, timeout: Duration) -> Result<(), TransactionError> {
+        self.writing_paused.store(true, Ordering::SeqCst);
+
+        let mut guard = self.mutex.lock();
+        let start = std::time::Instant::now();
+        loop {
+            let active = self.active_writes.load(Ordering::SeqCst);
+            if active == 0 {
+                return Ok(());
+            }
+            let elapsed = start.elapsed();
+            if elapsed >= timeout {
+                return Err(TransactionError::checkpoint_timeout(active));
+            }
+            let remaining = timeout - elapsed;
+            let result = self.condvar.wait_for(&mut guard, remaining);
+            if result.timed_out() {
+                return Err(TransactionError::checkpoint_timeout(
+                    self.active_writes.load(Ordering::SeqCst),
+                ));
+            }
+        }
+    }
+
+    /// Resume accepting new write transactions after checkpoint completes.
+    pub fn resume_writes(&self) {
+        self.writing_paused.store(false, Ordering::SeqCst);
+    }
+
+    /// Whether writes are currently paused.
+    pub fn is_paused(&self) -> bool {
+        self.writing_paused.load(Ordering::SeqCst)
+    }
+
+    /// Current count of active writes.
+    pub fn active_write_count(&self) -> u64 {
+        self.active_writes.load(Ordering::SeqCst)
+    }
+}
+
+impl Default for CheckpointGate {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Transaction Manager
 ///
@@ -46,6 +149,8 @@ pub struct TransactionManager {
     /// Optional sync manager for index cleanup and commit coordination
     sync_manager: Option<Arc<SyncManager>>,
     commit_sink: Option<Arc<dyn TransactionCommitSink>>,
+    /// Checkpoint coordination gate
+    checkpoint_gate: Arc<CheckpointGate>,
 }
 
 impl TransactionManager {
@@ -68,6 +173,7 @@ impl TransactionManager {
             cleaner,
             sync_manager: None,
             commit_sink: None,
+            checkpoint_gate: Arc::new(CheckpointGate::new()),
         }
     }
 
@@ -93,6 +199,7 @@ impl TransactionManager {
             cleaner,
             sync_manager: None,
             commit_sink: None,
+            checkpoint_gate: Arc::new(CheckpointGate::new()),
         }
     }
 
@@ -118,6 +225,7 @@ impl TransactionManager {
             cleaner,
             sync_manager: None,
             commit_sink: None,
+            checkpoint_gate: Arc::new(CheckpointGate::new()),
         }
     }
 
@@ -259,6 +367,9 @@ impl TransactionManager {
     /// Multiple insert transactions can be active concurrently.
     /// Conflict detection is performed by `check_write_set_conflict()`
     /// based on actual write set overlaps, not at transaction start time.
+    ///
+    /// Returns `TransactionError::CheckpointInProgress` if a checkpoint
+    /// operation has paused new writes.
     pub fn begin_insert_transaction(
         &self,
         options: TransactionOptions,
@@ -269,10 +380,14 @@ impl TransactionManager {
             ));
         }
 
+        // Checkpoint gate: refuse new writes during checkpoint drain.
+        self.checkpoint_gate.acquire_write()?;
+
         self.cleanup_expired_transactions();
 
         let active_count = self.active_transactions.len();
         if active_count >= self.config.max_concurrent_transactions {
+            self.checkpoint_gate.release_write();
             return Err(TransactionError::too_many_transactions());
         }
 
@@ -280,7 +395,10 @@ impl TransactionManager {
         let timestamp = self
             .version_manager
             .acquire_insert_timestamp()
-            .map_err(|e| TransactionError::internal(e.to_string()))?;
+            .map_err(|e| {
+                self.checkpoint_gate.release_write();
+                TransactionError::internal(e.to_string())
+            })?;
         let timeout = options.timeout.unwrap_or(self.config.default_timeout);
 
         let config = TransactionConfig {
@@ -339,6 +457,7 @@ impl TransactionManager {
             }
 
             if ctx.has_write_conflict_with(other_ctx) {
+                self.stats.record_txn_conflict();
                 return Err(TransactionError::write_transaction_conflict());
             }
         }
@@ -406,6 +525,9 @@ impl TransactionManager {
             if ctx.is_expired() {
                 self.stats.increment_timeout();
                 self.rollback_context_timestamp(&ctx);
+                if !ctx.read_only {
+                    self.checkpoint_gate.release_write();
+                }
                 self.active_transactions.remove(&txn_id);
                 return Err(TransactionError::transaction_timeout());
             }
@@ -438,6 +560,9 @@ impl TransactionManager {
 
             if let Some(err) = last_error {
                 self.rollback_context_timestamp(&context);
+                if !context.read_only {
+                    self.checkpoint_gate.release_write();
+                }
                 self.active_transactions.remove(&txn_id);
                 let _ = context.transition_to(TransactionState::Aborted);
                 self.stats.record_txn_rollback();
@@ -453,6 +578,7 @@ impl TransactionManager {
         } else {
             self.version_manager
                 .release_write_timestamp(context.timestamp());
+            self.checkpoint_gate.release_write();
         }
 
         self.active_transactions.remove(&txn_id);
@@ -587,6 +713,9 @@ impl TransactionManager {
                 }
             }
             if let Some(err) = last_error {
+                if !context.read_only {
+                    self.checkpoint_gate.release_write();
+                }
                 return Err(TransactionError::rollback_failed(format!(
                     "Failed to discard transaction {} persistence state after {} retries: {}",
                     context.id, max_retries, err
@@ -616,6 +745,9 @@ impl TransactionManager {
                     e
                 );
                 self.rollback_context_timestamp(context);
+                if !context.read_only {
+                    self.checkpoint_gate.release_write();
+                }
                 self.active_transactions.remove(&context.id);
                 let _ = context.transition_to(TransactionState::Aborted);
                 return Err(TransactionError::sync_failed(format!(
@@ -630,6 +762,7 @@ impl TransactionManager {
         } else {
             self.version_manager
                 .release_write_timestamp(context.timestamp());
+            self.checkpoint_gate.release_write();
         }
 
         self.active_transactions.remove(&context.id);
@@ -765,6 +898,59 @@ impl TransactionManager {
     /// Get pending transaction count
     pub fn pending_count(&self) -> i32 {
         self.version_manager.pending_count()
+    }
+
+    /// Get the checkpoint gate for external coordination.
+    pub fn checkpoint_gate(&self) -> &Arc<CheckpointGate> {
+        &self.checkpoint_gate
+    }
+
+    /// Begin a checkpoint operation: pause new writes and wait for active
+    /// write transactions to complete.
+    ///
+    /// This is the first phase of a checkpoint. After this returns Ok,
+    /// no new write transactions can start and all previously active writes
+    /// have been drained (committed or aborted).
+    ///
+    /// # Arguments
+    /// - `timeout`: Maximum time to wait for active writes to drain.
+    ///
+    /// # Returns
+    /// - `Ok(())` if writes are paused and all active writes have drained.
+    /// - `Err(TransactionError::CheckpointTimeout)` if timeout elapses first.
+    pub fn begin_checkpoint(&self, timeout: Duration) -> Result<(), TransactionError> {
+        self.checkpoint_gate.pause_writes_and_drain(timeout)
+    }
+
+    /// End a checkpoint operation: resume accepting new write transactions.
+    ///
+    /// This must be called after `begin_checkpoint` completes, regardless
+    /// of whether the checkpoint itself succeeded or failed.
+    pub fn end_checkpoint(&self) {
+        self.checkpoint_gate.resume_writes()
+    }
+
+    /// Execute a coordinated checkpoint: pause writes, run the provided
+    /// callback, then resume writes.
+    ///
+    /// The callback receives the current write timestamp and should return
+    /// the LSN to checkpoint at. Writes are guaranteed to be paused for
+    /// the duration of the callback.
+    ///
+    /// If the callback returns Err, writes are still resumed.
+    pub fn coordinated_checkpoint<F>(
+        &self,
+        timeout: Duration,
+        f: F,
+    ) -> Result<(Timestamp, Lsn), TransactionError>
+    where
+        F: FnOnce(Timestamp) -> Result<Lsn, TransactionError>,
+    {
+        self.begin_checkpoint(timeout)?;
+        let write_ts = self.version_manager.write_timestamp();
+        let result = f(write_ts);
+        self.end_checkpoint();
+        result.map(|lsn| (write_ts, lsn))
     }
 }
 
@@ -1197,5 +1383,125 @@ mod tests {
         assert!(ctx
             .transition_to(TransactionState::Aborting)
             .is_err());
+    }
+
+    #[test]
+    fn checkpoint_gate_pauses_new_writes() {
+        let gate = CheckpointGate::new();
+
+        // Acquire a write slot.
+        assert!(gate.acquire_write().is_ok());
+        assert_eq!(gate.active_write_count(), 1);
+
+        // Pause and drain.
+        gate.writing_paused.store(true, Ordering::SeqCst);
+
+        // New writes should fail.
+        assert!(gate.acquire_write().is_err());
+
+        // Release the active write.
+        gate.release_write();
+
+        // Still paused, should fail.
+        assert!(gate.acquire_write().is_err());
+
+        // Resume.
+        gate.resume_writes();
+        assert!(!gate.is_paused());
+        assert!(gate.acquire_write().is_ok());
+        assert_eq!(gate.active_write_count(), 1);
+    }
+
+    #[test]
+    fn checkpoint_gate_drain_waits_for_active_writes() {
+        use std::thread;
+
+        let gate = Arc::new(CheckpointGate::new());
+        let gate_clone = Arc::clone(&gate);
+
+        // Start a write transaction.
+        gate.acquire_write().expect("acquire should succeed");
+
+        // Spawn a thread that will release after a short delay.
+        let handle = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            gate_clone.release_write();
+        });
+
+        // Drain should wait until the write is released.
+        let result = gate.pause_writes_and_drain(Duration::from_secs(5));
+        assert!(result.is_ok());
+        assert_eq!(gate.active_write_count(), 0);
+
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn checkpoint_gate_drain_timeout() {
+        let gate = CheckpointGate::new();
+
+        // Acquire a write slot and never release.
+        gate.acquire_write().expect("acquire should succeed");
+
+        // Drain with short timeout should fail.
+        let result = gate.pause_writes_and_drain(Duration::from_millis(50));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn begin_insert_fails_when_checkpoint_paused() {
+        let manager = TransactionManager::new(TransactionManagerConfig::default());
+
+        // Pause writes via checkpoint.
+        manager
+            .checkpoint_gate()
+            .writing_paused
+            .store(true, Ordering::SeqCst);
+
+        // New insert should fail.
+        let result = manager.begin_insert_transaction(TransactionOptions::default());
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().kind(),
+            TransactionErrorKind::CheckpointInProgress
+        );
+
+        // Read transactions should still work.
+        let read_result = manager.begin_read_transaction(TransactionOptions::default());
+        assert!(read_result.is_ok());
+
+        // Resume writes.
+        manager.end_checkpoint();
+        let insert_result = manager.begin_insert_transaction(TransactionOptions::default());
+        assert!(insert_result.is_ok());
+    }
+
+    #[test]
+    fn coordinated_checkpoint_drains_writes() {
+        use std::thread;
+
+        let manager = Arc::new(TransactionManager::new(TransactionManagerConfig::default()));
+        let manager_clone = Arc::clone(&manager);
+
+        // Start a write transaction.
+        let txn_id = manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .expect("transaction should begin");
+
+        // Spawn a thread that commits the transaction after a delay.
+        let handle = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            manager_clone
+                .commit_transaction(txn_id)
+                .expect("commit should succeed");
+        });
+
+        // Coordinated checkpoint should wait for the write to complete.
+        let result = manager.coordinated_checkpoint(Duration::from_secs(5), |_ts| {
+            Ok(crate::core::wal::types::Lsn::new(100))
+        });
+        assert!(result.is_ok());
+
+        handle.join().unwrap();
     }
 }

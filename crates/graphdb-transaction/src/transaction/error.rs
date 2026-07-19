@@ -40,6 +40,8 @@ pub enum TransactionErrorKind {
     PersistenceFailed,
     SerializationFailed,
     SyncFailed,
+    CheckpointInProgress,
+    CheckpointTimeout,
     Internal,
 }
 
@@ -68,6 +70,8 @@ impl TransactionErrorKind {
             TransactionErrorKind::PersistenceFailed => "persistence_failed",
             TransactionErrorKind::SerializationFailed => "serialization_failed",
             TransactionErrorKind::SyncFailed => "sync_failed",
+            TransactionErrorKind::CheckpointInProgress => "checkpoint_in_progress",
+            TransactionErrorKind::CheckpointTimeout => "checkpoint_timeout",
             TransactionErrorKind::Internal => "internal",
         }
     }
@@ -242,6 +246,23 @@ impl TransactionError {
 
     pub fn sync_failed(message: impl Into<String>) -> Self {
         Self::new(TransactionErrorKind::SyncFailed, message)
+    }
+
+    pub fn checkpoint_in_progress() -> Self {
+        Self::new(
+            TransactionErrorKind::CheckpointInProgress,
+            "New writes are paused during checkpoint",
+        )
+    }
+
+    pub fn checkpoint_timeout(active_writes: u64) -> Self {
+        Self::new(
+            TransactionErrorKind::CheckpointTimeout,
+            format!(
+                "Checkpoint timed out waiting for {} active writes to complete",
+                active_writes
+            ),
+        )
     }
 
     pub fn internal(message: impl Into<String>) -> Self {

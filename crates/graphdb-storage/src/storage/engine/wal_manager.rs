@@ -7,6 +7,7 @@ use crate::core::types::{CommitLsn, TransactionId};
 use crate::core::wal::types::WalOpType;
 use crate::core::wal::OutboxIntent;
 use crate::core::{StorageError, StorageResult};
+use crate::storage::index::shard_runtime::IndexBarrierRegistry;
 use crate::transaction::wal::writer::WalWriter;
 use crate::transaction::wal::TransactionWalEntry;
 use crate::transaction::wal::{LocalWalWriter, Lsn, WalConfig};
@@ -23,6 +24,7 @@ use std::sync::Arc;
 /// to the underlying LocalWalWriter, avoiding the dual LSN tracking issue.
 pub struct WalManager {
     local_writer: Option<Arc<RwLock<LocalWalWriter>>>,
+    barrier_registry: Option<IndexBarrierRegistry>,
     config: WalConfig,
     sync_count: AtomicU64,
     sync_failures: AtomicU64,
@@ -40,6 +42,7 @@ impl WalManager {
     pub fn new() -> Self {
         Self {
             local_writer: None,
+            barrier_registry: None,
             config: WalConfig::default(),
             sync_count: AtomicU64::new(0),
             sync_failures: AtomicU64::new(0),
@@ -49,6 +52,7 @@ impl WalManager {
     pub fn with_config(config: WalConfig) -> Self {
         Self {
             local_writer: None,
+            barrier_registry: None,
             config,
             sync_count: AtomicU64::new(0),
             sync_failures: AtomicU64::new(0),
@@ -62,9 +66,9 @@ impl WalManager {
             .open()
             .map_err(|e| StorageError::wal_error(format!("Failed to open WAL: {:?}", e)))?;
         if self.config.group_commit_enabled {
-            writer
-                .enable_group_commit()
-                .map_err(|e| StorageError::wal_error(format!("Failed to enable group commit: {:?}", e)))?;
+            writer.enable_group_commit().map_err(|e| {
+                StorageError::wal_error(format!("Failed to enable group commit: {:?}", e))
+            })?;
         }
         self.local_writer = Some(Arc::new(RwLock::new(writer)));
         Ok(())
@@ -72,6 +76,20 @@ impl WalManager {
 
     pub fn writer(&self) -> Option<Arc<RwLock<LocalWalWriter>>> {
         self.local_writer.clone()
+    }
+
+    pub(crate) fn set_index_barrier_registry(&mut self, registry: IndexBarrierRegistry) {
+        self.barrier_registry = Some(registry);
+    }
+
+    fn truncation_barrier_lsn(&self) -> Option<Lsn> {
+        self.barrier_registry.as_ref().and_then(|registry| {
+            registry
+                .read()
+                .values()
+                .map(|barrier| Lsn::new(barrier.get()))
+                .min()
+        })
     }
 
     pub fn current_lsn(&self) -> Lsn {
@@ -192,11 +210,16 @@ impl WalManager {
     }
 
     pub fn truncate(&self, lsn: Lsn) -> StorageResult<()> {
+        let truncation_lsn = self
+            .truncation_barrier_lsn()
+            .map_or(lsn, |barrier| lsn.min(barrier));
         if let Some(ref writer) = self.local_writer {
-            writer
-                .write()
-                .truncate(lsn)
-                .map_err(|e| StorageError::wal_error(format!("Failed to truncate WAL: {:?}", e)))?;
+            writer.write().truncate(truncation_lsn).map_err(|e| {
+                StorageError::wal_error(format!(
+                    "Failed to truncate WAL at {} (requested {}): {:?}",
+                    truncation_lsn, lsn, e
+                ))
+            })?;
         }
         Ok(())
     }
@@ -239,5 +262,21 @@ mod tests {
         assert_eq!(metrics.sync_failures, 0);
         assert_eq!(metrics.accepted_lsn, manager.current_lsn());
         assert_eq!(metrics.durable_lsn, manager.durable_lsn());
+    }
+
+    #[test]
+    fn truncation_barrier_uses_the_oldest_published_index() {
+        let mut manager = WalManager::new();
+        let registry = Arc::new(RwLock::new(std::collections::HashMap::from([
+            ((1, 1), CommitLsn::new(80)),
+            ((1, 2), CommitLsn::new(120)),
+        ])));
+        manager.set_index_barrier_registry(registry);
+
+        assert_eq!(
+            manager.truncation_barrier_lsn(),
+            Some(Lsn::new(80)),
+            "WAL truncation must stop at the oldest active index barrier"
+        );
     }
 }

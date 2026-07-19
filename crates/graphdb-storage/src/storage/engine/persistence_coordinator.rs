@@ -44,6 +44,7 @@ use crate::core::{StorageError, StorageResult};
 use crate::storage::engine::config::PropertyGraphConfig;
 use crate::storage::engine::snapshot_manager::{SnapshotManager, SnapshotOptions};
 use crate::storage::engine::WalManager;
+use crate::storage::index::shard_runtime::IndexBarrierRegistry;
 use crate::transaction::wal::{CheckpointManager, Lsn, SyncPolicy, WalConfig};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -277,6 +278,12 @@ impl PersistenceCoordinator {
 
     pub fn wal_manager(&self) -> Option<Arc<RwLock<WalManager>>> {
         self.wal_manager.clone()
+    }
+
+    pub(crate) fn set_index_barrier_registry(&mut self, registry: IndexBarrierRegistry) {
+        if let Some(wal) = &self.wal_manager {
+            wal.write().set_index_barrier_registry(registry);
+        }
     }
 
     pub fn wal_dir(&self) -> PathBuf {
@@ -1018,19 +1025,18 @@ impl PersistenceCoordinator {
         checkpoint_dir: &Path,
         wal_lsn: Lsn,
     ) -> StorageResult<()> {
-        let storage_snapshot_ref =
-            CheckpointManifest::storage_snapshot_from_directory(
-                checkpoint_dir,
-                checkpoint.seq,
-                data.vertex_count,
-                data.edge_count,
-            )
-            .map_err(|error| {
-                StorageError::db_error(format!(
-                    "Failed to build storage snapshot reference: {}",
-                    error
-                ))
-            })?;
+        let storage_snapshot_ref = CheckpointManifest::storage_snapshot_from_directory(
+            checkpoint_dir,
+            checkpoint.seq,
+            data.vertex_count,
+            data.edge_count,
+        )
+        .map_err(|error| {
+            StorageError::db_error(format!(
+                "Failed to build storage snapshot reference: {}",
+                error
+            ))
+        })?;
 
         let storage_lsn = graphdb_core::core::types::CommitLsn::new(wal_lsn.into());
         let work_dir = self

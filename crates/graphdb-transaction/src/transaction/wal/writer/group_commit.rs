@@ -7,10 +7,16 @@
 use std::fs::File;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use parking_lot::{Condvar, Mutex};
 
 use crate::core::wal::types::{WalError, WalResult};
+
+/// Default timeout for group commit follower wait.
+/// If the sync leader does not complete within this duration, followers return
+/// a timeout error rather than blocking indefinitely.
+pub const GROUP_COMMIT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Shared coordinator for group commit.
 ///
@@ -76,16 +82,23 @@ impl GroupCommitCoordinator {
 
     /// Wait until the data up to `appended_lsn` is durable (fsynced to disk).
     ///
-    /// If a sync is already in progress by another thread, this call blocks
-    /// until that sync completes and then checks whether the requested LSN
-    /// has been covered. If no sync is in progress, the calling thread
-    /// becomes the sync leader and performs the fsync.
-    pub fn append_and_wait(&self, appended_lsn: u64) -> WalResult<()> {
+    /// Blocks until one of:
+    /// - The requested LSN is covered by a completed fsync.
+    /// - The `timeout` elapses (returns `WalError::GroupCommitTimeout`).
+    ///
+    /// If no sync is in progress, the calling thread becomes the sync leader
+    /// and performs the fsync. Followers wait on a condvar.
+    pub fn append_and_wait_timeout(
+        &self,
+        appended_lsn: u64,
+        timeout: Duration,
+    ) -> WalResult<()> {
         // Fast path: already durable
         if self.inner.durable_seq.load(Ordering::SeqCst) >= appended_lsn {
             return Ok(());
         }
 
+        let deadline = std::time::Instant::now() + timeout;
         let mut guard = self.inner.commit_mutex.lock();
 
         loop {
@@ -114,9 +127,25 @@ impl GroupCommitCoordinator {
                 return result;
             }
 
-            // Wait as follower
-            self.inner.commit_condvar.wait(&mut guard);
+            // Wait as follower with timeout
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return Err(WalError::GroupCommitTimeout);
+            }
+            let remaining = deadline - now;
+            let result = self.inner.commit_condvar.wait_for(&mut guard, remaining);
+            if result.timed_out() {
+                return Err(WalError::GroupCommitTimeout);
+            }
         }
+    }
+
+    /// Wait until durable with default timeout (30s).
+    ///
+    /// Returns `WalError::GroupCommitTimeout` if the sync leader fails to complete
+    /// within the timeout, preventing indefinite blocking on leader failure.
+    pub fn append_and_wait(&self, appended_lsn: u64) -> WalResult<()> {
+        self.append_and_wait_timeout(appended_lsn, GROUP_COMMIT_TIMEOUT)
     }
 
     /// Current durable sequence number.
