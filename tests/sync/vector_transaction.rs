@@ -125,27 +125,19 @@ async fn test_vector_sync_coordinator_with_buffer() {
         panic!("Transaction buffer not initialized");
     }
 
-    // Commit transaction — should fail with disabled engine
+    // Commit transaction — succeeds as no-op with disabled engine
     let commit_result = coordinator.commit_transaction(txn_id).await;
     assert!(
-        commit_result.is_err(),
-        "commit_transaction should fail with disabled vector engine"
+        commit_result.is_ok(),
+        "commit_transaction should succeed as no-op with disabled vector engine"
     );
 
-    // Buffer should still have updates (peek-first preserves buffer on failure)
-    if let Some(buffer) = coordinator.transaction_buffer() {
-        assert!(
-            buffer.has_pending_updates(txn_id),
-            "Buffer should preserve updates when commit fails"
-        );
-    }
-
-    // Rollback clears the buffer
-    coordinator.rollback_transaction(txn_id).await;
+    // Buffer is cleared after no-op commit (peek-then-take preserves buffer on engine errors,
+    // but disabled engine short-circuits before any engine operation)
     if let Some(buffer) = coordinator.transaction_buffer() {
         assert!(
             !buffer.has_pending_updates(txn_id),
-            "Buffer should be cleared after rollback"
+            "Buffer should be cleared after no-op commit"
         );
     }
 }

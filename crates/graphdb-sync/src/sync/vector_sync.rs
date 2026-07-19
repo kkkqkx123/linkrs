@@ -18,6 +18,16 @@ use vector_client::{
     VectorPoint,
 };
 
+/// Runtime state of the vector engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VectorEngineState {
+    /// Engine is disabled; all mutation/search operations are no-op.
+    /// Logical index metadata is still tracked for schema correctness.
+    Disabled,
+    /// Engine is active; mutations and searches execute against the backend.
+    Active,
+}
+
 /// Vector point data for synchronization
 #[derive(Debug, Clone)]
 pub struct VectorPointData {
@@ -341,6 +351,20 @@ impl std::fmt::Debug for VectorSyncCoordinator {
 impl VectorSyncCoordinator {
     pub fn is_disabled_engine(&self) -> bool {
         self.vector_manager.engine().name() == "disabled"
+    }
+
+    /// Returns the runtime state of the underlying vector engine.
+    ///
+    /// - `Disabled`: engine is not available; all mutation/search operations act as no-op.
+    ///   Index metadata is still tracked logically so that queries referencing vector indexes
+    ///   do not produce schema errors.
+    /// - `Active`: engine is operational; mutations and searches execute normally.
+    pub fn engine_state(&self) -> VectorEngineState {
+        if self.is_disabled_engine() {
+            VectorEngineState::Disabled
+        } else {
+            VectorEngineState::Active
+        }
     }
 
     /// Create a new vector sync coordinator with an explicit runtime handle.

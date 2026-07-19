@@ -163,7 +163,7 @@ async fn test_point_data_with_payload() {
     );
 }
 
-/// TC-204: Coordinator commit with disabled engine returns expected error
+/// TC-204: Coordinator commit with disabled engine acts as no-op
 #[tokio::test]
 async fn test_coordinator_commit_disabled_engine() {
     let vector_manager = Arc::new(
@@ -194,17 +194,11 @@ async fn test_coordinator_commit_disabled_engine() {
     );
     coordinator.buffer_vector_change(txn_id, ctx).unwrap();
 
-    // Commit should fail because engine is disabled
+    // Commit succeeds as no-op when engine is disabled
     let result = coordinator.commit_transaction(txn_id).await;
-    assert!(result.is_err());
+    assert!(result.is_ok());
 
-    // Buffer should still have updates (peek-first preserves them on failure)
-    if let Some(buffer) = coordinator.transaction_buffer() {
-        assert!(buffer.has_pending_updates(txn_id));
-    }
-
-    // Rollback clears the buffer
-    coordinator.rollback_transaction(txn_id).await;
+    // Buffer is cleared after successful no-op commit
     if let Some(buffer) = coordinator.transaction_buffer() {
         assert!(!buffer.has_pending_updates(txn_id));
     }

@@ -54,6 +54,7 @@ pub use types::{IndexOpKey, IndexOperation};
 
 #[cfg(feature = "qdrant")]
 pub use vector_sync::{
-    PendingVectorUpdate, VectorChangeContext, VectorChangeType, VectorIndexLocation,
-    VectorPointData, VectorSyncCoordinator, VectorTransactionBuffer, VectorTransactionBufferConfig,
+    PendingVectorUpdate, VectorChangeContext, VectorChangeType, VectorEngineState,
+    VectorIndexLocation, VectorPointData, VectorSyncCoordinator, VectorTransactionBuffer,
+    VectorTransactionBufferConfig,
 };

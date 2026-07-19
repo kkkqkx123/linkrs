@@ -636,10 +636,21 @@ impl SyncManager {
                     ));
                 }
             }
-            OutboxPayload::CreateIndex { .. }
-            | OutboxPayload::DropIndex { .. }
-            | OutboxPayload::EdgeInsert { .. }
-            | OutboxPayload::EdgeDelete { .. } => {}
+            OutboxPayload::CreateIndex { .. } => {
+                // DDL already executed locally before the outbox event was staged.
+                // Delivery records the application without reapplying the index creation.
+            }
+            OutboxPayload::DropIndex { .. } => {
+                // Same as CreateIndex — DDL was already applied locally.
+            }
+            OutboxPayload::EdgeInsert { .. } => {
+                // Edge mutations do not trigger vector index updates.
+                // Vector indexes are maintained per-vertex; edge-only changes
+                // do not carry vector fields and are not indexed.
+            }
+            OutboxPayload::EdgeDelete { .. } => {
+                // Same as EdgeInsert — edge deletions do not affect vector indexes.
+            }
         }
         if !contexts.is_empty() {
             coordinator
