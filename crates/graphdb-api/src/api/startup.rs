@@ -253,6 +253,7 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
     };
 
     if let Some(manager) = sync_manager.as_mut().and_then(Arc::get_mut) {
+        manager.set_stats_manager(stats_manager.clone());
         let outbox_path = PathBuf::from(config.storage_path()).join("outbox/outbox.sqlite");
         if let Err(error) = manager.configure_outbox(outbox_path) {
             return Err(crate::core::DBError::storage(format!(

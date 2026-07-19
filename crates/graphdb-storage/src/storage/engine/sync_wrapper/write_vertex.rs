@@ -164,10 +164,6 @@ impl<S: StorageClient + 'static> SyncWrapper<S> {
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
 
-            if props.is_empty() {
-                continue;
-            }
-
             if let Some(txn_id) = txn_id {
                 sync_manager
                     .on_vertex_change_with_txn(

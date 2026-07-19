@@ -699,8 +699,12 @@ impl RecoveryApplier for GraphStorageContext {
             Ok(_) => {}
             Err(e) => log::warn!("create_tag_index replay: {}", e),
         }
+        let stored = self
+            .index_metadata_manager()
+            .get_tag_index(redo.space_id, &redo.index_name)?
+            .unwrap_or(index);
         let data_mgr = self.index_data_manager().write();
-        let _ = data_mgr.register_native_index(redo.space_id, &index);
+        let _ = data_mgr.register_native_index(redo.space_id, &stored);
         Ok(())
     }
 
@@ -747,8 +751,12 @@ impl RecoveryApplier for GraphStorageContext {
             Ok(_) => {}
             Err(e) => log::warn!("create_edge_index replay: {}", e),
         }
+        let stored = self
+            .index_metadata_manager()
+            .get_edge_index(redo.space_id, &redo.index_name)?
+            .unwrap_or(index);
         let data_mgr = self.index_data_manager().write();
-        let _ = data_mgr.register_native_index(redo.space_id, &index);
+        let _ = data_mgr.register_native_index(redo.space_id, &stored);
         Ok(())
     }
 

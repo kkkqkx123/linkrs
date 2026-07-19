@@ -581,6 +581,9 @@ pub struct WriteSet {
     pub vertices: HashSet<VertexId>,
     /// Edges modified (insert/update/delete)
     pub edges: HashSet<EdgeIdentifier>,
+    /// Vertex IDs used as edge endpoints (source/destination).
+    /// Collected for O(1) endpoint lookup.
+    pub edge_endpoints: HashSet<VertexId>,
 }
 
 impl WriteSet {
@@ -596,6 +599,8 @@ impl WriteSet {
 
     /// Record an edge write
     pub fn record_edge(&mut self, edge: EdgeIdentifier) {
+        self.edge_endpoints.insert(edge.src_vid);
+        self.edge_endpoints.insert(edge.dst_vid);
         self.edges.insert(edge);
     }
 
@@ -666,10 +671,7 @@ mod tests {
 
     #[test]
     fn test_commit_retry_display() {
-        assert_eq!(
-            format!("{}", TransactionState::CommitRetry),
-            "CommitRetry"
-        );
+        assert_eq!(format!("{}", TransactionState::CommitRetry), "CommitRetry");
     }
 
     #[test]

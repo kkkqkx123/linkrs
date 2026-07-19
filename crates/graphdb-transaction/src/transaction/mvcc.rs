@@ -307,14 +307,6 @@ impl VersionManager {
         self.condvar.notify_all();
     }
 
-    /// Release an insert timestamp.
-    ///
-    /// This name is kept at the transaction-manager boundary while the MVCC
-    /// implementation uses the more accurate write-timestamp terminology.
-    pub fn release_insert_timestamp(&self, ts: Timestamp) {
-        self.release_write_timestamp(ts);
-    }
-
     pub fn pending_count(&self) -> i32 {
         self.pending_reqs.load(Ordering::SeqCst)
     }
@@ -385,13 +377,13 @@ impl InsertTimestampGuard {
 
     pub fn commit(mut self) {
         if let Some(ts) = self.timestamp.take() {
-            self.version_manager.release_insert_timestamp(ts);
+            self.version_manager.release_write_timestamp(ts);
         }
     }
 
     pub fn abort(mut self) {
         if let Some(ts) = self.timestamp.take() {
-            self.version_manager.release_insert_timestamp(ts);
+            self.version_manager.release_write_timestamp(ts);
         }
     }
 }
@@ -399,7 +391,7 @@ impl InsertTimestampGuard {
 impl Drop for InsertTimestampGuard {
     fn drop(&mut self) {
         if let Some(ts) = self.timestamp.take() {
-            self.version_manager.release_insert_timestamp(ts);
+            self.version_manager.release_write_timestamp(ts);
         }
     }
 }
@@ -421,7 +413,7 @@ mod tests {
 
         let ts2 = vm.acquire_insert_timestamp().expect("acquire insert");
         assert!(ts2 >= 1);
-        vm.release_insert_timestamp(ts2);
+        vm.release_write_timestamp(ts2);
     }
 
     #[test]
@@ -501,15 +493,15 @@ mod tests {
         assert_eq!(tracker.cleanup_threshold(), ts1);
 
         // Release first
-        vm.release_insert_timestamp(ts1);
+        vm.release_write_timestamp(ts1);
         assert_eq!(tracker.cleanup_threshold(), ts2);
 
         // Release second
-        vm.release_insert_timestamp(ts2);
+        vm.release_write_timestamp(ts2);
         assert_eq!(tracker.cleanup_threshold(), ts3);
 
         // Release last
-        vm.release_insert_timestamp(ts3);
+        vm.release_write_timestamp(ts3);
         assert_eq!(tracker.cleanup_threshold(), u32::MAX); // No active snapshots
     }
 }

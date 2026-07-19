@@ -8,9 +8,8 @@
 //!
 //! Each field starts with a type tag byte, followed by the encoded body.
 //! Fixed-length types encode to a fixed byte count; variable-length types
-//! (String, Blob) use a 0x00 terminator byte.  The 0x00 byte does not appear
-//! inside the encoded data — encoding a value containing 0x00 returns an
-//! [`StorageError`].
+//! (String, Blob) use an escaped 0x00 terminator. A zero byte in the data is
+//! encoded as `00 01`; the terminator is `00 00`.
 //!
 //! The terminator enables tight prefix upper bounds: for a string or blob
 //! prefix value P, the range scan bound is `[encode(P), tag +
@@ -31,21 +30,24 @@ pub const ORDERED_CODEC_VERSION: u8 = 0x01;
 
 // ── Type tags (1 byte) ──────────────────────────────────────────────────────
 
-const TAG_NULL: u8 = 0x00;
-const TAG_BOOL: u8 = 0x01;
-const TAG_SMALL_INT: u8 = 0x02;
-const TAG_INT: u8 = 0x03;
-const TAG_BIG_INT: u8 = 0x04;
-const TAG_FLOAT: u8 = 0x05;
-const TAG_DOUBLE: u8 = 0x06;
-const TAG_STRING: u8 = 0x07;
-const TAG_BLOB: u8 = 0x08;
+const TAG_EMPTY: u8 = 0x00;
+const TAG_NULL: u8 = 0x01;
+const TAG_BOOL: u8 = 0x02;
+const TAG_SMALL_INT: u8 = 0x03;
+const TAG_INT: u8 = 0x04;
+const TAG_BIG_INT: u8 = 0x05;
+const TAG_FLOAT: u8 = 0x06;
+const TAG_DOUBLE: u8 = 0x07;
+const TAG_DECIMAL: u8 = 0x08;
 const TAG_DATE: u8 = 0x09;
 const TAG_TIME: u8 = 0x0A;
 const TAG_DATE_TIME: u8 = 0x0B;
-const TAG_UUID: u8 = 0x0C;
-const TAG_VERTEX_ID: u8 = 0x0D;
-const TAG_EDGE_REF: u8 = 0x0E;
+const TAG_STRING: u8 = 0x0C;
+const TAG_FIXED_STRING: u8 = 0x0D;
+const TAG_BLOB: u8 = 0x0E;
+const TAG_VERTEX_ID: u8 = 0x0F;
+const TAG_EDGE_REF: u8 = 0x10;
+const TAG_UUID: u8 = 0x1A;
 const TAG_NULL_LAST: u8 = 0xFF;
 
 /// Order-preserving codec for index keys.
@@ -102,6 +104,7 @@ impl OrderedCodec {
         }
         let tag = bytes[0];
         match tag {
+            TAG_EMPTY => Ok((Value::Empty, 1)),
             TAG_NULL | TAG_NULL_LAST => Ok((Value::Null(NullType::Null), 1)),
             TAG_BOOL => {
                 if bytes.len() < 2 {
@@ -148,21 +151,35 @@ impl OrderedCodec {
                 ]);
                 Ok((Value::Double(decode_f64_ordered(raw)), 9))
             }
-            TAG_STRING | TAG_BLOB => {
-                // Terminator-based: scan for 0x00 byte (the terminator).
-                let term_rel = bytes[1..].iter().position(|b| *b == 0).ok_or_else(|| {
-                    StorageError::deserialize_error("missing string/blob terminator")
-                })?;
-                let term_abs = 1 + term_rel;
-                let data = bytes[1..term_abs].to_vec();
-                let end = term_abs + 1;
+            TAG_DECIMAL => {
+                let (value, consumed) = decode_decimal(bytes)?;
+                Ok((value, consumed))
+            }
+            TAG_STRING | TAG_FIXED_STRING | TAG_BLOB => {
+                let (data, end) = decode_escaped_bytes(bytes, 1)?;
                 if tag == TAG_STRING {
                     let s = String::from_utf8(data).map_err(|e| {
                         StorageError::deserialize_error(format!("invalid UTF-8: {}", e))
                     })?;
                     Ok((Value::String(s), end))
-                } else {
+                } else if tag == TAG_BLOB {
                     Ok((Value::Blob(data), end))
+                } else {
+                    if bytes.len() < end + 4 {
+                        return Err(StorageError::deserialize_error(
+                            "truncated fixed-string length",
+                        ));
+                    }
+                    let len = u32::from_be_bytes([
+                        bytes[end],
+                        bytes[end + 1],
+                        bytes[end + 2],
+                        bytes[end + 3],
+                    ]) as usize;
+                    let s = String::from_utf8(data).map_err(|e| {
+                        StorageError::deserialize_error(format!("invalid UTF-8: {}", e))
+                    })?;
+                    Ok((Value::FixedString { len, data: s }, end + 4))
                 }
             }
             TAG_DATE => {
@@ -327,8 +344,12 @@ impl OrderedCodec {
                 if bytes.len() < pos + 12 {
                     return Err(StorageError::deserialize_error("truncated edge ref"));
                 }
-                let et_bytes: [u8; 4] = bytes[pos..pos + 4].try_into().unwrap();
-                let rank_bytes: [u8; 8] = bytes[pos + 4..pos + 12].try_into().unwrap();
+                let et_bytes: [u8; 4] = bytes[pos..pos + 4]
+                    .try_into()
+                    .map_err(|_| StorageError::deserialize_error("invalid edge type bytes"))?;
+                let rank_bytes: [u8; 8] = bytes[pos + 4..pos + 12]
+                    .try_into()
+                    .map_err(|_| StorageError::deserialize_error("invalid edge ranking bytes"))?;
                 pos += 12;
                 Ok((
                     EntityRef::Edge {
@@ -394,32 +415,23 @@ impl OrderedCodec {
                 Ok((lower, upper))
             }
 
-            // String / blob: terminator-based, tight upper bound.
+            // String / fixed string / blob: escaped-terminator based, tight
+            // upper bound. The length suffix of a fixed string is deliberately
+            // outside the prefix range so all values with the requested data
+            // prefix remain covered.
             // Lower = full encoded value (TAG + data + 0x00).
             // Upper = TAG + prefix_upper_bound(data).
-            Value::String(_s) => {
+            Value::String(_) | Value::FixedString { .. } | Value::Blob(_) => {
                 let lower = self.encode(value)?;
                 let tag = lower[0];
-                let data = &lower[1..lower.len() - 1]; // strip tag and terminator
+                let (_, terminator_end) = decode_escaped_bytes(&lower, 1)?;
+                let data = &lower[1..terminator_end - 2];
                 let mut upper = vec![tag];
-                upper.extend_from_slice(&Self::prefix_upper_bound(data));
-                Ok((lower, upper))
-            }
-            Value::FixedString { data, .. } => {
-                let s = Value::String(data.clone());
-                let lower = self.encode(&s)?;
-                let tag = lower[0];
-                let data_bytes = &lower[1..lower.len() - 1];
-                let mut upper = vec![tag];
-                upper.extend_from_slice(&Self::prefix_upper_bound(data_bytes));
-                Ok((lower, upper))
-            }
-            Value::Blob(_b) => {
-                let lower = self.encode(value)?;
-                let tag = lower[0];
-                let data = &lower[1..lower.len() - 1];
-                let mut upper = vec![tag];
-                upper.extend_from_slice(&Self::prefix_upper_bound(data));
+                if data.is_empty() {
+                    upper = Self::prefix_upper_bound(&upper);
+                } else {
+                    upper.extend_from_slice(&Self::prefix_upper_bound(data));
+                }
                 Ok((lower, upper))
             }
 
@@ -440,7 +452,10 @@ impl OrderedCodec {
         null_last: bool,
     ) -> Result<(), StorageError> {
         match value {
-            Value::Empty | Value::Null(_) => {
+            Value::Empty => {
+                buf.push(if null_last { TAG_NULL_LAST } else { TAG_EMPTY });
+            }
+            Value::Null(_) => {
                 buf.push(if null_last { TAG_NULL_LAST } else { TAG_NULL });
             }
             Value::Bool(b) => {
@@ -467,35 +482,21 @@ impl OrderedCodec {
                 buf.push(TAG_DOUBLE);
                 buf.extend_from_slice(&encode_f64_ordered(*f).to_be_bytes());
             }
-            Value::String(s) => {
-                if s.as_bytes().contains(&0) {
-                    return Err(StorageError::db_error(
-                        "string with embedded 0x00 byte cannot be encoded in ordered_codec v1",
-                    ));
-                }
-                buf.push(TAG_STRING);
-                buf.extend_from_slice(s.as_bytes());
-                buf.push(0x00);
+            Value::Decimal128(decimal) => {
+                encode_decimal(decimal, buf)?;
             }
-            Value::FixedString { data, .. } => {
-                if data.as_bytes().contains(&0) {
-                    return Err(StorageError::db_error(
-                        "fixed string with embedded 0x00 byte cannot be encoded",
-                    ));
-                }
+            Value::String(s) => {
                 buf.push(TAG_STRING);
-                buf.extend_from_slice(data.as_bytes());
-                buf.push(0x00);
+                encode_escaped_bytes(s.as_bytes(), buf);
+            }
+            Value::FixedString { len, data } => {
+                buf.push(TAG_FIXED_STRING);
+                encode_escaped_bytes(data.as_bytes(), buf);
+                buf.extend_from_slice(&(*len as u32).to_be_bytes());
             }
             Value::Blob(b) => {
-                if b.contains(&0) {
-                    return Err(StorageError::db_error(
-                        "blob with embedded 0x00 byte cannot be encoded in ordered_codec v1",
-                    ));
-                }
                 buf.push(TAG_BLOB);
-                buf.extend_from_slice(b);
-                buf.push(0x00);
+                encode_escaped_bytes(b, buf);
             }
             Value::Date(d) => {
                 buf.push(TAG_DATE);
@@ -526,9 +527,9 @@ impl OrderedCodec {
                 buf.push(TAG_UUID);
                 buf.extend_from_slice(&u.0);
             }
-            // Complex types: encode as null (these shouldn't be index keys)
-            Value::Decimal128(_)
-            | Value::Vertex(_)
+            // Complex values are not valid ordered index fields. Silently
+            // encoding them as NULL would create false index matches.
+            Value::Vertex(_)
             | Value::Edge(_)
             | Value::Path(_)
             | Value::List(_)
@@ -540,11 +541,175 @@ impl OrderedCodec {
             | Value::Json(_)
             | Value::JsonB(_)
             | Value::Interval(_) => {
-                buf.push(TAG_NULL);
+                return Err(StorageError::invalid_input(format!(
+                    "Value type {:?} is not supported by OrderedCodec",
+                    value.get_type()
+                )));
             }
         }
         Ok(())
     }
+}
+
+fn encode_escaped_bytes(data: &[u8], buf: &mut Vec<u8>) {
+    for byte in data {
+        if *byte == 0 {
+            buf.extend_from_slice(&[0, 1]);
+        } else {
+            buf.push(*byte);
+        }
+    }
+    buf.extend_from_slice(&[0, 0]);
+}
+
+fn decode_escaped_bytes(
+    bytes: &[u8],
+    mut position: usize,
+) -> Result<(Vec<u8>, usize), StorageError> {
+    let mut data = Vec::new();
+    while position < bytes.len() {
+        let byte = bytes[position];
+        position += 1;
+        if byte != 0 {
+            data.push(byte);
+            continue;
+        }
+        let escape = *bytes.get(position).ok_or_else(|| {
+            StorageError::deserialize_error("missing variable-length value terminator")
+        })?;
+        position += 1;
+        match escape {
+            0 => return Ok((data, position)),
+            1 => data.push(0),
+            _ => {
+                return Err(StorageError::deserialize_error(
+                    "invalid variable-length value escape",
+                ))
+            }
+        }
+    }
+    Err(StorageError::deserialize_error(
+        "missing variable-length value terminator",
+    ))
+}
+
+fn encode_decimal(
+    decimal: &crate::core::value::Decimal128Value,
+    buf: &mut Vec<u8>,
+) -> Result<(), StorageError> {
+    let text = decimal.to_string();
+    let negative = text.starts_with('-');
+    let unsigned = text
+        .strip_prefix('-')
+        .or_else(|| text.strip_prefix('+'))
+        .unwrap_or(&text);
+    let (mantissa, exponent_part) = unsigned
+        .find(|character| character == 'e' || character == 'E')
+        .map_or((unsigned, "0"), |position| {
+            (&unsigned[..position], &unsigned[position + 1..])
+        });
+    let exponent10 = exponent_part.parse::<i32>().map_err(|error| {
+        StorageError::serialize_error(format!("Invalid decimal exponent: {error}"))
+    })?;
+    let (whole, fractional) = mantissa
+        .split_once('.')
+        .map_or((mantissa, ""), |parts| parts);
+    let mut digits = whole.bytes().chain(fractional.bytes()).collect::<Vec<_>>();
+    if digits.is_empty() || digits.iter().any(|digit| !digit.is_ascii_digit()) {
+        return Err(StorageError::serialize_error(format!(
+            "Invalid decimal value {text}"
+        )));
+    }
+    while digits.first() == Some(&b'0') && digits.len() > 1 {
+        digits.remove(0);
+    }
+    while digits.last() == Some(&b'0') && digits.len() > 1 {
+        digits.pop();
+    }
+    let is_zero = digits.iter().all(|digit| *digit == b'0');
+    if is_zero {
+        digits.clear();
+        digits.push(b'0');
+    }
+    let fractional_len = i32::try_from(fractional.len())
+        .map_err(|_| StorageError::serialize_error("Decimal fractional part is too long"))?;
+    let digit_exponent = i32::try_from(digits.len())
+        .map_err(|_| StorageError::serialize_error("Decimal significand is too long"))?
+        - fractional_len
+        + exponent10;
+    let biased = (digit_exponent as u32) ^ 0x8000_0000;
+    buf.push(TAG_DECIMAL);
+    buf.push(u8::from(!negative));
+    buf.extend_from_slice(&(if negative { !biased } else { biased }).to_be_bytes());
+    if negative {
+        buf.extend(digits.into_iter().map(|digit| !digit));
+        buf.push(0xFF);
+    } else {
+        buf.extend_from_slice(&digits);
+        buf.push(0x00);
+    }
+    Ok(())
+}
+
+fn decode_decimal(bytes: &[u8]) -> Result<(Value, usize), StorageError> {
+    if bytes.len() < 7 {
+        return Err(StorageError::deserialize_error("truncated decimal"));
+    }
+    let sign = bytes[1];
+    if sign > 1 {
+        return Err(StorageError::deserialize_error("invalid decimal sign"));
+    }
+    let raw = u32::from_be_bytes([bytes[2], bytes[3], bytes[4], bytes[5]]);
+    let wire_exponent = if sign == 0 { !raw } else { raw };
+    let exponent = (wire_exponent ^ 0x8000_0000) as i32;
+    let terminator = if sign == 0 { 0xFF } else { 0x00 };
+    let mut position = 6;
+    let mut digits = Vec::new();
+    while position < bytes.len() && bytes[position] != terminator {
+        let digit = if sign == 0 {
+            !bytes[position]
+        } else {
+            bytes[position]
+        };
+        if !digit.is_ascii_digit() {
+            return Err(StorageError::deserialize_error(
+                "invalid decimal significand",
+            ));
+        }
+        digits.push(digit);
+        position += 1;
+    }
+    if digits.is_empty() || position == bytes.len() {
+        return Err(StorageError::deserialize_error(
+            "missing decimal terminator",
+        ));
+    }
+    position += 1;
+    let decimal_position = exponent;
+    let mut text = String::new();
+    if sign == 0 && digits.iter().any(|digit| *digit != b'0') {
+        text.push('-');
+    }
+    if decimal_position <= 0 {
+        text.push_str("0.");
+        text.extend(std::iter::repeat_n('0', (-decimal_position) as usize));
+        text.extend(digits.iter().map(|digit| char::from(*digit)));
+    } else if decimal_position as usize >= digits.len() {
+        text.extend(digits.iter().map(|digit| char::from(*digit)));
+        text.extend(std::iter::repeat_n(
+            '0',
+            decimal_position as usize - digits.len(),
+        ));
+    } else {
+        let split = decimal_position as usize;
+        text.extend(digits[..split].iter().map(|digit| char::from(*digit)));
+        text.push('.');
+        text.extend(digits[split..].iter().map(|digit| char::from(*digit)));
+    }
+    let value = text
+        .parse::<crate::core::value::Decimal128Value>()
+        .map_err(|error| StorageError::deserialize_error(format!("invalid decimal: {error}")))?;
+    Ok((Value::Decimal128(value), position))
 }
 
 impl Default for OrderedCodec {
@@ -650,7 +815,7 @@ mod tests {
         let v = Value::Empty;
         let enc = codec().encode(&v).unwrap();
         let dec = codec().decode(&enc).unwrap();
-        assert_eq!(dec, Value::Null(NullType::Null));
+        assert_eq!(dec, v);
     }
 
     #[test]
@@ -750,7 +915,7 @@ mod tests {
         for v in &cases {
             let enc = codec().encode(v).unwrap();
             let dec = codec().decode(&enc).unwrap();
-            assert_eq!(dec, v.fixed_to_string_value());
+            assert_eq!(dec, *v);
         }
     }
 
@@ -778,7 +943,6 @@ mod tests {
             Value::Blob(vec![0x01, 0x02, 0x03]),
             Value::Blob(vec![0xFF, 0xFE]),
         ];
-        // Note: blobs with 0x00 byte are rejected at encode time.
         for v in cases {
             let enc = codec().encode(&v).unwrap();
             let dec = codec().decode(&enc).unwrap();
@@ -787,15 +951,15 @@ mod tests {
     }
 
     #[test]
-    fn test_blob_rejects_zero_byte() {
+    fn test_blob_roundtrips_zero_byte() {
         let v = Value::Blob(vec![0x00, 0x01]);
-        assert!(codec().encode(&v).is_err());
+        assert_eq!(codec().decode(&codec().encode(&v).unwrap()).unwrap(), v);
     }
 
     #[test]
-    fn test_string_rejects_zero_byte() {
+    fn test_string_roundtrips_zero_byte() {
         let v = Value::String("a\x00b".to_string());
-        assert!(codec().encode(&v).is_err());
+        assert_eq!(codec().decode(&codec().encode(&v).unwrap()).unwrap(), v);
     }
 
     #[test]
@@ -805,7 +969,7 @@ mod tests {
             .unwrap();
         // lower = [TAG_STRING, 0x61, 0x00]
         assert_eq!(lower[0], TAG_STRING);
-        assert_eq!(&lower[1..lower.len() - 1], b"a");
+        assert_eq!(&lower[1..lower.len() - 2], b"a");
         assert_eq!(lower[lower.len() - 1], 0x00);
 
         // upper = [TAG_STRING, 0x62]
@@ -829,7 +993,7 @@ mod tests {
         let (lower, upper) = codec()
             .prefix_bounds(&Value::String("ab".to_string()))
             .unwrap();
-        assert_eq!(&lower[1..lower.len() - 1], b"ab");
+        assert_eq!(&lower[1..lower.len() - 2], b"ab");
         assert_eq!(upper, vec![TAG_STRING, 0x61, 0x63]);
 
         let aba = codec().encode(&Value::String("aba".to_string())).unwrap();
@@ -845,7 +1009,7 @@ mod tests {
             .prefix_bounds(&Value::Blob(vec![0x01, 0x02]))
             .unwrap();
         assert_eq!(lower[0], TAG_BLOB);
-        assert_eq!(&lower[1..lower.len() - 1], &[0x01, 0x02]);
+        assert_eq!(&lower[1..lower.len() - 2], &[0x01, 0x02]);
         assert_eq!(upper, vec![TAG_BLOB, 0x01, 0x03]);
     }
 
@@ -889,7 +1053,7 @@ mod tests {
         let (lower, upper) = codec()
             .prefix_bounds(&Value::Blob(vec![0x01, 0xFF]))
             .unwrap();
-        assert_eq!(&lower[1..lower.len() - 1], &[0x01, 0xFF]);
+        assert_eq!(&lower[1..lower.len() - 2], &[0x01, 0xFF]);
         // prefix_upper_bound([0x01, 0xFF]) = [0x02, 0x00]
         assert_eq!(upper, vec![TAG_BLOB, 0x02, 0x00]);
 
@@ -1015,16 +1179,159 @@ mod tests {
         assert_eq!(dec, v);
     }
 
-    /// Helper: FixedString → Value::String for comparison
-    trait FixedToStr {
-        fn fixed_to_string_value(&self) -> Value;
+    #[test]
+    fn ordered_codec_integer_property() {
+        let values = [
+            Value::SmallInt(i16::MIN),
+            Value::SmallInt(-1),
+            Value::SmallInt(0),
+            Value::SmallInt(i16::MAX),
+            Value::Int(i32::MIN),
+            Value::Int(-1),
+            Value::Int(0),
+            Value::Int(i32::MAX),
+            Value::BigInt(i64::MIN),
+            Value::BigInt(-1),
+            Value::BigInt(0),
+            Value::BigInt(i64::MAX),
+        ];
+        for pair in values.windows(2) {
+            let semantic = pair[0].cmp(&pair[1]);
+            let encoded = codec()
+                .encode(&pair[0])
+                .unwrap()
+                .cmp(&codec().encode(&pair[1]).unwrap());
+            assert_eq!(
+                encoded, semantic,
+                "integer order changed for {:?} and {:?}",
+                pair[0], pair[1]
+            );
+        }
     }
-    impl FixedToStr for Value {
-        fn fixed_to_string_value(&self) -> Value {
-            match self {
-                Value::FixedString { data, .. } => Value::String(data.clone()),
-                other => other.clone(),
-            }
+
+    #[test]
+    fn ordered_codec_string_and_blob_property() {
+        let strings = ["", "a", "aa", "b", "世界", "z\0a"];
+        for pair in strings.windows(2) {
+            let left = Value::String(pair[0].to_string());
+            let right = Value::String(pair[1].to_string());
+            assert_eq!(
+                codec()
+                    .encode(&left)
+                    .unwrap()
+                    .cmp(&codec().encode(&right).unwrap()),
+                left.cmp(&right)
+            );
+        }
+
+        let blobs = [vec![], vec![0], vec![0, 1], vec![1], vec![1, 255], vec![2]];
+        for pair in blobs.windows(2) {
+            let left = Value::Blob(pair[0].clone());
+            let right = Value::Blob(pair[1].clone());
+            assert_eq!(
+                codec()
+                    .encode(&left)
+                    .unwrap()
+                    .cmp(&codec().encode(&right).unwrap()),
+                left.cmp(&right)
+            );
+        }
+    }
+
+    #[test]
+    fn ordered_codec_decimal_property() {
+        let values = ["-100.5", "-1.25", "0", "0.01", "1.2", "10", "100.5"]
+            .into_iter()
+            .map(|text| Value::Decimal128(text.parse().expect("decimal fixture should parse")))
+            .collect::<Vec<_>>();
+        for pair in values.windows(2) {
+            assert_eq!(
+                codec()
+                    .encode(&pair[0])
+                    .unwrap()
+                    .cmp(&codec().encode(&pair[1]).unwrap()),
+                pair[0].cmp(&pair[1])
+            );
+            assert_eq!(
+                codec().decode(&codec().encode(&pair[0]).unwrap()).unwrap(),
+                pair[0]
+            );
+        }
+    }
+
+    #[test]
+    fn ordered_codec_composite_prefix_property() {
+        let first = Value::String("user".to_string());
+        let second = Value::Int(1);
+        let third = Value::Int(2);
+        let first_key = codec()
+            .encode_composite(&[&first, &second], None, false)
+            .unwrap();
+        let second_key = codec()
+            .encode_composite(&[&first, &third], None, false)
+            .unwrap();
+        let other_key = codec()
+            .encode_composite(&[&Value::String("user2".to_string()), &second], None, false)
+            .unwrap();
+        assert!(first_key < second_key);
+        assert!(second_key < other_key);
+        let (decoded_first, consumed) = codec().decode_value_inner(&first_key).unwrap();
+        let (decoded_second, _) = codec().decode_value_inner(&first_key[consumed..]).unwrap();
+        assert_eq!(decoded_first, first);
+        assert_eq!(decoded_second, second);
+    }
+
+    #[test]
+    fn ordered_codec_supported_type_tags_follow_value_priority() {
+        let values = [
+            Value::Empty,
+            Value::Null(NullType::Null),
+            Value::Bool(false),
+            Value::SmallInt(0),
+            Value::Int(0),
+            Value::BigInt(0),
+            Value::Float(0.0),
+            Value::Double(0.0),
+            Value::Decimal128("0".parse().expect("decimal fixture should parse")),
+            Value::Date(DateValue {
+                year: 2024,
+                month: 1,
+                day: 1,
+            }),
+            Value::Time(TimeValue {
+                hour: 0,
+                minute: 0,
+                sec: 0,
+                microsec: 0,
+            }),
+            Value::DateTime(DateTimeValue {
+                year: 2024,
+                month: 1,
+                day: 1,
+                hour: 0,
+                minute: 0,
+                sec: 0,
+                microsec: 0,
+            }),
+            Value::String("".to_string()),
+            Value::FixedString {
+                len: 0,
+                data: "".to_string(),
+            },
+            Value::Blob(Vec::new()),
+            Value::Uuid(UuidValue::from_bytes([0; 16])),
+        ];
+        for pair in values.windows(2) {
+            assert_eq!(
+                codec()
+                    .encode(&pair[0])
+                    .unwrap()
+                    .cmp(&codec().encode(&pair[1]).unwrap()),
+                pair[0].cmp(&pair[1]),
+                "type order changed for {:?} and {:?}",
+                pair[0],
+                pair[1]
+            );
         }
     }
 }

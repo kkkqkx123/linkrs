@@ -270,6 +270,9 @@ impl GraphDatabase<GraphStorage> {
 
         // Create shared StatsManager for all components (before TransactionManager to enable wiring)
         let stats_manager = Arc::new(StatsManager::new());
+        if let Some(manager) = sync_manager.as_mut().and_then(Arc::get_mut) {
+            manager.set_stats_manager(stats_manager.clone());
+        }
 
         let mut txn_manager =
             TransactionManager::with_stats_manager(txn_manager_config, stats_manager.clone());

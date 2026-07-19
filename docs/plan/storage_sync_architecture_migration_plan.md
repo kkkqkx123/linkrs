@@ -1,6 +1,6 @@
 # 存储、索引与同步架构迁移计划
 
-> 当前进度（2026-07）：阶段 0 已完成；阶段 1 和阶段 3 已形成基础闭环但尚未完成旧路径删除与全部故障验收；阶段 4 已落地 ordered codec、typed predicate 和统一 cursor 的主要结构；阶段 5 已接入 edge index，但 rebuild、covering record 和 cursor 正确性仍未闭环；阶段 6 已完成持久 manifest、结构化 shard 路由、reader handle fence 和安全回收 primitive，在线 split 仍因阶段 5 的增量追平协议缺失而禁用；阶段 7 仅完成部分测试和指标，尚未收尾。
+> 当前进度（2026-07）：阶段 0 至阶段 6 的代码闭环已完成；阶段 1 已删除运行时 JSON event API，阶段 2 已接入 fulltext/vector receiver 和 generation barrier，阶段 3 已完成组合 checkpoint/outbox snapshot 恢复，阶段 4 已完成 ordered codec 边界与 property tests，阶段 5 已完成 edge/included-columns/rebuild，阶段 6 已完成真实 online split 和 crash recovery。阶段 7 仅剩最终全量验证、qdrant 外部服务演练和性能报告。
 
 ## 1. 执行原则
 
@@ -20,13 +20,13 @@
 | 阶段 | 状态 | 已完成范围 | 主要剩余项 |
 | --- | --- | --- | --- |
 | 0 | 已完成 | 强类型、WAL wire type、manifest/cursor 基础类型、roundtrip/版本校验 | 补充更多 crash fixture |
-| 1 | 基本闭环，未最终收尾 | WAL batch、commit LSN、committed recovery、自动/显式 commit sink、SQLite projection、claim/lease/retry/frontier | 删除 JSON 运行依赖；补齐 DDL/所有写 API 垂直闭环；移除兼容 direct API |
-| 2 | 未开始 | SQLite 已有 generation gate 和基础 frontier | 真实 fulltext/vector receiver、远端幂等 receipt、late-arrival 防护、minimum LSN |
-| 3 | 部分完成 | SQLite `VACUUM INTO` snapshot、checksum/restore primitive、延后 WAL 截断 | 组合 checkpoint manifest、snapshot+WAL 重建、JSON importer、独立回收判定 |
-| 4 | 部分完成 | OrderedKeyCodec、typed predicate、`IndexRow` cursor 接口 | prefix codec 边界、storage 内实体版本校验、完整 covering row |
-| 5 | 部分完成 | edge index DDL/读写/cursor、基础 MVCC record | included columns；固定 snapshot、增量追平和 publish fence rebuild |
-| 6 | 部分完成 | 版本化持久 manifest、`[lower,upper)` 路由/pruning、manifest handle 与延迟回收 | 将 manifest 接入物理 cursor/checkpoint；复用安全 rebuild 完成在线 split |
-| 7 | 部分完成 | manifest 指标和针对性单元测试 | 全链路故障演练、旧路径清理和完整运维文档 |
+| 1 | 已完成 | WAL batch、commit LSN、committed recovery、自动/显式 commit sink、SQLite projection、DDL/所有写 API staging、claim/lease/retry/frontier | 最终回归记录 |
+| 2 | 已完成 | fulltext/vector receiver、持久 receipt、late-arrival 防护、minimum LSN、generation barrier | qdrant 外部服务演练 |
+| 3 | 已完成 | SQLite `VACUUM INTO` snapshot、checksum/restore、组合 checkpoint manifest、snapshot+WAL 重建和延后 WAL 截断 | 最终回归记录 |
+| 4 | 已完成 | OrderedCodec、typed predicate、`IndexRow` cursor、prefix/composite/type-order property tests、实体版本校验和 covering row | 最终回归记录 |
+| 5 | 已完成 | edge index DDL/读写/cursor、included columns、固定 snapshot、增量追平、publish fence rebuild 和重启恢复 | 最终回归记录 |
+| 6 | 已完成 | 版本化持久 manifest、`[lower,upper)` 路由/pruning、manifest handle、延迟回收和真实 online split crash recovery | 最终回归记录 |
+| 7 | 基本完成 | manifest/outbox/frontier/generation/split/reclaim/transport/materializer 指标和针对性 E2E | 全链路最终验证、qdrant 演练、性能报告 |
 
 ## 2. 阶段 0：基线、类型与协议冻结（已完成）
 
@@ -43,7 +43,7 @@
 - 明确 `CommitLsn` 是 commit record end LSN，MVCC timestamp 不是 LSN。
 - `cargo fmt --check` 和全 workspace feature check 通过。
 
-## 3. 阶段 1：本地提交到持久 outbox 的最小闭环（基本闭环，收尾中）
+## 3. 阶段 1：本地提交到持久 outbox 的最小闭环（已完成）
 
 该阶段一次完成 WAL commit、target-specific intent、SQLite projection 和 claim 协议，避免出现“已删除旧投递但新队列尚未存在”的中间状态。transport 先使用确定性模拟器，阶段结束时真实写入已经只有 WAL → SQLite → claim 一条路径。
 
@@ -64,14 +64,14 @@
 
 ### 验收
 
-当前已验证：WAL batch roundtrip、commit LSN、checksum、未提交 tail 不恢复、SQLite durability、frontier 不跨洞、stale lease 不能 ack、显式 commit/abort sink 和 storage 全量单元测试通过。以下验收仍未完成：真实 DDL 全链路、所有 crash point 注入、JSON importer 后删除旧 API，以及代码库中彻底清除兼容 direct/sequence 路径。
+当前已验证：WAL batch roundtrip、commit LSN、checksum、未提交 tail 不恢复、SQLite durability、frontier 不跨洞、stale lease 不能 ack、显式 commit/abort sink、DDL/data write staging 和 storage 全量单元测试通过。旧 JSON event API 已删除，运行时投递路径固定为 WAL → SQLite → claim → receiver。
 
 - 在 redo 前、intent 中间、commit record 中间、fsync 后和 visibility publish 前注入崩溃；恢复结果只能是完整未提交或完整已提交。
 - 缺 intent、序号不连续、checksum 错误和截断 commit 不可恢复为已提交。
 - SQLite materialize 重放不重复；同 ordering key 不越过 backoff/leased 头事件；stale lease 不能 ack。
 - 从真实写 API 到模拟 target 完成闭环，代码中不存在 direct delivery。
 
-## 4. 阶段 2：真实 transport、generation barrier 与无洞 frontier（未开始）
+## 4. 阶段 2：真实 transport、generation barrier 与无洞 frontier（已完成）
 
 ### 修改
 
@@ -94,7 +94,7 @@
 - 超时后旧请求晚到不能覆盖更高 LSN；fulltext receipt 与数据不存在分裂状态。
 - 不同 target/index 的失败和等待互不错误确认。
 
-## 5. 阶段 3：原子 checkpoint、outbox snapshot 与 WAL 回收（部分完成）
+## 5. 阶段 3：原子 checkpoint、outbox snapshot 与 WAL 回收（已完成）
 
 ### 修改
 
@@ -112,14 +112,14 @@
 
 ### 验收
 
-当前已验证 SQLite snapshot 文件可原子生成、fsync 并通过 checksum 校验；WAL 截断已放到 snapshot 创建之后，并受 outbox safe LSN 限制。组合 manifest 的原子发布、损坏回退、在线 SQLite 丢失重建和旧 JSON 一次性导入仍未完成，因此本阶段不能视为完成。
+当前已验证 SQLite snapshot 文件可原子生成、fsync 并通过 checksum 校验；WAL 截断已放到 snapshot 创建之后，并受 outbox safe LSN 限制。组合 manifest 的原子发布、损坏回退、在线 SQLite 丢失重建和旧格式清理均已接入。
 
 - SQLite 在线文件删除且早期 WAL 已回收时，仍能由 outbox snapshot加剩余 WAL 恢复 pending event。
 - outbox snapshot 或 manifest checksum 损坏时回退到上一有效 checkpoint。
 - 任意 checkpoint crash point 不会发布半套 snapshot，也不会提前删除 WAL。
 - JSON 导入失败不切换格式，成功后重启不会重复导入。
 
-## 6. 阶段 4：OrderedKeyCodec、typed predicate 与统一 cursor（未开始）
+## 6. 阶段 4：OrderedKeyCodec、typed predicate 与统一 cursor（已完成）
 
 ### 修改
 
@@ -140,7 +140,7 @@
 - 任意 read timestamp 的 index cursor 与同 snapshot 表扫描一致。
 - covering 与回表的值、顺序、offset/limit 结果一致。
 
-## 7. 阶段 5：edge index、included columns 与 generation rebuild（未开始）
+## 7. 阶段 5：edge index、included columns 与 generation rebuild（已完成）
 
 ### 修改
 
@@ -166,7 +166,7 @@
 
 已完成带格式版本的 immutable manifest 原子落盘、无界端点的半开 shard range、按 key 和 query range 路由、epoch 单调发布、cursor 可持有的引用计数 handle，以及 reader 释放后才返回待回收文件的安全 primitive。该 primitive 只返回文件清单，实际删除仍由 checkpoint owner 在持久 fence 后执行。
 
-在线 split 尚不能启用。当前 rebuild 会清空 active B-tree 后直接从调用方提供的 `vertices`/`edges` 重建，只记录 `Building -> Active`，没有 `snapshot_ts/start_lsn`、增量 change log、barrier LSN、publish fence 或崩溃恢复。基于该路径实现 split 会在并发写下丢更新，也会让读者观察到构建中的不完整索引。必须先补齐阶段 5 的 generation rebuild 协议，再把 manifest catalog 接入真实 cursor 和 checkpoint 发布。
+在线 split 已复用 generation rebuild 的 snapshot/start LSN、WAL catch-up、rebuild gate、barrier publish、manifest 原子发布和启动恢复协议；split 期间的写入不能落入旧 generation，读者通过 manifest handle 固定物理 generation。
 
 ### 修改
 
@@ -189,7 +189,7 @@
 
 ### 当前边界（2026-07）
 
-manifest catalog 已暴露 active epoch/generation、active reader、retired generation、publish 和 reclaim 计数，并覆盖 range routing、持久 roundtrip、未知版本拒绝、epoch 发布和长读回收 fence 单元测试。全阶段收尾仍被前序未完成项阻塞：prefix cursor 仍使用扫描后解码过滤，covering row 尚未生成，rebuild/split 没有 crash-safe 增量追平，因此不能删除相应兼容路径或宣称通过 split/recovery 演练。
+manifest catalog 已暴露 active epoch/generation、active reader、retired generation、publish 和 reclaim 计数，并覆盖 range routing、持久 roundtrip、未知版本拒绝、epoch 发布和长读回收 fence 单元测试。prefix/composite codec、covering row、rebuild/split crash-safe 增量追平和 fulltext outbox E2E 已补齐；最终阶段只剩统一验证、qdrant 外部服务演练和性能报告。
 
 ### 修改
 

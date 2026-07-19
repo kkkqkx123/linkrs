@@ -1068,6 +1068,13 @@ impl SqliteOutbox {
             .map(|created_at_ms| from_sql_i64(created_at_ms, "event creation timestamp"))
             .transpose()?
             .map(|created_at_ms| now_ms.saturating_sub(created_at_ms));
+        let projection_size = std::fs::metadata(&self.path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        let durable_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|error| error.to_string())?;
 
         Ok(crate::sync::OutboxStats {
             pending: from_sql_i64(row.get("pending"), "pending event count")?
@@ -1081,6 +1088,8 @@ impl SqliteOutbox {
             leased: from_sql_i64(row.get("leased"), "leased event count")?
                 .try_into()
                 .map_err(|_| "leased event count exceeds usize range".to_string())?,
+            write_amplification_bytes: projection_size,
+            persist_operations: from_sql_i64(durable_rows, "durable event row count")?,
             ..Default::default()
         })
     }

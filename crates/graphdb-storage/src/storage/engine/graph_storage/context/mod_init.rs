@@ -59,6 +59,10 @@ impl GraphStorageContext {
     /// typically at startup time. The stats manager will be injected into all
     /// EdgeTable instances for automatic metrics recording.
     pub fn set_stats_manager(&mut self, stats: Arc<StatsManager>) {
-        self.persistent.stats_manager = Some(stats);
+        self.persistent.stats_manager = Some(stats.clone());
+        self.persistent
+            .index_data_manager
+            .write()
+            .set_stats_manager(stats);
     }
 }

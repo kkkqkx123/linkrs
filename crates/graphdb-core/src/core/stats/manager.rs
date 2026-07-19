@@ -82,6 +82,26 @@ pub enum MetricType {
     SyncLatencyMs,
     SyncErrors,
     SyncQueueDepth,
+    OutboxPending,
+    OutboxRetryCount,
+    OutboxDeadLetterCount,
+    OutboxLeasedCount,
+    OutboxOldestEventAgeMs,
+    OutboxFrontierLag,
+    OutboxDegraded,
+    TargetFrontierLag,
+    GenerationBuildCount,
+    GenerationPublishCount,
+    GenerationRebuildFailures,
+    SplitCount,
+    SplitFailures,
+    ReclaimedIndexFiles,
+    ManifestActiveReaders,
+    ManifestRetiredGenerations,
+    FenceFailures,
+    TransportLatencyMs,
+    MaterializerLatencyMs,
+    SnapshotLag,
     // Index metrics
     IndexScanCount,
     IndexLookupLatencyUs,
@@ -963,6 +983,71 @@ impl StatsManager {
 
     pub fn set_sync_queue_depth(&self, depth: u64) {
         self.set_value(MetricType::SyncQueueDepth, depth);
+    }
+
+    pub fn record_outbox_state(
+        &self,
+        pending: u64,
+        retries: u64,
+        dead_lettered: u64,
+        leased: u64,
+        oldest_event_age_ms: u64,
+        frontier_lag: u64,
+        degraded: bool,
+    ) {
+        self.set_value(MetricType::OutboxPending, pending);
+        self.set_value(MetricType::OutboxRetryCount, retries);
+        self.set_value(MetricType::OutboxDeadLetterCount, dead_lettered);
+        self.set_value(MetricType::OutboxLeasedCount, leased);
+        self.set_value(MetricType::OutboxOldestEventAgeMs, oldest_event_age_ms);
+        self.set_value(MetricType::OutboxFrontierLag, frontier_lag);
+        self.set_value(MetricType::TargetFrontierLag, frontier_lag);
+        self.set_value(MetricType::OutboxDegraded, u64::from(degraded));
+    }
+
+    pub fn record_generation_build(&self) {
+        self.add_value(MetricType::GenerationBuildCount);
+    }
+
+    pub fn record_generation_publish(&self) {
+        self.add_value(MetricType::GenerationPublishCount);
+    }
+
+    pub fn record_generation_rebuild_failure(&self) {
+        self.add_value(MetricType::GenerationRebuildFailures);
+    }
+
+    pub fn record_split(&self, success: bool) {
+        if success {
+            self.add_value(MetricType::SplitCount);
+        } else {
+            self.add_value(MetricType::SplitFailures);
+        }
+    }
+
+    pub fn record_reclaimed_index_files(&self, count: u64) {
+        self.add_value_with_amount(MetricType::ReclaimedIndexFiles, count);
+    }
+
+    pub fn set_manifest_state(&self, active_readers: u64, retired_generations: u64) {
+        self.set_value(MetricType::ManifestActiveReaders, active_readers);
+        self.set_value(MetricType::ManifestRetiredGenerations, retired_generations);
+    }
+
+    pub fn record_fence_failure(&self) {
+        self.add_value(MetricType::FenceFailures);
+    }
+
+    pub fn record_transport_latency(&self, latency_ms: u64) {
+        self.add_value_with_amount(MetricType::TransportLatencyMs, latency_ms);
+    }
+
+    pub fn record_materializer_latency(&self, latency_ms: u64) {
+        self.add_value_with_amount(MetricType::MaterializerLatencyMs, latency_ms);
+    }
+
+    pub fn set_snapshot_lag(&self, lag: u64) {
+        self.set_value(MetricType::SnapshotLag, lag);
     }
 
     pub fn record_index_scan(&self, latency_us: u64) {

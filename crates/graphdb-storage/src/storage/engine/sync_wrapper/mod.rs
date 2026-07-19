@@ -198,6 +198,7 @@ impl<S: StorageClient> SyncWrapper<S> {
                 transaction_id,
                 index.space_id,
                 &index.name,
+                &index.schema_name,
                 index_type,
                 &fields,
                 &index.properties,
@@ -221,7 +222,9 @@ impl<S: StorageClient> SyncWrapper<S> {
         &self,
         space_id: u64,
         index_name: &str,
+        schema_name: &str,
         index_type: &str,
+        fields: &[String],
     ) -> Result<(), StorageError> {
         if !self.enabled {
             return Ok(());
@@ -235,7 +238,14 @@ impl<S: StorageClient> SyncWrapper<S> {
             )
         })?;
         sync_manager
-            .on_index_drop(transaction_id, space_id, index_name, index_type)
+            .on_index_drop(
+                transaction_id,
+                space_id,
+                index_name,
+                schema_name,
+                index_type,
+                fields,
+            )
             .map_err(|error| {
                 StorageError::db_error(format!("Failed to stage index drop intent: {error}"))
             })
@@ -644,7 +654,12 @@ impl<S: StorageClient + 'static> StorageSchemaOps for SyncWrapper<S> {
         self.validate_schema_sync_context()?;
         let result = self.inner.create_tag_index(space, info)?;
         if result {
-            self.stage_index_create(info, "tag")?;
+            if let Err(error) = self.stage_index_create(info, "tag") {
+                if let Some(transaction_id) = self.get_current_txn_id() {
+                    let _ = self.abort_transaction_fact(transaction_id);
+                }
+                return Err(error);
+            }
         }
         self.commit_auto_transaction()?;
         Ok(result)
@@ -652,10 +667,30 @@ impl<S: StorageClient + 'static> StorageSchemaOps for SyncWrapper<S> {
 
     fn drop_tag_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError> {
         let space_id = self.inner.get_space_id(space)?;
+        let (fields, schema_name) = self
+            .inner
+            .get_tag_index(space, index)?
+            .map(|definition| {
+                (
+                    definition
+                        .fields
+                        .into_iter()
+                        .map(|field| field.name)
+                        .collect(),
+                    definition.schema_name,
+                )
+            })
+            .unwrap_or_else(|| (Vec::new(), index.to_string()));
         self.validate_schema_sync_context()?;
         let result = self.inner.drop_tag_index(space, index)?;
         if result {
-            self.stage_index_drop(space_id, index, "tag")?;
+            if let Err(error) = self.stage_index_drop(space_id, index, &schema_name, "tag", &fields)
+            {
+                if let Some(transaction_id) = self.get_current_txn_id() {
+                    let _ = self.abort_transaction_fact(transaction_id);
+                }
+                return Err(error);
+            }
         }
         self.commit_auto_transaction()?;
         Ok(result)
@@ -669,7 +704,12 @@ impl<S: StorageClient + 'static> StorageSchemaOps for SyncWrapper<S> {
         self.validate_schema_sync_context()?;
         let result = self.inner.create_edge_index(space, info)?;
         if result {
-            self.stage_index_create(info, "edge")?;
+            if let Err(error) = self.stage_index_create(info, "edge") {
+                if let Some(transaction_id) = self.get_current_txn_id() {
+                    let _ = self.abort_transaction_fact(transaction_id);
+                }
+                return Err(error);
+            }
         }
         self.commit_auto_transaction()?;
         Ok(result)
@@ -677,10 +717,31 @@ impl<S: StorageClient + 'static> StorageSchemaOps for SyncWrapper<S> {
 
     fn drop_edge_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError> {
         let space_id = self.inner.get_space_id(space)?;
+        let (fields, schema_name) = self
+            .inner
+            .get_edge_index(space, index)?
+            .map(|definition| {
+                (
+                    definition
+                        .fields
+                        .into_iter()
+                        .map(|field| field.name)
+                        .collect(),
+                    definition.schema_name,
+                )
+            })
+            .unwrap_or_else(|| (Vec::new(), index.to_string()));
         self.validate_schema_sync_context()?;
         let result = self.inner.drop_edge_index(space, index)?;
         if result {
-            self.stage_index_drop(space_id, index, "edge")?;
+            if let Err(error) =
+                self.stage_index_drop(space_id, index, &schema_name, "edge", &fields)
+            {
+                if let Some(transaction_id) = self.get_current_txn_id() {
+                    let _ = self.abort_transaction_fact(transaction_id);
+                }
+                return Err(error);
+            }
         }
         self.commit_auto_transaction()?;
         Ok(result)

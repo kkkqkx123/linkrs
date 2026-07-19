@@ -72,10 +72,10 @@ fn does_not_buffer_sync_events_when_edge_insert_fails() {
 #[test]
 #[cfg(feature = "fulltext-search")]
 fn checkpoint_reopens_storage_and_rebuilds_outbox_from_remaining_wal() {
-    use graphdb_search::search::config::FulltextConfig;
-    use graphdb_search::search::FulltextIndexManager;
     use crate::sync::batch::BatchConfig;
     use crate::sync::coordinator::SyncCoordinator;
+    use graphdb_search::search::config::FulltextConfig;
+    use graphdb_search::search::FulltextIndexManager;
 
     let directory = tempfile::tempdir().expect("temporary directory should be created");
     let work_dir = directory.path().to_path_buf();
@@ -97,12 +97,12 @@ fn checkpoint_reopens_storage_and_rebuilds_outbox_from_remaining_wal() {
         index_path: work_dir.join("fulltext"),
         ..Default::default()
     };
-    let fulltext_manager = Arc::new(
-        FulltextIndexManager::new(fulltext_config).expect("fulltext manager should open"),
-    );
-    let sync_coordinator = Arc::new(
-        SyncCoordinator::new(fulltext_manager, BatchConfig::default()),
-    );
+    let fulltext_manager =
+        Arc::new(FulltextIndexManager::new(fulltext_config).expect("fulltext manager should open"));
+    let sync_coordinator = Arc::new(SyncCoordinator::new(
+        fulltext_manager,
+        BatchConfig::default(),
+    ));
     let mut manager = SyncManager::new(sync_coordinator);
     manager
         .configure_outbox(work_dir.join("outbox/outbox.sqlite"))

@@ -35,7 +35,7 @@ pub use coordinator::{
 };
 pub use dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
 pub use manager::{EdgeProps, EdgeRef, OutboxConsumerConfig, SyncError, SyncManager};
-pub use outbox::{OutboxEvent, OutboxPayload, OutboxStats};
+pub use outbox::{OutboxPayload, OutboxStats};
 pub use outbox_recovery::{
     find_latest_snapshot, find_latest_snapshot_at_or_before, live_database_exists, recover_outbox,
     restore_latest_snapshot, restore_snapshot_sync, verify_live_database,

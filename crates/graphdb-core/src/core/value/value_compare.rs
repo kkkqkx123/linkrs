@@ -93,6 +93,7 @@ impl Ord for Value {
             (Value::Float(a), Value::Float(b)) => Self::cmp_f32(*a, *b),
             (Value::Double(a), Value::Double(b)) => Self::cmp_f64(*a, *b),
             (Value::Decimal128(a), Value::Decimal128(b)) => a.cmp(b),
+            (Value::Blob(a), Value::Blob(b)) => a.cmp(b),
             (Value::String(a), Value::String(b)) => a.cmp(b),
             (Value::FixedString { data: a, .. }, Value::FixedString { data: b, .. }) => a.cmp(b),
             (Value::Date(a), Value::Date(b)) => Self::cmp_date(a, b),

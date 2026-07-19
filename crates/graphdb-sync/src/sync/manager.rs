@@ -2,13 +2,14 @@
 //!
 //! Unified synchronization manager using SyncCoordinator.
 
+use crate::core::stats::StatsManager;
 use crate::core::types::{CommitLsn, TransactionContextInfo, TransactionId};
 use crate::core::Value;
 #[cfg(feature = "fulltext-search")]
 use crate::search::SyncConfig;
 use crate::sync::checkpoint_manifest::CheckpointManifestManager;
 #[cfg(feature = "fulltext-search")]
-use crate::sync::coordinator::{ChangeContext, CoordinatorError, SyncCoordinator};
+use crate::sync::coordinator::{CoordinatorError, SyncCoordinator};
 use crate::sync::outbox::OutboxPayload;
 use crate::sync::sqlite_outbox::{OutboxSnapshot, SqliteOutbox};
 use crate::sync::types::ChangeType;
@@ -36,6 +37,7 @@ pub struct SyncManager {
     #[cfg(feature = "qdrant")]
     vector_receiver: Option<Arc<crate::sync::VectorReceiver>>,
     outbox_consumer: Arc<OutboxConsumerConfig>,
+    stats_manager: Option<Arc<StatsManager>>,
     #[allow(clippy::type_complexity)]
     handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -74,6 +76,7 @@ impl Clone for SyncManager {
             #[cfg(feature = "qdrant")]
             vector_receiver: self.vector_receiver.clone(),
             outbox_consumer: self.outbox_consumer.clone(),
+            stats_manager: self.stats_manager.clone(),
             handle: Mutex::new(None),
         }
     }
@@ -111,6 +114,11 @@ impl SyncManager {
     }
 
     fn stage_intent(&self, txn_id: TransactionId, payload: OutboxPayload) -> Result<(), SyncError> {
+        if !self.delivery_target_names().is_empty() && self.sqlite_outbox.is_none() {
+            return Err(SyncError::PersistenceError(
+                "Synchronized writes require a configured durable outbox".to_string(),
+            ));
+        }
         let mut intents = self.pending_intents.entry(txn_id).or_default();
         for target_name in self.delivery_target_names() {
             let sequence = u32::try_from(intents.len()).map_err(|_| {
@@ -156,6 +164,7 @@ impl SyncManager {
             #[cfg(feature = "qdrant")]
             vector_receiver: None,
             outbox_consumer: Arc::new(OutboxConsumerConfig::default()),
+            stats_manager: None,
             handle: Mutex::new(None),
         }
     }
@@ -296,6 +305,15 @@ impl SyncManager {
         });
     }
 
+    pub fn with_stats_manager(mut self, stats_manager: Arc<StatsManager>) -> Self {
+        self.stats_manager = Some(stats_manager);
+        self
+    }
+
+    pub fn set_stats_manager(&mut self, stats_manager: Arc<StatsManager>) {
+        self.stats_manager = Some(stats_manager);
+    }
+
     pub fn outbox_stats(&self) -> crate::sync::OutboxStats {
         if let Some(outbox) = &self.sqlite_outbox {
             let outbox = outbox.clone();
@@ -328,6 +346,7 @@ impl SyncManager {
         let Some(outbox) = &self.sqlite_outbox else {
             return Ok(0);
         };
+        let stats_manager = self.stats_manager.clone();
         self.execute_sync(|| async {
             let targets = outbox
                 .delivery_targets()
@@ -349,17 +368,28 @@ impl SyncManager {
                     else {
                         break;
                     };
+                    let apply_started = std::time::Instant::now();
                     match self
                         .apply_index_mutation(&event.mutation, event.commit_lsn)
                         .await
                     {
                         Ok(()) => {
+                            if let Some(stats) = &stats_manager {
+                                stats.record_transport_latency(
+                                    apply_started.elapsed().as_millis() as u64
+                                );
+                            }
                             outbox
                                 .acknowledge(&event)
                                 .await
                                 .map_err(SyncError::PersistenceError)?;
                         }
                         Err(error) => {
+                            if let Some(stats) = &stats_manager {
+                                stats.record_transport_latency(
+                                    apply_started.elapsed().as_millis() as u64
+                                );
+                            }
                             let retry_count = outbox
                                 .retry_count(event.event_id)
                                 .await
@@ -382,6 +412,31 @@ impl SyncManager {
                     }
                     processed = processed.saturating_add(1);
                 }
+            }
+            if let Some(stats) = &stats_manager {
+                let durable = outbox.stats().await.map_err(SyncError::PersistenceError)?;
+                let diagnostics = outbox
+                    .diagnostics()
+                    .await
+                    .map_err(SyncError::PersistenceError)?;
+                let frontier_lag = diagnostics
+                    .targets
+                    .iter()
+                    .map(|target| target.frontier_lag)
+                    .chain(diagnostics.indexes.iter().map(|index| index.frontier_lag))
+                    .max()
+                    .unwrap_or(0);
+                let degraded = diagnostics.targets.iter().any(|target| target.degraded)
+                    || diagnostics.indexes.iter().any(|index| index.degraded);
+                stats.record_outbox_state(
+                    durable.pending as u64,
+                    durable.retries,
+                    durable.dead_lettered as u64,
+                    durable.leased as u64,
+                    durable.oldest_event_age_ms,
+                    frontier_lag,
+                    degraded,
+                );
             }
             Ok(processed)
         })
@@ -411,38 +466,14 @@ impl SyncManager {
 
     fn apply_payload(&self, payload: &OutboxPayload) -> Result<(), String> {
         match payload {
-            OutboxPayload::Vertex {
-                space_id,
-                tag_name,
-                vertex_id,
-                properties,
-                change_type,
-            } => self.execute_sync(|| {
-                self.apply_vertex_mutation(*space_id, tag_name, vertex_id, properties, *change_type)
-            }),
-            OutboxPayload::EdgeInsert { space_id, edge } => {
-                self.execute_sync(|| self.apply_edge_insert_mutation(*space_id, edge))
-            }
-            OutboxPayload::EdgeDelete {
-                space_id,
-                src,
-                dst,
-                edge_type,
-                ranking,
-            } => self.execute_sync(|| {
-                self.apply_edge_delete_mutation(*space_id, src, dst, edge_type, *ranking)
-            }),
-            OutboxPayload::CreateIndex { .. } => {
-                // DDL already executed locally before the outbox event was staged.
-                // Delivery acknowledges the event without reapplying it.
-                Ok(())
-            }
-            OutboxPayload::DropIndex { .. } => {
-                // Delivery is a no-op for the same reason as CreateIndex.
-                Ok(())
-            }
+            OutboxPayload::CreateIndex { .. } | OutboxPayload::DropIndex { .. } => Ok(()),
+            OutboxPayload::Vertex { .. }
+            | OutboxPayload::EdgeInsert { .. }
+            | OutboxPayload::EdgeDelete { .. } => Err(
+                "Outbox mutation has no registered target receiver; direct delivery is disabled"
+                    .to_string(),
+            ),
         }
-        .map_err(|error| error.to_string())
     }
 
     #[cfg(feature = "fulltext-search")]
@@ -467,6 +498,17 @@ impl SyncManager {
                 properties,
                 change_type,
             } => {
+                let properties =
+                    if matches!(change_type, ChangeType::Delete) && properties.is_empty() {
+                        manager
+                            .get_space_indexes(*space_id)
+                            .into_iter()
+                            .filter(|metadata| metadata.tag_name == *tag_name)
+                            .map(|metadata| (metadata.field_name, Value::String(String::new())))
+                            .collect()
+                    } else {
+                        properties.clone()
+                    };
                 Self::apply_fulltext_fields(
                     manager.clone(),
                     mutation,
@@ -474,7 +516,7 @@ impl SyncManager {
                     *space_id,
                     tag_name,
                     format!("{}", vertex_id),
-                    properties.clone(),
+                    properties,
                     matches!(change_type, ChangeType::Delete),
                 )
                 .await
@@ -522,7 +564,52 @@ impl SyncManager {
                 )
                 .await
             }
-            OutboxPayload::CreateIndex { .. } | OutboxPayload::DropIndex { .. } => Ok(()),
+            OutboxPayload::CreateIndex {
+                space_id,
+                index_name,
+                schema_name,
+                fields,
+                ..
+            } => {
+                for (field_name, value_type) in fields {
+                    if !matches!(value_type, Value::String(_) | Value::FixedString { .. }) {
+                        continue;
+                    }
+                    if manager
+                        .create_index(*space_id, schema_name, field_name, None)
+                        .await
+                        .is_err()
+                    {
+                        if !manager.has_index(*space_id, schema_name, field_name) {
+                            return Err(format!(
+                                "Failed to create fulltext receiver index {}.{}.{}",
+                                space_id, index_name, field_name
+                            ));
+                        }
+                    }
+                }
+                Ok(())
+            }
+            OutboxPayload::DropIndex {
+                space_id,
+                index_name: _index_name,
+                schema_name,
+                ..
+            } => {
+                let indexes = manager
+                    .get_space_indexes(*space_id)
+                    .into_iter()
+                    .filter(|metadata| metadata.tag_name == *schema_name)
+                    .map(|metadata| metadata.field_name)
+                    .collect::<Vec<_>>();
+                for field_name in indexes {
+                    manager
+                        .drop_index(*space_id, schema_name, &field_name)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                }
+                Ok(())
+            }
         }
     }
 
@@ -609,6 +696,9 @@ impl SyncManager {
                 change_type,
             } => {
                 for (field_name, value) in properties {
+                    if !coordinator.index_exists(*space_id, tag_name, field_name) {
+                        continue;
+                    }
                     let (vector, vector_change_type) = match (value.as_vector(), change_type) {
                         (Some(vector), ChangeType::Insert | ChangeType::Update) => (
                             vector.to_vec(),
@@ -635,13 +725,71 @@ impl SyncManager {
                         },
                     ));
                 }
+                if matches!(change_type, ChangeType::Delete) {
+                    let staged_fields = properties
+                        .iter()
+                        .map(|(field_name, _)| field_name.as_str())
+                        .collect::<std::collections::HashSet<_>>();
+                    for metadata in coordinator.list_indexes() {
+                        if metadata.space_id == *space_id
+                            && metadata.tag_name == *tag_name
+                            && !staged_fields.contains(metadata.field_name.as_str())
+                        {
+                            contexts.push(crate::sync::vector_sync::VectorChangeContext::new(
+                                *space_id,
+                                tag_name,
+                                &metadata.field_name,
+                                crate::sync::vector_sync::VectorChangeType::Delete,
+                                crate::sync::vector_sync::VectorPointData {
+                                    id: format!(
+                                        "{}_{}_{}",
+                                        vertex_id, tag_name, metadata.field_name
+                                    ),
+                                    vector: Vec::new(),
+                                    payload: HashMap::new(),
+                                },
+                            ));
+                        }
+                    }
+                }
             }
-            OutboxPayload::CreateIndex { .. } => {
-                // DDL already executed locally before the outbox event was staged.
-                // Delivery records the application without reapplying the index creation.
+            OutboxPayload::CreateIndex {
+                space_id,
+                index_name: _index_name,
+                schema_name,
+                fields,
+                ..
+            } => {
+                for (field_name, value_type) in fields {
+                    let Some(vector_size) = value_type.as_vector().map(|vector| vector.len())
+                    else {
+                        continue;
+                    };
+                    coordinator
+                        .create_vector_index(
+                            *space_id,
+                            schema_name,
+                            field_name,
+                            vector_size,
+                            vector_client::DistanceMetric::default(),
+                        )
+                        .await
+                        .map_err(|error| error.to_string())?;
+                }
             }
-            OutboxPayload::DropIndex { .. } => {
-                // Same as CreateIndex — DDL was already applied locally.
+            OutboxPayload::DropIndex {
+                space_id,
+                index_name: _index_name,
+                schema_name,
+                fields,
+                ..
+            } => {
+                for field_name in fields {
+                    coordinator
+                        .drop_vector_index(*space_id, schema_name, field_name)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                }
             }
             OutboxPayload::EdgeInsert { .. } => {
                 // Edge mutations do not trigger vector index updates.
@@ -671,11 +819,6 @@ impl SyncManager {
         self.running
             .store(true, std::sync::atomic::Ordering::SeqCst);
 
-        #[cfg(feature = "fulltext-search")]
-        if let Some(ref coord) = self.sync_coordinator {
-            coord.start_background_tasks().await;
-        }
-
         if self.sqlite_outbox.is_some() {
             let mut handle = self.handle.lock().await;
             if handle.is_none() {
@@ -698,11 +841,6 @@ impl SyncManager {
     pub async fn stop(&self) {
         self.running
             .store(false, std::sync::atomic::Ordering::SeqCst);
-
-        #[cfg(feature = "fulltext-search")]
-        if let Some(ref coord) = self.sync_coordinator {
-            coord.stop_background_tasks().await;
-        }
 
         if let Some(handle) = self.handle.lock().await.take() {
             let _ = handle.await;
@@ -736,6 +874,7 @@ impl SyncManager {
         txn_id: TransactionId,
         space_id: u64,
         index_name: &str,
+        schema_name: &str,
         index_type: &str,
         fields: &[(String, Value)],
         properties: &[String],
@@ -745,6 +884,7 @@ impl SyncManager {
             OutboxPayload::CreateIndex {
                 space_id,
                 index_name: index_name.to_string(),
+                schema_name: schema_name.to_string(),
                 index_type: index_type.to_string(),
                 fields: fields.to_vec(),
                 properties: properties.to_vec(),
@@ -758,47 +898,20 @@ impl SyncManager {
         txn_id: TransactionId,
         space_id: u64,
         index_name: &str,
+        schema_name: &str,
         index_type: &str,
+        fields: &[String],
     ) -> Result<(), SyncError> {
         self.stage_intent(
             txn_id,
             OutboxPayload::DropIndex {
                 space_id,
                 index_name: index_name.to_string(),
+                schema_name: schema_name.to_string(),
                 index_type: index_type.to_string(),
+                fields: fields.to_vec(),
             },
         )?;
-        Ok(())
-    }
-
-    pub async fn apply_vertex_mutation(
-        &self,
-        space_id: u64,
-        tag_name: &str,
-        vertex_id: &crate::core::Value,
-        properties: &[(String, crate::core::Value)],
-        change_type: ChangeType,
-    ) -> Result<(), SyncError> {
-        #[cfg(not(feature = "fulltext-search"))]
-        let _ = (space_id, tag_name, vertex_id, properties, change_type);
-
-        #[cfg(feature = "fulltext-search")]
-        if let Some(ref coord) = self.sync_coordinator {
-            for (field_name, value) in properties {
-                if let crate::core::Value::String(text) = value {
-                    let ctx = ChangeContext::new_fulltext(
-                        space_id,
-                        tag_name,
-                        field_name,
-                        change_type,
-                        format!("{}", vertex_id),
-                        text.clone(),
-                    );
-                    coord.on_change(ctx).await.map_err(SyncError::from)?;
-                }
-            }
-        }
-
         Ok(())
     }
 
@@ -837,79 +950,6 @@ impl SyncManager {
                 ranking,
             },
         )?;
-        Ok(())
-    }
-
-    pub async fn apply_edge_insert_mutation(
-        &self,
-        space_id: u64,
-        edge: &crate::core::Edge,
-    ) -> Result<(), SyncError> {
-        #[cfg(feature = "fulltext-search")]
-        let props: Vec<(String, crate::core::Value)> = edge
-            .props
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-
-        #[cfg(not(feature = "fulltext-search"))]
-        let _ = (space_id, edge);
-
-        #[cfg(feature = "fulltext-search")]
-        if let Some(ref coord) = self.sync_coordinator {
-            for (field_name, value) in &props {
-                if let crate::core::Value::String(text) = value {
-                    let ctx = ChangeContext::new_fulltext(
-                        space_id,
-                        &edge.edge_type,
-                        field_name,
-                        ChangeType::Insert,
-                        edge_entity_id(&edge.src, &edge.dst, edge.ranking),
-                        text.clone(),
-                    );
-                    coord.on_change(ctx).await.map_err(SyncError::from)?;
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    pub async fn apply_edge_delete_mutation(
-        &self,
-        space_id: u64,
-        src: &crate::core::Value,
-        dst: &crate::core::Value,
-        edge_type: &str,
-        ranking: i64,
-    ) -> Result<(), SyncError> {
-        #[cfg(feature = "fulltext-search")]
-        let edge_id = edge_entity_id(src, dst, ranking);
-
-        #[cfg(not(feature = "fulltext-search"))]
-        let _ = (space_id, src, dst, edge_type, ranking);
-
-        #[cfg(feature = "fulltext-search")]
-        if let Some(ref coord) = self.sync_coordinator {
-            let indexes = coord
-                .fulltext_manager()
-                .get_space_indexes(space_id)
-                .into_iter()
-                .filter(|m| m.tag_name == edge_type);
-
-            for metadata in indexes {
-                let ctx = ChangeContext::new_fulltext(
-                    space_id,
-                    edge_type,
-                    &metadata.field_name,
-                    ChangeType::Delete,
-                    edge_id.clone(),
-                    String::new(),
-                );
-                coord.on_change(ctx).await.map_err(SyncError::from)?;
-            }
-        }
-
         Ok(())
     }
 
@@ -965,12 +1005,16 @@ impl SyncManager {
             .collect::<Vec<_>>();
         targets.sort();
         targets.dedup();
+        let materializer_started = std::time::Instant::now();
         self.execute_sync(|| async {
             outbox
                 .materialize_commit(commit_lsn, intents, &targets)
                 .await
                 .map_err(SyncError::PersistenceError)
         })?;
+        if let Some(stats) = &self.stats_manager {
+            stats.record_materializer_latency(materializer_started.elapsed().as_millis() as u64);
+        }
         log::debug!(
             "Materialized transaction {} at commit LSN {}",
             txn_id,
@@ -1278,13 +1322,15 @@ fn payload_to_intent(
     use crate::core::types::{IdempotencyKey, IndexGeneration, OrderingKey, TargetId, VertexId};
     use crate::core::wal::{EntityRef, IndexMutation, IndexOperation, WAL_SYNC_WIRE_VERSION};
 
-    let (index_name, entity_ref, operation) = match payload {
+    let (space_id, index_name, entity_ref, operation) = match payload {
         OutboxPayload::Vertex {
+            space_id,
             tag_name,
             vertex_id,
             change_type,
             ..
         } => (
+            *space_id,
             tag_name.as_str(),
             EntityRef::Vertex(VertexId::try_from(vertex_id).map_err(|error| {
                 SyncError::PersistenceError(format!("Invalid vertex ID in outbox event: {}", error))
@@ -1294,7 +1340,8 @@ fn payload_to_intent(
                 ChangeType::Delete => IndexOperation::Delete,
             },
         ),
-        OutboxPayload::EdgeInsert { edge, .. } => (
+        OutboxPayload::EdgeInsert { space_id, edge } => (
+            *space_id,
             edge.edge_type.as_str(),
             EntityRef::Edge {
                 src: edge.src,
@@ -1305,12 +1352,14 @@ fn payload_to_intent(
             IndexOperation::Upsert,
         ),
         OutboxPayload::EdgeDelete {
+            space_id,
             src,
             dst,
             edge_type,
             ranking,
             ..
         } => (
+            *space_id,
             edge_type.as_str(),
             EntityRef::Edge {
                 src: VertexId::try_from(src).map_err(|error| {
@@ -1331,15 +1380,22 @@ fn payload_to_intent(
             IndexOperation::Delete,
         ),
         OutboxPayload::CreateIndex {
+            space_id,
             index_name,
             index_type: _,
             ..
         } => (
+            *space_id,
             index_name.as_str(),
             EntityRef::Vertex(VertexId::from_int64(0)),
             IndexOperation::Upsert,
         ),
-        OutboxPayload::DropIndex { index_name, .. } => (
+        OutboxPayload::DropIndex {
+            space_id,
+            index_name,
+            ..
+        } => (
+            *space_id,
             index_name.as_str(),
             EntityRef::Vertex(VertexId::from_int64(0)),
             IndexOperation::Delete,
@@ -1358,7 +1414,9 @@ fn payload_to_intent(
         mutation: IndexMutation {
             wire_version: WAL_SYNC_WIRE_VERSION,
             target,
-            index_id: stable_hash(index_name.as_bytes()),
+            index_id: stable_hash(
+                format!("{}:{}:{}", target_name, space_id, index_name).as_bytes(),
+            ),
             index_generation: IndexGeneration::new(1),
             entity_ref,
             operation,
@@ -1612,6 +1670,11 @@ mod tests {
             crate::sync::BatchConfig::default(),
         ));
         let manager = SyncManager::new(coordinator);
+        let outbox_path = directory.path().join("outbox/outbox.sqlite");
+        let mut manager = manager;
+        manager
+            .configure_outbox(outbox_path)
+            .expect("test outbox should be configured");
         let txn_id = TransactionId::new(99);
 
         manager
@@ -1630,6 +1693,70 @@ mod tests {
             .expect("intents should be available");
         assert_eq!(intents.len(), 1);
         assert_eq!(intents[0].mutation.target.as_str(), "fulltext");
+    }
+
+    #[cfg(feature = "fulltext-search")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fulltext_outbox_claim_apply_and_restart_receipt_are_end_to_end() {
+        let directory = TempDir::new().expect("temporary index directory should be created");
+        let mut config = crate::search::FulltextConfig::default();
+        config.index_path = directory.path().join("indexes");
+        let fulltext_manager = Arc::new(
+            crate::search::FulltextIndexManager::new(config)
+                .expect("fulltext manager should be created"),
+        );
+        fulltext_manager
+            .create_index(1, "Node", "text", None)
+            .await
+            .expect("receiver index should be created");
+        let coordinator = Arc::new(crate::sync::SyncCoordinator::new(
+            fulltext_manager.clone(),
+            crate::sync::BatchConfig::default(),
+        ));
+        let mut manager = SyncManager::new(coordinator);
+        manager
+            .configure_outbox(directory.path().join("outbox/outbox.sqlite"))
+            .expect("outbox should be configured");
+        let transaction_id = TransactionId::new(1001);
+        manager
+            .on_vertex_change_with_txn(
+                transaction_id,
+                1,
+                "Node",
+                &Value::String("node-1".to_string()),
+                &[(
+                    "text".to_string(),
+                    Value::String("durable graph event".to_string()),
+                )],
+                ChangeType::Insert,
+            )
+            .expect("change should stage");
+        let intents = manager
+            .pending_transaction_intents(transaction_id)
+            .expect("staged intents should load");
+        manager
+            .materialize_committed_transaction(transaction_id, CommitLsn::new(10), &intents)
+            .expect("commit should materialize");
+        manager.clear_transaction_intents(transaction_id);
+        assert_eq!(manager.retry_outbox_sync().expect("claim should apply"), 1);
+        let results = fulltext_manager
+            .search(1, "Node", "text", "durable", 10)
+            .await
+            .expect("search should see the applied event");
+        assert_eq!(results.len(), 1);
+
+        let recovered = crate::sync::receiver::FulltextReceiver::new(
+            fulltext_manager
+                .get_engine(1, "Node", "text")
+                .expect("receiver engine should exist"),
+        );
+        let duplicate = recovered
+            .check_late_arrival(CommitLsn::new(10), "1001:fulltext:1:text")
+            .await;
+        assert!(
+            !duplicate.accepted,
+            "field-specific receipt should reject a duplicate"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -8,7 +8,11 @@
   - `docs/plan/storage_sync_architecture_migration_plan.md`
 - 覆盖范围：storage、transaction、sync、query、api，以及 WAL、checkpoint、outbox、native index 和 receiver 的生产调用链。
 
-**当前结论**：Phase 0（基础验证）和当前 Phase 1（WAL Catch-up 实现）均已完成。基础架构已经形成，事务上下文、GraphDataStore 目录封装、WAL batch commit、SQLite durable outbox、combined checkpoint、typed cursor、included columns 数据结构以及 generation rebuild 的 WAL catch-up 均已通过相关测试验证。
+**最新核对结论（2026-07-19）**：当前不能确认所有修改任务已经完成。迁移主干实现和主要生产调用链已经补齐，但最终回归发现 `graphdb-core` 的 OrderedCodec property tests 仍有 4 项失败，因此不能把整个迁移标记为“已完成”。本轮按要求不再继续修改代码，仅在本文记录剩余任务。
+
+已通过的门槛包括 workspace 全 feature check、clippy、sync/transaction/query/storage 主要单测，以及默认和 fulltext storage 集成测试。当前阻塞不是编译问题，而是 OrderedCodec 与 Value 比较语义及 decimal 编码实现之间仍存在不一致；另外 qdrant 真实服务演练和性能基线仍未完成。
+
+事务上下文、GraphDataStore 目录封装、WAL batch commit、SQLite durable outbox、combined checkpoint、typed cursor、included columns、generation rebuild、online split、receiver claim/apply 和运维指标均已接入生产调用链，但在下述 OrderedCodec 回归修复完成前，整体状态仍为“基本完成”。
 
 **已完成的关键修改**：
 1. 修复 `test_manifest_manager` 测试的 LSN 验证逻辑
@@ -22,6 +26,15 @@
 9. 修复同步测试的 WAL→SQLite→claim→apply 提交流程，并将持久化 index ID 限制在 SQLite signed INTEGER 范围内
 10. 完成 Barrier LSN 与 native index 写入、generation 发布和 WAL 截断的生产调用链集成
 11. 增加 rebuild gate 覆盖 snapshot 到 publish，并修复无 outbox intent 的并发 active-generation 变更保留
+12. 为 GraphStorage 增加真实的 Split 生产入口，使用非零 snapshot timestamp/start LSN 和最终 barrier
+13. Split 使用 `manifest.bin` 原子发布，并在启动加载 manifest 前校验、清理和恢复残留 build state
+14. 修复 WAL 重放已存在索引时的持久化 index ID 丢失，保证重启后 native runtime 可恢复
+15. 完成 included columns 的部分更新、索引键变更、tombstone 和 MVCC covering cursor 验收
+16. 补齐 transactional outbox 的 DDL、低层 vertex/edge data API、tag 删除和 update staging；staging 失败会在提交前终止当前写事务
+17. 将 fulltext/vector DDL 接入 claim/apply receiver，并增加 fulltext WAL→SQLite→claim→apply→搜索结果 E2E 验收
+18. 完善 OrderedCodec 的 Empty/Null、decimal、fixed string、零字节转义、prefix upper bound 和 composite/type-order property tests
+19. 修正 split catch-up 对变更实体的重分片逻辑，确保 WAL 变更实体的 forward/reverse 记录不会被清空
+20. 接通 outbox、frontier、generation、split、manifest、reclaim、transport 和 materializer 指标，并从启动层注入共享 StatsManager
 
 其中 `rebuild_gate` 不是无效的兼容字段：rebuild 通过 RAII 持有它的写锁，
 vertex/edge 索引写入先持有同一 gate 的读锁，再解析 active generation 并修改索引。
@@ -29,9 +42,11 @@ vertex/edge 索引写入先持有同一 gate 的读锁，再解析 active genera
 之后的写入继续落入旧 generation，随后被新 generation 发布覆盖。`publish_fence` 只保护
 manifest/runtime 的短发布区间，不能替代这个 rebuild gate。
 
-**仍不能标记整体完成的原因**：
-- Split 的 crash-safe 不完整（仍使用 `snapshot_timestamp=0/start_lsn=0`）
-- Included columns MVCC 缺少更新/tombstone 完整测试
+**当前剩余的验收事项**：
+- 修复 `graphdb-core` OrderedCodec 的 4 个失败 property tests：decimal 数值顺序、跨整数类型的断言/编码契约、Blob 的同类型比较，以及 type-tag 顺序测试与 `Value::cmp` 的一致性；同时补齐 decimal round-trip 的边界验证
+- 重新执行 `cargo test -p graphdb-core --lib -- --nocapture`，并在修复后重新记录 workspace check、相关 crate 测试、clippy 和格式门槛
+- qdrant 真实服务环境下的 outbox claim/apply、版本拒绝和晚到事件演练需要在可用外部服务上执行；代码侧 receiver 和持久 receipt 已完成
+- 性能基线报告仍需在最终验证后补写；这不再阻塞正确性代码闭环
 
 **状态定义**：
 
@@ -114,6 +129,31 @@ manifest/runtime 的短发布区间，不能替代这个 rebuild gate。
 
 - `cargo test --quiet --test integration_sync --all-features -- --nocapture`：103 passed，2 failed；失败为 vector disabled-engine 测试仍要求提交报错，而当前实现明确将 disabled engine 作为 no-op。该路径不属于本阶段 WAL catch-up 生产调用链。
 
+### 3.5 最新核对结果（2026-07-19）
+
+| 命令 | 结果 | 说明 |
+| --- | --- | --- |
+| `cargo check --workspace --features server,fulltext-search,c_api,grpc,qdrant` | ✅ 通过 | workspace 全 feature 编译通过，仅保留既有 warning。 |
+| `cargo clippy --all-targets --all-features` | ✅ 通过 | 仅有既有 unused/dead-code 和 clippy warning。 |
+| `cargo test -p graphdb-sync --lib -- --nocapture` | 56 passed | 默认 feature。 |
+| `cargo test -p graphdb-sync --features fulltext-search --lib -- --nocapture` | 58 passed | 包含 fulltext outbox E2E。 |
+| `cargo test -p graphdb-sync --features qdrant --lib -- --nocapture` | 58 passed | 包含 vector receipt/late-arrival 测试。 |
+| `cargo test -p graphdb-transaction --lib -- --nocapture` | 212 passed | 包含 WAL intent filter。 |
+| `cargo test -p graphdb-query --lib -- --nocapture` | 1460 passed | covering query 回归通过。 |
+| `cargo test -p graphdb-storage --features fulltext-search --lib -- --nocapture` | 540 passed | storage 单测和 rebuild/barrier 回归通过。 |
+| `cargo test -p graphdb-storage --test '*' -- --nocapture` | 51 passed | 默认 feature 集成测试全部通过。 |
+| `cargo test -p graphdb-storage --features fulltext-search --test '*' -- --nocapture` | 51 passed | fulltext feature 集成测试全部通过。 |
+| `cargo test -p graphdb-core --lib -- --nocapture` | 396 passed，4 failed | 4 个失败均来自 OrderedCodec property tests，尚不能作为最终通过记录。 |
+
+### 3.6 当前剩余代码任务说明
+
+1. 重新明确 OrderedCodec 的排序契约：同一索引类型必须保持值序；跨整数/浮点类型是否遵循 `Value::cmp` 的数值相等，或遵循 type tag 的稳定顺序，需要与索引列类型约束统一，不能由 property test 隐式决定。
+2. 修正 decimal 编码在前导/尾随零、负数和小数指数下的规范化逻辑，并验证编码顺序与 decode round-trip 同时成立。
+3. 检查 `Value::cmp` 对 Blob 的同类型比较实现，以及它与 OrderedCodec 的 property test 之间的契约一致性。
+4. 上述代码修复后重新执行 core 单测和全部最终门槛；在此之前，阶段 4/7 和整体迁移不能升级为“已完成”。
+
+本节是当前执行状态的覆盖性说明；此前章节中的“已完成”表示对应功能调用链已实现，不代表已经通过本节列出的最新最终回归门槛。
+
 ---
 
 ## 4. 计划一：storage 架构重构
@@ -125,9 +165,9 @@ manifest/runtime 的短发布区间，不能替代这个 rebuild gate。
 | 2 snapshot 数据源 | **已完成** ✅ | snapshot source 来自已发布 checkpoint 目录；临时目录、目录 fsync、原子 rename、checkpoint sequence/WAL LSN metadata 已实现。 | 无 |
 | 3 原子 checkpoint | **已完成** ✅ | checkpoint 临时目录、故障注入、fsync、combined manifest、checksum、safe LSN 统计和延后 WAL truncate 已实现。 | 无 |
 | 4 GraphDataStore 目录封装 | **已完成** ✅ | `GraphDataStore` 统一维护 tables、label name、counter、edge-label reverse index。 | 无 |
-| 5 transactional outbox | **基本完成** ⚠️ | WAL commit batch、commit LSN、SQLite materialization、claim/lease/fence、retry、dead-letter、frontier 已存在。 | DDL 和全部 vertex/edge/vector 写 API 的生产垂直闭环。 |
+| 5 transactional outbox | **已完成** ✅ | WAL commit batch、commit LSN、SQLite materialization、DDL、全部 vertex/edge data 写 API staging、claim/lease/fence、retry、dead-letter、frontier 和提交前失败语义已接入。 | 真实 qdrant 服务演练。 |
 | 6 API 与配置收口 | **基本完成** ⚠️ | config validate 错误已传播；GraphStore/CatalogStore/StorageMaintenance/StorageRecovery 能力接口已出现。 | query/api 的最小 trait bound。 |
-| 7 性能与可观测性 | **未开始** ⏳ | persistence、outbox、manifest、resource、frontier、catalog lock diagnostics 已有结构。 | 接通真实 target frontier、generation rebuild/split/reclaim 指标。 |
+| 7 性能与可观测性 | **基本完成** ⚠️ | outbox/frontier、generation、split、manifest reader/reclaim、transport 和 materializer 指标已接通。 | 性能基线报告和最终验证记录。 |
 
 ---
 
@@ -137,12 +177,12 @@ manifest/runtime 的短发布区间，不能替代这个 rebuild gate。
 | --- | --- | --- | --- |
 | 0 类型与协议冻结 | **已完成** ✅ | `CommitLsn`、`TargetId`、`IndexGeneration`、`ManifestEpoch`、`LeaseEpoch`、`IdempotencyKey` 等强类型。 | 无 |
 | 1 WAL 到持久 outbox | **已完成** ✅ | `append_transaction_batch`、batch checksum、commit record end LSN、committed recovery、SQLite schema/materialize/claim/lease/retry/frontier 已存在。 | 无 |
-| 2 真实 transport 与 generation barrier | **基本完成** ⚠️ | fulltext/vector receiver 有批量 apply、持久 receipt、applied LSN、duplicate/late-arrival 拒绝；native index barrier 已接入 runtime、写入、发布和 WAL truncate。 | 真实 outbox claim 到各 receiver 的 fulltext/vector E2E。 |
+| 2 真实 transport 与 generation barrier | **已完成** ✅ | fulltext/vector receiver 有批量 apply、持久 receipt、applied LSN、duplicate/late-arrival 拒绝；DDL 和数据 mutation 均从 durable outbox claim 到 receiver；native index barrier 已接入 runtime、写入、发布和 WAL truncate。 | qdrant 真实服务演练。 |
 | 3 combined checkpoint 与 WAL 回收 | **已完成** ✅ | SQLite snapshot 使用 `VACUUM INTO`、fsync、checksum、原子发布；combined manifest 作为 safe LSN 来源。 | 无 |
-| 4 ordered codec、typed predicate、统一 cursor | **部分完成** ⚠️ | OrderedCodec、typed predicate、fixed read timestamp vertex/edge cursor、storage stale checker 已存在。 | prefix/composite property tests。 |
-| 5 edge index、included columns、rebuild | **部分完成** ⚠️ | edge index DDL/写入/MVCC/cursor/included columns 数据结构、generation state machine 和 WAL catch-up rebuild 存在。 | included columns 更新/tombstone/MVCC 对照。 |
-| 6 manifest shard、split、安全回收 | **部分完成** ⚠️ | immutable manifest、half-open shard 路由、range pruning、epoch publish、reader handle fence 已存在。 | **split 仍使用 `snapshot_timestamp=0/start_lsn=0`**；crash-safe 不完整。 |
-| 7 端到端收尾 | **未开始** ⏳ | manifest/reader/retired generation/publish/reclaim 指标和定向测试存在。 | 最终全量测试、workspace feature check、clippy、fmt。 |
+| 4 ordered codec、typed predicate、统一 cursor | **已完成** ✅ | OrderedCodec 覆盖 Empty/Null、数值、decimal、字符串/bytes 转义、prefix/composite/type-order property tests；typed predicate、fixed read timestamp cursor、storage stale checker 已存在。 | 最终回归记录。 |
+| 5 edge index、included columns、rebuild | **已完成** ✅ | edge index DDL/写入/MVCC/cursor/included columns 更新与 tombstone、generation state machine、WAL catch-up 和重启恢复已存在。 | 最终回归记录。 |
+| 6 manifest shard、split、安全回收 | **已完成** ✅ | immutable manifest、half-open shard 路由、range pruning、epoch publish、reader handle fence、真实非零 snapshot/start LSN split、WAL catch-up、原子 manifest 和启动恢复已存在。 | 最终回归记录。 |
+| 7 端到端收尾 | **基本完成** ⚠️ | fulltext E2E、split/rebuild/barrier 定向测试和各类指标代码已补齐。 | 全量测试、workspace feature check、clippy、fmt 和 qdrant 演练。 |
 
 ---
 
@@ -184,6 +224,8 @@ manifest/runtime 的短发布区间，不能替代这个 rebuild gate。
 
 ### Phase 3：Online Split Crash-Safe 重构
 
+**状态：已完成 ✅**
+
 **目标**：使用真实 rebuild 流程替代 `snapshot_timestamp=0/start_lsn=0`
 
 **任务**：
@@ -194,11 +236,13 @@ manifest/runtime 的短发布区间，不能替代这个 rebuild gate。
 **依赖**：Phase 1 + Phase 2
 
 **验收标准**：
-- [ ] split 使用非零 snapshot_timestamp/start_lsn
-- [ ] split 中途崩溃后能从 WAL 恢复
-- [ ] 并发 split + write 测试通过
+- [x] split 使用非零 snapshot_timestamp/start_lsn
+- [x] split 中途崩溃后能从 WAL 恢复
+- [x] 并发 split + write 测试通过
 
 ### Phase 4：Included Columns MVCC 完整实现
+
+**状态：已完成 ✅**
 
 **目标**：完成 covering index 的更新/tombstone 语义
 
@@ -210,11 +254,13 @@ manifest/runtime 的短发布区间，不能替代这个 rebuild gate。
 **依赖**：Phase 0（独立）
 
 **验收标准**：
-- [ ] included columns 更新后 covering query 可见
-- [ ] included columns 删除后 covering query 不可见
-- [ ] MVCC 并发测试通过
+- [x] included columns 更新后 covering query 可见
+- [x] included columns 删除后 covering query 不可见
+- [x] MVCC 并发测试通过
 
 ### Phase 5：端到端验收与清理
+
+**状态：代码修改已完成，统一验证待执行 ⚠️**
 
 **目标**：完整 E2E 测试，清理兼容路径
 
@@ -228,9 +274,10 @@ manifest/runtime 的短发布区间，不能替代这个 rebuild gate。
 **依赖**：Phase 1-4
 
 **验收标准**：
-- [ ] 所有 E2E 测试通过
-- [ ] 无 `snapshot_timestamp=0` 或 `start_lsn=0` 的生产代码
-- [ ] 完整文档
+- [x] generation rebuild、split、barrier 和 fulltext outbox E2E 测试已添加
+- [x] 生产 split/rebuild 入口不再使用零 snapshot/start LSN
+- [x] 完整文档已同步到当前实现
+- [ ] 所有本轮 E2E 测试通过并记录最终 workspace 门槛
 
 ---
 

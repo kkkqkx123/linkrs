@@ -540,11 +540,7 @@ fn verify_file_reference(
 }
 
 fn collect_storage_files(root: &Path) -> Result<Vec<StorageFileRef>, String> {
-    fn visit(
-        root: &Path,
-        directory: &Path,
-        files: &mut Vec<StorageFileRef>,
-    ) -> Result<(), String> {
+    fn visit(root: &Path, directory: &Path, files: &mut Vec<StorageFileRef>) -> Result<(), String> {
         for entry in std::fs::read_dir(directory).map_err(|error| error.to_string())? {
             let path = entry.map_err(|error| error.to_string())?.path();
             if path.is_dir() {

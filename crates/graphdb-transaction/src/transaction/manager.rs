@@ -21,9 +21,9 @@ use super::participant::TransactionCommitSink;
 use super::rollback::UndoLogRollback;
 use super::types::*;
 use super::undo_log::UndoTarget;
+use crate::core::stats::StatsManager;
 use crate::core::types::Timestamp;
 use crate::core::wal::types::Lsn;
-use crate::core::stats::StatsManager;
 use crate::sync::SyncManager;
 
 /// Checkpoint coordination gate.
@@ -699,8 +699,8 @@ impl TransactionManager {
     ///
     /// Follows atomic abort protocol:
     /// 1. Check state (transaction still active)
-    /// 2. Execute undo log rollback
-    /// 3. Transition to Aborting
+    /// 2. Transition to Aborting
+    /// 3. Execute undo log rollback
     /// 4. Call sync_manager rollback. If it fails, the transaction is terminated and resources
     ///    are released.
     /// 5. Release timestamp
@@ -759,10 +759,7 @@ impl TransactionManager {
     }
 
     /// Execute abort steps (transition already done by caller).
-    fn execute_abort_internal(
-        &self,
-        context: &TransactionContext,
-    ) -> Result<(), TransactionError> {
+    fn execute_abort_internal(&self, context: &TransactionContext) -> Result<(), TransactionError> {
         let max_retries = self.config.abort_retry_attempts;
 
         if let Some(ref commit_sink) = self.commit_sink {
@@ -1040,11 +1037,7 @@ impl TransactionManager {
         timeout: Duration,
     ) -> Result<CheckpointTransaction, TransactionError> {
         let write_ts = self.version_manager.write_timestamp();
-        CheckpointTransaction::begin(
-            Arc::clone(&self.checkpoint_gate),
-            write_ts,
-            timeout,
-        )
+        CheckpointTransaction::begin(Arc::clone(&self.checkpoint_gate), write_ts, timeout)
     }
 }
 
@@ -1474,9 +1467,7 @@ mod tests {
         // CommitRetry is only reachable from Committing.
         assert!(ctx.transition_to(TransactionState::Committing).is_ok());
         // Cannot go Aborting from CommitRetry.
-        assert!(ctx
-            .transition_to(TransactionState::Aborting)
-            .is_err());
+        assert!(ctx.transition_to(TransactionState::Aborting).is_err());
     }
 
     #[test]

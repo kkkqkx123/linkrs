@@ -52,7 +52,10 @@ pub use engine::resource_budget::{
 pub use engine::sync_wrapper::SyncWrapper;
 pub use engine::transaction::UndoTarget;
 pub use engine::WalMetrics;
-pub use index::{IndexManifest, IndexShard, ManifestCatalog, ManifestCatalogStats, ManifestHandle};
+pub use index::{
+    GenerationBuildState, GenerationState, IndexManifest, IndexShard, ManifestCatalog,
+    ManifestCatalogStats, ManifestHandle,
+};
 pub use metrics::MetricsStorage;
 pub use schema::{ChangeDetails, ChangeLog, LabelVersionHistory, PropertyChange, SchemaObjectType};
 pub use types::StoragePropertyDef;

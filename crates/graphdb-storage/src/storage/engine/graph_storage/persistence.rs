@@ -68,6 +68,7 @@ fn restore_full_state_from_disk(ctx: &GraphStorageContext) -> StorageResult<()> 
         if index_path.exists() {
             ctx.index_data_manager().write().load(&index_path)?;
         }
+        ctx.register_loaded_native_indexes()?;
     }
 
     Ok(())
@@ -389,7 +390,7 @@ pub(crate) fn compact_transactional(
 
     match result {
         Ok(()) => {
-            version_manager.release_insert_timestamp(timestamp);
+            version_manager.release_write_timestamp(timestamp);
 
             let after_stats = ctx.get_compact_stats();
             log::info!(
@@ -404,7 +405,7 @@ pub(crate) fn compact_transactional(
             Ok(())
         }
         Err(e) => {
-            version_manager.release_insert_timestamp(timestamp);
+            version_manager.release_write_timestamp(timestamp);
             Err(e)
         }
     }

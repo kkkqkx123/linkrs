@@ -26,8 +26,9 @@ use std::sync::Arc;
 use crate::core::metadata::{IndexMetadataManager, SchemaManager};
 use crate::core::stats::StatsManager;
 use crate::core::types::{
-    CompactConfig, EdgeTypeInfo, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo,
-    PropertyDef, SpaceInfo, TagInfo, Timestamp, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
+    CommitLsn, CompactConfig, EdgeTypeInfo, Index, InsertEdgeInfo, InsertVertexInfo, LabelId,
+    PasswordInfo, PropertyDef, SnapshotTimestamp, SpaceInfo, TagInfo, Timestamp, UpdateInfo,
+    UserAlterInfo, UserInfo, VertexId,
 };
 use crate::core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
 use crate::storage::cursor::{
@@ -36,6 +37,7 @@ use crate::storage::cursor::{
 use crate::storage::engine::background_freeze::{BackgroundFreezeManager, FreezeStats};
 use crate::storage::engine::graph_storage::context::ExportedEdgeSnapshotRecord;
 use crate::storage::engine::PersistenceConfig;
+use crate::storage::index::key_codec::KeyBuilder;
 use crate::storage::index::IndexGcConfig;
 use crate::storage::{
     StorageAdmin, StorageAuthOps, StorageGcOps, StorageOperationContext,
@@ -224,6 +226,109 @@ impl GraphStorage {
             .as_ref()
             .ok_or_else(|| StorageError::not_supported("Persistence is not enabled"))?;
         persistence.read().cleanup_old_checkpoints(max_checkpoints)
+    }
+
+    /// Split one persistent native index at an ordered-key boundary.
+    ///
+    /// The operation records a real MVCC snapshot and WAL start position,
+    /// builds the new shard layout, then reads the committed WAL intents after
+    /// the final publish barrier before installing the new generation.
+    pub fn split_native_index(
+        &self,
+        space: &str,
+        index_name: &str,
+        boundary: Vec<u8>,
+    ) -> StorageResult<()> {
+        let space_id = self.ctx.schema_manager().get_space_id(space)?;
+        let index = self
+            .ctx
+            .index_metadata_manager()
+            .get_tag_index(space_id, index_name)?
+            .or(self
+                .ctx
+                .index_metadata_manager()
+                .get_edge_index(space_id, index_name)?)
+            .ok_or_else(|| StorageError::not_found(format!("Index {index_name} not found")))?;
+        // Hold the rebuild gate from snapshot acquisition through publication.
+        // Index writers take its read side before resolving their active
+        // generation, so no writer can land in the old generation after this
+        // split snapshot.
+        let rebuild_gate = self.ctx.index_data_manager().read().rebuild_gate();
+        let _rebuild_guard = rebuild_gate.write();
+        let snapshot_timestamp =
+            SnapshotTimestamp::new(u64::from(self.ctx.get_read_timestamp().max(1)));
+        let start_lsn = {
+            let current = index_manager::current_wal_lsn(&self.ctx);
+            if current == CommitLsn::ZERO {
+                CommitLsn::new(1)
+            } else {
+                current
+            }
+        };
+        let wal_context = Arc::clone(&self.ctx);
+        let wal_index = index.clone();
+        let result = self.ctx.index_data_manager().write().split_native_index(
+            space_id,
+            index.id,
+            boundary,
+            snapshot_timestamp,
+            start_lsn,
+            {
+                let wal_context = Arc::clone(&wal_context);
+                move || {
+                    let current = index_manager::current_wal_lsn(&wal_context);
+                    Ok(if current < start_lsn {
+                        start_lsn
+                    } else {
+                        current
+                    })
+                }
+            },
+            move |from_lsn, to_lsn| {
+                index_manager::wal_intents_for_index(
+                    &wal_context,
+                    space_id,
+                    &wal_index,
+                    from_lsn,
+                    to_lsn,
+                )
+            },
+        );
+        if let Some(stats) = self.ctx.stats_manager() {
+            stats.record_split(result.is_ok());
+            if result.is_err() {
+                stats.record_fence_failure();
+            }
+        }
+        result
+    }
+
+    /// Split a native index at the beginning of one ordered property value.
+    pub fn split_native_index_at_value(
+        &self,
+        space: &str,
+        index_name: &str,
+        value: &Value,
+    ) -> StorageResult<()> {
+        let space_id = self.ctx.schema_manager().get_space_id(space)?;
+        let index = self
+            .ctx
+            .index_metadata_manager()
+            .get_tag_index(space_id, index_name)?
+            .or(self
+                .ctx
+                .index_metadata_manager()
+                .get_edge_index(space_id, index_name)?)
+            .ok_or_else(|| StorageError::not_found(format!("Index {index_name} not found")))?;
+        let boundary = match index.index_type {
+            crate::core::types::IndexType::TagIndex => {
+                KeyBuilder::build_vertex_index_value_prefix(space_id, index_name, value)?.0
+            }
+            crate::core::types::IndexType::EdgeIndex => {
+                KeyBuilder::build_edge_index_value_prefix(space_id, index_name, value)?.0
+            }
+        };
+        self.split_native_index(space, index_name, boundary)
     }
 }
 
@@ -880,7 +985,10 @@ impl StorageSchemaOps for GraphStorage {
         let rebuild_gate = self.ctx.index_data_manager().read().rebuild_gate();
         let _rebuild_guard = rebuild_gate.write();
         let snapshot_timestamp = self.ctx.get_read_timestamp();
-        let start_lsn = index_manager::current_wal_lsn(&self.ctx);
+        let start_lsn = match index_manager::current_wal_lsn(&self.ctx) {
+            crate::core::types::CommitLsn::ZERO => crate::core::types::CommitLsn::new(1),
+            lsn => lsn,
+        };
         let snapshot_ctx = self.ctx.with_operation_context(StorageOperationContext {
             transaction_id: None,
             read_timestamp: snapshot_timestamp,
@@ -889,14 +997,20 @@ impl StorageSchemaOps for GraphStorage {
             auto_commit: false,
         });
         let vertices = reader::scan_vertices(&snapshot_ctx, space)?;
-        index_manager::rebuild_tag_index(
+        let result = index_manager::rebuild_tag_index(
             &self.ctx,
             space,
             index_name,
             &vertices,
             crate::core::types::SnapshotTimestamp::new(u64::from(snapshot_timestamp)),
             start_lsn,
-        )
+        );
+        if let Some(stats) = self.ctx.stats_manager() {
+            if result.is_err() {
+                stats.record_generation_rebuild_failure();
+            }
+        }
+        result
     }
 
     fn create_edge_index(&mut self, space: &str, index: &Index) -> Result<bool, StorageError> {
@@ -915,7 +1029,10 @@ impl StorageSchemaOps for GraphStorage {
         let rebuild_gate = self.ctx.index_data_manager().read().rebuild_gate();
         let _rebuild_guard = rebuild_gate.write();
         let snapshot_timestamp = self.ctx.get_read_timestamp();
-        let start_lsn = index_manager::current_wal_lsn(&self.ctx);
+        let start_lsn = match index_manager::current_wal_lsn(&self.ctx) {
+            crate::core::types::CommitLsn::ZERO => crate::core::types::CommitLsn::new(1),
+            lsn => lsn,
+        };
         let snapshot_ctx = self.ctx.with_operation_context(StorageOperationContext {
             transaction_id: None,
             read_timestamp: snapshot_timestamp,
@@ -924,14 +1041,20 @@ impl StorageSchemaOps for GraphStorage {
             auto_commit: false,
         });
         let edges = reader::scan_all_edges(&snapshot_ctx, space)?;
-        index_manager::rebuild_edge_index(
+        let result = index_manager::rebuild_edge_index(
             &self.ctx,
             space,
             index_name,
             &edges,
             crate::core::types::SnapshotTimestamp::new(u64::from(snapshot_timestamp)),
             start_lsn,
-        )
+        );
+        if let Some(stats) = self.ctx.stats_manager() {
+            if result.is_err() {
+                stats.record_generation_rebuild_failure();
+            }
+        }
+        result
     }
 }
 

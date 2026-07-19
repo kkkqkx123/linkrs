@@ -6,10 +6,11 @@
 //! Supports persistence through flush/load operations.
 //! Supports MVCC (Multi-Version Concurrency Control) for snapshot isolation.
 
+use crate::core::stats::StatsManager;
 use crate::core::types::{
     CommitLsn, Index, IndexGeneration, IndexType, SnapshotTimestamp, Timestamp, MAX_TIMESTAMP,
 };
-use crate::core::wal::EntityRef;
+use crate::core::wal::{EntityRef, OutboxIntent};
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::cursor::IndexScanPlan;
 use crate::storage::index::edge_index_manager::EdgeIndexManager;
@@ -200,6 +201,7 @@ pub struct IndexDataManagerImpl {
     restored_generations: Arc<RwLock<HashMap<IndexIdentity, IndexGeneration>>>,
     barrier_registry: IndexBarrierRegistry,
     rebuild_gate: Arc<RwLock<()>>,
+    stats_manager: Option<Arc<StatsManager>>,
 }
 
 impl IndexDataManagerImpl {
@@ -227,6 +229,18 @@ impl IndexDataManagerImpl {
             restored_generations: Arc::new(RwLock::new(HashMap::new())),
             barrier_registry: Arc::new(RwLock::new(HashMap::new())),
             rebuild_gate: Arc::new(RwLock::new(())),
+            stats_manager: None,
+        }
+    }
+
+    pub fn set_stats_manager(&mut self, stats_manager: Arc<StatsManager>) {
+        self.stats_manager = Some(stats_manager);
+    }
+
+    fn record_manifest_state(&self, catalog: &ManifestCatalog) {
+        if let Some(stats) = &self.stats_manager {
+            let state = catalog.stats();
+            stats.set_manifest_state(state.active_readers, state.retired_generations);
         }
     }
 
@@ -478,9 +492,15 @@ impl IndexDataManagerImpl {
             .ok_or_else(|| StorageError::not_found("Index manifest catalog is unavailable"))?
             .publish(manifest)
             .map_err(StorageError::db_error)?;
+        if let Some(stats) = &self.stats_manager {
+            stats.record_generation_publish();
+        }
         runtime.establish_barrier_lsn(barrier_lsn);
         self.record_barrier_lsn(identity, barrier_lsn);
         runtime.wait_for_barrier_lsn(barrier_lsn);
+        if let Some(catalog) = self.manifest_catalog(identity.space_id, identity.index_id) {
+            self.record_manifest_state(&catalog);
+        }
         Ok(())
     }
 
@@ -530,52 +550,80 @@ impl IndexDataManagerImpl {
     }
 
     /// Resolve orphaned split build state at startup or before a new split.
-    /// Incomplete builds (Building, CatchingUp) are discarded. Publishing
-    /// builds with a published manifest are completed; otherwise the partial
-    /// checkpoint directories are left for the next split to overwrite.
+    /// Incomplete builds are discarded. A Publishing build is accepted only
+    /// when its generation is the generation recorded by the manifest.
     pub fn resolve_split_crash_recovery(&self, index_root: &Path) -> StorageResult<()> {
         let Some(build_state) = self.load_build_state(index_root)? else {
             return Ok(());
         };
+        let partial_generation =
+            index_root.join(format!("generation-{}", build_state.generation.get()));
         if matches!(
             build_state.state,
-            GenerationState::Building | GenerationState::CatchingUp
+            GenerationState::Building
+                | GenerationState::CatchingUp
+                | GenerationState::Failed
+                | GenerationState::Cancelled
         ) {
             log::warn!(
                 "Discarding incomplete split build state for gen {} (state={:?})",
                 build_state.generation,
                 build_state.state
             );
+            if partial_generation.exists() {
+                std::fs::remove_dir_all(&partial_generation)?;
+            }
             self.remove_build_state(index_root)?;
         }
         if matches!(build_state.state, GenerationState::Publishing) {
             let manifest_path = index_root.join("manifest.bin");
-            if manifest_path.exists() {
+            let published_generation = manifest_path
+                .is_file()
+                .then(|| IndexManifest::load(&manifest_path))
+                .transpose()?
+                .map(|manifest| manifest.generation);
+            if published_generation == Some(build_state.generation) {
                 log::info!("Completing split build from Publishing state");
-                let mut completed = build_state;
-                completed.state = GenerationState::Active;
-                self.save_build_state(index_root, &completed)?;
                 self.remove_build_state(index_root)?;
             } else {
-                log::warn!("Split in Publishing state but no manifest found; discarding");
+                log::warn!("Discarding split in Publishing state without its published generation");
+                if partial_generation.exists() {
+                    std::fs::remove_dir_all(&partial_generation)?;
+                }
                 self.remove_build_state(index_root)?;
             }
+        }
+        if matches!(build_state.state, GenerationState::Active) {
+            self.remove_build_state(index_root)?;
         }
         Ok(())
     }
 
-    pub fn split_native_index(
+    pub fn split_native_index<F, G>(
         &self,
         space_id: u64,
         index_id: u64,
         boundary: Vec<u8>,
         snapshot_timestamp: SnapshotTimestamp,
         start_lsn: CommitLsn,
-        barrier_lsn: CommitLsn,
-    ) -> StorageResult<()> {
+        barrier_lsn: F,
+        wal_intents: G,
+    ) -> StorageResult<()>
+    where
+        F: FnOnce() -> StorageResult<CommitLsn>,
+        G: FnOnce(CommitLsn, CommitLsn) -> StorageResult<Vec<OutboxIntent>>,
+    {
+        if let Some(stats) = &self.stats_manager {
+            stats.record_generation_build();
+        }
         if self.index_root.is_none() {
             return Err(StorageError::invalid_operation(
                 "Native index splitting requires a persistent index root",
+            ));
+        }
+        if snapshot_timestamp.get() == 0 || start_lsn == CommitLsn::ZERO {
+            return Err(StorageError::invalid_operation(
+                "Native index splitting requires non-zero snapshot timestamp and start LSN",
             ));
         }
         if boundary.is_empty() {
@@ -587,10 +635,6 @@ impl IndexDataManagerImpl {
             .manifest_catalog(space_id, index_id)
             .ok_or_else(|| StorageError::not_found(format!("Index {index_id} has no manifest")))?;
         let runtime = self.runtime(space_id, index_id)?;
-        // The exclusive fence is the publish barrier: no writer can observe a
-        // partially materialized generation or keep writing the old one after
-        // the manifest publication.
-        let _fence = runtime.write_fence();
         let current = catalog.acquire().manifest().clone();
         let split_position = current
             .shards
@@ -599,7 +643,7 @@ impl IndexDataManagerImpl {
             .ok_or_else(|| {
                 StorageError::invalid_operation("Split boundary is outside key space")
             })?;
-        let shard = &current.shards[split_position];
+        let shard = current.shards[split_position].clone();
         if shard.lower.as_ref() == Some(&boundary) || shard.upper.as_ref() == Some(&boundary) {
             return Err(StorageError::invalid_operation(
                 "Split boundary must be inside an existing shard",
@@ -631,8 +675,7 @@ impl IndexDataManagerImpl {
 
         // ── Phase: Building ──────────────────────────────────────────────
         self.resolve_split_crash_recovery(index_root)?;
-        let mut build_state =
-            GenerationBuildState::new(generation, snapshot_timestamp, start_lsn);
+        let mut build_state = GenerationBuildState::new(generation, snapshot_timestamp, start_lsn);
         self.save_build_state(index_root, &build_state)?;
 
         let next_generation_dir = index_root.join(format!("generation-{}", generation.get()));
@@ -645,6 +688,14 @@ impl IndexDataManagerImpl {
             .get(&IndexIdentity { space_id, index_id })
             .cloned()
             .ok_or_else(|| StorageError::not_found(format!("Index {index_id} has no type")))?;
+        let index_definition = self
+            .index_definitions
+            .read()
+            .get(&IndexIdentity { space_id, index_id })
+            .cloned()
+            .ok_or_else(|| {
+                StorageError::not_found(format!("Index {index_id} has no definition"))
+            })?;
 
         let mut shards = current.shards.clone();
         shards.splice(
@@ -668,85 +719,149 @@ impl IndexDataManagerImpl {
         );
         let next = IndexManifest::new(space_id, index_id, generation, shards)
             .map_err(StorageError::db_error)?;
+        let mut maps = {
+            let _fence = runtime.read_fence();
+            let active = runtime
+                .generation(current.generation)
+                .ok_or_else(|| StorageError::not_found("Active runtime generation is missing"))?;
+            let mut maps: HashMap<u32, IndexMaps> = HashMap::new();
+            for current_shard in &current.shards {
+                let (forward, reverse) = active
+                    .shard(current_shard.shard_id)
+                    .ok_or_else(|| StorageError::not_found("Active runtime shard is missing"))?
+                    .snapshot();
+                if current_shard.shard_id != shard.shard_id {
+                    maps.insert(current_shard.shard_id, (forward, reverse));
+                    continue;
+                }
+                let (forward_a, forward_b): (BTreeMap<_, _>, BTreeMap<_, _>) = forward
+                    .into_iter()
+                    .partition(|(key, _)| key.as_slice() < boundary.as_slice());
+                let mut entity_shards: Vec<(EntityRef, (Timestamp, u32))> = Vec::new();
+                for entry in forward_a.values() {
+                    if let Some(entity) = entry.entity_ref.clone() {
+                        if let Some((_, (ts, shard_id))) = entity_shards
+                            .iter_mut()
+                            .find(|(candidate, _)| *candidate == entity)
+                        {
+                            if entry.created_ts >= *ts {
+                                *ts = entry.created_ts;
+                                *shard_id = shard.shard_id;
+                            }
+                        } else {
+                            entity_shards.push((entity, (entry.created_ts, shard.shard_id)));
+                        }
+                    }
+                }
+                for entry in forward_b.values() {
+                    if let Some(entity) = entry.entity_ref.clone() {
+                        if let Some((_, (ts, shard_id))) = entity_shards
+                            .iter_mut()
+                            .find(|(candidate, _)| *candidate == entity)
+                        {
+                            if entry.created_ts >= *ts {
+                                *ts = entry.created_ts;
+                                *shard_id = next_shard_id;
+                            }
+                        } else {
+                            entity_shards.push((entity, (entry.created_ts, next_shard_id)));
+                        }
+                    }
+                }
+                let mut reverse_a = BTreeMap::new();
+                let mut reverse_b = BTreeMap::new();
+                for (key, entry) in reverse {
+                    let target_shard = entry
+                        .entity_ref
+                        .as_ref()
+                        .and_then(|entity| {
+                            entity_shards
+                                .iter()
+                                .find(|(candidate, _)| candidate == entity)
+                        })
+                        .map(|(_, (_, shard_id))| *shard_id);
+                    if target_shard == Some(next_shard_id) || target_shard.is_none() {
+                        reverse_b.insert(key, entry);
+                    } else {
+                        reverse_a.insert(key, entry);
+                    }
+                }
+                maps.insert(shard.shard_id, (forward_a, reverse_a));
+                maps.insert(next_shard_id, (forward_b, reverse_b));
+            }
+            maps
+        };
+
+        // ── Phase: CatchingUp ────────────────────────────────────────────
+        build_state
+            .transition_to_catching_up()
+            .map_err(StorageError::invalid_operation)?;
+        self.save_build_state(index_root, &build_state)?;
+
+        // The production entry point holds the rebuild gate from snapshot
+        // acquisition through publication. The publish fence still pins the
+        // active generation while its maps and barrier are materialized.
+        let _fence = runtime.write_fence();
+        let active_manifest = catalog.acquire().manifest().clone();
+        if active_manifest.generation != current.generation {
+            return Err(StorageError::invalid_operation(
+                "Index generation changed while splitting; retry the split",
+            ));
+        }
+        let barrier_lsn = barrier_lsn()?;
+        if barrier_lsn < start_lsn {
+            return Err(StorageError::invalid_operation(
+                "Split barrier LSN cannot precede its start LSN",
+            ));
+        }
+        let intents = wal_intents(start_lsn, barrier_lsn)?;
         let active = runtime
             .generation(current.generation)
             .ok_or_else(|| StorageError::not_found("Active runtime generation is missing"))?;
-        let mut maps: HashMap<u32, IndexMaps> = HashMap::new();
+        let mut active_forward = BTreeMap::new();
+        let mut active_reverse = BTreeMap::new();
         for current_shard in &current.shards {
             let (forward, reverse) = active
                 .shard(current_shard.shard_id)
                 .ok_or_else(|| StorageError::not_found("Active runtime shard is missing"))?
                 .snapshot();
-            if current_shard.shard_id != shard.shard_id {
-                maps.insert(current_shard.shard_id, (forward, reverse));
-                continue;
-            }
-            let (forward_a, forward_b): (BTreeMap<_, _>, BTreeMap<_, _>) = forward
-                .into_iter()
-                .partition(|(key, _)| key.as_slice() < boundary.as_slice());
-            let entities_a = index_entities(&forward_a);
-            let entities_b = index_entities(&forward_b);
-            let (reverse_a, reverse_b): (BTreeMap<_, _>, BTreeMap<_, _>) =
-                reverse.into_iter().partition(|(_, entry)| {
-                    entry
-                        .entity_ref
-                        .as_ref()
-                        .is_some_and(|entity| entities_a.contains(entity))
-                });
-            // A reverse record has no value key. Its owning forward record
-            // determines the shard; entries without an EntityRef are retained
-            // with the upper partition so no data is silently discarded.
-            let mut reverse_b = reverse_b;
-            reverse_b.retain(|_, entry| {
-                entry
-                    .entity_ref
-                    .as_ref()
-                    .is_none_or(|entity| entities_b.contains(entity))
-            });
-            maps.insert(shard.shard_id, (forward_a, reverse_a));
-            maps.insert(next_shard_id, (forward_b, reverse_b));
+            active_forward.extend(forward);
+            active_reverse.extend(reverse);
         }
-        let next_runtime = generation_from_maps(&next, maps);
         match index_type {
             IndexType::TagIndex => {
-                for entry in &next.shards {
-                    let data = next_runtime.shard(entry.shard_id).ok_or_else(|| {
-                        StorageError::not_found("Split generation shard is unavailable")
-                    })?;
-                    crate::storage::index::generic_index_manager::GenericIndexManager::<
-                        crate::storage::index::key_codec::VertexIndexKeyGen,
-                    >::flush_data(
-                        &entry.checkpoint_file,
-                        &data.forward().read(),
-                        &data.reverse().read(),
-                    )?;
-                }
+                let forward_prefix =
+                    KeyBuilder::build_vertex_index_prefix(space_id, &index_definition.name).0;
+                merge_split_wal_changes(
+                    &mut maps,
+                    &next,
+                    &active_forward,
+                    &active_reverse,
+                    &intents,
+                    |key| key.starts_with(&forward_prefix),
+                    |key| {
+                        KeyParser::parse_vertex_reverse_key_v2(key)
+                            .is_ok_and(|(_, name)| name == index_definition.name)
+                    },
+                )?;
             }
             IndexType::EdgeIndex => {
-                for entry in &next.shards {
-                    let data = next_runtime.shard(entry.shard_id).ok_or_else(|| {
-                        StorageError::not_found("Split generation shard is unavailable")
-                    })?;
-                    crate::storage::index::generic_index_manager::GenericIndexManager::<
-                        crate::storage::index::key_codec::EdgeIndexKeyGen,
-                    >::flush_data(
-                        &entry.checkpoint_file,
-                        &data.forward().read(),
-                        &data.reverse().read(),
-                    )?;
-                }
+                let forward_prefix =
+                    KeyBuilder::build_edge_index_prefix(space_id, &index_definition.name).0;
+                merge_split_wal_changes(
+                    &mut maps,
+                    &next,
+                    &active_forward,
+                    &active_reverse,
+                    &intents,
+                    |key| key.starts_with(&forward_prefix),
+                    |key| {
+                        KeyParser::parse_edge_reverse_key(key)
+                            .is_ok_and(|(_, _, _, _, name)| name == index_definition.name)
+                    },
+                )?;
             }
         }
-
-        // ── Phase: CatchingUp ────────────────────────────────────────────
-        // The exclusive fence blocks all concurrent writers, so no WAL
-        // entries can appear between start_lsn and barrier_lsn. The catch-up
-        // is a no-op replay, but going through the proper state machine
-        // ensures crash recovery follows the same path as rebuild.
-        build_state
-            .transition_to_catching_up()
-            .map_err(StorageError::invalid_operation)?;
-        self.save_build_state(index_root, &build_state)?;
 
         // ── Phase: Publishing ────────────────────────────────────────────
         build_state
@@ -754,12 +869,26 @@ impl IndexDataManagerImpl {
             .map_err(StorageError::invalid_operation)?;
         self.save_build_state(index_root, &build_state)?;
 
-        next.store(&index_root.join("manifest.json"))?;
+        let next_runtime = generation_from_maps(&next, maps);
+        match index_type {
+            IndexType::TagIndex => flush_split_generation::<
+                crate::storage::index::key_codec::VertexIndexKeyGen,
+            >(&next, &next_runtime)?,
+            IndexType::EdgeIndex => flush_split_generation::<
+                crate::storage::index::key_codec::EdgeIndexKeyGen,
+            >(&next, &next_runtime)?,
+        }
+
+        next.store(&index_root.join("manifest.bin"))?;
         runtime.install_generation(next_runtime);
         catalog.publish(next).map_err(StorageError::db_error)?;
         runtime.establish_barrier_lsn(barrier_lsn);
         self.record_barrier_lsn(IndexIdentity { space_id, index_id }, barrier_lsn);
         runtime.wait_for_barrier_lsn(barrier_lsn);
+        if let Some(stats) = &self.stats_manager {
+            stats.record_generation_publish();
+        }
+        self.record_manifest_state(&catalog);
 
         // ── Phase: Active ────────────────────────────────────────────────
         build_state
@@ -773,6 +902,7 @@ impl IndexDataManagerImpl {
         let mut files = Vec::new();
         for (index_id, catalog) in self.manifest_catalogs.read().iter() {
             let runtime = self.runtimes.read().get(index_id).cloned();
+            let files_before = files.len();
             for manifest in catalog.take_reclaimable_manifests() {
                 if let Some(runtime) = &runtime {
                     runtime.remove_generation(manifest.generation);
@@ -784,6 +914,10 @@ impl IndexDataManagerImpl {
                         .map(|shard| shard.checkpoint_file),
                 );
             }
+            if let Some(stats) = &self.stats_manager {
+                stats.record_reclaimed_index_files((files.len() - files_before) as u64);
+            }
+            self.record_manifest_state(catalog);
         }
         files
     }
@@ -812,7 +946,7 @@ impl IndexDataManagerImpl {
                 None => continue,
             }
             manifest.manifest().store(
-                &manifest_dir.join(format!("{}-{}.json", identity.space_id, identity.index_id)),
+                &manifest_dir.join(format!("{}-{}.bin", identity.space_id, identity.index_id)),
             )?;
         }
         Ok(())
@@ -838,19 +972,27 @@ impl IndexDataManagerImpl {
                 );
             }
         }
-        for entry in std::fs::read_dir(path)? {
-            let candidate = entry?.path().join("manifest.bin");
-            if !candidate.is_file() {
+        for space_entry in std::fs::read_dir(path)? {
+            let space_path = space_entry?.path();
+            if !space_path.is_dir() {
                 continue;
             }
-            let manifest = IndexManifest::load(&candidate)?;
-            self.manifest_catalogs.write().insert(
-                IndexIdentity {
-                    space_id: manifest.space_id,
-                    index_id: manifest.index_id,
-                },
-                Arc::new(ManifestCatalog::new(manifest).map_err(StorageError::db_error)?),
-            );
+            for index_entry in std::fs::read_dir(space_path)? {
+                let index_path = index_entry?.path();
+                self.resolve_split_crash_recovery(&index_path)?;
+                let candidate = index_path.join("manifest.bin");
+                if !candidate.is_file() {
+                    continue;
+                }
+                let manifest = IndexManifest::load(&candidate)?;
+                self.manifest_catalogs.write().insert(
+                    IndexIdentity {
+                        space_id: manifest.space_id,
+                        index_id: manifest.index_id,
+                    },
+                    Arc::new(ManifestCatalog::new(manifest).map_err(StorageError::db_error)?),
+                );
+            }
         }
         Ok(())
     }
@@ -1243,11 +1385,138 @@ impl Default for IndexDataManagerImpl {
     }
 }
 
-fn index_entities(entries: &BTreeMap<SecondaryIndexKey, IndexRecord>) -> Vec<EntityRef> {
-    entries
-        .values()
-        .filter_map(|entry| entry.entity_ref.clone())
-        .collect()
+fn merge_split_wal_changes<F, R>(
+    maps: &mut HashMap<u32, IndexMaps>,
+    manifest: &IndexManifest,
+    active_forward: &BTreeMap<SecondaryIndexKey, IndexRecord>,
+    active_reverse: &BTreeMap<SecondaryIndexKey, IndexRecord>,
+    intents: &[OutboxIntent],
+    matches_forward: F,
+    matches_reverse: R,
+) -> StorageResult<()>
+where
+    F: Fn(&[u8]) -> bool,
+    R: Fn(&[u8]) -> bool,
+{
+    let mut changed_entities = Vec::new();
+    for entity in intents
+        .iter()
+        .map(|intent| entity_ref_from_intent(intent))
+        .flatten()
+    {
+        if !changed_entities.contains(&entity) {
+            changed_entities.push(entity);
+        }
+    }
+    if changed_entities.is_empty() {
+        return Ok(());
+    }
+
+    for (forward, reverse) in maps.values_mut() {
+        forward.retain(|key, record| {
+            !(matches_forward(key)
+                && record
+                    .entity_ref
+                    .as_ref()
+                    .is_some_and(|entity| changed_entities.contains(entity)))
+        });
+        reverse.retain(|key, record| {
+            !(matches_reverse(key)
+                && record
+                    .entity_ref
+                    .as_ref()
+                    .is_some_and(|entity| changed_entities.contains(entity)))
+        });
+    }
+
+    let mut entity_shards: Vec<(EntityRef, (Timestamp, u32))> = Vec::new();
+    for (key, record) in active_forward {
+        if !matches_forward(key) {
+            continue;
+        }
+        let Some(entity) = record.entity_ref.clone() else {
+            continue;
+        };
+        let shard_id = manifest
+            .route_key(key)
+            .ok_or_else(|| {
+                StorageError::invalid_operation(
+                    "WAL catch-up produced an index key outside the split manifest",
+                )
+            })?
+            .shard_id;
+        if let Some((_, (ts, current_shard))) = entity_shards
+            .iter_mut()
+            .find(|(candidate, _)| *candidate == entity)
+        {
+            if record.created_ts >= *ts {
+                *ts = record.created_ts;
+                *current_shard = shard_id;
+            }
+        } else {
+            entity_shards.push((entity, (record.created_ts, shard_id)));
+        }
+    }
+
+    for (key, record) in active_forward {
+        if !matches_forward(key) {
+            continue;
+        }
+        let shard = manifest.route_key(key).ok_or_else(|| {
+            StorageError::invalid_operation(
+                "WAL catch-up produced an index key outside the split manifest",
+            )
+        })?;
+        maps.entry(shard.shard_id)
+            .or_insert_with(|| (BTreeMap::new(), BTreeMap::new()))
+            .0
+            .insert(key.clone(), record.clone());
+    }
+
+    for (key, record) in active_reverse {
+        if !matches_reverse(key) {
+            continue;
+        }
+        let entity = record.entity_ref.as_ref().ok_or_else(|| {
+            StorageError::invalid_operation("WAL catch-up reverse record has no owning entity")
+        })?;
+        let shard_id = entity_shards
+            .iter()
+            .find(|(candidate, _)| candidate == entity)
+            .map(|(_, (_, shard_id))| *shard_id)
+            .ok_or_else(|| {
+                StorageError::invalid_operation(
+                    "WAL catch-up reverse record has no routable forward record",
+                )
+            })?;
+        maps.entry(shard_id)
+            .or_insert_with(|| (BTreeMap::new(), BTreeMap::new()))
+            .1
+            .insert(key.clone(), record.clone());
+    }
+
+    Ok(())
+}
+
+fn entity_ref_from_intent(intent: &OutboxIntent) -> Option<EntityRef> {
+    Some(intent.mutation.entity_ref.clone())
+}
+
+fn flush_split_generation<K: crate::storage::index::key_codec::IndexKeyGenerator>(
+    manifest: &IndexManifest,
+    runtime: &GenerationRuntime,
+) -> StorageResult<()> {
+    for entry in &manifest.shards {
+        let data = runtime
+            .shard(entry.shard_id)
+            .ok_or_else(|| StorageError::not_found("Split generation shard is unavailable"))?;
+        crate::storage::index::generic_index_manager::GenericIndexManager::<K>::flush_data(
+            &entry.checkpoint_file,
+            &data.forward().read(),
+            &data.reverse().read(),
+        )?;
+    }
+    Ok(())
 }
 
 fn vertex_entity_ref(value: &Value) -> Option<EntityRef> {
@@ -1291,6 +1560,54 @@ fn stable_hash(bytes: &[u8]) -> u64 {
     hash
 }
 
+fn effective_index_values(
+    index_definition: Option<&Index>,
+    props: &[(String, Value)],
+    existing_values: Vec<Value>,
+) -> Vec<Value> {
+    let Some(index) = index_definition else {
+        return props.iter().map(|(_, value)| value.clone()).collect();
+    };
+    let values = index
+        .fields
+        .iter()
+        .filter_map(|field| {
+            props
+                .iter()
+                .find(|(name, _)| name == &field.name)
+                .map(|(_, value)| value.clone())
+        })
+        .collect::<Vec<_>>();
+    if values.is_empty() {
+        existing_values
+    } else {
+        values
+    }
+}
+
+fn merged_included_columns(
+    index_definition: Option<&Index>,
+    mut existing: Vec<(String, Value)>,
+    props: &[(String, Value)],
+) -> Vec<(String, Value)> {
+    let Some(index) = index_definition else {
+        return props.to_vec();
+    };
+    for name in &index.properties {
+        let Some((_, value)) = props.iter().find(|(candidate, _)| candidate == name) else {
+            continue;
+        };
+        if let Some((_, existing_value)) =
+            existing.iter_mut().find(|(candidate, _)| candidate == name)
+        {
+            *existing_value = value.clone();
+        } else {
+            existing.push((name.clone(), value.clone()));
+        }
+    }
+    existing
+}
+
 impl EdgeIndexOps for IndexDataManagerImpl {
     fn update_edge_indexes_mvcc(
         &self,
@@ -1323,39 +1640,60 @@ impl EdgeIndexOps for IndexDataManagerImpl {
             .read()
             .get(&IndexIdentity { space_id, index_id })
             .cloned();
-        let indexed_values = index_definition
-            .as_ref()
-            .map(|index| {
-                index
-                    .fields
-                    .iter()
-                    .filter_map(|field| {
-                        props
-                            .iter()
-                            .find(|(name, _)| name == &field.name)
-                            .map(|(_, value)| value)
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_else(|| props.iter().map(|(_, value)| value).collect());
-        let included_columns = index_definition
-            .as_ref()
-            .map(|index| {
-                index
-                    .properties
-                    .iter()
-                    .filter_map(|name| {
-                        props
-                            .iter()
-                            .find(|(candidate, _)| candidate == name)
-                            .map(|(_, value)| (name.clone(), value.clone()))
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let prefix = KeyBuilder::build_edge_index_prefix(space_id, index_name);
+        let end = KeyBuilder::build_range_end(&prefix);
+        let expected_entity = edge_entity_ref(edge_src, edge_dst, edge_type, ranking);
+        let mut existing_values = Vec::new();
+        let mut existing_columns = Vec::new();
+        let mut existing_columns_ts = 0;
+        for shard in generation.shards() {
+            for (key, record) in shard
+                .forward()
+                .read()
+                .range(prefix.0.clone()..end.0.clone())
+            {
+                if !record.is_visible_at(write_ts) {
+                    continue;
+                }
+                let matches_entity = record
+                    .entity_ref
+                    .as_ref()
+                    .zip(expected_entity.as_ref())
+                    .is_some_and(|(actual, expected)| actual == expected)
+                    || KeyParser::parse_edge_identity_from_key(key).is_ok_and(
+                        |(candidate_src, candidate_dst, candidate_type, candidate_rank)| {
+                            candidate_src == *edge_src
+                                && candidate_dst == *edge_dst
+                                && candidate_type == edge_type
+                                && candidate_rank == ranking
+                        },
+                    );
+                if !matches_entity {
+                    continue;
+                }
+                if let Ok(value) = KeyParser::parse_prop_value_from_edge_key(key) {
+                    if !existing_values.contains(&value) {
+                        existing_values.push(value);
+                    }
+                }
+                if record.created_ts >= existing_columns_ts {
+                    existing_columns_ts = record.created_ts;
+                    existing_columns = record.included_columns.clone();
+                }
+            }
+        }
+        let indexed_values =
+            effective_index_values(index_definition.as_ref(), props, existing_values);
+        let included_columns =
+            merged_included_columns(index_definition.as_ref(), existing_columns, props);
+        if !indexed_values.is_empty() {
+            self.clear_edge_entity(
+                space_id, edge_src, edge_dst, edge_type, ranking, index_name, write_ts,
+            )?;
+        }
         for value in indexed_values {
             let forward = KeyBuilder::build_edge_index_key(
-                space_id, index_name, value, edge_src, edge_dst, edge_type, ranking,
+                space_id, index_name, &value, edge_src, edge_dst, edge_type, ranking,
             )?;
             let reverse = KeyBuilder::build_edge_reverse_key(
                 space_id, edge_src, edge_dst, edge_type, ranking, index_name,
@@ -1524,39 +1862,52 @@ impl VertexIndexOps for IndexDataManagerImpl {
             .read()
             .get(&IndexIdentity { space_id, index_id })
             .cloned();
-        let indexed_values = index_definition
-            .as_ref()
-            .map(|index| {
-                index
-                    .fields
-                    .iter()
-                    .filter_map(|field| {
-                        props
-                            .iter()
-                            .find(|(name, _)| name == &field.name)
-                            .map(|(_, value)| value)
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_else(|| props.iter().map(|(_, value)| value).collect());
-        let included_columns = index_definition
-            .as_ref()
-            .map(|index| {
-                index
-                    .properties
-                    .iter()
-                    .filter_map(|name| {
-                        props
-                            .iter()
-                            .find(|(candidate, _)| candidate == name)
-                            .map(|(_, value)| (name.clone(), value.clone()))
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let prefix = KeyBuilder::build_vertex_index_prefix(space_id, index_name);
+        let end = KeyBuilder::build_range_end(&prefix);
+        let expected_entity = vertex_entity_ref(vertex_id);
+        let mut existing_values = Vec::new();
+        let mut existing_columns = Vec::new();
+        let mut existing_columns_ts = 0;
+        for shard in generation.shards() {
+            for (key, record) in shard
+                .forward()
+                .read()
+                .range(prefix.0.clone()..end.0.clone())
+            {
+                if !record.is_visible_at(write_ts) {
+                    continue;
+                }
+                let matches_entity = record
+                    .entity_ref
+                    .as_ref()
+                    .zip(expected_entity.as_ref())
+                    .is_some_and(|(actual, expected)| actual == expected)
+                    || KeyParser::parse_vertex_id_from_key(key)
+                        .is_ok_and(|candidate| candidate == *vertex_id);
+                if !matches_entity {
+                    continue;
+                }
+                if let Ok(value) = KeyParser::parse_prop_value_from_key(key) {
+                    if !existing_values.contains(&value) {
+                        existing_values.push(value);
+                    }
+                }
+                if record.created_ts >= existing_columns_ts {
+                    existing_columns_ts = record.created_ts;
+                    existing_columns = record.included_columns.clone();
+                }
+            }
+        }
+        let indexed_values =
+            effective_index_values(index_definition.as_ref(), props, existing_values);
+        let included_columns =
+            merged_included_columns(index_definition.as_ref(), existing_columns, props);
+        if !indexed_values.is_empty() {
+            self.clear_vertex_entity(space_id, vertex_id, index_name, write_ts)?;
+        }
         for value in indexed_values {
             let forward =
-                KeyBuilder::build_vertex_index_key(space_id, index_name, value, vertex_id)?;
+                KeyBuilder::build_vertex_index_key(space_id, index_name, &value, vertex_id)?;
             let reverse = KeyBuilder::build_vertex_reverse_key_v2(space_id, vertex_id, index_name)?;
             let forward_end = KeyBuilder::build_range_end(&forward);
             let reverse_end = KeyBuilder::build_range_end(&reverse);
@@ -1723,12 +2074,20 @@ impl IndexGcOps for IndexDataManagerImpl {
 #[cfg(test)]
 mod tests {
     use crate::core::types::{
-        CommitLsn, Index, IndexConfig, IndexField, IndexType, SnapshotTimestamp, MAX_TIMESTAMP,
+        CommitLsn, Index, IndexConfig, IndexField, IndexGeneration, IndexType, SnapshotTimestamp,
+        MAX_TIMESTAMP,
     };
     use crate::core::Value;
+    use crate::storage::cursor::{
+        IndexCursor, IndexPredicate, IndexRow, IndexScanPlan, PartitionSelector,
+    };
     use crate::storage::index::generic_index_manager::GenericIndexManager;
     use crate::storage::index::key_codec::{KeyBuilder, VertexIndexKeyGen};
+    use crate::storage::index::manifest::{
+        GenerationBuildState, GenerationState, IndexManifest, IndexShard,
+    };
     use crate::storage::index::*;
+    use std::collections::BTreeMap;
 
     fn create_test_index(name: &str, schema_name: &str) -> Index {
         Index::new(IndexConfig {
@@ -1884,8 +2243,9 @@ mod tests {
                 1,
                 boundary,
                 SnapshotTimestamp::new(1),
-                CommitLsn::new(0),
-                CommitLsn::new(100),
+                CommitLsn::new(1),
+                || Ok(CommitLsn::new(100)),
+                |_, _| Ok(Vec::new()),
             )
             .expect("split first index");
 
@@ -1906,5 +2266,511 @@ mod tests {
             assert!(forward.keys().all(|key| !key.starts_with(&second_prefix)));
         }
         assert_eq!(shard_entries, 2);
+    }
+    // --- Phase 3: Split crash recovery ---
+
+    #[test]
+    fn resolve_split_crash_recovery_discards_building_state() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let manager = IndexDataManagerImpl::new_with_root(directory.path().join("indexes"));
+        let index = create_test_index("first", "person");
+        manager
+            .register_native_index(1, &index)
+            .expect("register index");
+        manager
+            .update_vertex_indexes_mvcc(
+                1,
+                &Value::Int(1),
+                "first",
+                &[("name".to_string(), Value::String("Alice".to_string()))],
+                1,
+            )
+            .expect("write");
+
+        let index_root = directory.path().join("indexes").join("1").join("1");
+        let build_state_path = index_root.join("generation_build.bin");
+
+        let crashed = GenerationBuildState {
+            generation: IndexGeneration::new(2),
+            snapshot_timestamp: SnapshotTimestamp::new(1),
+            start_lsn: CommitLsn::new(10),
+            barrier_lsn: None,
+            state: GenerationState::Building,
+            terminal_reason: None,
+        };
+        let bytes = postcard::to_allocvec(&crashed).expect("serialize");
+        std::fs::create_dir_all(&index_root).unwrap();
+        std::fs::write(&build_state_path, &bytes).unwrap();
+
+        manager
+            .resolve_split_crash_recovery(&index_root)
+            .expect("recovery should succeed");
+
+        assert!(
+            !build_state_path.exists(),
+            "Building state must be discarded on recovery"
+        );
+
+        let results = manager
+            .lookup_tag_index(1, &index, &Value::String("Alice".to_string()))
+            .expect("lookup after recovery");
+        assert_eq!(results, vec![Value::Int(1)]);
+    }
+
+    #[test]
+    fn resolve_split_crash_recovery_discards_catching_up_state() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let manager = IndexDataManagerImpl::new_with_root(directory.path().join("indexes"));
+        let index = create_test_index("first", "person");
+        manager
+            .register_native_index(1, &index)
+            .expect("register index");
+
+        let index_root = directory.path().join("indexes").join("1").join("1");
+        let build_state_path = index_root.join("generation_build.bin");
+
+        let crashed = GenerationBuildState {
+            generation: IndexGeneration::new(2),
+            snapshot_timestamp: SnapshotTimestamp::new(1),
+            start_lsn: CommitLsn::new(10),
+            barrier_lsn: None,
+            state: GenerationState::CatchingUp,
+            terminal_reason: None,
+        };
+        let bytes = postcard::to_allocvec(&crashed).expect("serialize");
+        std::fs::create_dir_all(&index_root).unwrap();
+        std::fs::write(&build_state_path, &bytes).unwrap();
+
+        manager
+            .resolve_split_crash_recovery(&index_root)
+            .expect("recovery should succeed");
+
+        assert!(
+            !build_state_path.exists(),
+            "CatchingUp state must be discarded on recovery"
+        );
+    }
+
+    #[test]
+    fn resolve_split_crash_recovery_completes_publishing_state_with_manifest() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let manager = IndexDataManagerImpl::new_with_root(directory.path().join("indexes"));
+        let index = create_test_index("first", "person");
+        manager
+            .register_native_index(1, &index)
+            .expect("register index");
+        manager
+            .update_vertex_indexes_mvcc(
+                1,
+                &Value::Int(1),
+                "first",
+                &[("name".to_string(), Value::String("Alice".to_string()))],
+                1,
+            )
+            .expect("write");
+
+        let index_root = directory.path().join("indexes").join("1").join("1");
+        let build_state_path = index_root.join("generation_build.bin");
+
+        let manifest = IndexManifest::new(
+            1,
+            1,
+            IndexGeneration::new(2),
+            vec![IndexShard {
+                shard_id: 0,
+                lower: None,
+                upper: None,
+                checkpoint_file: index_root.join("generation-2").join("shard-0"),
+                checksum: None,
+            }],
+        )
+        .expect("new manifest");
+        manifest
+            .store(&index_root.join("manifest.bin"))
+            .expect("store manifest");
+
+        let publishing = GenerationBuildState {
+            generation: IndexGeneration::new(2),
+            snapshot_timestamp: SnapshotTimestamp::new(1),
+            start_lsn: CommitLsn::new(10),
+            barrier_lsn: Some(CommitLsn::new(50)),
+            state: GenerationState::Publishing,
+            terminal_reason: None,
+        };
+        let bytes = postcard::to_allocvec(&publishing).expect("serialize");
+        std::fs::create_dir_all(&index_root).unwrap();
+        std::fs::write(&build_state_path, &bytes).unwrap();
+
+        manager
+            .resolve_split_crash_recovery(&index_root)
+            .expect("recovery should succeed");
+
+        assert!(
+            !build_state_path.exists(),
+            "Publishing build state removed after completion"
+        );
+        assert!(
+            index_root.join("manifest.bin").exists(),
+            "manifest preserved after Publishing completion"
+        );
+
+        let results = manager
+            .lookup_tag_index(1, &index, &Value::String("Alice".to_string()))
+            .expect("lookup after publishing recovery");
+        assert_eq!(results, vec![Value::Int(1)]);
+    }
+
+    #[test]
+    fn resolve_split_crash_recovery_discards_publishing_without_manifest() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let manager = IndexDataManagerImpl::new_with_root(directory.path().join("indexes"));
+        let index = create_test_index("first", "person");
+        manager
+            .register_native_index(1, &index)
+            .expect("register index");
+
+        let index_root = directory.path().join("indexes").join("1").join("1");
+        let build_state_path = index_root.join("generation_build.bin");
+
+        let publishing = GenerationBuildState {
+            generation: IndexGeneration::new(2),
+            snapshot_timestamp: SnapshotTimestamp::new(1),
+            start_lsn: CommitLsn::new(10),
+            barrier_lsn: Some(CommitLsn::new(50)),
+            state: GenerationState::Publishing,
+            terminal_reason: None,
+        };
+        let bytes = postcard::to_allocvec(&publishing).expect("serialize");
+        std::fs::create_dir_all(&index_root).unwrap();
+        std::fs::write(&build_state_path, &bytes).unwrap();
+
+        manager
+            .resolve_split_crash_recovery(&index_root)
+            .expect("recovery should succeed");
+
+        assert!(
+            !build_state_path.exists(),
+            "Publishing state without manifest must be discarded"
+        );
+    }
+
+    // --- Phase 4: Included columns MVCC ---
+
+    fn create_edge_index_with_included_properties() -> Index {
+        // `weight` is the indexed field (stable key), `since` is the included
+        // property (changes on update without altering the index key).
+        Index::new(IndexConfig {
+            id: 1,
+            name: "knows_weight_idx".to_string(),
+            space_id: 1,
+            schema_name: "Person".to_string(),
+            fields: vec![IndexField::new("weight".to_string(), Value::Int(0), false)],
+            properties: vec!["since".to_string()],
+            index_type: IndexType::EdgeIndex,
+            is_unique: false,
+            partial_condition: None,
+        })
+    }
+
+    #[test]
+    fn included_columns_visible_in_covering_query_after_update() {
+        let manager = IndexDataManagerImpl::new();
+        let index = create_edge_index_with_included_properties();
+        manager
+            .register_native_index(1, &index)
+            .expect("register edge index");
+
+        // Initial write: weight=10 (indexed), since=2020 (included).
+        manager
+            .update_edge_indexes_mvcc(
+                1,
+                &Value::Int(1),
+                &Value::Int(2),
+                "KNOWS",
+                0,
+                "knows_weight_idx",
+                &[
+                    ("weight".to_string(), Value::Int(10)),
+                    ("since".to_string(), Value::Int(2020)),
+                ],
+                10,
+            )
+            .expect("initial write");
+
+        let covering_plan = IndexScanPlan {
+            space: "space".to_string(),
+            index_id: 1,
+            predicate: IndexPredicate::All,
+            partition: PartitionSelector::All,
+            partition_id_range: None,
+            projection: Some(vec!["since".to_string()]),
+            limit: None,
+            offset: 0,
+            read_timestamp: 10,
+        };
+        let mut cursor = manager
+            .open_edge_index_cursor(1, &index, &covering_plan)
+            .expect("cursor");
+        let rows: Vec<IndexRow> =
+            std::iter::from_fn(|| cursor.next_batch(64).ok().filter(|b| !b.is_empty()))
+                .flatten()
+                .collect();
+        assert_eq!(rows.len(), 1);
+        match &rows[0] {
+            IndexRow::Covering { columns, .. } => {
+                assert_eq!(columns.len(), 1);
+                assert_eq!(columns[0], ("since".to_string(), Value::Int(2020)));
+            }
+            IndexRow::RowId(_) => panic!("expected covering row"),
+        }
+
+        // Update only the included column: the index manager must retain the
+        // existing indexed value and refresh the covering payload.
+        manager
+            .update_edge_indexes_mvcc(
+                1,
+                &Value::Int(1),
+                &Value::Int(2),
+                "KNOWS",
+                0,
+                "knows_weight_idx",
+                &[("since".to_string(), Value::Int(2024))],
+                20,
+            )
+            .expect("update");
+
+        let after_update_plan = IndexScanPlan {
+            space: "space".to_string(),
+            index_id: 1,
+            predicate: IndexPredicate::All,
+            partition: PartitionSelector::All,
+            partition_id_range: None,
+            projection: Some(vec!["since".to_string()]),
+            limit: None,
+            offset: 0,
+            read_timestamp: 20,
+        };
+        let mut cursor = manager
+            .open_edge_index_cursor(1, &index, &after_update_plan)
+            .expect("cursor after update");
+        let rows: Vec<IndexRow> =
+            std::iter::from_fn(|| cursor.next_batch(64).ok().filter(|b| !b.is_empty()))
+                .flatten()
+                .collect();
+        assert_eq!(rows.len(), 1);
+        match &rows[0] {
+            IndexRow::Covering { columns, .. } => {
+                assert_eq!(columns[0], ("since".to_string(), Value::Int(2024)));
+            }
+            IndexRow::RowId(_) => panic!("expected covering row after update"),
+        }
+
+        // Snapshot query at ts=10 still sees the old included value (MVCC).
+        let snapshot_plan = IndexScanPlan {
+            space: "space".to_string(),
+            index_id: 1,
+            predicate: IndexPredicate::All,
+            partition: PartitionSelector::All,
+            partition_id_range: None,
+            projection: Some(vec!["since".to_string()]),
+            limit: None,
+            offset: 0,
+            read_timestamp: 10,
+        };
+        let mut cursor = manager
+            .open_edge_index_cursor(1, &index, &snapshot_plan)
+            .expect("snapshot cursor");
+        let rows: Vec<IndexRow> =
+            std::iter::from_fn(|| cursor.next_batch(64).ok().filter(|b| !b.is_empty()))
+                .flatten()
+                .collect();
+        assert_eq!(rows.len(), 1);
+        match &rows[0] {
+            IndexRow::Covering { columns, .. } => {
+                assert_eq!(columns[0], ("since".to_string(), Value::Int(2020)));
+            }
+            IndexRow::RowId(_) => panic!("expected covering row at snapshot"),
+        }
+    }
+
+    #[test]
+    fn included_columns_not_visible_after_delete() {
+        let manager = IndexDataManagerImpl::new();
+        let index = create_edge_index_with_included_properties();
+        manager
+            .register_native_index(1, &index)
+            .expect("register edge index");
+
+        manager
+            .update_edge_indexes_mvcc(
+                1,
+                &Value::Int(1),
+                &Value::Int(2),
+                "KNOWS",
+                0,
+                "knows_weight_idx",
+                &[
+                    ("weight".to_string(), Value::Int(10)),
+                    ("since".to_string(), Value::Int(2020)),
+                ],
+                10,
+            )
+            .expect("write");
+
+        let covering_plan = IndexScanPlan {
+            space: "space".to_string(),
+            index_id: 1,
+            predicate: IndexPredicate::All,
+            partition: PartitionSelector::All,
+            partition_id_range: None,
+            projection: Some(vec!["since".to_string()]),
+            limit: None,
+            offset: 0,
+            read_timestamp: 10,
+        };
+        let mut cursor = manager
+            .open_edge_index_cursor(1, &index, &covering_plan)
+            .expect("cursor");
+        let rows: Vec<IndexRow> =
+            std::iter::from_fn(|| cursor.next_batch(64).ok().filter(|b| !b.is_empty()))
+                .flatten()
+                .collect();
+        assert_eq!(rows.len(), 1, "one edge before delete");
+
+        manager
+            .delete_edge_indexes_mvcc(
+                1,
+                &Value::Int(1),
+                &Value::Int(2),
+                "KNOWS",
+                0,
+                &["knows_weight_idx".to_string()],
+                20,
+            )
+            .expect("delete");
+
+        let after_delete_plan = IndexScanPlan {
+            space: "space".to_string(),
+            index_id: 1,
+            predicate: IndexPredicate::All,
+            partition: PartitionSelector::All,
+            partition_id_range: None,
+            projection: Some(vec!["since".to_string()]),
+            limit: None,
+            offset: 0,
+            read_timestamp: 20,
+        };
+        let mut cursor = manager
+            .open_edge_index_cursor(1, &index, &after_delete_plan)
+            .expect("cursor after delete");
+        let rows: Vec<IndexRow> =
+            std::iter::from_fn(|| cursor.next_batch(64).ok().filter(|b| !b.is_empty()))
+                .flatten()
+                .collect();
+        assert!(
+            rows.is_empty(),
+            "covering query must not return deleted edge"
+        );
+    }
+
+    #[test]
+    fn included_columns_survive_rebuild_from_snapshot() {
+        use crate::storage::index::generic_index_manager::GenericIndexManager;
+
+        let directory = tempfile::tempdir().expect("tempdir");
+        let manager = IndexDataManagerImpl::new_with_root(directory.path().join("indexes"));
+        let index = create_edge_index_with_included_properties();
+        manager
+            .register_native_index(1, &index)
+            .expect("register index");
+
+        manager
+            .update_edge_indexes_mvcc(
+                1,
+                &Value::Int(1),
+                &Value::Int(2),
+                "KNOWS",
+                0,
+                "knows_weight_idx",
+                &[
+                    ("weight".to_string(), Value::Int(10)),
+                    ("since".to_string(), Value::Int(2020)),
+                ],
+                10,
+            )
+            .expect("write");
+
+        let runtime = manager.runtime(1, 1).expect("runtime");
+        let catalog = manager.manifest_catalog(1, 1).expect("catalog");
+        let manifest = catalog.acquire();
+        let generation = runtime
+            .generation(manifest.manifest().generation)
+            .expect("active generation");
+        let mut forward = BTreeMap::new();
+        let mut reverse = BTreeMap::new();
+        for shard in generation.shards() {
+            let (f, r) = shard.snapshot();
+            forward.extend(f);
+            reverse.extend(r);
+        }
+        drop(manifest);
+
+        let checkpoint_dir = directory
+            .path()
+            .join("indexes")
+            .join("1")
+            .join("1")
+            .join("generation-2")
+            .join("shard-0");
+        GenericIndexManager::<crate::storage::index::key_codec::EdgeIndexKeyGen>::flush_data(
+            &checkpoint_dir,
+            &forward,
+            &reverse,
+        )
+        .expect("flush checkpoint");
+
+        let next_gen = IndexGeneration::new(2);
+        let next_manifest = IndexManifest::new(
+            1,
+            1,
+            next_gen,
+            vec![IndexShard {
+                shard_id: 0,
+                lower: None,
+                upper: None,
+                checkpoint_file: checkpoint_dir,
+                checksum: None,
+            }],
+        )
+        .expect("new manifest");
+        manager
+            .publish_native_index(next_manifest, forward, reverse, CommitLsn::ZERO)
+            .expect("publish");
+
+        let covering_plan = IndexScanPlan {
+            space: "space".to_string(),
+            index_id: 1,
+            predicate: IndexPredicate::All,
+            partition: PartitionSelector::All,
+            partition_id_range: None,
+            projection: Some(vec!["since".to_string()]),
+            limit: None,
+            offset: 0,
+            read_timestamp: 10,
+        };
+        let mut cursor = manager
+            .open_edge_index_cursor(1, &index, &covering_plan)
+            .expect("cursor after rebuild");
+        let rows: Vec<IndexRow> =
+            std::iter::from_fn(|| cursor.next_batch(64).ok().filter(|b| !b.is_empty()))
+                .flatten()
+                .collect();
+        assert_eq!(rows.len(), 1, "rebuilt index should have one entry");
+        match &rows[0] {
+            IndexRow::Covering { columns, .. } => {
+                assert_eq!(columns[0], ("since".to_string(), Value::Int(2020)));
+            }
+            IndexRow::RowId(_) => panic!("expected covering row after rebuild"),
+        }
     }
 }

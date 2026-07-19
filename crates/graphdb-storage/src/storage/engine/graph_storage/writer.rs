@@ -1034,7 +1034,11 @@ fn update_vertex_indexes(
             .iter()
             .filter_map(|field| props.iter().find(|(name, _)| name == &field.name).cloned())
             .collect();
-        if indexed_props.is_empty() {
+        let included_changed = index
+            .properties
+            .iter()
+            .any(|name| props.iter().any(|(changed, _)| changed == name));
+        if indexed_props.is_empty() && !included_changed {
             continue;
         }
         // Check unique constraint before inserting.

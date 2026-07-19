@@ -91,7 +91,7 @@ fn committed_wal_transactions(
     })
 }
 
-fn wal_intents_for_index(
+pub(crate) fn wal_intents_for_index(
     ctx: &GraphStorageContext,
     space_id: u64,
     index: &Index,
@@ -497,6 +497,9 @@ pub(crate) fn rebuild_tag_index(
     snapshot_timestamp: SnapshotTimestamp,
     start_lsn: CommitLsn,
 ) -> StorageResult<bool> {
+    if let Some(stats) = ctx.stats_manager() {
+        stats.record_generation_build();
+    }
     let space_id = ctx.schema_manager().get_space_id(space)?;
     let index = ctx
         .index_metadata_manager()
@@ -548,7 +551,12 @@ pub(crate) fn rebuild_tag_index(
     // belong to this catch-up; active records only provide their MVCC payload.
     let manager = ctx.index_data_manager().write();
     let (active_forward, active_reverse) = manager.active_index_data(space_id, index.id)?;
-    let barrier_lsn = current_wal_lsn(ctx);
+    let observed_barrier_lsn = current_wal_lsn(ctx);
+    let barrier_lsn = if observed_barrier_lsn < start_lsn {
+        start_lsn
+    } else {
+        observed_barrier_lsn
+    };
     let intents = wal_intents_for_index(ctx, space_id, &index, start_lsn, barrier_lsn)?;
     let forward_prefix = KeyBuilder::build_vertex_index_prefix(space_id, index_name).0;
     let (merged_forward, merged_reverse) = replay_wal_partition(
@@ -644,6 +652,10 @@ pub(crate) fn rebuild_tag_index(
         .set_tag_index_status(space_id, index_name, IndexStatus::Active)?;
 
     remove_generation_build_state(ctx, space_id, index_name)?;
+
+    if let Some(stats) = ctx.stats_manager() {
+        stats.record_generation_publish();
+    }
 
     log::info!(
         "Generation rebuild for index {} (gen {}) completed successfully",
@@ -794,6 +806,9 @@ pub(crate) fn rebuild_edge_index(
     snapshot_timestamp: SnapshotTimestamp,
     start_lsn: CommitLsn,
 ) -> StorageResult<bool> {
+    if let Some(stats) = ctx.stats_manager() {
+        stats.record_generation_build();
+    }
     let space_id = ctx.schema_manager().get_space_id(space)?;
     let index = ctx
         .index_metadata_manager()
@@ -839,7 +854,12 @@ pub(crate) fn rebuild_edge_index(
 
     let manager = ctx.index_data_manager().write();
     let (active_forward, active_reverse) = manager.active_index_data(space_id, index.id)?;
-    let barrier_lsn = current_wal_lsn(ctx);
+    let observed_barrier_lsn = current_wal_lsn(ctx);
+    let barrier_lsn = if observed_barrier_lsn < start_lsn {
+        start_lsn
+    } else {
+        observed_barrier_lsn
+    };
     let intents = wal_intents_for_index(ctx, space_id, &index, start_lsn, barrier_lsn)?;
     let forward_prefix = KeyBuilder::build_edge_index_prefix(space_id, index_name).0;
     let (merged_forward, merged_reverse) = replay_wal_partition(
@@ -936,6 +956,10 @@ pub(crate) fn rebuild_edge_index(
     )?;
 
     remove_generation_build_state(ctx, space_id, index_name)?;
+
+    if let Some(stats) = ctx.stats_manager() {
+        stats.record_generation_publish();
+    }
 
     log::info!(
         "Generation rebuild for edge index {} (gen {}) completed successfully",

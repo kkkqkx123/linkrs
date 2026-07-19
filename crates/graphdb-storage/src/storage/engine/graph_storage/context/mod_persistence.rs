@@ -1,3 +1,4 @@
+use crate::core::metadata::IndexMetadataManager;
 use crate::core::types::LabelId;
 use crate::core::StorageResult;
 use crate::storage::engine::data_store::EdgeTableKey;
@@ -6,6 +7,28 @@ use std::path::Path;
 use super::GraphStorageContext;
 
 impl GraphStorageContext {
+    pub(crate) fn register_loaded_native_indexes(&self) -> StorageResult<()> {
+        let spaces = self.persistent.schema_manager.list_spaces()?;
+        let index_manager = self.persistent.index_data_manager.write();
+        for space in spaces {
+            for index in self
+                .persistent
+                .index_metadata_manager
+                .list_tag_indexes(space.space_id)?
+            {
+                index_manager.register_native_index(space.space_id, &index)?;
+            }
+            for index in self
+                .persistent
+                .index_metadata_manager
+                .list_edge_indexes(space.space_id)?
+            {
+                index_manager.register_native_index(space.space_id, &index)?;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn flush_tables_to_dir(&self, data_dir: &Path) -> StorageResult<()> {
         use std::fs;
 
@@ -153,13 +176,17 @@ impl GraphStorageContext {
                 })?;
         }
 
-        let index_dir = checkpoint_paths.indexes_dir();
+        // Checkpoints place native index files below data/ because they are
+        // flushed together with the table snapshot.
+        let index_dir = checkpoint_paths.data_dir().join("indexes");
         if index_dir.exists() {
             self.persistent
                 .index_data_manager
                 .write()
                 .load(&index_dir)?;
         }
+
+        self.register_loaded_native_indexes()?;
 
         Ok(())
     }
