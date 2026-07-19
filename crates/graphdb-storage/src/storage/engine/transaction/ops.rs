@@ -9,7 +9,6 @@ use crate::core::types::{ColumnId, LabelId, Timestamp, VertexId};
 use crate::core::Value;
 use crate::storage::edge::UpdateEdgePropertyByOffsetParams;
 use crate::transaction::codec::property_value_to_value;
-use crate::transaction::insert_transaction::{InsertTransactionError, InsertTransactionResult};
 use crate::transaction::undo_log::{PropertyValue, UndoLogError, UndoLogResult};
 
 use crate::storage::edge::EdgeStore;
@@ -90,21 +89,21 @@ impl TransactionOps {
         vid: VertexId,
         properties: &[(String, Value)],
         ts: Timestamp,
-    ) -> InsertTransactionResult<VertexId> {
+    ) -> UndoLogResult<VertexId> {
         let table = vertex_tables
             .get_mut(&label)
-            .ok_or(InsertTransactionError::LabelNotFound(label))?;
+            .ok_or(UndoLogError::LabelNotFound(label))?;
 
         let internal_id = if let Some(int_id) = vid.as_int64() {
             table
                 .insert_by_i64(int_id, properties, ts)
-                .map_err(|e| InsertTransactionError::SchemaError(e.to_string()))?
+                .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?
         } else if let Some(str_id) = vid.as_str() {
             table
                 .insert(str_id, properties, ts)
-                .map_err(|e| InsertTransactionError::SchemaError(e.to_string()))?
+                .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?
         } else {
-            return Err(InsertTransactionError::SerializationError(
+            return Err(UndoLogError::UndoFailed(
                 "Invalid VertexId: neither int64 nor string".to_string(),
             ));
         };
@@ -118,38 +117,35 @@ impl TransactionOps {
         params: AddEdgeParams,
         properties: &[(String, Value)],
         ts: Timestamp,
-    ) -> InsertTransactionResult<()> {
+    ) -> UndoLogResult<()> {
         let src_table = vertex_tables
             .get(&params.src_label)
-            .ok_or(InsertTransactionError::LabelNotFound(params.src_label))?;
+            .ok_or(UndoLogError::LabelNotFound(params.src_label))?;
         let dst_table = vertex_tables
             .get(&params.dst_label)
-            .ok_or(InsertTransactionError::LabelNotFound(params.dst_label))?;
+            .ok_or(UndoLogError::LabelNotFound(params.dst_label))?;
 
-        let src_external = src_table.get_external_id(params.src_vid, ts).ok_or(
-            InsertTransactionError::VertexNotFound(VertexId::from_int64(params.src_vid as i64)),
-        )?;
-        let dst_external = dst_table.get_external_id(params.dst_vid, ts).ok_or(
-            InsertTransactionError::VertexNotFound(VertexId::from_int64(params.dst_vid as i64)),
-        )?;
-
-        let _src_id_str = match &src_external {
-            crate::storage::vertex::IdKey::Text(s) => s.clone(),
-            crate::storage::vertex::IdKey::Int(i) => i.to_string(),
-        };
-        let _dst_id_str = match &dst_external {
-            crate::storage::vertex::IdKey::Text(s) => s.clone(),
-            crate::storage::vertex::IdKey::Int(i) => i.to_string(),
-        };
+        let src_external =
+            src_table
+                .get_external_id(params.src_vid, ts)
+                .ok_or(UndoLogError::VertexNotFound(VertexId::from_int64(
+                    params.src_vid as i64,
+                )))?;
+        let dst_external =
+            dst_table
+                .get_external_id(params.dst_vid, ts)
+                .ok_or(UndoLogError::VertexNotFound(VertexId::from_int64(
+                    params.dst_vid as i64,
+                )))?;
 
         let key = EdgeTableKey::new(params.src_label, params.dst_label, params.edge_label);
         let edge_table = edge_tables
             .get_mut(&key)
-            .ok_or(InsertTransactionError::LabelNotFound(params.edge_label))?;
+            .ok_or(UndoLogError::LabelNotFound(params.edge_label))?;
 
         edge_table
             .insert_edge(params.src_vid, params.dst_vid, params.rank, properties, ts)
-            .map_err(|e| InsertTransactionError::SchemaError(e.to_string()))?;
+            .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
 
         Ok(())
     }

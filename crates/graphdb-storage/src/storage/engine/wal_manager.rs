@@ -61,6 +61,11 @@ impl WalManager {
         writer
             .open()
             .map_err(|e| StorageError::wal_error(format!("Failed to open WAL: {:?}", e)))?;
+        if self.config.group_commit_enabled {
+            writer
+                .enable_group_commit()
+                .map_err(|e| StorageError::wal_error(format!("Failed to enable group commit: {:?}", e)))?;
+        }
         self.local_writer = Some(Arc::new(RwLock::new(writer)));
         Ok(())
     }
@@ -179,15 +184,9 @@ impl WalManager {
     /// Restore the logical WAL baseline covered by a durable checkpoint.
     pub fn set_recovery_baseline_lsn(&self, lsn: Lsn) -> StorageResult<()> {
         if let Some(ref writer) = self.local_writer {
-            writer
-                .write()
-                .set_recovery_baseline_lsn(lsn)
-                .map_err(|e| {
-                    StorageError::wal_error(format!(
-                        "Failed to restore WAL recovery baseline: {:?}",
-                        e
-                    ))
-                })?;
+            writer.write().set_recovery_baseline_lsn(lsn).map_err(|e| {
+                StorageError::wal_error(format!("Failed to restore WAL recovery baseline: {:?}", e))
+            })?;
         }
         Ok(())
     }

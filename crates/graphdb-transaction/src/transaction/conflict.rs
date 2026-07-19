@@ -47,25 +47,12 @@ impl WriteSetAnalyzer {
         !ws1.edges.is_disjoint(&ws2.edges)
     }
 
-    /// Check if conflict is due to shared vertex endpoints
-    pub fn conflicts_on_shared_vertex(ws1: &WriteSet, ws2: &WriteSet) -> bool {
-        for edge1 in &ws1.edges {
-            for edge2 in &ws2.edges {
-                if edge1.src_vid == edge2.src_vid || edge1.dst_vid == edge2.dst_vid {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
     /// Get a detailed conflict report
     pub fn analyze_conflict(ws1: &WriteSet, ws2: &WriteSet) -> ConflictReport {
         ConflictReport {
             has_conflict: have_write_conflict(ws1, ws2),
             vertex_conflict: Self::conflicts_on_vertex(ws1, ws2),
             edge_conflict: Self::conflicts_on_edge(ws1, ws2),
-            shared_vertex_conflict: Self::conflicts_on_shared_vertex(ws1, ws2),
             intensity: Self::conflict_intensity(ws1, ws2),
         }
     }
@@ -80,8 +67,6 @@ pub struct ConflictReport {
     pub vertex_conflict: bool,
     /// Whether conflict is due to edge modification
     pub edge_conflict: bool,
-    /// Whether conflict is due to shared vertex endpoints
-    pub shared_vertex_conflict: bool,
     /// Conflict intensity (0.0 to 1.0)
     pub intensity: f64,
 }
@@ -148,5 +133,25 @@ mod tests {
         let report = WriteSetAnalyzer::analyze_conflict(&ws1, &ws2);
         assert!(!report.has_conflict);
         assert!(!report.vertex_conflict);
+    }
+
+    #[test]
+    fn test_shared_endpoint_not_conflict() {
+        let vid1 = VertexId::from_int64(1);
+        let vid2 = VertexId::from_int64(2);
+        let vid3 = VertexId::from_int64(3);
+
+        let mut ws1 = WriteSet::new();
+        let edge1 = crate::core::types::EdgeIdentifier::new(1, vid1, 1, vid2, 1, 0);
+        ws1.record_edge(edge1);
+
+        let mut ws2 = WriteSet::new();
+        let edge2 = crate::core::types::EdgeIdentifier::new(1, vid1, 1, vid3, 1, 0);
+        ws2.record_edge(edge2);
+
+        assert!(
+            !ws1.has_conflict_with(&ws2),
+            "edges sharing a source vertex should not conflict"
+        );
     }
 }

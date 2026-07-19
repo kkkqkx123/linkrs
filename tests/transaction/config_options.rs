@@ -34,6 +34,8 @@ fn test_manager_config_custom() {
         max_concurrent_transactions: 500,
         auto_cleanup: false,
         write_lock_timeout: Duration::from_secs(10),
+        commit_retry_attempts: 3,
+        abort_retry_attempts: 3,
     };
 
     assert_eq!(config.default_timeout, Duration::from_secs(60));
@@ -175,6 +177,8 @@ fn test_manager_with_custom_config() {
         max_concurrent_transactions: 100,
         auto_cleanup: true,
         write_lock_timeout: Duration::from_secs(10),
+        commit_retry_attempts: 3,
+        abort_retry_attempts: 3,
     };
 
     let manager = TransactionManager::new(config);
@@ -364,6 +368,8 @@ fn test_manager_config_clone() {
         max_concurrent_transactions: 200,
         auto_cleanup: false,
         write_lock_timeout: Duration::from_secs(10),
+        commit_retry_attempts: 3,
+        abort_retry_attempts: 3,
     };
 
     let cloned = original.clone();

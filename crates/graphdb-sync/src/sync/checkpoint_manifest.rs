@@ -34,6 +34,13 @@ pub struct CheckpointManifest {
     pub storage_lsn: CommitLsn,
     /// Outbox snapshot LSN - the materialized LSN of the outbox snapshot
     pub outbox_lsn: CommitLsn,
+    /// Whether the database has a durable SQLite outbox projection.
+    ///
+    /// This is distinct from `outbox_snapshot`: a checkpoint may be created
+    /// while the outbox is temporarily unavailable. In that case WAL cannot
+    /// be reclaimed past zero because the missing projection must be rebuilt
+    /// from the retained WAL.
+    pub outbox_enabled: bool,
     /// Common safe LSN - the minimum of storage_lsn and outbox_lsn
     /// This is the LSN up to which WAL can be safely truncated
     pub safe_lsn: CommitLsn,
@@ -56,12 +63,25 @@ pub struct StorageSnapshotRef {
     pub size_bytes: u64,
     /// CRC32 checksum
     pub checksum: u32,
+    /// Checksummed files contained by the snapshot directory.
+    pub files: Vec<StorageFileRef>,
     /// Checkpoint sequence number
     pub checkpoint_seq: u64,
     /// Number of vertices
     pub vertex_count: u64,
     /// Number of edges
     pub edge_count: u64,
+}
+
+/// Immutable file reference belonging to a storage snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StorageFileRef {
+    /// Path relative to the storage snapshot directory.
+    pub path: PathBuf,
+    /// Size in bytes.
+    pub size_bytes: u64,
+    /// CRC32 checksum.
+    pub checksum: u32,
 }
 
 /// Reference to an outbox snapshot
@@ -96,13 +116,37 @@ pub struct IndexManifestRef {
 
 impl CheckpointManifest {
     /// Current manifest format version
-    pub const CURRENT_FORMAT_VERSION: u32 = 2;
+    pub const CURRENT_FORMAT_VERSION: u32 = 3;
+
+    /// Build a storage reference from a fully materialized checkpoint
+    /// directory. The file list is part of the combined manifest so recovery
+    /// can reject a directory that was only partially written or corrupted.
+    pub fn storage_snapshot_from_directory(
+        path: impl AsRef<Path>,
+        checkpoint_seq: u64,
+        vertex_count: u64,
+        edge_count: u64,
+    ) -> Result<StorageSnapshotRef, String> {
+        let path = path.as_ref();
+        let files = collect_storage_files(path)?;
+        let size_bytes = files.iter().map(|file| file.size_bytes).sum();
+        let checksum = storage_files_checksum(&files)?;
+        Ok(StorageSnapshotRef {
+            path: path.to_path_buf(),
+            size_bytes,
+            checksum,
+            files,
+            checkpoint_seq,
+            vertex_count,
+            edge_count,
+        })
+    }
 
     /// Create a new checkpoint manifest from component snapshots.
     ///
     /// This computes the common safe LSN as the minimum of storage and outbox LSNs.
-    /// When there is no outbox snapshot, outbox_lsn is set to ZERO and safe_lsn
-    /// equals storage_lsn.
+    /// When the outbox is enabled but no snapshot is available, safe_lsn is
+    /// zero so the retained WAL can rebuild the missing projection.
     pub fn new(
         checkpoint_id: u64,
         storage_lsn: CommitLsn,
@@ -110,14 +154,54 @@ impl CheckpointManifest {
         outbox_snapshot: Option<OutboxSnapshotRef>,
         index_manifests: Vec<IndexManifestRef>,
     ) -> Self {
+        Self::new_with_outbox_state(
+            checkpoint_id,
+            storage_lsn,
+            storage_snapshot,
+            outbox_snapshot,
+            index_manifests,
+            false,
+        )
+    }
+
+    /// Create a manifest for a database whose SQLite outbox is part of the
+    /// durability boundary.
+    pub fn new_with_outbox(
+        checkpoint_id: u64,
+        storage_lsn: CommitLsn,
+        storage_snapshot: StorageSnapshotRef,
+        outbox_snapshot: Option<OutboxSnapshotRef>,
+        index_manifests: Vec<IndexManifestRef>,
+    ) -> Self {
+        Self::new_with_outbox_state(
+            checkpoint_id,
+            storage_lsn,
+            storage_snapshot,
+            outbox_snapshot,
+            index_manifests,
+            true,
+        )
+    }
+
+    fn new_with_outbox_state(
+        checkpoint_id: u64,
+        storage_lsn: CommitLsn,
+        storage_snapshot: StorageSnapshotRef,
+        outbox_snapshot: Option<OutboxSnapshotRef>,
+        index_manifests: Vec<IndexManifestRef>,
+        outbox_enabled: bool,
+    ) -> Self {
         let outbox_lsn = outbox_snapshot
             .as_ref()
             .map(|s| s.materialized_lsn)
             .unwrap_or(CommitLsn::ZERO);
 
-        // Safe LSN is the minimum of storage and outbox LSNs.
-        // When there is no outbox snapshot, safe_lsn = storage_lsn.
-        let safe_lsn = if outbox_snapshot.is_some() && outbox_lsn < storage_lsn {
+        // A missing outbox snapshot is safe only when no outbox projection is
+        // configured. If the projection is enabled, retaining WAL from zero
+        // is the only boundary that permits a complete rebuild after restart.
+        let safe_lsn = if outbox_enabled && outbox_snapshot.is_none() {
+            CommitLsn::ZERO
+        } else if outbox_snapshot.is_some() && outbox_lsn < storage_lsn {
             outbox_lsn
         } else {
             storage_lsn
@@ -132,6 +216,7 @@ impl CheckpointManifest {
                 .as_secs(),
             storage_lsn,
             outbox_lsn,
+            outbox_enabled,
             safe_lsn,
             storage_snapshot,
             outbox_snapshot,
@@ -183,7 +268,9 @@ impl CheckpointManifest {
             .map(|s| s.materialized_lsn)
             .unwrap_or(CommitLsn::ZERO);
 
-        let expected_safe = if self.outbox_snapshot.is_some() && outbox_lsn < self.storage_lsn {
+        let expected_safe = if self.outbox_enabled && self.outbox_snapshot.is_none() {
+            CommitLsn::ZERO
+        } else if self.outbox_snapshot.is_some() && outbox_lsn < self.storage_lsn {
             outbox_lsn
         } else {
             self.storage_lsn
@@ -196,6 +283,20 @@ impl CheckpointManifest {
             ));
         }
 
+        if self.storage_snapshot.checkpoint_seq != self.checkpoint_id {
+            return Err(format!(
+                "Storage snapshot checkpoint sequence {} does not match manifest {}",
+                self.storage_snapshot.checkpoint_seq, self.checkpoint_id
+            ));
+        }
+
+        if self.outbox_snapshot.is_some() && self.outbox_lsn > self.storage_lsn {
+            return Err(format!(
+                "Outbox snapshot LSN {} is ahead of storage LSN {}",
+                self.outbox_lsn, self.storage_lsn
+            ));
+        }
+
         // Validate that outbox LSN is consistent with outbox snapshot presence
         if self.outbox_snapshot.is_none() && self.outbox_lsn != CommitLsn::ZERO {
             return Err(
@@ -203,12 +304,7 @@ impl CheckpointManifest {
             );
         }
 
-        if !self.storage_snapshot.path.exists() {
-            return Err(format!(
-                "Storage snapshot does not exist: {}",
-                self.storage_snapshot.path.display()
-            ));
-        }
+        verify_storage_reference(&self.storage_snapshot)?;
         if let Some(snapshot) = &self.outbox_snapshot {
             verify_file_reference(
                 &snapshot.path,
@@ -443,6 +539,91 @@ fn verify_file_reference(
     Ok(())
 }
 
+fn collect_storage_files(root: &Path) -> Result<Vec<StorageFileRef>, String> {
+    fn visit(
+        root: &Path,
+        directory: &Path,
+        files: &mut Vec<StorageFileRef>,
+    ) -> Result<(), String> {
+        for entry in std::fs::read_dir(directory).map_err(|error| error.to_string())? {
+            let path = entry.map_err(|error| error.to_string())?.path();
+            if path.is_dir() {
+                visit(root, &path, files)?;
+                continue;
+            }
+            if !path.is_file() {
+                continue;
+            }
+            let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|error| error.to_string())?
+                .to_path_buf();
+            files.push(StorageFileRef {
+                path: relative,
+                size_bytes: bytes.len() as u64,
+                checksum: crc32fast::hash(&bytes),
+            });
+        }
+        Ok(())
+    }
+
+    if !root.is_dir() {
+        return Err(format!(
+            "Storage snapshot directory does not exist: {}",
+            root.display()
+        ));
+    }
+    let mut files = Vec::new();
+    visit(root, root, &mut files)?;
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(files)
+}
+
+fn storage_files_checksum(files: &[StorageFileRef]) -> Result<u32, String> {
+    let bytes = postcard::to_allocvec(files).map_err(|error| error.to_string())?;
+    Ok(crc32fast::hash(&bytes))
+}
+
+fn verify_storage_reference(reference: &StorageSnapshotRef) -> Result<(), String> {
+    let actual = collect_storage_files(&reference.path)?;
+    if actual != reference.files {
+        return Err(format!(
+            "Storage snapshot file list mismatch: {}",
+            reference.path.display()
+        ));
+    }
+    let size_bytes: u64 = actual.iter().map(|file| file.size_bytes).sum();
+    if size_bytes != reference.size_bytes {
+        return Err(format!(
+            "Storage snapshot size mismatch: {}",
+            reference.path.display()
+        ));
+    }
+    let checksum = storage_files_checksum(&actual)?;
+    if checksum != reference.checksum {
+        return Err(format!(
+            "Storage snapshot checksum mismatch: {}",
+            reference.path.display()
+        ));
+    }
+
+    for file in &actual {
+        if file.path.is_absolute()
+            || file
+                .path
+                .components()
+                .any(|component| component == std::path::Component::ParentDir)
+        {
+            return Err(format!(
+                "Invalid storage snapshot file path: {}",
+                file.path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,14 +632,8 @@ mod tests {
     fn create_test_storage_snapshot_ref(temp_dir: &Path) -> StorageSnapshotRef {
         let snapshot_path = temp_dir.join("storage_snapshot");
         std::fs::create_dir_all(&snapshot_path).unwrap();
-        StorageSnapshotRef {
-            path: snapshot_path,
-            size_bytes: 1024,
-            checksum: 0x12345678,
-            checkpoint_seq: 1,
-            vertex_count: 100,
-            edge_count: 50,
-        }
+        std::fs::write(snapshot_path.join("checkpoint.meta"), b"checkpoint").unwrap();
+        CheckpointManifest::storage_snapshot_from_directory(&snapshot_path, 1, 100, 50).unwrap()
     }
 
     fn create_test_outbox_snapshot_ref(temp_dir: &Path) -> OutboxSnapshotRef {
@@ -497,7 +672,8 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let storage_ref = create_test_storage_snapshot_ref(temp_dir.path());
 
-        // Storage LSN is lower
+        // Storage LSN is lower. The outbox snapshot must not be ahead of the
+        // storage boundary in a combined manifest.
         let manifest1 = CheckpointManifest::new(
             1,
             CommitLsn::new(50),
@@ -506,7 +682,7 @@ mod tests {
                 path: temp_dir.path().join("outbox.sqlite"),
                 size_bytes: 4,
                 checksum: 0,
-                materialized_lsn: CommitLsn::new(100),
+                materialized_lsn: CommitLsn::new(50),
             }),
             Vec::new(),
         );
@@ -521,11 +697,26 @@ mod tests {
                 path: temp_dir.path().join("outbox2.sqlite"),
                 size_bytes: 4,
                 checksum: 0,
-                materialized_lsn: CommitLsn::new(50),
+                materialized_lsn: CommitLsn::new(20),
             }),
             Vec::new(),
         );
-        assert_eq!(manifest2.safe_lsn, CommitLsn::new(50));
+        assert_eq!(manifest2.safe_lsn, CommitLsn::new(20));
+    }
+
+    #[test]
+    fn enabled_outbox_without_snapshot_keeps_wal_reclaim_boundary_at_zero() {
+        let temp_dir = TempDir::new().unwrap();
+        let manifest = CheckpointManifest::new_with_outbox(
+            1,
+            CommitLsn::new(100),
+            create_test_storage_snapshot_ref(temp_dir.path()),
+            None,
+            Vec::new(),
+        );
+
+        assert_eq!(manifest.safe_lsn, CommitLsn::ZERO);
+        assert!(manifest.validate().is_ok());
     }
 
     #[test]
@@ -550,26 +741,35 @@ mod tests {
         assert_eq!(loaded.safe_lsn, manifest.safe_lsn);
     }
 
+    fn create_storage_snapshot_ref(temp_dir: &Path, checkpoint_seq: u64) -> StorageSnapshotRef {
+        let snapshot_path = temp_dir.join(format!("storage_snapshot_{}", checkpoint_seq));
+        std::fs::create_dir_all(&snapshot_path).unwrap();
+        std::fs::write(snapshot_path.join("checkpoint.meta"), b"checkpoint").unwrap();
+        CheckpointManifest::storage_snapshot_from_directory(&snapshot_path, checkpoint_seq, 100, 50)
+            .unwrap()
+    }
+
     #[test]
     fn test_manifest_manager() {
         let temp_dir = TempDir::new().unwrap();
         let manager = CheckpointManifestManager::new(temp_dir.path());
         manager.init().unwrap();
 
-        let storage_ref = create_test_storage_snapshot_ref(temp_dir.path());
+        let storage_ref1 = create_storage_snapshot_ref(temp_dir.path(), 1);
+        let storage_ref2 = create_storage_snapshot_ref(temp_dir.path(), 2);
         let outbox_ref = create_test_outbox_snapshot_ref(temp_dir.path());
 
         let manifest1 = CheckpointManifest::new(
             1,
-            CommitLsn::new(50),
-            storage_ref.clone(),
+            CommitLsn::new(100),
+            storage_ref1,
             Some(outbox_ref.clone()),
             Vec::new(),
         );
         let manifest2 = CheckpointManifest::new(
             2,
             CommitLsn::new(100),
-            storage_ref,
+            storage_ref2,
             Some(outbox_ref),
             Vec::new(),
         );

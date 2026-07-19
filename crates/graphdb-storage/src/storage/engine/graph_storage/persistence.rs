@@ -6,9 +6,10 @@ use crate::storage::engine::paths::StoragePaths;
 use crate::storage::engine::persistence_coordinator::{
     CheckpointData, CheckpointInfo, CheckpointStats,
 };
-use crate::transaction::compact_transaction::CompactTransaction;
+use crate::transaction::mvcc::RELEASED_TIMESTAMP;
 use crate::transaction::wal::recovery::{RecoveryConfig, RecoveryManager, RecoveryStats};
 use crate::transaction::wal::{Lsn, ParallelWalParser, WalRecoveryMode};
+use graphdb_sync::sync::checkpoint_manifest::CheckpointManifestManager;
 
 use super::context::GraphStorageContext;
 
@@ -50,32 +51,11 @@ fn latest_published_checkpoint_dir(work_dir: &Path) -> StorageResult<Option<Path
     if !checkpoint_root.exists() {
         return Ok(None);
     }
-
-    let mut latest = None;
-    for entry in std::fs::read_dir(checkpoint_root)? {
-        let entry = entry?;
-        let path = entry.path();
-        if !path.is_dir() || !path.join("checkpoint.meta").is_file() {
-            continue;
-        }
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        let Some(sequence) = name
-            .strip_prefix("checkpoint_")
-            .and_then(|value| value.parse::<u64>().ok())
-        else {
-            continue;
-        };
-        if latest
-            .as_ref()
-            .is_none_or(|(current, _): &(u64, PathBuf)| sequence > *current)
-        {
-            latest = Some((sequence, path));
-        }
-    }
-
-    Ok(latest.map(|(_, path)| path))
+    let manifest_manager = CheckpointManifestManager::new(checkpoint_root.join("manifests"));
+    manifest_manager
+        .load_latest()
+        .map_err(StorageError::db_error)
+        .map(|manifest| manifest.map(|manifest| manifest.storage_snapshot.path))
 }
 
 fn restore_full_state_from_disk(ctx: &GraphStorageContext) -> StorageResult<()> {
@@ -122,14 +102,13 @@ pub(crate) fn bootstrap_from_disk(ctx: &GraphStorageContext) -> StorageResult<()
         // persisted data (written at timestamps <= checkpoint timestamp) is visible
         // after reload. Without this, the fresh version manager's read_ts=1 would
         // not see data written at higher timestamps.
-        let thread_num = 1;
-        ctx.version_manager().init_ts(info.timestamp, thread_num);
+        ctx.version_manager().init_ts(info.timestamp);
     } else {
         restore_full_state_from_disk(ctx)?;
         // If data was restored from the main data directory (no checkpoints),
         // we can't recover the max timestamp. Use a default that ensures
         // data at ts=1 is visible (the minimum write timestamp).
-        ctx.version_manager().init_ts(1, 1);
+        ctx.version_manager().init_ts(1);
     }
 
     Ok(())
@@ -370,47 +349,65 @@ pub(crate) fn compact_transactional(
         StorageError::db_error("Persistence not available for transactional compaction".to_string())
     })?;
 
-    let wal_writer = {
-        let coordinator = persistence.read();
-        let wal_mgr = coordinator.wal_manager();
-        let wal_reader = wal_mgr
-            .as_ref()
-            .ok_or_else(|| StorageError::db_error("WAL not enabled".to_string()))?
-            .read();
-        wal_reader
-            .writer()
-            .ok_or_else(|| StorageError::db_error("WAL writer not initialized".to_string()))?
-    };
-
-    let mut wal_writer_guard = wal_writer.write();
     let version_manager = ctx.version_manager().as_ref();
 
-    let txn = CompactTransaction::new(ctx, version_manager, &mut *wal_writer_guard, config)
-        .map_err(|e| {
-            StorageError::db_error(format!("Failed to create compact transaction: {}", e))
-        })?;
+    let timestamp = version_manager.acquire_insert_timestamp().map_err(|e| {
+        StorageError::db_error(format!("Failed to acquire compaction timestamp: {}", e))
+    })?;
 
-    let before_stats = txn.storage_stats();
-    log::info!(
-        "Starting transactional compaction: enable_structure_compaction={}, config={{ segment_merge_enabled: {} }}, size={}/{}",
-        config.enable_structure_compaction,
-        config.segment_merge_enabled,
-        before_stats.used_size,
-        before_stats.total_size
-    );
+    let result = {
+        let wal_writer = {
+            let coordinator = persistence.read();
+            let wal_mgr = coordinator.wal_manager();
+            let wal_reader = wal_mgr
+                .as_ref()
+                .ok_or_else(|| StorageError::db_error("WAL not enabled".to_string()))?
+                .read();
+            wal_reader
+                .writer()
+                .ok_or_else(|| StorageError::db_error("WAL writer not initialized".to_string()))?
+        };
 
-    txn.commit()
-        .map_err(|e| StorageError::db_error(format!("Compact transaction failed: {}", e)))?;
+        let mut wal_writer_guard = wal_writer.write();
 
-    let after_stats = ctx.get_compact_stats();
-    log::info!(
-        "Compaction completed: size={}/{} (freed {} bytes)",
-        after_stats.used_size,
-        after_stats.total_size,
-        before_stats.used_size.saturating_sub(after_stats.used_size)
-    );
+        let before_stats = ctx.get_compact_stats();
+        log::info!(
+            "Starting transactional compaction: enable_structure_compaction={}, config={{ segment_merge_enabled: {} }}, size={}/{}",
+            config.enable_structure_compaction,
+            config.segment_merge_enabled,
+            before_stats.used_size,
+            before_stats.total_size
+        );
 
-    Ok(())
+        wal_writer_guard
+            .append_entry(crate::core::wal::types::WalOpType::Compact, timestamp, &[])
+            .map_err(|e| StorageError::wal_error(format!("Failed to append compact WAL: {}", e)))?;
+
+        ctx.compact(config, timestamp)
+            .map_err(|e| StorageError::db_error(format!("Compaction failed: {}", e)))
+    };
+
+    match result {
+        Ok(()) => {
+            version_manager.release_insert_timestamp(timestamp);
+
+            let after_stats = ctx.get_compact_stats();
+            log::info!(
+                "Compaction completed: size={}/{} (freed {} bytes)",
+                after_stats.used_size,
+                after_stats.total_size,
+                ctx.get_compact_stats()
+                    .total_size
+                    .saturating_sub(after_stats.used_size)
+            );
+
+            Ok(())
+        }
+        Err(e) => {
+            version_manager.release_insert_timestamp(timestamp);
+            Err(e)
+        }
+    }
 }
 
 pub(crate) fn load_from_disk(ctx: &GraphStorageContext) -> StorageResult<()> {
@@ -478,16 +475,22 @@ pub(crate) fn recover_from_wal(ctx: &GraphStorageContext) -> StorageResult<Recov
     // visible after reload.
     let current_ts = ctx.version_manager().write_timestamp();
     if stats.max_timestamp >= current_ts {
-        ctx.version_manager().init_ts(stats.max_timestamp, 1);
+        ctx.version_manager().init_ts(stats.max_timestamp);
     }
 
-    // Persist the recovered state as a new checkpoint baseline so the next
-    // startup does not replay the same WAL range again.
-    let _ = create_checkpoint(ctx)?;
+    // When the durable outbox exists, storage recovery must leave the
+    // remaining WAL available for the outbox projection recovery that runs
+    // immediately after startup. A storage-only checkpoint here could
+    // reclaim the very intents that SQLite still needs. The synchronized
+    // checkpoint path creates the next combined baseline after projection
+    // recovery completes.
+    if !has_durable_outbox(ctx) {
+        let _ = create_checkpoint(ctx)?;
+    }
 
     // Update read_ts so recovered data is visible to subsequent reads.
     let checkpoint_ts = ctx.version_manager().write_timestamp().saturating_sub(1);
-    ctx.version_manager().init_ts(checkpoint_ts, 1);
+    ctx.version_manager().init_ts(checkpoint_ts);
 
     Ok(stats)
 }
@@ -522,16 +525,16 @@ pub(crate) fn recover_from_wal_with_config(
     // allocates a timestamp >= all recovered data.
     let current_ts = ctx.version_manager().write_timestamp();
     if stats.max_timestamp >= current_ts {
-        ctx.version_manager().init_ts(stats.max_timestamp, 1);
+        ctx.version_manager().init_ts(stats.max_timestamp);
     }
 
-    // Persist the recovered state as a new checkpoint baseline so the next
-    // startup does not replay the same WAL range again.
-    let _ = create_checkpoint(ctx)?;
+    if !has_durable_outbox(ctx) {
+        let _ = create_checkpoint(ctx)?;
+    }
 
     // Update read_ts so recovered data is visible to subsequent reads.
     let checkpoint_ts = ctx.version_manager().write_timestamp().saturating_sub(1);
-    ctx.version_manager().init_ts(checkpoint_ts, 1);
+    ctx.version_manager().init_ts(checkpoint_ts);
 
     Ok(stats)
 }
@@ -567,32 +570,22 @@ fn latest_checkpoint_info_from_dir(
     if !checkpoints_dir.exists() {
         return Ok(None);
     }
-
-    let mut checkpoints: Vec<(u64, std::path::PathBuf)> = std::fs::read_dir(checkpoints_dir)?
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| {
-            let path = entry.path();
-            if path.is_dir() {
-                let name = path.file_name()?.to_string_lossy();
-                if name.starts_with("checkpoint_") {
-                    let id: u64 = name.trim_start_matches("checkpoint_").parse().ok()?;
-                    Some((id, path))
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    checkpoints.sort_by_key(|(id, _)| std::cmp::Reverse(*id));
-
-    if let Some((_, checkpoint_path)) = checkpoints.first() {
-        return read_checkpoint_metadata(checkpoint_path).map(Some);
+    let manifest_manager = CheckpointManifestManager::new(checkpoints_dir.join("manifests"));
+    let Some(manifest) = manifest_manager
+        .load_latest()
+        .map_err(StorageError::db_error)?
+    else {
+        return Ok(None);
+    };
+    let checkpoint_path = manifest.storage_snapshot.path;
+    let info = read_checkpoint_metadata(&checkpoint_path)?;
+    if info.checkpoint_id != manifest.checkpoint_id {
+        return Err(StorageError::deserialize_error(format!(
+            "Checkpoint metadata id {} does not match manifest {}",
+            info.checkpoint_id, manifest.checkpoint_id
+        )));
     }
-
-    Ok(None)
+    Ok(Some(info))
 }
 
 fn persistence_dirs(ctx: &GraphStorageContext) -> Option<(PathBuf, PathBuf, PathBuf)> {
@@ -609,6 +602,14 @@ fn persistence_dirs(ctx: &GraphStorageContext) -> Option<(PathBuf, PathBuf, Path
             (paths.wal_dir(), paths.data_dir(), root.join("checkpoint"))
         })
     }
+}
+
+fn has_durable_outbox(ctx: &GraphStorageContext) -> bool {
+    let Some((_, data_dir, _)) = persistence_dirs(ctx) else {
+        return false;
+    };
+    let work_dir = data_dir.parent().unwrap_or(&data_dir);
+    work_dir.join("outbox/outbox.sqlite").exists() || work_dir.join("outbox_snapshots").is_dir()
 }
 
 fn read_checkpoint_metadata(dir: &Path) -> StorageResult<CheckpointInfo> {
@@ -698,6 +699,8 @@ mod tests {
     use crate::core::DataType;
     use crate::storage::engine::PersistenceConfig;
     use crate::storage::types::StoragePropertyDef;
+    use graphdb_core::core::types::CommitLsn;
+    use graphdb_sync::sync::checkpoint_manifest::CheckpointManifest;
     use crate::transaction::wal::writer::WalWriter;
     use crate::transaction::wal::{InsertVertexRedo, LocalWalWriter, WalOpType};
     use postcard::to_allocvec;
@@ -752,6 +755,24 @@ mod tests {
         writeln!(file, "format_version=2")?;
         writeln!(file, "checkpoint_id={}", checkpoint_id)?;
         writeln!(file, "wal_lsn={}", wal_lsn.as_u64())?;
+
+        let storage_ref = CheckpointManifest::storage_snapshot_from_directory(
+            &checkpoint_path,
+            checkpoint_id,
+            0,
+            0,
+        )
+        .map_err(StorageError::db_error)?;
+        let manifest = CheckpointManifest::new(
+            checkpoint_id,
+            CommitLsn::new(wal_lsn.as_u64()),
+            storage_ref,
+            None,
+            Vec::new(),
+        );
+        let manager = CheckpointManifestManager::new(checkpoint_dir.join("manifests"));
+        manager.init().map_err(StorageError::db_error)?;
+        manager.publish(&manifest).map_err(StorageError::db_error)?;
 
         Ok(())
     }

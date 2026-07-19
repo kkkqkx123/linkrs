@@ -24,7 +24,8 @@ use crate::sync::SyncManager;
 /// Transaction Manager
 ///
 /// Manages the lifecycle of all transactions using MVCC version management.
-/// Supports read, insert, update, and compact transactions.
+/// Supports read and insert (write) transactions.
+/// All write transactions run concurrently; conflicts are detected at commit time.
 pub struct TransactionManager {
     /// Version manager for MVCC timestamps
     version_manager: Arc<VersionManager>,
@@ -165,7 +166,10 @@ impl TransactionManager {
         }
 
         let txn_id = TransactionId(self.id_generator.fetch_add(1, Ordering::SeqCst));
-        let timestamp = self.version_manager.acquire_read_timestamp();
+        let timestamp = self
+            .version_manager
+            .acquire_read_timestamp()
+            .map_err(|e| TransactionError::internal(e.to_string()))?;
         let timeout = options.timeout.unwrap_or(self.config.default_timeout);
 
         let config = TransactionConfig {
@@ -225,7 +229,10 @@ impl TransactionManager {
         }
 
         let txn_id = TransactionId(self.id_generator.fetch_add(1, Ordering::SeqCst));
-        let timestamp = self.version_manager.acquire_read_timestamp();
+        let timestamp = self
+            .version_manager
+            .acquire_read_timestamp()
+            .map_err(|e| TransactionError::internal(e.to_string()))?;
         let timeout = options.timeout.unwrap_or(self.config.default_timeout);
 
         let config = TransactionConfig {
@@ -270,49 +277,9 @@ impl TransactionManager {
         }
 
         let txn_id = TransactionId(self.id_generator.fetch_add(1, Ordering::SeqCst));
-        let timestamp = self.version_manager.acquire_insert_timestamp();
-        let timeout = options.timeout.unwrap_or(self.config.default_timeout);
-
-        let config = TransactionConfig {
-            timeout,
-            durability: options.durability,
-            isolation_level: options.isolation_level,
-            query_timeout: options.query_timeout,
-            statement_timeout: options.statement_timeout,
-            idle_timeout: options.idle_timeout,
-            two_phase_commit: options.two_phase_commit,
-        };
-
-        let context = Arc::new(TransactionContext::new(txn_id, timestamp, config));
-
-        self.active_transactions.insert(txn_id, context);
-        self.stats.record_txn_begin();
-
-        Ok(txn_id)
-    }
-
-    /// Start a new update transaction
-    ///
-    /// Update transactions require exclusive access and will block
-    /// until all other transactions complete.
-    pub fn begin_update_transaction(
-        &self,
-        options: TransactionOptions,
-    ) -> Result<TransactionId, TransactionError> {
-        if self.shutdown_flag.load(Ordering::SeqCst) != 0 {
-            return Err(TransactionError::internal(
-                "Transaction manager is shutdown".to_string(),
-            ));
-        }
-
-        if self.has_active_write_transaction() {
-            return Err(TransactionError::write_transaction_conflict());
-        }
-
-        let txn_id = TransactionId(self.id_generator.fetch_add(1, Ordering::SeqCst));
         let timestamp = self
             .version_manager
-            .acquire_update_timestamp()
+            .acquire_insert_timestamp()
             .map_err(|e| TransactionError::internal(e.to_string()))?;
         let timeout = options.timeout.unwrap_or(self.config.default_timeout);
 
@@ -416,11 +383,8 @@ impl TransactionManager {
     /// Follows atomic commit protocol:
     /// 1. Check state and timeout (transaction still active)
     /// 2. Transition to Committing (marks in-progress, prevents concurrent operations)
-    /// 3. Call sync_manager (external coordination) - if this fails, the transaction is terminated
-    ///    and resources are released. The current state machine does not support retrying a
-    ///    commit from Committing.
-    ///    NOTE: sync_manager.commit() is called BEFORE storage-level timestamp release, ensuring that
-    ///    storage and index visibility change together.
+    /// 3. Persist through the configured storage commit sink. On retryable failure,
+    ///    transitions to CommitRetry, backs off, and retries up to N times.
     /// 4. Release timestamp
     /// 5. Remove from active_transactions (only after all steps succeed)
     /// 6. Transition to Committed
@@ -452,19 +416,35 @@ impl TransactionManager {
         context.transition_to(TransactionState::Committing)?;
 
         if let Some(ref commit_sink) = self.commit_sink {
-            commit_sink.commit_transaction(txn_id).map_err(|error| {
-                TransactionError::internal(format!(
-                    "Failed to persist transaction {}: {}",
-                    txn_id, error
-                ))
-            })?;
-        } else if let Some(ref sync_manager) = self.sync_manager {
-            if let Err(e) = sync_manager.commit_transaction_sync(txn_id) {
-                log::error!(
-                    "Sync commit failed for transaction {}; local commit will complete and the outbox will retry: {}",
-                    txn_id,
-                    e
-                );
+            let max_retries = self.config.commit_retry_attempts;
+            let mut last_error = None;
+
+            for attempt in 0..=max_retries {
+                match commit_sink.commit_transaction(txn_id) {
+                    Ok(_) => {
+                        last_error = None;
+                        break;
+                    }
+                    Err(e) => {
+                        last_error = Some(e);
+                        if attempt < max_retries {
+                            context.transition_to(TransactionState::CommitRetry)?;
+                            std::thread::sleep(Self::backoff_delay(attempt));
+                            context.transition_to(TransactionState::Committing)?;
+                        }
+                    }
+                }
+            }
+
+            if let Some(err) = last_error {
+                self.rollback_context_timestamp(&context);
+                self.active_transactions.remove(&txn_id);
+                let _ = context.transition_to(TransactionState::Aborted);
+                self.stats.record_txn_rollback();
+                return Err(TransactionError::commit_failed(format!(
+                    "Failed to persist transaction {} after {} retries: {}",
+                    txn_id, max_retries, err
+                )));
             }
         }
 
@@ -472,7 +452,7 @@ impl TransactionManager {
             self.version_manager.release_read_timestamp();
         } else {
             self.version_manager
-                .release_insert_timestamp(context.timestamp());
+                .release_write_timestamp(context.timestamp());
         }
 
         self.active_transactions.remove(&txn_id);
@@ -484,13 +464,10 @@ impl TransactionManager {
         Ok(())
     }
 
-    /// Commit transaction with undo target (for rollback support)
-    pub fn commit_transaction_with_undo<T: UndoTarget + ?Sized>(
-        &self,
-        txn_id: TransactionId,
-        _target: &mut T,
-    ) -> Result<(), TransactionError> {
-        self.commit_transaction(txn_id)
+    /// Exponential backoff delay: 100ms * 2^attempt, capped at 10s.
+    fn backoff_delay(attempt: u32) -> std::time::Duration {
+        let ms = 100u64.saturating_mul(2u64.pow(attempt.min(10)));
+        std::time::Duration::from_millis(ms.min(10_000))
     }
 
     /// Abort transaction
@@ -555,17 +532,20 @@ impl TransactionManager {
             ctx
         };
 
-        // Execute undo log rollback first (before state transition)
+        // Transition to Aborting first, then execute undo logs.
+        // If undo fails, we're in Aborting state (not Active) — state machine remains consistent.
+        context.transition_to(TransactionState::Aborting)?;
+
         let rollback = UndoLogRollback::new(&*context);
         rollback
             .execute_rollback(target, context.timestamp())
             .map_err(|e| TransactionError::rollback_failed(e.to_string()))?;
         rollback.clear_logs();
 
-        self.abort_transaction_internal(&context)
+        self.execute_abort_internal(&context)
     }
 
-    /// Internal abort implementation
+    /// Internal abort implementation.
     ///
     /// Atomic abort protocol:
     /// 1. Transition to Aborting (marks in-progress)
@@ -580,27 +560,67 @@ impl TransactionManager {
         context: &TransactionContext,
     ) -> Result<(), TransactionError> {
         context.transition_to(TransactionState::Aborting)?;
+        self.execute_abort_internal(context)
+    }
+
+    /// Execute abort steps (transition already done by caller).
+    fn execute_abort_internal(
+        &self,
+        context: &TransactionContext,
+    ) -> Result<(), TransactionError> {
+        let max_retries = self.config.abort_retry_attempts;
 
         if let Some(ref commit_sink) = self.commit_sink {
-            commit_sink.abort_transaction(context.id).map_err(|error| {
-                TransactionError::rollback_failed(format!(
-                    "Failed to discard transaction {} persistence state: {}",
-                    context.id, error
-                ))
-            })?;
+            let mut last_error = None;
+            for attempt in 0..=max_retries {
+                match commit_sink.abort_transaction(context.id) {
+                    Ok(_) => {
+                        last_error = None;
+                        break;
+                    }
+                    Err(e) => {
+                        last_error = Some(e);
+                        if attempt < max_retries {
+                            std::thread::sleep(Self::backoff_delay(attempt));
+                        }
+                    }
+                }
+            }
+            if let Some(err) = last_error {
+                return Err(TransactionError::rollback_failed(format!(
+                    "Failed to discard transaction {} persistence state after {} retries: {}",
+                    context.id, max_retries, err
+                )));
+            }
         } else if let Some(ref sync_manager) = self.sync_manager {
-            if let Err(e) = sync_manager.rollback_transaction_sync(context.id) {
+            let mut last_error = None;
+            for attempt in 0..=max_retries {
+                match sync_manager.rollback_transaction_sync(context.id) {
+                    Ok(_) => {
+                        last_error = None;
+                        break;
+                    }
+                    Err(e) => {
+                        last_error = Some(e);
+                        if attempt < max_retries {
+                            std::thread::sleep(Self::backoff_delay(attempt));
+                        }
+                    }
+                }
+            }
+            if let Some(e) = last_error {
                 log::warn!(
-                    "Sync rollback failed for transaction {}, aborting transaction: {}",
+                    "Sync rollback failed for transaction {} after {} retries, aborting: {}",
                     context.id,
+                    max_retries,
                     e
                 );
                 self.rollback_context_timestamp(context);
                 self.active_transactions.remove(&context.id);
                 let _ = context.transition_to(TransactionState::Aborted);
                 return Err(TransactionError::sync_failed(format!(
-                    "Failed to rollback sync data for transaction {}: {}",
-                    context.id, e
+                    "Failed to rollback sync data for transaction {} after {} retries: {}",
+                    context.id, max_retries, e
                 )));
             }
         }
@@ -609,7 +629,7 @@ impl TransactionManager {
             self.version_manager.release_read_timestamp();
         } else {
             self.version_manager
-                .release_insert_timestamp(context.timestamp());
+                .release_write_timestamp(context.timestamp());
         }
 
         self.active_transactions.remove(&context.id);
@@ -626,7 +646,7 @@ impl TransactionManager {
             self.version_manager.release_read_timestamp();
         } else {
             self.version_manager
-                .release_insert_timestamp(context.timestamp());
+                .release_write_timestamp(context.timestamp());
         }
     }
 
@@ -742,21 +762,9 @@ impl TransactionManager {
         self.version_manager.read_timestamp()
     }
 
-    /// Check if an update transaction is in progress
-    pub fn is_update_in_progress(&self) -> bool {
-        self.version_manager.is_update_in_progress()
-    }
-
     /// Get pending transaction count
     pub fn pending_count(&self) -> i32 {
         self.version_manager.pending_count()
-    }
-
-    /// Check if there's an active write transaction
-    fn has_active_write_transaction(&self) -> bool {
-        self.active_transactions
-            .iter()
-            .any(|entry| !entry.value().read_only)
     }
 }
 
@@ -766,6 +774,7 @@ mod tests {
     use crate::core::types::{
         ColumnId, CommitLsn, EdgeDeletionContext, EdgeIdentifier, EdgeKey, VertexIdentifier,
     };
+    use crate::transaction::error::TransactionErrorKind;
     use crate::transaction::undo_log::{PropertyValue, UndoLogResult, UndoTarget};
     use std::sync::atomic::AtomicUsize;
 
@@ -1028,5 +1037,165 @@ mod tests {
         let result = manager.rollback_to_savepoint(txn_id, sp_id, &dummy);
         // rollback_to_savepoint now succeeds as sync_manager properly handles the operation
         assert!(result.is_ok());
+    }
+
+    /// Sink that fails the first `fail_count` commit attempts, then succeeds.
+    struct FlakyCommitSink {
+        commits: AtomicUsize,
+        fail_count: usize,
+    }
+
+    impl TransactionCommitSink for FlakyCommitSink {
+        fn commit_transaction(&self, _txn_id: TransactionId) -> Result<CommitLsn, String> {
+            let n = self.commits.fetch_add(1, Ordering::SeqCst);
+            if n < self.fail_count {
+                Err(format!("transient error #{}", n + 1))
+            } else {
+                Ok(CommitLsn::new(7))
+            }
+        }
+
+        fn abort_transaction(&self, _txn_id: TransactionId) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    /// Sink that always fails commit.
+    struct AlwaysFailCommitSink;
+
+    impl TransactionCommitSink for AlwaysFailCommitSink {
+        fn commit_transaction(&self, _txn_id: TransactionId) -> Result<CommitLsn, String> {
+            Err("permanent failure".to_string())
+        }
+
+        fn abort_transaction(&self, _txn_id: TransactionId) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn commit_succeeds_after_retries() {
+        let sink = Arc::new(FlakyCommitSink {
+            commits: AtomicUsize::new(0),
+            fail_count: 2,
+        });
+        let config = TransactionManagerConfig {
+            commit_retry_attempts: 3,
+            ..Default::default()
+        };
+        let manager = TransactionManager::new(config).with_commit_sink(sink.clone());
+
+        let txn_id = manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .expect("transaction should begin");
+
+        // Should succeed after 2 failures + 1 success (within 3 retry budget).
+        manager
+            .commit_transaction(txn_id)
+            .expect("commit should succeed after retries");
+
+        // commit_sink was called 3 times (2 failures + 1 success).
+        assert_eq!(sink.commits.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn commit_fails_after_exhausting_retries() {
+        let sink = Arc::new(AlwaysFailCommitSink);
+        let config = TransactionManagerConfig {
+            commit_retry_attempts: 2,
+            ..Default::default()
+        };
+        let manager = TransactionManager::new(config).with_commit_sink(sink);
+
+        let txn_id = manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .expect("transaction should begin");
+
+        let result = manager.commit_transaction(txn_id);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().kind(),
+            TransactionErrorKind::CommitFailed
+        );
+    }
+
+    /// Sink that fails the first `fail_count` abort attempts, then succeeds.
+    struct FlakyAbortSink {
+        aborts: AtomicUsize,
+        fail_count: usize,
+    }
+
+    impl TransactionCommitSink for FlakyAbortSink {
+        fn commit_transaction(&self, _txn_id: TransactionId) -> Result<CommitLsn, String> {
+            Ok(CommitLsn::new(7))
+        }
+
+        fn abort_transaction(&self, _txn_id: TransactionId) -> Result<(), String> {
+            let n = self.aborts.fetch_add(1, Ordering::SeqCst);
+            if n < self.fail_count {
+                Err(format!("transient abort error #{}", n + 1))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn abort_succeeds_after_retries() {
+        let sink = Arc::new(FlakyAbortSink {
+            aborts: AtomicUsize::new(0),
+            fail_count: 1,
+        });
+        let config = TransactionManagerConfig {
+            abort_retry_attempts: 2,
+            ..Default::default()
+        };
+        let manager = TransactionManager::new(config).with_commit_sink(sink.clone());
+
+        let txn_id = manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .expect("transaction should begin");
+
+        manager
+            .abort_transaction(txn_id)
+            .expect("abort should succeed after retries");
+
+        assert_eq!(sink.aborts.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn state_transition_commit_retry_roundtrip() {
+        let config = TransactionConfig::default();
+        let ctx = TransactionContext::new(TransactionId(1), 1, config);
+
+        assert!(ctx.transition_to(TransactionState::Committing).is_ok());
+        assert!(ctx.transition_to(TransactionState::CommitRetry).is_ok());
+        assert!(ctx.transition_to(TransactionState::Committing).is_ok());
+        assert!(ctx.transition_to(TransactionState::Committed).is_ok());
+        assert_eq!(ctx.state(), TransactionState::Committed);
+    }
+
+    #[test]
+    fn state_transition_commit_retry_to_aborted() {
+        let config = TransactionConfig::default();
+        let ctx = TransactionContext::new(TransactionId(1), 1, config);
+
+        assert!(ctx.transition_to(TransactionState::Committing).is_ok());
+        assert!(ctx.transition_to(TransactionState::CommitRetry).is_ok());
+        assert!(ctx.transition_to(TransactionState::Aborted).is_ok());
+        assert_eq!(ctx.state(), TransactionState::Aborted);
+    }
+
+    #[test]
+    fn state_transition_commit_retry_from_aborting() {
+        let config = TransactionConfig::default();
+        let ctx = TransactionContext::new(TransactionId(1), 1, config);
+
+        // CommitRetry is only reachable from Committing.
+        assert!(ctx.transition_to(TransactionState::Committing).is_ok());
+        // Cannot go Aborting from CommitRetry.
+        assert!(ctx
+            .transition_to(TransactionState::Aborting)
+            .is_err());
     }
 }

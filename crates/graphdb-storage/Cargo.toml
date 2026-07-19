@@ -6,11 +6,13 @@ edition.workspace = true
 [features]
 default = []
 test-support = []
+fulltext-search = ["graphdb-sync/fulltext-search", "graphdb-search"]
 
 [dependencies]
 graphdb-core = { path = "../graphdb-core" }
 graphdb-transaction = { path = "../graphdb-transaction" }
 graphdb-sync = { path = "../graphdb-sync" }
+graphdb-search = { path = "../graphdb-search", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

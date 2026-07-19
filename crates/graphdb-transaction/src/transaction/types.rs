@@ -154,6 +154,8 @@ pub enum TransactionState {
     Active,
     /// Committing
     Committing,
+    /// Commit failed with retryable error, retrying after backoff
+    CommitRetry,
     /// Committed
     Committed,
     /// Aborting
@@ -192,6 +194,7 @@ impl fmt::Display for TransactionState {
         match self {
             TransactionState::Active => write!(f, "Active"),
             TransactionState::Committing => write!(f, "Committing"),
+            TransactionState::CommitRetry => write!(f, "CommitRetry"),
             TransactionState::Committed => write!(f, "Committed"),
             TransactionState::Aborting => write!(f, "Aborting"),
             TransactionState::Aborted => write!(f, "Aborted"),
@@ -367,6 +370,10 @@ pub struct TransactionManagerConfig {
     /// Timeout for acquiring storage write lock when beginning a write transaction.
     /// If the write lock cannot be acquired within this duration, the begin operation fails.
     pub write_lock_timeout: Duration,
+    /// Maximum number of retry attempts for commit sink failures before aborting the transaction.
+    pub commit_retry_attempts: u32,
+    /// Maximum number of retry attempts for abort/sync rollback failures before reporting failure.
+    pub abort_retry_attempts: u32,
 }
 
 impl Default for TransactionManagerConfig {
@@ -376,6 +383,8 @@ impl Default for TransactionManagerConfig {
             max_concurrent_transactions: 1000,
             auto_cleanup: true,
             write_lock_timeout: Duration::from_secs(10),
+            commit_retry_attempts: 3,
+            abort_retry_attempts: 3,
         }
     }
 }
@@ -516,27 +525,18 @@ impl WriteSet {
         self.vertices.len() + self.edges.len()
     }
 
-    /// Check if two write sets have any conflicting entities
+    /// Check if two write sets have any conflicting entities.
+    ///
+    /// Conflict is defined as: same vertex modified OR same edge modified.
+    /// Edges sharing endpoints (source/destination) without actually modifying
+    /// the same entity are NOT considered conflicting.
     pub fn has_conflict_with(&self, other: &WriteSet) -> bool {
-        // Conflict if same vertex is modified
         if !self.vertices.is_disjoint(&other.vertices) {
             return true;
         }
-
-        // Conflict if same edge is modified
         if !self.edges.is_disjoint(&other.edges) {
             return true;
         }
-
-        // Conflict if edges share a source or destination vertex
-        for edge1 in &self.edges {
-            for edge2 in &other.edges {
-                if edge1.src_vid == edge2.src_vid || edge1.dst_vid == edge2.dst_vid {
-                    return true;
-                }
-            }
-        }
-
         false
     }
 }
@@ -570,6 +570,22 @@ mod tests {
         assert!(!TransactionState::Committed.can_commit());
         assert!(!TransactionState::Committed.can_abort());
         assert!(TransactionState::Committed.is_terminal());
+    }
+
+    #[test]
+    fn test_commit_retry_state_not_terminal() {
+        assert!(!TransactionState::CommitRetry.is_terminal());
+        assert!(!TransactionState::CommitRetry.can_execute());
+        assert!(!TransactionState::CommitRetry.can_commit());
+        assert!(!TransactionState::CommitRetry.can_abort());
+    }
+
+    #[test]
+    fn test_commit_retry_display() {
+        assert_eq!(
+            format!("{}", TransactionState::CommitRetry),
+            "CommitRetry"
+        );
     }
 
     #[test]

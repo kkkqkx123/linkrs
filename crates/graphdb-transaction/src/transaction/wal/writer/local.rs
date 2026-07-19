@@ -8,6 +8,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use super::compression::{self as compression_mod, create_compressor, Compressor};
+use super::group_commit::GroupCommitCoordinator;
 use super::sync::{elapsed_since, should_sync};
 use crate::core::types::Timestamp;
 use crate::core::wal::traits::WalWriter;
@@ -40,6 +41,9 @@ pub struct LocalWalWriter {
     compressor: Box<dyn Compressor>,
     write_count: AtomicU64,
     last_sync_time: Mutex<Option<Instant>>,
+    poisoned: AtomicBool,
+    poison_reason: Mutex<Option<String>>,
+    group_commit: Option<GroupCommitCoordinator>,
 }
 
 impl LocalWalWriter {
@@ -69,6 +73,9 @@ impl LocalWalWriter {
             compressor,
             write_count: AtomicU64::new(0),
             last_sync_time: Mutex::new(None),
+            poisoned: AtomicBool::new(false),
+            poison_reason: Mutex::new(None),
+            group_commit: None,
         }
     }
 
@@ -98,7 +105,70 @@ impl LocalWalWriter {
             compressor,
             write_count: AtomicU64::new(0),
             last_sync_time: Mutex::new(None),
+            poisoned: AtomicBool::new(false),
+            poison_reason: Mutex::new(None),
+            group_commit: None,
         }
+    }
+
+    /// Check if the WAL is poisoned.
+    pub fn is_poisoned(&self) -> bool {
+        self.poisoned.load(Ordering::SeqCst)
+    }
+
+    /// Get the poison reason, if any.
+    pub fn poison_reason(&self) -> Option<String> {
+        self.poison_reason.lock().ok()?.clone()
+    }
+
+    /// Poison the WAL writer. All subsequent write operations will fail with WalError::Poisoned.
+    pub fn poison(&self, reason: String) {
+        if self
+            .poisoned
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            if let Ok(mut guard) = self.poison_reason.lock() {
+                *guard = Some(reason.clone());
+            }
+            log::error!("WAL poisoned: {}", reason);
+        }
+    }
+
+    fn check_poisoned(&self) -> WalResult<()> {
+        if self.poisoned.load(Ordering::SeqCst) {
+            let reason = self
+                .poison_reason
+                .lock()
+                .ok()
+                .and_then(|g| (*g).clone())
+                .unwrap_or_else(|| "Unknown reason".to_string());
+            Err(WalError::Poisoned(reason))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Enable group commit coordination for this writer.
+    ///
+    /// Must be called after [`open`](Self::open) so that the file handle exists.
+    /// When enabled, calls to [`sync`](WalWriter::sync) and the final sync in
+    /// [`append_batch`](Self::append_batch) are routed through the coordinator,
+    /// which batches fsync operations across threads.
+    pub fn enable_group_commit(&mut self) -> WalResult<()> {
+        let file = self.file.as_ref().ok_or(WalError::Closed)?;
+        let start_lsn = self.current_lsn.load(Ordering::SeqCst);
+        self.group_commit = Some(GroupCommitCoordinator::new(
+            file.try_clone()
+                .map_err(|e| WalError::IoError(e.to_string()))?,
+            start_lsn,
+        ));
+        Ok(())
+    }
+
+    /// Get the group commit coordinator, if enabled.
+    pub fn group_commit_coordinator(&self) -> Option<&GroupCommitCoordinator> {
+        self.group_commit.as_ref()
     }
 
     /// Get the WAL directory path
@@ -259,6 +329,12 @@ impl LocalWalWriter {
             .open(&new_path)?;
 
         file.set_len(self.config.truncate_size as u64)?;
+
+        if let Some(ref coordinator) = self.group_commit {
+            if let Ok(cloned) = file.try_clone() {
+                coordinator.update_file(cloned);
+            }
+        }
 
         self.file = Some(file);
         self.file_path = Some(new_path);
@@ -530,6 +606,7 @@ impl LocalWalWriter {
         timestamp: u32,
         payload: &[u8],
     ) -> WalResult<bool> {
+        self.check_poisoned()?;
         if !self.is_open.load(Ordering::SeqCst) {
             return Err(WalError::Closed);
         }
@@ -668,7 +745,10 @@ impl LocalWalWriter {
         let should_sync = should_sync(&self.config.sync_policy, write_count, elapsed);
 
         if should_sync {
-            file.sync_data()?;
+            if let Err(e) = file.sync_data() {
+                self.poison(format!("fsync failed: {}", e));
+                return Err(WalError::IoError(e.to_string()));
+            }
             let lsn = self.current_lsn.load(Ordering::SeqCst);
             self.last_synced_lsn.store(lsn, Ordering::SeqCst);
             self.write_count.store(0, Ordering::SeqCst);
@@ -682,6 +762,7 @@ impl LocalWalWriter {
 
     /// Append multiple entries as a batch (for group commit)
     pub fn append_batch(&mut self, entries: &[(WalOpType, u32, &[u8])]) -> WalResult<bool> {
+        self.check_poisoned()?;
         if !self.is_open.load(Ordering::SeqCst) {
             return Err(WalError::Closed);
         }
@@ -733,7 +814,12 @@ impl LocalWalWriter {
         let new_lsn = self.current_lsn.load(Ordering::SeqCst) + total_len as u64;
         self.current_lsn.store(new_lsn, Ordering::SeqCst);
 
-        file.sync_data()?;
+        if let Some(ref coordinator) = self.group_commit {
+            coordinator.record_appended(new_lsn);
+            coordinator.append_and_wait(new_lsn)?;
+        } else {
+            file.sync_data()?;
+        }
         self.last_synced_lsn.store(new_lsn, Ordering::SeqCst);
 
         Ok(true)
@@ -745,6 +831,7 @@ impl LocalWalWriter {
         mut entries: Vec<crate::transaction::wal::TransactionWalEntry>,
         intents: &[crate::core::wal::OutboxIntent],
     ) -> WalResult<crate::core::types::CommitLsn> {
+        self.check_poisoned()?;
         for (expected, intent) in intents.iter().enumerate() {
             intent.validate().map_err(WalError::InvalidOperation)?;
             if intent.transaction_id != transaction_id {
@@ -903,6 +990,7 @@ impl LocalWalWriter {
 
 impl WalWriter for LocalWalWriter {
     fn open(&mut self) -> WalResult<()> {
+        self.check_poisoned()?;
         if self.is_open.load(Ordering::SeqCst) {
             return Ok(());
         }
@@ -967,9 +1055,11 @@ impl WalWriter for LocalWalWriter {
         self.file_size = 0;
         self.file_used = 0;
         self.file_header = None;
+        self.group_commit = None;
     }
 
     fn append(&mut self, data: &[u8]) -> WalResult<bool> {
+        self.check_poisoned()?;
         if !self.is_open.load(Ordering::SeqCst) {
             return Err(WalError::Closed);
         }
@@ -1030,16 +1120,40 @@ impl WalWriter for LocalWalWriter {
     }
 
     fn sync(&self) -> WalResult<()> {
-        if let Some(ref file) = self.file {
-            file.sync_all()?;
-            let current_lsn = self.current_lsn.load(Ordering::SeqCst);
-            self.last_synced_lsn.store(current_lsn, Ordering::SeqCst);
-            self.write_count.store(0, Ordering::SeqCst);
-            if let Ok(mut guard) = self.last_sync_time.lock() {
-                *guard = Some(Instant::now());
+        self.check_poisoned()?;
+        let current_lsn = self.current_lsn.load(Ordering::SeqCst);
+
+        if let Some(ref coordinator) = self.group_commit {
+            coordinator.record_appended(current_lsn);
+            coordinator.append_and_wait(current_lsn)?;
+        } else if let Some(ref file) = self.file {
+            if let Err(e) = file.sync_all() {
+                self.poison(format!("fsync failed: {}", e));
+                return Err(WalError::IoError(e.to_string()));
             }
         }
+
+        self.last_synced_lsn.store(current_lsn, Ordering::SeqCst);
+        self.write_count.store(0, Ordering::SeqCst);
+        if let Ok(mut guard) = self.last_sync_time.lock() {
+            *guard = Some(Instant::now());
+        }
         Ok(())
+    }
+
+    fn wait_for_durable(&self, appended_lsn: u64) -> WalResult<()> {
+        if let Some(ref coordinator) = self.group_commit {
+            coordinator.record_appended(appended_lsn);
+            coordinator.append_and_wait(appended_lsn)
+        } else if let Some(ref file) = self.file {
+            self.check_poisoned()?;
+            file.sync_all()
+                .map_err(|e| WalError::IoError(e.to_string()))?;
+            self.last_synced_lsn.store(appended_lsn, Ordering::SeqCst);
+            Ok(())
+        } else {
+            Err(WalError::Closed)
+        }
     }
 }
 
@@ -1500,6 +1614,42 @@ mod tests {
             .count();
 
         assert!(wal_files >= 1);
+    }
+
+    #[test]
+    fn test_wal_poison_blocks_writes() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let wal_path = temp_dir.path().to_string_lossy().to_string();
+
+        let mut writer = LocalWalWriter::new(&wal_path, 0);
+        writer.open().expect("WAL should open");
+
+        writer.poison("test poison".to_string());
+        assert!(writer.is_poisoned());
+        assert_eq!(writer.poison_reason(), Some("test poison".to_string()));
+
+        let result = writer.append_entry(WalOpType::InsertVertex, 1, b"payload");
+        assert!(matches!(result, Err(WalError::Poisoned(_))));
+
+        writer.close();
+    }
+
+    #[test]
+    fn test_wal_poison_idempotent() {
+        let writer = LocalWalWriter::new("/tmp/nonexistent", 0);
+        writer.poison("first".to_string());
+        writer.poison("second".to_string());
+
+        assert!(writer.is_poisoned());
+        assert_eq!(writer.poison_reason(), Some("first".to_string()));
+    }
+
+    #[test]
+    fn test_wal_poison_blocks_open() {
+        let mut writer = LocalWalWriter::new("/tmp/nonexistent", 0);
+        writer.poison("poisoned before open".to_string());
+
+        assert!(writer.open().is_err());
     }
 
     #[test]

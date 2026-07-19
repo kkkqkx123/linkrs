@@ -3,7 +3,7 @@
 //! Provides a unified property value type for undo/redo operations.
 
 /// Property value type for undo operations
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum PropertyValue {
     Int(i64),
     Float(f64),

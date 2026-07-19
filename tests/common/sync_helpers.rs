@@ -13,7 +13,7 @@ use graphdb::search::{
     EngineType, FulltextConfig, FulltextIndexManager, SyncConfig, TantivyConfig, TokenizerKind,
 };
 use graphdb::storage::GraphStorage;
-use graphdb::storage::{StorageReader, StorageSchemaOps, StorageWriter};
+use graphdb::storage::{StorageCommitOps, StorageReader, StorageSchemaOps, StorageWriter};
 use graphdb::sync::batch::BatchConfig;
 use graphdb::sync::coordinator::{ChangeType, SyncCoordinator};
 use graphdb::sync::manager::SyncManager;
@@ -74,13 +74,15 @@ impl SyncTestHarness {
             Arc::new(SyncCoordinator::new(fulltext_manager.clone(), batch_config));
 
         // Create sync manager
-        let sync_manager = Arc::new(SyncManager::new(sync_coordinator.clone()));
+        let mut sync_manager = SyncManager::new(sync_coordinator.clone());
+        sync_manager.configure_outbox(temp_dir.path().join("outbox"))?;
+        let sync_manager = Arc::new(sync_manager);
 
         // Create runtime for async operations
         let rt = tokio::runtime::Runtime::new()?;
 
-        // Start background tasks for batch processing
-        rt.block_on(sync_coordinator.start_background_tasks());
+        // Start both target processors and the durable outbox consumer.
+        rt.block_on(sync_manager.start())?;
 
         Ok(Self {
             storage,
@@ -189,8 +191,20 @@ impl SyncTestHarness {
     /// Commit current transaction
     pub fn commit_transaction(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(txn_id) = self.current_txn_id.take() {
-            self.rt
-                .block_on(self.sync_manager.commit_transaction(TransactionId(txn_id)))?;
+            let transaction_id = TransactionId(txn_id);
+            let intents = self
+                .sync_manager
+                .pending_transaction_intents(transaction_id)?;
+            let commit_lsn = self
+                .storage
+                .commit_staged_writes(transaction_id, &intents)?;
+            self.sync_manager.materialize_committed_transaction(
+                transaction_id,
+                commit_lsn,
+                &intents,
+            )?;
+            self.sync_manager.retry_outbox_sync()?;
+            self.sync_manager.clear_transaction_intents(transaction_id);
         }
         Ok(())
     }

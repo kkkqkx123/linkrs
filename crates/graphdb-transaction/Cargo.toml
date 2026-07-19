@@ -19,6 +19,7 @@ postcard.workspace = true
 crc32fast.workspace = true
 num_cpus.workspace = true
 zstd.workspace = true
+tempfile.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

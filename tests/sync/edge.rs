@@ -321,7 +321,7 @@ fn test_edge_delete_sync_via_manager() {
     // Sync delete
     harness
         .sync_manager
-        .on_edge_delete(txn_id, space_id, &Value::Int(1), &Value::Int(2), "KNOWS")
+        .on_edge_delete(txn_id, space_id, &Value::Int(1), &Value::Int(2), "KNOWS", 0)
         .expect("Failed to sync edge delete");
 
     harness.commit_transaction().expect("Failed to commit");
@@ -574,6 +574,7 @@ fn test_edge_delete_no_index_graceful() {
         &Value::Int(1),
         &Value::Int(2),
         "KNOWS",
+        0,
     );
     assert!(
         result.is_ok(),

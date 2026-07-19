@@ -28,6 +28,15 @@ pub trait WalWriter: Send + Sync {
         payload: &[u8],
     ) -> WalResult<bool>;
     fn sync(&self) -> WalResult<()>;
+
+    /// Block until the WAL record at `appended_lsn` is durable (fsynced).
+    ///
+    /// Default implementation calls `sync()`. Implementations that support
+    /// group commit should override this to participate in the coordinated
+    /// sync protocol.
+    fn wait_for_durable(&self, _appended_lsn: u64) -> WalResult<()> {
+        self.sync()
+    }
 }
 
 /// Trait for applying recovered operations to the storage engine.

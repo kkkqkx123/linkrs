@@ -85,7 +85,7 @@ impl<S: StorageClient> SyncWrapper<S> {
     ) -> Result<crate::core::types::CommitLsn, StorageError> {
         let intents = match self.sync_manager.as_ref() {
             Some(manager) => manager
-                .transaction_intents(transaction_id)
+                .pending_transaction_intents(transaction_id)
                 .map_err(|error| {
                     StorageError::db_error(format!(
                         "Failed to build transaction index intents: {}",
@@ -126,7 +126,7 @@ impl<S: StorageClient> SyncWrapper<S> {
                     error
                 );
             }
-            manager.clear_staged_transaction(transaction_id);
+            manager.clear_transaction_intents(transaction_id);
             if let Err(error) = manager.retry_outbox_sync() {
                 log::debug!(
                     "Committed transaction {} at {}; target delivery will retry: {}",

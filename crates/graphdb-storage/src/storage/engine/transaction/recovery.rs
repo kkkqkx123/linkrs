@@ -848,17 +848,13 @@ impl GraphStorageContext {
                 &redo.properties,
                 ts,
             ) {
-                use crate::transaction::insert_transaction::InsertTransactionError;
-                match &e {
-                    InsertTransactionError::SchemaError(msg) if msg.contains("already exists") => {
-                        // edge already present — idempotent, skip
-                    }
-                    _ => {
-                        return Err(StorageError::db_error(format!(
-                            "Failed to replay insert edge: {}",
-                            e
-                        )));
-                    }
+                if e.to_string().contains("already exists") {
+                    // edge already present — idempotent, skip
+                } else {
+                    return Err(StorageError::db_error(format!(
+                        "Failed to replay insert edge: {}",
+                        e
+                    )));
                 }
             }
         }
@@ -938,13 +934,7 @@ impl GraphStorageContext {
         let vid_value = Value::from(vid);
         for index in indexes {
             if index.schema_name == tag_info.tag_name {
-                self.update_vertex_indexes_mvcc(
-                    space_id,
-                    &vid_value,
-                    &index.name,
-                    properties,
-                    ts,
-                )?;
+                self.update_vertex_indexes_mvcc(space_id, &vid_value, &index.name, properties, ts)?;
             }
         }
         Ok(())

@@ -11,9 +11,15 @@ use crate::storage::index::manifest::{
 use crate::storage::index::{EdgeIndexOps, VertexIndexOps};
 use std::collections::BTreeMap;
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use super::context::GraphStorageContext;
+
+use crate::transaction::wal::{
+    collect_committed_transactions, filter_intents_for_indexes, CommittedWalTransaction,
+    LocalWalParser, WalParser,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum GenerationFaultPoint {
@@ -58,12 +64,72 @@ pub(crate) fn current_wal_lsn(ctx: &GraphStorageContext) -> CommitLsn {
     CommitLsn::ZERO
 }
 
+fn committed_wal_transactions(
+    ctx: &GraphStorageContext,
+) -> StorageResult<Vec<CommittedWalTransaction>> {
+    let Some(paths) = ctx.storage_paths() else {
+        return Ok(Vec::new());
+    };
+    if !paths.wal_dir().exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut parser = LocalWalParser::new();
+    parser
+        .open(&paths.wal_dir().to_string_lossy())
+        .map_err(|error| {
+            StorageError::wal_error(format!(
+                "Failed to parse WAL for index generation catch-up: {}",
+                error
+            ))
+        })?;
+    collect_committed_transactions(&parser.parse_all_entries()).map_err(|error| {
+        StorageError::wal_error(format!(
+            "Failed to validate WAL for index generation catch-up: {}",
+            error
+        ))
+    })
+}
+
+fn wal_intents_for_index(
+    ctx: &GraphStorageContext,
+    space_id: u64,
+    index: &Index,
+    start_lsn: CommitLsn,
+    barrier_lsn: CommitLsn,
+) -> StorageResult<Vec<crate::core::wal::OutboxIntent>> {
+    let transactions = committed_wal_transactions(ctx)?;
+    let mut index_ids = vec![index.id];
+    for logical_name in [&index.name, &index.schema_name] {
+        index_ids.push(stable_hash(logical_name.as_bytes()));
+        index_ids.push(stable_hash(
+            format!("{}:{}", space_id, logical_name).as_bytes(),
+        ));
+        index_ids.extend(index.fields.iter().map(|field| {
+            stable_hash(format!("{}:{}:{}", space_id, logical_name, field.name).as_bytes())
+        }));
+    }
+
+    Ok(filter_intents_for_indexes(
+        &transactions,
+        &index_ids,
+        start_lsn,
+        barrier_lsn,
+    ))
+}
+
 fn save_generation_build_state(
     ctx: &GraphStorageContext,
     space_id: u64,
     index_name: &str,
     state: &GenerationBuildState,
 ) -> StorageResult<()> {
+    // In-memory storage has no crash-recovery boundary. Its generation state is
+    // still tracked in memory by the manifest catalog, but there is no durable
+    // file to write.
+    if ctx.work_dir().is_none() {
+        return Ok(());
+    }
     let serialized =
         serde_json::to_vec(state).map_err(|e| StorageError::serialize_error(e.to_string()))?;
     let dir = build_state_dir(ctx, space_id)?;
@@ -88,6 +154,9 @@ fn load_generation_build_state(
     space_id: u64,
     index_name: &str,
 ) -> StorageResult<Option<GenerationBuildState>> {
+    if ctx.work_dir().is_none() {
+        return Ok(None);
+    }
     let dir = build_state_dir(ctx, space_id)?;
     let path = dir.join(format!("{index_name}_generation_build.json"));
     if !path.exists() {
@@ -104,6 +173,9 @@ fn remove_generation_build_state(
     space_id: u64,
     index_name: &str,
 ) -> StorageResult<()> {
+    if ctx.work_dir().is_none() {
+        return Ok(());
+    }
     let dir = build_state_dir(ctx, space_id)?;
     let path = dir.join(format!("{index_name}_generation_build.json"));
     if path.exists() {
@@ -219,6 +291,24 @@ fn make_physical_key(logical_key: &[u8], version: u64) -> Vec<u8> {
     physical_key
 }
 
+fn edge_entity_ref(edge: &crate::core::Edge) -> EntityRef {
+    EntityRef::Edge {
+        src: edge.src,
+        dst: edge.dst,
+        edge_type: stable_hash(edge.edge_type.as_bytes()) as u32,
+        ranking: edge.ranking,
+    }
+}
+
+fn stable_hash(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
 fn record_changed_after(record: &IndexRecord, snapshot_timestamp: u32) -> bool {
     record.created_ts > snapshot_timestamp
         || record
@@ -226,37 +316,13 @@ fn record_changed_after(record: &IndexRecord, snapshot_timestamp: u32) -> bool {
             .is_some_and(|deleted_ts| deleted_ts > snapshot_timestamp)
 }
 
-fn replay_partition_changes(
-    target: &mut BTreeMap<Vec<u8>, IndexRecord>,
-    changes: Vec<(Vec<u8>, IndexRecord)>,
-    snapshot_timestamp: u32,
-) {
-    for (key, record) in changes {
-        let logical_len = key.len().saturating_sub(std::mem::size_of::<u64>());
-        let logical_key = &key[..logical_len];
-        if record.created_ts > snapshot_timestamp {
-            target.insert(key.clone(), record.clone());
-        }
-        if let Some(deleted_ts) = record
-            .deleted_ts
-            .filter(|deleted_ts| *deleted_ts > snapshot_timestamp)
-        {
-            for (candidate, entry) in target.iter_mut() {
-                let candidate_len = candidate.len().saturating_sub(std::mem::size_of::<u64>());
-                if candidate[..candidate_len] == *logical_key {
-                    entry.mark_deleted(deleted_ts);
-                }
-            }
-        }
-    }
-}
-
-fn merge_rebuilt_partition<F, R>(
+fn replay_wal_partition<F, R>(
     mut active_forward: BTreeMap<Vec<u8>, IndexRecord>,
     mut active_reverse: BTreeMap<Vec<u8>, IndexRecord>,
     rebuilt_forward: BTreeMap<Vec<u8>, IndexRecord>,
     rebuilt_reverse: BTreeMap<Vec<u8>, IndexRecord>,
     snapshot_timestamp: u32,
+    intents: &[crate::core::wal::OutboxIntent],
     matches_forward: F,
     matches_reverse: R,
 ) -> (
@@ -267,17 +333,33 @@ where
     F: Fn(&[u8]) -> bool,
     R: Fn(&[u8]) -> bool,
 {
-    let forward_changes = active_forward
+    let changed_entities = intents
+        .iter()
+        .map(|intent| &intent.mutation.entity_ref)
+        .collect::<Vec<_>>();
+    let forward_changes: Vec<(Vec<u8>, IndexRecord)> = active_forward
         .iter()
         .filter(|(key, record)| {
-            matches_forward(key) && record_changed_after(record, snapshot_timestamp)
+            matches_forward(key)
+                && record_changed_after(record, snapshot_timestamp)
+                && record.entity_ref.as_ref().is_some_and(|entity| {
+                    changed_entities
+                        .iter()
+                        .any(|candidate| *candidate == entity)
+                })
         })
         .map(|(key, record)| (key.clone(), record.clone()))
         .collect();
-    let reverse_changes = active_reverse
+    let reverse_changes: Vec<(Vec<u8>, IndexRecord)> = active_reverse
         .iter()
         .filter(|(key, record)| {
-            matches_reverse(key) && record_changed_after(record, snapshot_timestamp)
+            matches_reverse(key)
+                && record_changed_after(record, snapshot_timestamp)
+                && record.entity_ref.as_ref().is_some_and(|entity| {
+                    changed_entities
+                        .iter()
+                        .any(|candidate| *candidate == entity)
+                })
         })
         .map(|(key, record)| (key.clone(), record.clone()))
         .collect();
@@ -286,8 +368,8 @@ where
     active_reverse.retain(|key, _| !matches_reverse(key));
     active_forward.extend(rebuilt_forward);
     active_reverse.extend(rebuilt_reverse);
-    replay_partition_changes(&mut active_forward, forward_changes, snapshot_timestamp);
-    replay_partition_changes(&mut active_reverse, reverse_changes, snapshot_timestamp);
+    active_forward.extend(forward_changes);
+    active_reverse.extend(reverse_changes);
     (active_forward, active_reverse)
 }
 
@@ -375,6 +457,36 @@ fn next_generation(
     ))
 }
 
+/// Return the physical output location for a rebuilt generation.
+///
+/// Persistent storage gets a durable generation directory and manifest path.
+/// In-memory storage keeps the same logical manifest/runtime behavior but uses
+/// a synthetic path and skips filesystem writes entirely.
+fn generation_output_paths(
+    ctx: &GraphStorageContext,
+    space_id: u64,
+    index_id: u64,
+    generation: IndexGeneration,
+) -> (PathBuf, Option<PathBuf>) {
+    if let Some(index_dir) = ctx.storage_paths().map(|paths| paths.indexes_dir()) {
+        let index_root = index_dir
+            .join(space_id.to_string())
+            .join(index_id.to_string());
+        (
+            index_root.join(format!("generation-{}", generation.get())),
+            Some(index_root.join("manifest.bin")),
+        )
+    } else {
+        (
+            PathBuf::from("memory-index")
+                .join(space_id.to_string())
+                .join(index_id.to_string())
+                .join(format!("generation-{}", generation.get())),
+            None,
+        )
+    }
+}
+
 pub(crate) fn rebuild_tag_index(
     ctx: &GraphStorageContext,
     space: &str,
@@ -388,6 +500,10 @@ pub(crate) fn rebuild_tag_index(
         .index_metadata_manager()
         .get_tag_index(space_id, index_name)?
         .ok_or_else(|| StorageError::not_found(format!("Index {} not found", index_name)))?;
+
+    ctx.index_data_manager()
+        .read()
+        .register_native_index(space_id, &index)?;
 
     // Resolve any incomplete generation build from a previous crash.
     resolve_crash_recovery(ctx, space_id, index_name)?;
@@ -425,17 +541,21 @@ pub(crate) fn rebuild_tag_index(
         IndexStatus::CatchingUp,
     )?;
 
-    // Establish the publish fence by excluding native-index writers. The active
-    // MVCC history is the native change log for writes after snapshot_ts.
+    // Capture the active generation and WAL barrier while the index manager is
+    // exclusively borrowed. The WAL is the source of truth for which changes
+    // belong to this catch-up; active records only provide their MVCC payload.
     let manager = ctx.index_data_manager().write();
     let (active_forward, active_reverse) = manager.active_index_data(space_id, index.id)?;
+    let barrier_lsn = current_wal_lsn(ctx);
+    let intents = wal_intents_for_index(ctx, space_id, &index, start_lsn, barrier_lsn)?;
     let forward_prefix = KeyBuilder::build_vertex_index_prefix(space_id, index_name).0;
-    let (merged_forward, merged_reverse) = merge_rebuilt_partition(
+    let (merged_forward, merged_reverse) = replay_wal_partition(
         active_forward,
         active_reverse,
         forward,
         reverse,
         snapshot_ts,
+        &intents,
         |key| key.starts_with(&forward_prefix),
         |key| {
             KeyParser::parse_vertex_reverse_key_v2(key)
@@ -443,7 +563,6 @@ pub(crate) fn rebuild_tag_index(
         },
     );
     fail_if_generation_fault_is_injected(GenerationFaultPoint::IncrementalReplay)?;
-    let barrier_lsn = current_wal_lsn(ctx);
     build_state
         .transition_to_publishing(barrier_lsn)
         .map_err(StorageError::invalid_operation)?;
@@ -455,16 +574,7 @@ pub(crate) fn rebuild_tag_index(
         IndexStatus::Publishing,
     )?;
 
-    let index_dir = ctx
-        .storage_paths()
-        .map(|paths| paths.indexes_dir())
-        .ok_or_else(|| StorageError::db_error("No work directory configured".to_string()))?;
-    std::fs::create_dir_all(&index_dir)?;
-    let index_root = index_dir
-        .join(space_id.to_string())
-        .join(index.id.to_string());
-    let gen_dir = index_root.join(format!("generation-{}", generation.get()));
-    std::fs::create_dir_all(&gen_dir)?;
+    let (gen_dir, manifest_path) = generation_output_paths(ctx, space_id, index.id, generation);
     let persisted_forward = merged_forward
         .iter()
         .filter(|(key, _)| key.starts_with(&forward_prefix))
@@ -478,11 +588,14 @@ pub(crate) fn rebuild_tag_index(
         })
         .map(|(key, record)| (key.clone(), record.clone()))
         .collect();
-    GenericIndexManager::<VertexIndexKeyGen>::flush_data(
-        &gen_dir,
-        &persisted_forward,
-        &persisted_reverse,
-    )?;
+    if manifest_path.is_some() {
+        std::fs::create_dir_all(&gen_dir)?;
+        GenericIndexManager::<VertexIndexKeyGen>::flush_data(
+            &gen_dir,
+            &persisted_forward,
+            &persisted_reverse,
+        )?;
+    }
     fail_if_generation_fault_is_injected(GenerationFaultPoint::GenerationFsync)?;
 
     let manifest = IndexManifest::new(
@@ -500,7 +613,9 @@ pub(crate) fn rebuild_tag_index(
     .map_err(StorageError::db_error)?;
 
     fail_if_generation_fault_is_injected(GenerationFaultPoint::ManifestRename)?;
-    manifest.store(&index_root.join("manifest.bin"))?;
+    if let Some(manifest_path) = manifest_path {
+        manifest.store(&manifest_path)?;
+    }
     manager.publish_generation_data(manifest.clone(), persisted_forward, persisted_reverse)?;
     log::info!(
         "Published new generation {} for index {} (space {})",
@@ -648,8 +763,9 @@ fn build_edge_index_data(
                 &index.name,
             )?;
 
-            let mut entry =
-                IndexRecord::new(snapshot_timestamp).with_entity_version(snapshot_timestamp);
+            let mut entry = IndexRecord::new(snapshot_timestamp)
+                .with_entity_version(snapshot_timestamp)
+                .with_entity_ref(edge_entity_ref(edge));
             entry.included_columns = included_columns.clone();
             let fwd_key = make_physical_key(&logical_forward_key.0, version_counter);
             version_counter = version_counter.wrapping_add(1);
@@ -676,6 +792,10 @@ pub(crate) fn rebuild_edge_index(
         .index_metadata_manager()
         .get_edge_index(space_id, index_name)?
         .ok_or_else(|| StorageError::not_found(format!("Edge index {} not found", index_name)))?;
+
+    ctx.index_data_manager()
+        .read()
+        .register_native_index(space_id, &index)?;
 
     // Resolve any incomplete generation build from a previous crash.
     resolve_crash_recovery(ctx, space_id, index_name)?;
@@ -712,13 +832,16 @@ pub(crate) fn rebuild_edge_index(
 
     let manager = ctx.index_data_manager().write();
     let (active_forward, active_reverse) = manager.active_index_data(space_id, index.id)?;
+    let barrier_lsn = current_wal_lsn(ctx);
+    let intents = wal_intents_for_index(ctx, space_id, &index, start_lsn, barrier_lsn)?;
     let forward_prefix = KeyBuilder::build_edge_index_prefix(space_id, index_name).0;
-    let (merged_forward, merged_reverse) = merge_rebuilt_partition(
+    let (merged_forward, merged_reverse) = replay_wal_partition(
         active_forward,
         active_reverse,
         forward,
         reverse,
         snapshot_ts,
+        &intents,
         |key| key.starts_with(&forward_prefix),
         |key| {
             KeyParser::parse_edge_reverse_key(key)
@@ -726,7 +849,6 @@ pub(crate) fn rebuild_edge_index(
         },
     );
     fail_if_generation_fault_is_injected(GenerationFaultPoint::IncrementalReplay)?;
-    let barrier_lsn = current_wal_lsn(ctx);
     build_state
         .transition_to_publishing(barrier_lsn)
         .map_err(StorageError::invalid_operation)?;
@@ -738,16 +860,7 @@ pub(crate) fn rebuild_edge_index(
         IndexStatus::Publishing,
     )?;
 
-    let index_dir = ctx
-        .storage_paths()
-        .map(|paths| paths.indexes_dir())
-        .ok_or_else(|| StorageError::db_error("No work directory configured".to_string()))?;
-    std::fs::create_dir_all(&index_dir)?;
-    let index_root = index_dir
-        .join(space_id.to_string())
-        .join(index.id.to_string());
-    let gen_dir = index_root.join(format!("generation-{}", generation.get()));
-    std::fs::create_dir_all(&gen_dir)?;
+    let (gen_dir, manifest_path) = generation_output_paths(ctx, space_id, index.id, generation);
     let persisted_forward = merged_forward
         .iter()
         .filter(|(key, _)| key.starts_with(&forward_prefix))
@@ -761,11 +874,14 @@ pub(crate) fn rebuild_edge_index(
         })
         .map(|(key, record)| (key.clone(), record.clone()))
         .collect();
-    GenericIndexManager::<EdgeIndexKeyGen>::flush_data(
-        &gen_dir,
-        &persisted_forward,
-        &persisted_reverse,
-    )?;
+    if manifest_path.is_some() {
+        std::fs::create_dir_all(&gen_dir)?;
+        GenericIndexManager::<EdgeIndexKeyGen>::flush_data(
+            &gen_dir,
+            &persisted_forward,
+            &persisted_reverse,
+        )?;
+    }
     fail_if_generation_fault_is_injected(GenerationFaultPoint::GenerationFsync)?;
 
     let manifest = IndexManifest::new(
@@ -783,7 +899,9 @@ pub(crate) fn rebuild_edge_index(
     .map_err(StorageError::db_error)?;
 
     fail_if_generation_fault_is_injected(GenerationFaultPoint::ManifestRename)?;
-    manifest.store(&index_root.join("manifest.bin"))?;
+    if let Some(manifest_path) = manifest_path {
+        manifest.store(&manifest_path)?;
+    }
     manager.publish_generation_data(manifest.clone(), persisted_forward, persisted_reverse)?;
     log::info!(
         "Published new generation {} for edge index {} (space {})",
@@ -855,12 +973,17 @@ pub(crate) fn lookup_edge_index(
 #[cfg(test)]
 mod tests {
     use crate::core::types::{
-        CommitLsn, Index, IndexConfig, IndexField, IndexGeneration, IndexType, SnapshotTimestamp,
+        CommitLsn, IdempotencyKey, Index, IndexConfig, IndexField, IndexGeneration, IndexType,
+        OrderingKey, SnapshotTimestamp, TargetId, TransactionId, VertexId,
     };
-    use crate::core::StorageError;
+    use crate::core::wal::{EntityRef, IndexMutation, IndexOperation, OutboxIntent};
     use crate::core::Value;
     use crate::storage::engine::graph_storage::context::GraphStorageContext;
+    use crate::storage::index::index_data_manager::IndexRecord;
     use crate::storage::index::manifest::{GenerationBuildState, GenerationState};
+    use crate::storage::{
+        GraphStorage, StoragePersistenceOps, StorageReader, StorageSchemaOps, StorageWriter,
+    };
 
     fn setup_context() -> GraphStorageContext {
         GraphStorageContext::new()
@@ -880,6 +1003,196 @@ mod tests {
         let ctx = GraphStorageContext::new_with_persistence(temp_dir.path().to_path_buf(), config)
             .expect("Failed to create persistent context");
         (temp_dir, ctx)
+    }
+
+    fn test_intent(transaction_id: TransactionId, index_id: u64, vertex_id: i64) -> OutboxIntent {
+        OutboxIntent {
+            wire_version: crate::core::wal::WAL_SYNC_WIRE_VERSION,
+            transaction_id,
+            intent_sequence: 0,
+            mutation: IndexMutation {
+                wire_version: crate::core::wal::WAL_SYNC_WIRE_VERSION,
+                target: TargetId::new("native-index").expect("target should be valid"),
+                index_id,
+                index_generation: IndexGeneration::new(1),
+                entity_ref: EntityRef::Vertex(VertexId::from_int64(vertex_id)),
+                operation: IndexOperation::Upsert,
+                document_or_vector: Vec::new(),
+                idempotency_key: IdempotencyKey::new(format!(
+                    "intent-{transaction_id}-{vertex_id}"
+                ))
+                .expect("idempotency key should be valid"),
+                ordering_key: OrderingKey::new(format!("vertex-{vertex_id}"))
+                    .expect("ordering key should be valid"),
+            },
+        }
+    }
+
+    #[test]
+    fn wal_catch_up_uses_only_intent_entities() {
+        let entity = EntityRef::Vertex(VertexId::from_int64(1));
+        let other_entity = EntityRef::Vertex(VertexId::from_int64(2));
+        let intents = vec![test_intent(TransactionId::new(1), 7, 1)];
+
+        let mut active_forward = std::collections::BTreeMap::new();
+        active_forward.insert(
+            b"logged-forward".to_vec(),
+            IndexRecord::new(20).with_entity_ref(entity.clone()),
+        );
+        active_forward.insert(
+            b"memory-only-forward".to_vec(),
+            IndexRecord::new(20).with_entity_ref(other_entity.clone()),
+        );
+        let mut active_reverse = std::collections::BTreeMap::new();
+        active_reverse.insert(
+            b"logged-reverse".to_vec(),
+            IndexRecord::new(20).with_entity_ref(entity),
+        );
+        active_reverse.insert(
+            b"memory-only-reverse".to_vec(),
+            IndexRecord::new(20).with_entity_ref(other_entity),
+        );
+
+        let mut rebuilt_forward = std::collections::BTreeMap::new();
+        rebuilt_forward.insert(b"snapshot-forward".to_vec(), IndexRecord::new(10));
+        let mut rebuilt_reverse = std::collections::BTreeMap::new();
+        rebuilt_reverse.insert(b"snapshot-reverse".to_vec(), IndexRecord::new(10));
+
+        let (forward, reverse) = super::replay_wal_partition(
+            active_forward,
+            active_reverse,
+            rebuilt_forward,
+            rebuilt_reverse,
+            10,
+            &intents,
+            |_| true,
+            |_| true,
+        );
+
+        assert!(forward.contains_key(b"snapshot-forward".as_slice()));
+        assert!(forward.contains_key(b"logged-forward".as_slice()));
+        assert!(!forward.contains_key(b"memory-only-forward".as_slice()));
+        assert!(reverse.contains_key(b"snapshot-reverse".as_slice()));
+        assert!(reverse.contains_key(b"logged-reverse".as_slice()));
+        assert!(!reverse.contains_key(b"memory-only-reverse".as_slice()));
+    }
+
+    #[test]
+    fn wal_catch_up_reads_committed_intents_from_disk() {
+        let (_temp_dir, ctx) = setup_persistent_context();
+        let transaction_id = TransactionId::new(9);
+        let intent = test_intent(transaction_id, 7, 42);
+
+        ctx.commit_staged_writes(transaction_id, &[intent])
+            .expect("transaction should be durable");
+        let barrier_lsn = super::current_wal_lsn(&ctx);
+        let index = Index::new(IndexConfig {
+            id: 7,
+            name: "test_index".to_string(),
+            space_id: 1,
+            schema_name: "Person".to_string(),
+            fields: vec![IndexField::new(
+                "name".to_string(),
+                Value::String(String::new()),
+                false,
+            )],
+            properties: Vec::new(),
+            index_type: IndexType::TagIndex,
+            is_unique: false,
+            partial_condition: None,
+        });
+        let filtered = super::wal_intents_for_index(&ctx, 1, &index, CommitLsn::ZERO, barrier_lsn)
+            .expect("committed intents should be readable");
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].transaction_id, transaction_id);
+        assert_eq!(filtered[0].mutation.index_id, 7);
+    }
+
+    #[test]
+    fn rebuild_restarts_after_incremental_replay_failure() {
+        let temp_dir = tempfile::TempDir::new().expect("temporary directory should be created");
+        let index = Index::new(IndexConfig {
+            id: 1,
+            name: "person_name_idx".to_string(),
+            space_id: 1,
+            schema_name: "Person".to_string(),
+            fields: vec![IndexField::new(
+                "name".to_string(),
+                Value::String(String::new()),
+                false,
+            )],
+            properties: Vec::new(),
+            index_type: IndexType::TagIndex,
+            is_unique: false,
+            partial_condition: None,
+        });
+
+        {
+            let mut storage = GraphStorage::new_with_path(temp_dir.path().to_path_buf())
+                .expect("persistent storage should be created");
+            let mut space = crate::core::types::SpaceInfo::new("test_space".to_string())
+                .with_vid_type(crate::core::DataType::BigInt);
+            storage
+                .create_space(&mut space)
+                .expect("space should be created");
+            let tag = crate::core::types::TagInfo::new("Person".to_string()).with_properties(vec![
+                crate::core::types::PropertyDef::new(
+                    "name".to_string(),
+                    crate::core::DataType::String,
+                ),
+            ]);
+            storage
+                .create_tag("test_space", &tag)
+                .expect("tag should be created");
+            storage
+                .create_tag_index("test_space", &index)
+                .expect("index should be created");
+            let vertex = crate::core::Vertex::new(
+                VertexId::from_int64(1),
+                vec![crate::core::vertex_edge_path::Tag::new(
+                    "Person".to_string(),
+                    vec![("name".to_string(), Value::String("Alice".to_string()))]
+                        .into_iter()
+                        .collect(),
+                )],
+            );
+            storage
+                .insert_vertex("test_space", vertex)
+                .expect("vertex should be inserted");
+            storage
+                .rebuild_tag_index("test_space", "person_name_idx")
+                .expect("initial generation should build");
+            storage.flush().expect("initial index state should flush");
+            storage
+                .create_checkpoint()
+                .expect("initial checkpoint should succeed");
+
+            super::inject_generation_fault(super::GenerationFaultPoint::IncrementalReplay);
+            let result = storage.rebuild_tag_index("test_space", "person_name_idx");
+            super::clear_generation_faults();
+            assert!(
+                result.is_err(),
+                "injected catch-up failure should be returned"
+            );
+            storage
+                .flush()
+                .expect("storage should flush before restart");
+        }
+
+        let mut storage = GraphStorage::open(temp_dir.path().to_path_buf())
+            .expect("storage should reopen after the failed build");
+        assert!(storage
+            .rebuild_tag_index("test_space", "person_name_idx")
+            .expect("rebuild should restart after crash recovery"));
+        let indexed = storage
+            .lookup_index(
+                "test_space",
+                "person_name_idx",
+                &Value::String("Alice".to_string()),
+            )
+            .expect("rebuilt index should be readable");
+        assert_eq!(indexed, vec![Value::from(VertexId::from_int64(1))]);
     }
 
     #[test]

@@ -122,7 +122,7 @@ impl TransactionCleaner {
             self.version_manager.release_read_timestamp();
         } else {
             self.version_manager
-                .release_insert_timestamp(context.timestamp());
+                .release_write_timestamp(context.timestamp());
         }
 
         context.transition_to(TransactionState::Aborted)?;

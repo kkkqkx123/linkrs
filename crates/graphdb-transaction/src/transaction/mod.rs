@@ -7,12 +7,6 @@
 //! - Write-Ahead Log (WAL) for durability
 //! - Undo Log for transaction rollback
 //!
-//! ## Transaction Types
-//!
-//! - **ReadTransaction**: Read-only snapshot transaction
-//! - **InsertTransaction**: Insert-only transaction for adding data
-//! - **CompactTransaction**: Compaction transaction for storage optimization
-//!
 //! ## Usage Example
 //!
 //! ```rust,ignore
@@ -32,16 +26,13 @@
 
 pub mod cleaner;
 pub mod codec;
-pub mod compact_transaction;
 pub mod conflict;
 pub mod context;
 pub mod error;
-pub mod insert_transaction;
 pub mod manager;
 pub mod monitor;
 pub mod mvcc;
 pub mod participant;
-pub mod read_transaction;
 pub mod rollback;
 pub mod snapshot_tracker;
 pub mod types;
@@ -56,28 +47,17 @@ pub mod context_test;
 pub mod manager_test;
 
 pub use self::mvcc::{
-    InsertTimestampGuard, ReadTimestampGuard, UpdateTimestampGuard, VersionManager,
-    VersionManagerConfig, VersionManagerError, VersionManagerResult,
+    InsertTimestampGuard, ReadTimestampGuard, VersionManager,
+    VersionManagerConfig, VersionManagerError, VersionManagerResult, RELEASED_TIMESTAMP,
 };
 pub use self::snapshot_tracker::SnapshotTracker;
-pub use crate::core::types::CompactTarget;
 pub use cleaner::TransactionCleaner;
-pub use compact_transaction::{
-    CompactTransaction, CompactTransactionError, CompactTransactionResult,
-};
 pub use conflict::{have_write_conflict, ConflictReport, WriteSetAnalyzer};
 pub use context::TransactionContext;
 pub use error::{TransactionError, TransactionErrorKind, TransactionResult};
-pub use insert_transaction::{
-    InsertTarget, InsertTransaction, InsertTransactionError, InsertTransactionResult,
-};
 pub use manager::TransactionManager;
 pub use monitor::TransactionMonitor;
 pub use participant::TransactionCommitSink;
-pub use read_transaction::{
-    ReadTarget, ReadTransaction, ReadTransactionError, ReadTransactionResult, VertexRecord,
-    RELEASED_TIMESTAMP,
-};
 pub use rollback::{
     CreateRemoveEdgeUndoParams, CreateRemoveVertexUndoParams, CreateUpdateEdgePropUndoParams,
     RollbackHelper,
@@ -86,9 +66,9 @@ pub use types::*;
 pub use undo_log::{
     AddEdgePropUndo, AddVertexPropUndo, CreateEdgeTypeUndo, CreateVertexTypeUndo,
     DeleteEdgePropUndo, DeleteEdgeTypeUndo, DeleteVertexPropUndo, DeleteVertexTypeUndo,
-    InsertEdgeUndo, InsertVertexUndo, PropertyValue, RelatedEdgeInfo, RemoveEdgeUndo,
-    RemoveVertexUndo, UndoLogEntry, UndoLogError, UndoLogManager, UndoLogResult, UndoTarget,
-    UpdateEdgePropUndo, UpdateVertexPropUndo,
+    FileBackedUndoLog, InsertEdgeUndo, InsertVertexUndo, PropertyValue, RelatedEdgeInfo,
+    RemoveEdgeUndo, RemoveVertexUndo, UndoLogConfig, UndoLogEntry, UndoLogError, UndoLogManager,
+    UndoLogResult, UndoTarget, UpdateEdgePropUndo, UpdateVertexPropUndo,
 };
 pub use wal::{
     ColumnId, CreateEdgeTypeRedo, CreateVertexTypeRedo, DeleteEdgeRedo, DeleteVertexRedo, EdgeId,

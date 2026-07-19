@@ -45,11 +45,7 @@ impl CsvExporter {
             let values: Vec<String> = result
                 .columns
                 .iter()
-                .map(|col| {
-                    row.get(col)
-                        .map(value_to_csv_string)
-                        .unwrap_or_default()
-                })
+                .map(|col| row.get(col).map(value_to_csv_string).unwrap_or_default())
                 .collect();
             writer.write_record(&values)?;
             stats.total_rows += 1;
@@ -98,11 +94,7 @@ impl CsvExporter {
                 let values: Vec<String> = result
                     .columns
                     .iter()
-                    .map(|col| {
-                        row.get(col)
-                            .map(value_to_csv_string)
-                            .unwrap_or_default()
-                    })
+                    .map(|col| row.get(col).map(value_to_csv_string).unwrap_or_default())
                     .collect();
                 writer.write_record(&values)?;
                 stats.total_rows += 1;

@@ -158,7 +158,7 @@ fn test_conflict_report_classification() {
     assert!(report_e.edge_conflict);
     assert!(!report_e.vertex_conflict);
 
-    // Shared vertex endpoint conflict
+    // Shared vertex endpoint does NOT cause conflict
     let mut ws_e3 = WriteSet::new();
     let edge2 = EdgeIdentifier::new(1, vid1, 1, vid2, 1, 0);
     let edge3 = EdgeIdentifier::new(1, vid1, 1, vid3, 1, 0); // shares src vertex
@@ -168,8 +168,7 @@ fn test_conflict_report_classification() {
     ws_e4.record_edge(edge3);
 
     let report_shared = WriteSetAnalyzer::analyze_conflict(&ws_e3, &ws_e4);
-    assert!(report_shared.has_conflict);
-    assert!(report_shared.shared_vertex_conflict);
+    assert!(!report_shared.has_conflict);
 }
 
 /// Test 3.1.5: Read-only transaction doesn't conflict

@@ -307,6 +307,10 @@ impl TransactionContext {
                     TransactionState::Committing | TransactionState::Aborting
                 ) | (TransactionState::Committing, TransactionState::Committed)
                     | (TransactionState::Committing, TransactionState::Aborted)
+                    | (TransactionState::Committing, TransactionState::CommitRetry)
+                    | (TransactionState::CommitRetry, TransactionState::Committing)
+                    | (TransactionState::CommitRetry, TransactionState::Committed)
+                    | (TransactionState::CommitRetry, TransactionState::Aborted)
                     | (TransactionState::Aborting, TransactionState::Committed)
                     | (TransactionState::Aborting, TransactionState::Aborted)
             );

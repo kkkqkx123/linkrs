@@ -196,6 +196,7 @@ pub struct IndexDataManagerImpl {
     runtimes: Arc<RwLock<HashMap<IndexIdentity, Arc<IndexRuntime>>>>,
     index_aliases: Arc<RwLock<HashMap<(u64, String), u64>>>,
     index_types: Arc<RwLock<HashMap<IndexIdentity, IndexType>>>,
+    index_definitions: Arc<RwLock<HashMap<IndexIdentity, Index>>>,
     restored_generations: Arc<RwLock<HashMap<IndexIdentity, IndexGeneration>>>,
 }
 
@@ -220,6 +221,7 @@ impl IndexDataManagerImpl {
             runtimes: Arc::new(RwLock::new(HashMap::new())),
             index_aliases: Arc::new(RwLock::new(HashMap::new())),
             index_types: Arc::new(RwLock::new(HashMap::new())),
+            index_definitions: Arc::new(RwLock::new(HashMap::new())),
             restored_generations: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -255,6 +257,9 @@ impl IndexDataManagerImpl {
         self.index_types
             .write()
             .insert(identity, index.index_type.clone());
+        self.index_definitions
+            .write()
+            .insert(identity, index.clone());
         let mut catalogs = self.manifest_catalogs.write();
         if !catalogs.contains_key(&identity) {
             let manifest = IndexManifest::new(
@@ -327,6 +332,7 @@ impl IndexDataManagerImpl {
             self.manifest_catalogs.write().remove(&identity);
             self.runtimes.write().remove(&identity);
             self.index_types.write().remove(&identity);
+            self.index_definitions.write().remove(&identity);
             self.restored_generations.write().remove(&identity);
         }
     }
@@ -429,8 +435,8 @@ impl IndexDataManagerImpl {
         std::fs::create_dir_all(index_root)?;
         let path = self.build_state_path(index_root);
         let temporary = path.with_extension("tmp");
-        let serialized =
-            postcard::to_allocvec(state).map_err(|e| StorageError::serialize_error(e.to_string()))?;
+        let serialized = postcard::to_allocvec(state)
+            .map_err(|e| StorageError::serialize_error(e.to_string()))?;
         {
             let mut file = std::fs::File::create(&temporary)?;
             file.write_all(&serialized)?;
@@ -1185,9 +1191,18 @@ fn edge_entity_ref(src: &Value, dst: &Value, edge_type: &str, ranking: i64) -> O
     Some(EntityRef::Edge {
         src,
         dst,
-        edge_type: edge_type.parse::<u32>().unwrap_or_default(),
+        edge_type: stable_hash(edge_type.as_bytes()) as u32,
         ranking,
     })
+}
+
+fn stable_hash(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 impl EdgeIndexOps for IndexDataManagerImpl {
@@ -1216,7 +1231,42 @@ impl EdgeIndexOps for IndexDataManagerImpl {
             .ok_or_else(|| {
                 StorageError::not_found("Active index runtime generation is unavailable")
             })?;
-        for (_, value) in props {
+        let index_definition = self
+            .index_definitions
+            .read()
+            .get(&IndexIdentity { space_id, index_id })
+            .cloned();
+        let indexed_values = index_definition
+            .as_ref()
+            .map(|index| {
+                index
+                    .fields
+                    .iter()
+                    .filter_map(|field| {
+                        props
+                            .iter()
+                            .find(|(name, _)| name == &field.name)
+                            .map(|(_, value)| value)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| props.iter().map(|(_, value)| value).collect());
+        let included_columns = index_definition
+            .as_ref()
+            .map(|index| {
+                index
+                    .properties
+                    .iter()
+                    .filter_map(|name| {
+                        props
+                            .iter()
+                            .find(|(candidate, _)| candidate == name)
+                            .map(|(_, value)| (name.clone(), value.clone()))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for value in indexed_values {
             let forward = KeyBuilder::build_edge_index_key(
                 space_id, index_name, value, edge_src, edge_dst, edge_type, ranking,
             )?;
@@ -1261,7 +1311,8 @@ impl EdgeIndexOps for IndexDataManagerImpl {
                     StorageError::invalid_operation("Index manifest does not cover the ordered key")
                 })?;
             let entity_ref = edge_entity_ref(edge_src, edge_dst, edge_type, ranking);
-            let mut entry = IndexRecord::new(write_ts).with_entity_version(write_ts);
+            let mut entry = IndexRecord::new_with_columns(write_ts, included_columns.clone())
+                .with_entity_version(write_ts);
             if let Some(entity) = entity_ref {
                 entry = entry.with_entity_ref(entity);
             }
@@ -1379,7 +1430,42 @@ impl VertexIndexOps for IndexDataManagerImpl {
             .ok_or_else(|| {
                 StorageError::not_found("Active index runtime generation is unavailable")
             })?;
-        for (_, value) in props {
+        let index_definition = self
+            .index_definitions
+            .read()
+            .get(&IndexIdentity { space_id, index_id })
+            .cloned();
+        let indexed_values = index_definition
+            .as_ref()
+            .map(|index| {
+                index
+                    .fields
+                    .iter()
+                    .filter_map(|field| {
+                        props
+                            .iter()
+                            .find(|(name, _)| name == &field.name)
+                            .map(|(_, value)| value)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| props.iter().map(|(_, value)| value).collect());
+        let included_columns = index_definition
+            .as_ref()
+            .map(|index| {
+                index
+                    .properties
+                    .iter()
+                    .filter_map(|name| {
+                        props
+                            .iter()
+                            .find(|(candidate, _)| candidate == name)
+                            .map(|(_, value)| (name.clone(), value.clone()))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for value in indexed_values {
             let forward =
                 KeyBuilder::build_vertex_index_key(space_id, index_name, value, vertex_id)?;
             let reverse = KeyBuilder::build_vertex_reverse_key_v2(space_id, vertex_id, index_name)?;
@@ -1420,7 +1506,8 @@ impl VertexIndexOps for IndexDataManagerImpl {
                 .ok_or_else(|| {
                     StorageError::invalid_operation("Index manifest does not cover the ordered key")
                 })?;
-            let mut entry = IndexRecord::new(write_ts).with_entity_version(write_ts);
+            let mut entry = IndexRecord::new_with_columns(write_ts, included_columns.clone())
+                .with_entity_version(write_ts);
             if let Some(entity) = vertex_entity_ref(vertex_id) {
                 entry = entry.with_entity_ref(entity);
             }

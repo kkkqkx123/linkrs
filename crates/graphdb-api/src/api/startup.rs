@@ -298,6 +298,8 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
         max_concurrent_transactions: config.transaction.max_concurrent_transactions,
         auto_cleanup: true,
         write_lock_timeout: std::time::Duration::from_secs(10),
+        commit_retry_attempts: 3,
+        abort_retry_attempts: 3,
     };
 
     let mut transaction_manager =

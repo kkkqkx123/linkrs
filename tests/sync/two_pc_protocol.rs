@@ -113,10 +113,10 @@ fn test_2pc_full_protocol() {
     }
 
     // Phase 1: Prepare
-    let sync_manager = harness.sync_manager.clone();
+    let sync_coordinator = harness.sync_coordinator.clone();
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
-        sync_manager
+        sync_coordinator
             .prepare_transaction(txn_id)
             .await
             .expect("Prepare should succeed");
@@ -201,9 +201,9 @@ fn test_2pc_prepare_failure() {
 
     // Prepare should succeed in normal case
     let txn_id = TransactionId(harness.current_txn_id.unwrap());
-    let sync_manager = harness.sync_manager.clone();
+    let sync_coordinator = harness.sync_coordinator.clone();
     let rt = tokio::runtime::Runtime::new().unwrap();
-    let prepare_result = rt.block_on(async { sync_manager.prepare_transaction(txn_id).await });
+    let prepare_result = rt.block_on(async { sync_coordinator.prepare_transaction(txn_id).await });
 
     // Prepare should succeed
     assert!(

@@ -22,6 +22,7 @@ pub enum OutboxPayload {
         src: Value,
         dst: Value,
         edge_type: String,
+        ranking: i64,
     },
     CreateIndex {
         space_id: u64,

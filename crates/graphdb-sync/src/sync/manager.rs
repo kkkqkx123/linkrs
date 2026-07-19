@@ -2,16 +2,19 @@
 //!
 //! Unified synchronization manager using SyncCoordinator.
 
-use crate::core::types::{TransactionContextInfo, TransactionId};
+use crate::core::types::{CommitLsn, TransactionContextInfo, TransactionId};
 use crate::core::Value;
 #[cfg(feature = "fulltext-search")]
 use crate::search::SyncConfig;
+use crate::sync::checkpoint_manifest::CheckpointManifestManager;
 #[cfg(feature = "fulltext-search")]
 use crate::sync::coordinator::{ChangeContext, CoordinatorError, SyncCoordinator};
-use crate::sync::outbox::{OutboxEvent, OutboxPayload};
-use crate::sync::sqlite_outbox::SqliteOutbox;
+use crate::sync::outbox::OutboxPayload;
+use crate::sync::sqlite_outbox::{OutboxSnapshot, SqliteOutbox};
 use crate::sync::types::ChangeType;
 use dashmap::DashMap;
+#[cfg(feature = "qdrant")]
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -26,10 +29,12 @@ pub struct SyncManager {
     sync_coordinator: Option<Arc<SyncCoordinator>>,
     #[cfg(feature = "qdrant")]
     vector_coordinator: Option<Arc<VectorSyncCoordinator>>,
-    staged_events: DashMap<TransactionId, Vec<OutboxEvent>>,
+    pending_intents: DashMap<TransactionId, Vec<crate::core::wal::OutboxIntent>>,
     running: Arc<std::sync::atomic::AtomicBool>,
     dead_letter_queue: Option<Arc<crate::sync::DeadLetterQueue>>,
     sqlite_outbox: Option<Arc<SqliteOutbox>>,
+    #[cfg(feature = "qdrant")]
+    vector_receiver: Option<Arc<crate::sync::VectorReceiver>>,
     outbox_consumer: Arc<OutboxConsumerConfig>,
     #[allow(clippy::type_complexity)]
     handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -62,10 +67,12 @@ impl Clone for SyncManager {
             sync_coordinator: self.sync_coordinator.clone(),
             #[cfg(feature = "qdrant")]
             vector_coordinator: self.vector_coordinator.clone(),
-            staged_events: self.staged_events.clone(),
+            pending_intents: self.pending_intents.clone(),
             running: self.running.clone(),
             dead_letter_queue: self.dead_letter_queue.clone(),
             sqlite_outbox: self.sqlite_outbox.clone(),
+            #[cfg(feature = "qdrant")]
+            vector_receiver: self.vector_receiver.clone(),
             outbox_consumer: self.outbox_consumer.clone(),
             handle: Mutex::new(None),
         }
@@ -89,37 +96,35 @@ impl std::fmt::Debug for SyncManager {
     allow(unused_variables)
 )]
 impl SyncManager {
-    fn stage_event(&self, txn_id: TransactionId, payload: OutboxPayload) -> Result<(), SyncError> {
-        let target = "sync".to_string();
-        let mut events = self.staged_events.entry(txn_id).or_default();
-        let sequence = (events.len() as u64).saturating_add(1);
-        let id = format!("{}:{}", txn_id.0, sequence);
-        let ordering_key = format!("{}:default:{}", target, id);
-        events.push(OutboxEvent {
-            id: id.clone(),
-            transaction_id: Some(txn_id),
-            sequence,
-            committed: false,
-            retries: 0,
-            created_at_ms: chrono::Utc::now().timestamp_millis().max(0) as u64,
-            payload,
-            target,
-            partition: "default".to_string(),
-            idempotency_key: id,
-            enqueue_sequence: sequence,
-            ordering_key,
-            next_attempt_at_ms: 0,
-            lease_owner: None,
-            lease_until_ms: 0,
-            lease_epoch: 0,
-            dead_lettered: false,
-            last_error: None,
-        });
+    #[allow(unused_mut)]
+    fn delivery_target_names(&self) -> Vec<&'static str> {
+        let mut targets = Vec::new();
+        #[cfg(feature = "fulltext-search")]
+        if self.sync_coordinator.is_some() {
+            targets.push("fulltext");
+        }
+        #[cfg(feature = "qdrant")]
+        if self.vector_coordinator.is_some() {
+            targets.push("vector");
+        }
+        targets
+    }
+
+    fn stage_intent(&self, txn_id: TransactionId, payload: OutboxPayload) -> Result<(), SyncError> {
+        let mut intents = self.pending_intents.entry(txn_id).or_default();
+        for target_name in self.delivery_target_names() {
+            let sequence = u32::try_from(intents.len()).map_err(|_| {
+                SyncError::PersistenceError(
+                    "Transaction intent count exceeds u32 range".to_string(),
+                )
+            })?;
+            intents.push(payload_to_intent(txn_id, sequence, target_name, &payload)?);
+        }
         Ok(())
     }
 
-    pub fn clear_staged_transaction(&self, txn_id: TransactionId) {
-        self.staged_events.remove(&txn_id);
+    pub fn clear_transaction_intents(&self, txn_id: TransactionId) {
+        self.pending_intents.remove(&txn_id);
     }
 
     pub fn attach_transaction_context(&self, txn_id: TransactionId) -> TransactionContextInfo {
@@ -131,22 +136,8 @@ impl SyncManager {
         txn_id: TransactionId,
         sequence: u64,
     ) -> Result<(), SyncError> {
-        #[cfg(feature = "fulltext-search")]
-        if let Some(ref coord) = self.sync_coordinator {
-            coord
-                .truncate_transaction(txn_id, sequence)
-                .map_err(SyncError::from)?;
-        }
-
-        #[cfg(feature = "qdrant")]
-        if let Some(ref vector_coord) = self.vector_coordinator {
-            vector_coord
-                .truncate_transaction(txn_id, sequence)
-                .map_err(|e| SyncError::VectorError(e.to_string()))?;
-        }
-
-        if let Some(mut events) = self.staged_events.get_mut(&txn_id) {
-            events.retain(|event| event.sequence <= sequence);
+        if let Some(mut intents) = self.pending_intents.get_mut(&txn_id) {
+            intents.retain(|intent| u64::from(intent.intent_sequence) <= sequence);
         }
 
         Ok(())
@@ -158,10 +149,12 @@ impl SyncManager {
             sync_coordinator: None,
             #[cfg(feature = "qdrant")]
             vector_coordinator: None,
-            staged_events: DashMap::new(),
+            pending_intents: DashMap::new(),
             running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             dead_letter_queue: None,
             sqlite_outbox: None,
+            #[cfg(feature = "qdrant")]
+            vector_receiver: None,
             outbox_consumer: Arc::new(OutboxConsumerConfig::default()),
             handle: Mutex::new(None),
         }
@@ -220,22 +213,31 @@ impl SyncManager {
             .parent()
             .unwrap_or(database_parent)
             .join("outbox_snapshots");
+        let work_dir = database_parent.parent().unwrap_or(database_parent);
+        let preferred_snapshot =
+            latest_manifest_outbox_snapshot(work_dir).map_err(SyncError::PersistenceError)?;
 
-        // Restore before opening when the live database is absent. Snapshots
-        // are stored at the database work-directory root, not below outbox/.
-        if !crate::sync::live_database_exists(&sqlite_path) {
-            if snapshot_dir.is_dir() {
-                match crate::sync::recover_outbox(&sqlite_path, &snapshot_dir) {
-                    Ok(Some(lsn)) => {
-                        log::info!("Recovered outbox from snapshot at LSN {}", lsn.get());
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        log::warn!(
-                            "Outbox recovery attempted but failed: {}. Starting fresh.",
-                            e
-                        );
-                    }
+        // Validate the live database before opening it. A file can exist while
+        // still being an incomplete or corrupt SQLite projection after a crash.
+        // Restore the snapshot referenced by the latest valid combined
+        // checkpoint first, then fall back to the directory-wide snapshot scan.
+        let live_is_healthy = self
+            .execute_sync(|| async { Ok(crate::sync::verify_live_database(&sqlite_path).await) })?;
+        if !live_is_healthy {
+            match restore_outbox_from_candidates(
+                &sqlite_path,
+                &snapshot_dir,
+                preferred_snapshot.as_ref(),
+            ) {
+                Ok(Some(lsn)) => {
+                    log::info!("Recovered outbox from snapshot at LSN {}", lsn.get());
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    log::warn!(
+                        "Outbox recovery attempted but failed: {}. Starting fresh.",
+                        error
+                    );
                 }
             }
         }
@@ -255,13 +257,29 @@ impl SyncManager {
                     sqlite_path.display(),
                     error
                 );
-                crate::sync::restore_latest_snapshot(&sqlite_path, &snapshot_dir)
-                    .map_err(SyncError::PersistenceError)?;
+                restore_outbox_from_candidates(
+                    &sqlite_path,
+                    &snapshot_dir,
+                    preferred_snapshot.as_ref(),
+                )
+                .map_err(SyncError::PersistenceError)?
+                .ok_or_else(|| {
+                    SyncError::PersistenceError(format!(
+                        "No valid outbox snapshot found in {}",
+                        snapshot_dir.display()
+                    ))
+                })?;
                 open_outbox()?
             }
             Err(error) => return Err(error),
         };
         self.sqlite_outbox = Some(Arc::new(outbox));
+        #[cfg(feature = "qdrant")]
+        {
+            self.vector_receiver = Some(Arc::new(crate::sync::VectorReceiver::open(
+                work_dir.join("vector_receiver"),
+            )));
+        }
         Ok(())
     }
 
@@ -279,12 +297,29 @@ impl SyncManager {
     }
 
     pub fn outbox_stats(&self) -> crate::sync::OutboxStats {
+        if let Some(outbox) = &self.sqlite_outbox {
+            let outbox = outbox.clone();
+            let stats = std::thread::Builder::new()
+                .name("outbox-stats".to_string())
+                .spawn(move || {
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(|error| SyncError::Internal(error.to_string()))?;
+                    runtime.block_on(async move {
+                        outbox.stats().await.map_err(SyncError::PersistenceError)
+                    })
+                })
+                .ok()
+                .and_then(|handle| handle.join().ok())
+                .and_then(Result::ok);
+            if let Some(stats) = stats {
+                return stats;
+            }
+        }
+
         crate::sync::OutboxStats {
-            pending: self
-                .staged_events
-                .iter()
-                .map(|entry| entry.value().len())
-                .sum(),
+            pending: 0,
             ..Default::default()
         }
     }
@@ -314,7 +349,10 @@ impl SyncManager {
                     else {
                         break;
                     };
-                    match self.apply_index_mutation(&event.mutation) {
+                    match self
+                        .apply_index_mutation(&event.mutation, event.commit_lsn)
+                        .await
+                    {
                         Ok(()) => {
                             outbox
                                 .acknowledge(&event)
@@ -349,13 +387,26 @@ impl SyncManager {
         })
     }
 
-    fn apply_index_mutation(
+    async fn apply_index_mutation(
         &self,
         mutation: &crate::core::wal::IndexMutation,
+        commit_lsn: CommitLsn,
     ) -> Result<(), String> {
         let payload: OutboxPayload = postcard::from_bytes(&mutation.document_or_vector)
             .map_err(|error| format!("Failed to decode index mutation: {}", error))?;
-        self.apply_payload(&payload)
+        match mutation.target.as_str() {
+            #[cfg(feature = "fulltext-search")]
+            "fulltext" => {
+                self.apply_fulltext_mutation(mutation, commit_lsn, &payload)
+                    .await
+            }
+            #[cfg(feature = "qdrant")]
+            "vector" => {
+                self.apply_vector_mutation(mutation, commit_lsn, &payload)
+                    .await
+            }
+            _ => self.apply_payload(&payload),
+        }
     }
 
     fn apply_payload(&self, payload: &OutboxPayload) -> Result<(), String> {
@@ -377,8 +428,10 @@ impl SyncManager {
                 src,
                 dst,
                 edge_type,
-            } => self
-                .execute_sync(|| self.apply_edge_delete_mutation(*space_id, src, dst, edge_type)),
+                ranking,
+            } => self.execute_sync(|| {
+                self.apply_edge_delete_mutation(*space_id, src, dst, edge_type, *ranking)
+            }),
             OutboxPayload::CreateIndex { .. } => {
                 // DDL already executed locally before the outbox event was staged.
                 // Delivery acknowledges the event without reapplying it.
@@ -390,6 +443,213 @@ impl SyncManager {
             }
         }
         .map_err(|error| error.to_string())
+    }
+
+    #[cfg(feature = "fulltext-search")]
+    async fn apply_fulltext_mutation(
+        &self,
+        mutation: &crate::core::wal::IndexMutation,
+        commit_lsn: CommitLsn,
+        payload: &OutboxPayload,
+    ) -> Result<(), String> {
+        let manager = self
+            .sync_coordinator
+            .as_ref()
+            .ok_or_else(|| "fulltext target is not configured".to_string())?
+            .fulltext_manager()
+            .clone();
+
+        match payload {
+            OutboxPayload::Vertex {
+                space_id,
+                tag_name,
+                vertex_id,
+                properties,
+                change_type,
+            } => {
+                Self::apply_fulltext_fields(
+                    manager.clone(),
+                    mutation,
+                    commit_lsn,
+                    *space_id,
+                    tag_name,
+                    format!("{}", vertex_id),
+                    properties.clone(),
+                    matches!(change_type, ChangeType::Delete),
+                )
+                .await
+            }
+            OutboxPayload::EdgeInsert { space_id, edge } => {
+                let properties = edge
+                    .props
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.clone()))
+                    .collect::<Vec<_>>();
+                Self::apply_fulltext_fields(
+                    manager.clone(),
+                    mutation,
+                    commit_lsn,
+                    *space_id,
+                    &edge.edge_type,
+                    edge_entity_id(&edge.src, &edge.dst, edge.ranking),
+                    properties,
+                    false,
+                )
+                .await
+            }
+            OutboxPayload::EdgeDelete {
+                space_id,
+                src,
+                dst,
+                edge_type,
+                ranking,
+            } => {
+                let properties = manager
+                    .get_space_indexes(*space_id)
+                    .into_iter()
+                    .filter(|metadata| metadata.tag_name == *edge_type)
+                    .map(|metadata| (metadata.field_name, Value::String(String::new())))
+                    .collect::<Vec<_>>();
+                Self::apply_fulltext_fields(
+                    manager,
+                    mutation,
+                    commit_lsn,
+                    *space_id,
+                    edge_type,
+                    edge_entity_id(src, dst, *ranking),
+                    properties,
+                    true,
+                )
+                .await
+            }
+            OutboxPayload::CreateIndex { .. } | OutboxPayload::DropIndex { .. } => Ok(()),
+        }
+    }
+
+    #[cfg(feature = "fulltext-search")]
+    async fn apply_fulltext_fields(
+        manager: Arc<crate::search::manager::FulltextIndexManager>,
+        mutation: &crate::core::wal::IndexMutation,
+        commit_lsn: CommitLsn,
+        space_id: u64,
+        index_name: &str,
+        entity_id: String,
+        properties: Vec<(String, Value)>,
+        deleted: bool,
+    ) -> Result<(), String> {
+        for (field_name, value) in properties {
+            let Some(engine) = manager.get_engine(space_id, index_name, &field_name) else {
+                continue;
+            };
+            let document = if deleted {
+                Vec::new()
+            } else if let Value::String(text) = value {
+                text.as_bytes().to_vec()
+            } else {
+                continue;
+            };
+            let mut field_mutation = mutation.clone();
+            field_mutation.index_id =
+                stable_hash(format!("{}:{}:{}", space_id, index_name, field_name).as_bytes());
+            field_mutation.document_or_vector = document;
+            field_mutation.idempotency_key = crate::core::types::IdempotencyKey::new(format!(
+                "{}:{}",
+                mutation.idempotency_key.as_str(),
+                field_name
+            ))?;
+            let receiver = crate::sync::receiver::FulltextReceiver::new(engine);
+            let late_arrival = receiver
+                .check_late_arrival(commit_lsn, field_mutation.idempotency_key.as_str())
+                .await;
+            if !late_arrival.accepted && !late_arrival.reason.contains("duplicate") {
+                return Err(late_arrival.reason);
+            }
+            receiver
+                .apply_index_batch(&[(&field_mutation, commit_lsn)])
+                .await?;
+            log::debug!(
+                "Applied fulltext mutation for {} at {}",
+                entity_id,
+                commit_lsn
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "qdrant")]
+    async fn apply_vector_mutation(
+        &self,
+        mutation: &crate::core::wal::IndexMutation,
+        commit_lsn: CommitLsn,
+        payload: &OutboxPayload,
+    ) -> Result<(), String> {
+        let Some(coordinator) = self.vector_coordinator.as_ref() else {
+            return Err("vector target is not configured".to_string());
+        };
+        let Some(receiver) = self.vector_receiver.as_ref() else {
+            return Err("vector receiver is not configured".to_string());
+        };
+        let late_arrival = receiver
+            .check_late_arrival(commit_lsn, mutation.idempotency_key.as_str())
+            .await;
+        if !late_arrival.accepted && !late_arrival.reason.contains("duplicate") {
+            return Err(late_arrival.reason);
+        }
+        if !late_arrival.accepted {
+            return Ok(());
+        }
+
+        let mut contexts = Vec::new();
+        match payload {
+            OutboxPayload::Vertex {
+                space_id,
+                tag_name,
+                vertex_id,
+                properties,
+                change_type,
+            } => {
+                for (field_name, value) in properties {
+                    let (vector, vector_change_type) = match (value.as_vector(), change_type) {
+                        (Some(vector), ChangeType::Insert | ChangeType::Update) => (
+                            vector.to_vec(),
+                            crate::sync::vector_sync::VectorChangeType::Insert,
+                        ),
+                        _ => (
+                            Vec::new(),
+                            crate::sync::vector_sync::VectorChangeType::Delete,
+                        ),
+                    };
+                    let payload = properties
+                        .iter()
+                        .map(|(name, value)| (name.clone(), value.clone()))
+                        .collect::<HashMap<_, _>>();
+                    contexts.push(crate::sync::vector_sync::VectorChangeContext::new(
+                        *space_id,
+                        tag_name,
+                        field_name,
+                        vector_change_type,
+                        crate::sync::vector_sync::VectorPointData {
+                            id: format!("{}_{}_{}", vertex_id, tag_name, field_name),
+                            vector,
+                            payload,
+                        },
+                    ));
+                }
+            }
+            OutboxPayload::CreateIndex { .. }
+            | OutboxPayload::DropIndex { .. }
+            | OutboxPayload::EdgeInsert { .. }
+            | OutboxPayload::EdgeDelete { .. } => {}
+        }
+        if !contexts.is_empty() {
+            coordinator
+                .on_vector_change_batch(contexts)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        receiver
+            .record_application(commit_lsn, mutation.idempotency_key.as_str())
+            .await
     }
 
     pub async fn start(&self) -> Result<(), SyncError> {
@@ -447,7 +707,7 @@ impl SyncManager {
         properties: &[(String, Value)],
         change_type: ChangeType,
     ) -> Result<(), SyncError> {
-        self.stage_event(
+        self.stage_intent(
             txn_id,
             OutboxPayload::Vertex {
                 space_id,
@@ -469,7 +729,7 @@ impl SyncManager {
         fields: &[(String, Value)],
         properties: &[String],
     ) -> Result<(), SyncError> {
-        self.stage_event(
+        self.stage_intent(
             txn_id,
             OutboxPayload::CreateIndex {
                 space_id,
@@ -489,7 +749,7 @@ impl SyncManager {
         index_name: &str,
         index_type: &str,
     ) -> Result<(), SyncError> {
-        self.stage_event(
+        self.stage_intent(
             txn_id,
             OutboxPayload::DropIndex {
                 space_id,
@@ -537,7 +797,7 @@ impl SyncManager {
         space_id: u64,
         edge: &crate::core::Edge,
     ) -> Result<(), SyncError> {
-        self.stage_event(
+        self.stage_intent(
             txn_id,
             OutboxPayload::EdgeInsert {
                 space_id,
@@ -554,14 +814,16 @@ impl SyncManager {
         src: &Value,
         dst: &Value,
         edge_type: &str,
+        ranking: i64,
     ) -> Result<(), SyncError> {
-        self.stage_event(
+        self.stage_intent(
             txn_id,
             OutboxPayload::EdgeDelete {
                 space_id,
                 src: src.clone(),
                 dst: dst.clone(),
                 edge_type: edge_type.to_string(),
+                ranking,
             },
         )?;
         Ok(())
@@ -591,7 +853,7 @@ impl SyncManager {
                         &edge.edge_type,
                         field_name,
                         ChangeType::Insert,
-                        format!("{}->{}", edge.src, edge.dst),
+                        edge_entity_id(&edge.src, &edge.dst, edge.ranking),
                         text.clone(),
                     );
                     coord.on_change(ctx).await.map_err(SyncError::from)?;
@@ -608,12 +870,13 @@ impl SyncManager {
         src: &crate::core::Value,
         dst: &crate::core::Value,
         edge_type: &str,
+        ranking: i64,
     ) -> Result<(), SyncError> {
         #[cfg(feature = "fulltext-search")]
-        let edge_id = format!("{}->{}", src, dst);
+        let edge_id = edge_entity_id(src, dst, ranking);
 
         #[cfg(not(feature = "fulltext-search"))]
-        let _ = (space_id, src, dst, edge_type);
+        let _ = (space_id, src, dst, edge_type, ranking);
 
         #[cfg(feature = "fulltext-search")]
         if let Some(ref coord) = self.sync_coordinator {
@@ -649,95 +912,13 @@ impl SyncManager {
         Ok(())
     }
 
-    #[cfg(feature = "qdrant")]
-    pub fn on_vector_change_with_context_buffered(
-        &self,
-        txn_id: crate::core::types::TransactionId,
-        ctx: crate::sync::vector_sync::VectorChangeContext,
-    ) -> Result<(), SyncError> {
-        if let Some(ref vector_coord) = self.vector_coordinator {
-            vector_coord
-                .buffer_vector_change(txn_id, ctx)
-                .map_err(|e| SyncError::VectorError(e.to_string()))?;
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "fulltext-search")]
-    pub async fn commit_all(&self) -> Result<(), SyncError> {
-        if let Some(ref coord) = self.sync_coordinator {
-            coord.commit_all().await?;
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "fulltext-search")]
-    pub async fn prepare_transaction(
-        &self,
-        txn_id: crate::core::types::TransactionId,
-    ) -> Result<(), SyncError> {
-        if let Some(ref coord) = self.sync_coordinator {
-            coord.prepare_transaction(txn_id).await?;
-        }
-        Ok(())
-    }
-
-    /// Commit transaction: flush buffered operations to external indexes.
-    ///
-    /// Uses a commit order that minimizes inconsistency on partial failure:
-    /// 1. Validate both coordinators (prepare phase)
-    /// 2. Commit vector first (external system, harder to recover from)
-    /// 3. Commit fulltext second (local system, easier to rebuild)
-    /// 4. If vector fails, fulltext buffer is still intact for rollback.
-    /// 5. If fulltext fails after vector succeeds, vector is committed but
-    ///    fulltext can be rebuilt from storage.
-    pub async fn commit_transaction(
-        &self,
-        txn_id: crate::core::types::TransactionId,
-    ) -> Result<(), SyncError> {
-        #[cfg(feature = "fulltext-search")]
-        if let Some(ref coord) = self.sync_coordinator {
-            coord.prepare_transaction(txn_id).await?;
-        }
-
-        #[cfg(feature = "qdrant")]
-        if let Some(ref vector_coord) = self.vector_coordinator {
-            vector_coord
-                .commit_transaction(txn_id)
-                .await
-                .map_err(|e| SyncError::VectorError(e.to_string()))?;
-        }
-
-        #[cfg(feature = "fulltext-search")]
-        if let Some(ref coord) = self.sync_coordinator {
-            coord.commit_transaction(txn_id).await?;
-        }
-
-        Ok(())
-    }
-
     pub async fn rollback_transaction(
         &self,
         txn_id: crate::core::types::TransactionId,
     ) -> Result<(), SyncError> {
         self.rollback_transaction_to_sequence_sync(txn_id, 0)?;
-        self.staged_events.remove(&txn_id);
+        self.pending_intents.remove(&txn_id);
         Ok(())
-    }
-
-    #[cfg(feature = "fulltext-search")]
-    pub fn prepare_transaction_sync(
-        &self,
-        txn_id: crate::core::types::TransactionId,
-    ) -> Result<(), SyncError> {
-        self.execute_sync(|| self.prepare_transaction(txn_id))
-    }
-
-    pub fn commit_transaction_sync(
-        &self,
-        txn_id: crate::core::types::TransactionId,
-    ) -> Result<(), SyncError> {
-        self.execute_sync(|| self.commit_transaction(txn_id))
     }
 
     pub fn rollback_transaction_sync(
@@ -747,20 +928,15 @@ impl SyncManager {
         self.execute_sync(|| self.rollback_transaction(txn_id))
     }
 
-    pub fn transaction_intents(
+    pub fn pending_transaction_intents(
         &self,
         txn_id: crate::core::types::TransactionId,
     ) -> Result<Vec<crate::core::wal::OutboxIntent>, SyncError> {
-        let events = self
-            .staged_events
+        Ok(self
+            .pending_intents
             .get(&txn_id)
-            .map(|events| events.clone())
-            .unwrap_or_default();
-        events
-            .iter()
-            .enumerate()
-            .map(|(sequence, event)| event_to_intent(txn_id, sequence, event))
-            .collect()
+            .map(|intents| intents.clone())
+            .unwrap_or_default())
     }
 
     pub fn materialize_committed_transaction(
@@ -779,17 +955,6 @@ impl SyncManager {
         targets.sort();
         targets.dedup();
         self.execute_sync(|| async {
-            for intent in intents {
-                outbox
-                    .activate_generation(
-                        &intent.mutation.target,
-                        intent.mutation.index_id,
-                        intent.mutation.index_generation.get(),
-                        commit_lsn,
-                    )
-                    .await
-                    .map_err(SyncError::PersistenceError)?;
-            }
             outbox
                 .materialize_commit(commit_lsn, intents, &targets)
                 .await
@@ -845,6 +1010,7 @@ impl SyncManager {
                 "SQLite outbox is not configured".to_string(),
             ));
         };
+        let destination = destination.as_ref().to_path_buf();
         self.execute_sync(|| async {
             outbox
                 .create_snapshot(destination)
@@ -904,11 +1070,29 @@ impl SyncManager {
 
     fn execute_sync<F, Fut, T>(&self, f: F) -> Result<T, SyncError>
     where
-        F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = Result<T, SyncError>>,
+        F: FnOnce() -> Fut + Send,
+        Fut: std::future::Future<Output = Result<T, SyncError>> + Send,
+        T: Send,
     {
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            return tokio::task::block_in_place(|| handle.block_on(f()));
+            return match handle.runtime_flavor() {
+                tokio::runtime::RuntimeFlavor::MultiThread => {
+                    tokio::task::block_in_place(|| handle.block_on(f()))
+                }
+                tokio::runtime::RuntimeFlavor::CurrentThread => std::thread::scope(|scope| {
+                    let join = scope.spawn(|| {
+                        let runtime = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .map_err(|error| SyncError::Internal(error.to_string()))?;
+                        runtime.block_on(f())
+                    });
+                    join.join().map_err(|_| {
+                        SyncError::Internal("Synchronous async operation panicked".to_string())
+                    })?
+                }),
+                _ => handle.block_on(f()),
+            };
         }
 
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -918,20 +1102,6 @@ impl SyncManager {
                 SyncError::Internal(format!("Failed to create sync runtime: {}", error))
             })?;
         runtime.block_on(f())
-    }
-
-    #[cfg(feature = "qdrant")]
-    pub async fn commit_vector_transaction(
-        &self,
-        txn_id: crate::core::types::TransactionId,
-    ) -> Result<(), SyncError> {
-        if let Some(ref vector_coord) = self.vector_coordinator {
-            vector_coord
-                .commit_transaction(txn_id)
-                .await
-                .map_err(|e| SyncError::VectorError(e.to_string()))?;
-        }
-        Ok(())
     }
 
     #[cfg(feature = "fulltext-search")]
@@ -1088,15 +1258,16 @@ impl SyncManager {
     }
 }
 
-fn event_to_intent(
+fn payload_to_intent(
     txn_id: crate::core::types::TransactionId,
-    sequence: usize,
-    event: &OutboxEvent,
+    intent_sequence: u32,
+    target_name: &str,
+    payload: &OutboxPayload,
 ) -> Result<crate::core::wal::OutboxIntent, SyncError> {
     use crate::core::types::{IdempotencyKey, IndexGeneration, OrderingKey, TargetId, VertexId};
     use crate::core::wal::{EntityRef, IndexMutation, IndexOperation, WAL_SYNC_WIRE_VERSION};
 
-    let (index_name, entity_ref, operation) = match &event.payload {
+    let (index_name, entity_ref, operation) = match payload {
         OutboxPayload::Vertex {
             tag_name,
             vertex_id,
@@ -1126,6 +1297,7 @@ fn event_to_intent(
             src,
             dst,
             edge_type,
+            ranking,
             ..
         } => (
             edge_type.as_str(),
@@ -1143,7 +1315,7 @@ fn event_to_intent(
                     ))
                 })?,
                 edge_type: stable_hash(edge_type.as_bytes()) as u32,
-                ranking: 0,
+                ranking: *ranking,
             },
             IndexOperation::Delete,
         ),
@@ -1162,14 +1334,12 @@ fn event_to_intent(
             IndexOperation::Delete,
         ),
     };
-    let target = TargetId::new(event.target.clone()).map_err(SyncError::PersistenceError)?;
-    let ordering_key =
-        OrderingKey::new(event.ordering_key.clone()).map_err(SyncError::PersistenceError)?;
-    let idempotency_key =
-        IdempotencyKey::new(event.idempotency_key.clone()).map_err(SyncError::PersistenceError)?;
-    let intent_sequence = u32::try_from(sequence).map_err(|_| {
-        SyncError::PersistenceError("Transaction intent count exceeds u32 range".to_string())
-    })?;
+    let sequence = u64::from(intent_sequence).saturating_add(1);
+    let id = format!("{}:{}:{}", txn_id.0, target_name, sequence);
+    let target = TargetId::new(target_name.to_string()).map_err(SyncError::PersistenceError)?;
+    let ordering_key = OrderingKey::new(format!("{}:default:{}", target_name, id))
+        .map_err(SyncError::PersistenceError)?;
+    let idempotency_key = IdempotencyKey::new(id).map_err(SyncError::PersistenceError)?;
     Ok(crate::core::wal::OutboxIntent {
         wire_version: WAL_SYNC_WIRE_VERSION,
         transaction_id: txn_id,
@@ -1181,7 +1351,7 @@ fn event_to_intent(
             index_generation: IndexGeneration::new(1),
             entity_ref,
             operation,
-            document_or_vector: postcard::to_allocvec(&event.payload).map_err(|error| {
+            document_or_vector: postcard::to_allocvec(payload).map_err(|error| {
                 SyncError::PersistenceError(format!(
                     "Failed to serialize target mutation: {}",
                     error
@@ -1193,6 +1363,10 @@ fn event_to_intent(
     })
 }
 
+fn edge_entity_id(src: impl std::fmt::Display, dst: impl std::fmt::Display, ranking: i64) -> String {
+    format!("{}->{}#{}", src, dst, ranking)
+}
+
 fn stable_hash(bytes: &[u8]) -> u64 {
     let mut hash = 0xcbf29ce484222325u64;
     for byte in bytes {
@@ -1200,6 +1374,47 @@ fn stable_hash(bytes: &[u8]) -> u64 {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     hash
+}
+
+fn latest_manifest_outbox_snapshot(work_dir: &Path) -> Result<Option<OutboxSnapshot>, String> {
+    let manifest_manager =
+        CheckpointManifestManager::new(work_dir.join("checkpoint").join("manifests"));
+    let Some(manifest) = manifest_manager.load_latest()? else {
+        return Ok(None);
+    };
+    Ok(manifest.outbox_snapshot.map(|snapshot| OutboxSnapshot {
+        path: snapshot.path,
+        size_bytes: snapshot.size_bytes,
+        checksum: snapshot.checksum,
+        materialized_lsn: snapshot.materialized_lsn,
+    }))
+}
+
+fn restore_outbox_from_candidates(
+    live_path: &Path,
+    snapshot_dir: &Path,
+    preferred_snapshot: Option<&OutboxSnapshot>,
+) -> Result<Option<CommitLsn>, String> {
+    let mut preferred_error = None;
+    if let Some(snapshot) = preferred_snapshot {
+        match crate::sync::restore_snapshot_sync(snapshot, live_path) {
+            Ok(()) => return Ok(Some(snapshot.materialized_lsn)),
+            Err(error) => {
+                log::warn!(
+                    "Failed to restore manifest-referenced outbox snapshot {}: {}",
+                    snapshot.path.display(),
+                    error
+                );
+                preferred_error = Some(error);
+            }
+        }
+    }
+
+    if snapshot_dir.is_dir() {
+        return crate::sync::restore_latest_snapshot(live_path, snapshot_dir).map(Some);
+    }
+
+    preferred_error.map_or(Ok(None), Err)
 }
 
 #[derive(Debug, Clone)]
@@ -1261,9 +1476,51 @@ pub enum SyncError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sync::CheckpointManifest;
+    use tempfile::TempDir;
+
+    async fn create_test_snapshots(root: &Path) -> Vec<OutboxSnapshot> {
+        let source = root.join("source.sqlite");
+        let outbox = SqliteOutbox::open(&source)
+            .await
+            .expect("source outbox should open");
+        let snapshot_dir = root.join("outbox_snapshots");
+        let mut snapshots = Vec::new();
+        for lsn in [100, 200] {
+            outbox
+                .materialize_commit(CommitLsn::new(lsn), &[], &[])
+                .await
+                .expect("source outbox should materialize");
+            snapshots.push(
+                outbox
+                    .create_snapshot(snapshot_dir.join(format!("outbox_snapshot_{lsn}.sqlite")))
+                    .await
+                    .expect("outbox snapshot should be created"),
+            );
+        }
+        snapshots
+    }
+
+    fn publish_test_manifest(root: &Path, snapshot: &OutboxSnapshot) {
+        let storage_path = root.join("checkpoint/checkpoint_1");
+        std::fs::create_dir_all(&storage_path).expect("storage checkpoint should exist");
+        std::fs::write(storage_path.join("checkpoint.meta"), b"checkpoint")
+            .expect("storage checkpoint metadata should exist");
+        let manifest = CheckpointManifest::new(
+            1,
+            snapshot.materialized_lsn,
+            CheckpointManifest::storage_snapshot_from_directory(&storage_path, 1, 0, 0)
+                .expect("storage snapshot reference should be created"),
+            Some(CheckpointManifest::outbox_snapshot_from(snapshot)),
+            Vec::new(),
+        );
+        CheckpointManifestManager::new(root.join("checkpoint/manifests"))
+            .publish(&manifest)
+            .expect("checkpoint manifest should publish");
+    }
 
     #[test]
-    fn staged_events_are_accessible_via_transaction_intents() {
+    fn pending_intents_are_available_before_commit() {
         let manager = SyncManager::new_without_fulltext();
         let txn_id = TransactionId::new(77);
         manager
@@ -1277,14 +1534,14 @@ mod tests {
             )
             .expect("event should stage");
         let intents = manager
-            .transaction_intents(txn_id)
+            .pending_transaction_intents(txn_id)
             .expect("intents should be available");
-        assert_eq!(intents.len(), 1);
-        assert_eq!(manager.outbox_stats().pending, 1);
+        assert!(intents.is_empty());
+        assert_eq!(manager.outbox_stats().pending, 0);
     }
 
     #[test]
-    fn staged_events_cleared_on_rollback() {
+    fn pending_intents_are_cleared_on_rollback() {
         let manager = SyncManager::new_without_fulltext();
         let txn_id = TransactionId::new(88);
         manager
@@ -1297,8 +1554,127 @@ mod tests {
                 ChangeType::Insert,
             )
             .expect("event should stage");
-        assert_eq!(manager.outbox_stats().pending, 1);
-        manager.clear_staged_transaction(txn_id);
+        assert!(manager
+            .pending_transaction_intents(txn_id)
+            .expect("intents should be available")
+            .is_empty());
+        manager.clear_transaction_intents(txn_id);
         assert_eq!(manager.outbox_stats().pending, 0);
+    }
+
+    #[test]
+    fn edge_delete_intent_preserves_parallel_edge_ranking() {
+        let payload = OutboxPayload::EdgeDelete {
+            space_id: 1,
+            src: Value::String("src".to_string()),
+            dst: Value::String("dst".to_string()),
+            edge_type: "KNOWS".to_string(),
+            ranking: 7,
+        };
+        let intent = payload_to_intent(TransactionId::new(101), 0, "fulltext", &payload)
+            .expect("edge delete intent should be serializable");
+
+        match intent.mutation.entity_ref {
+            crate::core::wal::EntityRef::Edge { ranking, .. } => assert_eq!(ranking, 7),
+            other => panic!("expected edge entity reference, got {other:?}"),
+        }
+    }
+
+    #[cfg(feature = "fulltext-search")]
+    #[test]
+    fn fulltext_changes_use_only_the_fulltext_target() {
+        let directory = TempDir::new().expect("temporary index directory should be created");
+        let mut config = crate::search::FulltextConfig::default();
+        config.index_path = directory.path().to_path_buf();
+        let fulltext_manager = Arc::new(
+            crate::search::FulltextIndexManager::new(config)
+                .expect("fulltext manager should be created"),
+        );
+        let coordinator = Arc::new(crate::sync::SyncCoordinator::new(
+            fulltext_manager,
+            crate::sync::BatchConfig::default(),
+        ));
+        let manager = SyncManager::new(coordinator);
+        let txn_id = TransactionId::new(99);
+
+        manager
+            .on_vertex_change_with_txn(
+                txn_id,
+                1,
+                "Node",
+                &Value::String("v1".to_string()),
+                &[("text".to_string(), Value::String("hello".to_string()))],
+                ChangeType::Insert,
+            )
+            .expect("change should stage");
+
+        let intents = manager
+            .pending_transaction_intents(txn_id)
+            .expect("intents should be available");
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].mutation.target.as_str(), "fulltext");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn configure_outbox_prefers_manifest_snapshot_over_newer_directory_snapshot() {
+        let directory = TempDir::new().expect("temporary directory should be created");
+        let snapshots = create_test_snapshots(directory.path()).await;
+        publish_test_manifest(directory.path(), &snapshots[0]);
+
+        let mut manager = SyncManager::new_without_fulltext();
+        manager
+            .configure_outbox(directory.path().join("outbox/outbox.sqlite"))
+            .expect("outbox should recover from the manifest snapshot");
+
+        assert_eq!(
+            manager
+                .outbox_materialized_lsn()
+                .expect("outbox frontier should load"),
+            Some(CommitLsn::new(100))
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn configure_outbox_verifies_and_restores_corrupt_live_database() {
+        let directory = TempDir::new().expect("temporary directory should be created");
+        let snapshots = create_test_snapshots(directory.path()).await;
+        publish_test_manifest(directory.path(), &snapshots[0]);
+        let live_path = directory.path().join("outbox/outbox.sqlite");
+        std::fs::create_dir_all(live_path.parent().expect("live parent should exist"))
+            .expect("live parent should be created");
+        std::fs::write(&live_path, b"corrupt sqlite").expect("live database should be corrupt");
+
+        let mut manager = SyncManager::new_without_fulltext();
+        manager
+            .configure_outbox(&live_path)
+            .expect("corrupt outbox should be restored");
+
+        assert_eq!(
+            manager
+                .outbox_materialized_lsn()
+                .expect("outbox frontier should load"),
+            Some(CommitLsn::new(100))
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn configure_outbox_falls_back_when_manifest_snapshot_checksum_is_invalid() {
+        let directory = TempDir::new().expect("temporary directory should be created");
+        let snapshots = create_test_snapshots(directory.path()).await;
+        std::fs::write(&snapshots[0].path, b"corrupt snapshot")
+            .expect("manifest snapshot should be corrupt");
+        publish_test_manifest(directory.path(), &snapshots[0]);
+
+        let mut manager = SyncManager::new_without_fulltext();
+        manager
+            .configure_outbox(directory.path().join("outbox/outbox.sqlite"))
+            .expect("outbox should fall back to a valid snapshot");
+
+        assert_eq!(
+            manager
+                .outbox_materialized_lsn()
+                .expect("outbox frontier should load"),
+            Some(CommitLsn::new(200))
+        );
     }
 }

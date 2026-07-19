@@ -46,6 +46,7 @@
 
 pub mod checkpoint;
 pub mod commit;
+pub mod filter;
 pub mod parser;
 pub mod recovery;
 pub mod writer;
@@ -56,6 +57,7 @@ pub use crate::core::wal::redo::*;
 pub use crate::core::wal::types::*;
 pub use checkpoint::{Checkpoint, CheckpointManager, CheckpointMode, CheckpointResult};
 pub use commit::{collect_committed_transactions, CommittedWalTransaction, TransactionWalEntry};
+pub use filter::{filter_intents_for_index, filter_intents_for_indexes};
 pub use parser::{
     LocalWalParser, ParallelWalParser, ParsedWalEntry, RecoveryResult, WalEntryIter, WalParser,
     WalParserFactory,

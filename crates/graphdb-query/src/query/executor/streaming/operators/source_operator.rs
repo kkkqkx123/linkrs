@@ -44,6 +44,21 @@ fn make_vertex_row(vertex: crate::core::vertex_edge_path::Vertex) -> Vec<Value> 
     vec![Value::Vertex(Box::new(vertex))]
 }
 
+fn make_covering_vertex_row(
+    entity_ref: &EntityRef,
+    columns: Vec<(String, Value)>,
+) -> Option<Vec<Value>> {
+    let vertex_id = entity_ref_to_vertex_id(entity_ref)?;
+    let properties = columns.into_iter().collect();
+    Some(make_vertex_row(
+        crate::core::vertex_edge_path::Vertex::new_with_properties(
+            vertex_id,
+            Vec::new(),
+            properties,
+        ),
+    ))
+}
+
 fn make_edge_row(edge: crate::core::vertex_edge_path::Edge) -> Vec<Value> {
     vec![Value::Edge(Box::new(edge))]
 }
@@ -1013,31 +1028,14 @@ fn next_index_chunk(
                 match row {
                     IndexRow::Covering {
                         entity_ref,
-                        columns: _,
+                        columns,
                     } => {
-                        // Phase 5+: handle covering projections directly.
-                        // For now, fall through to back-to-table fetch.
-                        let vertex_id = entity_ref_to_vertex_id(&entity_ref);
-                        if let Some(vid) = vertex_id {
-                            match guard.get_vertex(space_name, &vid) {
-                                Ok(Some(vertex)) => output_rows.push(make_vertex_row(vertex)),
-                                Ok(None) => {
-                                    // Cursor stale_checker should have filtered this.
-                                    debug_assert!(
-                                        false,
-                                        "cursor yielded stale vertex {} in space {}",
-                                        vid, space_name
-                                    );
-                                }
-                                Err(error) => {
-                                    return Err(storage_error(
-                                        source,
-                                        "get indexed vertex",
-                                        space_name,
-                                        error,
-                                    ));
-                                }
-                            }
+                        // The storage cursor only emits Covering when every
+                        // requested column is present in the immutable index
+                        // record. Keep the result detached from the mutable
+                        // table so the query remains a true covering scan.
+                        if let Some(row) = make_covering_vertex_row(&entity_ref, columns) {
+                            output_rows.push(row);
                         }
                     }
                     IndexRow::RowId(entity_ref) => {
@@ -1136,6 +1134,23 @@ fn next_buffer_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn covering_index_rows_do_not_require_a_table_fetch() {
+        let row = make_covering_vertex_row(
+            &EntityRef::Vertex(VertexId::from_int64(7)),
+            vec![("name".to_string(), Value::String("Alice".to_string()))],
+        )
+        .expect("vertex entity should produce a covering row");
+        let Value::Vertex(vertex) = &row[0] else {
+            panic!("covering row should contain a vertex");
+        };
+        assert_eq!(vertex.vid.as_int64(), Some(7));
+        assert_eq!(
+            vertex.get_property_any("name"),
+            Some(&Value::String("Alice".to_string()))
+        );
+    }
 
     #[test]
     fn scan_source_terminates_after_consuming_its_buffer() {

@@ -694,6 +694,29 @@ impl SqliteOutbox {
                 .map_err(|error| error.to_string())?
                 .as_millis() as u64;
 
+            // A normal data mutation can arrive before an explicit index
+            // rebuild has registered a generation. The first generation for
+            // a live target is registered as active atomically with the
+            // projection row. Existing lifecycle state is preserved, so a
+            // rebuilding generation remains fenced until its barrier is
+            // published.
+            for intent in intents {
+                sqlx::query(
+                    "INSERT OR IGNORE INTO generation_state(\
+                        target, index_id, generation, state, barrier_lsn\
+                     ) VALUES(?, ?, ?, 'active', NULL)",
+                )
+                .bind(intent.mutation.target.as_str())
+                .bind(to_sql_i64(intent.mutation.index_id, "index ID")?)
+                .bind(to_sql_i64(
+                    intent.mutation.index_generation.get(),
+                    "index generation",
+                )?)
+                .execute(&mut *connection)
+                .await
+                .map_err(|error| error.to_string())?;
+            }
+
             for target in targets {
                 sqlx::query("INSERT OR IGNORE INTO target_state(target) VALUES(?)")
                     .bind(target.as_str())
@@ -1014,6 +1037,52 @@ impl SqliteOutbox {
         .await
         .map_err(|error| error.to_string())?;
         rows.into_iter().map(TargetId::new).collect()
+    }
+
+    /// Return aggregate delivery statistics from the durable projection.
+    ///
+    /// The in-memory transaction staging map is intentionally not used here:
+    /// once a commit has crossed the WAL and SQLite materialization fences,
+    /// SQLite is the source of truth for backlog, leases, retries, and
+    /// dead-letter state.
+    pub async fn stats(&self) -> Result<crate::sync::OutboxStats, String> {
+        let row = sqlx::query(
+            "SELECT \
+                COALESCE(SUM(CASE WHEN status IN ('pending', 'retry') THEN 1 ELSE 0 END), 0) AS pending, \
+                COALESCE(SUM(retry_count), 0) AS retries, \
+                COALESCE(SUM(CASE WHEN status = 'leased' THEN 1 ELSE 0 END), 0) AS leased, \
+                COALESCE(SUM(CASE WHEN status = 'dead_letter' THEN 1 ELSE 0 END), 0) AS dead_lettered, \
+                MIN(CASE WHEN status IN ('pending', 'retry', 'leased') AND created_at_ms > 0 \
+                         THEN created_at_ms END) AS oldest_created_at_ms \
+             FROM events",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|error| error.to_string())?;
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| error.to_string())?
+            .as_millis() as u64;
+        let oldest_created_at_ms: Option<i64> = row.get("oldest_created_at_ms");
+        let oldest_event_age_ms = oldest_created_at_ms
+            .map(|created_at_ms| from_sql_i64(created_at_ms, "event creation timestamp"))
+            .transpose()?
+            .map(|created_at_ms| now_ms.saturating_sub(created_at_ms));
+
+        Ok(crate::sync::OutboxStats {
+            pending: from_sql_i64(row.get("pending"), "pending event count")?
+                .try_into()
+                .map_err(|_| "pending event count exceeds usize range".to_string())?,
+            retries: from_sql_i64(row.get("retries"), "retry count")?,
+            oldest_event_age_ms: oldest_event_age_ms.unwrap_or(0),
+            dead_lettered: from_sql_i64(row.get("dead_lettered"), "dead letter count")?
+                .try_into()
+                .map_err(|_| "dead letter count exceeds usize range".to_string())?,
+            leased: from_sql_i64(row.get("leased"), "leased event count")?
+                .try_into()
+                .map_err(|_| "leased event count exceeds usize range".to_string())?,
+            ..Default::default()
+        })
     }
 
     pub async fn retry_count(&self, event_id: i64) -> Result<u64, String> {
@@ -1611,6 +1680,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn materialization_registers_a_missing_first_generation() {
+        let directory = TempDir::new().expect("temporary directory should be created");
+        let target = TargetId::new("fulltext").expect("target should be valid");
+        let outbox = SqliteOutbox::open(directory.path().join("outbox.sqlite"))
+            .await
+            .expect("outbox should open");
+        outbox
+            .materialize_commit(
+                CommitLsn::new(10),
+                &[intent(0, 1, &target)],
+                std::slice::from_ref(&target),
+            )
+            .await
+            .expect("commit should materialize");
+
+        let state = outbox
+            .get_generation_state(&target, 1, 1)
+            .await
+            .expect("generation state should load")
+            .expect("generation should be registered");
+        assert_eq!(state.0, "active");
+        assert!(outbox
+            .claim_next(&target, "worker-1", 0, 100)
+            .await
+            .expect("event should be claimable")
+            .is_some());
+    }
+
+    #[tokio::test]
     async fn frontier_does_not_cross_an_unacknowledged_commit() {
         let directory = TempDir::new().expect("temporary directory should be created");
         let target = TargetId::new("vector").expect("target should be valid");
@@ -1795,5 +1893,28 @@ mod tests {
         assert_eq!(diagnostics.indexes.len(), 1);
         assert_eq!(diagnostics.indexes[0].state, "active");
         assert_eq!(diagnostics.indexes[0].frontier_lag, 42);
+
+        let stats = outbox.stats().await.expect("outbox stats should load");
+        assert_eq!(stats.pending, 1);
+        assert_eq!(stats.leased, 0);
+        assert_eq!(stats.dead_lettered, 0);
+        assert_eq!(stats.retries, 0);
+
+        let event = outbox
+            .claim_next(&target, "stats-worker", 0, 1_000)
+            .await
+            .expect("event should be claimable")
+            .expect("event should exist");
+        let leased = outbox.stats().await.expect("leased stats should load");
+        assert_eq!(leased.pending, 0);
+        assert_eq!(leased.leased, 1);
+        outbox
+            .retry(&event, 1_001, "temporary failure")
+            .await
+            .expect("event should be retryable");
+        let retrying = outbox.stats().await.expect("retry stats should load");
+        assert_eq!(retrying.pending, 1);
+        assert_eq!(retrying.leased, 0);
+        assert_eq!(retrying.retries, 1);
     }
 }

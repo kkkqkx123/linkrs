@@ -1721,7 +1721,9 @@ mod tests {
         );
 
         // Acquire a read timestamp (creates a snapshot)
-        let read_ts = version_manager.acquire_read_timestamp();
+        let read_ts = version_manager
+            .acquire_read_timestamp()
+            .expect("Failed to acquire read timestamp");
         assert!(read_ts > 0, "Read timestamp should be valid");
 
         // Now cleanup_threshold should equal the read timestamp
@@ -1763,9 +1765,15 @@ mod tests {
         assert_eq!(snapshot_tracker.active_count(), 0);
 
         // Acquire multiple read timestamps
-        let ts1 = version_manager.acquire_read_timestamp();
-        let ts2 = version_manager.acquire_read_timestamp();
-        let ts3 = version_manager.acquire_read_timestamp();
+        let ts1 = version_manager
+            .acquire_read_timestamp()
+            .expect("Failed to acquire read timestamp");
+        let ts2 = version_manager
+            .acquire_read_timestamp()
+            .expect("Failed to acquire read timestamp");
+        let ts3 = version_manager
+            .acquire_read_timestamp()
+            .expect("Failed to acquire read timestamp");
 
         // All should use the same read_ts (due to MVCC design)
         assert_eq!(ts1, ts2);

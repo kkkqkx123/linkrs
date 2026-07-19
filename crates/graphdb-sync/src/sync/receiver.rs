@@ -78,6 +78,13 @@ impl FulltextReceiver {
                 });
                 continue;
             }
+            let applied_lsn = *self.applied_lsn.read().await;
+            if *lsn < applied_lsn {
+                return Err(format!(
+                    "late fulltext mutation: commit LSN {} is below applied LSN {}",
+                    lsn, applied_lsn
+                ));
+            }
 
             match mutation.operation {
                 crate::core::wal::IndexOperation::Delete => {
@@ -148,6 +155,34 @@ impl FulltextReceiver {
         *self.applied_lsn.write().await = max_lsn;
 
         Ok(receipts)
+    }
+
+    pub async fn check_late_arrival(
+        &self,
+        commit_lsn: CommitLsn,
+        idempotency_key: &str,
+    ) -> LateArrivalResult {
+        let receipts = self.receipts.read().await;
+        if receipts.contains(idempotency_key) {
+            return LateArrivalResult {
+                accepted: false,
+                reason: "duplicate idempotency key".to_string(),
+            };
+        }
+        let applied_lsn = *self.applied_lsn.read().await;
+        if commit_lsn < applied_lsn {
+            return LateArrivalResult {
+                accepted: false,
+                reason: format!(
+                    "late arrival: commit_lsn {} < applied_lsn {}",
+                    commit_lsn, applied_lsn
+                ),
+            };
+        }
+        LateArrivalResult {
+            accepted: true,
+            reason: String::new(),
+        }
     }
 
     pub async fn applied_lsn(&self) -> CommitLsn {

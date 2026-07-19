@@ -62,16 +62,28 @@ pub fn collect_committed_transactions(
             WalOpType::TransactionCommit => {
                 let commit: TransactionCommit = postcard::from_bytes(&entry.payload)?;
                 commit.validate().map_err(WalError::InvalidOperation)?;
-                let checksum = parsed_batch_checksum(&pending)?;
-                if checksum != commit.batch_checksum {
-                    return Err(WalError::ChecksumMismatch {
+                // During the migration window, legacy records can precede a
+                // transactional batch in the same WAL stream. The writer's
+                // checksum covers only the transactional suffix, so locate
+                // that exact suffix instead of accidentally treating legacy
+                // records as part of the batch. A missing match remains a
+                // hard corruption error.
+                let batch_start = (0..=pending.len())
+                    .rev()
+                    .find(|start| {
+                        parsed_batch_checksum(&pending[*start..])
+                            .map(|checksum| checksum == commit.batch_checksum)
+                            .unwrap_or(false)
+                    })
+                    .ok_or_else(|| WalError::ChecksumMismatch {
                         expected: commit.batch_checksum,
-                        actual: checksum,
-                    });
-                }
+                        actual: parsed_batch_checksum(&pending).unwrap_or_default(),
+                    })?;
+                let batch = pending.split_off(batch_start);
+                pending.clear();
                 let mut redo_entries = Vec::new();
                 let mut intents = Vec::new();
-                for pending_entry in pending.drain(..) {
+                for pending_entry in batch {
                     if WalOpType::try_from(pending_entry.header.op_type)? == WalOpType::OutboxIntent
                     {
                         let intent: OutboxIntent = postcard::from_bytes(&pending_entry.payload)?;

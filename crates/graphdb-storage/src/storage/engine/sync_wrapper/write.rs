@@ -109,7 +109,13 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
     fn update_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError> {
         let result = self.inner.update_edge(space, edge.clone());
         if result.is_ok() {
-            if let Err(error) = self.sync_delete_edge(space, &edge.src, &edge.dst, &edge.edge_type)
+            if let Err(error) = self.sync_delete_edge(
+                space,
+                &edge.src,
+                &edge.dst,
+                &edge.edge_type,
+                edge.ranking,
+            )
             {
                 log::error!(
                     "Index event delivery deferred after edge update delete: {}",
@@ -138,7 +144,7 @@ impl<S: StorageClient + 'static> StorageWriter for SyncWrapper<S> {
     ) -> Result<(), StorageError> {
         let result = StorageWriter::delete_edge(&mut self.inner, space, src, dst, edge_type, rank);
         if result.is_ok() {
-            if let Err(error) = self.sync_delete_edge(space, src, dst, edge_type) {
+            if let Err(error) = self.sync_delete_edge(space, src, dst, edge_type, rank) {
                 log::error!("Index event delivery deferred after edge delete: {}", error);
             }
         }

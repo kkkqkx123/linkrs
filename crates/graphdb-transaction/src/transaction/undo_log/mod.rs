@@ -3,6 +3,10 @@
 //! Provides transaction rollback support through undo log entries.
 //! Each undo log entry can reverse a specific operation during transaction abort.
 
+pub mod file_backed;
+
+pub use file_backed::{FileBackedUndoLog, UndoLogConfig};
+
 use super::wal::{ColumnId, LabelId, Timestamp, VertexId};
 use crate::core::types::{
     EdgeDeletionContext, EdgeDeletionContextParams, EdgeIdentifier, EdgeKey, VertexIdentifier,
@@ -21,7 +25,7 @@ pub use crate::core::types::PropertyValue;
 pub use crate::core::types::UndoTarget;
 
 /// Undo log for create vertex type operation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CreateVertexTypeUndo {
     pub vertex_type: LabelId,
 }
@@ -37,7 +41,7 @@ impl CreateVertexTypeUndo {
 }
 
 /// Undo log for create edge type operation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CreateEdgeTypeUndo {
     pub src_type: LabelId,
     pub dst_type: LabelId,
@@ -58,7 +62,7 @@ impl CreateEdgeTypeUndo {
 }
 
 /// Undo log for insert vertex operation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct InsertVertexUndo {
     pub v_label: LabelId,
     pub vid: VertexId,
@@ -75,7 +79,7 @@ impl InsertVertexUndo {
 }
 
 /// Undo log for insert edge operation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct InsertEdgeUndo {
     pub src_label: LabelId,
     pub dst_label: LabelId,
@@ -111,7 +115,7 @@ impl InsertEdgeUndo {
 }
 
 /// Undo log for update vertex property operation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UpdateVertexPropUndo {
     pub v_label: LabelId,
     pub vid: VertexId,
@@ -138,7 +142,7 @@ impl UpdateVertexPropUndo {
 }
 
 /// Undo log for update edge property operation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UpdateEdgePropUndo {
     pub src_label: LabelId,
     pub src_vid: VertexId,
@@ -180,7 +184,7 @@ impl UpdateEdgePropUndo {
 }
 
 /// Related edge information for remove vertex undo
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RelatedEdgeInfo {
     pub src_vid: VertexId,
     pub dst_vid: VertexId,
@@ -190,7 +194,7 @@ pub struct RelatedEdgeInfo {
 }
 
 /// Undo log for remove vertex operation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RemoveVertexUndo {
     pub v_label: LabelId,
     pub vid: VertexId,
@@ -231,7 +235,7 @@ impl RemoveVertexUndo {
 }
 
 /// Undo log for remove edge operation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RemoveEdgeUndo {
     pub src_label: LabelId,
     pub src_vid: VertexId,
@@ -267,7 +271,7 @@ impl RemoveEdgeUndo {
 }
 
 /// Undo log for add vertex property operation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AddVertexPropUndo {
     pub label: LabelId,
     pub label_name: String,
@@ -288,7 +292,7 @@ impl AddVertexPropUndo {
 }
 
 /// Undo log for add edge property operation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AddEdgePropUndo {
     pub src_label: LabelId,
     pub dst_label: LabelId,
@@ -318,7 +322,7 @@ impl AddEdgePropUndo {
 }
 
 /// Undo log for rename vertex property operation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RenameVertexPropUndo {
     pub label: LabelId,
     pub label_name: String,
@@ -349,7 +353,7 @@ impl RenameVertexPropUndo {
 }
 
 /// Undo log for rename edge property operation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RenameEdgePropUndo {
     pub src_label: LabelId,
     pub dst_label: LabelId,
@@ -390,7 +394,7 @@ impl RenameEdgePropUndo {
 }
 
 /// Undo log for delete vertex property operation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DeleteVertexPropUndo {
     pub label: LabelId,
     pub label_name: String,
@@ -411,7 +415,7 @@ impl DeleteVertexPropUndo {
 }
 
 /// Undo log for delete edge property operation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DeleteEdgePropUndo {
     pub src_label: LabelId,
     pub dst_label: LabelId,
@@ -441,7 +445,7 @@ impl DeleteEdgePropUndo {
 }
 
 /// Undo log for delete vertex type operation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DeleteVertexTypeUndo {
     pub v_label: String,
 }
@@ -457,7 +461,7 @@ impl DeleteVertexTypeUndo {
 }
 
 /// Undo log for delete edge type operation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DeleteEdgeTypeUndo {
     pub src_label: String,
     pub dst_label: String,
@@ -478,7 +482,7 @@ impl DeleteEdgeTypeUndo {
 }
 
 /// Undo log entry enum - zero-cost abstraction for all undo types
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum UndoLogEntry {
     CreateVertexType(CreateVertexTypeUndo),
     CreateEdgeType(CreateEdgeTypeUndo),
@@ -542,9 +546,13 @@ impl UndoLogEntry {
     }
 }
 
-/// Undo log manager for collecting and executing undo logs
+/// Undo log manager for collecting and executing undo logs.
+///
+/// Uses `FileBackedUndoLog` internally: when entries exceed the memory
+/// threshold, older entries are spilled to a temp file. The temp file is
+/// automatically cleaned up when the manager is dropped (on commit/abort).
 pub struct UndoLogManager {
-    logs: Vec<UndoLogEntry>,
+    storage: FileBackedUndoLog,
 }
 
 /// Parameters for add_insert_edge operation
@@ -575,11 +583,19 @@ pub struct AddUpdateEdgePropParams {
 
 impl UndoLogManager {
     pub fn new() -> Self {
-        Self { logs: Vec::new() }
+        Self {
+            storage: FileBackedUndoLog::new(UndoLogConfig::default()),
+        }
+    }
+
+    pub fn with_config(config: UndoLogConfig) -> Self {
+        Self {
+            storage: FileBackedUndoLog::new(config),
+        }
     }
 
     pub fn add(&mut self, log: UndoLogEntry) {
-        self.logs.push(log);
+        self.storage.add(log);
     }
 
     pub fn add_insert_vertex(&mut self, label: LabelId, vid: VertexId) {
@@ -633,19 +649,19 @@ impl UndoLogManager {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.logs.is_empty()
+        self.storage.is_empty()
     }
 
     pub fn len(&self) -> usize {
-        self.logs.len()
+        self.storage.len()
     }
 
     pub fn clear(&mut self) {
-        self.logs.clear();
+        self.storage.clear();
     }
 
     pub fn pop(&mut self) -> Option<UndoLogEntry> {
-        self.logs.pop()
+        self.storage.pop()
     }
 
     pub fn execute_undo<T: UndoTarget + ?Sized>(
@@ -653,10 +669,7 @@ impl UndoLogManager {
         graph: &T,
         ts: Timestamp,
     ) -> UndoLogResult<()> {
-        while let Some(log) = self.logs.pop() {
-            log.undo(graph, ts)?;
-        }
-        Ok(())
+        self.storage.execute_undo(graph, ts)
     }
 
     pub fn execute_undo_from_index<T: UndoTarget + ?Sized>(
@@ -665,19 +678,7 @@ impl UndoLogManager {
         ts: Timestamp,
         start_index: usize,
     ) -> UndoLogResult<()> {
-        if start_index > self.logs.len() {
-            return Err(UndoLogError::UndoFailed(format!(
-                "Invalid undo log rollback index: {}, undo log length: {}",
-                start_index,
-                self.logs.len()
-            )));
-        }
-
-        let mut tail = self.logs.split_off(start_index);
-        while let Some(log) = tail.pop() {
-            log.undo(graph, ts)?;
-        }
-        Ok(())
+        self.storage.execute_undo_from_index(graph, ts, start_index)
     }
 }
 

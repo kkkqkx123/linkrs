@@ -172,7 +172,10 @@ impl GraphStoragePersistent {
             resource_accounting,
             layout: GraphStorageLayout::new(),
             stats_manager: None,
-            next_auto_transaction_id: Arc::new(AtomicU64::new(1 << 63)),
+            // SQLite stores transaction IDs in signed INTEGER columns for the
+            // durable outbox. Keep auto-generated IDs in the non-negative
+            // i64 domain while leaving room below the high bit for callers.
+            next_auto_transaction_id: Arc::new(AtomicU64::new(1 << 62)),
             staged_wal: Arc::new(dashmap::DashMap::new()),
         }
     }
@@ -233,7 +236,7 @@ impl GraphStoragePersistent {
             resource_accounting,
             layout: GraphStorageLayout::new_with_path(path),
             stats_manager: None,
-            next_auto_transaction_id: Arc::new(AtomicU64::new(1 << 63)),
+            next_auto_transaction_id: Arc::new(AtomicU64::new(1 << 62)),
             staged_wal: Arc::new(dashmap::DashMap::new()),
         })
     }
@@ -289,7 +292,7 @@ struct WriteTimestampLease {
 impl Drop for WriteTimestampLease {
     fn drop(&mut self) {
         self.version_manager
-            .release_insert_timestamp(self.timestamp);
+            .release_write_timestamp(self.timestamp);
     }
 }
 

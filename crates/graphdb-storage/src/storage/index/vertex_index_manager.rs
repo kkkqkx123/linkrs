@@ -649,19 +649,24 @@ fn project_vertex_row(
     let Some(projection) = projection else {
         return IndexRow::RowId(entity_ref);
     };
-    let columns = if projection.is_empty() {
-        included_columns.to_vec()
-    } else {
-        projection
-            .iter()
-            .filter_map(|name| {
-                included_columns
-                    .iter()
-                    .find(|(candidate, _)| candidate == name)
-                    .cloned()
-            })
-            .collect()
-    };
+    if !projection.is_empty()
+        && !projection.iter().all(|name| {
+            included_columns
+                .iter()
+                .any(|(candidate, _)| candidate == name)
+        })
+    {
+        return IndexRow::RowId(entity_ref);
+    }
+    let columns = projection
+        .iter()
+        .filter_map(|name| {
+            included_columns
+                .iter()
+                .find(|(candidate, _)| candidate == name)
+                .cloned()
+        })
+        .collect();
     IndexRow::Covering {
         entity_ref,
         columns,

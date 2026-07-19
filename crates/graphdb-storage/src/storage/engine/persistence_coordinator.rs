@@ -36,7 +36,7 @@ use std::time::{Duration, Instant, SystemTime};
 use parking_lot::RwLock;
 
 use graphdb_sync::sync::checkpoint_manifest::{
-    CheckpointManifest, CheckpointManifestManager, IndexManifestRef, StorageSnapshotRef,
+    CheckpointManifest, CheckpointManifestManager, IndexManifestRef,
 };
 
 use crate::core::types::Timestamp;
@@ -506,24 +506,6 @@ impl PersistenceCoordinator {
         Self::sync_directory(&self.config.checkpoint_dir)?;
         self.fail_if_injected(PersistenceFaultPoint::CheckpointFsyncAfter)?;
 
-        {
-            let mut cm = self.checkpoint_manager.write();
-            cm.publish_checkpoint(&checkpoint).map_err(|e| {
-                StorageError::db_error(format!("Failed to publish checkpoint: {}", e))
-            })?;
-        }
-
-        // Publication order is part of the recovery protocol:
-        // checkpoint files -> directory fsync -> manager metadata -> WAL
-        // boundary -> snapshot -> outbox marker (the wrapper performs the
-        // last step). Retention only deletes points after all references are
-        // collected, so a failed later step never exposes partial data.
-        if let Some(ref wal) = self.wal_manager {
-            wal.read().set_checkpoint_seq(checkpoint.seq)?;
-        }
-
-        self.mark_checkpointed(wal_lsn);
-
         let snapshot_created = if self.should_snapshot() {
             *self.state.write() = PersistenceState::Snapshotting;
             if let Some(ref snapshot_manager) = self.snapshot_manager {
@@ -560,18 +542,38 @@ impl PersistenceCoordinator {
         self.fail_if_injected(PersistenceFaultPoint::CheckpointVisibilityPublish)?;
         self.publish_checkpoint_manifest(&checkpoint, &data, &checkpoint_dir, wal_lsn)?;
 
+        // The combined manifest is the recovery authority. Publish the legacy
+        // checkpoint-manager metadata only after that durable boundary is
+        // visible, so a crash cannot make an unpublished checkpoint look
+        // recoverable to a component that does not understand the manifest.
+        {
+            let mut cm = self.checkpoint_manager.write();
+            cm.publish_checkpoint(&checkpoint).map_err(|e| {
+                StorageError::db_error(format!("Failed to publish checkpoint: {}", e))
+            })?;
+        }
+
         if let Some(ref wal) = self.wal_manager {
+            wal.read().set_checkpoint_seq(checkpoint.seq)?;
+        }
+
+        self.mark_checkpointed(wal_lsn);
+
+        let safe_wal_lsn = if let Some(ref wal) = self.wal_manager {
             let safe_lsn = self.manifest_manager.latest_safe_lsn().map_err(|error| {
                 StorageError::db_error(format!("Failed to get safe LSN: {}", error))
             })?;
             let safe_wal_lsn = Lsn::new(safe_lsn.get());
             wal.read().truncate(safe_wal_lsn)?;
-        }
+            safe_wal_lsn
+        } else {
+            wal_lsn
+        };
 
         let stats = CheckpointStats {
             checkpoint_id: checkpoint.seq,
             data_flushed: data.data_size,
-            wal_truncated: wal_lsn.into(),
+            wal_truncated: safe_wal_lsn.into(),
             duration: start.elapsed(),
             snapshot_created,
         };
@@ -715,11 +717,25 @@ impl PersistenceCoordinator {
             return Ok(None);
         }
 
-        let Some(published_manifest) = self
+        let published_manifest = self
             .manifest_manager
             .load_latest()
-            .map_err(StorageError::db_error)?
-        else {
+            .map_err(StorageError::db_error)?;
+        let Some(published_manifest) = published_manifest else {
+            // If the manifest directory exists and has files, but none could
+            // be loaded, the stored manifests have been corrupted.
+            let manifest_dir = self.config.checkpoint_dir.join("manifests");
+            if manifest_dir.exists() {
+                if let Ok(mut entries) = std::fs::read_dir(&manifest_dir) {
+                    if entries.any(|e| e.is_ok()) {
+                        return Err(StorageError::deserialize_error(
+                            "Published manifest exists but failed validation. \
+                             Checkpoint files or manifests may be corrupted."
+                                .to_string(),
+                        ));
+                    }
+                }
+            }
             return Ok(None);
         };
         let published_checkpoint = published_manifest.storage_snapshot.checkpoint_seq;
@@ -1002,16 +1018,19 @@ impl PersistenceCoordinator {
         checkpoint_dir: &Path,
         wal_lsn: Lsn,
     ) -> StorageResult<()> {
-        let storage_snapshot_ref = StorageSnapshotRef {
-            path: checkpoint_dir.to_path_buf(),
-            size_bytes: data.data_size,
-            checksum: crc32fast::hash(
-                &std::fs::read(checkpoint_dir.join("checkpoint.meta")).unwrap_or_default(),
-            ),
-            checkpoint_seq: checkpoint.seq,
-            vertex_count: data.vertex_count,
-            edge_count: data.edge_count,
-        };
+        let storage_snapshot_ref =
+            CheckpointManifest::storage_snapshot_from_directory(
+                checkpoint_dir,
+                checkpoint.seq,
+                data.vertex_count,
+                data.edge_count,
+            )
+            .map_err(|error| {
+                StorageError::db_error(format!(
+                    "Failed to build storage snapshot reference: {}",
+                    error
+                ))
+            })?;
 
         let storage_lsn = graphdb_core::core::types::CommitLsn::new(wal_lsn.into());
         let work_dir = self
@@ -1019,19 +1038,33 @@ impl PersistenceCoordinator {
             .data_dir
             .parent()
             .unwrap_or(&self.config.data_dir);
-        let outbox_snapshot =
-            graphdb_sync::sync::find_latest_snapshot(&work_dir.join("outbox_snapshots"))
-                .filter(|snapshot| snapshot.materialized_lsn >= storage_lsn)
-                .map(|snapshot| CheckpointManifest::outbox_snapshot_from(&snapshot));
+        let outbox_snapshot = graphdb_sync::sync::find_latest_snapshot_at_or_before(
+            &work_dir.join("outbox_snapshots"),
+            storage_lsn.get(),
+        )
+        .map(|snapshot| CheckpointManifest::outbox_snapshot_from(&snapshot));
         let index_manifests = Self::collect_index_manifest_refs(checkpoint_dir)?;
 
-        let manifest = CheckpointManifest::new(
-            checkpoint.seq,
-            storage_lsn,
-            storage_snapshot_ref,
-            outbox_snapshot,
-            index_manifests,
-        );
+        let outbox_enabled = work_dir.join("outbox/outbox.sqlite").exists()
+            || work_dir.join("outbox_snapshots").is_dir();
+
+        let manifest = if outbox_enabled {
+            CheckpointManifest::new_with_outbox(
+                checkpoint.seq,
+                storage_lsn,
+                storage_snapshot_ref,
+                outbox_snapshot,
+                index_manifests,
+            )
+        } else {
+            CheckpointManifest::new(
+                checkpoint.seq,
+                storage_lsn,
+                storage_snapshot_ref,
+                outbox_snapshot,
+                index_manifests,
+            )
+        };
 
         self.manifest_manager.publish(&manifest).map_err(|error| {
             StorageError::db_error(format!("Failed to publish manifest: {}", error))
@@ -1232,6 +1265,54 @@ mod tests {
             Lsn::new(12)
         );
         assert_eq!(*coordinator.last_checkpoint_lsn.read(), Lsn::new(24));
+    }
+
+    #[test]
+    fn checkpoint_stats_report_the_manifest_safe_lsn() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let config = PersistenceConfig {
+            enable_snapshots: false,
+            enable_wal: true,
+            sync_policy: Some(SyncPolicy::EveryWrite),
+            ..PersistenceConfig::for_work_dir(temp_dir.path())
+        };
+        let coordinator = PersistenceCoordinator::new(config).expect("coordinator");
+
+        let wal = coordinator.wal_manager().expect("WAL should be enabled");
+        wal.read()
+            .append_redo(crate::core::wal::types::WalOpType::Compact, 1, &())
+            .expect("WAL entry should append");
+        wal.read().sync().expect("WAL should be durable");
+        let checkpoint_lsn = wal.read().durable_lsn();
+        assert!(checkpoint_lsn > Lsn::ZERO);
+
+        let snapshot_dir = temp_dir.path().join("outbox_snapshots");
+        std::fs::create_dir_all(&snapshot_dir).expect("snapshot directory should exist");
+        let snapshot_path = snapshot_dir.join("outbox_snapshot_0.sqlite");
+        let snapshot_bytes = b"valid checksum fixture";
+        std::fs::write(&snapshot_path, snapshot_bytes).expect("snapshot should be written");
+        std::fs::write(
+            snapshot_path.with_extension("checksum"),
+            crc32fast::hash(snapshot_bytes).to_string(),
+        )
+        .expect("snapshot checksum should be written");
+
+        let stats = coordinator
+            .create_checkpoint(
+                |temporary_dir, _| {
+                    std::fs::write(temporary_dir.join("table.data"), b"data")?;
+                    Ok(CheckpointData {
+                        vertex_count: 1,
+                        edge_count: 0,
+                        data_size: 4,
+                    })
+                },
+                1,
+            )
+            .expect("checkpoint should succeed");
+
+        assert_eq!(stats.wal_truncated, 0);
+        assert!(stats.wal_truncated < checkpoint_lsn.into());
     }
 
     #[test]

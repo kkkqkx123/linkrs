@@ -37,6 +37,7 @@ impl<S: StorageClient + 'static> SyncWrapper<S> {
         src: &VertexId,
         dst: &VertexId,
         edge_type: &str,
+        ranking: i64,
     ) -> Result<(), StorageError> {
         if !self.enabled {
             return Ok(());
@@ -53,7 +54,7 @@ impl<S: StorageClient + 'static> SyncWrapper<S> {
 
         if let Some(txn_id) = txn_id {
             sync_manager
-                .on_edge_delete(txn_id, space_id, &src_value, &dst_value, edge_type)
+                .on_edge_delete(txn_id, space_id, &src_value, &dst_value, edge_type, ranking)
                 .map_err(|e| StorageError::db_error(format!("Failed to sync edge delete: {}", e)))
         } else {
             Err(StorageError::db_error(

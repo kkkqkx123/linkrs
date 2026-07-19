@@ -5,6 +5,10 @@
 //!
 //! ## Concurrency Model
 //!
+//! All write transactions are "insert" transactions that run concurrently.
+//! Conflicts are detected by WriteSet at commit time, not at start time.
+//! No write transaction ever blocks readers.
+//!
 //! This module uses `parking_lot::Condvar` for efficient waiting instead of
 //! spin-wait loops. This reduces CPU usage during contention and provides
 //! proper timeout support.
@@ -13,17 +17,14 @@ use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use parking_lot::{Condvar, Mutex, RwLock};
+use parking_lot::{Condvar, Mutex};
 
 use super::snapshot_tracker::SnapshotTracker;
 use crate::core::types::Timestamp;
 
-const RING_BUF_SIZE: u32 = 1024 * 1024;
-const RING_INDEX_MASK: u32 = RING_BUF_SIZE - 1;
-
-/// Safety check: log warning if pending operations approach ring buffer capacity.
-/// This prevents silent corruption if concurrent transactions exceed buffer size.
-const RING_BUF_WARNING_THRESHOLD: i32 = (RING_BUF_SIZE as i32) / 2;
+/// Released timestamp sentinel value (0 means timestamp has been released)
+/// Note: distinct from Timestamp::MAX which may be used as a sentinel elsewhere
+pub const RELEASED_TIMESTAMP: Timestamp = 0;
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum VersionManagerError {
@@ -33,70 +34,20 @@ pub enum VersionManagerError {
     #[error("Invalid timestamp: {0}")]
     InvalidTimestamp(Timestamp),
 
-    #[error("Update transaction already in progress")]
-    UpdateInProgress,
-
     #[error("Timeout waiting for transaction")]
     Timeout,
+
+    #[error("Failed to track snapshot for timestamp")]
+    SnapshotTrackingFailed,
 }
 
 pub type VersionManagerResult<T> = Result<T, VersionManagerError>;
-
-#[derive(Debug, Default)]
-struct BitSet {
-    data: RwLock<Vec<u64>>,
-}
-
-impl BitSet {
-    fn new(size: usize) -> Self {
-        let word_count = size.div_ceil(64);
-        Self {
-            data: RwLock::new(vec![0u64; word_count]),
-        }
-    }
-
-    fn set(&self, index: u32) {
-        let word = index as usize / 64;
-        let bit = index as usize % 64;
-        let mut data = self.data.write();
-        if word < data.len() {
-            data[word] |= 1u64 << bit;
-        }
-    }
-
-    fn atomic_reset_with_ret(&self, index: u32) -> bool {
-        let word = index as usize / 64;
-        let bit = index as usize % 64;
-        let mut data = self.data.write();
-        if word < data.len() {
-            let mask = 1u64 << bit;
-            let was_set = (data[word] & mask) != 0;
-            if was_set {
-                data[word] &= !mask;
-                return true;
-            }
-        }
-        false
-    }
-
-    fn reset_all(&self) {
-        let mut data = self.data.write();
-        for word in data.iter_mut() {
-            *word = 0;
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct VersionManagerConfig {
     pub max_concurrent_reads: u32,
     pub max_concurrent_inserts: u32,
-    pub max_concurrent_updates: u32,
-    pub thread_num: i32,
     pub wait_timeout: Duration,
-    pub update_acquire_timeout: Duration,
-    /// Enable partition-level conflict detection for updates (experimental)
-    pub partition_conflict_detection: bool,
 }
 
 impl Default for VersionManagerConfig {
@@ -104,11 +55,7 @@ impl Default for VersionManagerConfig {
         Self {
             max_concurrent_reads: 1000,
             max_concurrent_inserts: 100,
-            max_concurrent_updates: 1,
-            thread_num: 1,
             wait_timeout: Duration::from_secs(5),
-            update_acquire_timeout: Duration::from_secs(10),
-            partition_conflict_detection: false, // Disabled by default; enable for mixed workloads
         }
     }
 }
@@ -127,30 +74,12 @@ impl VersionManagerConfig {
         self.max_concurrent_inserts = max;
         self
     }
-
-    pub fn with_thread_num(mut self, num: i32) -> Self {
-        self.thread_num = num;
-        self
-    }
-
-    pub fn with_update_acquire_timeout(mut self, timeout: Duration) -> Self {
-        self.update_acquire_timeout = timeout;
-        self
-    }
-
-    pub fn with_partition_conflict_detection(mut self, enabled: bool) -> Self {
-        self.partition_conflict_detection = enabled;
-        self
-    }
 }
 
 pub struct VersionManager {
     write_ts: AtomicU32,
     read_ts: AtomicU32,
     pending_reqs: AtomicI32,
-    pending_update_reqs: AtomicI32,
-    thread_num: AtomicI32,
-    buffer: BitSet,
     lock: Mutex<()>,
     condvar: Condvar,
     config: VersionManagerConfig,
@@ -163,14 +92,10 @@ impl VersionManager {
     }
 
     pub fn with_config(config: VersionManagerConfig) -> Self {
-        let thread_num = config.thread_num;
         Self {
             write_ts: AtomicU32::new(1),
             read_ts: AtomicU32::new(1),
             pending_reqs: AtomicI32::new(0),
-            pending_update_reqs: AtomicI32::new(0),
-            thread_num: AtomicI32::new(thread_num),
-            buffer: BitSet::new(RING_BUF_SIZE as usize),
             lock: Mutex::new(()),
             condvar: Condvar::new(),
             config,
@@ -178,10 +103,9 @@ impl VersionManager {
         }
     }
 
-    pub fn init_ts(&self, ts: Timestamp, thread_num: i32) {
+    pub fn init_ts(&self, ts: Timestamp) {
         self.write_ts.store(ts + 1, Ordering::SeqCst);
         self.read_ts.store(ts, Ordering::SeqCst);
-        self.thread_num.store(thread_num, Ordering::SeqCst);
     }
 
     pub fn clear(&self) {
@@ -190,8 +114,6 @@ impl VersionManager {
         // data remains visible after reload.
         self.read_ts.store(0, Ordering::SeqCst);
         self.pending_reqs.store(0, Ordering::SeqCst);
-        self.pending_update_reqs.store(0, Ordering::SeqCst);
-        self.buffer.reset_all();
     }
 
     pub fn write_timestamp(&self) -> Timestamp {
@@ -207,19 +129,17 @@ impl VersionManager {
         self.read_ts.load(Ordering::SeqCst)
     }
 
-    pub fn acquire_read_timestamp(&self) -> Timestamp {
+    pub fn acquire_read_timestamp(&self) -> VersionManagerResult<Timestamp> {
         let mut guard = self.lock.lock();
         loop {
             let pr = self.pending_reqs.load(Ordering::SeqCst);
             if pr >= 0 {
-                // Safety check: ensure pending_reqs won't overflow RING_BUF_SIZE
-                // This prevents timestamp collision in the ring buffer indexing
-                if pr >= (RING_BUF_SIZE as i32 - 1) {
+                if pr >= self.config.max_concurrent_reads as i32 {
                     log::warn!(
-                        "Too many pending read requests: {}. Ring buffer capacity: {}. \
+                        "Too many pending read requests: {}. Max concurrent reads: {}. \
                         Consider increasing max_concurrent_reads or reducing read intensity.",
                         pr,
-                        RING_BUF_SIZE
+                        self.config.max_concurrent_reads,
                     );
                     self.condvar.wait(&mut guard);
                     continue;
@@ -231,9 +151,9 @@ impl VersionManager {
                     log::error!("Failed to track read snapshot {}: {}", ts, e);
                     self.pending_reqs.fetch_sub(1, Ordering::SeqCst);
                     self.condvar.notify_all();
-                    panic!("Critical: Failed to track snapshot for timestamp {}", ts);
+                    return Err(VersionManagerError::SnapshotTrackingFailed);
                 }
-                return ts;
+                return Ok(ts);
             }
             self.condvar.wait(&mut guard);
         }
@@ -245,12 +165,11 @@ impl VersionManager {
         loop {
             let pr = self.pending_reqs.load(Ordering::SeqCst);
             if pr >= 0 {
-                // Safety check: ensure pending_reqs won't overflow RING_BUF_SIZE
-                if pr >= (RING_BUF_SIZE as i32 - 1) {
+                if pr >= self.config.max_concurrent_reads as i32 {
                     log::warn!(
-                        "Too many pending read requests: {}. Ring buffer capacity: {}.",
+                        "Too many pending read requests: {}. Max concurrent reads: {}.",
                         pr,
-                        RING_BUF_SIZE
+                        self.config.max_concurrent_reads,
                     );
                     let elapsed = start.elapsed();
                     if elapsed >= timeout {
@@ -297,30 +216,20 @@ impl VersionManager {
         self.condvar.notify_all();
     }
 
-    pub fn acquire_insert_timestamp(&self) -> Timestamp {
+    pub fn acquire_insert_timestamp(&self) -> VersionManagerResult<Timestamp> {
         let mut guard = self.lock.lock();
         loop {
             let pr = self.pending_reqs.load(Ordering::SeqCst);
             if pr >= 0 {
-                // Safety check: ensure pending_reqs won't overflow RING_BUF_SIZE
-                // This prevents timestamp collision in the ring buffer indexing
-                if pr >= (RING_BUF_SIZE as i32 - 1) {
+                if pr >= self.config.max_concurrent_inserts as i32 {
                     log::warn!(
-                        "Too many pending insert requests: {}. Ring buffer capacity: {}. \
+                        "Too many pending insert requests: {}. Max concurrent inserts: {}. \
                         Consider increasing max_concurrent_inserts or reducing write intensity.",
                         pr,
-                        RING_BUF_SIZE
+                        self.config.max_concurrent_inserts,
                     );
                     self.condvar.wait(&mut guard);
                     continue;
-                }
-
-                // Warning threshold for monitoring
-                if pr >= RING_BUF_WARNING_THRESHOLD {
-                    log::warn!(
-                        "Ring buffer approaching saturation: {} concurrent transactions (capacity: {})",
-                        pr, RING_BUF_SIZE
-                    );
                 }
 
                 self.pending_reqs.fetch_add(1, Ordering::SeqCst);
@@ -330,9 +239,9 @@ impl VersionManager {
                     log::error!("Failed to track insert snapshot {}: {}", ts, e);
                     self.pending_reqs.fetch_sub(1, Ordering::SeqCst);
                     self.condvar.notify_all();
-                    panic!("Critical: Failed to track snapshot for timestamp {}", ts);
+                    return Err(VersionManagerError::SnapshotTrackingFailed);
                 }
-                return ts;
+                return Ok(ts);
             }
             self.condvar.wait(&mut guard);
         }
@@ -344,12 +253,11 @@ impl VersionManager {
         loop {
             let pr = self.pending_reqs.load(Ordering::SeqCst);
             if pr >= 0 {
-                // Safety check: ensure pending_reqs won't overflow RING_BUF_SIZE
-                if pr >= (RING_BUF_SIZE as i32 - 1) {
+                if pr >= self.config.max_concurrent_inserts as i32 {
                     log::warn!(
-                        "Too many pending insert requests: {}. Ring buffer capacity: {}.",
+                        "Too many pending insert requests: {}. Max concurrent inserts: {}.",
                         pr,
-                        RING_BUF_SIZE
+                        self.config.max_concurrent_inserts,
                     );
                     let elapsed = start.elapsed();
                     if elapsed >= timeout {
@@ -361,14 +269,6 @@ impl VersionManager {
                         return None;
                     }
                     continue;
-                }
-
-                // Warning threshold for monitoring
-                if pr >= RING_BUF_WARNING_THRESHOLD {
-                    log::warn!(
-                        "Ring buffer approaching saturation: {} concurrent transactions (capacity: {})",
-                        pr, RING_BUF_SIZE
-                    );
                 }
 
                 self.pending_reqs.fetch_add(1, Ordering::SeqCst);
@@ -395,19 +295,12 @@ impl VersionManager {
         }
     }
 
-    pub fn release_insert_timestamp(&self, ts: Timestamp) {
+    pub fn release_write_timestamp(&self, ts: Timestamp) {
         let _ = self.snapshot_tracker.release_snapshot(ts);
         let _guard = self.lock.lock();
 
-        let current_read_ts = self.read_ts.load(Ordering::SeqCst);
-        if ts >= current_read_ts {
-            while self
-                .buffer
-                .atomic_reset_with_ret((ts + 1) & RING_INDEX_MASK)
-            {}
+        if ts > self.read_ts.load(Ordering::SeqCst) {
             self.read_ts.store(ts, Ordering::SeqCst);
-        } else {
-            self.buffer.set(ts & RING_INDEX_MASK);
         }
 
         self.pending_reqs.fetch_sub(1, Ordering::SeqCst);
@@ -415,128 +308,25 @@ impl VersionManager {
         self.condvar.notify_all();
     }
 
-    pub fn acquire_update_timestamp(&self) -> VersionManagerResult<Timestamp> {
-        self.acquire_update_timestamp_with_timeout(self.config.update_acquire_timeout)
-    }
-
-    /// Acquire an exclusive update timestamp for a transaction.
+    /// Release an insert timestamp.
     ///
-    /// Current implementation (SERIALIZABLE isolation):
-    /// - Only 1 concurrent update transaction allowed (max_concurrent_updates=1 by default)
-    /// - Waits for all active read/insert transactions to complete
-    /// - Then waits for all pending operations to finish before proceeding
-    ///
-    /// This ensures perfect isolation but limits concurrency. For mixed workloads with
-    /// many reads and few updates, consider enabling partition_conflict_detection to
-    /// allow concurrent updates that don't conflict (experimental feature).
-    ///
-    /// # Performance Notes
-    /// - Single update: O(1) timestamp allocation, O(N) wait for N active reads
-    /// - Concurrent updates: Not allowed (will block)
-    /// - Read-heavy workloads: Updates are blocked; consider horizontal sharding
-    ///
-    /// Future optimization: Implement row/partition-level conflict detection to
-    /// allow non-conflicting updates to proceed concurrently.
-    pub fn acquire_update_timestamp_with_timeout(
-        &self,
-        timeout: Duration,
-    ) -> VersionManagerResult<Timestamp> {
-        let start = Instant::now();
-        let mut guard = self.lock.lock();
-
-        while self
-            .pending_update_reqs
-            .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
-            let elapsed = start.elapsed();
-            if elapsed >= timeout {
-                return Err(VersionManagerError::Timeout);
-            }
-
-            let remaining = timeout - elapsed;
-            let result = self.condvar.wait_for(&mut guard, remaining);
-            if result.timed_out() {
-                return Err(VersionManagerError::Timeout);
-            }
-        }
-
-        let thread_num = self.thread_num.load(Ordering::SeqCst);
-        self.pending_reqs.fetch_sub(thread_num, Ordering::SeqCst);
-
-        let target = -thread_num;
-        while self.pending_reqs.load(Ordering::SeqCst) != target {
-            let elapsed = start.elapsed();
-            if elapsed >= timeout {
-                self.pending_reqs.fetch_add(thread_num, Ordering::SeqCst);
-                self.pending_update_reqs.store(0, Ordering::SeqCst);
-                return Err(VersionManagerError::Timeout);
-            }
-
-            let remaining = timeout - elapsed;
-            let result = self.condvar.wait_for(&mut guard, remaining);
-            if result.timed_out() {
-                self.pending_reqs.fetch_add(thread_num, Ordering::SeqCst);
-                self.pending_update_reqs.store(0, Ordering::SeqCst);
-                return Err(VersionManagerError::Timeout);
-            }
-        }
-
-        let ts = self.write_ts.fetch_add(1, Ordering::SeqCst);
-        drop(guard);
-        let _ = self.snapshot_tracker.add_snapshot(ts);
-        Ok(ts)
-    }
-
-    pub fn release_update_timestamp(&self, ts: Timestamp) {
-        let _ = self.snapshot_tracker.release_snapshot(ts);
-        let _guard = self.lock.lock();
-
-        if ts == self.read_ts.load(Ordering::SeqCst) + 1 {
-            self.read_ts.store(ts, Ordering::SeqCst);
-        } else {
-            self.buffer.set(ts & RING_INDEX_MASK);
-        }
-
-        self.pending_reqs
-            .fetch_add(self.thread_num.load(Ordering::SeqCst), Ordering::SeqCst);
-        self.pending_update_reqs.store(0, Ordering::SeqCst);
-        drop(_guard);
-        self.condvar.notify_all();
-    }
-
-    pub fn revert_update_timestamp(&self, ts: Timestamp) -> bool {
-        let expected = ts + 1;
-        if self
-            .write_ts
-            .compare_exchange(expected, ts, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
-        {
-            let _ = self.snapshot_tracker.release_snapshot(expected);
-            self.pending_reqs
-                .fetch_add(self.thread_num.load(Ordering::SeqCst), Ordering::SeqCst);
-            self.pending_update_reqs.store(0, Ordering::SeqCst);
-            self.condvar.notify_all();
-            return true;
-        }
-        false
+    /// This name is kept at the transaction-manager boundary while the MVCC
+    /// implementation uses the more accurate write-timestamp terminology.
+    pub fn release_insert_timestamp(&self, ts: Timestamp) {
+        self.release_write_timestamp(ts);
     }
 
     pub fn pending_count(&self) -> i32 {
         self.pending_reqs.load(Ordering::SeqCst)
     }
 
-    pub fn is_update_in_progress(&self) -> bool {
-        self.pending_update_reqs.load(Ordering::SeqCst) > 0
-    }
-
     pub fn get_safe_gc_timestamp(&self) -> Timestamp {
-        self.read_ts.load(Ordering::SeqCst)
+        self.snapshot_tracker.min_active_snapshot()
     }
 
     pub fn get_safe_gc_timestamp_with_margin(&self, margin: Timestamp) -> Timestamp {
-        let read_ts = self.read_ts.load(Ordering::SeqCst);
-        read_ts.saturating_sub(margin)
+        let safe_ts = self.snapshot_tracker.min_active_snapshot();
+        safe_ts.saturating_sub(margin)
     }
 
     /// Get the snapshot tracker for explicit snapshot management
@@ -557,12 +347,12 @@ pub struct ReadTimestampGuard {
 }
 
 impl ReadTimestampGuard {
-    pub fn new(version_manager: Arc<VersionManager>) -> Self {
-        let timestamp = version_manager.acquire_read_timestamp();
-        Self {
+    pub fn new(version_manager: Arc<VersionManager>) -> VersionManagerResult<Self> {
+        let timestamp = version_manager.acquire_read_timestamp()?;
+        Ok(Self {
             version_manager,
             timestamp,
-        }
+        })
     }
 
     pub fn timestamp(&self) -> Timestamp {
@@ -582,12 +372,12 @@ pub struct InsertTimestampGuard {
 }
 
 impl InsertTimestampGuard {
-    pub fn new(version_manager: Arc<VersionManager>) -> Self {
-        let timestamp = version_manager.acquire_insert_timestamp();
-        Self {
+    pub fn new(version_manager: Arc<VersionManager>) -> VersionManagerResult<Self> {
+        let timestamp = version_manager.acquire_insert_timestamp()?;
+        Ok(Self {
             version_manager,
             timestamp: Some(timestamp),
-        }
+        })
     }
 
     pub fn timestamp(&self) -> Timestamp {
@@ -615,45 +405,6 @@ impl Drop for InsertTimestampGuard {
     }
 }
 
-pub struct UpdateTimestampGuard {
-    version_manager: Arc<VersionManager>,
-    timestamp: Option<Timestamp>,
-}
-
-impl UpdateTimestampGuard {
-    pub fn new(version_manager: Arc<VersionManager>) -> VersionManagerResult<Self> {
-        let timestamp = version_manager.acquire_update_timestamp()?;
-        Ok(Self {
-            version_manager,
-            timestamp: Some(timestamp),
-        })
-    }
-
-    pub fn timestamp(&self) -> Timestamp {
-        self.timestamp.unwrap_or(0)
-    }
-
-    pub fn commit(mut self) {
-        if let Some(ts) = self.timestamp.take() {
-            self.version_manager.release_update_timestamp(ts);
-        }
-    }
-
-    pub fn abort(mut self) {
-        if let Some(ts) = self.timestamp.take() {
-            self.version_manager.revert_update_timestamp(ts);
-        }
-    }
-}
-
-impl Drop for UpdateTimestampGuard {
-    fn drop(&mut self) {
-        if let Some(ts) = self.timestamp.take() {
-            self.version_manager.release_update_timestamp(ts);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -665,11 +416,11 @@ mod tests {
     fn test_version_manager_basic() {
         let vm = VersionManager::new();
 
-        let ts1 = vm.acquire_read_timestamp();
+        let ts1 = vm.acquire_read_timestamp().expect("acquire read");
         assert_eq!(ts1, 1);
         vm.release_read_timestamp();
 
-        let ts2 = vm.acquire_insert_timestamp();
+        let ts2 = vm.acquire_insert_timestamp().expect("acquire insert");
         assert!(ts2 >= 1);
         vm.release_insert_timestamp(ts2);
     }
@@ -679,7 +430,7 @@ mod tests {
         let vm = Arc::new(VersionManager::new());
 
         {
-            let guard = ReadTimestampGuard::new(vm.clone());
+            let guard = ReadTimestampGuard::new(vm.clone()).expect("guard should be created");
             assert_eq!(guard.timestamp(), 1);
         }
 
@@ -691,25 +442,12 @@ mod tests {
         let vm = Arc::new(VersionManager::new());
 
         {
-            let guard = InsertTimestampGuard::new(vm.clone());
+            let guard = InsertTimestampGuard::new(vm.clone()).expect("guard should be created");
             let ts = guard.timestamp();
             assert!(ts >= 1);
         }
 
         assert_eq!(vm.pending_count(), 0);
-    }
-
-    #[test]
-    fn test_update_timestamp_guard() {
-        let vm = Arc::new(VersionManager::new());
-
-        {
-            let guard = UpdateTimestampGuard::new(vm.clone()).expect("Failed to acquire update");
-            let ts = guard.timestamp();
-            assert!(ts >= 1);
-        }
-
-        assert!(!vm.is_update_in_progress());
     }
 
     #[test]
@@ -720,7 +458,7 @@ mod tests {
         for _ in 0..10 {
             let vm_clone = vm.clone();
             handles.push(thread::spawn(move || {
-                let guard = ReadTimestampGuard::new(vm_clone);
+                let guard = ReadTimestampGuard::new(vm_clone).expect("guard should be created");
                 thread::sleep(Duration::from_millis(10));
                 guard.timestamp()
             }));
@@ -738,7 +476,7 @@ mod tests {
         for _ in 0..10 {
             let vm_clone = vm.clone();
             handles.push(thread::spawn(move || {
-                let guard = InsertTimestampGuard::new(vm_clone);
+                let guard = InsertTimestampGuard::new(vm_clone).expect("guard should be created");
                 let ts = guard.timestamp();
                 thread::sleep(Duration::from_millis(10));
                 ts
@@ -756,9 +494,9 @@ mod tests {
         let tracker = vm.snapshot_tracker();
 
         // Add multiple snapshots via insert timestamps
-        let ts1 = vm.acquire_insert_timestamp();
-        let ts2 = vm.acquire_insert_timestamp();
-        let ts3 = vm.acquire_insert_timestamp();
+        let ts1 = vm.acquire_insert_timestamp().expect("acquire insert");
+        let ts2 = vm.acquire_insert_timestamp().expect("acquire insert");
+        let ts3 = vm.acquire_insert_timestamp().expect("acquire insert");
 
         // Cleanup threshold should be minimum active
         assert_eq!(tracker.cleanup_threshold(), ts1);

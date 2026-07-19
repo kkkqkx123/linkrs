@@ -44,6 +44,19 @@ pub async fn verify_live_database(path: &Path) -> bool {
 /// Snapshot files are named `outbox_snapshot_<lsn>.sqlite` and have an
 /// accompanying `.checksum` file.
 pub fn find_latest_snapshot(snapshot_dir: &Path) -> Option<OutboxSnapshot> {
+    find_latest_snapshot_at_or_before(snapshot_dir, u64::MAX)
+}
+
+/// Find the most recent valid outbox snapshot whose materialized LSN does not
+/// exceed the supplied recovery boundary.
+///
+/// A snapshot newer than the storage checkpoint cannot be part of the same
+/// consistent checkpoint, so callers creating a combined manifest must use
+/// this bounded form instead of selecting the directory-wide newest file.
+pub fn find_latest_snapshot_at_or_before(
+    snapshot_dir: &Path,
+    max_lsn: u64,
+) -> Option<OutboxSnapshot> {
     if !snapshot_dir.is_dir() {
         return None;
     }
@@ -59,6 +72,9 @@ pub fn find_latest_snapshot(snapshot_dir: &Path) -> Option<OutboxSnapshot> {
                 .strip_suffix(".sqlite")?
                 .parse::<u64>()
                 .ok()?;
+            if lsn > max_lsn {
+                return None;
+            }
             Some((lsn, path))
         })
         .collect();
@@ -253,6 +269,8 @@ mod tests {
 
         let snapshot = find_latest_snapshot(&snapshot_dir).unwrap();
         assert_eq!(snapshot.materialized_lsn, CommitLsn::new(200));
+        let bounded = find_latest_snapshot_at_or_before(&snapshot_dir, 100).unwrap();
+        assert_eq!(bounded.materialized_lsn, CommitLsn::new(100));
     }
 
     #[test]

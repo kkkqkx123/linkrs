@@ -9,9 +9,11 @@
 //! - Archive support
 
 mod compression;
+mod group_commit;
 mod local;
 mod sync;
 
 pub use crate::core::wal::traits::WalWriter;
 pub use compression::decompress_payload;
+pub use group_commit::GroupCommitCoordinator;
 pub use local::LocalWalWriter;

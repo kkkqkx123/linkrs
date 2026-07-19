@@ -592,6 +592,9 @@ pub enum WalError {
 
     #[error("Invalid operation: {0}")]
     InvalidOperation(String),
+
+    #[error("WAL is poisoned: {0}")]
+    Poisoned(String),
 }
 
 impl From<std::io::Error> for WalError {
@@ -812,6 +815,7 @@ pub struct WalConfig {
     pub max_parallel_recovery_threads: usize,
     pub circular_buffer: bool,
     pub circular_buffer_size: usize,
+    pub group_commit_enabled: bool,
 }
 
 impl Default for WalConfig {
@@ -833,6 +837,7 @@ impl Default for WalConfig {
             max_parallel_recovery_threads: 4,
             circular_buffer: false,
             circular_buffer_size: 16 * 1024 * 1024,
+            group_commit_enabled: false,
         }
     }
 }
@@ -933,6 +938,11 @@ impl WalConfig {
 
     pub fn with_archive_mode(mut self, mode: ArchiveMode) -> Self {
         self.archive_mode = mode;
+        self
+    }
+
+    pub fn with_group_commit(mut self, enabled: bool) -> Self {
+        self.group_commit_enabled = enabled;
         self
     }
 }

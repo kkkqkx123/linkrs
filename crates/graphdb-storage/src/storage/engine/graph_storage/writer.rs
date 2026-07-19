@@ -13,7 +13,6 @@ use crate::core::{Edge, EdgeDirection, StorageError, StorageResult, Value, Verte
 use crate::storage::engine::params::{EdgeOperationParams, InsertEdgeParams};
 use crate::storage::index::index_data_manager::VertexIndexOps;
 
-
 use super::context::GraphStorageContext;
 use super::ops::{edge_label_id, endpoint_label_id, tag_label_id};
 use super::reader;
@@ -1026,23 +1025,27 @@ fn update_vertex_indexes(
         if index.schema_name != tag_name {
             continue;
         }
-        // Only index properties that this index covers.
-        let filtered_props: Vec<(String, Value)> = if index.properties.is_empty() {
-            props.to_vec()
-        } else {
-            props
-                .iter()
-                .filter(|(name, _)| index.properties.contains(name))
-                .cloned()
-                .collect()
-        };
-        if filtered_props.is_empty() {
+        // The index manager derives indexed fields and included columns from
+        // the complete entity property set. Keeping both sets here is
+        // important: included columns must not become index keys, and an
+        // update must refresh their covering values as well.
+        let indexed_props: Vec<(String, Value)> = index
+            .fields
+            .iter()
+            .filter_map(|field| {
+                props
+                    .iter()
+                    .find(|(name, _)| name == &field.name)
+                    .cloned()
+            })
+            .collect();
+        if indexed_props.is_empty() {
             continue;
         }
         // Check unique constraint before inserting.
         if index.is_unique {
             let index_data = ctx.index_data_manager();
-            for (_prop_name, prop_value) in &filtered_props {
+            for (_prop_name, prop_value) in &indexed_props {
                 let existing = index_data
                     .read()
                     .lookup_tag_index(space_id, &index, prop_value)?;
@@ -1054,7 +1057,7 @@ fn update_vertex_indexes(
                 }
             }
         }
-        ctx.update_vertex_indexes_mvcc(space_id, vertex_id, &index.name, &filtered_props, ts)?;
+        ctx.update_vertex_indexes_mvcc(space_id, vertex_id, &index.name, props, ts)?;
     }
     Ok(())
 }

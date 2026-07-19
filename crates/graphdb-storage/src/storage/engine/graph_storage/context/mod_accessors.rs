@@ -64,7 +64,7 @@ impl GraphStorageContext {
         if self.operation_context.is_none() {
             self.persistent
                 .version_manager
-                .release_insert_timestamp(timestamp);
+                .release_write_timestamp(timestamp);
         }
     }
 
