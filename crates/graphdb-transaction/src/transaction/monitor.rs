@@ -68,6 +68,8 @@ impl TransactionMonitor {
             .collect();
 
         metrics.total_count = self.stats.total_transactions.load(Ordering::Relaxed);
+        metrics.conflict_rate = self.stats.conflict_rate();
+        metrics.conflict_rate_windowed = self.stats.conflict_rate_windowed();
 
         metrics
     }

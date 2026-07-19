@@ -55,7 +55,7 @@ pub use cleaner::TransactionCleaner;
 pub use conflict::{have_write_conflict, ConflictReport, WriteSetAnalyzer};
 pub use context::TransactionContext;
 pub use error::{TransactionError, TransactionErrorKind, TransactionResult};
-pub use manager::{CheckpointGate, TransactionManager};
+pub use manager::{CheckpointGate, CheckpointTransaction, TransactionManager};
 pub use monitor::TransactionMonitor;
 pub use participant::TransactionCommitSink;
 pub use rollback::{

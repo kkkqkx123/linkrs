@@ -530,17 +530,21 @@ impl IndexDataManagerImpl {
     }
 
     /// Resolve orphaned split build state at startup or before a new split.
-    /// Incomplete builds (Building) are discarded. Publishing builds with a
-    /// published manifest are completed; otherwise the partial checkpoint
-    /// directories are left for the next split to overwrite.
+    /// Incomplete builds (Building, CatchingUp) are discarded. Publishing
+    /// builds with a published manifest are completed; otherwise the partial
+    /// checkpoint directories are left for the next split to overwrite.
     pub fn resolve_split_crash_recovery(&self, index_root: &Path) -> StorageResult<()> {
         let Some(build_state) = self.load_build_state(index_root)? else {
             return Ok(());
         };
-        if matches!(build_state.state, GenerationState::Building) {
+        if matches!(
+            build_state.state,
+            GenerationState::Building | GenerationState::CatchingUp
+        ) {
             log::warn!(
-                "Discarding incomplete split build state for gen {}",
-                build_state.generation
+                "Discarding incomplete split build state for gen {} (state={:?})",
+                build_state.generation,
+                build_state.state
             );
             self.remove_build_state(index_root)?;
         }
@@ -565,6 +569,8 @@ impl IndexDataManagerImpl {
         space_id: u64,
         index_id: u64,
         boundary: Vec<u8>,
+        snapshot_timestamp: SnapshotTimestamp,
+        start_lsn: CommitLsn,
         barrier_lsn: CommitLsn,
     ) -> StorageResult<()> {
         if self.index_root.is_none() {
@@ -626,7 +632,7 @@ impl IndexDataManagerImpl {
         // ── Phase: Building ──────────────────────────────────────────────
         self.resolve_split_crash_recovery(index_root)?;
         let mut build_state =
-            GenerationBuildState::new(generation, SnapshotTimestamp::new(0), CommitLsn::ZERO);
+            GenerationBuildState::new(generation, snapshot_timestamp, start_lsn);
         self.save_build_state(index_root, &build_state)?;
 
         let next_generation_dir = index_root.join(format!("generation-{}", generation.get()));
@@ -732,9 +738,19 @@ impl IndexDataManagerImpl {
             }
         }
 
+        // ── Phase: CatchingUp ────────────────────────────────────────────
+        // The exclusive fence blocks all concurrent writers, so no WAL
+        // entries can appear between start_lsn and barrier_lsn. The catch-up
+        // is a no-op replay, but going through the proper state machine
+        // ensures crash recovery follows the same path as rebuild.
+        build_state
+            .transition_to_catching_up()
+            .map_err(StorageError::invalid_operation)?;
+        self.save_build_state(index_root, &build_state)?;
+
         // ── Phase: Publishing ────────────────────────────────────────────
         build_state
-            .transition_from_building_to_publishing(barrier_lsn)
+            .transition_to_publishing(barrier_lsn)
             .map_err(StorageError::invalid_operation)?;
         self.save_build_state(index_root, &build_state)?;
 
@@ -1706,7 +1722,9 @@ impl IndexGcOps for IndexDataManagerImpl {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::types::{CommitLsn, Index, IndexConfig, IndexField, IndexType, MAX_TIMESTAMP};
+    use crate::core::types::{
+        CommitLsn, Index, IndexConfig, IndexField, IndexType, SnapshotTimestamp, MAX_TIMESTAMP,
+    };
     use crate::core::Value;
     use crate::storage::index::generic_index_manager::GenericIndexManager;
     use crate::storage::index::key_codec::{KeyBuilder, VertexIndexKeyGen};
@@ -1861,7 +1879,14 @@ mod tests {
         .expect("build split boundary")
         .0;
         manager
-            .split_native_index(1, 1, boundary, CommitLsn::new(100))
+            .split_native_index(
+                1,
+                1,
+                boundary,
+                SnapshotTimestamp::new(1),
+                CommitLsn::new(0),
+                CommitLsn::new(100),
+            )
             .expect("split first index");
 
         let catalog = manager.manifest_catalog(1, 1).expect("catalog exists");

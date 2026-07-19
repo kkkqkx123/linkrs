@@ -130,11 +130,15 @@ impl GroupCommitCoordinator {
             // Wait as follower with timeout
             let now = std::time::Instant::now();
             if now >= deadline {
+                self.inner.sync_in_progress.store(false, Ordering::SeqCst);
+                self.inner.commit_condvar.notify_all();
                 return Err(WalError::GroupCommitTimeout);
             }
             let remaining = deadline - now;
             let result = self.inner.commit_condvar.wait_for(&mut guard, remaining);
             if result.timed_out() {
+                self.inner.sync_in_progress.store(false, Ordering::SeqCst);
+                self.inner.commit_condvar.notify_all();
                 return Err(WalError::GroupCommitTimeout);
             }
         }

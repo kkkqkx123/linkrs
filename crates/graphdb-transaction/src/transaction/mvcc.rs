@@ -232,15 +232,14 @@ impl VersionManager {
                     continue;
                 }
 
-                self.pending_reqs.fetch_add(1, Ordering::SeqCst);
-                let ts = self.write_ts.fetch_add(1, Ordering::SeqCst);
-                drop(guard);
+                let ts = (self.write_ts.load(Ordering::SeqCst) + 1) as Timestamp;
                 if let Err(e) = self.snapshot_tracker.add_snapshot(ts) {
-                    log::error!("Failed to track insert snapshot {}: {}", ts, e);
-                    self.pending_reqs.fetch_sub(1, Ordering::SeqCst);
-                    self.condvar.notify_all();
+                    log::error!("Failed to pre-reserve snapshot {}: {}", ts, e);
                     return Err(VersionManagerError::SnapshotTrackingFailed);
                 }
+                self.pending_reqs.fetch_add(1, Ordering::SeqCst);
+                self.write_ts.fetch_add(1, Ordering::SeqCst);
+                drop(guard);
                 return Ok(ts);
             }
             self.condvar.wait(&mut guard);
@@ -271,14 +270,14 @@ impl VersionManager {
                     continue;
                 }
 
-                self.pending_reqs.fetch_add(1, Ordering::SeqCst);
-                let ts = self.write_ts.fetch_add(1, Ordering::SeqCst);
-                drop(guard);
+                let ts = (self.write_ts.load(Ordering::SeqCst) + 1) as Timestamp;
                 if let Err(e) = self.snapshot_tracker.add_snapshot(ts) {
-                    log::error!("Failed to track insert snapshot {}: {}", ts, e);
-                    self.pending_reqs.fetch_sub(1, Ordering::SeqCst);
+                    log::error!("Failed to pre-reserve snapshot {}: {}", ts, e);
                     return None;
                 }
+                self.pending_reqs.fetch_add(1, Ordering::SeqCst);
+                self.write_ts.fetch_add(1, Ordering::SeqCst);
+                drop(guard);
                 return Some(ts);
             }
 

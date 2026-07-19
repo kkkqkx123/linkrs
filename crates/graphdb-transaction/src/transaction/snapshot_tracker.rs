@@ -46,7 +46,7 @@ pub struct SnapshotTracker {
 
     /// Ordered snapshots for O(1) min queries
     /// Only contains snapshots with ref_count > 0
-    ordered_snapshots: Mutex<BTreeMap<u64, u32>>,
+    ordered_snapshots: Mutex<BTreeMap<u64, u64>>,
 
     /// Minimum active snapshot (cached for O(1) queries)
     min_active: AtomicU64,

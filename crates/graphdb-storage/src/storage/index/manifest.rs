@@ -91,18 +91,6 @@ impl GenerationBuildState {
         Ok(())
     }
 
-    /// Bypass the CatchingUp phase (used by split, which operates under an
-    /// exclusive fence and needs no incremental replay).
-    pub fn transition_from_building_to_publishing(
-        &mut self,
-        barrier_lsn: CommitLsn,
-    ) -> Result<(), String> {
-        self.require_state(GenerationState::Building)?;
-        self.barrier_lsn = Some(barrier_lsn);
-        self.state = GenerationState::Publishing;
-        Ok(())
-    }
-
     pub fn transition_to_active(&mut self) -> Result<(), String> {
         self.require_state(GenerationState::Publishing)?;
         self.state = GenerationState::Active;

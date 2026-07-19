@@ -87,6 +87,10 @@ pub struct TransactionMetrics {
     pub long_transactions: Vec<TransactionInfo>,
     /// Total number of transactions
     pub total_count: u64,
+    /// Cumulative conflict rate (0.0 to 1.0)
+    pub conflict_rate: f64,
+    /// Windowed conflicts per second (60s sliding window)
+    pub conflict_rate_windowed: f64,
 }
 
 impl TransactionMetrics {
@@ -389,6 +393,9 @@ impl Default for TransactionManagerConfig {
     }
 }
 
+/// Number of 1-second buckets for the conflict rate sliding window.
+const CONFLICT_WINDOW_BUCKETS: usize = 60;
+
 /// Transaction Statistics
 #[derive(Debug)]
 pub struct TransactionStats {
@@ -404,6 +411,13 @@ pub struct TransactionStats {
     pub timeout_transactions: AtomicU64,
     /// Transactions aborted due to write-set conflicts
     pub conflict_transactions: AtomicU64,
+    /// Sliding window of conflict counts per second (circular buffer).
+    /// `window_buckets[i]` holds the count for the second at index `(window_head + i) % N`.
+    window_buckets: Vec<AtomicU64>,
+    /// Current head index into the circular buffer, updated by `record_txn_conflict`.
+    window_head: AtomicU64,
+    /// Last second timestamp when the window was updated.
+    window_last_epoch_sec: AtomicU64,
     /// Optional StatsManager for unified metrics
     stats_manager: Option<Arc<StatsManager>>,
 }
@@ -417,6 +431,11 @@ impl Default for TransactionStats {
             aborted_transactions: AtomicU64::new(0),
             timeout_transactions: AtomicU64::new(0),
             conflict_transactions: AtomicU64::new(0),
+            window_buckets: (0..CONFLICT_WINDOW_BUCKETS)
+                .map(|_| AtomicU64::new(0))
+                .collect(),
+            window_head: AtomicU64::new(0),
+            window_last_epoch_sec: AtomicU64::new(0),
             stats_manager: None,
         }
     }
@@ -435,6 +454,11 @@ impl TransactionStats {
             aborted_transactions: AtomicU64::new(0),
             timeout_transactions: AtomicU64::new(0),
             conflict_transactions: AtomicU64::new(0),
+            window_buckets: (0..CONFLICT_WINDOW_BUCKETS)
+                .map(|_| AtomicU64::new(0))
+                .collect(),
+            window_head: AtomicU64::new(0),
+            window_last_epoch_sec: AtomicU64::new(0),
             stats_manager: Some(stats_manager),
         }
     }
@@ -489,13 +513,45 @@ impl TransactionStats {
 
     pub fn record_txn_conflict(&self) {
         self.conflict_transactions.fetch_add(1, Ordering::Relaxed);
+        self.record_conflict_in_window();
         if let Some(ref sm) = self.stats_manager {
             sm.add_value(MetricType::TxnConflictCount);
         }
     }
 
-    /// Get the conflict rate as a ratio (0.0 to 1.0).
-    /// Returns conflicts / total_transactions.
+    fn record_conflict_in_window(&self) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let last = self.window_last_epoch_sec.load(Ordering::Relaxed);
+        let mut head = self.window_head.load(Ordering::Relaxed) as usize;
+
+        if now > last {
+            let elapsed = (now - last) as usize;
+            let n = CONFLICT_WINDOW_BUCKETS;
+            if elapsed >= n {
+                for bucket in &self.window_buckets {
+                    bucket.store(0, Ordering::Relaxed);
+                }
+                head = 0;
+            } else {
+                for i in 0..elapsed {
+                    let idx = (head + i) % n;
+                    self.window_buckets[idx].store(0, Ordering::Relaxed);
+                }
+                head = (head + elapsed) % n;
+            }
+            self.window_head.store(head as u64, Ordering::Relaxed);
+            self.window_last_epoch_sec.store(now, Ordering::Relaxed);
+        }
+
+        let idx = head % CONFLICT_WINDOW_BUCKETS;
+        self.window_buckets[idx].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Get the cumulative conflict rate as a ratio (0.0 to 1.0).
+    /// Returns total_conflicts / total_transactions.
     pub fn conflict_rate(&self) -> f64 {
         let total = self.total_transactions.load(Ordering::Relaxed);
         if total == 0 {
@@ -504,6 +560,17 @@ impl TransactionStats {
             let conflicts = self.conflict_transactions.load(Ordering::Relaxed);
             conflicts as f64 / total as f64
         }
+    }
+
+    /// Get the conflict rate over the sliding window (conflicts per second averaged).
+    /// Sums all buckets and divides by window size in seconds.
+    pub fn conflict_rate_windowed(&self) -> f64 {
+        let total: u64 = self
+            .window_buckets
+            .iter()
+            .map(|b| b.load(Ordering::Relaxed))
+            .sum();
+        total as f64 / CONFLICT_WINDOW_BUCKETS as f64
     }
 }
 
@@ -650,6 +717,23 @@ mod tests {
         // No transactions => 0.0
         let empty = TransactionStats::new();
         assert_eq!(empty.conflict_rate(), 0.0);
+    }
+
+    #[test]
+    fn test_conflict_rate_windowed() {
+        let stats = TransactionStats::new();
+
+        // Empty window => 0.0
+        assert_eq!(stats.conflict_rate_windowed(), 0.0);
+
+        // Record 10 conflicts in the current bucket
+        for _ in 0..10 {
+            stats.record_txn_conflict();
+        }
+
+        // 10 conflicts / 60 buckets = ~0.167 conf/sec average
+        let rate = stats.conflict_rate_windowed();
+        assert!((rate - 10.0 / 60.0).abs() < f64::EPSILON);
     }
 
     #[test]

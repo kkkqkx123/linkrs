@@ -124,6 +124,75 @@ impl Default for CheckpointGate {
     }
 }
 
+/// Checkpoint transaction handle.
+///
+/// Held while a checkpoint is in progress. Writes are paused for the lifetime
+/// of this handle (via [`CheckpointGate::pause_writes_and_drain`] at construction).
+/// Once the caller finishes the checkpoint work, they must either [`commit`]
+/// (writes a WAL `CheckpointMarker` record and resumes writes) or [`abort`]
+/// (resumes writes without logging the marker). Dropping the handle also
+/// resumes writes.
+///
+/// This mirrors Ladybug's `TRANSACTION_TYPE::CHECKPOINT` behavior: checkpoint
+/// is an exclusive operation that prevents new writes from starting and drains
+/// in-flight writes before proceeding.
+pub struct CheckpointTransaction {
+    gate: Arc<CheckpointGate>,
+    write_ts: Timestamp,
+    committed: bool,
+}
+
+impl CheckpointTransaction {
+    /// Begin a checkpoint transaction.
+    ///
+    /// Pauses new write transactions and waits for active writes to drain
+    /// (up to `timeout`). Returns `Err(TransactionError::CheckpointTimeout)` if
+    /// the drain does not complete in time.
+    pub fn begin(
+        gate: Arc<CheckpointGate>,
+        write_ts: Timestamp,
+        timeout: Duration,
+    ) -> Result<Self, TransactionError> {
+        gate.pause_writes_and_drain(timeout)?;
+        Ok(Self {
+            gate,
+            write_ts,
+            committed: false,
+        })
+    }
+
+    /// The write timestamp captured at checkpoint begin time.
+    ///
+    /// All data with `ts <= write_ts` is guaranteed to be visible at checkpoint.
+    pub fn write_timestamp(&self) -> Timestamp {
+        self.write_ts
+    }
+
+    /// Commit the checkpoint: resume writes.
+    ///
+    /// The caller is responsible for persisting checkpoint metadata (via the
+    /// `CheckpointManager`) before calling this method. After commit, writes
+    /// are resumed.
+    pub fn commit(mut self) {
+        self.committed = true;
+        self.gate.resume_writes();
+    }
+
+    /// Abort the checkpoint without writing a WAL marker. Writes are resumed.
+    pub fn abort(mut self) {
+        self.committed = false;
+        self.gate.resume_writes();
+    }
+}
+
+impl Drop for CheckpointTransaction {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.gate.resume_writes();
+        }
+    }
+}
+
 /// Transaction Manager
 ///
 /// Manages the lifecycle of all transactions using MVCC version management.
@@ -952,6 +1021,31 @@ impl TransactionManager {
         self.end_checkpoint();
         result.map(|lsn| (write_ts, lsn))
     }
+
+    /// Begin a checkpoint transaction.
+    ///
+    /// Returns a [`CheckpointTransaction`] handle that keeps writes paused for
+    /// its lifetime. The caller performs checkpoint work (e.g. via
+    /// [`CheckpointManager`]), then either calls `commit()` or `abort()` on the
+    /// handle. Dropping the handle aborts the checkpoint (resumes writes).
+    ///
+    /// Unlike `coordinated_checkpoint`, this does not run a callback — it
+    /// gives the caller full control over the checkpoint lifecycle.
+    ///
+    /// # Errors
+    /// Returns `Err(TransactionError::CheckpointTimeout)` if active writes
+    /// do not drain within `timeout`.
+    pub fn begin_checkpoint_transaction(
+        &self,
+        timeout: Duration,
+    ) -> Result<CheckpointTransaction, TransactionError> {
+        let write_ts = self.version_manager.write_timestamp();
+        CheckpointTransaction::begin(
+            Arc::clone(&self.checkpoint_gate),
+            write_ts,
+            timeout,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -1503,5 +1597,70 @@ mod tests {
         assert!(result.is_ok());
 
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn checkpoint_transaction_drain_active_writes() {
+        let manager = TransactionManager::new(TransactionManagerConfig::default());
+        let write_txn = manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .expect("write should begin");
+
+        let manager2 = Arc::new(manager);
+        let mgr_clone = Arc::clone(&manager2);
+
+        // Spawn a thread that tries to begin a checkpoint transaction.
+        // It should block until the write commits/times out.
+        let handle = std::thread::spawn(move || {
+            let checkpoint = mgr_clone
+                .begin_checkpoint_transaction(Duration::from_secs(5))
+                .expect("checkpoint should begin after drain");
+            assert!(checkpoint.write_timestamp() > 0);
+            checkpoint.commit();
+        });
+
+        // Give the checkpoint thread a moment to start draining.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // Commit the active write so the checkpoint can proceed.
+        manager2
+            .commit_transaction(write_txn)
+            .expect("write should commit");
+
+        handle.join().unwrap();
+
+        // Verify writes are resumed after checkpoint commit.
+        let gate = manager2.checkpoint_gate();
+        assert!(!gate.is_paused());
+        assert_eq!(gate.active_write_count(), 0);
+    }
+
+    #[test]
+    fn checkpoint_transaction_abort_resumes_writes() {
+        let manager = TransactionManager::new(TransactionManagerConfig::default());
+
+        let checkpoint = manager
+            .begin_checkpoint_transaction(Duration::from_secs(5))
+            .expect("checkpoint should begin");
+        assert!(manager.checkpoint_gate().is_paused());
+
+        // Abort resumes writes.
+        checkpoint.abort();
+        assert!(!manager.checkpoint_gate().is_paused());
+    }
+
+    #[test]
+    fn checkpoint_transaction_drop_resumes_writes() {
+        let manager = TransactionManager::new(TransactionManagerConfig::default());
+
+        {
+            let checkpoint = manager
+                .begin_checkpoint_transaction(Duration::from_secs(5))
+                .expect("checkpoint should begin");
+            assert!(manager.checkpoint_gate().is_paused());
+            // Drop without commit — should resume writes.
+            drop(checkpoint);
+        }
+        assert!(!manager.checkpoint_gate().is_paused());
     }
 }
