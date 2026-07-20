@@ -1,21 +1,21 @@
-use super::next_transaction_id;
 use super::QueryPipelineManager;
+use super::next_transaction_id;
 use crate::core::error::{DBError, DBResult, QueryError};
 use crate::core::types::SpaceInfo;
 use crate::core::types::TransactionId;
 use crate::core::{
     ErrorInfo, ErrorType, MetricType, QueryMetrics, QueryPhase, QueryProfile, StatsManager,
 };
+use crate::query::QueryContext;
+use crate::query::QueryRequestContext;
 use crate::query::executor::base::{ExecutionContext, ExecutionResult};
+use crate::query::executor::streaming::StreamingQueryResult;
 use crate::query::executor::streaming::instance::{
     QueryBindings, QueryExecutionInstance, ResultSink,
 };
 use crate::query::executor::streaming::plan::PhysicalPlan;
 use crate::query::executor::streaming::transaction_scope::TransactionScope;
-use crate::query::executor::streaming::StreamingQueryResult;
 use crate::query::validator::ValidatedStatement;
-use crate::query::QueryContext;
-use crate::query::QueryRequestContext;
 use crate::storage::QueryStorage;
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -221,6 +221,16 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         rctx: Arc<crate::query::QueryRequestContext>,
         space_info: Option<SpaceInfo>,
     ) -> DBResult<StreamingQueryResult> {
+        self.execute_query_stream_with_request_scope(query_text, rctx, space_info, None)
+    }
+
+    pub fn execute_query_stream_with_request_scope(
+        &mut self,
+        query_text: &str,
+        rctx: Arc<crate::query::QueryRequestContext>,
+        space_info: Option<SpaceInfo>,
+        transaction_id: Option<TransactionId>,
+    ) -> DBResult<StreamingQueryResult> {
         let mut query_context = QueryContext::new(rctx);
         if let Some(ref space) = space_info {
             query_context.set_space_info(space.clone());
@@ -245,7 +255,14 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         }
 
         let (physical_plan, _) = self.compile(query_context.clone(), &validated)?;
-        self.execute_compiled_stream(physical_plan, query_context)
+        let scope = Self::scope_for_request(&validated.ast.stmt(), query_context.request_context());
+        self.execute_compiled_stream_with_scope(
+            physical_plan,
+            query_context,
+            transaction_id
+                .map(|id| TransactionScope::explicit(id, true))
+                .unwrap_or(scope),
+        )
     }
 
     pub fn execute_query_with_request(
@@ -253,6 +270,16 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         query_text: &str,
         rctx: Arc<crate::query::QueryRequestContext>,
         space_info: Option<SpaceInfo>,
+    ) -> DBResult<ExecutionResult> {
+        self.execute_query_with_request_scope(query_text, rctx, space_info, None)
+    }
+
+    pub fn execute_query_with_request_scope(
+        &mut self,
+        query_text: &str,
+        rctx: Arc<crate::query::QueryRequestContext>,
+        space_info: Option<SpaceInfo>,
+        transaction_id: Option<TransactionId>,
     ) -> DBResult<ExecutionResult> {
         let mut query_context = QueryContext::new(rctx);
         if let Some(ref space) = space_info {
@@ -277,8 +304,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         }
 
         let (physical_plan, _) = self.compile(query_context.clone(), &validated)?;
-        let scope = if Self::statement_requires_auto_commit(&stmt) {
-            TransactionScope::auto_commit(TransactionId(next_transaction_id()))
+        let scope = if let Some(transaction_id) = transaction_id {
+            TransactionScope::explicit(transaction_id, true)
+        } else if Self::statement_requires_auto_commit(&stmt) {
+            Self::scope_for_request(&stmt, query_context.request_context())
         } else if Self::statement_is_transaction(&stmt) {
             TransactionScope::CommandScope
         } else {
@@ -290,6 +319,31 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             ResultSink::Materialize,
             scope,
         )
+    }
+
+    fn scope_for_request(
+        stmt: &crate::query::parser::ast::Stmt,
+        request: &crate::query::QueryRequestContext,
+    ) -> TransactionScope {
+        let transaction_id = request.transaction_id.or_else(|| {
+            request
+                .operation_context
+                .as_ref()
+                .and_then(|ctx| ctx.transaction_id)
+        });
+        if let Some(transaction_id) = transaction_id {
+            if request.auto_commit {
+                TransactionScope::auto_commit(transaction_id)
+            } else {
+                TransactionScope::explicit(transaction_id, !request.read_only)
+            }
+        } else if Self::statement_requires_auto_commit(stmt) {
+            TransactionScope::auto_commit(TransactionId(next_transaction_id()))
+        } else if Self::statement_is_transaction(stmt) {
+            TransactionScope::CommandScope
+        } else {
+            TransactionScope::None
+        }
     }
 
     /// Check if a statement needs an auto-commit transaction scope.
@@ -622,7 +676,18 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             ..ExecutionContext::default()
         };
         if let Some(ref storage) = self.storage {
-            let dyn_storage: Arc<RwLock<dyn QueryStorage>> = storage.clone();
+            let dyn_storage: Arc<RwLock<dyn QueryStorage>> = if let Some(operation_storage) =
+                query_context.request_context().operation_storage.clone()
+            {
+                operation_storage
+            } else if let Some(operation) =
+                query_context.request_context().operation_context.clone()
+            {
+                let bound_storage = storage.read().bind_operation_context(operation);
+                Arc::new(RwLock::new(bound_storage))
+            } else {
+                storage.clone()
+            };
             context.storage = Some(dyn_storage);
         }
         #[cfg(feature = "fulltext-search")]

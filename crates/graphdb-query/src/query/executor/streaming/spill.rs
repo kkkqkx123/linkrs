@@ -11,11 +11,11 @@
 
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::core::error::QueryError;
 use crate::core::Value;
+use crate::core::error::QueryError;
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
@@ -142,7 +142,7 @@ impl RunHeader {
                 return Err(QueryError::execution(format!(
                     "spill run: unknown compression type {}",
                     other
-                )))
+                )));
             }
         };
         Ok(Self {
@@ -386,7 +386,7 @@ impl std::fmt::Debug for RunWriter {
 /// Reads a sorted run file back, validating the header (version, magic,
 /// checksum) on open.
 pub struct RunReader {
-    reader: BufReader<std::fs::File>,
+    reader: BufReader<std::io::Cursor<Vec<u8>>>,
     path: PathBuf,
     header: RunHeader,
     remaining: u64,
@@ -428,10 +428,8 @@ impl RunReader {
         // Decompress if needed
         let decompressed = match header.compression_type {
             RunCompression::None => body_data,
-            RunCompression::Zstd => {
-                zstd::decode_all(body_data.as_slice())
-                    .map_err(|e| QueryError::execution(format!("run decompress: {}", e)))?
-            }
+            RunCompression::Zstd => zstd::decode_all(body_data.as_slice())
+                .map_err(|e| QueryError::execution(format!("run decompress: {}", e)))?,
         };
 
         // Verify checksum on decompressed data
@@ -1192,10 +1190,12 @@ mod tests {
         };
         let result = RunReader::open(&wrong_meta);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("schema fingerprint mismatch"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("schema fingerprint mismatch")
+        );
     }
 
     #[test]
@@ -1248,10 +1248,12 @@ mod tests {
         // This should exceed
         let result = quota.try_reserve(30);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Disk quota exceeded"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Disk quota exceeded")
+        );
     }
 
     #[test]

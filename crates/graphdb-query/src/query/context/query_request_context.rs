@@ -3,7 +3,11 @@
 //! This module provides the minimum amount of contextual information required to execute the query, thereby avoiding the need for the query layer to rely on the API layer.
 
 use crate::core::Value;
+use crate::storage::QueryStorage;
+use crate::storage::StorageOperationContext;
+use parking_lot::RwLock;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Query request context – Simplified version
 ///
@@ -25,6 +29,12 @@ pub struct QueryRequestContext {
     pub query: String,
     /// Query parameters
     pub parameters: HashMap<String, Value>,
+    /// Transaction identity and storage binding for this execution.
+    pub transaction_id: Option<crate::core::types::TransactionId>,
+    pub auto_commit: bool,
+    pub read_only: bool,
+    pub operation_context: Option<StorageOperationContext>,
+    pub operation_storage: Option<Arc<RwLock<dyn QueryStorage>>>,
 }
 
 impl QueryRequestContext {
@@ -36,6 +46,11 @@ impl QueryRequestContext {
             space_name: None,
             query,
             parameters: HashMap::new(),
+            transaction_id: None,
+            auto_commit: true,
+            read_only: false,
+            operation_context: None,
+            operation_storage: None,
         }
     }
 

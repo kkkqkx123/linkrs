@@ -119,10 +119,11 @@ impl TransactionCleaner {
         }
 
         if context.read_only {
-            self.version_manager.release_read_timestamp();
+            self.version_manager
+                .release_read_timestamp_at(context.start_timestamp);
         } else {
             self.version_manager
-                .release_write_timestamp(context.timestamp());
+                .abort_write_timestamp(context.timestamp());
         }
 
         context.transition_to(TransactionState::Aborted)?;

@@ -2,15 +2,15 @@
 //!
 //! Responsible for planning the execution of the LIMIT and SKIP clauses, in order to implement paginated results.
 
+use crate::query::QueryContext;
 use crate::query::parser::ast::Stmt;
+use crate::query::planning::plan::SubPlan;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::query::planning::plan::core::nodes::operation::sort_node::LimitNode;
-use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::PlannerError;
 use crate::query::planning::statements::match_statement_planner::PaginationInfo;
 use crate::query::planning::statements::statement_planner::ClausePlanner;
 use crate::query::validator::structs::CypherClauseKind;
-use crate::query::QueryContext;
 use std::sync::Arc;
 
 /// LIMIT/SKIP Clause Planner
@@ -70,8 +70,8 @@ impl ClausePlanner for PaginationPlanner {
 mod tests {
     use super::*;
     use crate::query::parser::ast::Span;
-    use crate::query::planning::plan::core::nodes::StartNode;
     use crate::query::planning::plan::core::PlanNodeEnum;
+    use crate::query::planning::plan::core::nodes::StartNode;
 
     #[test]
     fn test_pagination_planner_creation() {
@@ -184,6 +184,7 @@ mod tests {
                 space_name: None,
                 query: String::new(),
                 parameters: std::collections::HashMap::new(),
+                ..Default::default()
             },
         )));
 
@@ -228,6 +229,7 @@ mod tests {
                 space_name: None,
                 query: String::new(),
                 parameters: std::collections::HashMap::new(),
+                ..Default::default()
             },
         )));
 
@@ -270,6 +272,7 @@ mod tests {
                 space_name: None,
                 query: String::new(),
                 parameters: std::collections::HashMap::new(),
+                ..Default::default()
             },
         )));
 

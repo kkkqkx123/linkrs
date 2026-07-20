@@ -4,11 +4,11 @@
 
 use crate::api::core::error::{CoreError, CoreResult};
 use crate::api::core::types::{ExecutionMetadata, QueryRequest, QueryResult, Row};
-use crate::core::metadata::SchemaManager;
 use crate::core::StatsManager;
+use crate::core::metadata::SchemaManager;
 use crate::query::executor::streaming::StreamingQueryResult;
 use crate::query::{OptimizerEngine, QueryPipelineManager};
-use crate::storage::StorageClient;
+use crate::storage::{QueryStorage, StorageClient, StorageOperationContext};
 use crate::sync::SyncManager;
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -184,10 +184,57 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
     /// # Return
     /// Structured Search Results
     pub fn execute(&mut self, query: &str, ctx: QueryRequest) -> CoreResult<QueryResult> {
+        self.execute_with_operation_context_and_storage(query, ctx, None, None)
+    }
+
+    pub fn execute_with_operation_context(
+        &mut self,
+        query: &str,
+        ctx: QueryRequest,
+        operation_context: Option<StorageOperationContext>,
+    ) -> CoreResult<QueryResult> {
+        self.execute_with_operation_context_and_storage(query, ctx, operation_context, None)
+    }
+
+    pub fn execute_with_operation_storage(
+        &mut self,
+        query: &str,
+        ctx: QueryRequest,
+        storage: S,
+    ) -> CoreResult<QueryResult> {
+        let operation_context = storage.operation_context().as_deref().cloned();
+        self.execute_with_operation_context_and_storage(
+            query,
+            ctx,
+            operation_context,
+            Some(storage),
+        )
+    }
+
+    fn execute_with_operation_context_and_storage(
+        &mut self,
+        query: &str,
+        ctx: QueryRequest,
+        operation_context: Option<StorageOperationContext>,
+        operation_storage: Option<S>,
+    ) -> CoreResult<QueryResult> {
         let start_time = Instant::now();
 
         // Constructing a QueryRequestContext
-        let rctx = Arc::new(crate::query::QueryRequestContext::new(query.to_string()));
+        let mut request_context = crate::query::QueryRequestContext::new(query.to_string());
+        request_context.transaction_id = ctx.transaction_id.or_else(|| {
+            operation_context
+                .as_ref()
+                .and_then(|context| context.transaction_id)
+        });
+        request_context.auto_commit = ctx.auto_commit;
+        request_context.read_only = operation_context
+            .as_ref()
+            .is_some_and(|context| context.read_only);
+        request_context.operation_context = operation_context;
+        request_context.operation_storage = operation_storage
+            .map(|storage| Arc::new(RwLock::new(storage)) as Arc<RwLock<dyn QueryStorage>>);
+        let rctx = Arc::new(request_context);
 
         // Build space info from request context if space_id is provided
         let space_info = ctx.space_id.map(|id| {
@@ -200,7 +247,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         // Execute the query (using the new execute_query_with_request method).
         let execution_result = self
             .pipeline_manager
-            .execute_query_with_request(query, rctx, space_info)
+            .execute_query_with_request_scope(query, rctx, space_info, ctx.transaction_id)
             .map_err(|e| CoreError::QueryExecutionFailed(e.to_string()))?;
 
         // Conversion to structured results
@@ -220,7 +267,54 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         query: &str,
         ctx: QueryRequest,
     ) -> CoreResult<StreamingQueryResult> {
-        let rctx = Arc::new(crate::query::QueryRequestContext::new(query.to_string()));
+        self.execute_stream_with_operation_context_and_storage(query, ctx, None, None)
+    }
+
+    pub fn execute_stream_with_operation_context(
+        &mut self,
+        query: &str,
+        ctx: QueryRequest,
+        operation_context: Option<StorageOperationContext>,
+    ) -> CoreResult<StreamingQueryResult> {
+        self.execute_stream_with_operation_context_and_storage(query, ctx, operation_context, None)
+    }
+
+    pub fn execute_stream_with_operation_storage(
+        &mut self,
+        query: &str,
+        ctx: QueryRequest,
+        storage: S,
+    ) -> CoreResult<StreamingQueryResult> {
+        let operation_context = storage.operation_context().as_deref().cloned();
+        self.execute_stream_with_operation_context_and_storage(
+            query,
+            ctx,
+            operation_context,
+            Some(storage),
+        )
+    }
+
+    fn execute_stream_with_operation_context_and_storage(
+        &mut self,
+        query: &str,
+        ctx: QueryRequest,
+        operation_context: Option<StorageOperationContext>,
+        operation_storage: Option<S>,
+    ) -> CoreResult<StreamingQueryResult> {
+        let mut request_context = crate::query::QueryRequestContext::new(query.to_string());
+        request_context.transaction_id = ctx.transaction_id.or_else(|| {
+            operation_context
+                .as_ref()
+                .and_then(|context| context.transaction_id)
+        });
+        request_context.auto_commit = ctx.auto_commit;
+        request_context.read_only = operation_context
+            .as_ref()
+            .is_some_and(|context| context.read_only);
+        request_context.operation_context = operation_context;
+        request_context.operation_storage = operation_storage
+            .map(|storage| Arc::new(RwLock::new(storage)) as Arc<RwLock<dyn QueryStorage>>);
+        let rctx = Arc::new(request_context);
 
         let space_info = ctx.space_id.map(|id| {
             let space_name = ctx.space_name.clone().unwrap_or_default();
@@ -230,7 +324,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         });
 
         self.pipeline_manager
-            .execute_query_stream_with_request(query, rctx, space_info)
+            .execute_query_stream_with_request_scope(query, rctx, space_info, ctx.transaction_id)
             .map_err(|e| CoreError::QueryExecutionFailed(e.to_string()))
     }
 

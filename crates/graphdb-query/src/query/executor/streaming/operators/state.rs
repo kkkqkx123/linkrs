@@ -7,10 +7,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::core::types::expr::Expression;
 use crate::core::Value;
+use crate::core::types::expr::Expression;
 use crate::query::executor::base::MemoryTracker;
-use crate::storage::cursor::{EdgeCursor, IndexCursor, VertexCursor};
+use crate::storage::{EdgeCursor, IndexCursor, VertexCursor};
 
 use super::super::chunk::DataChunk;
 use super::super::executor::SortDirection;

@@ -6,7 +6,7 @@ use crate::api::core::{CoreError, CoreResult, QueryRequest, TransactionHandle};
 use crate::api::embedded::result::QueryResult;
 use crate::api::embedded::session::Session;
 use crate::core::Value;
-use crate::storage::StorageClient;
+use crate::storage::{StorageClient, StorageOperationContext};
 use crate::transaction::types::{SavepointId, SavepointInfo};
 use crate::transaction::{DurabilityLevel, IsolationLevel, TransactionOptions};
 use std::collections::HashMap;
@@ -203,7 +203,15 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoT
         };
 
         let mut query_api = self.session.query_api_mut();
-        let result = query_api.execute(query, query_ctx)?;
+        let storage =
+            self.session
+                .storage()
+                .bind_operation_context(StorageOperationContext::transaction(
+                    ctx.id,
+                    ctx.start_timestamp,
+                    ctx.read_only,
+                ));
+        let result = query_api.execute_with_operation_storage(query, query_ctx, storage)?;
         ctx.update_activity();
         Ok(QueryResult::from_core(result))
     }
@@ -238,7 +246,15 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoT
         };
 
         let mut query_api = self.session.query_api_mut();
-        let result = query_api.execute(query, query_ctx)?;
+        let storage =
+            self.session
+                .storage()
+                .bind_operation_context(StorageOperationContext::transaction(
+                    ctx.id,
+                    ctx.start_timestamp,
+                    ctx.read_only,
+                ));
+        let result = query_api.execute_with_operation_storage(query, query_ctx, storage)?;
         ctx.update_activity();
         Ok(QueryResult::from_core(result))
     }

@@ -11,9 +11,9 @@ use crate::core::{SessionStatistics, StatsManager};
 use crate::query::executor::expression::functions::{CustomFunction, FunctionRegistry};
 use crate::search::FulltextIndexManager;
 use crate::storage::StorageClient;
+use crate::sync::SyncManager;
 #[cfg(feature = "qdrant")]
 use crate::sync::vector_sync::SearchOptions;
-use crate::sync::SyncManager;
 use crate::transaction::TransactionManager;
 use crate::transaction::TransactionOptions;
 use parking_lot::RwLock;
@@ -394,6 +394,10 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
     /// Acquiring stored write locks (for internal use)
     pub(crate) fn storage_mut(&self) -> parking_lot::RwLockWriteGuard<'_, S> {
         self.db.storage.write()
+    }
+
+    pub(crate) fn storage(&self) -> S {
+        self.db.storage.read().clone()
     }
 
     /// Get current space name (for internal use)

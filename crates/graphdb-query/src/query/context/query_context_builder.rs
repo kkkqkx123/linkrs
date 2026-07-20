@@ -151,6 +151,7 @@ mod tests {
             space_name: None,
             query: "MATCH (n) RETURN n".to_string(),
             parameters: HashMap::new(),
+            ..Default::default()
         });
 
         let query_context = QueryContextBuilder::new(rctx).build();
@@ -166,6 +167,7 @@ mod tests {
             space_name: None,
             query: "MATCH (n) RETURN n".to_string(),
             parameters: HashMap::new(),
+            ..Default::default()
         });
 
         let space_info = SpaceInfo {
@@ -200,6 +202,7 @@ mod tests {
             space_name: None,
             query: "MATCH (n) RETURN n".to_string(),
             parameters: HashMap::new(),
+            ..Default::default()
         });
 
         let query_context = QueryContextBuilder::new(rctx).with_start_id(100).build();
@@ -215,6 +218,7 @@ mod tests {
             space_name: None,
             query: "MATCH (n) RETURN n".to_string(),
             parameters: HashMap::new(),
+            ..Default::default()
         });
 
         let query_context = QueryContextBuilder::new(rctx).with_arena().build();
@@ -230,6 +234,7 @@ mod tests {
             space_name: None,
             query: "MATCH (n) RETURN n".to_string(),
             parameters: HashMap::new(),
+            ..Default::default()
         });
 
         let space_info = SpaceInfo {

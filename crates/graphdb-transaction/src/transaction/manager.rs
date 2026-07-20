@@ -4,8 +4,8 @@
 //! transaction start, commit, and abort. Uses MVCC version management for
 //! snapshot isolation.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use parking_lot::{Condvar, Mutex};
@@ -396,19 +396,18 @@ impl TransactionManager {
             return Err(TransactionError::too_many_transactions());
         }
 
-        let current_write_ts = self.version_manager.next_write_timestamp();
-        if snapshot_ts > current_write_ts.saturating_sub(1) {
+        let current_write_ts = self.version_manager.read_timestamp();
+        if snapshot_ts > current_write_ts {
             return Err(TransactionError::internal(format!(
                 "Snapshot timestamp {} is too recent (max: {})",
-                snapshot_ts,
-                current_write_ts.saturating_sub(1)
+                snapshot_ts, current_write_ts
             )));
         }
 
         let txn_id = TransactionId(self.id_generator.fetch_add(1, Ordering::SeqCst));
         let timestamp = self
             .version_manager
-            .acquire_read_timestamp()
+            .acquire_read_timestamp_at(snapshot_ts)
             .map_err(|e| TransactionError::internal(e.to_string()))?;
         let timeout = options.timeout.unwrap_or(self.config.default_timeout);
 
@@ -643,10 +642,11 @@ impl TransactionManager {
         }
 
         if context.read_only {
-            self.version_manager.release_read_timestamp();
+            self.version_manager
+                .release_read_timestamp_at(context.start_timestamp);
         } else {
             self.version_manager
-                .release_write_timestamp(context.timestamp());
+                .commit_write_timestamp(context.timestamp());
             self.checkpoint_gate.release_write();
         }
 
@@ -826,10 +826,11 @@ impl TransactionManager {
         }
 
         if context.read_only {
-            self.version_manager.release_read_timestamp();
+            self.version_manager
+                .release_read_timestamp_at(context.start_timestamp);
         } else {
             self.version_manager
-                .release_write_timestamp(context.timestamp());
+                .abort_write_timestamp(context.timestamp());
             self.checkpoint_gate.release_write();
         }
 
@@ -844,10 +845,11 @@ impl TransactionManager {
 
     fn rollback_context_timestamp(&self, context: &TransactionContext) {
         if context.read_only {
-            self.version_manager.release_read_timestamp();
+            self.version_manager
+                .release_read_timestamp_at(context.start_timestamp);
         } else {
             self.version_manager
-                .release_write_timestamp(context.timestamp());
+                .abort_write_timestamp(context.timestamp());
         }
     }
 

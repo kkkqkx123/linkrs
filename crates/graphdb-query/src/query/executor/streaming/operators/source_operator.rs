@@ -8,19 +8,19 @@ use super::super::state::GlobalState;
 use super::spec::{BoundIndexPredicate, IndexProjection};
 use super::state::SourceState;
 use crate::core::error::QueryError;
-use crate::core::types::storage_ids::VertexId;
 use crate::core::types::MAX_TIMESTAMP;
+use crate::core::types::storage_ids::VertexId;
 use crate::core::wal::EntityRef;
 use crate::core::{EdgeDirection, Value};
 use crate::query::executor::base::{MemoryBudget, MemoryReservation};
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::slot::SlotLayout;
-use crate::storage::cursor::{
-    open_edge_scan, open_index_cursor, open_vertex_scan, EdgeCursor, IndexCursor, IndexPredicate,
-    IndexRow, IndexScanPlan, ScanOptions, VecEdgeCursor, VertexCursor,
-};
 use crate::storage::QueryStorage;
+use crate::storage::{
+    EdgeCursor, IndexCursor, IndexPredicate, IndexRow, IndexScanPlan, ScanOptions, VecEdgeCursor,
+    VertexCursor, open_edge_scan, open_index_cursor, open_vertex_scan,
+};
 
 #[derive(Debug, Default)]
 pub enum NeighborScanState {
@@ -1169,10 +1169,12 @@ mod tests {
                 .map(|chunk| chunk.len()),
             Some(1)
         );
-        assert!(source
-            .next(&mut base)
-            .expect("second pull should succeed")
-            .is_none());
+        assert!(
+            source
+                .next(&mut base)
+                .expect("second pull should succeed")
+                .is_none()
+        );
     }
 
     #[test]
@@ -1208,10 +1210,12 @@ mod tests {
             .expect("third chunk should be Some");
         assert_eq!(chunk3.len(), 7);
 
-        assert!(source
-            .next(&mut base)
-            .expect("fourth pull should succeed")
-            .is_none());
+        assert!(
+            source
+                .next(&mut base)
+                .expect("fourth pull should succeed")
+                .is_none()
+        );
 
         // Verify no data loss: concatenate all chunks
         let total: i64 = chunk1

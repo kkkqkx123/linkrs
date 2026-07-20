@@ -11,9 +11,9 @@ use crate::core::metadata::SchemaManager;
 use crate::core::stats::StatsManager;
 use crate::core::types::SpaceSummary;
 use crate::core::{DataType, MetricType, Permission};
-use crate::query::executor::streaming::StreamingQueryResult;
-use crate::query::executor::ExecutionResult;
 use crate::query::DataSet;
+use crate::query::executor::ExecutionResult;
+use crate::query::executor::streaming::StreamingQueryResult;
 use crate::storage::{
     StorageClient, StorageOperationContext, StorageOperationContextOps, StorageSchemaContextOps,
     StorageSyncContextOps,
@@ -21,8 +21,8 @@ use crate::storage::{
 use crate::transaction::TransactionManager;
 use log::{info, warn};
 use parking_lot::RwLock;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 #[cfg(feature = "qdrant")]
 use vector_client::VectorManager;
@@ -46,13 +46,13 @@ pub struct GraphService<S: StorageClient + Clone + 'static> {
 }
 
 impl<
-        S: StorageClient
-            + StorageSchemaContextOps
-            + StorageSyncContextOps
-            + StorageOperationContextOps
-            + Clone
-            + 'static,
-    > GraphService<S>
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + 'static,
+> GraphService<S>
 {
     /// Create a new GraphService (without a transaction manager, for use in a production environment).
     pub async fn new(config: Config, storage: Arc<S>) -> Arc<Self> {
@@ -396,9 +396,28 @@ impl<
             parameters: None,
         };
 
+        let execution_storage = session
+            .current_transaction()
+            .and_then(|txn_id| {
+                self.transaction_manager.as_ref().and_then(|manager| {
+                    manager.get_context(txn_id).ok().map(|context| {
+                        self.storage
+                            .bind_operation_context(StorageOperationContext::transaction(
+                                context.id,
+                                context.start_timestamp,
+                                context.read_only,
+                            ))
+                    })
+                })
+            })
+            .or_else(|| Some(self.storage.bind_auto_commit_context()));
         let mut query_api = self.query_api.write();
         let result = query_api
-            .execute_stream(stmt, query_request)
+            .execute_stream_with_operation_storage(
+                stmt,
+                query_request,
+                execution_storage.ok_or_else(|| "Failed to bind query storage".to_string())?,
+            )
             .map_err(|e| e.to_string())?;
 
         // Assign a server-side monotonic query ID (not from SQL text hash).
@@ -453,7 +472,8 @@ impl<
                         if !ctx.state().can_execute() {
                             warn!(
                                 "Transaction {} is in invalid state {}, cleaning up session binding",
-                                txn_id, ctx.state()
+                                txn_id,
+                                ctx.state()
                             );
                             session.unbind_transaction();
                             None
@@ -498,8 +518,8 @@ impl<
                     ))
             },
         );
-        query_api.replace_storage(execution_storage);
-        let result = query_api.execute(stmt, query_request);
+        let result =
+            query_api.execute_with_operation_storage(stmt, query_request, execution_storage);
 
         // If the query failed and we have an active transaction, check if the
         // transaction is still in a valid state. If the transaction has become
@@ -511,7 +531,8 @@ impl<
                         if !ctx.state().can_execute() {
                             warn!(
                                 "Transaction {} is in invalid state {} after failed query, cleaning up",
-                                txn_id, ctx.state()
+                                txn_id,
+                                ctx.state()
                             );
                             if let Err(e) = txn_manager.abort_transaction(txn_id) {
                                 warn!("Failed to rollback invalid transaction {}: {}", txn_id, e);

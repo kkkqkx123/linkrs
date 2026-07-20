@@ -2,13 +2,16 @@
 //!
 //! Responsible for planning the execution of the RETURN statement and implementing the projection of the results.
 
+use crate::core::Expression;
+use crate::core::YieldColumn;
 use crate::core::types::expr::contextual::ContextualExpression;
 use crate::core::types::expr::expression::ExpressionMeta;
 use crate::core::types::expr::expression_utils::generate_default_alias_from_contextual;
 use crate::core::types::operators::AggregateFunction;
-use crate::core::Expression;
-use crate::core::YieldColumn;
+use crate::query::QueryContext;
 use crate::query::parser::ast::Stmt;
+use crate::query::planning::plan::SubPlan;
+use crate::query::planning::plan::core::nodes::AggregateNode;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::DedupNode;
 use crate::query::planning::plan::core::nodes::graph_operations::window_node::{
@@ -16,12 +19,9 @@ use crate::query::planning::plan::core::nodes::graph_operations::window_node::{
 };
 use crate::query::planning::plan::core::nodes::operation::project_node::ProjectNode;
 use crate::query::planning::plan::core::nodes::operation::sample_node::SampleNode;
-use crate::query::planning::plan::core::nodes::AggregateNode;
-use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::PlannerError;
 use crate::query::planning::statements::statement_planner::ClausePlanner;
 use crate::query::validator::structs::CypherClauseKind;
-use crate::query::QueryContext;
 use std::sync::Arc;
 
 pub use crate::query::planning::plan::core::PlanNodeEnum;
@@ -455,12 +455,12 @@ fn extract_aggregate_function(
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
+    use crate::core::Expression;
     use crate::core::types::expr::contextual::ContextualExpression;
     use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::core::Expression;
     use crate::query::parser::ast::Span;
-    use crate::query::planning::plan::core::nodes::StartNode;
     use crate::query::planning::plan::core::PlanNodeEnum;
+    use crate::query::planning::plan::core::nodes::StartNode;
     use std::sync::Arc;
 
     #[test]
@@ -644,6 +644,7 @@ mod tests {
                 space_name: None,
                 query: String::new(),
                 parameters: std::collections::HashMap::new(),
+                ..Default::default()
             },
         )));
 
@@ -707,6 +708,7 @@ mod tests {
                 space_name: None,
                 query: String::new(),
                 parameters: std::collections::HashMap::new(),
+                ..Default::default()
             },
         )));
 
@@ -767,6 +769,7 @@ mod tests {
                 space_name: None,
                 query: String::new(),
                 parameters: std::collections::HashMap::new(),
+                ..Default::default()
             },
         )));
 

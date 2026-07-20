@@ -13,8 +13,9 @@
 //! spin-wait loops. This reduces CPU usage during contention and provides
 //! proper timeout support.
 
-use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
+use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use parking_lot::{Condvar, Mutex};
@@ -84,6 +85,14 @@ pub struct VersionManager {
     condvar: Condvar,
     config: VersionManagerConfig,
     snapshot_tracker: Arc<SnapshotTracker>,
+    write_states: Mutex<BTreeMap<Timestamp, WriteTimestampState>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WriteTimestampState {
+    Pending,
+    Committed,
+    Aborted,
 }
 
 impl VersionManager {
@@ -100,12 +109,14 @@ impl VersionManager {
             condvar: Condvar::new(),
             config,
             snapshot_tracker: Arc::new(SnapshotTracker::new()),
+            write_states: Mutex::new(BTreeMap::new()),
         }
     }
 
     pub fn init_ts(&self, ts: Timestamp) {
         self.write_ts.store(ts + 1, Ordering::SeqCst);
         self.read_ts.store(ts, Ordering::SeqCst);
+        self.write_states.lock().clear();
     }
 
     pub fn clear(&self) {
@@ -114,6 +125,7 @@ impl VersionManager {
         // data remains visible after reload.
         self.read_ts.store(0, Ordering::SeqCst);
         self.pending_reqs.store(0, Ordering::SeqCst);
+        self.write_states.lock().clear();
     }
 
     pub fn write_timestamp(&self) -> Timestamp {
@@ -121,8 +133,15 @@ impl VersionManager {
     }
 
     pub fn next_write_timestamp(&self) -> Timestamp {
+        let ts = self.write_ts.fetch_add(1, Ordering::SeqCst) + 1;
         self.pending_reqs.fetch_add(1, Ordering::SeqCst);
-        self.write_ts.fetch_add(1, Ordering::SeqCst)
+        self.snapshot_tracker
+            .add_snapshot(ts)
+            .expect("write timestamp snapshot tracking must succeed");
+        self.write_states
+            .lock()
+            .insert(ts, WriteTimestampState::Pending);
+        ts
     }
 
     pub fn read_timestamp(&self) -> Timestamp {
@@ -206,8 +225,37 @@ impl VersionManager {
         }
     }
 
+    /// Register a read at an already committed historical timestamp.
+    pub fn acquire_read_timestamp_at(
+        &self,
+        timestamp: Timestamp,
+    ) -> VersionManagerResult<Timestamp> {
+        if timestamp > self.read_timestamp() {
+            return Err(VersionManagerError::InvalidTimestamp(timestamp));
+        }
+        let guard = self.lock.lock();
+        let pending = self.pending_reqs.load(Ordering::SeqCst);
+        if pending < 0 || pending >= self.config.max_concurrent_reads as i32 {
+            drop(guard);
+            return Err(VersionManagerError::TooManyTransactions);
+        }
+        self.pending_reqs.fetch_add(1, Ordering::SeqCst);
+        if self.snapshot_tracker.add_snapshot(timestamp).is_err() {
+            self.pending_reqs.fetch_sub(1, Ordering::SeqCst);
+            self.condvar.notify_all();
+            drop(guard);
+            return Err(VersionManagerError::SnapshotTrackingFailed);
+        }
+        drop(guard);
+        Ok(timestamp)
+    }
+
     pub fn release_read_timestamp(&self) {
         let ts = self.read_ts.load(Ordering::SeqCst);
+        self.release_read_timestamp_at(ts);
+    }
+
+    pub fn release_read_timestamp_at(&self, ts: Timestamp) {
         if let Err(e) = self.snapshot_tracker.release_snapshot(ts) {
             log::error!("Failed to release snapshot {}: {}", ts, e);
             // Continue anyway - we still need to decrement pending_reqs
@@ -232,13 +280,15 @@ impl VersionManager {
                     continue;
                 }
 
-                let ts = (self.write_ts.load(Ordering::SeqCst) + 1) as Timestamp;
+                let ts = self.write_ts.fetch_add(1, Ordering::SeqCst) + 1;
                 if let Err(e) = self.snapshot_tracker.add_snapshot(ts) {
                     log::error!("Failed to pre-reserve snapshot {}: {}", ts, e);
                     return Err(VersionManagerError::SnapshotTrackingFailed);
                 }
+                self.write_states
+                    .lock()
+                    .insert(ts, WriteTimestampState::Pending);
                 self.pending_reqs.fetch_add(1, Ordering::SeqCst);
-                self.write_ts.fetch_add(1, Ordering::SeqCst);
                 drop(guard);
                 return Ok(ts);
             }
@@ -270,13 +320,15 @@ impl VersionManager {
                     continue;
                 }
 
-                let ts = (self.write_ts.load(Ordering::SeqCst) + 1) as Timestamp;
+                let ts = self.write_ts.fetch_add(1, Ordering::SeqCst) + 1;
                 if let Err(e) = self.snapshot_tracker.add_snapshot(ts) {
                     log::error!("Failed to pre-reserve snapshot {}: {}", ts, e);
                     return None;
                 }
+                self.write_states
+                    .lock()
+                    .insert(ts, WriteTimestampState::Pending);
                 self.pending_reqs.fetch_add(1, Ordering::SeqCst);
-                self.write_ts.fetch_add(1, Ordering::SeqCst);
                 drop(guard);
                 return Some(ts);
             }
@@ -295,14 +347,41 @@ impl VersionManager {
     }
 
     pub fn release_write_timestamp(&self, ts: Timestamp) {
-        let _ = self.snapshot_tracker.release_snapshot(ts);
-        let _guard = self.lock.lock();
+        self.commit_write_timestamp(ts);
+    }
 
-        if ts > self.read_ts.load(Ordering::SeqCst) {
-            self.read_ts.store(ts, Ordering::SeqCst);
+    pub fn commit_write_timestamp(&self, ts: Timestamp) {
+        self.finish_write_timestamp(ts, WriteTimestampState::Committed);
+    }
+
+    pub fn abort_write_timestamp(&self, ts: Timestamp) {
+        self.finish_write_timestamp(ts, WriteTimestampState::Aborted);
+    }
+
+    fn finish_write_timestamp(&self, ts: Timestamp, state: WriteTimestampState) {
+        let _guard = self.lock.lock();
+        let mut states = self.write_states.lock();
+        if let Some(entry) = states.get_mut(&ts) {
+            if *entry == WriteTimestampState::Pending {
+                *entry = state;
+                let _ = self.snapshot_tracker.release_snapshot(ts);
+                self.pending_reqs.fetch_sub(1, Ordering::SeqCst);
+            }
         }
 
-        self.pending_reqs.fetch_sub(1, Ordering::SeqCst);
+        let mut frontier = self.read_ts.load(Ordering::SeqCst);
+        loop {
+            let next = frontier.saturating_add(1);
+            match states.get(&next).copied() {
+                Some(WriteTimestampState::Committed | WriteTimestampState::Aborted) => {
+                    frontier = next;
+                    states.remove(&next);
+                }
+                _ => break,
+            }
+        }
+        self.read_ts.store(frontier, Ordering::SeqCst);
+        drop(states);
         drop(_guard);
         self.condvar.notify_all();
     }
@@ -353,7 +432,8 @@ impl ReadTimestampGuard {
 
 impl Drop for ReadTimestampGuard {
     fn drop(&mut self) {
-        self.version_manager.release_read_timestamp();
+        self.version_manager
+            .release_read_timestamp_at(self.timestamp);
     }
 }
 
@@ -377,13 +457,13 @@ impl InsertTimestampGuard {
 
     pub fn commit(mut self) {
         if let Some(ts) = self.timestamp.take() {
-            self.version_manager.release_write_timestamp(ts);
+            self.version_manager.commit_write_timestamp(ts);
         }
     }
 
     pub fn abort(mut self) {
         if let Some(ts) = self.timestamp.take() {
-            self.version_manager.release_write_timestamp(ts);
+            self.version_manager.abort_write_timestamp(ts);
         }
     }
 }
@@ -391,7 +471,7 @@ impl InsertTimestampGuard {
 impl Drop for InsertTimestampGuard {
     fn drop(&mut self) {
         if let Some(ts) = self.timestamp.take() {
-            self.version_manager.release_write_timestamp(ts);
+            self.version_manager.abort_write_timestamp(ts);
         }
     }
 }
@@ -503,5 +583,66 @@ mod tests {
         // Release last
         vm.release_write_timestamp(ts3);
         assert_eq!(tracker.cleanup_threshold(), u32::MAX); // No active snapshots
+    }
+
+    #[test]
+    fn test_out_of_order_commit_does_not_advance_frontier() {
+        let vm = VersionManager::new();
+        let first = vm
+            .acquire_insert_timestamp()
+            .expect("first write timestamp");
+        let second = vm
+            .acquire_insert_timestamp()
+            .expect("second write timestamp");
+
+        vm.commit_write_timestamp(second);
+        assert_eq!(vm.read_timestamp(), first - 1);
+        assert_eq!(vm.pending_count(), 1);
+
+        vm.commit_write_timestamp(first);
+        assert_eq!(vm.read_timestamp(), second);
+        assert_eq!(vm.pending_count(), 0);
+    }
+
+    #[test]
+    fn test_abort_does_not_publish_frontier_as_a_commit() {
+        let vm = VersionManager::new();
+        let timestamp = vm.acquire_insert_timestamp().expect("write timestamp");
+
+        vm.abort_write_timestamp(timestamp);
+
+        assert_eq!(vm.read_timestamp(), timestamp);
+        assert_eq!(vm.pending_count(), 0);
+        assert_eq!(vm.snapshot_tracker().active_count(), 0);
+    }
+
+    #[test]
+    fn test_read_guard_releases_original_timestamp() {
+        let vm = Arc::new(VersionManager::new());
+        let guard = ReadTimestampGuard::new(vm.clone()).expect("read timestamp");
+        let timestamp = guard.timestamp();
+        let write_timestamp = vm.acquire_insert_timestamp().expect("write timestamp");
+        vm.commit_write_timestamp(write_timestamp);
+
+        assert_eq!(vm.read_timestamp(), write_timestamp);
+        drop(guard);
+        assert_eq!(vm.snapshot_tracker().ref_count(timestamp), None);
+        assert_eq!(vm.pending_count(), 0);
+    }
+
+    #[test]
+    fn test_historical_read_tracks_requested_timestamp() {
+        let vm = Arc::new(VersionManager::new());
+        let write_timestamp = vm.acquire_insert_timestamp().expect("write timestamp");
+        vm.commit_write_timestamp(write_timestamp);
+
+        let timestamp = vm
+            .acquire_read_timestamp_at(write_timestamp)
+            .expect("historical timestamp");
+        assert_eq!(timestamp, write_timestamp);
+        assert_eq!(vm.snapshot_tracker().ref_count(timestamp), Some(1));
+
+        vm.release_read_timestamp_at(timestamp);
+        assert_eq!(vm.snapshot_tracker().ref_count(timestamp), None);
     }
 }
