@@ -3,7 +3,7 @@
 //! Analyzes column data characteristics to choose the optimal encoding.
 //! Thresholds are configurable via `EncodingThresholds`.
 
-use crate::core::Value;
+use crate::core::{DataType, Value};
 use crate::storage::encoding::EncodingType;
 
 /// Configurable thresholds for encoding selection.
@@ -17,6 +17,10 @@ pub struct EncodingThresholds {
     pub cardinality_ratio_threshold: f64,
     /// Ratio of new data to existing data that triggers FSST rebuild.
     pub fsst_rebuild_threshold: f64,
+    /// Compression ratio above which re-encoding is recommended.
+    /// When the average compressed_size/raw_size exceeds this threshold,
+    /// the column should be re-evaluated with a different encoding.
+    pub reencode_threshold: f64,
 }
 
 impl Default for EncodingThresholds {
@@ -26,34 +30,95 @@ impl Default for EncodingThresholds {
             avg_length_threshold: 16,
             cardinality_ratio_threshold: 0.5,
             fsst_rebuild_threshold: 0.2,
+            reencode_threshold: 0.8,
         }
     }
 }
 
-/// Metrics collected during encoding/decoding operations.
 #[derive(Debug, Clone, Default)]
-pub struct CompressionMetrics {
-    pub encoding_type: EncodingType,
-    pub raw_bytes: u64,
-    pub encoded_bytes: u64,
-    pub compression_ratio: f64,
-    pub encode_time_us: u64,
-    pub decode_time_us: u64,
+struct EncodingFeedback {
+    observations: Vec<FeedbackObservation>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FeedbackObservation {
+    encoding_type: EncodingType,
+    compression_ratio: f64,
+}
+
+impl EncodingFeedback {
+    const MAX_OBSERVATIONS: usize = 100;
+    const REEVALUATE_AFTER: usize = 20;
+
+    fn record(&mut self, encoding_type: EncodingType, compression_ratio: f64) {
+        if self.observations.len() >= Self::MAX_OBSERVATIONS {
+            self.observations.remove(0);
+        }
+        self.observations.push(FeedbackObservation {
+            encoding_type,
+            compression_ratio,
+        });
+    }
+
+    fn average_ratio(&self, encoding_type: EncodingType) -> Option<f64> {
+        let ratios: Vec<f64> = self
+            .observations
+            .iter()
+            .filter(|o| o.encoding_type == encoding_type)
+            .map(|o| o.compression_ratio)
+            .collect();
+        if ratios.is_empty() {
+            return None;
+        }
+        Some(ratios.iter().sum::<f64>() / ratios.len() as f64)
+    }
+
+    fn should_reevaluate(&self, encoding_type: EncodingType) -> bool {
+        let count = self
+            .observations
+            .iter()
+            .filter(|o| o.encoding_type == encoding_type)
+            .count();
+        count >= Self::REEVALUATE_AFTER
+    }
 }
 
 /// Analyzes data characteristics and selects the optimal encoding.
 #[derive(Debug, Clone)]
 pub struct EncodingSelector {
     thresholds: EncodingThresholds,
+    feedback: EncodingFeedback,
 }
 
 impl EncodingSelector {
     pub fn new(thresholds: EncodingThresholds) -> Self {
-        Self { thresholds }
+        Self {
+            thresholds,
+            feedback: EncodingFeedback::default(),
+        }
     }
 
     pub fn thresholds(&self) -> &EncodingThresholds {
         &self.thresholds
+    }
+
+    pub fn record_compression_result(
+        &mut self,
+        encoding_type: EncodingType,
+        compression_ratio: f64,
+    ) {
+        self.feedback.record(encoding_type, compression_ratio);
+    }
+
+    pub fn should_reencode(&self, encoding_type: EncodingType) -> bool {
+        if !self.feedback.should_reevaluate(encoding_type) {
+            return false;
+        }
+        if let Some(avg_ratio) = self.feedback.average_ratio(encoding_type) {
+            avg_ratio > self.thresholds.reencode_threshold
+        } else {
+            false
+        }
     }
 
     /// Select encoding for integer columns.
@@ -125,6 +190,17 @@ impl EncodingSelector {
     /// Select encoding for boolean columns.
     pub fn select_for_booleans(&self, _values: &[Option<Value>]) -> EncodingType {
         EncodingType::Rle
+    }
+
+    /// Select encoding based on data type and values.
+    pub fn select_for_column(&self, data_type: &DataType, values: &[Option<Value>]) -> EncodingType {
+        match data_type {
+            DataType::Bool => self.select_for_booleans(values),
+            DataType::SmallInt | DataType::Int | DataType::BigInt => self.select_for_integers(values),
+            DataType::Float | DataType::Double => self.select_for_floats(values),
+            DataType::String => self.select_for_strings(values),
+            _ => EncodingType::None,
+        }
     }
 }
 
@@ -222,11 +298,61 @@ mod tests {
             avg_length_threshold: 8,
             cardinality_ratio_threshold: 0.3,
             fsst_rebuild_threshold: 0.5,
+            reencode_threshold: 0.9,
         };
         let selector = EncodingSelector::new(thresholds);
         assert_eq!(selector.thresholds().string_min_rows, 10);
         assert_eq!(selector.thresholds().avg_length_threshold, 8);
         assert!((selector.thresholds().cardinality_ratio_threshold - 0.3).abs() < f64::EPSILON);
         assert!((selector.thresholds().fsst_rebuild_threshold - 0.5).abs() < f64::EPSILON);
+        assert!((selector.thresholds().reencode_threshold - 0.9).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_feedback_triggers_reencode() {
+        let mut selector = EncodingSelector::default();
+        for _ in 0..EncodingFeedback::REEVALUATE_AFTER {
+            selector.record_compression_result(EncodingType::Dictionary, 0.95);
+        }
+        assert!(selector.should_reencode(EncodingType::Dictionary));
+    }
+
+    #[test]
+    fn test_no_reencode_with_few_observations() {
+        let mut selector = EncodingSelector::default();
+        for _ in 0..5 {
+            selector.record_compression_result(EncodingType::Dictionary, 0.95);
+        }
+        assert!(!selector.should_reencode(EncodingType::Dictionary));
+    }
+
+    #[test]
+    fn test_no_reencode_with_good_ratio() {
+        let mut selector = EncodingSelector::default();
+        for _ in 0..EncodingFeedback::REEVALUATE_AFTER {
+            selector.record_compression_result(EncodingType::Dictionary, 0.5);
+        }
+        assert!(!selector.should_reencode(EncodingType::Dictionary));
+    }
+
+    #[test]
+    fn test_select_for_column_dispatch() {
+        let selector = EncodingSelector::default();
+        let int_values: Vec<Option<Value>> = (0..100).map(|i| Some(Value::Int(i))).collect();
+        assert_eq!(
+            selector.select_for_column(&DataType::Int, &int_values),
+            EncodingType::BitPacking
+        );
+
+        let bool_values: Vec<Option<Value>> = (0..100).map(|i| Some(Value::Bool(i % 2 == 0))).collect();
+        assert_eq!(
+            selector.select_for_column(&DataType::Bool, &bool_values),
+            EncodingType::Rle
+        );
+
+        assert_eq!(
+            selector.select_for_column(&DataType::VectorDense(0), &[]),
+            EncodingType::None
+        );
     }
 }

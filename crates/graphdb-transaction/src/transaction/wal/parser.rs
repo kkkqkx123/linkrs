@@ -237,7 +237,7 @@ impl ParallelWalParser {
                 },
             };
 
-            if header.timestamp == 0 && header.length == 0 && header.lsn == 0 {
+            if header.timestamp == 0 && header.length() == 0 && header.lsn == 0 {
                 break;
             }
 
@@ -245,7 +245,7 @@ impl ParallelWalParser {
                 .prev_lsn()
                 .as_u64()
                 .checked_add(WAL_HEADER_SIZE as u64)
-                .and_then(|lsn| lsn.checked_add(header.length as u64))
+                .and_then(|lsn| lsn.checked_add(header.length() as u64))
                 .ok_or_else(|| WalError::Corrupted(format!("LSN overflow at offset {}", offset)))?;
             if header.prev_lsn() != expected_prev_lsn || header.lsn() != Lsn::new(expected_lsn) {
                 return Err(WalError::Corrupted(format!(
@@ -257,16 +257,14 @@ impl ParallelWalParser {
                 )));
             }
 
-            let payload_start = offset + WAL_HEADER_SIZE;
-            let payload_end = payload_start + header.length as usize;
-
-            if payload_end > buffer.len() {
-                // A valid header followed by an incomplete payload is a torn
-                // final record. Earlier records remain recoverable, but the
-                // tail must be reported rather than silently ignored.
+            let remaining = buffer.len() - offset - WAL_HEADER_SIZE;
+            if !header.is_length_valid(remaining) {
                 result.corrupted_count += 1;
                 break;
             }
+
+            let payload_start = offset + WAL_HEADER_SIZE;
+            let payload_end = payload_start + header.length() as usize;
 
             if let Err(error) = WalOpType::try_from(header.op_type) {
                 match recovery_mode {
@@ -706,7 +704,7 @@ impl LocalWalParser {
                 },
             };
 
-            if header.timestamp == 0 && header.length == 0 && header.lsn == 0 {
+            if header.timestamp == 0 && header.length() == 0 && header.lsn == 0 {
                 break;
             }
 
@@ -714,7 +712,7 @@ impl LocalWalParser {
                 .prev_lsn()
                 .as_u64()
                 .checked_add(WAL_HEADER_SIZE as u64)
-                .and_then(|lsn| lsn.checked_add(header.length as u64))
+                .and_then(|lsn| lsn.checked_add(header.length() as u64))
                 .ok_or_else(|| WalError::Corrupted(format!("LSN overflow at offset {}", offset)))?;
             if header.prev_lsn() != expected_prev_lsn || header.lsn() != Lsn::new(expected_lsn) {
                 return Err(WalError::Corrupted(format!(
@@ -726,16 +724,14 @@ impl LocalWalParser {
                 )));
             }
 
-            let payload_start = offset + WAL_HEADER_SIZE;
-            let payload_end = payload_start + header.length as usize;
-
-            if payload_end > buffer.len() {
-                // A valid header followed by an incomplete payload is a torn
-                // final record. Earlier records remain recoverable, but the
-                // tail must be reported rather than silently ignored.
+            let remaining = buffer.len() - offset - WAL_HEADER_SIZE;
+            if !header.is_length_valid(remaining) {
                 self.corrupted_count += 1;
                 break;
             }
+
+            let payload_start = offset + WAL_HEADER_SIZE;
+            let payload_end = payload_start + header.length() as usize;
 
             if let Err(error) = WalOpType::try_from(header.op_type) {
                 match self.recovery_mode {

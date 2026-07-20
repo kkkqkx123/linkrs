@@ -188,6 +188,11 @@ pub enum IndexSelectionResult {
     FullScan,
 }
 
+pub struct PredicatePruneResult {
+    pub kept: Vec<PredicateInfo>,
+    pub pruned: Vec<PredicateInfo>,
+}
+
 pub struct CompositeIndexAnalyzer {
     cost_config: CostModelConfig,
     column_stats: HashMap<String, ColumnStats>,
@@ -199,6 +204,8 @@ pub struct ColumnStats {
     pub distinct_count: usize,
     pub null_count: usize,
     pub total_rows: usize,
+    pub min_value: Option<Value>,
+    pub max_value: Option<Value>,
 }
 
 impl ColumnStats {
@@ -208,6 +215,8 @@ impl ColumnStats {
             distinct_count,
             null_count: 0,
             total_rows,
+            min_value: None,
+            max_value: None,
         }
     }
 
@@ -216,6 +225,36 @@ impl ColumnStats {
             return 1.0;
         }
         1.0 / self.distinct_count as f64
+    }
+
+    pub fn is_null_only(&self) -> bool {
+        self.null_count >= self.total_rows
+    }
+
+    pub fn range_overlap(&self, lower: &Option<Value>, upper: &Option<Value>) -> bool {
+        match (lower, upper) {
+            (None, None) => true,
+            (Some(l), None) => {
+                if let Some(ref max) = self.max_value {
+                    l <= max
+                } else {
+                    true
+                }
+            }
+            (None, Some(u)) => {
+                if let Some(ref min) = self.min_value {
+                    u >= min
+                } else {
+                    true
+                }
+            }
+            (Some(l), Some(u)) => {
+                match (&self.min_value, &self.max_value) {
+                    (Some(min), Some(max)) => l <= max && u >= min,
+                    _ => true,
+                }
+            }
+        }
     }
 }
 
@@ -245,8 +284,15 @@ impl CompositeIndexAnalyzer {
             return IndexSelectionResult::FullScan;
         }
 
-        let composite_result = self.find_best_composite_index(predicates, indexes);
-        let single_result = self.find_best_single_column_index(predicates, indexes);
+        let prune_result = self.prune_predicates(predicates);
+        let kept = &prune_result.kept;
+
+        if kept.is_empty() {
+            return IndexSelectionResult::FullScan;
+        }
+
+        let composite_result = self.find_best_composite_index(kept, indexes);
+        let single_result = self.find_best_single_column_index(kept, indexes);
 
         match (composite_result, single_result) {
             (Some(composite), Some(single)) => {
@@ -433,6 +479,33 @@ impl CompositeIndexAnalyzer {
             PredicateOp::Like => 0.2,
             PredicateOp::NotEqual => 0.9,
         }
+    }
+
+    pub fn prune_predicates(&self, predicates: &[PredicateInfo]) -> PredicatePruneResult {
+        let mut kept = Vec::new();
+        let mut pruned = Vec::new();
+
+        for pred in predicates {
+            if let Some(stats) = self.column_stats.get(&pred.column) {
+                if stats.is_null_only() {
+                    match &pred.op {
+                        PredicateOp::Equal | PredicateOp::Range | PredicateOp::In => {
+                            pruned.push(pred.clone());
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
+
+                if pred.is_range() && !stats.range_overlap(&pred.lower, &pred.upper) {
+                    pruned.push(pred.clone());
+                    continue;
+                }
+            }
+            kept.push(pred.clone());
+        }
+
+        PredicatePruneResult { kept, pruned }
     }
 }
 
@@ -691,5 +764,49 @@ mod tests {
     fn test_column_stats_selectivity() {
         let stats = ColumnStats::new("name".to_string(), 100, 1000);
         assert!((stats.selectivity() - 0.01).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_prune_null_only_column() {
+        let mut analyzer = CompositeIndexAnalyzer::new();
+        let mut stats = ColumnStats::new("status".to_string(), 0, 100);
+        stats.null_count = 100;
+        analyzer.add_column_stats(stats);
+
+        let predicates = vec![
+            PredicateInfo::equal("status".to_string(), Value::String("active".to_string())),
+            PredicateInfo::equal("name".to_string(), Value::String("Alice".to_string())),
+        ];
+
+        let result = analyzer.prune_predicates(&predicates);
+        assert_eq!(result.pruned.len(), 1);
+        assert_eq!(result.pruned[0].column, "status");
+        assert_eq!(result.kept.len(), 1);
+        assert_eq!(result.kept[0].column, "name");
+    }
+
+    #[test]
+    fn test_prune_range_no_overlap() {
+        let mut analyzer = CompositeIndexAnalyzer::new();
+        let mut stats = ColumnStats::new("age".to_string(), 50, 100);
+        stats.min_value = Some(Value::Int(20));
+        stats.max_value = Some(Value::Int(30));
+        analyzer.add_column_stats(stats);
+
+        let predicates = vec![
+            PredicateInfo::range(
+                "age".to_string(),
+                Some(Value::Int(40)),
+                Some(Value::Int(50)),
+                true,
+                true,
+            ),
+            PredicateInfo::equal("name".to_string(), Value::String("Alice".to_string())),
+        ];
+
+        let result = analyzer.prune_predicates(&predicates);
+        assert_eq!(result.pruned.len(), 1);
+        assert_eq!(result.pruned[0].column, "age");
+        assert_eq!(result.kept.len(), 1);
     }
 }

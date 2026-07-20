@@ -1284,6 +1284,18 @@ impl ColumnStore {
         }
     }
 
+    pub fn read_page(path: &std::path::Path, page_idx: u32) -> StorageResult<Vec<u8>> {
+        crate::storage::compression::read_single_page_from_file(path, page_idx)
+    }
+
+    pub fn read_pages_in_range(
+        path: &std::path::Path,
+        start_page: u32,
+        end_page: u32,
+    ) -> StorageResult<Vec<u8>> {
+        crate::storage::compression::read_pages_range_from_file(path, start_page, end_page)
+    }
+
     pub fn apply_encoding_to_column(
         &mut self,
         col_name: &str,

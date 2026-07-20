@@ -368,6 +368,16 @@ impl RecordType {
 impl WalHeader {
     pub const SIZE: usize = WAL_HEADER_SIZE;
 
+    pub const MAX_PAYLOAD_LENGTH: u32 = 256 * 1024 * 1024;
+
+    pub fn length(&self) -> u32 {
+        self.length
+    }
+
+    pub fn is_length_valid(&self, remaining: usize) -> bool {
+        self.length <= Self::MAX_PAYLOAD_LENGTH && self.length as usize <= remaining
+    }
+
     pub fn new(op_type: WalOpType, timestamp: Timestamp, length: u32) -> Self {
         let is_update = matches!(
             op_type,

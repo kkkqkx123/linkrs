@@ -34,7 +34,7 @@ impl VertexTable {
 
         let meta_path = path.join("meta.bin");
         let meta_payload = self.build_meta_payload()?;
-        Self::write_pages_to_file(&meta_path, &meta_payload, page_size, level)?;
+        Self::write_pages_to_file(&meta_path, &meta_payload, page_size, level, 1)?;
 
         let id_indexer_path = path.join("id_indexer.bin");
         self.flush_id_indexer(&id_indexer_path)?;
@@ -53,6 +53,7 @@ impl VertexTable {
         payload: &[u8],
         page_size: usize,
         level: i32,
+        total_rows: u32,
     ) -> StorageResult<()> {
         let mut pages_buf = Vec::new();
         let mut writer = crate::storage::compression::PageWriter::new(page_size, level);
@@ -62,7 +63,7 @@ impl VertexTable {
         let header = crate::storage::compression::ColumnFileHeader {
             page_size,
             page_count: writer.page_count(),
-            total_rows: 0,
+            total_rows,
         };
         header.serialize(&mut final_buf)?;
         final_buf.extend_from_slice(&pages_buf);
@@ -110,7 +111,8 @@ impl VertexTable {
         }
 
         let page_size = crate::storage::compression::DEFAULT_PAGE_SIZE;
-        Self::write_pages_to_file(path, &payload, page_size, 3)
+        let total_rows = self.id_indexer.len() as u32;
+        Self::write_pages_to_file(path, &payload, page_size, 3, total_rows)
     }
 
     fn flush_columns(&self, path: &Path) -> StorageResult<()> {
@@ -186,7 +188,8 @@ impl VertexTable {
         }
 
         let page_size = crate::storage::compression::DEFAULT_PAGE_SIZE;
-        Self::write_pages_to_file(path, &payload, page_size, 3)
+        let total_rows = self.columns.row_count() as u32;
+        Self::write_pages_to_file(path, &payload, page_size, 3, total_rows)
     }
 
     fn flush_timestamps(&self, path: &Path) -> StorageResult<()> {
@@ -204,27 +207,29 @@ impl VertexTable {
         }
 
         let page_size = crate::storage::compression::DEFAULT_PAGE_SIZE;
-        Self::write_pages_to_file(path, &payload, page_size, 3)
+        Self::write_pages_to_file(path, &payload, page_size, 3, count)
     }
 
     pub fn load<P: AsRef<Path>>(&mut self, path: P) -> StorageResult<()> {
         self.load_internal(path)
     }
 
-    fn read_pages_from_file(path: &Path) -> StorageResult<Vec<u8>> {
+    fn read_pages_from_file(path: &Path) -> StorageResult<(Vec<u8>, u32)> {
         let file = std::fs::File::open(path)
             .map_err(|e| StorageError::io_error(format!("Failed to open {}: {}", path.display(), e)))?;
         let mut reader = std::io::BufReader::new(file);
         let header = crate::storage::compression::ColumnFileHeader::deserialize(&mut reader)?;
+        let total_rows = header.total_rows;
         let page_reader = crate::storage::compression::PageReader::new(header.page_size);
-        page_reader.read_all(&mut reader, header.page_count)
+        let data = page_reader.read_all(&mut reader, header.page_count)?;
+        Ok((data, total_rows))
     }
 
     fn load_internal<P: AsRef<Path>>(&mut self, path: P) -> StorageResult<()> {
         let path = path.as_ref();
 
         let meta_path = path.join("meta.bin");
-        let meta_data = Self::read_pages_from_file(&meta_path)?;
+        let (meta_data, _meta_rows) = Self::read_pages_from_file(&meta_path)?;
         let mut meta_cursor = &meta_data[..];
         let mut header_buf = [0u8; HEADER_SIZE];
         meta_cursor.read_exact(&mut header_buf)?;
@@ -283,7 +288,7 @@ impl VertexTable {
     }
 
     fn load_id_indexer(&mut self, path: &Path) -> StorageResult<()> {
-        let data = Self::read_pages_from_file(path)?;
+        let (data, total_rows) = Self::read_pages_from_file(path)?;
         let mut cursor = &data[..];
         let mut header_buf = [0u8; HEADER_SIZE];
         cursor.read_exact(&mut header_buf)?;
@@ -321,11 +326,18 @@ impl VertexTable {
             self.id_indexer.set_at(internal_id, key);
         }
 
+        if total_rows > 0 && total_rows != count as u32 {
+            return Err(StorageError::deserialize_error(format!(
+                "id_indexer total_rows mismatch: header={}, actual={}",
+                total_rows, count
+            )));
+        }
+
         Ok(())
     }
 
     fn load_columns(&mut self, path: &Path) -> StorageResult<()> {
-        let data = Self::read_pages_from_file(path)?;
+        let (data, total_rows) = Self::read_pages_from_file(path)?;
         let mut cursor = &data[..];
         let mut header_buf = [0u8; HEADER_SIZE];
         cursor.read_exact(&mut header_buf)?;
@@ -452,6 +464,14 @@ impl VertexTable {
             }
         }
 
+        if total_rows > 0 && total_rows != self.columns.row_count() as u32 {
+            return Err(StorageError::deserialize_error(format!(
+                "columns total_rows mismatch: header={}, actual={}",
+                total_rows,
+                self.columns.row_count()
+            )));
+        }
+
         Ok(())
     }
 
@@ -507,7 +527,7 @@ impl VertexTable {
     }
 
     fn load_timestamps(&mut self, path: &Path) -> StorageResult<()> {
-        let data = Self::read_pages_from_file(path)?;
+        let (data, total_rows) = Self::read_pages_from_file(path)?;
         let mut cursor = &data[..];
         let mut header_buf = [0u8; HEADER_SIZE];
         cursor.read_exact(&mut header_buf)?;
@@ -526,6 +546,13 @@ impl VertexTable {
         let mut count_bytes = [0u8; 4];
         cursor.read_exact(&mut count_bytes)?;
         let count = u32::from_le_bytes(count_bytes) as usize;
+
+        if total_rows > 0 && total_rows != count as u32 {
+            return Err(StorageError::deserialize_error(format!(
+                "timestamps total_rows mismatch: header={}, actual={}",
+                total_rows, count
+            )));
+        }
 
         let mut timestamps = Vec::with_capacity(count);
         for _ in 0..count {

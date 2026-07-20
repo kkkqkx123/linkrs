@@ -207,7 +207,7 @@ pub fn load_csr(
     csr: &mut CsrVariant,
     segments: &mut Vec<CsrSegment>,
 ) -> StorageResult<()> {
-    let raw_data = read_pages_from_file(path)?;
+    let (raw_data, total_rows) = read_pages_from_file(path)?;
     let mut cursor = &raw_data[..];
     let mut header_buf = [0u8; HEADER_SIZE];
     cursor.read_exact(&mut header_buf)?;
@@ -318,12 +318,20 @@ pub fn load_csr(
         segments.push(segment);
     }
 
+    let loaded_edge_count = csr.edge_count() as u32;
+    if total_rows > 0 && total_rows != loaded_edge_count {
+        return Err(StorageError::deserialize_error(format!(
+            "CSR total_rows mismatch: header={}, actual={}",
+            total_rows, loaded_edge_count
+        )));
+    }
+
     Ok(())
 }
 
 /// Load properties from file
 pub fn load_properties(path: &Path) -> StorageResult<PropertyTable> {
-    let raw_data = read_pages_from_file(path)?;
+    let (raw_data, total_rows) = read_pages_from_file(path)?;
     let mut cursor = &raw_data[..];
     let mut header_buf = [0u8; HEADER_SIZE];
     cursor.read_exact(&mut header_buf)?;
@@ -349,6 +357,14 @@ pub fn load_properties(path: &Path) -> StorageResult<PropertyTable> {
     let mut properties = PropertyTable::new();
     properties.load(&data)?;
 
+    if total_rows > 0 && total_rows != properties.row_count() as u32 {
+        return Err(StorageError::deserialize_error(format!(
+            "properties total_rows mismatch: header={}, actual={}",
+            total_rows,
+            properties.row_count()
+        )));
+    }
+
     Ok(properties)
 }
 
@@ -358,6 +374,7 @@ pub fn write_pages_to_file(
     payload: &[u8],
     page_size: usize,
     level: i32,
+    total_rows: u32,
 ) -> StorageResult<()> {
     let mut pages_buf = Vec::new();
     let mut writer = crate::storage::compression::PageWriter::new(page_size, level);
@@ -367,7 +384,7 @@ pub fn write_pages_to_file(
     let header = crate::storage::compression::ColumnFileHeader {
         page_size,
         page_count: writer.page_count(),
-        total_rows: 0,
+        total_rows,
     };
     header.serialize(&mut final_buf)?;
     final_buf.extend_from_slice(&pages_buf);
@@ -375,14 +392,54 @@ pub fn write_pages_to_file(
     crate::storage::compression::write_shadow_file(path, &final_buf)
 }
 
-/// Read pages from a page-compressed file
-pub fn read_pages_from_file(path: &Path) -> StorageResult<Vec<u8>> {
+/// Read pages from a page-compressed file.
+/// Returns (decompressed_data, total_rows_from_header).
+pub fn read_pages_from_file(path: &Path) -> StorageResult<(Vec<u8>, u32)> {
     let file = File::open(path)
         .map_err(|e| StorageError::io_error(format!("Failed to open {}: {}", path.display(), e)))?;
     let mut reader = std::io::BufReader::new(file);
     let header = crate::storage::compression::ColumnFileHeader::deserialize(&mut reader)?;
+    let total_rows = header.total_rows;
     let page_reader = crate::storage::compression::PageReader::new(header.page_size);
-    page_reader.read_all(&mut reader, header.page_count)
+    let data = page_reader.read_all(&mut reader, header.page_count)?;
+    Ok((data, total_rows))
+}
+
+/// Read a single page from a page-compressed file.
+/// Returns the decompressed page contents.
+pub fn read_single_page_from_file(path: &Path, page_idx: u32) -> StorageResult<Vec<u8>> {
+    let file = File::open(path)
+        .map_err(|e| StorageError::io_error(format!("Failed to open {}: {}", path.display(), e)))?;
+    let mut reader = std::io::BufReader::new(file);
+    let header = crate::storage::compression::ColumnFileHeader::deserialize(&mut reader)?;
+    if page_idx >= header.page_count {
+        return Err(StorageError::invalid_input(format!(
+            "page index {} out of bounds (total pages: {})",
+            page_idx, header.page_count
+        )));
+    }
+    let page_reader = crate::storage::compression::PageReader::new(header.page_size);
+    page_reader.read_pages_in_range(&mut reader, page_idx, page_idx + 1)
+}
+
+/// Read pages in range [start_page, end_page) and concatenate their contents.
+pub fn read_pages_range_from_file(
+    path: &Path,
+    start_page: u32,
+    end_page: u32,
+) -> StorageResult<Vec<u8>> {
+    let file = File::open(path)
+        .map_err(|e| StorageError::io_error(format!("Failed to open {}: {}", path.display(), e)))?;
+    let mut reader = std::io::BufReader::new(file);
+    let header = crate::storage::compression::ColumnFileHeader::deserialize(&mut reader)?;
+    if end_page > header.page_count || start_page > end_page {
+        return Err(StorageError::invalid_input(format!(
+            "invalid page range [{}, {}) for file with {} pages",
+            start_page, end_page, header.page_count
+        )));
+    }
+    let page_reader = crate::storage::compression::PageReader::new(header.page_size);
+    page_reader.read_pages_in_range(&mut reader, start_page, end_page)
 }
 
 #[cfg(test)]

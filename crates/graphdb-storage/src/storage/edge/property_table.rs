@@ -37,6 +37,7 @@ use std::io::{Cursor, Read};
 
 use crate::core::types::Timestamp;
 use crate::core::{DataType, DateValue, StorageError, StorageResult, Value};
+use crate::storage::encoding::EncodingType;
 use crate::storage::mvcc::{MVCCTable, SnapshotHandle, TieredTombstoneManager};
 use crate::storage::naming::NameIndexer;
 use crate::storage::persistence::{read_header, read_u32_le, section, write_header};
@@ -722,6 +723,10 @@ impl PropertyTable {
         true
     }
 
+    pub fn row_count(&self) -> usize {
+        self.row_count
+    }
+
     pub fn has_property(&self, name: &str) -> bool {
         self.name_indexer.contains(name)
     }
@@ -729,6 +734,58 @@ impl PropertyTable {
     /// Get PropertyId by name
     pub fn get_property_id(&self, name: &str) -> Option<crate::storage::types::PropertyId> {
         self.name_indexer.get_id(name)
+    }
+
+    pub fn column_values(&self, col_idx: usize) -> Vec<Option<Value>> {
+        let mut values = Vec::with_capacity(self.records.len());
+        for record in &self.records {
+            match record {
+                Some(rec) => {
+                    match self.deserialize_row(&rec.data) {
+                        Ok(row) => {
+                            if col_idx < row.len() {
+                                values.push(row[col_idx].1.clone());
+                            } else {
+                                values.push(None);
+                            }
+                        }
+                        Err(_) => values.push(None),
+                    }
+                }
+                None => values.push(None),
+            }
+        }
+        values
+    }
+
+    pub fn compute_column_stats(
+        &self,
+        col_idx: usize,
+    ) -> Option<crate::storage::column_stats::ColumnStats> {
+        if col_idx >= self.schema.len() {
+            return None;
+        }
+        let schema = &self.schema[col_idx];
+        let values = self.column_values(col_idx);
+        let raw_size = values.len() as u64 * crate::storage::vertex::column_store::element_size(&schema.data_type).max(1) as u64;
+        Some(crate::storage::column_stats::compute_stats(
+            &values,
+            crate::storage::encoding::EncodingType::None,
+            raw_size,
+            raw_size,
+        ))
+    }
+
+    pub fn select_encodings(
+        &mut self,
+        selector: &crate::storage::encoding::EncodingSelector,
+    ) {
+        for i in 0..self.schema.len() {
+            let data_type = self.schema[i].data_type.clone();
+            let values = self.column_values(i);
+            let encoding = selector.select_for_column(&data_type, &values);
+            self.schema[i].encoding_type = encoding;
+        }
     }
 
     pub fn dump(&self) -> Vec<u8> {
@@ -739,8 +796,8 @@ impl PropertyTable {
         let checksum_pos = result.len();
         result.extend_from_slice(&[0u8; 4]);
 
-        // Version 1: Current development format with MVCC support
-        result.push(1); // version
+        // Version 2: Added per-column encoding_type
+        result.push(2); // version
 
         result.extend_from_slice(&(self.schema.len() as u32).to_le_bytes());
         for prop in &self.schema {
@@ -750,6 +807,7 @@ impl PropertyTable {
             result.extend_from_slice(&prop.prop_id.to_le_bytes());
             result.push(prop.data_type.as_u8());
             result.push(if prop.nullable { 1 } else { 0 });
+            result.push(prop.encoding_type.to_u8());
         }
 
         result.extend_from_slice(&(self.records.len() as u32).to_le_bytes());
@@ -831,7 +889,7 @@ impl PropertyTable {
         let data = payload;
         let mut offset = 0usize;
 
-        // Read version (currently v1)
+        // Read version (v1: no encoding, v2: per-column encoding_type)
         let version = if offset < data.len() {
             let v = data[offset];
             offset += 1;
@@ -840,9 +898,9 @@ impl PropertyTable {
             1 // Default to v1 if not specified
         };
 
-        if version != 1 {
+        if version != 1 && version != 2 {
             return Err(StorageError::deserialize_error(format!(
-                "Unsupported PropertyTable version: expected 1, got {}",
+                "Unsupported PropertyTable version: expected 1 or 2, got {}",
                 version
             )));
         }
@@ -871,8 +929,17 @@ impl PropertyTable {
             let nullable = data[offset] == 1;
             offset += 1;
 
-            let prop_schema =
-                PropertySchema::new(name.clone(), prop_id, data_type).nullable(nullable);
+            let encoding_type = if version >= 2 {
+                let et = EncodingType::from_u8(data[offset]);
+                offset += 1;
+                et
+            } else {
+                EncodingType::None
+            };
+
+            let prop_schema = PropertySchema::new(name.clone(), prop_id, data_type)
+                .nullable(nullable)
+                .with_encoding(encoding_type);
             self.name_indexer.register(name.clone());
             self.schema.push(prop_schema);
         }

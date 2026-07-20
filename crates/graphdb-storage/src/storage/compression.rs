@@ -373,7 +373,6 @@ impl PageReader {
         Ok(decompressed)
     }
 
-    #[allow(dead_code)]
     pub fn skip_page<R: std::io::Read>(&self, reader: &mut R) -> StorageResult<()> {
         let header = PageHeader::deserialize(reader)?;
         let mut bounded = crate::storage::safe_read::BoundedReader::new(
@@ -389,6 +388,33 @@ impl PageReader {
     pub fn read_all<R: std::io::Read>(&self, reader: &mut R, page_count: u32) -> StorageResult<Vec<u8>> {
         let mut result = Vec::new();
         for _ in 0..page_count {
+            let page = self.read_page(reader)?;
+            result.extend_from_slice(&page);
+        }
+        Ok(result)
+    }
+
+    /// Read a single page from the reader.
+    /// The reader must be positioned at the start of a page header.
+    pub fn read_single_page<R: std::io::Read>(&self, reader: &mut R) -> StorageResult<Vec<u8>> {
+        self.read_page(reader)
+    }
+
+    /// Read pages in range [start_page, end_page) and concatenate their contents.
+    /// Pages before start_page are skipped; pages from start_page up to (but not
+    /// including) end_page are read and concatenated.
+    pub fn read_pages_in_range<R: std::io::Read>(
+        &self,
+        reader: &mut R,
+        start_page: u32,
+        end_page: u32,
+    ) -> StorageResult<Vec<u8>> {
+        for _ in 0..start_page {
+            self.skip_page(reader)?;
+        }
+        let count = end_page - start_page;
+        let mut result = Vec::new();
+        for _ in 0..count {
             let page = self.read_page(reader)?;
             result.extend_from_slice(&page);
         }
@@ -439,6 +465,42 @@ pub fn cleanup_shadow_files<P: AsRef<std::path::Path>>(dir: P) -> StorageResult<
         }
     }
     Ok(cleaned)
+}
+
+/// Read a single page from a page-compressed file.
+pub fn read_single_page_from_file(path: &std::path::Path, page_idx: u32) -> StorageResult<Vec<u8>> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| StorageError::io_error(format!("Failed to open {}: {}", path.display(), e)))?;
+    let mut reader = std::io::BufReader::new(file);
+    let header = ColumnFileHeader::deserialize(&mut reader)?;
+    if page_idx >= header.page_count {
+        return Err(StorageError::invalid_input(format!(
+            "page index {} out of bounds (total pages: {})",
+            page_idx, header.page_count
+        )));
+    }
+    let page_reader = PageReader::new(header.page_size);
+    page_reader.read_pages_in_range(&mut reader, page_idx, page_idx + 1)
+}
+
+/// Read pages in range [start_page, end_page) from a page-compressed file.
+pub fn read_pages_range_from_file(
+    path: &std::path::Path,
+    start_page: u32,
+    end_page: u32,
+) -> StorageResult<Vec<u8>> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| StorageError::io_error(format!("Failed to open {}: {}", path.display(), e)))?;
+    let mut reader = std::io::BufReader::new(file);
+    let header = ColumnFileHeader::deserialize(&mut reader)?;
+    if end_page > header.page_count || start_page > end_page {
+        return Err(StorageError::invalid_input(format!(
+            "invalid page range [{}, {}) for file with {} pages",
+            start_page, end_page, header.page_count
+        )));
+    }
+    let page_reader = PageReader::new(header.page_size);
+    page_reader.read_pages_in_range(&mut reader, start_page, end_page)
 }
 
 impl SafeSerializable for PageHeader {

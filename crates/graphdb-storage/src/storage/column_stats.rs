@@ -34,6 +34,22 @@ impl ColumnStats {
         }
     }
 
+    pub fn compression_ratio(&self) -> f64 {
+        if self.raw_size == 0 {
+            1.0
+        } else {
+            self.compressed_size as f64 / self.raw_size as f64
+        }
+    }
+
+    pub fn space_savings(&self) -> f64 {
+        if self.raw_size == 0 {
+            0.0
+        } else {
+            1.0 - self.compressed_size as f64 / self.raw_size as f64
+        }
+    }
+
     pub fn serialize_meta(&self, writer: &mut impl Write) -> StorageResult<usize> {
         let mut written = 0usize;
 

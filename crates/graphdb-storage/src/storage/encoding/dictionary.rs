@@ -64,14 +64,11 @@ impl StringDictionary {
         let count = self.values.len() as u32;
         writer.write_all(&count.to_le_bytes())?;
         written += 4;
-        for (idx, value) in self.values.iter().enumerate() {
+        for value in self.values.iter() {
             let len = value.len() as u32;
             writer.write_all(&len.to_le_bytes())?;
             writer.write_all(value.as_bytes())?;
             written += 4 + value.len();
-            let code = idx as u32;
-            writer.write_all(&code.to_le_bytes())?;
-            written += 4;
         }
         Ok(written)
     }
@@ -89,9 +86,6 @@ impl StringDictionary {
             reader.read_exact(&mut buf)?;
             let value = String::from_utf8(buf)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-            let mut code_bytes = [0u8; 4];
-            reader.read_exact(&mut code_bytes)?;
-            let _code = u32::from_le_bytes(code_bytes);
             dict.insert(&value);
         }
         Ok(dict)

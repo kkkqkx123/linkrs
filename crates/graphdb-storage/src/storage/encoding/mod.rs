@@ -15,7 +15,7 @@ pub mod fsst;
 pub mod rle;
 pub mod selector;
 
-use std::io::{Read, Write};
+use std::io::Write;
 
 use crate::core::{DataType, StorageResult, Value};
 
@@ -24,7 +24,7 @@ pub use bitpacking::BitPackedIntColumn;
 pub use dictionary::DictionaryColumn;
 pub use fsst::{FsstColumn, FsstEncoder};
 pub use rle::{RleBoolColumn, RleIntColumn};
-pub use selector::{CompressionMetrics, EncodingSelector, EncodingThresholds};
+pub use selector::{EncodingSelector, EncodingThresholds};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EncodingType {
@@ -59,11 +59,6 @@ impl EncodingType {
             _ => EncodingType::None,
         }
     }
-}
-
-pub trait Encodable: Send + Sync {
-    fn serialize_meta(&self, writer: &mut impl Write) -> StorageResult<usize>;
-    fn deserialize_meta(reader: &mut impl Read) -> StorageResult<Self> where Self: Sized;
 }
 
 #[derive(Debug, Clone, Default)]

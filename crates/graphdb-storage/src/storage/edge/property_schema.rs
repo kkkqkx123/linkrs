@@ -5,6 +5,7 @@
 
 use crate::core::types::Timestamp;
 use crate::core::DataType;
+use crate::storage::encoding::EncodingType;
 
 /// Sentinel value meaning "no properties"
 pub const PROP_OFFSET_NONE: u32 = 0;
@@ -31,6 +32,7 @@ pub struct PropertySchema {
     pub prop_id: i32,
     pub data_type: DataType,
     pub nullable: bool,
+    pub encoding_type: EncodingType,
 }
 
 impl PropertySchema {
@@ -40,11 +42,17 @@ impl PropertySchema {
             prop_id,
             data_type,
             nullable: false,
+            encoding_type: EncodingType::None,
         }
     }
 
     pub fn nullable(mut self, nullable: bool) -> Self {
         self.nullable = nullable;
+        self
+    }
+
+    pub fn with_encoding(mut self, encoding_type: EncodingType) -> Self {
+        self.encoding_type = encoding_type;
         self
     }
 }
