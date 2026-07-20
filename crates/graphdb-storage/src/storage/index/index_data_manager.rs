@@ -29,10 +29,39 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+pub(crate) type StaleChecker = Arc<dyn Fn(&EntityRef, Option<Timestamp>) -> bool + Send + Sync>;
+
+#[derive(Debug, Clone, Copy)]
+pub struct EdgeIdentity<'a> {
+    pub space_id: u64,
+    pub src: &'a Value,
+    pub dst: &'a Value,
+    pub edge_type: &'a str,
+    pub ranking: i64,
+}
+
+impl<'a> EdgeIdentity<'a> {
+    pub fn new(
+        space_id: u64,
+        src: &'a Value,
+        dst: &'a Value,
+        edge_type: &'a str,
+        ranking: i64,
+    ) -> Self {
+        Self {
+            space_id,
+            src,
+            dst,
+            edge_type,
+            ranking,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct IndexIdentity {
-    space_id: u64,
-    index_id: u64,
+pub(crate) struct IndexIdentity {
+    pub(crate) space_id: u64,
+    pub(crate) index_id: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -138,11 +167,7 @@ pub trait VertexIndexOps: Send + Sync {
 pub trait EdgeIndexOps: Send + Sync {
     fn update_edge_indexes_mvcc(
         &self,
-        space_id: u64,
-        edge_src: &Value,
-        edge_dst: &Value,
-        edge_type: &str,
-        ranking: i64,
+        edge: &EdgeIdentity<'_>,
         index_name: &str,
         props: &[(String, Value)],
         write_ts: Timestamp,
@@ -150,11 +175,7 @@ pub trait EdgeIndexOps: Send + Sync {
 
     fn delete_edge_indexes_mvcc(
         &self,
-        space_id: u64,
-        edge_src: &Value,
-        edge_dst: &Value,
-        edge_type: &str,
-        ranking: i64,
+        edge: &EdgeIdentity<'_>,
         index_names: &[String],
         write_ts: Timestamp,
     ) -> Result<(), StorageError>;
@@ -279,7 +300,7 @@ impl IndexDataManagerImpl {
             .write()
             .insert(identity, index.clone());
         let mut catalogs = self.manifest_catalogs.write();
-        if !catalogs.contains_key(&identity) {
+        if let std::collections::hash_map::Entry::Vacant(e) = catalogs.entry(identity) {
             let manifest = IndexManifest::new(
                 space_id,
                 index_id,
@@ -293,10 +314,9 @@ impl IndexDataManagerImpl {
                 }],
             )
             .map_err(StorageError::db_error)?;
-            catalogs.insert(
-                identity,
-                Arc::new(ManifestCatalog::new(manifest).map_err(StorageError::db_error)?),
-            );
+            e.insert(Arc::new(
+                ManifestCatalog::new(manifest).map_err(StorageError::db_error)?,
+            ));
         }
         drop(catalogs);
         let catalog = self
@@ -601,8 +621,7 @@ impl IndexDataManagerImpl {
 
     pub fn split_native_index<F, G>(
         &self,
-        space_id: u64,
-        index_id: u64,
+        identity: IndexIdentity,
         boundary: Vec<u8>,
         snapshot_timestamp: SnapshotTimestamp,
         start_lsn: CommitLsn,
@@ -613,6 +632,7 @@ impl IndexDataManagerImpl {
         F: FnOnce() -> StorageResult<CommitLsn>,
         G: FnOnce(CommitLsn, CommitLsn) -> StorageResult<Vec<OutboxIntent>>,
     {
+        let IndexIdentity { space_id, index_id } = identity;
         if let Some(stats) = &self.stats_manager {
             stats.record_generation_build();
         }
@@ -1012,13 +1032,7 @@ impl IndexDataManagerImpl {
         space_id: u64,
         index: &Index,
         plan: &IndexScanPlan,
-        stale_checker: Option<
-            Arc<
-                dyn Fn(&crate::core::wal::EntityRef, Option<crate::core::types::Timestamp>) -> bool
-                    + Send
-                    + Sync,
-            >,
-        >,
+        stale_checker: Option<StaleChecker>,
     ) -> StorageResult<crate::storage::index::vertex_index_manager::VertexIndexCursor> {
         self.open_tag_index_cursor_full(space_id, index, plan, stale_checker, None)
     }
@@ -1028,13 +1042,7 @@ impl IndexDataManagerImpl {
         space_id: u64,
         index: &Index,
         plan: &IndexScanPlan,
-        stale_checker: Option<
-            Arc<
-                dyn Fn(&crate::core::wal::EntityRef, Option<crate::core::types::Timestamp>) -> bool
-                    + Send
-                    + Sync,
-            >,
-        >,
+        stale_checker: Option<StaleChecker>,
         catalog: Option<&crate::storage::index::manifest::ManifestCatalog>,
     ) -> StorageResult<crate::storage::index::vertex_index_manager::VertexIndexCursor> {
         let owned_catalog = if catalog.is_none() {
@@ -1084,13 +1092,7 @@ impl IndexDataManagerImpl {
         space_id: u64,
         index: &Index,
         plan: &IndexScanPlan,
-        stale_checker: Option<
-            Arc<
-                dyn Fn(&crate::core::wal::EntityRef, Option<crate::core::types::Timestamp>) -> bool
-                    + Send
-                    + Sync,
-            >,
-        >,
+        stale_checker: Option<StaleChecker>,
     ) -> StorageResult<crate::storage::index::edge_index_manager::EdgeIndexCursor> {
         self.open_edge_index_cursor_full(space_id, index, plan, stale_checker, None)
     }
@@ -1100,13 +1102,7 @@ impl IndexDataManagerImpl {
         space_id: u64,
         index: &Index,
         plan: &IndexScanPlan,
-        stale_checker: Option<
-            Arc<
-                dyn Fn(&crate::core::wal::EntityRef, Option<crate::core::types::Timestamp>) -> bool
-                    + Send
-                    + Sync,
-            >,
-        >,
+        stale_checker: Option<StaleChecker>,
         catalog: Option<&crate::storage::index::manifest::ManifestCatalog>,
     ) -> StorageResult<crate::storage::index::edge_index_manager::EdgeIndexCursor> {
         let owned_catalog = if catalog.is_none() {
@@ -1197,14 +1193,15 @@ impl IndexDataManagerImpl {
 
     fn clear_edge_entity(
         &self,
-        space_id: u64,
-        src: &Value,
-        dst: &Value,
-        edge_type: &str,
-        ranking: i64,
+        edge: &EdgeIdentity<'_>,
         index_name: &str,
         write_ts: Timestamp,
     ) -> StorageResult<()> {
+        let space_id = edge.space_id;
+        let src = edge.src;
+        let dst = edge.dst;
+        let edge_type = edge.edge_type;
+        let ranking = edge.ranking;
         let Some(index_id) = self.index_alias(space_id, index_name) else {
             return Ok(());
         };
@@ -1399,11 +1396,7 @@ where
     R: Fn(&[u8]) -> bool,
 {
     let mut changed_entities = Vec::new();
-    for entity in intents
-        .iter()
-        .map(|intent| entity_ref_from_intent(intent))
-        .flatten()
-    {
+    for entity in intents.iter().filter_map(entity_ref_from_intent) {
         if !changed_entities.contains(&entity) {
             changed_entities.push(entity);
         }
@@ -1611,15 +1604,18 @@ fn merged_included_columns(
 impl EdgeIndexOps for IndexDataManagerImpl {
     fn update_edge_indexes_mvcc(
         &self,
-        space_id: u64,
-        edge_src: &Value,
-        edge_dst: &Value,
-        edge_type: &str,
-        ranking: i64,
+        edge: &EdgeIdentity<'_>,
         index_name: &str,
         props: &[(String, Value)],
         write_ts: Timestamp,
     ) -> Result<(), StorageError> {
+        let EdgeIdentity {
+            space_id,
+            src: edge_src,
+            dst: edge_dst,
+            edge_type,
+            ranking,
+        } = *edge;
         let Some(index_id) = self.index_alias(space_id, index_name) else {
             return Ok(());
         };
@@ -1687,9 +1683,7 @@ impl EdgeIndexOps for IndexDataManagerImpl {
         let included_columns =
             merged_included_columns(index_definition.as_ref(), existing_columns, props);
         if !indexed_values.is_empty() {
-            self.clear_edge_entity(
-                space_id, edge_src, edge_dst, edge_type, ranking, index_name, write_ts,
-            )?;
+            self.clear_edge_entity(edge, index_name, write_ts)?;
         }
         for value in indexed_values {
             let forward = KeyBuilder::build_edge_index_key(
@@ -1755,18 +1749,12 @@ impl EdgeIndexOps for IndexDataManagerImpl {
 
     fn delete_edge_indexes_mvcc(
         &self,
-        space_id: u64,
-        edge_src: &Value,
-        edge_dst: &Value,
-        edge_type: &str,
-        ranking: i64,
+        edge: &EdgeIdentity<'_>,
         index_names: &[String],
         write_ts: Timestamp,
     ) -> Result<(), StorageError> {
         for index_name in index_names {
-            self.clear_edge_entity(
-                space_id, edge_src, edge_dst, edge_type, ranking, index_name, write_ts,
-            )?;
+            self.clear_edge_entity(edge, index_name, write_ts)?;
         }
         Ok(())
     }
@@ -2073,6 +2061,7 @@ impl IndexGcOps for IndexDataManagerImpl {
 
 #[cfg(test)]
 mod tests {
+    use super::{EdgeIdentity, IndexIdentity};
     use crate::core::types::{
         CommitLsn, Index, IndexConfig, IndexField, IndexGeneration, IndexType, SnapshotTimestamp,
         MAX_TIMESTAMP,
@@ -2239,8 +2228,10 @@ mod tests {
         .0;
         manager
             .split_native_index(
-                1,
-                1,
+                IndexIdentity {
+                    space_id: 1,
+                    index_id: 1,
+                },
                 boundary,
                 SnapshotTimestamp::new(1),
                 CommitLsn::new(1),
@@ -2479,15 +2470,14 @@ mod tests {
         manager
             .register_native_index(1, &index)
             .expect("register edge index");
+        let src = Value::Int(1);
+        let dst = Value::Int(2);
+        let edge = EdgeIdentity::new(1, &src, &dst, "KNOWS", 0);
 
         // Initial write: weight=10 (indexed), since=2020 (included).
         manager
             .update_edge_indexes_mvcc(
-                1,
-                &Value::Int(1),
-                &Value::Int(2),
-                "KNOWS",
-                0,
+                &edge,
                 "knows_weight_idx",
                 &[
                     ("weight".to_string(), Value::Int(10)),
@@ -2528,11 +2518,7 @@ mod tests {
         // existing indexed value and refresh the covering payload.
         manager
             .update_edge_indexes_mvcc(
-                1,
-                &Value::Int(1),
-                &Value::Int(2),
-                "KNOWS",
-                0,
+                &edge,
                 "knows_weight_idx",
                 &[("since".to_string(), Value::Int(2024))],
                 20,
@@ -2600,14 +2586,13 @@ mod tests {
         manager
             .register_native_index(1, &index)
             .expect("register edge index");
+        let src = Value::Int(1);
+        let dst = Value::Int(2);
+        let edge = EdgeIdentity::new(1, &src, &dst, "KNOWS", 0);
 
         manager
             .update_edge_indexes_mvcc(
-                1,
-                &Value::Int(1),
-                &Value::Int(2),
-                "KNOWS",
-                0,
+                &edge,
                 "knows_weight_idx",
                 &[
                     ("weight".to_string(), Value::Int(10)),
@@ -2638,15 +2623,7 @@ mod tests {
         assert_eq!(rows.len(), 1, "one edge before delete");
 
         manager
-            .delete_edge_indexes_mvcc(
-                1,
-                &Value::Int(1),
-                &Value::Int(2),
-                "KNOWS",
-                0,
-                &["knows_weight_idx".to_string()],
-                20,
-            )
+            .delete_edge_indexes_mvcc(&edge, &["knows_weight_idx".to_string()], 20)
             .expect("delete");
 
         let after_delete_plan = IndexScanPlan {
@@ -2683,14 +2660,13 @@ mod tests {
         manager
             .register_native_index(1, &index)
             .expect("register index");
+        let src = Value::Int(1);
+        let dst = Value::Int(2);
+        let edge = EdgeIdentity::new(1, &src, &dst, "KNOWS", 0);
 
         manager
             .update_edge_indexes_mvcc(
-                1,
-                &Value::Int(1),
-                &Value::Int(2),
-                "KNOWS",
-                0,
+                &edge,
                 "knows_weight_idx",
                 &[
                     ("weight".to_string(), Value::Int(10)),

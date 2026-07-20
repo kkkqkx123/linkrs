@@ -14,6 +14,7 @@
 
 pub mod compaction;
 pub mod core;
+pub mod free_space;
 pub mod freeze;
 pub mod merge;
 pub mod mvcc;
@@ -271,28 +272,6 @@ impl EdgeStore {
         }
     }
 
-    pub fn scan_paginated(
-        &self,
-        ts: Timestamp,
-        offset: usize,
-        page_size: usize,
-    ) -> (Vec<super::EdgeRecord>, bool) {
-        match self {
-            EdgeStore::TimeTravel(s) => s.scan_paginated(ts, offset, page_size),
-        }
-    }
-
-    pub fn scan_paginated_iter(
-        &self,
-        ts: Timestamp,
-        offset: usize,
-        page_size: usize,
-    ) -> EdgeStoreScanIterator<'_> {
-        match self {
-            EdgeStore::TimeTravel(s) => s.scan_paginated_iter(ts, offset, page_size),
-        }
-    }
-
     pub fn edge_count(&self) -> u64 {
         match self {
             EdgeStore::TimeTravel(s) => s.edge_count(),
@@ -469,9 +448,6 @@ impl<'a> Drop for EdgeSnapshotHandle<'a> {
     }
 }
 
-// ── Unified scan iterator for EdgeStore ──
-pub type EdgeStoreScanIterator<'a> = core::EdgeTableScanIterator<'a>;
-
 // ── TimeTravelEdgeStore methods ──
 impl core::TimeTravelEdgeStore {
     pub fn register_snapshot(&mut self, ts: Timestamp) {
@@ -550,8 +526,16 @@ impl core::TimeTravelEdgeStore {
 
     pub fn merge_segments_lsm_tiered(&mut self, current_ts: Timestamp) -> usize {
         let start = Instant::now();
-        let out_reduced = merge::merge_lsm_tiered(&mut self.out_segments, current_ts);
-        let in_reduced = merge::merge_lsm_tiered(&mut self.in_segments, current_ts);
+        let out_reduced = merge::merge_lsm_tiered_with_free_space(
+            &mut self.out_segments,
+            current_ts,
+            &mut self.out_free_space,
+        );
+        let in_reduced = merge::merge_lsm_tiered_with_free_space(
+            &mut self.in_segments,
+            current_ts,
+            &mut self.in_free_space,
+        );
 
         let total_reduced = out_reduced + in_reduced;
         if total_reduced > 0 {
@@ -571,19 +555,21 @@ impl core::TimeTravelEdgeStore {
         max_segment_size_bytes: usize,
     ) -> usize {
         let start = Instant::now();
-        let out_reduced = merge::merge_adaptive(
+        let out_reduced = merge::merge_adaptive_with_free_space(
             &mut self.out_segments,
             current_ts,
             max_segment_age,
             deletion_threshold,
             max_segment_size_bytes,
+            &mut self.out_free_space,
         );
-        let in_reduced = merge::merge_adaptive(
+        let in_reduced = merge::merge_adaptive_with_free_space(
             &mut self.in_segments,
             current_ts,
             max_segment_age,
             deletion_threshold,
             max_segment_size_bytes,
+            &mut self.in_free_space,
         );
 
         let total_reduced = out_reduced + in_reduced;
@@ -604,10 +590,18 @@ impl core::TimeTravelEdgeStore {
         let start = Instant::now();
         let segments_before = self.out_segments.len() + self.in_segments.len();
 
-        let out_metrics =
-            merge::merge_in_place(&mut self.out_segments, time_threshold, size_threshold_bytes);
-        let in_metrics =
-            merge::merge_in_place(&mut self.in_segments, time_threshold, size_threshold_bytes);
+        let out_metrics = merge::merge_in_place_with_free_space(
+            &mut self.out_segments,
+            time_threshold,
+            size_threshold_bytes,
+            &mut self.out_free_space,
+        );
+        let in_metrics = merge::merge_in_place_with_free_space(
+            &mut self.in_segments,
+            time_threshold,
+            size_threshold_bytes,
+            &mut self.in_free_space,
+        );
 
         let segments_after = self.out_segments.len() + self.in_segments.len();
         let total_edges = out_metrics.edges_processed + in_metrics.edges_processed;
@@ -642,27 +636,37 @@ impl core::TimeTravelEdgeStore {
         if let Some(_min_ts) = min_active_snapshot_ts {
             if self.out_segments.len() > 1 {
                 let out_indices: Vec<usize> = (0..self.out_segments.len()).collect();
-                merge::merge_selected_segments_with_deletion_filter(
+                merge::merge_selected_segments_with_deletion_filter_with_free_space(
                     &mut self.out_segments,
                     out_indices,
                     u32::MAX,
                     min_active_snapshot_ts,
+                    &mut self.out_free_space,
                 );
             }
             if self.in_segments.len() > 1 {
                 let in_indices: Vec<usize> = (0..self.in_segments.len()).collect();
-                merge::merge_selected_segments_with_deletion_filter(
+                merge::merge_selected_segments_with_deletion_filter_with_free_space(
                     &mut self.in_segments,
                     in_indices,
                     u32::MAX,
                     min_active_snapshot_ts,
+                    &mut self.in_free_space,
                 );
             }
         } else {
-            let _ =
-                merge::merge_in_place(&mut self.out_segments, time_threshold, size_threshold_bytes);
-            let _ =
-                merge::merge_in_place(&mut self.in_segments, time_threshold, size_threshold_bytes);
+            let _ = merge::merge_in_place_with_free_space(
+                &mut self.out_segments,
+                time_threshold,
+                size_threshold_bytes,
+                &mut self.out_free_space,
+            );
+            let _ = merge::merge_in_place_with_free_space(
+                &mut self.in_segments,
+                time_threshold,
+                size_threshold_bytes,
+                &mut self.in_free_space,
+            );
         }
 
         let segments_after = self.out_segments.len() + self.in_segments.len();
@@ -794,6 +798,8 @@ impl core::TimeTravelEdgeStore {
         self.next_edge_id = next_edge_id;
         self.mvcc.tombstones = tombstones;
         self.mvcc.min_active_snapshot_ts = min_snapshot_ts;
+        self.out_free_space.clear();
+        self.in_free_space.clear();
 
         let out_csr_path = path.join("out_csr.bin");
         persistence::load_csr(&out_csr_path, &mut self.out_csr, &mut self.out_segments)?;
@@ -810,14 +816,12 @@ impl core::TimeTravelEdgeStore {
                 .out_csr
                 .iter(ts)
                 .map(|(_, nbr)| nbr.edge_id.0 + 1)
-                .chain(
-                    self.out_segments
-                        .iter()
-                        .flat_map(|segment| {
-                            let csr = segment.csr.read();
-                            csr.iter().map(|(_, nbr)| nbr.edge_id.0 + 1).collect::<Vec<_>>()
-                        }),
-                )
+                .chain(self.out_segments.iter().flat_map(|segment| {
+                    let csr = segment.csr.read();
+                    csr.iter()
+                        .map(|(_, nbr)| nbr.edge_id.0 + 1)
+                        .collect::<Vec<_>>()
+                }))
                 .max()
                 .unwrap_or(0);
             self.next_edge_id = EdgeId(max_id);

@@ -47,8 +47,8 @@ pub mod context_test;
 pub mod manager_test;
 
 pub use self::mvcc::{
-    InsertTimestampGuard, ReadTimestampGuard, VersionManager,
-    VersionManagerConfig, VersionManagerError, VersionManagerResult, RELEASED_TIMESTAMP,
+    InsertTimestampGuard, ReadTimestampGuard, VersionManager, VersionManagerConfig,
+    VersionManagerError, VersionManagerResult, RELEASED_TIMESTAMP,
 };
 pub use self::snapshot_tracker::SnapshotTracker;
 pub use cleaner::TransactionCleaner;

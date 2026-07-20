@@ -8,7 +8,7 @@ use super::core::TimeTravelEdgeStore;
 use super::merge;
 use super::segment::{CsrSegment, DeletionInfo, SEPARATE_EDGE_ID_STORAGE_THRESHOLD};
 use crate::core::types::{EdgeId, Timestamp};
-use crate::storage::edge::{Csr, CsrBase, CsrVariant};
+use crate::storage::edge::{CsrBase, CsrVariant};
 use std::collections::HashMap;
 
 impl TimeTravelEdgeStore {
@@ -25,6 +25,7 @@ impl TimeTravelEdgeStore {
         let out_result = Self::freeze_delta(
             &mut self.out_csr,
             &mut self.out_segments,
+            &mut self.out_free_space,
             ts,
             &self.mvcc.pending_segment_deletions,
             &self.mvcc.segment_tombstones,
@@ -36,6 +37,7 @@ impl TimeTravelEdgeStore {
         let in_result = Self::freeze_delta(
             &mut self.in_csr,
             &mut self.in_segments,
+            &mut self.in_free_space,
             ts,
             &self.mvcc.pending_segment_deletions,
             &self.mvcc.segment_tombstones,
@@ -88,6 +90,7 @@ impl TimeTravelEdgeStore {
     fn freeze_delta(
         delta: &mut CsrVariant,
         segments: &mut Vec<CsrSegment>,
+        free_space: &mut super::free_space::SegmentFreeList,
         ts: Timestamp,
         pending_deletions: &HashMap<EdgeId, Timestamp>,
         segment_tombstones: &HashMap<EdgeId, Timestamp>,
@@ -150,7 +153,7 @@ impl TimeTravelEdgeStore {
                 (std::cmp::min(min, ts), std::cmp::max(max, ts))
             });
 
-        let csr = Csr::from_nbr_entries(&entries, vertex_capacity);
+        let csr = free_space.build_csr(&entries, vertex_capacity);
         let frozen = entries.len();
 
         let deletion_info = DeletionInfo::with_count(delete_ts_min, delete_ts_max, deleted_count);
@@ -283,12 +286,14 @@ impl TimeTravelEdgeStore {
                     + 1;
                 if excess > 1 {
                     let merge_indices: Vec<usize> = (0..excess).collect();
-                    let merged = merge::merge_selected_segments_with_deletion_filter(
-                        &mut self.out_segments,
-                        merge_indices,
-                        ts,
-                        Some(min_snapshot_ts),
-                    );
+                    let merged =
+                        merge::merge_selected_segments_with_deletion_filter_with_free_space(
+                            &mut self.out_segments,
+                            merge_indices,
+                            ts,
+                            Some(min_snapshot_ts),
+                            &mut self.out_free_space,
+                        );
                     total_merged += merged;
                     self.rebuild_segment_indices();
                 }
@@ -301,12 +306,14 @@ impl TimeTravelEdgeStore {
                     + 1;
                 if excess > 1 {
                     let merge_indices: Vec<usize> = (0..excess).collect();
-                    let merged = merge::merge_selected_segments_with_deletion_filter(
-                        &mut self.in_segments,
-                        merge_indices,
-                        ts,
-                        Some(min_snapshot_ts),
-                    );
+                    let merged =
+                        merge::merge_selected_segments_with_deletion_filter_with_free_space(
+                            &mut self.in_segments,
+                            merge_indices,
+                            ts,
+                            Some(min_snapshot_ts),
+                            &mut self.in_free_space,
+                        );
                     total_merged += merged;
                     self.rebuild_segment_indices();
                 }
@@ -335,11 +342,12 @@ impl TimeTravelEdgeStore {
                 .saturating_sub(self.config.merge_keep_newest);
             if to_merge_count > 1 {
                 let merge_indices: Vec<usize> = (0..to_merge_count).collect();
-                let merged = merge::merge_selected_segments_with_deletion_filter(
+                let merged = merge::merge_selected_segments_with_deletion_filter_with_free_space(
                     &mut self.out_segments,
                     merge_indices.clone(),
                     ts,
                     Some(min_snapshot_ts),
+                    &mut self.out_free_space,
                 );
                 total_merged += merged;
                 if cfg!(debug_assertions) && merged > 0 {
@@ -360,11 +368,12 @@ impl TimeTravelEdgeStore {
                 .saturating_sub(self.config.merge_keep_newest);
             if to_merge_count > 1 {
                 let merge_indices: Vec<usize> = (0..to_merge_count).collect();
-                let merged = merge::merge_selected_segments_with_deletion_filter(
+                let merged = merge::merge_selected_segments_with_deletion_filter_with_free_space(
                     &mut self.in_segments,
                     merge_indices.clone(),
                     ts,
                     Some(min_snapshot_ts),
+                    &mut self.in_free_space,
                 );
                 total_merged += merged;
                 if cfg!(debug_assertions) && merged > 0 {

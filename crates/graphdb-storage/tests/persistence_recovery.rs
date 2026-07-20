@@ -25,7 +25,7 @@ fn test_flush_after_vertex_update() {
     let dir = temp_dir.path();
 
     {
-        let mut storage = common::create_persistent_storage(&dir);
+        let mut storage = common::create_persistent_storage(dir);
         common::setup_basic_schema(&mut storage);
         common::insert_test_data(&mut storage, "test_space");
         storage.save_to_disk().unwrap();
@@ -33,7 +33,7 @@ fn test_flush_after_vertex_update() {
     }
 
     {
-        let mut storage = common::open_persistent_storage(&dir);
+        let mut storage = common::open_persistent_storage(dir);
         let updated = Vertex::new(
             VertexId::from_int64(1),
             vec![Tag::new(
@@ -52,7 +52,7 @@ fn test_flush_after_vertex_update() {
     }
 
     {
-        let storage = common::open_persistent_storage(&dir);
+        let storage = common::open_persistent_storage(dir);
         let alice = storage
             .get_vertex("test_space", &VertexId::from_int64(1))
             .unwrap()
@@ -67,7 +67,7 @@ fn test_flush_after_edge_delete() {
     let dir = temp_dir.path();
 
     {
-        let mut storage = common::create_persistent_storage(&dir);
+        let mut storage = common::create_persistent_storage(dir);
         common::setup_basic_schema(&mut storage);
         common::insert_test_data(&mut storage, "test_space");
         storage.save_to_disk().unwrap();
@@ -75,7 +75,7 @@ fn test_flush_after_edge_delete() {
     }
 
     {
-        let mut storage = common::open_persistent_storage(&dir);
+        let mut storage = common::open_persistent_storage(dir);
         storage
             .delete_edge(
                 "test_space",
@@ -90,7 +90,7 @@ fn test_flush_after_edge_delete() {
     }
 
     {
-        let storage = common::open_persistent_storage(&dir);
+        let storage = common::open_persistent_storage(dir);
         let edge = storage
             .get_edge(
                 "test_space",
@@ -110,7 +110,7 @@ fn test_flush_with_index_metadata() {
     let dir = temp_dir.path();
 
     {
-        let mut storage = common::create_persistent_storage(&dir);
+        let mut storage = common::create_persistent_storage(dir);
         common::setup_basic_schema(&mut storage);
 
         let index = Index::new(IndexConfig {
@@ -135,7 +135,7 @@ fn test_flush_with_index_metadata() {
     }
 
     {
-        let storage = common::open_persistent_storage(&dir);
+        let storage = common::open_persistent_storage(dir);
         let indexes = storage.list_tag_indexes("test_space").unwrap();
         assert!(!indexes.is_empty(), "Index metadata should survive flush");
     }
@@ -147,14 +147,14 @@ fn test_flush_and_reload_empty_storage() {
     let dir = temp_dir.path();
 
     {
-        let mut storage = common::create_persistent_storage(&dir);
+        let mut storage = common::create_persistent_storage(dir);
         common::setup_basic_schema(&mut storage);
         storage.save_to_disk().unwrap();
         storage.create_checkpoint().unwrap();
     }
 
     {
-        let storage = common::open_persistent_storage(&dir);
+        let storage = common::open_persistent_storage(dir);
         assert!(storage.space_exists("test_space"));
     }
 }

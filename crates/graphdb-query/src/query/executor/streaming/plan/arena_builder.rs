@@ -18,16 +18,6 @@ use super::context::PhysicalPlanBuildContext;
 use super::node::PhysicalNode;
 use super::properties::{PhysicalProperties, PipelineKind};
 
-/// Allowed call-sites for `PhysicalNode` construction and materialization.
-/// Phase A audit: any production path hitting PhysicalNode outside this list
-/// must be treated as a bug.
-#[cfg(debug_assertions)]
-const PHYSICAL_NODE_ALLOWED_SITES: &[&str] = &[
-    "arena_builder.rs", // from_physical_node conversion (legacy IR)
-    "node.rs",          // definition + materialize
-                        // operator_plan_builder/*.rs — these construct PhysicalNode trees
-                        // Tests are always allowed.
-];
 use super::types::{
     CapabilitySet, FragmentGraph, FragmentId, FragmentKind, FragmentSpec, InputContract,
     LogicalNodeId, OperatorKindSpec, OutputContract, PhysicalOperatorId,

@@ -118,7 +118,7 @@ fn barrier_fence_multiple_rebuilds_remain_consistent() {
         storage
             .insert_vertex(
                 "test_space",
-                common::create_person_vertex(i, &format!("Person{}", i), 20 + i as i64),
+                common::create_person_vertex(i, &format!("Person{}", i), 20 + i),
             )
             .expect("insert vertex");
 

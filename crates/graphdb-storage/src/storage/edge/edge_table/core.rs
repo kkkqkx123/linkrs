@@ -4,6 +4,7 @@
 //! querying, property management, and basic maintenance operations.
 
 use super::super::{Csr, CsrBase, CsrVariant, EdgeRecord, EdgeSchema, MutableCsrTrait, Nbr};
+use super::free_space::SegmentFreeList;
 use super::mvcc::MVCCManager;
 use super::segment::{CsrSegment, SegmentVersion};
 use crate::core::types::{EdgeId, LabelId, Timestamp, VertexId};
@@ -77,6 +78,10 @@ pub struct TimeTravelEdgeStore {
     pub in_csr: CsrVariant,
     pub out_segments: Vec<CsrSegment>,
     pub in_segments: Vec<CsrSegment>,
+    /// Reusable CSR allocations retired from out-direction segments.
+    pub out_free_space: SegmentFreeList,
+    /// Reusable CSR allocations retired from in-direction segments.
+    pub in_free_space: SegmentFreeList,
     /// Segment index for fast time-based lookup: (create_ts_min, segment_idx in out_segments)
     /// Sorted by create_ts_min, enables binary search to skip irrelevant segments
     pub out_segment_index: Vec<(Timestamp, usize)>,
@@ -158,6 +163,8 @@ impl TimeTravelEdgeStore {
             in_csr,
             out_segments: Vec::new(),
             in_segments: Vec::new(),
+            out_free_space: SegmentFreeList::new(),
+            in_free_space: SegmentFreeList::new(),
             out_segment_index: Vec::new(),
             in_segment_index: Vec::new(),
             mvcc: MVCCManager::new(),
@@ -765,52 +772,6 @@ impl TimeTravelEdgeStore {
         self.iter(ts).collect()
     }
 
-    /// Scan edges with pagination support.
-    /// Returns at most `page_size` edges starting from `offset`.
-    /// Returns (edges, has_more) where has_more indicates if there are more edges beyond this page.
-    pub fn scan_paginated(
-        &self,
-        ts: Timestamp,
-        offset: usize,
-        page_size: usize,
-    ) -> (Vec<EdgeRecord>, bool) {
-        if !self.is_open {
-            return (Vec::new(), false);
-        }
-
-        let mut edges = Vec::new();
-        let mut skip_count = 0;
-
-        for edge in self.iter(ts) {
-            if skip_count < offset {
-                skip_count += 1;
-                continue;
-            }
-            let has_more = edges.len() >= page_size;
-            if has_more {
-                return (edges, true);
-            }
-            edges.push(edge);
-        }
-
-        (edges, false)
-    }
-
-    /// Create a scan iterator with pagination support
-    pub fn scan_paginated_iter(
-        &self,
-        ts: Timestamp,
-        offset: usize,
-        page_size: usize,
-    ) -> EdgeTableScanIterator<'_> {
-        let mut iter = EdgeTableScanIterator::with_limit(self, ts, Some(page_size));
-        // Skip offset records
-        for _ in 0..offset {
-            iter.next();
-        }
-        iter
-    }
-
     /// Record a schema change event
     ///
     /// Handles the common pattern of:
@@ -1410,15 +1371,6 @@ impl<'a> EdgeTableScanIterator<'a> {
             records: records.into_iter(),
             max_records,
             current_count: 0,
-        }
-    }
-
-    /// Check if iterator has more records to fetch
-    pub fn has_more(&self) -> bool {
-        if let Some(max) = self.max_records {
-            self.current_count < max && self.records.len() > self.current_count
-        } else {
-            self.records.len() > self.current_count
         }
     }
 }

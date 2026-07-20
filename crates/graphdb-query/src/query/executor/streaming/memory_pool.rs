@@ -149,16 +149,6 @@ impl MemoryPoolReservation {
         }
     }
 
-    /// Create a reservation from bytes that are already accounted for.
-    /// Does not reserve any new bytes — the caller is responsible for
-    /// having already deducted them from the pool.
-    fn from_accounted(inner: Arc<PoolInner>, bytes: usize) -> Self {
-        Self {
-            inner: Some(inner),
-            bytes,
-        }
-    }
-
     /// Forget the reservation — memory is not released on drop.
     pub fn forget(mut self) {
         self.bytes = 0;
@@ -290,7 +280,6 @@ impl DatabaseMemoryPool {
         let effective = requested_bytes.min(self.max_query_bytes);
         let reservation = self.handle.reserve(effective)?;
         Ok(QueryPool {
-            database: self.clone(),
             handle: PoolHandle::new(effective),
             _reservation: reservation,
         })
@@ -325,7 +314,6 @@ impl DatabaseMemoryPool {
 /// query execution.  It is released when the query completes.
 #[derive(Debug, Clone)]
 pub struct QueryPool {
-    database: DatabaseMemoryPool,
     handle: PoolHandle,
     _reservation: MemoryPoolReservation,
 }
@@ -338,7 +326,6 @@ impl QueryPool {
     ) -> Result<FragmentPool, MemoryPoolError> {
         let reservation = self.handle.reserve(requested_bytes)?;
         Ok(FragmentPool {
-            query: self.clone(),
             handle: PoolHandle::new(requested_bytes),
             _reservation: reservation,
         })
@@ -365,7 +352,6 @@ impl QueryPool {
 /// Per-fragment memory pool, allocated from [`QueryPool`].
 #[derive(Debug, Clone)]
 pub struct FragmentPool {
-    query: QueryPool,
     handle: PoolHandle,
     _reservation: MemoryPoolReservation,
 }
@@ -378,7 +364,6 @@ impl FragmentPool {
     ) -> Result<OperatorPool, MemoryPoolError> {
         let reservation = self.handle.reserve(requested_bytes)?;
         Ok(OperatorPool {
-            fragment: self.clone(),
             handle: PoolHandle::new(requested_bytes),
             _reservation: reservation,
         })
@@ -400,7 +385,6 @@ impl FragmentPool {
 /// Per-operator memory pool, allocated from [`FragmentPool`].
 #[derive(Debug, Clone)]
 pub struct OperatorPool {
-    fragment: FragmentPool,
     handle: PoolHandle,
     _reservation: MemoryPoolReservation,
 }
@@ -410,7 +394,6 @@ impl OperatorPool {
     pub fn new_task_pool(&self, requested_bytes: usize) -> Result<TaskPool, MemoryPoolError> {
         let reservation = self.handle.reserve(requested_bytes)?;
         Ok(TaskPool {
-            operator: self.clone(),
             handle: PoolHandle::new(requested_bytes),
             _reservation: reservation,
         })
@@ -436,7 +419,6 @@ impl OperatorPool {
 /// and database limits.
 #[derive(Debug, Clone)]
 pub struct TaskPool {
-    operator: OperatorPool,
     handle: PoolHandle,
     _reservation: MemoryPoolReservation,
 }

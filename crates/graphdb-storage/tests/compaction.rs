@@ -46,7 +46,7 @@ fn test_compact_reclaims_deleted_vertex_space() {
     let temp_dir = common::create_test_workdir();
     let dir = temp_dir.path();
 
-    let storage = compact_and_reopen(&dir, |s| {
+    let storage = compact_and_reopen(dir, |s| {
         s.delete_vertex("test_space", &VertexId::from_int64(1))
             .unwrap();
     });
@@ -70,7 +70,7 @@ fn test_compact_after_multiple_operations() {
     let temp_dir = common::create_test_workdir();
     let dir = temp_dir.path();
 
-    let storage = compact_and_reopen(&dir, |s| {
+    let storage = compact_and_reopen(dir, |s| {
         // Insert more vertices
         for i in 3..=10 {
             let v = common::create_person_vertex(i, &format!("Person{}", i), 20 + i);
@@ -115,7 +115,7 @@ fn test_compact_clean_state() {
     let temp_dir = common::create_test_workdir();
     let dir = temp_dir.path();
 
-    let storage = compact_and_reopen(&dir, |_| {});
+    let storage = compact_and_reopen(dir, |_| {});
 
     // All data intact
     common::verify_test_data(&storage, "test_space");
@@ -128,7 +128,7 @@ fn test_compact_persistent_roundtrip() {
     let temp_dir = common::create_test_workdir();
     let dir = temp_dir.path();
 
-    let storage = compact_and_reopen(&dir, |s| {
+    let storage = compact_and_reopen(dir, |s| {
         // Delete Bob
         s.delete_vertex("test_space", &VertexId::from_int64(2))
             .unwrap();

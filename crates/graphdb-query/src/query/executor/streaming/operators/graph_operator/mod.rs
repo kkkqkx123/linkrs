@@ -593,7 +593,7 @@ impl GraphOperator {
     pub fn stop(
         &mut self,
         base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
+        _input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
         if base.lifecycle.can_close() {
             match self {

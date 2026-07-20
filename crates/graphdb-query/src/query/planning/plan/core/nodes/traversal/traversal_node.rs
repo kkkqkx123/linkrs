@@ -212,7 +212,6 @@ pub struct ExpandAllNode {
     include_empty_paths: bool,
     output_var: Option<String>,
     col_names: Vec<String>,
-    column_types: Vec<crate::core::DataType>,
     /// Input variable name for getting input from ExecutionContext
     input_var: Option<String>,
 }
@@ -238,7 +237,6 @@ impl ExpandAllNode {
             include_empty_paths: true, // Default to true for backward compatibility
             output_var: None,
             col_names: Vec::new(),
-            column_types: vec![],
             input_var: None,
         }
     }

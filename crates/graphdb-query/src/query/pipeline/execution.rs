@@ -186,12 +186,14 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 query_text,
                 physical_plan,
                 param_positions,
-                dependent_tables,
-                space_name.clone(),
-                schema_version,
-                index_version,
-                is_dml,
-                is_transaction,
+                crate::query::cache::plan_cache::PlanCachePutContext {
+                    dependent_tables,
+                    space_name: space_name.clone(),
+                    schema_version,
+                    index_version,
+                    is_dml,
+                    is_transaction,
+                },
             );
             self.plan_cache.record_execution_with_space(
                 query_text,

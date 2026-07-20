@@ -236,7 +236,7 @@ impl RecursiveFragmentOperator {
                         name: "_shortest_path".to_string(),
                         data_type: "path".to_string(),
                     });
-                    let schema = Arc::new(Schema::new(new_cols));
+                    let _schema = Arc::new(Schema::new(new_cols));
                     return Ok(Some(DataChunk::new_with_layout(
                         out_rows,
                         Arc::clone(&base.output_layout),
@@ -326,7 +326,7 @@ impl RecursiveFragmentOperator {
                         name: "_multi_shortest_path".to_string(),
                         data_type: "path".to_string(),
                     });
-                    let schema = Arc::new(Schema::new(new_cols));
+                    let _schema = Arc::new(Schema::new(new_cols));
                     return Ok(Some(DataChunk::new_with_layout(
                         out_rows,
                         Arc::clone(&base.output_layout),
@@ -411,7 +411,7 @@ impl RecursiveFragmentOperator {
                         name: "_bfs_path".to_string(),
                         data_type: "path".to_string(),
                     });
-                    let schema = Arc::new(Schema::new(new_cols));
+                    let _schema = Arc::new(Schema::new(new_cols));
                     return Ok(Some(DataChunk::new_with_layout(
                         out_rows,
                         Arc::clone(&base.output_layout),
@@ -496,7 +496,7 @@ impl RecursiveFragmentOperator {
                         name: "_all_paths".to_string(),
                         data_type: "path".to_string(),
                     });
-                    let schema = Arc::new(Schema::new(new_cols));
+                    let _schema = Arc::new(Schema::new(new_cols));
                     return Ok(Some(DataChunk::new_with_layout(
                         out_rows,
                         Arc::clone(&base.output_layout),
@@ -511,7 +511,7 @@ impl RecursiveFragmentOperator {
     pub fn stop(
         &mut self,
         base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
+        _input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
         if base.lifecycle.can_close() {
             base.lifecycle.mark_stopped();

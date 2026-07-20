@@ -7,6 +7,8 @@ use crate::core::{StorageError, Value};
 
 use super::key_builder::codec;
 
+type EdgeReverseKeyParts = (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, String);
+
 pub struct KeyParser;
 
 impl KeyParser {
@@ -139,9 +141,7 @@ impl KeyParser {
     // Edge Reverse Index Key Parsing
     // ========================================================================
 
-    pub fn parse_edge_reverse_key(
-        key_bytes: &[u8],
-    ) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, String), StorageError> {
+    pub fn parse_edge_reverse_key(key_bytes: &[u8]) -> Result<EdgeReverseKeyParts, StorageError> {
         if key_bytes.len() < 9 {
             return Err(StorageError::db_error(
                 "Invalid edge reverse key: too short".to_string(),
@@ -263,7 +263,7 @@ mod tests {
             .expect("parse_vertex_reverse_key_v2 should succeed");
         assert_eq!(parsed_name, index_name);
 
-        let expected_bytes = KeyBuilder::build_vertex_reverse_prefix_v2(space_id, &vertex_id)
+        let _expected_bytes = KeyBuilder::build_vertex_reverse_prefix_v2(space_id, &vertex_id)
             .expect("build_vertex_reverse_prefix_v2 should succeed");
         // The reverse prefix without index_name + rest should give us just the entity
         let entity_bytes = &parsed_vid_bytes;

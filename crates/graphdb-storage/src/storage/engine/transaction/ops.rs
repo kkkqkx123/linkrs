@@ -125,13 +125,13 @@ impl TransactionOps {
             .get(&params.dst_label)
             .ok_or(UndoLogError::LabelNotFound(params.dst_label))?;
 
-        let src_external =
+        let _src_external =
             src_table
                 .get_external_id(params.src_vid, ts)
                 .ok_or(UndoLogError::VertexNotFound(VertexId::from_int64(
                     params.src_vid as i64,
                 )))?;
-        let dst_external =
+        let _dst_external =
             dst_table
                 .get_external_id(params.dst_vid, ts)
                 .ok_or(UndoLogError::VertexNotFound(VertexId::from_int64(

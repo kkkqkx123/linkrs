@@ -1,23 +1,8 @@
-use super::aggregate::value_to_partial_accumulator;
-use super::materialize::*;
 use super::sort::*;
 use super::*;
 use crate::core::value::NullType;
 use crate::query::executor::base::MemoryBudget;
 use crate::query::executor::streaming::spill::{RunReader, SpillConfig, SpillManager};
-
-fn sample_rows(n: usize) -> Vec<Vec<Value>> {
-    (0..n)
-        .map(|i| {
-            vec![
-                Value::BigInt(i as i64),
-                Value::String(format!("val_{}", i)),
-                Value::Null(NullType::Null),
-                Value::Bool(i % 2 == 0),
-            ]
-        })
-        .collect()
-}
 
 fn integer_rows(values: &[i64]) -> Vec<Vec<Value>> {
     values.iter().map(|&v| vec![Value::BigInt(v)]).collect()

@@ -404,6 +404,7 @@ fn property_graph_config_from_config(
             .then(|| Duration::from_secs(storage.cache_ttl_secs)),
         cache_tti: (storage.cache_tti_secs > 0)
             .then(|| Duration::from_secs(storage.cache_tti_secs)),
+        ..config.resources
     };
     config
 }

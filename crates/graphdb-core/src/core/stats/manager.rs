@@ -210,6 +210,17 @@ impl MetricValue {
 /// Statistics Manager
 ///
 /// Unified management of query metrics, query profiling and error statistics.
+#[derive(Debug, Clone, Copy)]
+pub struct OutboxState {
+    pub pending: u64,
+    pub retries: u64,
+    pub dead_lettered: u64,
+    pub leased: u64,
+    pub oldest_event_age_ms: u64,
+    pub frontier_lag: u64,
+    pub degraded: bool,
+}
+
 #[derive(Debug)]
 pub struct StatsManager {
     metrics: Arc<DashMap<MetricType, Arc<MetricValue>>>,
@@ -985,24 +996,18 @@ impl StatsManager {
         self.set_value(MetricType::SyncQueueDepth, depth);
     }
 
-    pub fn record_outbox_state(
-        &self,
-        pending: u64,
-        retries: u64,
-        dead_lettered: u64,
-        leased: u64,
-        oldest_event_age_ms: u64,
-        frontier_lag: u64,
-        degraded: bool,
-    ) {
-        self.set_value(MetricType::OutboxPending, pending);
-        self.set_value(MetricType::OutboxRetryCount, retries);
-        self.set_value(MetricType::OutboxDeadLetterCount, dead_lettered);
-        self.set_value(MetricType::OutboxLeasedCount, leased);
-        self.set_value(MetricType::OutboxOldestEventAgeMs, oldest_event_age_ms);
-        self.set_value(MetricType::OutboxFrontierLag, frontier_lag);
-        self.set_value(MetricType::TargetFrontierLag, frontier_lag);
-        self.set_value(MetricType::OutboxDegraded, u64::from(degraded));
+    pub fn record_outbox_state(&self, state: OutboxState) {
+        self.set_value(MetricType::OutboxPending, state.pending);
+        self.set_value(MetricType::OutboxRetryCount, state.retries);
+        self.set_value(MetricType::OutboxDeadLetterCount, state.dead_lettered);
+        self.set_value(MetricType::OutboxLeasedCount, state.leased);
+        self.set_value(
+            MetricType::OutboxOldestEventAgeMs,
+            state.oldest_event_age_ms,
+        );
+        self.set_value(MetricType::OutboxFrontierLag, state.frontier_lag);
+        self.set_value(MetricType::TargetFrontierLag, state.frontier_lag);
+        self.set_value(MetricType::OutboxDegraded, u64::from(state.degraded));
     }
 
     pub fn record_generation_build(&self) {

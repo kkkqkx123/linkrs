@@ -6,7 +6,8 @@
 //! - In-place: balances time-gaps and size constraints
 //! - Aggressive: size-only, used when segment limit exceeded
 
-use super::super::{Csr, CsrBase, Nbr};
+use super::super::{CsrBase, Nbr};
+use super::free_space::SegmentFreeList;
 use super::segment::{CsrSegment, DeletionInfo};
 use super::stats::DirectionMergeMetrics;
 use crate::core::types::Timestamp;
@@ -21,11 +22,13 @@ pub struct FreezeDeltaResult {
 ///
 /// If min_active_snapshot_ts is provided, edges deleted before that timestamp
 /// are not included in the merged segment (physical deletion).
-pub fn merge_selected_segments_with_deletion_filter(
+/// Merge selected segments while reusing retired CSR allocations.
+pub fn merge_selected_segments_with_deletion_filter_with_free_space(
     segments: &mut Vec<CsrSegment>,
     indices: Vec<usize>,
     current_ts: Timestamp,
     min_active_snapshot_ts: Option<Timestamp>,
+    free_space: &mut SegmentFreeList,
 ) -> usize {
     if indices.len() <= 1 {
         return 0;
@@ -93,8 +96,6 @@ pub fn merge_selected_segments_with_deletion_filter(
             .unwrap_or(1024)
             .max(1024);
 
-        let merged_csr = Csr::from_nbr_entries(&merged_entries, vertex_capacity);
-
         // Adjust deletion info if we performed physical deletion
         let final_deletion_info = if physically_deleted_count > 0 {
             match merged_deletion_info {
@@ -112,6 +113,15 @@ pub fn merge_selected_segments_with_deletion_filter(
             merged_deletion_info
         };
 
+        let removed_segments: Vec<_> = sorted_indices
+            .into_iter()
+            .map(|idx| segments.remove(idx))
+            .collect();
+        for segment in removed_segments {
+            free_space.recycle_csr(segment.into_csr());
+        }
+
+        let merged_csr = free_space.build_csr(&merged_entries, vertex_capacity);
         let merged_segment = CsrSegment::with_creation_ts(
             merged_csr,
             min_create_ts,
@@ -119,10 +129,6 @@ pub fn merge_selected_segments_with_deletion_filter(
             final_deletion_info,
             current_ts,
         );
-
-        for idx in sorted_indices {
-            segments.remove(idx);
-        }
 
         segments.push(merged_segment);
         merge_count
@@ -138,7 +144,13 @@ pub fn merge_selected_segments_with_deletion_filter(
 /// - L1: 1-8MB
 /// - L2: 8-32MB
 /// - L3+: > 32MB
-pub fn merge_lsm_tiered(segments: &mut Vec<CsrSegment>, current_ts: Timestamp) -> usize {
+///
+/// LSM-style tiered merge that reuses retired CSR allocations.
+pub fn merge_lsm_tiered_with_free_space(
+    segments: &mut Vec<CsrSegment>,
+    current_ts: Timestamp,
+    free_space: &mut SegmentFreeList,
+) -> usize {
     use crate::storage::engine::config::LSMSegmentLevel;
 
     let mut total_merged = 0usize;
@@ -170,11 +182,12 @@ pub fn merge_lsm_tiered(segments: &mut Vec<CsrSegment>, current_ts: Timestamp) -
                 indices.len()
             );
 
-            let merged = merge_selected_segments_with_deletion_filter(
+            let merged = merge_selected_segments_with_deletion_filter_with_free_space(
                 segments,
                 indices.clone(),
                 current_ts,
                 None,
+                free_space,
             );
             total_merged += merged;
         }
@@ -184,12 +197,14 @@ pub fn merge_lsm_tiered(segments: &mut Vec<CsrSegment>, current_ts: Timestamp) -
 }
 
 /// Adaptive merge: prioritizes old and high-deletion segments
-pub fn merge_adaptive(
+/// Adaptive merge that reuses retired CSR allocations.
+pub fn merge_adaptive_with_free_space(
     segments: &mut Vec<CsrSegment>,
     current_ts: Timestamp,
     max_segment_age: Timestamp,
     deletion_threshold: f64,
     max_segment_size_bytes: usize,
+    free_space: &mut SegmentFreeList,
 ) -> usize {
     if max_segment_size_bytes == 0 {
         return 0;
@@ -200,6 +215,7 @@ pub fn merge_adaptive(
         max_segment_age,
         deletion_threshold,
         max_segment_size_bytes,
+        free_space,
     )
 }
 
@@ -210,6 +226,7 @@ fn merge_adaptive_impl(
     max_segment_age: Timestamp,
     deletion_threshold: f64,
     size_threshold: usize,
+    free_space: &mut SegmentFreeList,
 ) -> usize {
     if segments.len() <= 1 {
         return 0;
@@ -296,7 +313,16 @@ fn merge_adaptive_impl(
             .unwrap_or(1024)
             .max(1024);
 
-        let merged_csr = Csr::from_nbr_entries(&merged_entries, vertex_capacity);
+        let removed_segments: Vec<_> = to_remove
+            .into_iter()
+            .rev()
+            .map(|idx| segments.remove(idx))
+            .collect();
+        for segment in removed_segments {
+            free_space.recycle_csr(segment.into_csr());
+        }
+
+        let merged_csr = free_space.build_csr(&merged_entries, vertex_capacity);
         let merged_segment = CsrSegment::with_creation_ts(
             merged_csr,
             min_create_ts,
@@ -304,11 +330,6 @@ fn merge_adaptive_impl(
             merged_deletion_info,
             current_ts,
         );
-
-        to_remove.sort_by(|a, b| b.cmp(a));
-        for idx in to_remove {
-            segments.remove(idx);
-        }
 
         segments.push(merged_segment);
         to_merge.len()
@@ -318,10 +339,12 @@ fn merge_adaptive_impl(
 }
 
 /// Merge segments with time and size thresholds
-pub fn merge_in_place(
+/// Merge segments in place while reusing retired CSR allocations.
+pub fn merge_in_place_with_free_space(
     segments: &mut Vec<CsrSegment>,
     time_threshold: Timestamp,
     size_threshold: usize,
+    free_space: &mut SegmentFreeList,
 ) -> DirectionMergeMetrics {
     if segments.len() <= 1 {
         return DirectionMergeMetrics { edges_processed: 0 };
@@ -341,24 +364,16 @@ pub fn merge_in_place(
             segment.create_ts_min.saturating_sub(current_create_ts_max)
         };
 
-        let csr = segment.csr.read();
-        let total_edge_count = current_entries.len() + csr.edge_count() as usize;
-        let bytes_per_edge = csr.bytes_per_edge();
+        let (segment_edge_count, bytes_per_edge) = {
+            let csr = segment.csr.read();
+            (csr.edge_count() as usize, csr.bytes_per_edge())
+        };
+        let total_edge_count = current_entries.len() + segment_edge_count;
         let estimated_size = total_edge_count * bytes_per_edge;
         let size_ok = estimated_size <= size_threshold;
 
         if time_gap <= time_threshold && size_ok && !current_entries.is_empty() {
-            for (edge_position, (src, immutable_nbr)) in segment.csr.read().iter().enumerate() {
-                let src_u32 = src.as_int64().unwrap_or(0) as u32;
-                let edge_id = segment.recover_edge_id(immutable_nbr, edge_position);
-                let nbr = Nbr::new(
-                    immutable_nbr.neighbor,
-                    edge_id,
-                    immutable_nbr.prop_offset,
-                    immutable_nbr.timestamp,
-                );
-                current_entries.push((src_u32, nbr));
-            }
+            append_segment_entries(&segment, &mut current_entries);
             current_create_ts_min = current_create_ts_min.min(segment.create_ts_min);
             current_create_ts_max = current_create_ts_max.max(segment.create_ts_max);
             current_deletion_info = current_deletion_info.merge(&segment.deletion_info);
@@ -371,7 +386,7 @@ pub fn merge_in_place(
                     .unwrap_or(1024)
                     .max(1024);
 
-                let merged_csr = Csr::from_nbr_entries(&current_entries, vertex_capacity);
+                let merged_csr = free_space.build_csr(&current_entries, vertex_capacity);
                 total_edges += merged_csr.edge_count();
                 merged.push(CsrSegment::new(
                     merged_csr,
@@ -382,21 +397,13 @@ pub fn merge_in_place(
                 current_entries.clear();
             }
 
-            for (edge_position, (src, immutable_nbr)) in segment.csr.read().iter().enumerate() {
-                let src_u32 = src.as_int64().unwrap_or(0) as u32;
-                let edge_id = segment.recover_edge_id(immutable_nbr, edge_position);
-                let nbr = Nbr::new(
-                    immutable_nbr.neighbor,
-                    edge_id,
-                    immutable_nbr.prop_offset,
-                    immutable_nbr.timestamp,
-                );
-                current_entries.push((src_u32, nbr));
-            }
+            append_segment_entries(&segment, &mut current_entries);
             current_create_ts_min = segment.create_ts_min;
             current_create_ts_max = segment.create_ts_max;
             current_deletion_info = segment.deletion_info;
         }
+
+        free_space.recycle_csr(segment.into_csr());
     }
 
     if !current_entries.is_empty() {
@@ -407,7 +414,7 @@ pub fn merge_in_place(
             .unwrap_or(1024)
             .max(1024);
 
-        let merged_csr = Csr::from_nbr_entries(&current_entries, vertex_capacity);
+        let merged_csr = free_space.build_csr(&current_entries, vertex_capacity);
         total_edges += merged_csr.edge_count();
         merged.push(CsrSegment::new(
             merged_csr,
@@ -431,6 +438,20 @@ pub fn merge_in_place(
 
     DirectionMergeMetrics {
         edges_processed: total_edges,
+    }
+}
+
+fn append_segment_entries(segment: &CsrSegment, entries: &mut Vec<(u32, Nbr)>) {
+    for (edge_position, (src, immutable_nbr)) in segment.csr.read().iter().enumerate() {
+        let src_u32 = src.as_int64().unwrap_or(0) as u32;
+        let edge_id = segment.recover_edge_id(immutable_nbr, edge_position);
+        let nbr = Nbr::new(
+            immutable_nbr.neighbor,
+            edge_id,
+            immutable_nbr.prop_offset,
+            immutable_nbr.timestamp,
+        );
+        entries.push((src_u32, nbr));
     }
 }
 
@@ -544,6 +565,7 @@ mod tests {
         assert!(metrics.segments_after <= metrics.segments_before);
         assert!(metrics.edges_merged > 0);
         assert!(metrics.duration_ms < 1_000_000);
+        assert!(table.out_free_space.free_slot_count() > 0);
     }
 
     #[test]

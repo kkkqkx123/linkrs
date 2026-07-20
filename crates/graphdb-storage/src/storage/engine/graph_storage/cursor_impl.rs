@@ -544,7 +544,7 @@ fn scan_segments(args: ScanArgs, seg_idx: usize) {
             store: args.store,
             target: args.target,
             td: args.td,
-            src_vid: &src_vid,
+            src_vid,
             nbr,
             projection: args.projection,
         });

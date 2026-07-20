@@ -10,10 +10,12 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use crate::core::StorageResult;
+use crate::storage::edge::edge_table::segment_eviction::SegmentEvictionEngine;
 use crate::storage::engine::cache_manager::CacheManager;
 use crate::storage::engine::data_store::GraphDataStore;
-use crate::storage::engine::resource_budget::{MemoryAccounting, MemoryCategory, MemoryReservation};
-use crate::storage::edge::edge_table::segment_eviction::SegmentEvictionEngine;
+use crate::storage::engine::resource_budget::{
+    MemoryAccounting, MemoryCategory, MemoryReservation,
+};
 
 /// Metadata for an active spill file.
 #[derive(Debug)]
@@ -77,7 +79,11 @@ impl Spiller {
         }
 
         if let Err(e) = std::fs::create_dir_all(&self.spill_dir) {
-            log::warn!("Failed to create spill directory {}: {}", self.spill_dir.display(), e);
+            log::warn!(
+                "Failed to create spill directory {}: {}",
+                self.spill_dir.display(),
+                e
+            );
             return None;
         }
 
@@ -108,8 +114,7 @@ impl Spiller {
         let cache_bytes = snapshot.categories[MemoryCategory::Cache as usize].current_bytes;
         if cache_bytes > 0 {
             self.cache_manager.clear_cache();
-            self.accounting
-                .release(MemoryCategory::Cache, cache_bytes);
+            self.accounting.release(MemoryCategory::Cache, cache_bytes);
             total_freed += cache_bytes;
         }
 
@@ -196,14 +201,16 @@ mod tests {
     fn test_spiller_debug_info() {
         let accounting = Arc::new(MemoryAccounting::new(
             crate::storage::engine::resource_budget::MemoryBudget::from_validated(
-                1024,
-                256,
-                0.8,
-                0.95,
+                1024, 256, 0.8, 0.95,
             ),
         ));
         let data_store = Arc::new(GraphDataStore::new());
-        let cache_manager = Arc::new(CacheManager::new(false, 0, &crate::storage::engine::config::ResourceConfig::default(), Arc::clone(&accounting)));
+        let cache_manager = Arc::new(CacheManager::new(
+            false,
+            0,
+            &crate::storage::engine::config::ResourceConfig::default(),
+            Arc::clone(&accounting),
+        ));
         let spiller = Spiller::new(
             PathBuf::from("/tmp/linkrs_test_spill"),
             accounting,

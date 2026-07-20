@@ -18,7 +18,6 @@ use crate::query::executor::streaming::helpers::accumulator_states::{
 use crate::query::executor::streaming::helpers::compare_values;
 use crate::query::executor::streaming::helpers::compute_aggregate;
 use crate::query::executor::streaming::operators::base::OperatorBase;
-use crate::query::executor::streaming::slot::SlotLayout;
 use crate::query::executor::streaming::spill::{
     HashPartitionConfig, HashPartitionSpiller, SpillManager, SpilledFile,
 };
@@ -563,7 +562,7 @@ impl BlockingOperator {
             Self::Aggregate {
                 group_by_expressions,
                 aggregate_functions,
-                output_col_names,
+                output_col_names: _,
                 memory_tracker,
                 state,
                 ..
@@ -1665,7 +1664,7 @@ impl BlockingOperator {
             Self::PartialAggregate {
                 group_by_expressions,
                 aggregate_functions,
-                output_col_names,
+                output_col_names: _,
                 memory_tracker,
                 state,
                 ..
@@ -1752,7 +1751,7 @@ impl BlockingOperator {
             Self::FinalAggregate {
                 group_by_expressions,
                 aggregate_functions,
-                output_col_names,
+                output_col_names: _,
                 memory_tracker,
                 state,
                 ..
@@ -1882,10 +1881,8 @@ impl BlockingOperator {
                 if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     if let Some(ref s) = state {
-                        for run in &s.spilled_runs {
-                            if let Some(r) = run {
-                                let _ = std::fs::remove_file(&r.path);
-                            }
+                        for r in s.spilled_runs.iter().flatten() {
+                            let _ = std::fs::remove_file(&r.path);
                         }
                     }
                     *state = None;
@@ -1961,10 +1958,8 @@ impl BlockingOperator {
                 if base.lifecycle.can_close() {
                     memory_tracker.reset();
                     if let Some(ref s) = state {
-                        for run in &s.spilled_runs {
-                            if let Some(r) = run {
-                                let _ = std::fs::remove_file(&r.path);
-                            }
+                        for r in s.spilled_runs.iter().flatten() {
+                            let _ = std::fs::remove_file(&r.path);
                         }
                     }
                     *state = None;

@@ -62,9 +62,7 @@ impl SegmentEvictionEngine {
         table: &super::EdgeStore,
         target_bytes: usize,
     ) -> StorageResult<usize> {
-        let tt = match table {
-            super::EdgeStore::TimeTravel(tt) => tt,
-        };
+        let super::EdgeStore::TimeTravel(tt) = table;
         let mut freed = 0;
 
         while freed < target_bytes {
@@ -90,7 +88,10 @@ impl SegmentEvictionEngine {
 
         for (idx, segment) in table.out_segments.iter().enumerate() {
             if let Some(candidate) = self.evaluate_candidate(segment, Direction::Out, idx) {
-                if best.as_ref().map_or(true, |b| candidate.last_access < b.last_access) {
+                if best
+                    .as_ref()
+                    .is_none_or(|b| candidate.last_access < b.last_access)
+                {
                     best = Some(candidate);
                 }
             }
@@ -98,7 +99,10 @@ impl SegmentEvictionEngine {
 
         for (idx, segment) in table.in_segments.iter().enumerate() {
             if let Some(candidate) = self.evaluate_candidate(segment, Direction::In, idx) {
-                if best.as_ref().map_or(true, |b| candidate.last_access < b.last_access) {
+                if best
+                    .as_ref()
+                    .is_none_or(|b| candidate.last_access < b.last_access)
+                {
                     best = Some(candidate);
                 }
             }
@@ -145,9 +149,9 @@ impl SegmentEvictionEngine {
         direction: Direction,
         index: usize,
     ) -> StorageResult<usize> {
-        let spill_path =
-            self.spill_dir
-                .join(format!("{:?}_{}.spill", direction, index));
+        let spill_path = self
+            .spill_dir
+            .join(format!("{:?}_{}.spill", direction, index));
 
         // If already marked, complete the eviction
         if segment.lock_state.read_state() == super::page_state::SegmentState::Marked {
@@ -173,7 +177,7 @@ mod tests {
     #[test]
     fn test_access_clock_shared() {
         let engine = SegmentEvictionEngine::new(PathBuf::from("/tmp"));
-        let clock = engine.access_clock().clone();
+        let clock = engine.access_clock();
         let t1 = clock.tick();
         let t2 = engine.access_clock().tick();
         assert!(t1 < t2);

@@ -182,7 +182,7 @@ mod tests {
         let mut executor = StreamingExecutor::Txn(OperatorBase::new(1), Box::new(input), operator);
 
         let ctrl = Arc::new(SessionTransactionController::new());
-        let mut rt = ExecutionRuntime::default_budget();
+        let rt = ExecutionRuntime::default_budget();
         rt.set_session_controller(ctrl.clone());
         executor.set_runtime(Some(Arc::new(rt)));
 
@@ -206,7 +206,7 @@ mod tests {
         let mut executor = StreamingExecutor::Txn(OperatorBase::new(1), Box::new(input), operator);
 
         let ctrl = Arc::new(SessionTransactionController::new());
-        let mut rt = ExecutionRuntime::default_budget();
+        let rt = ExecutionRuntime::default_budget();
         rt.set_session_controller(ctrl.clone());
         executor.set_runtime(Some(Arc::new(rt)));
 

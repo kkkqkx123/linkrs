@@ -21,7 +21,6 @@ use crate::core::types::expr::Expression;
 use crate::query::executor::base::{MemoryBudget, MemoryTracker};
 use crate::query::executor::streaming::plan::types::SyntheticNodeIdAllocator;
 use crate::query::executor::streaming::pool::MorselWorkerPool;
-use crate::query::executor::streaming::slot::SlotLayout;
 use crate::query::executor::streaming::spill::{SpillConfig, SpillManager};
 
 /// Streaming execution engine
@@ -645,6 +644,7 @@ mod tests {
     use super::super::operators::gather_operator::GatherOperator;
     use super::super::operators::source_operator::SourceOperator;
     use super::super::operators::unary_operator::UnaryOperator;
+    use super::super::slot::SlotLayout;
     use super::*;
     use crate::core::Value;
 

@@ -518,7 +518,7 @@ fn test_multi_cycle_flush_and_load() {
 
     // Cycle 1: Initial setup and save to disk (includes schema + data)
     {
-        let mut storage = common::create_persistent_storage(&dir);
+        let mut storage = common::create_persistent_storage(dir);
         common::setup_basic_schema(&mut storage);
         common::insert_test_data(&mut storage, "test_space");
         StorageAdmin::save_to_disk(&storage).unwrap();
@@ -527,7 +527,7 @@ fn test_multi_cycle_flush_and_load() {
 
     // Cycle 2: Load, add more data, save again
     {
-        let mut storage = common::open_persistent_storage(&dir);
+        let mut storage = common::open_persistent_storage(dir);
         common::verify_test_data(&storage, "test_space");
 
         let charlie = common::create_person_vertex(3, "Charlie", 35);
@@ -541,7 +541,7 @@ fn test_multi_cycle_flush_and_load() {
 
     // Cycle 3: Load, add more data, save again
     {
-        let mut storage = common::open_persistent_storage(&dir);
+        let mut storage = common::open_persistent_storage(dir);
         common::verify_test_data(&storage, "test_space");
 
         let charlie = storage
@@ -564,7 +564,7 @@ fn test_multi_cycle_flush_and_load() {
 
     // Cycle 4: Final load, verify everything survived
     {
-        let storage = common::open_persistent_storage(&dir);
+        let storage = common::open_persistent_storage(dir);
         common::verify_test_data(&storage, "test_space");
 
         // Charlie from cycle 2 survived

@@ -296,7 +296,7 @@ impl PhysicalPlanMaterializer {
                     match &mut prepend {
                         StreamingExecutor::Unary(_, c, _)
                         | StreamingExecutor::Blocking(_, c, _) => {
-                            std::mem::swap(c, &mut Box::new(root_executor));
+                            **c = root_executor;
                             root_executor = prepend;
                         }
                         _ => {

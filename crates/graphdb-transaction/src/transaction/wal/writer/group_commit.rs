@@ -88,11 +88,7 @@ impl GroupCommitCoordinator {
     ///
     /// If no sync is in progress, the calling thread becomes the sync leader
     /// and performs the fsync. Followers wait on a condvar.
-    pub fn append_and_wait_timeout(
-        &self,
-        appended_lsn: u64,
-        timeout: Duration,
-    ) -> WalResult<()> {
+    pub fn append_and_wait_timeout(&self, appended_lsn: u64, timeout: Duration) -> WalResult<()> {
         // Fast path: already durable
         if self.inner.durable_seq.load(Ordering::SeqCst) >= appended_lsn {
             return Ok(());

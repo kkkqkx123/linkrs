@@ -1,5 +1,6 @@
 use crate::core::types::Timestamp;
 use crate::core::{StorageResult, Value};
+use crate::storage::index::index_data_manager::EdgeIdentity;
 use crate::storage::index::{EdgeIndexOps, VertexIndexOps};
 
 use super::context::GraphStorageContext;
@@ -41,41 +42,27 @@ pub fn delete_vertex_indexes_mvcc(
 
 pub fn update_edge_indexes_mvcc(
     ctx: &GraphStorageContext,
-    space_id: u64,
-    edge_src: &Value,
-    edge_dst: &Value,
-    edge_type: &str,
-    ranking: i64,
+    edge: &EdgeIdentity<'_>,
     index_name: &str,
     props: &[(String, Value)],
     ts: Timestamp,
 ) -> StorageResult<()> {
     let rebuild_gate = ctx.index_data_manager().read().rebuild_gate();
     let _write_gate = rebuild_gate.read();
-    ctx.index_data_manager().write().update_edge_indexes_mvcc(
-        space_id, edge_src, edge_dst, edge_type, ranking, index_name, props, ts,
-    )
+    ctx.index_data_manager()
+        .write()
+        .update_edge_indexes_mvcc(edge, index_name, props, ts)
 }
 
 pub fn delete_edge_indexes_mvcc(
     ctx: &GraphStorageContext,
-    space_id: u64,
-    edge_src: &Value,
-    edge_dst: &Value,
-    edge_type: &str,
-    ranking: i64,
+    edge: &EdgeIdentity<'_>,
     index_names: &[String],
     ts: Timestamp,
 ) -> StorageResult<()> {
     let rebuild_gate = ctx.index_data_manager().read().rebuild_gate();
     let _write_gate = rebuild_gate.read();
-    ctx.index_data_manager().write().delete_edge_indexes_mvcc(
-        space_id,
-        edge_src,
-        edge_dst,
-        edge_type,
-        ranking,
-        index_names,
-        ts,
-    )
+    ctx.index_data_manager()
+        .write()
+        .delete_edge_indexes_mvcc(edge, index_names, ts)
 }

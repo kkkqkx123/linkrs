@@ -415,7 +415,7 @@ mod tests {
             .expect("create_vertex_type should succeed");
         assert!(ctx.data_store().vertex_label_id("Person").is_some());
         ctx.drop_vertex_type("Person").expect("drop should succeed");
-        assert!(!ctx.data_store().vertex_label_id("Person").is_some());
+        assert!(ctx.data_store().vertex_label_id("Person").is_none());
     }
 
     #[test]
@@ -668,7 +668,7 @@ mod tests {
         let ctx = GraphStorageContext::new();
 
         // Valid names: starting with letter or underscore, containing alphanumeric and underscore
-        let label_id = ctx
+        let _label_id = ctx
             .create_vertex_type(
                 "ValidNames",
                 vec![

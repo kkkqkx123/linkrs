@@ -13,5 +13,4 @@ pub mod optimizer;
 pub mod persistence;
 pub mod schema;
 
-pub use compaction::CompactionCoordinator;
-pub use core::{VertexIterator, VertexTable, VertexTableConfig};
+pub use core::VertexTable;

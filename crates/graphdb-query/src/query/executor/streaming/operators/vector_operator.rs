@@ -405,7 +405,7 @@ impl VectorOperator {
     pub fn stop(
         &mut self,
         base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
+        _input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
         match self {
             VectorOperator::VectorManage { .. }

@@ -775,16 +775,11 @@ mod tests {
         op.open(&mut base, &mut children).unwrap();
 
         let mut all_values = Vec::new();
-        loop {
-            match op.next(&mut base, &mut children).unwrap() {
-                Some(chunk) => {
-                    for row in chunk.rows {
-                        if let Some(Value::BigInt(v)) = row.first() {
-                            all_values.push(*v);
-                        }
-                    }
+        while let Some(chunk) = op.next(&mut base, &mut children).unwrap() {
+            for row in chunk.rows {
+                if let Some(Value::BigInt(v)) = row.first() {
+                    all_values.push(*v);
                 }
-                None => break,
             }
         }
 

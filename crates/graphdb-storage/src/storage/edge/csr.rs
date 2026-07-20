@@ -152,8 +152,22 @@ impl Csr {
 
     pub fn from_nbr_entries(entries: &[(u32, Nbr)], vertex_capacity: usize) -> Self {
         let mut csr = Self::with_capacity(vertex_capacity.max(1), entries.len());
+        csr.rebuild_from_nbr_entries(entries, vertex_capacity);
+        csr
+    }
+
+    /// Rebuild CSR contents while retaining existing vector allocations when possible.
+    pub fn rebuild_from_nbr_entries(&mut self, entries: &[(u32, Nbr)], vertex_capacity: usize) {
         if entries.is_empty() {
-            return csr;
+            self.offsets.truncate(1);
+            self.offsets.fill(0);
+            self.edges.clear();
+            self.edge_count.store(0, Ordering::Relaxed);
+            return;
+        }
+
+        if vertex_capacity.max(1) > self.vertex_capacity() {
+            self.resize(vertex_capacity.max(1));
         }
 
         let src_list: Vec<_> = entries.iter().map(|(src, _)| *src).collect();
@@ -161,14 +175,27 @@ impl Csr {
         let edge_ids: Vec<_> = entries.iter().map(|(_, nbr)| nbr.edge_id).collect();
         let prop_offsets: Vec<_> = entries.iter().map(|(_, nbr)| nbr.prop_offset).collect();
         let timestamps: Vec<_> = entries.iter().map(|(_, nbr)| nbr.create_ts).collect();
-        csr.batch_put_edges_with_timestamps(
+        self.batch_put_edges_with_timestamps(
             &src_list,
             &dst_list,
             &edge_ids,
             &prop_offsets,
             &timestamps,
         );
-        csr
+    }
+
+    /// Estimate the allocation needed for a CSR with the given dimensions.
+    pub fn required_memory_size(vertex_capacity: usize, edge_capacity: usize) -> usize {
+        (vertex_capacity.max(1) + 1) * std::mem::size_of::<u32>()
+            + edge_capacity * std::mem::size_of::<ImmutableNbr>()
+            + std::mem::size_of::<Self>()
+    }
+
+    /// Return the currently allocated bytes, including unused vector capacity.
+    pub fn allocated_memory_size(&self) -> usize {
+        self.offsets.capacity() * std::mem::size_of::<u32>()
+            + self.edges.capacity() * std::mem::size_of::<ImmutableNbr>()
+            + std::mem::size_of::<Self>()
     }
 
     pub fn batch_put_edges_with_timestamps(
@@ -197,23 +224,27 @@ impl Csr {
             }
         }
 
-        let mut new_offsets = vec![0u32; vc + 1];
+        self.offsets.resize(vc + 1, 0);
+        self.offsets.fill(0);
         let mut cumsum = 0u32;
         for (i, &deg) in degrees.iter().enumerate() {
-            new_offsets[i] = cumsum;
+            self.offsets[i] = cumsum;
             cumsum += deg;
         }
-        new_offsets[vc] = cumsum;
+        self.offsets[vc] = cumsum;
 
-        let mut new_edges =
-            vec![ImmutableNbr::new(VertexId::from_int64(0), EdgeId(0), 0); src_list.len()];
-        let mut current_pos = new_offsets.clone();
+        self.edges.clear();
+        self.edges.resize(
+            src_list.len(),
+            ImmutableNbr::new(VertexId::from_int64(0), EdgeId(0), 0),
+        );
+        let mut current_pos = self.offsets.clone();
         for i in 0..src_list.len() {
             let src = src_list[i] as usize;
             if src < current_pos.len() - 1 {
                 let pos = current_pos[src] as usize;
-                if pos < new_edges.len() {
-                    new_edges[pos] = ImmutableNbr::with_timestamp(
+                if pos < self.edges.len() {
+                    self.edges[pos] = ImmutableNbr::with_timestamp(
                         dst_list[i],
                         edge_ids[i],
                         prop_offsets[i],
@@ -224,8 +255,6 @@ impl Csr {
             }
         }
 
-        self.offsets = new_offsets;
-        self.edges = new_edges;
         self.edge_count
             .store(src_list.len() as u64, Ordering::Relaxed);
     }
@@ -318,9 +347,8 @@ impl Csr {
 
     /// Load CSR data from a file, replacing current contents (segment reload).
     pub fn load_from_file(&mut self, path: &Path) -> StorageResult<()> {
-        let data = std::fs::read(path).map_err(|e| {
-            StorageError::io_error(format!("failed to read CSR spill file: {}", e))
-        })?;
+        let data = std::fs::read(path)
+            .map_err(|e| StorageError::io_error(format!("failed to read CSR spill file: {}", e)))?;
         self.load(&data)
     }
 }

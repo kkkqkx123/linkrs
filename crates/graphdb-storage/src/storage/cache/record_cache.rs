@@ -84,25 +84,22 @@ impl RecordCache {
         let id_index_stats = Arc::new(CacheStats::new());
 
         let eviction_callback = Arc::new(Mutex::new(None::<EvictionCallback>));
-        let eviction_callback_with_size =
-            Arc::new(Mutex::new(None::<EvictionCallbackWithSize>));
+        let eviction_callback_with_size = Arc::new(Mutex::new(None::<EvictionCallbackWithSize>));
 
-        let vertex_weigher: WeigherFn<VertexCacheKey, CachedVertex> = Arc::new(
-            |_key: &VertexCacheKey, value: &CachedVertex| {
+        let vertex_weigher: WeigherFn<VertexCacheKey, CachedVertex> =
+            Arc::new(|_key: &VertexCacheKey, value: &CachedVertex| {
                 let key_size = std::mem::size_of::<VertexCacheKey>() as u32;
                 let value_size = value.estimated_size();
                 key_size.saturating_add(value_size)
-            },
-        );
+            });
 
-        let id_index_weigher: WeigherFn<IdIndexCacheKey, IdIndexCacheValue> = Arc::new(
-            |key: &IdIndexCacheKey, _value: &IdIndexCacheValue| {
+        let id_index_weigher: WeigherFn<IdIndexCacheKey, IdIndexCacheValue> =
+            Arc::new(|key: &IdIndexCacheKey, _value: &IdIndexCacheValue| {
                 let key_size = std::mem::size_of::<IdIndexCacheKey>() as u32
                     + key.external_id.capacity() as u32;
                 let value_size = std::mem::size_of::<IdIndexCacheValue>() as u32;
                 key_size.saturating_add(value_size)
-            },
-        );
+            });
 
         let vertex_cache = Self::build_vertex_cache(
             vertex_memory,

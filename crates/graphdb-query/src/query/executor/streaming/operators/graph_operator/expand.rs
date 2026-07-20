@@ -65,9 +65,7 @@ pub(super) fn handle(
             let mut rows = chunk.rows;
             for row in rows.iter_mut() {
                 row.push(Value::Null(crate::core::NullType::Null));
-                row.push(Value::Vertex(Box::new(
-                    crate::core::vertex_edge_path::Vertex::default(),
-                )));
+                row.push(Value::Vertex(Box::default()));
             }
             let out_col_names = schema
                 .columns
@@ -137,13 +135,11 @@ pub(super) fn handle_all(
                 name: "_expand_dst".to_string(),
                 data_type: "vertex".to_string(),
             });
-            let schema = Arc::new(Schema::new(new_cols));
+            let _schema = Arc::new(Schema::new(new_cols));
             let mut rows = chunk.rows;
             for row in rows.iter_mut() {
                 row.push(Value::Null(crate::core::NullType::Null));
-                row.push(Value::Vertex(Box::new(
-                    crate::core::vertex_edge_path::Vertex::default(),
-                )));
+                row.push(Value::Vertex(Box::default()));
             }
             if !rows.is_empty() {
                 return Ok(Some(DataChunk::new_with_layout(

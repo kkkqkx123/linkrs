@@ -96,7 +96,7 @@ pub(super) fn handle_shortest_path(
                 name: "_shortest_path".to_string(),
                 data_type: "path".to_string(),
             });
-            let schema = Arc::new(Schema::new(new_cols));
+            let _schema = Arc::new(Schema::new(new_cols));
             return Ok(Some(DataChunk::new_with_layout(
                 out_rows,
                 Arc::clone(&base.output_layout),
@@ -189,7 +189,7 @@ pub(super) fn handle_bfs_shortest(
                 name: "_bfs_shortest".to_string(),
                 data_type: "path".to_string(),
             });
-            let schema = Arc::new(Schema::new(new_cols));
+            let _schema = Arc::new(Schema::new(new_cols));
             return Ok(Some(DataChunk::new_with_layout(
                 out_rows,
                 Arc::clone(&base.output_layout),

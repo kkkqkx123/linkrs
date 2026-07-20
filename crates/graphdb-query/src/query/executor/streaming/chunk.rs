@@ -347,10 +347,7 @@ impl DataChunk {
 
     /// Create a zero-copy view into this chunk's rows.
     pub fn view(&self) -> ChunkView<'_> {
-        ChunkView {
-            rows: &self.rows,
-            layout: &self.layout,
-        }
+        ChunkView { rows: &self.rows }
     }
 
     /// Move a range of rows [start, end) into a new chunk.
@@ -383,7 +380,6 @@ impl DataChunk {
 #[derive(Debug)]
 pub struct ChunkView<'a> {
     pub(crate) rows: &'a [Vec<crate::core::Value>],
-    pub(crate) layout: &'a SlotLayout,
 }
 
 impl ChunkView<'_> {

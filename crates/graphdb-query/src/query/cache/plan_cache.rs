@@ -39,6 +39,17 @@ pub struct ParamPosition {
     pub expected_type: Option<crate::core::types::DataType>,
 }
 
+/// Context stored with a cached plan.
+#[derive(Debug, Clone, Default)]
+pub struct PlanCachePutContext {
+    pub dependent_tables: Vec<String>,
+    pub space_name: Option<String>,
+    pub schema_version: Option<u64>,
+    pub index_version: Option<u64>,
+    pub is_dml: bool,
+    pub is_transaction: bool,
+}
+
 use crate::query::planning::plan::execution_plan::PartitionSpec;
 
 /// Query Plan Cache Key
@@ -475,17 +486,7 @@ impl QueryPlanCache {
     /// - `plan`: Arena-based physical plan
     /// - `param_positions`: Information about the positions of the parameters
     pub fn put(&self, query: &str, plan: Arc<PhysicalPlan>, param_positions: Vec<ParamPosition>) {
-        self.put_with_context(
-            query,
-            plan,
-            param_positions,
-            Vec::new(),
-            None,
-            None,
-            None,
-            false,
-            false,
-        );
+        self.put_with_context(query, plan, param_positions, PlanCachePutContext::default());
     }
 
     /// Put the plan in the cache with dependent tables.
@@ -500,12 +501,10 @@ impl QueryPlanCache {
             query,
             plan,
             param_positions,
-            dependent_tables,
-            None,
-            None,
-            None,
-            false,
-            false,
+            PlanCachePutContext {
+                dependent_tables,
+                ..PlanCachePutContext::default()
+            },
         );
     }
 
@@ -526,13 +525,16 @@ impl QueryPlanCache {
         query: &str,
         plan: Arc<PhysicalPlan>,
         param_positions: Vec<ParamPosition>,
-        dependent_tables: Vec<String>,
-        space_name: Option<String>,
-        schema_version: Option<u64>,
-        index_version: Option<u64>,
-        is_dml: bool,
-        is_transaction: bool,
+        context: PlanCachePutContext,
     ) {
+        let PlanCachePutContext {
+            dependent_tables,
+            space_name,
+            schema_version,
+            index_version,
+            is_dml,
+            is_transaction,
+        } = context;
         let query_bytes = query.len();
         let param_type_sig = Self::compute_param_type_signature(&param_positions);
         let key = PlanCacheKey::from_query_with_full_context(

@@ -14,7 +14,7 @@ fn test_recovery_partial_vertex_write() {
     let dir = temp_dir.path();
 
     {
-        let mut storage = common::create_persistent_storage(&dir);
+        let mut storage = common::create_persistent_storage(dir);
         common::setup_basic_schema(&mut storage);
         common::insert_test_data(&mut storage, "test_space");
 
@@ -31,7 +31,7 @@ fn test_recovery_partial_vertex_write() {
 
     // Reopen and verify recovery
     {
-        let storage = common::open_persistent_storage(&dir);
+        let storage = common::open_persistent_storage(dir);
 
         // Original data should be intact
         let v1 = storage
@@ -60,7 +60,7 @@ fn test_recovery_after_concurrent_crash() {
     let dir = temp_dir.path();
 
     {
-        let mut storage = common::create_persistent_storage(&dir);
+        let mut storage = common::create_persistent_storage(dir);
         common::setup_basic_schema(&mut storage);
         common::insert_test_data(&mut storage, "test_space");
 
@@ -79,7 +79,7 @@ fn test_recovery_after_concurrent_crash() {
 
     // Verify recovery
     {
-        let storage = common::open_persistent_storage(&dir);
+        let storage = common::open_persistent_storage(dir);
 
         // Check data consistency
         let vertices = storage.scan_vertices("test_space").unwrap();
@@ -104,7 +104,7 @@ fn test_recovery_index_state_after_crash() {
     let dir = temp_dir.path();
 
     {
-        let mut storage = common::create_persistent_storage(&dir);
+        let mut storage = common::create_persistent_storage(dir);
         common::setup_basic_schema(&mut storage);
 
         // Create index
@@ -126,7 +126,7 @@ fn test_recovery_index_state_after_crash() {
 
     // Verify index recovery
     {
-        let storage = common::open_persistent_storage(&dir);
+        let storage = common::open_persistent_storage(dir);
 
         // Index should still be functional
         let result = storage.lookup_index(
@@ -152,7 +152,7 @@ fn test_recovery_deleted_vertex_integrity() {
     let dir = temp_dir.path();
 
     {
-        let mut storage = common::create_persistent_storage(&dir);
+        let mut storage = common::create_persistent_storage(dir);
         common::setup_basic_schema(&mut storage);
         common::insert_test_data(&mut storage, "test_space");
 
@@ -172,7 +172,7 @@ fn test_recovery_deleted_vertex_integrity() {
 
     // Verify recovery preserves consistency
     {
-        let storage = common::open_persistent_storage(&dir);
+        let storage = common::open_persistent_storage(dir);
 
         // Check recovered state
         let all_vertices = storage.scan_vertices("test_space").unwrap();
@@ -210,9 +210,9 @@ fn test_multiple_crash_recovery_cycles() {
     for cycle in 0..3 {
         {
             let mut storage = if cycle == 0 {
-                common::create_persistent_storage(&dir)
+                common::create_persistent_storage(dir)
             } else {
-                common::open_persistent_storage(&dir)
+                common::open_persistent_storage(dir)
             };
 
             if cycle == 0 {
@@ -233,7 +233,7 @@ fn test_multiple_crash_recovery_cycles() {
 
         // Reopen and verify consistency
         {
-            let storage = common::open_persistent_storage(&dir);
+            let storage = common::open_persistent_storage(dir);
             let vertices = storage.scan_vertices("test_space").unwrap();
             assert!(vertices.len() >= 2, "Cycle {}: Should have vertices", cycle);
 

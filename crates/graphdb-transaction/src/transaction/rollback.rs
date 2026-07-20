@@ -45,7 +45,7 @@ pub(crate) trait UndoLogContext {
         target: &T,
         start_index: usize,
     ) -> Result<(), StorageError>;
-    fn clear_undo_logs(&self);
+    fn clear_undo_logs(&self) -> Result<(), StorageError>;
 }
 
 impl UndoLogContext for crate::transaction::context::TransactionContext {
@@ -63,8 +63,9 @@ impl UndoLogContext for crate::transaction::context::TransactionContext {
             .map_err(|e| StorageError::db_error(e.to_string()))
     }
 
-    fn clear_undo_logs(&self) {
-        self.clear_undo_logs();
+    fn clear_undo_logs(&self) -> Result<(), StorageError> {
+        self.clear_undo_logs()
+            .map_err(|error| StorageError::db_error(error.to_string()))
     }
 }
 
@@ -89,8 +90,8 @@ impl<'a, T: UndoLogContext> UndoLogRollback<'a, T> {
         self.ctx.execute_undo_logs(target)
     }
 
-    pub fn clear_logs(&self) {
-        self.ctx.clear_undo_logs();
+    pub fn clear_logs(&self) -> Result<(), StorageError> {
+        self.ctx.clear_undo_logs()
     }
 }
 
@@ -270,8 +271,10 @@ mod tests {
             &self,
             _target: &T,
         ) -> Result<(), StorageError> {
-            self.logs.borrow_mut().clear();
-            Ok(())
+            self.logs
+                .borrow_mut()
+                .clear()
+                .map_err(|error| StorageError::db_error(error.to_string()))
         }
 
         fn execute_undo_logs_from_index<T: UndoTarget + ?Sized>(
@@ -279,12 +282,17 @@ mod tests {
             _target: &T,
             _start_index: usize,
         ) -> Result<(), StorageError> {
-            self.logs.borrow_mut().clear();
-            Ok(())
+            self.logs
+                .borrow_mut()
+                .clear()
+                .map_err(|error| StorageError::db_error(error.to_string()))
         }
 
-        fn clear_undo_logs(&self) {
-            self.logs.borrow_mut().clear();
+        fn clear_undo_logs(&self) -> Result<(), StorageError> {
+            self.logs
+                .borrow_mut()
+                .clear()
+                .map_err(|error| StorageError::db_error(error.to_string()))
         }
     }
 
@@ -296,10 +304,11 @@ mod tests {
         assert_eq!(ctx.logs.borrow().len(), 0);
         ctx.logs
             .borrow_mut()
-            .add(RollbackHelper::create_insert_vertex_undo(1, 100));
+            .add(RollbackHelper::create_insert_vertex_undo(1, 100))
+            .expect("Failed to append undo log");
         assert_eq!(ctx.logs.borrow().len(), 1);
 
-        rollback.clear_logs();
+        rollback.clear_logs().expect("Failed to clear undo log");
         assert_eq!(ctx.logs.borrow().len(), 0);
     }
 

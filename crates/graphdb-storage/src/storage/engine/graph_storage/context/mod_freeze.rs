@@ -1,9 +1,7 @@
-use std::path::PathBuf;
-
 use crate::core::types::CompactConfig;
 use crate::core::StorageResult;
-use crate::storage::engine::background_freeze::{FreezeGuard, FreezeStats};
 use crate::storage::edge::edge_table::segment_eviction::SegmentEvictionEngine;
+use crate::storage::engine::background_freeze::{FreezeGuard, FreezeStats};
 
 use super::GraphStorageContext;
 
@@ -134,7 +132,9 @@ impl GraphStorageContext {
             return Ok(0);
         }
 
-        let excess = snapshot.total_current_bytes.saturating_sub(snapshot.budget.soft_limit_bytes);
+        let excess = snapshot
+            .total_current_bytes
+            .saturating_sub(snapshot.budget.soft_limit_bytes);
         if excess == 0 {
             return Ok(0);
         }
@@ -147,22 +147,20 @@ impl GraphStorageContext {
 
         let engine = SegmentEvictionEngine::new(spill_dir);
 
-        self.persistent
-            .data_store
-            .with_edge_tables(|edge_tables| {
-                for table in edge_tables.values() {
-                    if total_freed >= excess {
-                        break;
-                    }
-                    let remaining = excess - total_freed;
-                    match engine.evict_cold_segments(table, remaining as usize) {
-                        Ok(freed) => total_freed += freed as u64,
-                        Err(e) => {
-                            log::warn!("Segment eviction failed for table: {}", e);
-                        }
+        self.persistent.data_store.with_edge_tables(|edge_tables| {
+            for table in edge_tables.values() {
+                if total_freed >= excess {
+                    break;
+                }
+                let remaining = excess - total_freed;
+                match engine.evict_cold_segments(table, remaining as usize) {
+                    Ok(freed) => total_freed += freed as u64,
+                    Err(e) => {
+                        log::warn!("Segment eviction failed for table: {}", e);
                     }
                 }
-            });
+            }
+        });
 
         if total_freed > 0 {
             accounting.release(

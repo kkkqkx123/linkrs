@@ -16,6 +16,11 @@ use std::sync::LazyLock;
 
 use super::context::GraphStorageContext;
 
+type IndexDataMaps = (
+    BTreeMap<Vec<u8>, IndexRecord>,
+    BTreeMap<Vec<u8>, IndexRecord>,
+);
+
 use crate::transaction::wal::{
     collect_committed_transactions, filter_intents_for_indexes, CommittedWalTransaction,
     LocalWalParser, WalParser,
@@ -319,18 +324,13 @@ fn record_changed_after(record: &IndexRecord, snapshot_timestamp: u32) -> bool {
 }
 
 fn replay_wal_partition<F, R>(
-    mut active_forward: BTreeMap<Vec<u8>, IndexRecord>,
-    mut active_reverse: BTreeMap<Vec<u8>, IndexRecord>,
-    rebuilt_forward: BTreeMap<Vec<u8>, IndexRecord>,
-    rebuilt_reverse: BTreeMap<Vec<u8>, IndexRecord>,
+    (mut active_forward, mut active_reverse): IndexDataMaps,
+    (rebuilt_forward, rebuilt_reverse): IndexDataMaps,
     snapshot_timestamp: u32,
     intents: &[crate::core::wal::OutboxIntent],
     matches_forward: F,
     matches_reverse: R,
-) -> (
-    BTreeMap<Vec<u8>, IndexRecord>,
-    BTreeMap<Vec<u8>, IndexRecord>,
-)
+) -> IndexDataMaps
 where
     F: Fn(&[u8]) -> bool,
     R: Fn(&[u8]) -> bool,
@@ -341,11 +341,10 @@ where
         .collect::<Vec<_>>();
     let matches_changed_entity = |record: &IndexRecord| {
         changed_entities.is_empty()
-            || record.entity_ref.as_ref().is_some_and(|entity| {
-                changed_entities
-                    .iter()
-                    .any(|candidate| *candidate == entity)
-            })
+            || record
+                .entity_ref
+                .as_ref()
+                .is_some_and(|entity| changed_entities.contains(&entity))
     };
     let forward_changes: Vec<(Vec<u8>, IndexRecord)> = active_forward
         .iter()
@@ -381,10 +380,7 @@ fn build_vertex_index_data(
     index: &Index,
     vertices: &[crate::core::Vertex],
     snapshot_timestamp: u32,
-) -> StorageResult<(
-    BTreeMap<Vec<u8>, IndexRecord>,
-    BTreeMap<Vec<u8>, IndexRecord>,
-)> {
+) -> StorageResult<IndexDataMaps> {
     let mut forward = BTreeMap::new();
     let mut reverse = BTreeMap::new();
     let mut version_counter = 1u64;
@@ -439,8 +435,8 @@ fn next_generation(
 ) -> StorageResult<IndexGeneration> {
     let index_id = {
         let mgr = ctx.index_data_manager().read();
-        let alias = mgr.index_alias(space_id, index_name);
-        alias
+
+        mgr.index_alias(space_id, index_name)
     };
     let Some(index_id) = index_id else {
         // No manifest catalog yet; start at generation 1.
@@ -560,10 +556,8 @@ pub(crate) fn rebuild_tag_index(
     let intents = wal_intents_for_index(ctx, space_id, &index, start_lsn, barrier_lsn)?;
     let forward_prefix = KeyBuilder::build_vertex_index_prefix(space_id, index_name).0;
     let (merged_forward, merged_reverse) = replay_wal_partition(
-        active_forward,
-        active_reverse,
-        forward,
-        reverse,
+        (active_forward, active_reverse),
+        (forward, reverse),
         snapshot_ts,
         &intents,
         |key| key.starts_with(&forward_prefix),
@@ -736,10 +730,7 @@ fn build_edge_index_data(
     index: &Index,
     edges: &[crate::core::Edge],
     snapshot_timestamp: u32,
-) -> StorageResult<(
-    BTreeMap<Vec<u8>, IndexRecord>,
-    BTreeMap<Vec<u8>, IndexRecord>,
-)> {
+) -> StorageResult<IndexDataMaps> {
     let mut forward = BTreeMap::new();
     let mut reverse = BTreeMap::new();
     let mut version_counter = 1u64;
@@ -863,10 +854,8 @@ pub(crate) fn rebuild_edge_index(
     let intents = wal_intents_for_index(ctx, space_id, &index, start_lsn, barrier_lsn)?;
     let forward_prefix = KeyBuilder::build_edge_index_prefix(space_id, index_name).0;
     let (merged_forward, merged_reverse) = replay_wal_partition(
-        active_forward,
-        active_reverse,
-        forward,
-        reverse,
+        (active_forward, active_reverse),
+        (forward, reverse),
         snapshot_ts,
         &intents,
         |key| key.starts_with(&forward_prefix),
@@ -1095,10 +1084,8 @@ mod tests {
         rebuilt_reverse.insert(b"snapshot-reverse".to_vec(), IndexRecord::new(10));
 
         let (forward, reverse) = super::replay_wal_partition(
-            active_forward,
-            active_reverse,
-            rebuilt_forward,
-            rebuilt_reverse,
+            (active_forward, active_reverse),
+            (rebuilt_forward, rebuilt_reverse),
             10,
             &intents,
             |_| true,

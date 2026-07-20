@@ -614,18 +614,13 @@ impl From<postcard::Error> for WalError {
 
 pub type WalResult<T> = Result<T, WalError>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WalRecoveryMode {
+    #[default]
     AbortOnCorruption,
     SkipCorruption,
     WalOnly,
     ErrorIfMissing,
-}
-
-impl Default for WalRecoveryMode {
-    fn default() -> Self {
-        Self::AbortOnCorruption
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

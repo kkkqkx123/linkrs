@@ -650,7 +650,7 @@ fn encode_decimal(
         .or_else(|| text.strip_prefix('+'))
         .unwrap_or(&text);
     let (mantissa, exponent_part) = unsigned
-        .find(|character| character == 'e' || character == 'E')
+        .find(['e', 'E'])
         .map_or((unsigned, "0"), |position| {
             (&unsigned[..position], &unsigned[position + 1..])
         });

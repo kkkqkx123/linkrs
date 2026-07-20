@@ -399,13 +399,6 @@ fn keys_match(left: &[Value], right: &[Value]) -> bool {
         })
 }
 
-fn close_result(left: Option<QueryError>, right: Option<QueryError>) -> Result<(), QueryError> {
-    match (left, right) {
-        (Some(error), _) | (None, Some(error)) => Err(error),
-        (None, None) => Ok(()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

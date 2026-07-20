@@ -33,7 +33,7 @@ fn test_crash_without_flush_loses_uncommitted_data() {
 
     let vid: VertexId;
     {
-        let mut storage = common::create_persistent_storage(&dir);
+        let mut storage = common::create_persistent_storage(dir);
         common::setup_basic_schema(&mut storage);
         common::insert_test_data(&mut storage, "test_space");
         save_and_checkpoint(&mut storage);
@@ -53,7 +53,7 @@ fn test_crash_without_flush_loses_uncommitted_data() {
 
     // Reopen — WAL should replay the unflushed insert
     {
-        let storage = common::open_persistent_storage(&dir);
+        let storage = common::open_persistent_storage(dir);
         common::verify_test_data(&storage, "test_space");
 
         let extra_vertex = storage.get_vertex("test_space", &vid).unwrap();
@@ -71,7 +71,7 @@ fn test_crash_recovery_replays_edge_insert() {
     let dir = temp_dir.path();
 
     {
-        let mut storage = common::create_persistent_storage(&dir);
+        let mut storage = common::create_persistent_storage(dir);
         common::setup_basic_schema(&mut storage);
         common::insert_test_data(&mut storage, "test_space");
         save_and_checkpoint(&mut storage);
@@ -85,7 +85,7 @@ fn test_crash_recovery_replays_edge_insert() {
     }
 
     {
-        let storage = common::open_persistent_storage(&dir);
+        let storage = common::open_persistent_storage(dir);
 
         // Edge should exist after WAL replay
         let edge = storage
@@ -114,7 +114,7 @@ fn test_crash_recovery_replays_vertex_delete() {
     let dir = temp_dir.path();
 
     {
-        let mut storage = common::create_persistent_storage(&dir);
+        let mut storage = common::create_persistent_storage(dir);
         common::setup_basic_schema(&mut storage);
         common::insert_test_data(&mut storage, "test_space");
         save_and_checkpoint(&mut storage);
@@ -126,7 +126,7 @@ fn test_crash_recovery_replays_vertex_delete() {
     }
 
     {
-        let storage = common::open_persistent_storage(&dir);
+        let storage = common::open_persistent_storage(dir);
 
         let alice = storage
             .get_vertex("test_space", &VertexId::from_int64(1))
@@ -150,7 +150,7 @@ fn test_crash_recovery_replays_tag_creation() {
     let dir = temp_dir.path();
 
     {
-        let mut storage = common::create_persistent_storage(&dir);
+        let mut storage = common::create_persistent_storage(dir);
         common::create_space(&mut storage, "test_space");
         save_and_checkpoint(&mut storage);
 
@@ -159,7 +159,7 @@ fn test_crash_recovery_replays_tag_creation() {
     }
 
     {
-        let storage = common::open_persistent_storage(&dir);
+        let storage = common::open_persistent_storage(dir);
 
         let tag = storage.get_tag("test_space", "Person").unwrap();
         assert!(tag.is_some(), "Tag should be recovered via WAL replay");
@@ -173,7 +173,7 @@ fn test_crash_recovery_replays_edge_delete() {
     let dir = temp_dir.path();
 
     {
-        let mut storage = common::create_persistent_storage(&dir);
+        let mut storage = common::create_persistent_storage(dir);
         common::setup_basic_schema(&mut storage);
         common::insert_test_data(&mut storage, "test_space");
         save_and_checkpoint(&mut storage);
@@ -191,7 +191,7 @@ fn test_crash_recovery_replays_edge_delete() {
     }
 
     {
-        let storage = common::open_persistent_storage(&dir);
+        let storage = common::open_persistent_storage(dir);
 
         let edge = storage
             .get_edge(
@@ -214,7 +214,7 @@ fn test_multiple_crash_recovery_cycles() {
 
     // Cycle 1: setup schema, save+checkpoint, insert Alice, crash
     {
-        let mut storage = common::create_persistent_storage(&dir);
+        let mut storage = common::create_persistent_storage(dir);
         common::setup_basic_schema(&mut storage);
         save_and_checkpoint(&mut storage);
 
@@ -224,7 +224,7 @@ fn test_multiple_crash_recovery_cycles() {
 
     // Recover, save+checkpoint, insert Bob, crash
     {
-        let mut storage = common::open_persistent_storage(&dir);
+        let mut storage = common::open_persistent_storage(dir);
         assert!(storage
             .get_vertex("test_space", &VertexId::from_int64(1))
             .unwrap()
@@ -238,7 +238,7 @@ fn test_multiple_crash_recovery_cycles() {
 
     // Recover, verify both
     {
-        let storage = common::open_persistent_storage(&dir);
+        let storage = common::open_persistent_storage(dir);
         assert!(storage
             .get_vertex("test_space", &VertexId::from_int64(1))
             .unwrap()
@@ -259,7 +259,7 @@ fn test_schema_version_history_recovery() {
 
     let version_before_recovery: u64;
     {
-        let mut storage = common::create_persistent_storage(&dir);
+        let mut storage = common::create_persistent_storage(dir);
         common::create_space(&mut storage, "test_space");
         save_and_checkpoint(&mut storage);
 
@@ -278,7 +278,7 @@ fn test_schema_version_history_recovery() {
 
     // Reopen and verify version_history is still there
     {
-        let storage = common::open_persistent_storage(&dir);
+        let storage = common::open_persistent_storage(dir);
 
         let history = storage
             .get_vertex_version_history("test_space", "Person")

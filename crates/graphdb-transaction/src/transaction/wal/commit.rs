@@ -141,7 +141,7 @@ mod tests {
             timestamp: 10,
             payload: vec![1, 2, 3],
         };
-        let checksum = batch_checksum(&[entry.clone()]);
+        let checksum = batch_checksum(std::slice::from_ref(&entry));
         let mut changed = entry;
         changed.timestamp = 11;
         assert_ne!(checksum, batch_checksum(&[changed]));

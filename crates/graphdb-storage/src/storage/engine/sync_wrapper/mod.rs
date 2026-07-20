@@ -196,12 +196,14 @@ impl<S: StorageClient> SyncWrapper<S> {
         sync_manager
             .on_index_create(
                 transaction_id,
-                index.space_id,
-                &index.name,
-                &index.schema_name,
-                index_type,
-                &fields,
-                &index.properties,
+                crate::sync::manager::IndexCreateRequest {
+                    space_id: index.space_id,
+                    index_name: index.name.clone(),
+                    schema_name: index.schema_name.clone(),
+                    index_type: index_type.to_string(),
+                    fields,
+                    properties: index.properties.clone(),
+                },
             )
             .map_err(|error| {
                 StorageError::db_error(format!("Failed to stage index creation intent: {error}"))

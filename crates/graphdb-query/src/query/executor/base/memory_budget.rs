@@ -248,26 +248,6 @@ impl MemoryTracker {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tracked_reservation_releases_budget_and_tracker() {
-        let budget = MemoryBudget::new(64);
-        let mut tracker = MemoryTracker::new(budget.clone());
-
-        {
-            let reservation = tracker.reserve_guarded(32).expect("reserve memory");
-            assert_eq!(reservation.bytes, 32);
-        }
-
-        assert_eq!(budget.current(), 0);
-        assert_eq!(tracker.current(), 0);
-        assert_eq!(tracker.peak(), 32);
-    }
-}
-
 /// Trait for operators that can spill intermediate data to disk.
 ///
 /// Each blocking operator that may exceed the memory budget should implement
@@ -295,5 +275,25 @@ pub trait Spillable {
             self.spill_to_disk()?;
         }
         Ok(self.has_spilled())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tracked_reservation_releases_budget_and_tracker() {
+        let budget = MemoryBudget::new(64);
+        let mut tracker = MemoryTracker::new(budget.clone());
+
+        {
+            let reservation = tracker.reserve_guarded(32).expect("reserve memory");
+            assert_eq!(reservation.bytes, 32);
+        }
+
+        assert_eq!(budget.current(), 0);
+        assert_eq!(tracker.current(), 0);
+        assert_eq!(tracker.peak(), 32);
     }
 }

@@ -4,7 +4,7 @@ use crate::core::wal::EntityRef;
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::cursor::{IndexCursor, IndexPredicate, IndexRow, IndexScanPlan};
 use crate::storage::index::generic_index_manager::GenericIndexManager;
-use crate::storage::index::index_data_manager::IndexRecord;
+use crate::storage::index::index_data_manager::{EdgeIdentity, IndexRecord, StaleChecker};
 use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
 use crate::storage::index::key_codec::{EdgeIndexKeyGen, KeyBuilder, KeyParser};
 use crate::storage::index::manifest::{ManifestCatalog, ManifestHandle};
@@ -26,43 +26,37 @@ impl EdgeIndexManager {
 
     pub fn update_edge_indexes(
         &self,
-        space_id: u64,
-        edge_src: &Value,
-        edge_dst: &Value,
-        edge_type: &str,
-        ranking: i64,
+        edge: &EdgeIdentity<'_>,
         index_name: &str,
         props: &[(String, Value)],
     ) -> Result<(), StorageError> {
-        self.update_edge_indexes_mvcc(
-            space_id,
-            edge_src,
-            edge_dst,
-            edge_type,
-            ranking,
-            index_name,
-            props,
-            MAX_TIMESTAMP,
-        )
+        self.update_edge_indexes_mvcc(edge, index_name, props, MAX_TIMESTAMP)
     }
 
     pub fn update_edge_indexes_mvcc(
         &self,
-        space_id: u64,
-        edge_src: &Value,
-        edge_dst: &Value,
-        edge_type: &str,
-        ranking: i64,
+        edge: &EdgeIdentity<'_>,
         index_name: &str,
         props: &[(String, Value)],
         write_ts: Timestamp,
     ) -> Result<(), StorageError> {
         for (_prop_name, prop_value) in props {
             let logical_forward_key = KeyBuilder::build_edge_index_key(
-                space_id, index_name, prop_value, edge_src, edge_dst, edge_type, ranking,
+                edge.space_id,
+                index_name,
+                prop_value,
+                edge.src,
+                edge.dst,
+                edge.edge_type,
+                edge.ranking,
             )?;
             let logical_reverse_key = KeyBuilder::build_edge_reverse_key(
-                space_id, edge_src, edge_dst, edge_type, ranking, index_name,
+                edge.space_id,
+                edge.src,
+                edge.dst,
+                edge.edge_type,
+                edge.ranking,
+                index_name,
             )?;
 
             let mut forward_keys_to_delete: Vec<SecondaryIndexKey> = Vec::new();
@@ -90,7 +84,7 @@ impl EdgeIndexManager {
 
             let index_key = logical_forward_key;
             let reverse_key = logical_reverse_key;
-            let entity_ref = make_edge_entity_ref(edge_src, edge_dst, edge_type, ranking);
+            let entity_ref = make_edge_entity_ref(edge.src, edge.dst, edge.edge_type, edge.ranking);
             let entry = if let Some(er) = entity_ref {
                 IndexRecord::new(write_ts)
                     .with_entity_version(write_ts)
@@ -115,31 +109,15 @@ impl EdgeIndexManager {
 
     pub fn delete_edge_indexes(
         &self,
-        space_id: u64,
-        edge_src: &Value,
-        edge_dst: &Value,
-        edge_type: &str,
-        ranking: i64,
+        edge: &EdgeIdentity<'_>,
         index_names: &[String],
     ) -> Result<(), StorageError> {
-        self.delete_edge_indexes_mvcc(
-            space_id,
-            edge_src,
-            edge_dst,
-            edge_type,
-            ranking,
-            index_names,
-            MAX_TIMESTAMP,
-        )
+        self.delete_edge_indexes_mvcc(edge, index_names, MAX_TIMESTAMP)
     }
 
     pub fn delete_edge_indexes_mvcc(
         &self,
-        space_id: u64,
-        edge_src: &Value,
-        edge_dst: &Value,
-        edge_type: &str,
-        ranking: i64,
+        edge: &EdgeIdentity<'_>,
         index_names: &[String],
         write_ts: Timestamp,
     ) -> Result<(), StorageError> {
@@ -148,7 +126,11 @@ impl EdgeIndexManager {
         }
 
         let reverse_prefix = KeyBuilder::build_edge_reverse_prefix(
-            space_id, edge_src, edge_dst, edge_type, ranking,
+            edge.space_id,
+            edge.src,
+            edge.dst,
+            edge.edge_type,
+            edge.ranking,
         )?;
         let reverse_end = KeyBuilder::build_range_end(&reverse_prefix);
 
@@ -172,8 +154,10 @@ impl EdgeIndexManager {
                     )) = KeyParser::parse_edge_reverse_key(compressed_key)
                     {
                         if index_names.contains(&parsed_index_name) {
-                            let forward_key_start =
-                                KeyBuilder::build_edge_index_prefix(space_id, &parsed_index_name);
+                            let forward_key_start = KeyBuilder::build_edge_index_prefix(
+                                edge.space_id,
+                                &parsed_index_name,
+                            );
                             let forward_key_end = KeyBuilder::build_range_end(&forward_key_start);
 
                             let forward_index = self.base.forward_index().read();
@@ -184,10 +168,10 @@ impl EdgeIndexManager {
                                     if let Ok((fwd_src, fwd_dst, fwd_type, fwd_rank)) =
                                         KeyParser::parse_edge_identity_from_key(fwd_compressed_key)
                                     {
-                                        if fwd_src == *edge_src
-                                            && fwd_dst == *edge_dst
-                                            && fwd_type == edge_type
-                                            && fwd_rank == ranking
+                                        if fwd_src == *edge.src
+                                            && fwd_dst == *edge.dst
+                                            && fwd_type == edge.edge_type
+                                            && fwd_rank == edge.ranking
                                         {
                                             forward_keys_to_delete.push(fwd_compressed_key.clone());
                                         }
@@ -366,7 +350,7 @@ impl EdgeIndexManager {
         space_id: u64,
         index: &Index,
         plan: &IndexScanPlan,
-        stale_checker: Option<Arc<dyn Fn(&EntityRef, Option<Timestamp>) -> bool + Send + Sync>>,
+        stale_checker: Option<StaleChecker>,
     ) -> StorageResult<EdgeIndexCursor> {
         self.open_edge_index_cursor_full(space_id, index, plan, stale_checker, None)
     }
@@ -376,7 +360,7 @@ impl EdgeIndexManager {
         space_id: u64,
         index: &Index,
         plan: &IndexScanPlan,
-        stale_checker: Option<Arc<dyn Fn(&EntityRef, Option<Timestamp>) -> bool + Send + Sync>>,
+        stale_checker: Option<StaleChecker>,
         catalog: Option<&ManifestCatalog>,
     ) -> StorageResult<EdgeIndexCursor> {
         let index_prefix = KeyBuilder::build_edge_index_prefix(space_id, &index.name);
@@ -504,7 +488,7 @@ pub struct EdgeIndexCursor {
     stale_skipped: u64,
     estimated_match_count: u64,
     manifest_handle: Option<ManifestHandle>,
-    stale_checker: Option<Arc<dyn Fn(&EntityRef, Option<Timestamp>) -> bool + Send + Sync>>,
+    stale_checker: Option<StaleChecker>,
     partition_id_range: Option<std::ops::Range<i64>>,
 }
 
@@ -734,12 +718,11 @@ fn value_to_vertex_id(v: &Value) -> Option<crate::core::types::storage_ids::Vert
 
 #[cfg(test)]
 mod tests {
-    use crate::core::types::storage_ids::VertexId;
     use crate::core::types::{Index, IndexConfig, IndexField, IndexType};
     use crate::core::Value;
     use crate::storage::cursor::{IndexCursor, IndexPredicate, IndexRow, IndexScanPlan};
 
-    use super::EdgeIndexManager;
+    use super::{EdgeIdentity, EdgeIndexManager};
 
     fn create_test_index(name: &str, schema_name: &str) -> Index {
         Index::new(IndexConfig {
@@ -759,7 +742,12 @@ mod tests {
         })
     }
 
-    fn make_edge_values(src_id: i64, dst_id: i64, edge_type: &str, ranking: i64) -> (Value, Value) {
+    fn make_edge_values(
+        src_id: i64,
+        dst_id: i64,
+        _edge_type: &str,
+        _ranking: i64,
+    ) -> (Value, Value) {
         (Value::BigInt(src_id), Value::BigInt(dst_id))
     }
 
@@ -772,8 +760,9 @@ mod tests {
         let index_name = "idx_weight";
         let props = vec![("weight".to_string(), Value::Int(42))];
 
+        let edge = EdgeIdentity::new(space_id, &src, &dst, "knows", 1);
         manager
-            .update_edge_indexes(space_id, &src, &dst, "knows", 1, index_name, &props)
+            .update_edge_indexes(&edge, index_name, &props)
             .expect("Failed to update edge indexes");
 
         let index = create_test_index(index_name, "knows");
@@ -797,8 +786,9 @@ mod tests {
         let index_name = "idx_weight";
         let props = vec![("weight".to_string(), Value::Int(42))];
 
+        let edge = EdgeIdentity::new(space_id, &src, &dst, "knows", 1);
         manager
-            .update_edge_indexes(space_id, &src, &dst, "knows", 1, index_name, &props)
+            .update_edge_indexes(&edge, index_name, &props)
             .expect("Failed to update edge indexes");
 
         let index = create_test_index(index_name, "knows");
@@ -808,7 +798,7 @@ mod tests {
         assert_eq!(results.len(), 1);
 
         manager
-            .delete_edge_indexes(space_id, &src, &dst, "knows", 1, &[index_name.to_string()])
+            .delete_edge_indexes(&edge, &[index_name.to_string()])
             .expect("Failed to delete edge indexes");
 
         let results_after = manager
@@ -826,24 +816,18 @@ mod tests {
         let (src2, dst2) = make_edge_values(102, 203, "knows", 2);
         let index_name = "idx_weight";
 
+        let edge1 = EdgeIdentity::new(space_id, &src1, &dst1, "knows", 1);
         manager
             .update_edge_indexes(
-                space_id,
-                &src1,
-                &dst1,
-                "knows",
-                1,
+                &edge1,
                 index_name,
                 &[("weight".to_string(), Value::Int(42))],
             )
             .expect("insert edge 1");
+        let edge2 = EdgeIdentity::new(space_id, &src2, &dst2, "knows", 2);
         manager
             .update_edge_indexes(
-                space_id,
-                &src2,
-                &dst2,
-                "knows",
-                2,
+                &edge2,
                 index_name,
                 &[("weight".to_string(), Value::Int(99))],
             )
@@ -868,26 +852,24 @@ mod tests {
     fn test_edge_index_cursor() {
         let manager = EdgeIndexManager::new();
         let index = create_test_index("idx_weight", "knows");
+        let src1 = Value::BigInt(1);
+        let dst1 = Value::BigInt(2);
+        let edge1 = EdgeIdentity::new(1, &src1, &dst1, "knows", 0);
 
         manager
             .update_edge_indexes_mvcc(
-                1,
-                &Value::BigInt(1),
-                &Value::BigInt(2),
-                "knows",
-                0,
+                &edge1,
                 "idx_weight",
                 &[("weight".to_string(), Value::Int(10))],
                 10,
             )
             .expect("edge entry");
+        let src2 = Value::BigInt(3);
+        let dst2 = Value::BigInt(4);
+        let edge2 = EdgeIdentity::new(1, &src2, &dst2, "knows", 1);
         manager
             .update_edge_indexes_mvcc(
-                1,
-                &Value::BigInt(3),
-                &Value::BigInt(4),
-                "knows",
-                1,
+                &edge2,
                 "idx_weight",
                 &[("weight".to_string(), Value::Int(20))],
                 20,
@@ -925,13 +907,10 @@ mod tests {
             (Value::BigInt(5), Value::BigInt(6), 30, 10),
         ];
         for (src, dst, weight, ts) in &entries {
+            let edge = EdgeIdentity::new(1, src, dst, "knows", 0);
             manager
                 .update_edge_indexes_mvcc(
-                    1,
-                    src,
-                    dst,
-                    "knows",
-                    0,
+                    &edge,
                     "idx_weight",
                     &[("weight".to_string(), Value::Int(*weight))],
                     *ts,

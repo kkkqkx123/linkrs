@@ -1,12 +1,11 @@
 use std::path::{Path, PathBuf};
 
 use crate::core::types::{CompactConfig, CompactTarget};
-use crate::core::{StorageError, StorageResult, Value};
+use crate::core::{StorageError, StorageResult};
 use crate::storage::engine::paths::StoragePaths;
 use crate::storage::engine::persistence_coordinator::{
     CheckpointData, CheckpointInfo, CheckpointStats,
 };
-use crate::transaction::mvcc::RELEASED_TIMESTAMP;
 use crate::transaction::wal::recovery::{RecoveryConfig, RecoveryManager, RecoveryStats};
 use crate::transaction::wal::{Lsn, ParallelWalParser, WalRecoveryMode};
 use graphdb_sync::sync::checkpoint_manifest::CheckpointManifestManager;
@@ -697,7 +696,7 @@ fn read_checkpoint_metadata(dir: &Path) -> StorageResult<CheckpointInfo> {
 mod tests {
     use super::*;
     use crate::core::types::VertexId;
-    use crate::core::DataType;
+    use crate::core::{DataType, Value};
     use crate::storage::engine::PersistenceConfig;
     use crate::storage::types::StoragePropertyDef;
     use crate::transaction::wal::writer::WalWriter;

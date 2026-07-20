@@ -37,6 +37,7 @@ use crate::storage::cursor::{
 use crate::storage::engine::background_freeze::{BackgroundFreezeManager, FreezeStats};
 use crate::storage::engine::graph_storage::context::ExportedEdgeSnapshotRecord;
 use crate::storage::engine::PersistenceConfig;
+use crate::storage::index::index_data_manager::IndexIdentity;
 use crate::storage::index::key_codec::KeyBuilder;
 use crate::storage::index::IndexGcConfig;
 use crate::storage::{
@@ -268,8 +269,10 @@ impl GraphStorage {
         let wal_context = Arc::clone(&self.ctx);
         let wal_index = index.clone();
         let result = self.ctx.index_data_manager().write().split_native_index(
-            space_id,
-            index.id,
+            IndexIdentity {
+                space_id,
+                index_id: index.id,
+            },
             boundary,
             snapshot_timestamp,
             start_lsn,
@@ -670,19 +673,18 @@ impl StorageReader for GraphStorage {
             let space_id = self.ctx.schema_manager().get_space_id(&plan.space)?;
             let space_name = plan.space.clone();
             let ctx = self.ctx.clone();
-            let stale_checker: Option<
-                Arc<dyn Fn(&crate::core::wal::EntityRef, Option<Timestamp>) -> bool + Send + Sync>,
-            > = Some(Arc::new(
-                move |entity_ref, _entity_version| match entity_ref {
-                    crate::core::wal::EntityRef::Vertex(vid) => {
-                        reader::get_vertex(&*ctx, &space_name, vid)
-                            .ok()
-                            .flatten()
-                            .is_some()
-                    }
-                    crate::core::wal::EntityRef::Edge { .. } => true,
-                },
-            ));
+            let stale_checker: Option<crate::storage::index::index_data_manager::StaleChecker> =
+                Some(Arc::new(
+                    move |entity_ref, _entity_version| match entity_ref {
+                        crate::core::wal::EntityRef::Vertex(vid) => {
+                            reader::get_vertex(&ctx, &space_name, vid)
+                                .ok()
+                                .flatten()
+                                .is_some()
+                        }
+                        crate::core::wal::EntityRef::Edge { .. } => true,
+                    },
+                ));
             let cursor = self
                 .ctx
                 .index_data_manager()
@@ -695,19 +697,18 @@ impl StorageReader for GraphStorage {
             let space_id = self.ctx.schema_manager().get_space_id(&plan.space)?;
             let space_name = plan.space.clone();
             let ctx = self.ctx.clone();
-            let stale_checker: Option<
-                Arc<dyn Fn(&crate::core::wal::EntityRef, Option<Timestamp>) -> bool + Send + Sync>,
-            > = Some(Arc::new(
-                move |entity_ref, _entity_version| match entity_ref {
-                    crate::core::wal::EntityRef::Vertex(vid) => {
-                        reader::get_vertex(&*ctx, &space_name, vid)
-                            .ok()
-                            .flatten()
-                            .is_some()
-                    }
-                    crate::core::wal::EntityRef::Edge { .. } => true,
-                },
-            ));
+            let stale_checker: Option<crate::storage::index::index_data_manager::StaleChecker> =
+                Some(Arc::new(
+                    move |entity_ref, _entity_version| match entity_ref {
+                        crate::core::wal::EntityRef::Vertex(vid) => {
+                            reader::get_vertex(&ctx, &space_name, vid)
+                                .ok()
+                                .flatten()
+                                .is_some()
+                        }
+                        crate::core::wal::EntityRef::Edge { .. } => true,
+                    },
+                ));
             let cursor = self
                 .ctx
                 .index_data_manager()

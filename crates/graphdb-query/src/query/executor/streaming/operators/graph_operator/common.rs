@@ -46,7 +46,7 @@ pub(super) fn expand_on_chunk(
     src_vids: Vec<Value>,
     cancel_token: Option<Arc<AtomicBool>>,
 ) -> Result<Option<DataChunk>, QueryError> {
-    let chunk_col_names = chunk.col_names();
+    let _chunk_col_names = chunk.col_names();
 
     // Build the list of seed vertex IDs: from the chunk rows, or from explicit src_vids.
     let mut seed_vids: Vec<VertexId> = Vec::new();
@@ -124,7 +124,7 @@ pub(super) fn traverse_on_chunk(
     visited: &mut VisitedSet,
     cancel_token: Option<Arc<AtomicBool>>,
 ) -> Result<Option<DataChunk>, QueryError> {
-    let col_names = chunk.col_names();
+    let _col_names = chunk.col_names();
     let edge_type = config.edge_types.first().map(|s| s.as_str()).unwrap_or("");
     let dir_str = match config.direction {
         EdgeDirection::Out => "out",

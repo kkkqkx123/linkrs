@@ -20,6 +20,12 @@ use std::sync::{
     Arc,
 };
 
+type LoadedIndexData = (
+    BTreeMap<SecondaryIndexKey, IndexRecord>,
+    BTreeMap<SecondaryIndexKey, IndexRecord>,
+    u64,
+);
+
 /// Generic index manager
 ///
 /// Provides common functionality for index management including:
@@ -300,13 +306,7 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
         Ok(())
     }
 
-    pub(crate) fn load_data<P: AsRef<Path>>(
-        path: P,
-    ) -> StorageResult<(
-        BTreeMap<SecondaryIndexKey, IndexRecord>,
-        BTreeMap<SecondaryIndexKey, IndexRecord>,
-        u64,
-    )> {
+    pub(crate) fn load_data<P: AsRef<Path>>(path: P) -> StorageResult<LoadedIndexData> {
         let path = path.as_ref();
         let loader = Self::new();
         let (forward_index, forward_max_version) =

@@ -121,7 +121,7 @@ pub(super) fn handle(
                 name: "_subgraph_edge_type".to_string(),
                 data_type: "string".to_string(),
             });
-            let schema = Arc::new(Schema::new(new_cols));
+            let _schema = Arc::new(Schema::new(new_cols));
             return Ok(Some(DataChunk::new_with_layout(
                 out_rows,
                 Arc::clone(&base.output_layout),

@@ -152,7 +152,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         if let Some(ref space_name) = qctx.space_name() {
             base_ctx.space_name = Some(space_name.clone());
         }
-        if let Some(ref space_info) = qctx.space_info() {
+        if let Some(space_info) = qctx.space_info() {
             base_ctx.space_name = Some(space_info.space_name.clone());
         }
 

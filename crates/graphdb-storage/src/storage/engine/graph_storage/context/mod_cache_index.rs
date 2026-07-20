@@ -2,6 +2,7 @@ use crate::core::types::{LabelId, Timestamp};
 use crate::core::{StorageResult, Value};
 use crate::storage::edge::ExportedEdgeSnapshot;
 use crate::storage::engine::data_store::EdgeTableKey;
+use crate::storage::index::index_data_manager::EdgeIdentity;
 use crate::storage::index::{GcStats, IndexGcOps};
 
 use super::GraphStorageContext;
@@ -51,40 +52,21 @@ impl GraphStorageContext {
 
     pub(crate) fn update_edge_indexes_mvcc(
         &self,
-        space_id: u64,
-        edge_src: &Value,
-        edge_dst: &Value,
-        edge_type: &str,
-        ranking: i64,
+        edge: &EdgeIdentity<'_>,
         index_name: &str,
         props: &[(String, Value)],
         ts: Timestamp,
     ) -> StorageResult<()> {
-        super::super::index_engine::update_edge_indexes_mvcc(
-            self, space_id, edge_src, edge_dst, edge_type, ranking, index_name, props, ts,
-        )
+        super::super::index_engine::update_edge_indexes_mvcc(self, edge, index_name, props, ts)
     }
 
     pub(crate) fn delete_edge_indexes_mvcc(
         &self,
-        space_id: u64,
-        edge_src: &Value,
-        edge_dst: &Value,
-        edge_type: &str,
-        ranking: i64,
+        edge: &EdgeIdentity<'_>,
         index_names: &[String],
         ts: Timestamp,
     ) -> StorageResult<()> {
-        super::super::index_engine::delete_edge_indexes_mvcc(
-            self,
-            space_id,
-            edge_src,
-            edge_dst,
-            edge_type,
-            ranking,
-            index_names,
-            ts,
-        )
+        super::super::index_engine::delete_edge_indexes_mvcc(self, edge, index_names, ts)
     }
 
     pub(crate) fn gc_index_tombstones(&self, ts: Timestamp) -> StorageResult<GcStats> {

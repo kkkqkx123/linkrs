@@ -7,25 +7,13 @@
 //! Phase A fixtures: single/multi chunk, empty input, first-row NULL,
 //! mid-stream empty chunk, cancel, early stop.
 
-use graphdb_query::core::types::expr::Expression;
-use graphdb_query::core::DataType;
 use graphdb_query::core::Value;
-use graphdb_query::query::executor::base::MemoryBudget;
 use graphdb_query::query::executor::streaming::executor::StreamingExecutor;
 use graphdb_query::query::executor::streaming::operators::base::OperatorBase;
-use graphdb_query::query::executor::streaming::operators::blocking::BlockingOperator;
 use graphdb_query::query::executor::streaming::operators::source_operator::SourceOperator;
 use graphdb_query::query::executor::streaming::operators::unary_operator::UnaryOperator;
-use graphdb_query::query::executor::streaming::slot::SlotLayout;
 
 // ── Helpers ──
-
-fn scan_vertices_layout() -> SlotLayout {
-    SlotLayout::from_names_and_types(
-        &["id".to_string(), "name".to_string()],
-        &[Some(DataType::Int), Some(DataType::String)],
-    )
-}
 
 fn make_scan(data: Vec<Vec<Value>>) -> StreamingExecutor {
     StreamingExecutor::Source(
@@ -41,13 +29,8 @@ fn make_scan(data: Vec<Vec<Value>>) -> StreamingExecutor {
 fn collect_all(mut exec: StreamingExecutor) -> Vec<Vec<Value>> {
     exec.open().unwrap();
     let mut rows = Vec::new();
-    loop {
-        match exec.advance().unwrap() {
-            Some(chunk) => {
-                rows.extend(chunk.rows);
-            }
-            None => break,
-        }
+    while let Some(chunk) = exec.advance().unwrap() {
+        rows.extend(chunk.rows);
     }
     exec.close().unwrap();
     rows
@@ -74,7 +57,7 @@ fn contract_multi_chunk() {
         .map(|i| vec![Value::Int(i), Value::String(format!("n{}", i))])
         .collect();
     let scan = make_scan(data.clone());
-    let mut exec = StreamingExecutor::Unary(
+    let exec = StreamingExecutor::Unary(
         OperatorBase::new(1),
         Box::new(scan),
         UnaryOperator::Limit {

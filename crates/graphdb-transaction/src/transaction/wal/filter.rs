@@ -167,8 +167,8 @@ mod tests {
                 entity_ref: EntityRef::Vertex(VertexId::from_int64(lsn as i64)),
                 operation: crate::core::wal::IndexOperation::Upsert,
                 document_or_vector: vec![1, 2, 3],
-                idempotency_key: IdempotencyKey::new(&format!("{}-{}", lsn, sequence)).unwrap(),
-                ordering_key: OrderingKey::new(&format!("index-1-vertex-{}", lsn)).unwrap(),
+                idempotency_key: IdempotencyKey::new(format!("{}-{}", lsn, sequence)).unwrap(),
+                ordering_key: OrderingKey::new(format!("index-1-vertex-{}", lsn)).unwrap(),
             },
         }
     }

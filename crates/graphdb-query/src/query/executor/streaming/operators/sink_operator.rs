@@ -10,7 +10,7 @@ use crate::core::vertex_edge_path::{Edge, Tag, Vertex};
 use crate::core::Value;
 use crate::query::executor::expression::evaluator::traits::ExpressionContext;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
-use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
+use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::context::ValueRowContext;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::operators::base::OperatorBase;
@@ -759,7 +759,7 @@ impl SinkOperator {
     pub fn stop(
         &mut self,
         base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
+        _input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
         match self {
             SinkOperator::InsertVertices { .. }

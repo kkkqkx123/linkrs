@@ -379,6 +379,11 @@ impl CsrSegment {
     pub fn record_access(&self, clock_ts: u64) {
         self.last_access_ts.store(clock_ts, Ordering::Relaxed);
     }
+
+    /// Consume the segment and return its CSR allocation to the free-space pool.
+    pub(crate) fn into_csr(self) -> Csr {
+        self.csr.into_inner()
+    }
 }
 
 impl std::fmt::Debug for CsrSegment {

@@ -735,7 +735,9 @@ impl TransactionManager {
         rollback
             .execute_rollback(target, context.timestamp())
             .map_err(|e| TransactionError::rollback_failed(e.to_string()))?;
-        rollback.clear_logs();
+        rollback
+            .clear_logs()
+            .map_err(|error| TransactionError::rollback_failed(error.to_string()))?;
 
         self.execute_abort_internal(&context)
     }

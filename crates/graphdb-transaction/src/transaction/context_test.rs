@@ -467,14 +467,16 @@ fn test_savepoint_rollback_preserves_prefix_state() {
     ctx.add_undo_log(UndoLogEntry::InsertVertex(InsertVertexUndo {
         v_label: 1,
         vid: crate::transaction::VertexId::from_int64(1),
-    }));
+    }))
+    .expect("Failed to append undo log");
 
     let sp1 = ctx.create_savepoint(Some("sp1".to_string()), 0);
 
     ctx.add_undo_log(UndoLogEntry::InsertVertex(InsertVertexUndo {
         v_label: 1,
         vid: crate::transaction::VertexId::from_int64(2),
-    }));
+    }))
+    .expect("Failed to append undo log");
 
     let mock_target = MockUndoTarget;
     let result = ctx.rollback_to_savepoint(sp1, &mock_target);
@@ -539,7 +541,7 @@ fn test_clear() {
     ctx.record_table_modification("vertices");
     ctx.create_savepoint(Some("sp1".to_string()), 0);
 
-    ctx.clear();
+    ctx.clear().expect("Failed to clear transaction context");
 
     assert_eq!(ctx.operation_log_len(), 0);
     assert_eq!(ctx.get_modified_tables().len(), 0);

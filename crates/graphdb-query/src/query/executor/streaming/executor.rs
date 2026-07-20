@@ -752,8 +752,8 @@ impl Spillable for StreamingExecutor {
     fn spill_count(&self) -> u64 {
         match self {
             Self::Blocking(_, _, op) => op.spill_count(),
-            Self::Join(_, _, _, op) => 0,
-            Self::Set(_, _, _, op) => 0,
+            Self::Join(_, _, _, _op) => 0,
+            Self::Set(_, _, _, _op) => 0,
             _ => 0,
         }
     }
@@ -952,6 +952,10 @@ mod tests {
                 space_name: None,
             },
             budget.clone(),
+            None,
+            #[cfg(feature = "fulltext-search")]
+            None,
+            #[cfg(feature = "qdrant")]
             None,
         ));
 

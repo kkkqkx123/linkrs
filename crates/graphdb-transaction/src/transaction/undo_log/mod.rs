@@ -594,18 +594,18 @@ impl UndoLogManager {
         }
     }
 
-    pub fn add(&mut self, log: UndoLogEntry) {
-        self.storage.add(log);
+    pub fn add(&mut self, log: UndoLogEntry) -> UndoLogResult<()> {
+        self.storage.add(log)
     }
 
-    pub fn add_insert_vertex(&mut self, label: LabelId, vid: VertexId) {
+    pub fn add_insert_vertex(&mut self, label: LabelId, vid: VertexId) -> UndoLogResult<()> {
         self.add(UndoLogEntry::InsertVertex(InsertVertexUndo {
             v_label: label,
             vid,
-        }));
+        }))
     }
 
-    pub fn add_insert_edge(&mut self, params: AddInsertEdgeParams) {
+    pub fn add_insert_edge(&mut self, params: AddInsertEdgeParams) -> UndoLogResult<()> {
         self.add(UndoLogEntry::InsertEdge(InsertEdgeUndo {
             src_label: params.src_label,
             dst_label: params.dst_label,
@@ -615,7 +615,7 @@ impl UndoLogManager {
             dst_vid: params.dst_vid,
             oe_offset: params.oe_offset,
             ie_offset: params.ie_offset,
-        }));
+        }))
     }
 
     pub fn add_update_vertex_prop(
@@ -624,16 +624,16 @@ impl UndoLogManager {
         vid: VertexId,
         col_id: ColumnId,
         old_value: PropertyValue,
-    ) {
+    ) -> UndoLogResult<()> {
         self.add(UndoLogEntry::UpdateVertexProp(UpdateVertexPropUndo {
             v_label: label,
             vid,
             col_id,
             old_value,
-        }));
+        }))
     }
 
-    pub fn add_update_edge_prop(&mut self, params: AddUpdateEdgePropParams) {
+    pub fn add_update_edge_prop(&mut self, params: AddUpdateEdgePropParams) -> UndoLogResult<()> {
         self.add(UndoLogEntry::UpdateEdgeProp(UpdateEdgePropUndo {
             src_label: params.src_label,
             src_vid: params.src_vid,
@@ -645,7 +645,7 @@ impl UndoLogManager {
             ie_offset: params.ie_offset,
             col_id: params.col_id,
             old_value: params.old_value,
-        }));
+        }))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -656,11 +656,11 @@ impl UndoLogManager {
         self.storage.len()
     }
 
-    pub fn clear(&mut self) {
-        self.storage.clear();
+    pub fn clear(&mut self) -> UndoLogResult<()> {
+        self.storage.clear()
     }
 
-    pub fn pop(&mut self) -> Option<UndoLogEntry> {
+    pub fn pop(&mut self) -> UndoLogResult<Option<UndoLogEntry>> {
         self.storage.pop()
     }
 
@@ -801,17 +801,21 @@ mod tests {
     fn test_undo_log_manager() {
         let mut manager = UndoLogManager::new();
 
-        manager.add_insert_vertex(1, VertexId::from_int64(100));
-        manager.add_insert_edge(AddInsertEdgeParams {
-            src_label: 1,
-            dst_label: 2,
-            edge_label: 3,
-            rank: 0,
-            src_vid: VertexId::from_int64(100),
-            dst_vid: VertexId::from_int64(200),
-            oe_offset: 0,
-            ie_offset: 0,
-        });
+        manager
+            .add_insert_vertex(1, VertexId::from_int64(100))
+            .expect("Failed to append undo log");
+        manager
+            .add_insert_edge(AddInsertEdgeParams {
+                src_label: 1,
+                dst_label: 2,
+                edge_label: 3,
+                rank: 0,
+                src_vid: VertexId::from_int64(100),
+                dst_vid: VertexId::from_int64(200),
+                oe_offset: 0,
+                ie_offset: 0,
+            })
+            .expect("Failed to append undo log");
 
         assert_eq!(manager.len(), 2);
 
@@ -824,9 +828,15 @@ mod tests {
     #[test]
     fn test_execute_undo_from_index_keeps_prefix() {
         let mut manager = UndoLogManager::new();
-        manager.add_insert_vertex(1, VertexId::from_int64(1));
-        manager.add_insert_vertex(1, VertexId::from_int64(2));
-        manager.add_insert_vertex(1, VertexId::from_int64(3));
+        manager
+            .add_insert_vertex(1, VertexId::from_int64(1))
+            .expect("Failed to append undo log");
+        manager
+            .add_insert_vertex(1, VertexId::from_int64(2))
+            .expect("Failed to append undo log");
+        manager
+            .add_insert_vertex(1, VertexId::from_int64(3))
+            .expect("Failed to append undo log");
 
         let target = MockUndoTarget;
         manager
@@ -1030,9 +1040,15 @@ mod tests {
     fn test_undo_order_is_lifo() {
         let mut manager = UndoLogManager::new();
 
-        manager.add_insert_vertex(1, VertexId::from_int64(100));
-        manager.add_insert_vertex(1, VertexId::from_int64(200));
-        manager.add_insert_vertex(1, VertexId::from_int64(300));
+        manager
+            .add_insert_vertex(1, VertexId::from_int64(100))
+            .expect("Failed to append undo log");
+        manager
+            .add_insert_vertex(1, VertexId::from_int64(200))
+            .expect("Failed to append undo log");
+        manager
+            .add_insert_vertex(1, VertexId::from_int64(300))
+            .expect("Failed to append undo log");
 
         assert_eq!(manager.len(), 3);
 
@@ -1053,21 +1069,25 @@ mod tests {
     fn test_undo_log_manager_clear() {
         let mut manager = UndoLogManager::new();
 
-        manager.add_insert_vertex(1, VertexId::from_int64(100));
-        manager.add_insert_edge(AddInsertEdgeParams {
-            src_label: 1,
-            dst_label: 2,
-            edge_label: 3,
-            rank: 0,
-            src_vid: VertexId::from_int64(100),
-            dst_vid: VertexId::from_int64(200),
-            oe_offset: 0,
-            ie_offset: 0,
-        });
+        manager
+            .add_insert_vertex(1, VertexId::from_int64(100))
+            .expect("Failed to append undo log");
+        manager
+            .add_insert_edge(AddInsertEdgeParams {
+                src_label: 1,
+                dst_label: 2,
+                edge_label: 3,
+                rank: 0,
+                src_vid: VertexId::from_int64(100),
+                dst_vid: VertexId::from_int64(200),
+                oe_offset: 0,
+                ie_offset: 0,
+            })
+            .expect("Failed to append undo log");
 
         assert_eq!(manager.len(), 2);
 
-        manager.clear();
+        manager.clear().expect("Failed to clear undo log");
 
         assert!(manager.is_empty());
         assert_eq!(manager.len(), 0);

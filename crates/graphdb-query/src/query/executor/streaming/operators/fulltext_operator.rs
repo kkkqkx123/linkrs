@@ -344,7 +344,7 @@ impl FulltextOperator {
                                             .is_none_or(|schema| &metadata.tag_name == schema)
                                     })
                                     .collect();
-                                let schema = Arc::new(Schema::new(vec![
+                                let _schema = Arc::new(Schema::new(vec![
                                     ColumnInfo {
                                         name: "index_id".to_string(),
                                         data_type: "string".to_string(),
@@ -571,7 +571,7 @@ impl FulltextOperator {
     pub fn stop(
         &mut self,
         base: &mut OperatorBase,
-        input: &mut StreamingExecutor,
+        _input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
         match self {
             FulltextOperator::FulltextManage { .. }

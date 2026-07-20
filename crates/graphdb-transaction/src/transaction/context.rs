@@ -568,9 +568,11 @@ impl TransactionContext {
     }
 
     /// Add undo log
-    pub fn add_undo_log(&self, log: UndoLogEntry) {
+    pub fn add_undo_log(&self, log: UndoLogEntry) -> Result<(), TransactionError> {
         let mut undo_logs = self.undo_logs.write();
-        undo_logs.add(log);
+        undo_logs
+            .add(log)
+            .map_err(|error| TransactionError::internal(error.to_string()))
     }
 
     /// Get undo log length
@@ -580,9 +582,11 @@ impl TransactionContext {
     }
 
     /// Clear undo logs
-    pub fn clear_undo_logs(&self) {
+    pub fn clear_undo_logs(&self) -> Result<(), TransactionError> {
         let mut undo_logs = self.undo_logs.write();
-        undo_logs.clear();
+        undo_logs
+            .clear()
+            .map_err(|error| TransactionError::internal(error.to_string()))
     }
 
     /// Execute undo logs for rollback
@@ -609,7 +613,8 @@ impl TransactionContext {
     }
 
     /// Clear all state
-    pub fn clear(&self) {
+    pub fn clear(&self) -> Result<(), TransactionError> {
+        self.clear_undo_logs()?;
         self.clear_operation_log();
         {
             let mut tables = self.modified_tables.lock();
@@ -619,10 +624,7 @@ impl TransactionContext {
             let mut manager = self.savepoint_manager.write();
             manager.clear();
         }
-        {
-            let mut undo_logs = self.undo_logs.write();
-            undo_logs.clear();
-        }
+        Ok(())
     }
 }
 

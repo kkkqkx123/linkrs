@@ -2,7 +2,7 @@
 //!
 //! Unified synchronization manager using SyncCoordinator.
 
-use crate::core::stats::StatsManager;
+use crate::core::stats::{OutboxState, StatsManager};
 use crate::core::types::{CommitLsn, TransactionContextInfo, TransactionId};
 use crate::core::Value;
 #[cfg(feature = "fulltext-search")]
@@ -22,6 +22,28 @@ use tokio::sync::Mutex;
 
 #[cfg(feature = "qdrant")]
 use crate::sync::vector_sync::VectorSyncCoordinator;
+
+#[cfg(feature = "fulltext-search")]
+struct FulltextFieldApply<'a> {
+    manager: Arc<crate::search::manager::FulltextIndexManager>,
+    mutation: &'a crate::core::wal::IndexMutation,
+    commit_lsn: CommitLsn,
+    space_id: u64,
+    index_name: &'a str,
+    entity_id: String,
+    properties: Vec<(String, Value)>,
+    deleted: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct IndexCreateRequest {
+    pub space_id: u64,
+    pub index_name: String,
+    pub schema_name: String,
+    pub index_type: String,
+    pub fields: Vec<(String, Value)>,
+    pub properties: Vec<String>,
+}
 #[cfg(feature = "qdrant")]
 pub use vector_client::{CollectionConfig, SearchResult};
 
@@ -428,15 +450,15 @@ impl SyncManager {
                     .unwrap_or(0);
                 let degraded = diagnostics.targets.iter().any(|target| target.degraded)
                     || diagnostics.indexes.iter().any(|index| index.degraded);
-                stats.record_outbox_state(
-                    durable.pending as u64,
-                    durable.retries,
-                    durable.dead_lettered as u64,
-                    durable.leased as u64,
-                    durable.oldest_event_age_ms,
+                stats.record_outbox_state(OutboxState {
+                    pending: durable.pending as u64,
+                    retries: durable.retries,
+                    dead_lettered: durable.dead_lettered as u64,
+                    leased: durable.leased as u64,
+                    oldest_event_age_ms: durable.oldest_event_age_ms,
                     frontier_lag,
                     degraded,
-                );
+                });
             }
             Ok(processed)
         })
@@ -509,16 +531,16 @@ impl SyncManager {
                     } else {
                         properties.clone()
                     };
-                Self::apply_fulltext_fields(
-                    manager.clone(),
+                Self::apply_fulltext_fields(FulltextFieldApply {
+                    manager: manager.clone(),
                     mutation,
                     commit_lsn,
-                    *space_id,
-                    tag_name,
-                    format!("{}", vertex_id),
+                    space_id: *space_id,
+                    index_name: tag_name,
+                    entity_id: format!("{}", vertex_id),
                     properties,
-                    matches!(change_type, ChangeType::Delete),
-                )
+                    deleted: matches!(change_type, ChangeType::Delete),
+                })
                 .await
             }
             OutboxPayload::EdgeInsert { space_id, edge } => {
@@ -527,16 +549,16 @@ impl SyncManager {
                     .iter()
                     .map(|(name, value)| (name.clone(), value.clone()))
                     .collect::<Vec<_>>();
-                Self::apply_fulltext_fields(
-                    manager.clone(),
+                Self::apply_fulltext_fields(FulltextFieldApply {
+                    manager: manager.clone(),
                     mutation,
                     commit_lsn,
-                    *space_id,
-                    &edge.edge_type,
-                    edge_entity_id(&edge.src, &edge.dst, edge.ranking),
+                    space_id: *space_id,
+                    index_name: &edge.edge_type,
+                    entity_id: edge_entity_id(edge.src, edge.dst, edge.ranking),
                     properties,
-                    false,
-                )
+                    deleted: false,
+                })
                 .await
             }
             OutboxPayload::EdgeDelete {
@@ -552,16 +574,16 @@ impl SyncManager {
                     .filter(|metadata| metadata.tag_name == *edge_type)
                     .map(|metadata| (metadata.field_name, Value::String(String::new())))
                     .collect::<Vec<_>>();
-                Self::apply_fulltext_fields(
+                Self::apply_fulltext_fields(FulltextFieldApply {
                     manager,
                     mutation,
                     commit_lsn,
-                    *space_id,
-                    edge_type,
-                    edge_entity_id(src, dst, *ranking),
+                    space_id: *space_id,
+                    index_name: edge_type,
+                    entity_id: edge_entity_id(src, dst, *ranking),
                     properties,
-                    true,
-                )
+                    deleted: true,
+                })
                 .await
             }
             OutboxPayload::CreateIndex {
@@ -579,13 +601,12 @@ impl SyncManager {
                         .create_index(*space_id, schema_name, field_name, None)
                         .await
                         .is_err()
+                        && !manager.has_index(*space_id, schema_name, field_name)
                     {
-                        if !manager.has_index(*space_id, schema_name, field_name) {
-                            return Err(format!(
-                                "Failed to create fulltext receiver index {}.{}.{}",
-                                space_id, index_name, field_name
-                            ));
-                        }
+                        return Err(format!(
+                            "Failed to create fulltext receiver index {}.{}.{}",
+                            space_id, index_name, field_name
+                        ));
                     }
                 }
                 Ok(())
@@ -614,50 +635,46 @@ impl SyncManager {
     }
 
     #[cfg(feature = "fulltext-search")]
-    async fn apply_fulltext_fields(
-        manager: Arc<crate::search::manager::FulltextIndexManager>,
-        mutation: &crate::core::wal::IndexMutation,
-        commit_lsn: CommitLsn,
-        space_id: u64,
-        index_name: &str,
-        entity_id: String,
-        properties: Vec<(String, Value)>,
-        deleted: bool,
-    ) -> Result<(), String> {
-        for (field_name, value) in properties {
-            let Some(engine) = manager.get_engine(space_id, index_name, &field_name) else {
+    async fn apply_fulltext_fields(request: FulltextFieldApply<'_>) -> Result<(), String> {
+        for (field_name, value) in request.properties {
+            let Some(engine) =
+                request
+                    .manager
+                    .get_engine(request.space_id, request.index_name, &field_name)
+            else {
                 continue;
             };
-            let document = if deleted {
+            let document = if request.deleted {
                 Vec::new()
             } else if let Value::String(text) = value {
                 text.as_bytes().to_vec()
             } else {
                 continue;
             };
-            let mut field_mutation = mutation.clone();
-            field_mutation.index_id =
-                stable_hash(format!("{}:{}:{}", space_id, index_name, field_name).as_bytes());
+            let mut field_mutation = request.mutation.clone();
+            field_mutation.index_id = stable_hash(
+                format!("{}:{}:{}", request.space_id, request.index_name, field_name).as_bytes(),
+            );
             field_mutation.document_or_vector = document;
             field_mutation.idempotency_key = crate::core::types::IdempotencyKey::new(format!(
                 "{}:{}",
-                mutation.idempotency_key.as_str(),
+                request.mutation.idempotency_key.as_str(),
                 field_name
             ))?;
             let receiver = crate::sync::receiver::FulltextReceiver::new(engine);
             let late_arrival = receiver
-                .check_late_arrival(commit_lsn, field_mutation.idempotency_key.as_str())
+                .check_late_arrival(request.commit_lsn, field_mutation.idempotency_key.as_str())
                 .await;
             if !late_arrival.accepted && !late_arrival.reason.contains("duplicate") {
                 return Err(late_arrival.reason);
             }
             receiver
-                .apply_index_batch(&[(&field_mutation, commit_lsn)])
+                .apply_index_batch(&[(&field_mutation, request.commit_lsn)])
                 .await?;
             log::debug!(
                 "Applied fulltext mutation for {} at {}",
-                entity_id,
-                commit_lsn
+                request.entity_id.as_str(),
+                request.commit_lsn
             );
         }
         Ok(())
@@ -872,22 +889,17 @@ impl SyncManager {
     pub fn on_index_create(
         &self,
         txn_id: TransactionId,
-        space_id: u64,
-        index_name: &str,
-        schema_name: &str,
-        index_type: &str,
-        fields: &[(String, Value)],
-        properties: &[String],
+        request: IndexCreateRequest,
     ) -> Result<(), SyncError> {
         self.stage_intent(
             txn_id,
             OutboxPayload::CreateIndex {
-                space_id,
-                index_name: index_name.to_string(),
-                schema_name: schema_name.to_string(),
-                index_type: index_type.to_string(),
-                fields: fields.to_vec(),
-                properties: properties.to_vec(),
+                space_id: request.space_id,
+                index_name: request.index_name,
+                schema_name: request.schema_name,
+                index_type: request.index_type,
+                fields: request.fields,
+                properties: request.properties,
             },
         )?;
         Ok(())
@@ -1660,8 +1672,10 @@ mod tests {
     #[test]
     fn fulltext_changes_use_only_the_fulltext_target() {
         let directory = TempDir::new().expect("temporary index directory should be created");
-        let mut config = crate::search::FulltextConfig::default();
-        config.index_path = directory.path().to_path_buf();
+        let config = crate::search::FulltextConfig {
+            index_path: directory.path().to_path_buf(),
+            ..Default::default()
+        };
         let fulltext_manager = Arc::new(
             crate::search::FulltextIndexManager::new(config)
                 .expect("fulltext manager should be created"),
@@ -1700,8 +1714,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fulltext_outbox_claim_apply_and_restart_receipt_are_end_to_end() {
         let directory = TempDir::new().expect("temporary index directory should be created");
-        let mut config = crate::search::FulltextConfig::default();
-        config.index_path = directory.path().join("indexes");
+        let config = crate::search::FulltextConfig {
+            index_path: directory.path().join("indexes"),
+            ..Default::default()
+        };
         let fulltext_manager = Arc::new(
             crate::search::FulltextIndexManager::new(config)
                 .expect("fulltext manager should be created"),

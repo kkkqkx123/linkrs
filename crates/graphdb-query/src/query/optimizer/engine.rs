@@ -371,13 +371,6 @@ impl OptimizerEngine {
         self.partitioning_planner.config()
     }
 
-    /// Apply heuristic optimization rules
-    fn apply_heuristic(&self, plan: ExecutionPlan) -> OptimizeResult<ExecutionPlan> {
-        self.heuristic_rewriter
-            .rewrite(plan)
-            .map_err(|e| OptimizeError::HeuristicFailed(e.to_string()))
-    }
-
     /// Apply heuristic optimization rules with caller-supplied iteration limit.
     fn apply_heuristic_with_max_iterations(
         &self,

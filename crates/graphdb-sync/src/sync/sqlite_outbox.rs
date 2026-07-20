@@ -1655,7 +1655,7 @@ mod tests {
             .materialize_commit(
                 CommitLsn::new(100),
                 &[intent(0, 7, &target)],
-                &[target.clone()],
+                std::slice::from_ref(&target),
             )
             .await
             .expect("commit should materialize");
@@ -1744,7 +1744,7 @@ mod tests {
             .materialize_commit(
                 CommitLsn::new(100),
                 &[intent(0, 1, &target)],
-                &[target.clone()],
+                std::slice::from_ref(&target),
             )
             .await
             .expect("first commit should materialize");
@@ -1753,7 +1753,11 @@ mod tests {
         second.mutation.idempotency_key =
             IdempotencyKey::new("second").expect("key should be valid");
         outbox
-            .materialize_commit(CommitLsn::new(200), &[second], &[target.clone()])
+            .materialize_commit(
+                CommitLsn::new(200),
+                &[second],
+                std::slice::from_ref(&target),
+            )
             .await
             .expect("second commit should materialize");
 
@@ -1819,7 +1823,7 @@ mod tests {
             .materialize_commit(
                 CommitLsn::new(10),
                 &[intent(0, 1, &target)],
-                &[target.clone()],
+                std::slice::from_ref(&target),
             )
             .await
             .expect("commit should materialize");
@@ -1887,7 +1891,7 @@ mod tests {
             .materialize_commit(
                 CommitLsn::new(42),
                 &[intent(0, 1, &target)],
-                &[target.clone()],
+                std::slice::from_ref(&target),
             )
             .await
             .expect("commit should materialize");

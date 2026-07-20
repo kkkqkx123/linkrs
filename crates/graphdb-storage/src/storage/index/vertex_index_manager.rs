@@ -14,7 +14,7 @@ use crate::core::wal::EntityRef;
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::cursor::{IndexCursor, IndexPredicate, IndexRow, IndexScanPlan};
 use crate::storage::index::generic_index_manager::GenericIndexManager;
-use crate::storage::index::index_data_manager::IndexRecord;
+use crate::storage::index::index_data_manager::{IndexRecord, StaleChecker};
 use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
 use crate::storage::index::key_codec::{KeyBuilder, KeyParser, VertexIndexKeyGen};
 use crate::storage::index::manifest::{ManifestCatalog, ManifestHandle};
@@ -352,7 +352,7 @@ impl VertexIndexManager {
         space_id: u64,
         index: &Index,
         plan: &IndexScanPlan,
-        stale_checker: Option<Arc<dyn Fn(&EntityRef, Option<Timestamp>) -> bool + Send + Sync>>,
+        stale_checker: Option<StaleChecker>,
     ) -> StorageResult<VertexIndexCursor> {
         self.open_tag_index_cursor_full(space_id, index, plan, stale_checker, None)
     }
@@ -362,7 +362,7 @@ impl VertexIndexManager {
         space_id: u64,
         index: &Index,
         plan: &IndexScanPlan,
-        stale_checker: Option<Arc<dyn Fn(&EntityRef, Option<Timestamp>) -> bool + Send + Sync>>,
+        stale_checker: Option<StaleChecker>,
         catalog: Option<&ManifestCatalog>,
     ) -> StorageResult<VertexIndexCursor> {
         let index_prefix = KeyBuilder::build_vertex_index_prefix(space_id, &index.name);
@@ -488,7 +488,7 @@ pub struct VertexIndexCursor {
     stale_skipped: u64,
     estimated_match_count: u64,
     manifest_handle: Option<ManifestHandle>,
-    stale_checker: Option<Arc<dyn Fn(&EntityRef, Option<Timestamp>) -> bool + Send + Sync>>,
+    stale_checker: Option<StaleChecker>,
     partition_id_range: Option<std::ops::Range<i64>>,
 }
 
