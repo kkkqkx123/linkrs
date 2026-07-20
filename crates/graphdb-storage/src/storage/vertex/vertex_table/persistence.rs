@@ -3,14 +3,14 @@
 //! Handles serialization, deserialization, and file I/O for vertex tables.
 //!
 //! # Encoding Handling
-//! - Deferred encodings are loaded and stored separately
-//! - Can be applied eagerly via `ensure_encodings()` after load
-//! - Preserves encoding metadata across flush/load cycles
+//! - Encodings are serialized as structured metadata during flush
+//! - Encodings are reconstructed directly via `deserialize_meta()` on load
 
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::Path;
 
 use crate::core::{StorageError, StorageResult};
+use crate::storage::compression::CompressionType;
 use crate::storage::encoding::EncodingType;
 use crate::storage::persistence::{read_header, section, write_header_to, HEADER_SIZE};
 use crate::storage::vertex::IdKey;
@@ -23,163 +23,188 @@ impl VertexTable {
         path: P,
         compression: crate::storage::compression::CompressionType,
     ) -> StorageResult<()> {
-        use std::fs::{self, File};
-
-        // Warn if there are unapplied deferred encodings
-        if !self.deferred_encodings.is_empty() {
-            eprintln!(
-                "WARNING: Flushing VertexTable with {} unapplied deferred encodings. \
-                 Call ensure_encodings() before flush for better space efficiency.",
-                self.deferred_encodings.len()
-            );
-        }
+        use std::fs;
 
         let path = path.as_ref();
         fs::create_dir_all(path)?;
+        crate::storage::compression::cleanup_shadow_files(path)?;
+
+        let CompressionType::Zstd { level } = compression;
+        let page_size = crate::storage::compression::DEFAULT_PAGE_SIZE;
 
         let meta_path = path.join("meta.bin");
-        let mut meta_file = File::create(&meta_path)?;
-        write_header_to(&mut meta_file, section::VERTEX_META)
+        let meta_payload = self.build_meta_payload()?;
+        Self::write_pages_to_file(&meta_path, &meta_payload, page_size, level)?;
+
+        let id_indexer_path = path.join("id_indexer.bin");
+        self.flush_id_indexer(&id_indexer_path)?;
+
+        let columns_path = path.join("columns.bin");
+        self.flush_columns(&columns_path)?;
+
+        let timestamps_path = path.join("timestamps.bin");
+        self.flush_timestamps(&timestamps_path)?;
+
+        Ok(())
+    }
+
+    fn write_pages_to_file(
+        path: &Path,
+        payload: &[u8],
+        page_size: usize,
+        level: i32,
+    ) -> StorageResult<()> {
+        let mut pages_buf = Vec::new();
+        let mut writer = crate::storage::compression::PageWriter::new(page_size, level);
+        writer.write_all(&mut pages_buf, payload)?;
+
+        let mut final_buf = Vec::new();
+        let header = crate::storage::compression::ColumnFileHeader {
+            page_size,
+            page_count: writer.page_count(),
+            total_rows: 0,
+        };
+        header.serialize(&mut final_buf)?;
+        final_buf.extend_from_slice(&pages_buf);
+
+        crate::storage::compression::write_shadow_file(path, &final_buf)
+    }
+
+    fn build_meta_payload(&self) -> StorageResult<Vec<u8>> {
+        let mut buf = Vec::new();
+        write_header_to(&mut buf, section::VERTEX_META)
             .map_err(|e| StorageError::io_error(format!("Failed to write meta header: {}", e)))?;
 
         let label_bytes = self.label.to_le_bytes();
         let label_name_bytes = self.label_name.as_bytes();
         let label_name_len = label_name_bytes.len() as u32;
 
-        meta_file.write_all(&label_bytes)?;
-        meta_file.write_all(&label_name_len.to_le_bytes())?;
-        meta_file.write_all(label_name_bytes)?;
+        buf.extend_from_slice(&label_bytes);
+        buf.extend_from_slice(&label_name_len.to_le_bytes());
+        buf.extend_from_slice(label_name_bytes);
 
         let schema_json = serde_json::to_string(&self.schema)
             .map_err(|e| StorageError::serialize_error(e.to_string()))?;
         let schema_bytes = schema_json.as_bytes();
-        meta_file.write_all(&(schema_bytes.len() as u32).to_le_bytes())?;
-        meta_file.write_all(schema_bytes)?;
+        buf.extend_from_slice(&(schema_bytes.len() as u32).to_le_bytes());
+        buf.extend_from_slice(schema_bytes);
 
-        drop(meta_file);
-        crate::storage::compression::compress_file_inplace(&meta_path, compression)?;
-
-        let id_indexer_path = path.join("id_indexer.bin");
-        self.flush_id_indexer(&id_indexer_path)?;
-        crate::storage::compression::compress_file_inplace(&id_indexer_path, compression)?;
-
-        let columns_path = path.join("columns.bin");
-        self.flush_columns(&columns_path)?;
-        crate::storage::compression::compress_file_inplace(&columns_path, compression)?;
-
-        let timestamps_path = path.join("timestamps.bin");
-        self.flush_timestamps(&timestamps_path)?;
-        crate::storage::compression::compress_file_inplace(&timestamps_path, compression)?;
-
-        Ok(())
+        Ok(buf)
     }
 
     fn flush_id_indexer(&self, path: &Path) -> StorageResult<()> {
-        use std::fs::File;
-
-        let mut file = File::create(path)?;
-        write_header_to(&mut file, section::VERTEX_ID_INDEXER).map_err(|e| {
+        let mut payload = Vec::new();
+        write_header_to(&mut payload, section::VERTEX_ID_INDEXER).map_err(|e| {
             StorageError::io_error(format!("Failed to write id_indexer header: {}", e))
         })?;
 
         let count = self.id_indexer.len() as u32;
-        file.write_all(&count.to_le_bytes())?;
+        payload.extend_from_slice(&count.to_le_bytes());
 
         let mut key_buf = Vec::new();
         for (key, id) in self.id_indexer.iter() {
-            file.write_all(&id.to_le_bytes())?;
+            payload.extend_from_slice(&id.to_le_bytes());
             key.write_to(&mut key_buf);
-            file.write_all(&(key_buf.len() as u32).to_le_bytes())?;
-            file.write_all(&key_buf)?;
+            payload.extend_from_slice(&(key_buf.len() as u32).to_le_bytes());
+            payload.extend_from_slice(&key_buf);
         }
 
-        Ok(())
+        let page_size = crate::storage::compression::DEFAULT_PAGE_SIZE;
+        Self::write_pages_to_file(path, &payload, page_size, 3)
     }
 
     fn flush_columns(&self, path: &Path) -> StorageResult<()> {
-        use std::fs::File;
-
-        let mut file = File::create(path)?;
-        write_header_to(&mut file, section::VERTEX_COLUMNS).map_err(|e| {
+        let mut payload = Vec::new();
+        write_header_to(&mut payload, section::VERTEX_COLUMNS).map_err(|e| {
             StorageError::io_error(format!("Failed to write columns header: {}", e))
         })?;
 
         let column_count = self.columns.column_count() as u32;
-        file.write_all(&column_count.to_le_bytes())?;
+        payload.extend_from_slice(&column_count.to_le_bytes());
 
         for col in self.columns.columns() {
             let name_bytes = col.name.as_bytes();
-            file.write_all(&(name_bytes.len() as u32).to_le_bytes())?;
-            file.write_all(name_bytes)?;
+            payload.extend_from_slice(&(name_bytes.len() as u32).to_le_bytes());
+            payload.extend_from_slice(name_bytes);
 
-            let (data, offsets, bitmap) = col.get_flush_data();
-
-            let row_count = offsets
-                .len()
-                .max(if data.is_empty() { 0 } else { col.len() });
-            file.write_all(&(row_count as u32).to_le_bytes())?;
-
-            file.write_all(&(data.len() as u32).to_le_bytes())?;
-            file.write_all(&data)?;
-
-            let offsets_count = offsets.len() as u32;
-            file.write_all(&offsets_count.to_le_bytes())?;
-            for &off in &offsets {
-                file.write_all(&off.to_le_bytes())?;
-            }
-
-            if let Some(bitmap) = bitmap {
-                file.write_all(&[1u8])?;
-                let bitmap_bytes = bitmap.as_raw_slice();
-                let bitmap_bit_len = bitmap.len() as u32;
-                file.write_all(&bitmap_bit_len.to_le_bytes())?;
-                file.write_all(&(bitmap_bytes.len() as u32).to_le_bytes())?;
-                file.write_all(bitmap_bytes)?;
+            if col.encoding_type() != EncodingType::None {
+                payload.push(1u8);
+                let mut meta_buf = Vec::new();
+                col.encoding().serialize_meta(&mut meta_buf)?;
+                let meta_len = meta_buf.len() as u32;
+                payload.extend_from_slice(&meta_len.to_le_bytes());
+                payload.extend_from_slice(&meta_buf);
             } else {
-                file.write_all(&[0u8])?;
-            }
+                payload.push(0u8);
+                let (data, offsets, bitmap) = col.get_flush_data();
 
-            let encoding_type = col.encoding_type().to_u8();
-            file.write_all(&[encoding_type])?;
+                let row_count = offsets
+                    .len()
+                    .max(if data.is_empty() { 0 } else { col.len() });
+                payload.extend_from_slice(&(row_count as u32).to_le_bytes());
+
+                payload.extend_from_slice(&(data.len() as u32).to_le_bytes());
+                payload.extend_from_slice(&data);
+
+                let offsets_count = offsets.len() as u32;
+                payload.extend_from_slice(&offsets_count.to_le_bytes());
+                for &off in &offsets {
+                    payload.extend_from_slice(&off.to_le_bytes());
+                }
+
+                if let Some(bitmap) = bitmap {
+                    payload.push(1u8);
+                    let bitmap_bytes = bitmap.as_raw_slice();
+                    let bitmap_bit_len = bitmap.len() as u32;
+                    payload.extend_from_slice(&bitmap_bit_len.to_le_bytes());
+                    payload.extend_from_slice(&(bitmap_bytes.len() as u32).to_le_bytes());
+                    payload.extend_from_slice(bitmap_bytes);
+                } else {
+                    payload.push(0u8);
+                }
+            }
         }
 
-        Ok(())
+        let page_size = crate::storage::compression::DEFAULT_PAGE_SIZE;
+        Self::write_pages_to_file(path, &payload, page_size, 3)
     }
 
     fn flush_timestamps(&self, path: &Path) -> StorageResult<()> {
-        use std::fs::File;
-
-        let mut file = File::create(path)?;
-        write_header_to(&mut file, section::VERTEX_TIMESTAMPS).map_err(|e| {
+        let mut payload = Vec::new();
+        write_header_to(&mut payload, section::VERTEX_TIMESTAMPS).map_err(|e| {
             StorageError::io_error(format!("Failed to write timestamps header: {}", e))
         })?;
 
         let timestamps = self.timestamps.dump();
         let count = timestamps.len() as u32;
-        file.write_all(&count.to_le_bytes())?;
+        payload.extend_from_slice(&count.to_le_bytes());
 
         for ts in timestamps {
-            file.write_all(&ts.to_le_bytes())?;
+            payload.extend_from_slice(&ts.to_le_bytes());
         }
 
-        Ok(())
+        let page_size = crate::storage::compression::DEFAULT_PAGE_SIZE;
+        Self::write_pages_to_file(path, &payload, page_size, 3)
     }
 
     pub fn load<P: AsRef<Path>>(&mut self, path: P) -> StorageResult<()> {
-        self.load_internal(path, true)
+        self.load_internal(path)
     }
 
-    /// Load without applying deferred encodings (lazy load).
-    /// Only use if you're certain encodings don't need to be applied immediately.
-    pub fn load_lazy<P: AsRef<Path>>(&mut self, path: P) -> StorageResult<()> {
-        self.load_internal(path, false)
+    fn read_pages_from_file(path: &Path) -> StorageResult<Vec<u8>> {
+        let file = std::fs::File::open(path)
+            .map_err(|e| StorageError::io_error(format!("Failed to open {}: {}", path.display(), e)))?;
+        let mut reader = std::io::BufReader::new(file);
+        let header = crate::storage::compression::ColumnFileHeader::deserialize(&mut reader)?;
+        let page_reader = crate::storage::compression::PageReader::new(header.page_size);
+        page_reader.read_all(&mut reader, header.page_count)
     }
 
-    fn load_internal<P: AsRef<Path>>(&mut self, path: P, eager_encode: bool) -> StorageResult<()> {
+    fn load_internal<P: AsRef<Path>>(&mut self, path: P) -> StorageResult<()> {
         let path = path.as_ref();
 
         let meta_path = path.join("meta.bin");
-        let meta_data = crate::storage::compression::read_decompressed(&meta_path)?;
+        let meta_data = Self::read_pages_from_file(&meta_path)?;
         let mut meta_cursor = &meta_data[..];
         let mut header_buf = [0u8; HEADER_SIZE];
         meta_cursor.read_exact(&mut header_buf)?;
@@ -233,17 +258,12 @@ impl VertexTable {
         let timestamps_path = path.join("timestamps.bin");
         self.load_timestamps(&timestamps_path)?;
 
-        // Apply deferred encodings if eager loading is requested
-        if eager_encode {
-            self.apply_deferred_encodings()?;
-        }
-
         self.is_open = true;
         Ok(())
     }
 
     fn load_id_indexer(&mut self, path: &Path) -> StorageResult<()> {
-        let data = crate::storage::compression::read_decompressed(path)?;
+        let data = Self::read_pages_from_file(path)?;
         let mut cursor = &data[..];
         let mut header_buf = [0u8; HEADER_SIZE];
         cursor.read_exact(&mut header_buf)?;
@@ -285,7 +305,7 @@ impl VertexTable {
     }
 
     fn load_columns(&mut self, path: &Path) -> StorageResult<()> {
-        let data = crate::storage::compression::read_decompressed(path)?;
+        let data = Self::read_pages_from_file(path)?;
         let mut cursor = &data[..];
         let mut header_buf = [0u8; HEADER_SIZE];
         cursor.read_exact(&mut header_buf)?;
@@ -306,7 +326,6 @@ impl VertexTable {
         let column_count = u32::from_le_bytes(column_count_bytes) as usize;
 
         self.columns.clear();
-        self.deferred_encodings.clear();
 
         for _ in 0..column_count {
             let mut name_len_bytes = [0u8; 4];
@@ -318,73 +337,129 @@ impl VertexTable {
             let name = String::from_utf8(name_bytes)
                 .map_err(|e| StorageError::deserialize_error(e.to_string()))?;
 
-            let mut row_count_bytes = [0u8; 4];
-            cursor.read_exact(&mut row_count_bytes)?;
-            let _row_count = u32::from_le_bytes(row_count_bytes) as usize;
+            let mut has_encoding_bytes = [0u8; 1];
+            cursor.read_exact(&mut has_encoding_bytes)?;
+            let has_encoding = has_encoding_bytes[0] == 1;
 
-            let mut data_len_bytes = [0u8; 4];
-            cursor.read_exact(&mut data_len_bytes)?;
-            let data_len = u32::from_le_bytes(data_len_bytes) as usize;
-
-            let mut data = vec![0u8; data_len];
-            cursor.read_exact(&mut data)?;
-
-            let mut offsets_count_bytes = [0u8; 4];
-            cursor.read_exact(&mut offsets_count_bytes)?;
-            let offsets_count = u32::from_le_bytes(offsets_count_bytes) as usize;
-
-            let mut offsets = Vec::with_capacity(offsets_count);
-            for _ in 0..offsets_count {
-                let mut off_bytes = [0u8; 8];
-                cursor.read_exact(&mut off_bytes)?;
-                offsets.push(u64::from_le_bytes(off_bytes));
-            }
-
-            let mut has_bitmap_bytes = [0u8; 1];
-            cursor.read_exact(&mut has_bitmap_bytes)?;
-            let has_bitmap = has_bitmap_bytes[0] == 1;
-
-            let (null_bitmap_raw, bitmap_bit_len) = if has_bitmap {
-                let mut bitmap_bit_len_bytes = [0u8; 4];
-                cursor.read_exact(&mut bitmap_bit_len_bytes)?;
-                let bitmap_bit_len = u32::from_le_bytes(bitmap_bit_len_bytes) as usize;
-
-                let mut bitmap_bytes_len_bytes = [0u8; 4];
-                cursor.read_exact(&mut bitmap_bytes_len_bytes)?;
-                let bitmap_bytes_len = u32::from_le_bytes(bitmap_bytes_len_bytes) as usize;
-
-                let mut bitmap_bytes = vec![0u8; bitmap_bytes_len];
-                cursor.read_exact(&mut bitmap_bytes)?;
-
-                (Some(bitmap_bytes), bitmap_bit_len)
+            if has_encoding {
+                let mut meta_len_bytes = [0u8; 4];
+                cursor.read_exact(&mut meta_len_bytes)?;
+                let meta_len = u32::from_le_bytes(meta_len_bytes) as usize;
+                let mut meta_bytes = vec![0u8; meta_len];
+                cursor.read_exact(&mut meta_bytes)?;
+                let encoding_type = EncodingType::from_u8(meta_bytes[0]);
+                let mut meta_cursor = &meta_bytes[1..];
+                self.load_column_with_encoding(&name, encoding_type, &mut meta_cursor)?;
             } else {
-                (None, 0)
-            };
+                let mut row_count_bytes = [0u8; 4];
+                cursor.read_exact(&mut row_count_bytes)?;
+                let _row_count = u32::from_le_bytes(row_count_bytes) as usize;
 
-            self.columns.load_column_from_raw(
-                &name,
-                data,
-                offsets,
-                null_bitmap_raw,
-                bitmap_bit_len,
-            )?;
+                let mut data_len_bytes = [0u8; 4];
+                cursor.read_exact(&mut data_len_bytes)?;
+                let data_len = u32::from_le_bytes(data_len_bytes) as usize;
 
-            let mut encoding_byte_bytes = [0u8; 1];
-            cursor.read_exact(&mut encoding_byte_bytes)?;
-            let encoding_type = EncodingType::from_u8(encoding_byte_bytes[0]);
+                let mut data = vec![0u8; data_len];
+                cursor.read_exact(&mut data)?;
 
-            // Store deferred encoding for later application
-            // This allows lazy encoding on-demand or explicit application via ensure_encodings()
-            if encoding_type != EncodingType::None {
-                self.deferred_encodings.insert(name.clone(), encoding_type);
+                let mut offsets_count_bytes = [0u8; 4];
+                cursor.read_exact(&mut offsets_count_bytes)?;
+                let offsets_count = u32::from_le_bytes(offsets_count_bytes) as usize;
+
+                let mut offsets = Vec::with_capacity(offsets_count);
+                for _ in 0..offsets_count {
+                    let mut off_bytes = [0u8; 8];
+                    cursor.read_exact(&mut off_bytes)?;
+                    offsets.push(u64::from_le_bytes(off_bytes));
+                }
+
+                let mut has_bitmap_bytes = [0u8; 1];
+                cursor.read_exact(&mut has_bitmap_bytes)?;
+                let has_bitmap = has_bitmap_bytes[0] == 1;
+
+                let (null_bitmap_raw, bitmap_bit_len) = if has_bitmap {
+                    let mut bitmap_bit_len_bytes = [0u8; 4];
+                    cursor.read_exact(&mut bitmap_bit_len_bytes)?;
+                    let bitmap_bit_len = u32::from_le_bytes(bitmap_bit_len_bytes) as usize;
+
+                    let mut bitmap_bytes_len_bytes = [0u8; 4];
+                    cursor.read_exact(&mut bitmap_bytes_len_bytes)?;
+                    let bitmap_bytes_len = u32::from_le_bytes(bitmap_bytes_len_bytes) as usize;
+
+                    let mut bitmap_bytes = vec![0u8; bitmap_bytes_len];
+                    cursor.read_exact(&mut bitmap_bytes)?;
+
+                    (Some(bitmap_bytes), bitmap_bit_len)
+                } else {
+                    (None, 0)
+                };
+
+                self.columns.load_column_from_raw(
+                    &name,
+                    data,
+                    offsets,
+                    null_bitmap_raw,
+                    bitmap_bit_len,
+                )?;
             }
         }
 
         Ok(())
     }
 
+    fn load_column_with_encoding(
+        &mut self,
+        name: &str,
+        encoding_type: EncodingType,
+        meta_cursor: &mut &[u8],
+    ) -> StorageResult<()> {
+        use crate::storage::encoding::{
+            AlpColumn, BitPackedIntColumn, DictionaryColumn, FsstColumn, RleBoolColumn, RleIntColumn,
+        };
+
+        match encoding_type {
+            EncodingType::Fsst => {
+                let col = FsstColumn::deserialize_meta(meta_cursor)?;
+                let Some(column) = self.columns.get_column_mut(name) else {
+                    return Err(StorageError::column_not_found(name.to_string()));
+                };
+                column.apply_fsst_from_meta(col)?;
+            }
+            EncodingType::Dictionary => {
+                let col = DictionaryColumn::deserialize_meta(meta_cursor)?;
+                let Some(column) = self.columns.get_column_mut(name) else {
+                    return Err(StorageError::column_not_found(name.to_string()));
+                };
+                column.apply_dictionary_from_meta(col)?;
+            }
+            EncodingType::Rle => {
+                let col = RleIntColumn::deserialize_meta(meta_cursor)?;
+                let Some(column) = self.columns.get_column_mut(name) else {
+                    return Err(StorageError::column_not_found(name.to_string()));
+                };
+                column.apply_rle_int_from_meta(col)?;
+            }
+            EncodingType::BitPacking => {
+                let col = BitPackedIntColumn::deserialize_meta(meta_cursor)?;
+                let Some(column) = self.columns.get_column_mut(name) else {
+                    return Err(StorageError::column_not_found(name.to_string()));
+                };
+                column.apply_bitpacked_from_meta(col)?;
+            }
+            EncodingType::Alp => {
+                let col = AlpColumn::deserialize_meta(meta_cursor)?;
+                let Some(column) = self.columns.get_column_mut(name) else {
+                    return Err(StorageError::column_not_found(name.to_string()));
+                };
+                column.apply_alp_from_meta(col)?;
+            }
+            EncodingType::None => {}
+        }
+        Ok(())
+    }
+
     fn load_timestamps(&mut self, path: &Path) -> StorageResult<()> {
-        let data = crate::storage::compression::read_decompressed(path)?;
+        let data = Self::read_pages_from_file(path)?;
         let mut cursor = &data[..];
         let mut header_buf = [0u8; HEADER_SIZE];
         cursor.read_exact(&mut header_buf)?;

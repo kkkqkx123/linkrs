@@ -128,6 +128,23 @@ impl ColumnEncoding {
         !matches!(self, Self::None)
     }
 
+    pub fn serialize_meta(&self, writer: &mut impl Write) -> StorageResult<usize> {
+        let mut written = 0usize;
+        let tag = self.encoding_type().to_u8();
+        writer.write_all(&[tag])?;
+        written += 1;
+        match self {
+            Self::Fsst(col) => written += col.serialize_meta(writer)?,
+            Self::Dictionary(col) => written += col.serialize_meta(writer)?,
+            Self::RleInt(col) => written += col.serialize_meta(writer)?,
+            Self::RleBool(col) => written += col.serialize_meta(writer)?,
+            Self::BitPacked(col) => written += col.serialize_meta(writer)?,
+            Self::Alp(col) => written += col.serialize_meta(writer)?,
+            Self::None => {}
+        }
+        Ok(written)
+    }
+
     pub fn set(&mut self, row_idx: usize, value: Option<&Value>) -> crate::core::StorageResult<()> {
         use crate::core::StorageError;
 

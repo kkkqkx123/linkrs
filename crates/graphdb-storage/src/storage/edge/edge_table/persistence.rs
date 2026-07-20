@@ -19,10 +19,10 @@ const EDGE_META_VERSION: u32 = 2;
 const EDGE_ID_STORAGE_MODE_DIRECT: u8 = 0;
 const EDGE_ID_STORAGE_MODE_SEPARATE: u8 = 1;
 
-/// Write edge table metadata to file
+/// Serialize edge table metadata to a buffer
 #[allow(clippy::too_many_arguments)]
 pub fn flush_metadata(
-    file: &mut File,
+    buf: &mut Vec<u8>,
     label: u32,
     src_label: u32,
     dst_label: u32,
@@ -33,86 +33,84 @@ pub fn flush_metadata(
     tombstones: &HashMap<EdgeId, Timestamp>,
     min_active_snapshot_ts: Timestamp,
 ) -> StorageResult<()> {
-    file.write_all(&EDGE_META_VERSION.to_le_bytes())?;
-    file.write_all(&label.to_le_bytes())?;
-    file.write_all(&src_label.to_le_bytes())?;
-    file.write_all(&dst_label.to_le_bytes())?;
+    buf.extend_from_slice(&EDGE_META_VERSION.to_le_bytes());
+    buf.extend_from_slice(&label.to_le_bytes());
+    buf.extend_from_slice(&src_label.to_le_bytes());
+    buf.extend_from_slice(&dst_label.to_le_bytes());
 
     let label_name_bytes = label_name.as_bytes();
-    file.write_all(&(label_name_bytes.len() as u32).to_le_bytes())?;
-    file.write_all(label_name_bytes)?;
+    buf.extend_from_slice(&(label_name_bytes.len() as u32).to_le_bytes());
+    buf.extend_from_slice(label_name_bytes);
 
     let is_open_flag: u8 = if is_open { 1 } else { 0 };
-    file.write_all(&is_open_flag.to_le_bytes())?;
+    buf.extend_from_slice(&is_open_flag.to_le_bytes());
 
     let schema_json =
         serde_json::to_string(schema).map_err(|e| StorageError::serialize_error(e.to_string()))?;
     let schema_bytes = schema_json.as_bytes();
-    file.write_all(&(schema_bytes.len() as u32).to_le_bytes())?;
-    file.write_all(schema_bytes)?;
+    buf.extend_from_slice(&(schema_bytes.len() as u32).to_le_bytes());
+    buf.extend_from_slice(schema_bytes);
 
-    file.write_all(&next_edge_id.0.to_le_bytes())?;
-    file.write_all(&(tombstones.len() as u64).to_le_bytes())?;
+    buf.extend_from_slice(&next_edge_id.0.to_le_bytes());
+    buf.extend_from_slice(&(tombstones.len() as u64).to_le_bytes());
     for (edge_id, delete_ts) in tombstones {
-        file.write_all(&edge_id.0.to_le_bytes())?;
-        file.write_all(&delete_ts.to_le_bytes())?;
+        buf.extend_from_slice(&edge_id.0.to_le_bytes());
+        buf.extend_from_slice(&delete_ts.to_le_bytes());
     }
-    file.write_all(&min_active_snapshot_ts.to_le_bytes())?;
+    buf.extend_from_slice(&min_active_snapshot_ts.to_le_bytes());
 
     Ok(())
 }
 
-/// Flush CSR and segments to file
-pub fn flush_csr(
+/// Serialize CSR and segments to a buffer
+pub fn serialize_csr(
     csr: &CsrVariant,
     segments: &[CsrSegment],
-    path: &Path,
     section_id: u32,
+    buf: &mut Vec<u8>,
 ) -> StorageResult<()> {
-    let mut file = File::create(path)?;
-    write_header_to(&mut file, section_id)
+    write_header_to(buf, section_id)
         .map_err(|e| StorageError::io_error(format!("Failed to write CSR header: {}", e)))?;
 
     let data = csr.dump();
-    file.write_all(&(data.len() as u64).to_le_bytes())?;
-    file.write_all(&data)?;
-    file.write_all(&(segments.len() as u64).to_le_bytes())?;
+    buf.extend_from_slice(&(data.len() as u64).to_le_bytes());
+    buf.extend_from_slice(&data);
+    buf.extend_from_slice(&(segments.len() as u64).to_le_bytes());
 
     for segment in segments {
-        file.write_all(&segment.create_ts_min.to_le_bytes())?;
-        file.write_all(&segment.create_ts_max.to_le_bytes())?;
+        buf.extend_from_slice(&segment.create_ts_min.to_le_bytes());
+        buf.extend_from_slice(&segment.create_ts_max.to_le_bytes());
         let (delete_ts_min, delete_ts_max) = segment.deletion_range();
-        file.write_all(&delete_ts_min.to_le_bytes())?;
-        file.write_all(&delete_ts_max.to_le_bytes())?;
+        buf.extend_from_slice(&delete_ts_min.to_le_bytes());
+        buf.extend_from_slice(&delete_ts_max.to_le_bytes());
         let data = segment.csr.read().dump();
-        file.write_all(&(data.len() as u64).to_le_bytes())?;
-        file.write_all(&data)?;
+        buf.extend_from_slice(&(data.len() as u64).to_le_bytes());
+        buf.extend_from_slice(&data);
 
         if let Some(edge_ids) = &segment.edge_ids {
-            file.write_all(&[EDGE_ID_STORAGE_MODE_SEPARATE])?;
-            file.write_all(&(edge_ids.len() as u64).to_le_bytes())?;
+            buf.push(EDGE_ID_STORAGE_MODE_SEPARATE);
+            buf.extend_from_slice(&(edge_ids.len() as u64).to_le_bytes());
             let mut edge_id_buffer = Vec::with_capacity(edge_ids.len() * 8);
             for edge_id in edge_ids {
                 edge_id_buffer.extend_from_slice(&edge_id.to_le_bytes());
             }
-            file.write_all(&edge_id_buffer)?;
+            buf.extend_from_slice(&edge_id_buffer);
         } else {
-            file.write_all(&[EDGE_ID_STORAGE_MODE_DIRECT])?;
+            buf.push(EDGE_ID_STORAGE_MODE_DIRECT);
         }
     }
 
     Ok(())
 }
 
-/// Flush properties to file
-pub fn flush_properties(properties: &PropertyTable, path: &Path) -> StorageResult<()> {
-    let mut file = File::create(path)?;
-    write_header_to(&mut file, section::EDGE_PROPERTIES)
+/// Serialize properties to a buffer
+pub fn serialize_properties(properties: &PropertyTable, buf: &mut Vec<u8>) -> StorageResult<()> {
+    write_header_to(buf, section::EDGE_PROPERTIES)
         .map_err(|e| StorageError::io_error(format!("Failed to write properties header: {}", e)))?;
 
     let data = properties.dump();
-    file.write_all(&(data.len() as u64).to_le_bytes())?;
-    file.write_all(&data)?;
+    buf.extend_from_slice(&(data.len() as u64).to_le_bytes());
+    buf.extend_from_slice(&data);
 
     Ok(())
 }
@@ -209,7 +207,7 @@ pub fn load_csr(
     csr: &mut CsrVariant,
     segments: &mut Vec<CsrSegment>,
 ) -> StorageResult<()> {
-    let raw_data = crate::storage::compression::read_decompressed(path)?;
+    let raw_data = read_pages_from_file(path)?;
     let mut cursor = &raw_data[..];
     let mut header_buf = [0u8; HEADER_SIZE];
     cursor.read_exact(&mut header_buf)?;
@@ -325,7 +323,7 @@ pub fn load_csr(
 
 /// Load properties from file
 pub fn load_properties(path: &Path) -> StorageResult<PropertyTable> {
-    let raw_data = crate::storage::compression::read_decompressed(path)?;
+    let raw_data = read_pages_from_file(path)?;
     let mut cursor = &raw_data[..];
     let mut header_buf = [0u8; HEADER_SIZE];
     cursor.read_exact(&mut header_buf)?;
@@ -352,6 +350,39 @@ pub fn load_properties(path: &Path) -> StorageResult<PropertyTable> {
     properties.load(&data)?;
 
     Ok(properties)
+}
+
+/// Write payload to file using page-level compression with shadow file atomic writes
+pub fn write_pages_to_file(
+    path: &Path,
+    payload: &[u8],
+    page_size: usize,
+    level: i32,
+) -> StorageResult<()> {
+    let mut pages_buf = Vec::new();
+    let mut writer = crate::storage::compression::PageWriter::new(page_size, level);
+    writer.write_all(&mut pages_buf, payload)?;
+
+    let mut final_buf = Vec::new();
+    let header = crate::storage::compression::ColumnFileHeader {
+        page_size,
+        page_count: writer.page_count(),
+        total_rows: 0,
+    };
+    header.serialize(&mut final_buf)?;
+    final_buf.extend_from_slice(&pages_buf);
+
+    crate::storage::compression::write_shadow_file(path, &final_buf)
+}
+
+/// Read pages from a page-compressed file
+pub fn read_pages_from_file(path: &Path) -> StorageResult<Vec<u8>> {
+    let file = File::open(path)
+        .map_err(|e| StorageError::io_error(format!("Failed to open {}: {}", path.display(), e)))?;
+    let mut reader = std::io::BufReader::new(file);
+    let header = crate::storage::compression::ColumnFileHeader::deserialize(&mut reader)?;
+    let page_reader = crate::storage::compression::PageReader::new(header.page_size);
+    page_reader.read_all(&mut reader, header.page_count)
 }
 
 #[cfg(test)]

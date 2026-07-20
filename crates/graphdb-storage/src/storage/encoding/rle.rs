@@ -139,6 +139,13 @@ impl RleIntColumn {
             writer.write_all(&(run.count as u32).to_le_bytes())?;
             written += 12;
         }
+        let bm_len = self.null_bitmap.len() as u32;
+        writer.write_all(&bm_len.to_le_bytes())?;
+        written += 4;
+        for &word in self.null_bitmap.as_bits() {
+            writer.write_all(&word.to_le_bytes())?;
+            written += 8;
+        }
         Ok(written)
     }
 
@@ -156,9 +163,20 @@ impl RleIntColumn {
             let cnt = u32::from_le_bytes(cnt_bytes) as usize;
             encoder.runs.push(RleRun { value: val, count: cnt });
         }
+        let mut bm_len_bytes = [0u8; 4];
+        reader.read_exact(&mut bm_len_bytes)?;
+        let bm_len = u32::from_le_bytes(bm_len_bytes) as usize;
+        let words = bm_len.div_ceil(64);
+        let mut data = Vec::with_capacity(words);
+        for _ in 0..words {
+            let mut word_bytes = [0u8; 8];
+            reader.read_exact(&mut word_bytes)?;
+            data.push(u64::from_le_bytes(word_bytes));
+        }
+        let null_bitmap = NullBitmap::from_raw(data, bm_len);
         Ok(Self {
             encoder,
-            null_bitmap: NullBitmap::new(),
+            null_bitmap,
         })
     }
 }
@@ -229,6 +247,13 @@ impl RleBoolColumn {
             writer.write_all(&(run.count as u32).to_le_bytes())?;
             written += 5;
         }
+        let bm_len = self.null_bitmap.len() as u32;
+        writer.write_all(&bm_len.to_le_bytes())?;
+        written += 4;
+        for &word in self.null_bitmap.as_bits() {
+            writer.write_all(&word.to_le_bytes())?;
+            written += 8;
+        }
         Ok(written)
     }
 
@@ -237,7 +262,7 @@ impl RleBoolColumn {
         reader.read_exact(&mut count_bytes)?;
         let count = u32::from_le_bytes(count_bytes) as usize;
         let mut encoder = RleEncoder::new();
-        for _ in 0..count {
+        for _  in 0..count {
             let mut val_byte = [0u8; 1];
             reader.read_exact(&mut val_byte)?;
             let val = val_byte[0] != 0;
@@ -246,9 +271,20 @@ impl RleBoolColumn {
             let cnt = u32::from_le_bytes(cnt_bytes) as usize;
             encoder.runs.push(RleRun { value: val, count: cnt });
         }
+        let mut bm_len_bytes = [0u8; 4];
+        reader.read_exact(&mut bm_len_bytes)?;
+        let bm_len = u32::from_le_bytes(bm_len_bytes) as usize;
+        let words = bm_len.div_ceil(64);
+        let mut data = Vec::with_capacity(words);
+        for _ in 0..words {
+            let mut word_bytes = [0u8; 8];
+            reader.read_exact(&mut word_bytes)?;
+            data.push(u64::from_le_bytes(word_bytes));
+        }
+        let null_bitmap = NullBitmap::from_raw(data, bm_len);
         Ok(Self {
             encoder,
-            null_bitmap: NullBitmap::new(),
+            null_bitmap,
         })
     }
 }

@@ -11,7 +11,10 @@
 use crate::core::value::{DateTimeValue, DateValue, TimeValue, VectorValue};
 use crate::core::{DataType, StorageError, StorageResult, Value};
 
-use crate::storage::encoding::{ColumnEncoding, EncodingType, FsstColumn, FsstEncoder};
+use crate::storage::encoding::{
+    AlpColumn, BitPackedIntColumn, ColumnEncoding, DictionaryColumn, EncodingType, FsstColumn,
+    FsstEncoder, RleBoolColumn, RleIntColumn,
+};
 use crate::utils::NullBitmap;
 use bitvec::prelude::*;
 
@@ -875,6 +878,14 @@ impl Column {
         self.encoding.encoding_type()
     }
 
+    pub fn encoding(&self) -> &ColumnEncoding {
+        &self.encoding
+    }
+
+    pub fn encoding_mut(&mut self) -> &mut ColumnEncoding {
+        &mut self.encoding
+    }
+
     fn sync_row_count_from_encoding(&mut self) {
         let encoded_len = self.encoding.len();
         self.inner_mut().resize(encoded_len);
@@ -1031,6 +1042,48 @@ impl Column {
 
         Ok(())
     }
+
+    pub fn apply_fsst_from_meta(&mut self, fsst_col: FsstColumn) -> StorageResult<()> {
+        let encoded_len = fsst_col.len();
+        self.encoding = ColumnEncoding::Fsst(fsst_col);
+        self.inner_mut().resize(encoded_len);
+        Ok(())
+    }
+
+    pub fn apply_dictionary_from_meta(&mut self, dict_col: DictionaryColumn) -> StorageResult<()> {
+        let encoded_len = dict_col.len();
+        self.encoding = ColumnEncoding::Dictionary(dict_col);
+        self.inner_mut().resize(encoded_len);
+        Ok(())
+    }
+
+    pub fn apply_rle_int_from_meta(&mut self, rle_col: RleIntColumn) -> StorageResult<()> {
+        let encoded_len = rle_col.len();
+        self.encoding = ColumnEncoding::RleInt(rle_col);
+        self.inner_mut().resize(encoded_len);
+        Ok(())
+    }
+
+    pub fn apply_rle_bool_from_meta(&mut self, rle_col: RleBoolColumn) -> StorageResult<()> {
+        let encoded_len = rle_col.len();
+        self.encoding = ColumnEncoding::RleBool(rle_col);
+        self.inner_mut().resize(encoded_len);
+        Ok(())
+    }
+
+    pub fn apply_bitpacked_from_meta(&mut self, bp_col: BitPackedIntColumn) -> StorageResult<()> {
+        let encoded_len = bp_col.len();
+        self.encoding = ColumnEncoding::BitPacked(bp_col);
+        self.inner_mut().resize(encoded_len);
+        Ok(())
+    }
+
+    pub fn apply_alp_from_meta(&mut self, alp_col: AlpColumn) -> StorageResult<()> {
+        let encoded_len = alp_col.len();
+        self.encoding = ColumnEncoding::Alp(alp_col);
+        self.inner_mut().resize(encoded_len);
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1177,6 +1230,10 @@ impl ColumnStore {
 
     pub fn columns(&self) -> &[Column] {
         &self.columns
+    }
+
+    pub fn columns_mut(&mut self) -> &mut [Column] {
+        &mut self.columns
     }
 
     pub fn load_column_from_raw(

@@ -89,8 +89,7 @@ impl CompactionCoordinator {
     /// 3. **Propagate to columns**: Apply mapping to property data
     /// 4. **Cleanup orphans**: Remove any orphaned timestamp entries
     /// 5. **Resize columns**: Truncate to match new id_indexer size
-    /// 6. **Apply encodings**: Batch any pending column encodings
-    /// 7. **Verify**: Assert all three structures are consistent
+    /// 6. **Verify**: Assert all three structures are consistent
     ///
     /// # Error Handling
     ///
@@ -120,10 +119,7 @@ impl CompactionCoordinator {
         // Step 4: Resize columns to match new id_indexer size
         table.columns.resize(table.id_indexer.len());
 
-        // Step 5: Apply any deferred encodings
-        table.apply_deferred_encodings()?;
-
-        // Step 6: Verify invariants (debug builds only)
+        // Step 5: Verify invariants (debug builds only)
         #[cfg(debug_assertions)]
         table.verify_invariants()?;
 

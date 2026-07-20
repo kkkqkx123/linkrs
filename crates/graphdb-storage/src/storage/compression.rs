@@ -89,32 +89,7 @@ pub fn decompress_payload(data: &[u8]) -> StorageResult<Vec<u8>> {
     }
 }
 
-/// Compress a file in-place by reading it, compressing, and rewriting.
-pub fn compress_file_inplace(path: &std::path::Path, ct: CompressionType) -> StorageResult<()> {
-    let data = std::fs::read(path).map_err(|e| {
-        StorageError::io_error(format!(
-            "failed to read {} for compression: {}",
-            path.display(),
-            e
-        ))
-    })?;
-    let compressed = compress_payload(&data, ct)?;
-    std::fs::write(path, &compressed).map_err(|e| {
-        StorageError::io_error(format!(
-            "failed to write compressed {}: {}",
-            path.display(),
-            e
-        ))
-    })?;
-    Ok(())
-}
 
-/// Read a file and decompress it.
-pub fn read_decompressed(path: &std::path::Path) -> StorageResult<Vec<u8>> {
-    let data = std::fs::read(path)
-        .map_err(|e| StorageError::io_error(format!("failed to read {}: {}", path.display(), e)))?;
-    decompress_payload(&data)
-}
 
 pub struct ColumnFileHeader {
     pub page_size: usize,

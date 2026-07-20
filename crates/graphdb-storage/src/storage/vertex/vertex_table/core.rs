@@ -60,8 +60,6 @@ pub struct VertexTable {
     pub(super) columns: ColumnStore,
     pub(super) timestamps: VertexTimestamp,
     pub(super) is_open: bool,
-    pub(super) deferred_encodings:
-        std::collections::HashMap<String, crate::storage::encoding::EncodingType>,
     /// Cache for property name → index mapping to avoid O(n) schema lookups.
     /// Invalidated whenever schema changes.
     pub(super) property_index_cache: HashMap<String, usize>,
@@ -107,7 +105,6 @@ impl VertexTable {
             columns,
             timestamps: VertexTimestamp::with_capacity(config.initial_capacity),
             is_open: true,
-            deferred_encodings: std::collections::HashMap::new(),
             property_index_cache,
             version_history,
             mvcc: VertexMVCC {
@@ -535,11 +532,6 @@ impl VertexTable {
         // Account for property_index_cache HashMap (actual entries, not capacity)
         total += self.property_index_cache.len()
             * (std::mem::size_of::<String>() + std::mem::size_of::<usize>());
-
-        // Account for deferred_encodings HashMap (actual entries, not capacity)
-        total += self.deferred_encodings.len()
-            * (std::mem::size_of::<String>()
-                + std::mem::size_of::<crate::storage::encoding::EncodingType>());
 
         total += std::mem::size_of::<Self>();
 

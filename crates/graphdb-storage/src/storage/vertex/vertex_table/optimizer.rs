@@ -1,47 +1,16 @@
 //! Vertex Table Optimizer
 //!
-//! Handles compaction, ID remapping, and deferred encodings.
+//! Handles compaction and ID remapping.
 //!
 //! # Optimizations
 //! - Batch timestamp checks during compaction via CompactionCoordinator
 //! - Range-based column copying instead of row-by-row operations
-//! - Deferred encoding application to reduce memory churn
 
 use super::core::VertexTable;
 use crate::core::StorageResult;
-use crate::storage::encoding::EncodingType;
 use crate::storage::vertex::IdKey;
 
 impl VertexTable {
-    pub fn apply_deferred_encodings(&mut self) -> StorageResult<()> {
-        if self.deferred_encodings.is_empty() {
-            return Ok(());
-        }
-
-        let encodings: Vec<(String, EncodingType)> = self
-            .deferred_encodings
-            .iter()
-            .map(|(k, v)| (k.clone(), *v))
-            .collect();
-
-        for (col_name, encoding_type) in encodings {
-            self.columns
-                .apply_encoding_to_column(&col_name, encoding_type)?;
-        }
-
-        self.deferred_encodings.clear();
-        Ok(())
-    }
-
-    /// Ensure all deferred encodings are applied immediately.
-    /// Useful for eager loading or before export.
-    pub fn ensure_encodings(&mut self) -> StorageResult<()> {
-        if !self.deferred_encodings.is_empty() {
-            self.apply_deferred_encodings()?;
-        }
-        Ok(())
-    }
-
     pub fn compact_with_ts_collect(
         &mut self,
         ts: crate::core::types::Timestamp,
@@ -80,8 +49,7 @@ impl VertexTable {
     /// 2. Propagate remapping to timestamps (if any IDs moved)
     /// 3. Propagate remapping to columns (if any IDs moved)
     /// 4. Resize columns to match new id_indexer size
-    /// 5. Apply any deferred column encodings
-    /// 6. Verify all invariants (debug builds only)
+    /// 5. Verify all invariants (debug builds only)
     ///
     /// # Atomicity Guarantee
     ///

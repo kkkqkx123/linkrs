@@ -278,15 +278,40 @@ impl AlpColumn {
     }
 
     pub fn serialize_meta(&self, writer: &mut impl Write) -> StorageResult<usize> {
-        self.encoder.serialize_meta(writer)
+        let mut written = 0usize;
+        writer.write_all(&(self.row_count as u32).to_le_bytes())?;
+        written += 4;
+        written += self.encoder.serialize_meta(writer)?;
+        let bm_len = self.null_bitmap.len() as u32;
+        writer.write_all(&bm_len.to_le_bytes())?;
+        written += 4;
+        for &word in self.null_bitmap.as_bits() {
+            writer.write_all(&word.to_le_bytes())?;
+            written += 8;
+        }
+        Ok(written)
     }
 
     pub fn deserialize_meta(reader: &mut impl Read) -> StorageResult<Self> {
+        let mut rc_bytes = [0u8; 4];
+        reader.read_exact(&mut rc_bytes)?;
+        let row_count = u32::from_le_bytes(rc_bytes) as usize;
         let encoder = AlpEncoder::deserialize_meta(reader)?;
+        let mut bm_len_bytes = [0u8; 4];
+        reader.read_exact(&mut bm_len_bytes)?;
+        let bm_len = u32::from_le_bytes(bm_len_bytes) as usize;
+        let words = bm_len.div_ceil(64);
+        let mut data = Vec::with_capacity(words);
+        for _ in 0..words {
+            let mut word_bytes = [0u8; 8];
+            reader.read_exact(&mut word_bytes)?;
+            data.push(u64::from_le_bytes(word_bytes));
+        }
+        let null_bitmap = NullBitmap::from_raw(data, bm_len);
         Ok(Self {
             encoder,
-            row_count: 0,
-            null_bitmap: NullBitmap::new(),
+            row_count,
+            null_bitmap,
         })
     }
 }

@@ -697,17 +697,20 @@ impl core::TimeTravelEdgeStore {
         use std::fs;
         let path = path.as_ref();
         fs::create_dir_all(path)?;
+        crate::storage::compression::cleanup_shadow_files(path)?;
 
-        let meta_path = path.join("meta.bin");
-        let mut meta_file = std::fs::File::create(&meta_path)?;
+        let crate::storage::compression::CompressionType::Zstd { level } = compression;
+        let page_size = crate::storage::compression::DEFAULT_PAGE_SIZE;
+
+        let mut meta_payload = Vec::new();
         write_header_to(
-            &mut meta_file,
+            &mut meta_payload,
             crate::storage::persistence::section::EDGE_META,
         )
         .map_err(|e| StorageError::io_error(format!("Failed to write edge meta header: {}", e)))?;
 
         persistence::flush_metadata(
-            &mut meta_file,
+            &mut meta_payload,
             self.label,
             self.src_label,
             self.dst_label,
@@ -718,30 +721,29 @@ impl core::TimeTravelEdgeStore {
             &self.mvcc.tombstones,
             self.mvcc.min_active_snapshot_ts,
         )?;
-        drop(meta_file);
-        crate::storage::compression::compress_file_inplace(&meta_path, compression)?;
+        persistence::write_pages_to_file(&path.join("meta.bin"), &meta_payload, page_size, level)?;
 
-        let out_csr_path = path.join("out_csr.bin");
-        persistence::flush_csr(
+        let mut out_csr_payload = Vec::new();
+        persistence::serialize_csr(
             &self.out_csr,
             &self.out_segments,
-            &out_csr_path,
             crate::storage::persistence::section::EDGE_OUT_CSR,
+            &mut out_csr_payload,
         )?;
-        crate::storage::compression::compress_file_inplace(&out_csr_path, compression)?;
+        persistence::write_pages_to_file(&path.join("out_csr.bin"), &out_csr_payload, page_size, level)?;
 
-        let in_csr_path = path.join("in_csr.bin");
-        persistence::flush_csr(
+        let mut in_csr_payload = Vec::new();
+        persistence::serialize_csr(
             &self.in_csr,
             &self.in_segments,
-            &in_csr_path,
             crate::storage::persistence::section::EDGE_IN_CSR,
+            &mut in_csr_payload,
         )?;
-        crate::storage::compression::compress_file_inplace(&in_csr_path, compression)?;
+        persistence::write_pages_to_file(&path.join("in_csr.bin"), &in_csr_payload, page_size, level)?;
 
-        let props_path = path.join("properties.bin");
-        persistence::flush_properties(&self.properties, &props_path)?;
-        crate::storage::compression::compress_file_inplace(&props_path, compression)?;
+        let mut props_payload = Vec::new();
+        persistence::serialize_properties(&self.properties, &mut props_payload)?;
+        persistence::write_pages_to_file(&path.join("properties.bin"), &props_payload, page_size, level)?;
 
         Ok(())
     }
@@ -751,7 +753,7 @@ impl core::TimeTravelEdgeStore {
         let path = path.as_ref();
 
         let meta_path = path.join("meta.bin");
-        let meta_data = crate::storage::compression::read_decompressed(&meta_path)?;
+        let meta_data = persistence::read_pages_from_file(&meta_path)?;
         let mut meta_cursor = &meta_data[..];
         let mut header_buf = [0u8; crate::storage::persistence::HEADER_SIZE];
         meta_cursor.read_exact(&mut header_buf)?;

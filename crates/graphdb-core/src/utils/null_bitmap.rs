@@ -57,6 +57,11 @@ impl NullBitmap {
         }
     }
 
+    /// Create a null bitmap from raw u64 word data and element length.
+    pub fn from_raw(data: Vec<u64>, len: usize) -> Self {
+        Self { data, len }
+    }
+
     /// Calculate number of words needed for given length
     fn word_count(len: usize) -> usize {
         len.div_ceil(Self::BITS_PER_WORD)
