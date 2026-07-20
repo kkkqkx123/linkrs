@@ -12,6 +12,7 @@ graphdb-sync = { path = "../graphdb-sync" }
 serde.workspace = true
 serde_json.workspace = true
 postcard.workspace = true
+zstd.workspace = true
 thiserror.workspace = true
 log.workspace = true
 parking_lot.workspace = true

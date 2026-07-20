@@ -40,6 +40,17 @@ impl StringDictionary {
         self.values.get(index as usize).map(|s| s.as_ref())
     }
 
+    pub fn sorted_entries(&self) -> Vec<(u32, &str)> {
+        let mut entries: Vec<(u32, &str)> = self
+            .values
+            .iter()
+            .enumerate()
+            .map(|(idx, s)| (idx as u32, s.as_ref()))
+            .collect();
+        entries.sort_by(|a, b| a.1.cmp(b.1));
+        entries
+    }
+
     pub fn memory_usage(&self) -> usize {
         let values_size: usize = self.values.iter().map(|s| s.len()).sum();
         let overhead = self.values.len() * std::mem::size_of::<Arc<str>>();
@@ -341,5 +352,28 @@ mod tests {
         assert_eq!(col.get(1), Some(Value::String("b".to_string())));
         assert!(col.get(2).is_none());
         assert_eq!(col.get(3), Some(Value::String("a".to_string())));
+    }
+
+    #[test]
+    fn test_sorted_entries_deterministic() {
+        let mut dict1 = StringDictionary::new();
+        dict1.insert("cherry");
+        dict1.insert("apple");
+        dict1.insert("banana");
+
+        let mut dict2 = StringDictionary::new();
+        dict2.insert("banana");
+        dict2.insert("cherry");
+        dict2.insert("apple");
+
+        let entries1 = dict1.sorted_entries();
+        let entries2 = dict2.sorted_entries();
+
+        let strings1: Vec<&str> = entries1.iter().map(|(_, s)| *s).collect();
+        let strings2: Vec<&str> = entries2.iter().map(|(_, s)| *s).collect();
+
+        assert_eq!(strings1, vec!["apple", "banana", "cherry"]);
+        assert_eq!(strings2, vec!["apple", "banana", "cherry"]);
+        assert_eq!(strings1, strings2);
     }
 }

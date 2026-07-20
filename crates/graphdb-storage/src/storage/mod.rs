@@ -8,8 +8,9 @@
 
 pub(crate) mod cache;
 pub(crate) mod client;
+pub(crate) mod column_stats;
 pub(crate) mod compression;
-pub mod cursor;
+pub(crate) mod cursor;
 pub(crate) mod edge;
 pub(crate) mod encoding;
 pub(crate) mod engine;
@@ -20,6 +21,7 @@ pub(crate) mod schema;
 
 mod metrics;
 pub(crate) mod persistence;
+pub(crate) mod safe_read;
 pub(crate) mod types;
 pub(crate) mod vertex;
 

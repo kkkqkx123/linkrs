@@ -329,6 +329,42 @@ impl FsstColumn {
         self.encoded_data.len()
     }
 
+    pub fn rebuild(&mut self, new_strings: &[String]) -> crate::core::StorageResult<()> {
+        let mut all_strings: Vec<String> = Vec::with_capacity(self.encoded_data.len() + new_strings.len());
+
+        for (idx, encoded) in self.encoded_data.iter().enumerate() {
+            if self.null_bitmap.is_null(idx) {
+                continue;
+            }
+            let decoded = self.encoder.decode(encoded);
+            let s = String::from_utf8(decoded).map_err(|e| {
+                crate::core::StorageError::io_error(format!("FSST rebuild decode utf8: {}", e))
+            })?;
+            all_strings.push(s);
+        }
+
+        all_strings.extend_from_slice(new_strings);
+
+        if all_strings.is_empty() {
+            return Ok(());
+        }
+
+        let refs: Vec<&str> = all_strings.iter().map(|s| s.as_str()).collect();
+        let new_encoder = FsstEncoder::train(&refs, SYMBOL_TABLE_SIZE);
+
+        for (idx, encoded) in self.encoded_data.iter_mut().enumerate() {
+            if self.null_bitmap.is_null(idx) {
+                continue;
+            }
+            let s = &all_strings[idx];
+            *encoded = new_encoder.encode(s);
+        }
+
+        self.encoder = new_encoder;
+
+        Ok(())
+    }
+
     pub fn memory_usage(&self) -> usize {
         let data_size: usize = self.encoded_data.iter().map(|v| v.len()).sum();
         let null_size = self.null_bitmap.memory_usage();
@@ -638,5 +674,82 @@ mod tests {
 
         let encoder = FsstEncoder::train(&refs, 100);
         assert!(encoder.symbol_count() > 0);
+    }
+
+    #[test]
+    fn test_fsst_column_rebuild() {
+        let strings = vec![
+            Some("prefix_common_data_suffix_aaa"),
+            Some("prefix_common_data_suffix_bbb"),
+            Some("prefix_common_data_suffix_ccc"),
+        ];
+        let non_null: Vec<&str> = strings.iter().filter_map(|s| *s).collect();
+        let encoder = FsstEncoder::train(&non_null, 100);
+
+        let mut column = FsstColumn {
+            encoder,
+            encoded_data: Vec::with_capacity(strings.len()),
+            null_bitmap: NullBitmap::with_capacity(strings.len()),
+        };
+
+        for value in &strings {
+            match value {
+                Some(s) => {
+                    column.encoded_data.push(column.encoder.encode(s));
+                    column.null_bitmap.push(false);
+                }
+                None => {
+                    column.encoded_data.push(Vec::new());
+                    column.null_bitmap.push(true);
+                }
+            }
+        }
+
+        let original_compressed: usize = column.encoded_data.iter().map(|v| v.len()).sum();
+
+        let new_strings = vec![
+            "prefix_common_data_suffix_ddd".to_string(),
+            "prefix_common_data_suffix_eee".to_string(),
+        ];
+        column.rebuild(&new_strings).unwrap();
+
+        let new_compressed: usize = column.encoded_data.iter().map(|v| v.len()).sum();
+
+        assert!(new_compressed <= original_compressed * 3 / 2);
+
+        assert_eq!(column.len(), 3);
+    }
+
+    #[test]
+    fn test_fsst_rebuild_empty_new_strings() {
+        let strings = vec![
+            Some("hello world"),
+            Some("hello rust"),
+            Some("hello code"),
+        ];
+        let non_null: Vec<&str> = strings.iter().filter_map(|s| *s).collect();
+        let encoder = FsstEncoder::train(&non_null, 100);
+
+        let mut column = FsstColumn {
+            encoder,
+            encoded_data: Vec::with_capacity(strings.len()),
+            null_bitmap: NullBitmap::with_capacity(strings.len()),
+        };
+
+        for value in &strings {
+            match value {
+                Some(s) => {
+                    column.encoded_data.push(column.encoder.encode(s));
+                    column.null_bitmap.push(false);
+                }
+                None => {
+                    column.encoded_data.push(Vec::new());
+                    column.null_bitmap.push(true);
+                }
+            }
+        }
+
+        column.rebuild(&[]).unwrap();
+        assert_eq!(column.len(), 3);
     }
 }

@@ -13,6 +13,8 @@
 
 use crate::core::{StorageError, StorageResult};
 
+use crate::storage::safe_read::{BoundedReader, SafeSerializable};
+
 pub const DEFAULT_PAGE_SIZE: usize = 64 * 1024 - 1;
 pub const PAGE_MAGIC: [u8; 4] = *b"PGZC";
 pub const COLUMN_FILE_MAGIC: [u8; 8] = *b"GRPHDCOL";
@@ -91,6 +93,7 @@ pub fn decompress_payload(data: &[u8]) -> StorageResult<Vec<u8>> {
 
 
 
+#[derive(Debug)]
 pub struct ColumnFileHeader {
     pub page_size: usize,
     pub page_count: u32,
@@ -144,7 +147,13 @@ impl ColumnFileHeader {
         reader.read_exact(&mut version_bytes).map_err(|e| {
             StorageError::io_error(format!("ColumnFileHeader read version: {}", e))
         })?;
-        let _version = u16::from_le_bytes(version_bytes);
+        let version = u16::from_le_bytes(version_bytes);
+        if version != COLUMN_FILE_VERSION {
+            return Err(StorageError::unsupported_version(
+                version as u32,
+                COLUMN_FILE_VERSION as u32,
+            ));
+        }
         let mut page_size_bytes = [0u8; 2];
         reader.read_exact(&mut page_size_bytes).map_err(|e| {
             StorageError::io_error(format!("ColumnFileHeader read page_size: {}", e))
@@ -328,10 +337,19 @@ impl PageReader {
 
     pub fn read_page<R: std::io::Read>(&self, reader: &mut R) -> StorageResult<Vec<u8>> {
         let header = PageHeader::deserialize(reader)?;
-        let mut compressed = vec![0u8; header.compressed_len as usize];
-        reader.read_exact(&mut compressed).map_err(|e| {
+        let compressed_len = header.compressed_len as usize;
+        let mut bounded = crate::storage::safe_read::BoundedReader::new(reader, compressed_len);
+        let mut compressed = vec![0u8; compressed_len];
+        bounded.read_exact(&mut compressed).map_err(|e| {
             StorageError::io_error(format!("PageReader read compressed data: {}", e))
         })?;
+        if bounded.remaining() != 0 {
+            return Err(StorageError::deserialize_error(format!(
+                "expected {} bytes of page data, but {} bytes remained",
+                compressed_len,
+                bounded.remaining()
+            )));
+        }
         let actual_crc = crc32fast::hash(&compressed);
         if actual_crc != header.crc32 {
             return Err(StorageError::deserialize_error(
@@ -358,8 +376,11 @@ impl PageReader {
     #[allow(dead_code)]
     pub fn skip_page<R: std::io::Read>(&self, reader: &mut R) -> StorageResult<()> {
         let header = PageHeader::deserialize(reader)?;
-        let mut skip_buf = vec![0u8; header.compressed_len as usize];
-        reader.read_exact(&mut skip_buf).map_err(|e| {
+        let mut bounded = crate::storage::safe_read::BoundedReader::new(
+            reader,
+            header.compressed_len as usize,
+        );
+        bounded.skip_all().map_err(|e| {
             StorageError::io_error(format!("PageReader skip page data: {}", e))
         })?;
         Ok(())
@@ -420,9 +441,73 @@ pub fn cleanup_shadow_files<P: AsRef<std::path::Path>>(dir: P) -> StorageResult<
     Ok(cleaned)
 }
 
+impl SafeSerializable for PageHeader {
+    fn serialize(&self, writer: &mut impl std::io::Write) -> StorageResult<()> {
+        PageHeader::serialize(self, writer).map(|_| ())
+    }
+
+    fn deserialize(reader: &mut BoundedReader<'_>) -> StorageResult<Self> {
+        let mut magic = [0u8; 4];
+        reader.read_exact(&mut magic)?;
+        if magic != PAGE_MAGIC {
+            return Err(StorageError::deserialize_error(format!(
+                "Invalid page magic: {:?}, expected {:?}",
+                magic, PAGE_MAGIC
+            )));
+        }
+        let mut buf = [0u8; 11];
+        reader.read_exact(&mut buf)?;
+        let page_size = u32::from_le_bytes(buf[0..4].try_into().unwrap());
+        let compression_type = buf[4];
+        let crc32 = u32::from_le_bytes(buf[5..9].try_into().unwrap());
+        let compressed_len = u16::from_le_bytes(buf[9..11].try_into().unwrap()) as u32;
+        Ok(Self {
+            page_size,
+            compression_type,
+            crc32,
+            compressed_len,
+        })
+    }
+}
+
+impl SafeSerializable for ColumnFileHeader {
+    fn serialize(&self, writer: &mut impl std::io::Write) -> StorageResult<()> {
+        ColumnFileHeader::serialize(self, writer).map(|_| ())
+    }
+
+    fn deserialize(reader: &mut BoundedReader<'_>) -> StorageResult<Self> {
+        let mut magic = [0u8; 8];
+        reader.read_exact(&mut magic)?;
+        if magic != COLUMN_FILE_MAGIC {
+            return Err(StorageError::deserialize_error(format!(
+                "Invalid column file magic: {:?}, expected {:?}",
+                magic, COLUMN_FILE_MAGIC
+            )));
+        }
+        let mut buf = [0u8; 42];
+        reader.read_exact(&mut buf)?;
+        let version = u16::from_le_bytes(buf[0..2].try_into().unwrap());
+        if version != COLUMN_FILE_VERSION {
+            return Err(StorageError::unsupported_version(
+                version as u32,
+                COLUMN_FILE_VERSION as u32,
+            ));
+        }
+        let page_size = u16::from_le_bytes(buf[2..4].try_into().unwrap()) as usize;
+        let page_count = u32::from_le_bytes(buf[4..8].try_into().unwrap());
+        let total_rows = u32::from_le_bytes(buf[8..12].try_into().unwrap());
+        Ok(Self {
+            page_size,
+            page_count,
+            total_rows,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::safe_read::{BoundedReader, SafeSerializable};
 
     #[test]
     fn test_compress_decompress_roundtrip_zstd() {
@@ -472,5 +557,86 @@ mod tests {
         assert_eq!(result.page_size, header.page_size);
         assert_eq!(result.page_count, header.page_count);
         assert_eq!(result.total_rows, header.total_rows);
+    }
+
+    #[test]
+    fn test_column_file_header_rejects_wrong_version() {
+        let header = ColumnFileHeader {
+            page_size: 4096,
+            page_count: 10,
+            total_rows: 1000,
+        };
+        let mut buffer = Vec::new();
+        header.serialize(&mut buffer).unwrap();
+        let version_offset = 8;
+        buffer[version_offset] = 0xFF;
+        buffer[version_offset + 1] = 0xFF;
+        let mut cursor = std::io::Cursor::new(&buffer);
+        let result = ColumnFileHeader::deserialize(&mut cursor);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), crate::core::error::storage::StorageErrorKind::UnsupportedVersion);
+    }
+
+    #[test]
+    fn test_page_header_safe_serializable_roundtrip() {
+        let header = PageHeader {
+            page_size: 128,
+            compression_type: COMPRESSION_MARKER_ZSTD,
+            crc32: 0xDEADBEEF,
+            compressed_len: 64,
+        };
+        let mut buffer = Vec::new();
+        header.serialize(&mut buffer).unwrap();
+        let mut cursor = std::io::Cursor::new(&buffer);
+        let mut bounded = BoundedReader::new(&mut cursor, buffer.len());
+        let result = PageHeader::deserialize(&mut bounded).unwrap();
+        assert_eq!(result.page_size, header.page_size);
+        assert_eq!(result.compression_type, header.compression_type);
+        assert_eq!(result.crc32, header.crc32);
+        assert_eq!(result.compressed_len, header.compressed_len);
+    }
+
+    #[test]
+    fn test_page_header_safe_serializable_rejects_truncated() {
+        let header = PageHeader {
+            page_size: 128,
+            compression_type: COMPRESSION_MARKER_ZSTD,
+            crc32: 0xDEADBEEF,
+            compressed_len: 64,
+        };
+        let mut buffer = Vec::new();
+        header.serialize(&mut buffer).unwrap();
+        let truncated = &buffer[..buffer.len() - 2];
+        let mut cursor = std::io::Cursor::new(truncated);
+        let mut bounded = BoundedReader::new(&mut cursor, truncated.len());
+        let result = PageHeader::deserialize(&mut bounded);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_column_file_header_safe_serializable_rejects_truncated() {
+        let header = ColumnFileHeader {
+            page_size: 4096,
+            page_count: 10,
+            total_rows: 1000,
+        };
+        let mut buffer = Vec::new();
+        header.serialize(&mut buffer).unwrap();
+        let truncated = &buffer[..buffer.len() - 10];
+        let mut cursor = std::io::Cursor::new(truncated);
+        let mut bounded = BoundedReader::new(&mut cursor, truncated.len());
+        let result = ColumnFileHeader::deserialize(&mut bounded);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_safe_read_prevents_over_read() {
+        let data = [0u8; 100];
+        let mut cursor = std::io::Cursor::new(&data[..]);
+        let mut reader = BoundedReader::new(&mut cursor, 10);
+        let mut buf = [0u8; 20];
+        let result = reader.read_exact(&mut buf);
+        assert!(result.is_err());
     }
 }

@@ -43,10 +43,13 @@ impl Default for SpillConfig {
 const RUN_MAGIC: [u8; 4] = [0x47, 0x52, 0x53, 0x50];
 
 /// Current run file format version.
-const RUN_VERSION: u32 = 1;
+const RUN_VERSION: u32 = 2;
 
 /// Size of the run file header in bytes.
-const RUN_HEADER_SIZE: u32 = 40;
+const RUN_HEADER_SIZE: u32 = 41;
+
+/// Minimum body size (bytes) below which compression is skipped.
+const COMPRESSION_MIN_SIZE: usize = 256;
 
 // ── Simple FNV-1a 64-bit checksum ───────────────────────────────────────────
 
@@ -67,9 +70,17 @@ fn fnv1a_64_update(mut hash: u64, data: &[u8]) -> u64 {
 
 // ── RunHeader ────────────────────────────────────────────────────────────────
 
+/// Compression type stored in RunHeader.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum RunCompression {
+    None = 0,
+    Zstd = 1,
+}
+
 /// Header for a sorted spill run file.
 ///
-/// Layout (40 bytes total):
+/// Layout (41 bytes total):
 /// ```text
 /// [0..4)   magic: b"GRSP"
 /// [4..8)   version: u32 LE
@@ -77,7 +88,8 @@ fn fnv1a_64_update(mut hash: u64, data: &[u8]) -> u64 {
 /// [16..24) row_count: u64 LE
 /// [24..32) body_checksum: u64 LE  (FNV-1a of all body bytes)
 /// [32..36) flags: u32 LE          (bit 0: has_sort_keys)
-/// [36..40) reserved: u32 LE       (zero)
+/// [36..37) compression_type: u8   (0=none, 1=zstd)
+/// [37..41) reserved: u32 LE       (zero)
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct RunHeader {
@@ -86,23 +98,25 @@ pub struct RunHeader {
     pub row_count: u64,
     pub body_checksum: u64,
     pub flags: u32,
+    pub compression_type: RunCompression,
 }
 
 impl RunHeader {
-    /// Encode header into a 40-byte buffer.
+    /// Encode header into a 41-byte buffer.
     fn encode(&self) -> [u8; RUN_HEADER_SIZE as usize] {
-        let mut buf = [0u8; 40];
+        let mut buf = [0u8; RUN_HEADER_SIZE as usize];
         buf[0..4].copy_from_slice(&RUN_MAGIC);
         buf[4..8].copy_from_slice(&self.version.to_le_bytes());
         buf[8..16].copy_from_slice(&self.schema_fingerprint.to_le_bytes());
         buf[16..24].copy_from_slice(&self.row_count.to_le_bytes());
         buf[24..32].copy_from_slice(&self.body_checksum.to_le_bytes());
         buf[32..36].copy_from_slice(&self.flags.to_le_bytes());
-        // reserved bytes 36..40 stay zero
+        buf[36] = self.compression_type as u8;
+        // reserved bytes 37..41 stay zero
         buf
     }
 
-    /// Decode header from a 40-byte buffer, validating magic and version.
+    /// Decode header from a 41-byte buffer, validating magic and version.
     fn decode(buf: &[u8]) -> Result<Self, QueryError> {
         if buf.len() < RUN_HEADER_SIZE as usize {
             return Err(QueryError::execution(
@@ -121,12 +135,23 @@ impl RunHeader {
                 version, RUN_VERSION
             )));
         }
+        let compression_type = match buf[36] {
+            0 => RunCompression::None,
+            1 => RunCompression::Zstd,
+            other => {
+                return Err(QueryError::execution(format!(
+                    "spill run: unknown compression type {}",
+                    other
+                )))
+            }
+        };
         Ok(Self {
             version,
             schema_fingerprint: u64::from_le_bytes(buf[8..16].try_into().unwrap()),
             row_count: u64::from_le_bytes(buf[16..24].try_into().unwrap()),
             body_checksum: u64::from_le_bytes(buf[24..32].try_into().unwrap()),
             flags: u32::from_le_bytes(buf[32..36].try_into().unwrap()),
+            compression_type,
         })
     }
 }
@@ -238,6 +263,7 @@ pub struct RunWriter {
     pub(crate) row_count: u64,
     pub(crate) body_bytes: u64,
     pub(crate) body_hash: u64,
+    pub(crate) body_buffer: Vec<u8>,
 }
 
 impl RunWriter {
@@ -255,6 +281,7 @@ impl RunWriter {
             row_count: 0,
             body_bytes: 0,
             body_hash: 0xcbf29ce484222325,
+            body_buffer: Vec::new(),
         }
     }
 
@@ -264,12 +291,8 @@ impl RunWriter {
             .map_err(|e| QueryError::execution(format!("run serialize: {}", e)))?;
         let len = encoded.len() as u64;
         let len_bytes = len.to_le_bytes();
-        self.writer
-            .write_all(&len_bytes)
-            .map_err(|e| QueryError::execution(format!("run write len: {}", e)))?;
-        self.writer
-            .write_all(&encoded)
-            .map_err(|e| QueryError::execution(format!("run write data: {}", e)))?;
+        self.body_buffer.extend_from_slice(&len_bytes);
+        self.body_buffer.extend_from_slice(&encoded);
         self.row_count += 1;
         self.body_bytes += 8 + len as u64;
         self.body_hash = fnv1a_64_update(self.body_hash, &len_bytes);
@@ -285,12 +308,29 @@ impl RunWriter {
         Ok(())
     }
 
-    /// Finalize the run: write the header at the start of the file, then
-    /// flush.  Returns `SpilledRun` metadata.
+    /// Finalize the run: optionally compress body, write header + body, flush.
+    /// Returns `SpilledRun` metadata.
     pub fn finalize(mut self) -> Result<SpilledRun, QueryError> {
+        use std::io::Seek;
+
+        let (compression_type, final_body) = if self.body_buffer.len() >= COMPRESSION_MIN_SIZE {
+            let compressed = zstd::encode_all(self.body_buffer.as_slice(), 3)
+                .map_err(|e| QueryError::execution(format!("run compress: {}", e)))?;
+            if compressed.len() < self.body_buffer.len() {
+                (RunCompression::Zstd, compressed)
+            } else {
+                (RunCompression::None, std::mem::take(&mut self.body_buffer))
+            }
+        } else {
+            (RunCompression::None, std::mem::take(&mut self.body_buffer))
+        };
+
+        self.writer
+            .write_all(&final_body)
+            .map_err(|e| QueryError::execution(format!("run write body: {}", e)))?;
         self.writer
             .flush()
-            .map_err(|e| QueryError::execution(format!("run flush: {}", e)))?;
+            .map_err(|e| QueryError::execution(format!("run flush body: {}", e)))?;
 
         let header = RunHeader {
             version: RUN_VERSION,
@@ -298,10 +338,10 @@ impl RunWriter {
             row_count: self.row_count,
             body_checksum: self.body_hash,
             flags: 0,
+            compression_type,
         };
 
-        // Write header at position 0 of the file (overwrite any header placeholder).
-        use std::io::Seek;
+        // Seek back to position 0 to overwrite header placeholder with actual header.
         self.writer
             .seek(std::io::SeekFrom::Start(0))
             .map_err(|e| QueryError::execution(format!("run seek: {}", e)))?;
@@ -313,7 +353,7 @@ impl RunWriter {
             .flush()
             .map_err(|e| QueryError::execution(format!("run flush header: {}", e)))?;
 
-        let file_size = self.body_bytes + RUN_HEADER_SIZE as u64;
+        let file_size = final_body.len() as u64 + RUN_HEADER_SIZE as u64;
         Ok(SpilledRun {
             path: self.path.clone(),
             row_count: self.row_count,
@@ -358,7 +398,6 @@ impl RunReader {
         let mut f = std::fs::File::open(&run.path)
             .map_err(|e| QueryError::execution(format!("open run file: {}", e)))?;
 
-        use std::io::Seek;
         // Read header
         let mut header_buf = [0u8; RUN_HEADER_SIZE as usize];
         f.read_exact(&mut header_buf)
@@ -381,11 +420,22 @@ impl RunReader {
             )));
         }
 
-        // Verify checksum by re-reading all body data
+        // Read all body data
         let mut body_data = Vec::new();
         f.read_to_end(&mut body_data)
             .map_err(|e| QueryError::execution(format!("read run body: {}", e)))?;
-        let actual_checksum = fnv1a_64(&body_data);
+
+        // Decompress if needed
+        let decompressed = match header.compression_type {
+            RunCompression::None => body_data,
+            RunCompression::Zstd => {
+                zstd::decode_all(body_data.as_slice())
+                    .map_err(|e| QueryError::execution(format!("run decompress: {}", e)))?
+            }
+        };
+
+        // Verify checksum on decompressed data
+        let actual_checksum = fnv1a_64(&decompressed);
         if actual_checksum != header.body_checksum {
             return Err(QueryError::execution(format!(
                 "spill run: checksum mismatch: expected {}, got {}",
@@ -393,12 +443,8 @@ impl RunReader {
             )));
         }
 
-        // Seek back to start of body
-        f.seek(std::io::SeekFrom::Start(RUN_HEADER_SIZE as u64))
-            .map_err(|e| QueryError::execution(format!("seek run body: {}", e)))?;
-
         Ok(Self {
-            reader: BufReader::new(f),
+            reader: BufReader::new(std::io::Cursor::new(decompressed)),
             path: run.path.clone(),
             header,
             remaining: header.row_count,
@@ -1225,5 +1271,35 @@ mod tests {
         let quota = DiskQuota::new(0); // 0 = unlimited
         quota.try_reserve(u64::MAX).unwrap();
         assert!(quota.current() > 0);
+    }
+
+    #[test]
+    fn test_run_compression_roundtrip() {
+        let manager = SpillManager::new(SpillConfig::default(), 206).unwrap();
+        let fp: u64 = 0xabcdef;
+        let mut writer = manager.create_run_writer(fp).unwrap();
+
+        let rows = sample_rows(200);
+        writer.write_rows(&rows).unwrap();
+        let run = writer.finalize().unwrap();
+        assert_eq!(run.row_count, 200);
+
+        let mut reader = RunReader::open(&run).unwrap();
+        assert_eq!(reader.read_all().unwrap(), rows);
+        assert_eq!(reader.header().compression_type, RunCompression::Zstd);
+    }
+
+    #[test]
+    fn test_run_small_data_uncompressed() {
+        let manager = SpillManager::new(SpillConfig::default(), 207).unwrap();
+        let mut writer = manager.create_run_writer(0).unwrap();
+
+        let rows = sample_rows(2);
+        writer.write_rows(&rows).unwrap();
+        let run = writer.finalize().unwrap();
+
+        let mut reader = RunReader::open(&run).unwrap();
+        assert_eq!(reader.read_all().unwrap(), rows);
+        assert_eq!(reader.header().compression_type, RunCompression::None);
     }
 }

@@ -13,6 +13,7 @@ pub mod bitpacking;
 pub mod dictionary;
 pub mod fsst;
 pub mod rle;
+pub mod selector;
 
 use std::io::{Read, Write};
 
@@ -23,6 +24,7 @@ pub use bitpacking::BitPackedIntColumn;
 pub use dictionary::DictionaryColumn;
 pub use fsst::{FsstColumn, FsstEncoder};
 pub use rle::{RleBoolColumn, RleIntColumn};
+pub use selector::{CompressionMetrics, EncodingSelector, EncodingThresholds};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EncodingType {

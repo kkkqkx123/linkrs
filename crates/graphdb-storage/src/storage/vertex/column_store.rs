@@ -11,6 +11,7 @@
 use crate::core::value::{DateTimeValue, DateValue, TimeValue, VectorValue};
 use crate::core::{DataType, StorageError, StorageResult, Value};
 
+use crate::storage::column_stats::{self, ColumnStats};
 use crate::storage::encoding::{
     AlpColumn, BitPackedIntColumn, ColumnEncoding, DictionaryColumn, EncodingType, FsstColumn,
     FsstEncoder, RleBoolColumn, RleIntColumn,
@@ -690,6 +691,7 @@ pub struct Column {
     pub nullable: bool,
     inner: ColumnInner,
     encoding: ColumnEncoding,
+    stats: Option<ColumnStats>,
 }
 
 impl Column {
@@ -707,6 +709,7 @@ impl Column {
             nullable,
             inner,
             encoding: ColumnEncoding::None,
+            stats: None,
         }
     }
 
@@ -884,6 +887,31 @@ impl Column {
 
     pub fn encoding_mut(&mut self) -> &mut ColumnEncoding {
         &mut self.encoding
+    }
+
+    pub fn stats(&self) -> Option<&ColumnStats> {
+        self.stats.as_ref()
+    }
+
+    pub fn set_stats(&mut self, stats: ColumnStats) {
+        self.stats = Some(stats);
+    }
+
+    pub fn compute_and_set_stats(&mut self) {
+        let values: Vec<Option<Value>> = (0..self.len()).map(|i| self.get(i)).collect();
+        let raw_size = self.len().max(1) * element_size(&self.data_type);
+        let compressed_size = if self.encoding.is_encoded() {
+            self.encoding.memory_usage() as u64
+        } else {
+            raw_size as u64
+        };
+        let stats = column_stats::compute_stats(
+            &values,
+            self.encoding.encoding_type(),
+            compressed_size,
+            raw_size as u64,
+        );
+        self.stats = Some(stats);
     }
 
     fn sync_row_count_from_encoding(&mut self) {
@@ -1214,6 +1242,10 @@ impl ColumnStore {
 
     pub fn row_count(&self) -> usize {
         self.columns.first().map(|c| c.len()).unwrap_or(0)
+    }
+
+    pub fn column_stats(&self, name: &str) -> Option<&ColumnStats> {
+        self.get_column(name).and_then(|c| c.stats())
     }
 
     pub fn clear(&mut self) {

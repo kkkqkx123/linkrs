@@ -16,6 +16,7 @@ pub struct RleRun<T> {
 #[derive(Debug, Clone)]
 pub struct RleEncoder<T> {
     runs: Vec<RleRun<T>>,
+    cumulative_counts: Vec<usize>,
     total_count: usize,
 }
 
@@ -23,6 +24,7 @@ impl<T: Clone + PartialEq> RleEncoder<T> {
     pub fn new() -> Self {
         Self {
             runs: Vec::new(),
+            cumulative_counts: Vec::new(),
             total_count: 0,
         }
     }
@@ -33,11 +35,15 @@ impl<T: Clone + PartialEq> RleEncoder<T> {
         if let Some(last_run) = self.runs.last_mut() {
             if last_run.value == value {
                 last_run.count += 1;
+                if let Some(last) = self.cumulative_counts.last_mut() {
+                    *last += 1;
+                }
                 return;
             }
         }
 
         self.runs.push(RleRun { value, count: 1 });
+        self.cumulative_counts.push(self.total_count);
     }
 
     pub fn decode(&self, index: usize) -> Option<&T> {
@@ -54,6 +60,26 @@ impl<T: Clone + PartialEq> RleEncoder<T> {
         }
 
         None
+    }
+
+    pub fn get(&self, row_idx: usize) -> Option<&T> {
+        if row_idx >= self.total_count {
+            return None;
+        }
+        match self.cumulative_counts.binary_search(&(row_idx + 1)) {
+            Ok(idx) | Err(idx) if idx < self.runs.len() => Some(&self.runs[idx].value),
+            _ => None,
+        }
+    }
+
+    pub fn rebuild_cumulative_counts(&mut self) {
+        self.cumulative_counts.clear();
+        let mut sum = 0usize;
+        for run in &self.runs {
+            sum += run.count;
+            self.cumulative_counts.push(sum);
+        }
+        self.total_count = sum;
     }
 
     pub fn len(&self) -> usize {
@@ -118,7 +144,7 @@ impl RleIntColumn {
         if self.null_bitmap.is_null(row_idx) {
             return None;
         }
-        self.encoder.decode(row_idx).map(|&v| Value::BigInt(v))
+        self.encoder.get(row_idx).map(|&v| Value::BigInt(v))
     }
 
     pub fn len(&self) -> usize {
@@ -163,6 +189,7 @@ impl RleIntColumn {
             let cnt = u32::from_le_bytes(cnt_bytes) as usize;
             encoder.runs.push(RleRun { value: val, count: cnt });
         }
+        encoder.rebuild_cumulative_counts();
         let mut bm_len_bytes = [0u8; 4];
         reader.read_exact(&mut bm_len_bytes)?;
         let bm_len = u32::from_le_bytes(bm_len_bytes) as usize;
@@ -226,7 +253,7 @@ impl RleBoolColumn {
         if self.null_bitmap.is_null(row_idx) {
             return None;
         }
-        self.encoder.decode(row_idx).map(|&v| Value::Bool(v))
+        self.encoder.get(row_idx).map(|&v| Value::Bool(v))
     }
 
     pub fn len(&self) -> usize {
@@ -271,6 +298,7 @@ impl RleBoolColumn {
             let cnt = u32::from_le_bytes(cnt_bytes) as usize;
             encoder.runs.push(RleRun { value: val, count: cnt });
         }
+        encoder.rebuild_cumulative_counts();
         let mut bm_len_bytes = [0u8; 4];
         reader.read_exact(&mut bm_len_bytes)?;
         let bm_len = u32::from_le_bytes(bm_len_bytes) as usize;
@@ -348,5 +376,47 @@ mod tests {
         assert_eq!(col.get(2), Some(Value::Bool(false)));
         assert!(col.null_bitmap.is_null(3));
         assert_eq!(col.encoder.runs.len(), 2);
+    }
+
+    #[test]
+    fn test_rle_binary_search_get() {
+        let mut encoder = RleEncoder::<i64>::new();
+
+        for _ in 0..100 {
+            encoder.encode(1);
+        }
+        for _ in 0..50 {
+            encoder.encode(2);
+        }
+        for _ in 0..200 {
+            encoder.encode(3);
+        }
+
+        assert_eq!(encoder.len(), 350);
+        assert_eq!(encoder.runs.len(), 3);
+
+        assert_eq!(encoder.get(0), Some(&1));
+        assert_eq!(encoder.get(99), Some(&1));
+        assert_eq!(encoder.get(100), Some(&2));
+        assert_eq!(encoder.get(149), Some(&2));
+        assert_eq!(encoder.get(150), Some(&3));
+        assert_eq!(encoder.get(349), Some(&3));
+        assert_eq!(encoder.get(350), None);
+
+        assert_eq!(encoder.cumulative_counts, vec![100, 150, 350]);
+    }
+
+    #[test]
+    fn test_rle_rebuild_cumulative_counts() {
+        let mut encoder = RleEncoder::<i64>::new();
+        encoder.runs.push(RleRun { value: 10, count: 5 });
+        encoder.runs.push(RleRun { value: 20, count: 3 });
+        encoder.rebuild_cumulative_counts();
+        assert_eq!(encoder.cumulative_counts, vec![5, 8]);
+        assert_eq!(encoder.total_count, 8);
+        assert_eq!(encoder.get(0), Some(&10));
+        assert_eq!(encoder.get(4), Some(&10));
+        assert_eq!(encoder.get(5), Some(&20));
+        assert_eq!(encoder.get(7), Some(&20));
     }
 }

@@ -131,6 +131,22 @@ pub struct StorageConfig {
     /// Record cache TTI in seconds. Zero disables TTI.
     #[serde(default = "default_cache_tti_secs")]
     pub cache_tti_secs: u64,
+
+    /// Minimum number of rows required for string encoding analysis.
+    #[serde(default = "default_string_min_rows")]
+    pub string_min_rows: usize,
+
+    /// Minimum average string length to consider FSST encoding.
+    #[serde(default = "default_avg_length_threshold")]
+    pub avg_length_threshold: usize,
+
+    /// Cardinality ratio (distinct / total) below which Dictionary is preferred.
+    #[serde(default = "default_cardinality_ratio_threshold")]
+    pub cardinality_ratio_threshold: f64,
+
+    /// Ratio of new data to existing data that triggers FSST rebuild.
+    #[serde(default = "default_fsst_rebuild_threshold")]
+    pub fsst_rebuild_threshold: f64,
 }
 
 fn default_compression_level() -> u32 {
@@ -205,6 +221,22 @@ fn default_cache_tti_secs() -> u64 {
     300
 }
 
+fn default_string_min_rows() -> usize {
+    50
+}
+
+fn default_avg_length_threshold() -> usize {
+    16
+}
+
+fn default_cardinality_ratio_threshold() -> f64 {
+    0.5
+}
+
+fn default_fsst_rebuild_threshold() -> f64 {
+    0.2
+}
+
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
@@ -229,6 +261,10 @@ impl Default for StorageConfig {
             dirty_flush_bytes: default_dirty_flush_bytes(),
             cache_ttl_secs: default_cache_ttl_secs(),
             cache_tti_secs: default_cache_tti_secs(),
+            string_min_rows: default_string_min_rows(),
+            avg_length_threshold: default_avg_length_threshold(),
+            cardinality_ratio_threshold: default_cardinality_ratio_threshold(),
+            fsst_rebuild_threshold: default_fsst_rebuild_threshold(),
         }
     }
 }

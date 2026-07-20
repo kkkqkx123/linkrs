@@ -134,6 +134,16 @@ impl VertexTable {
                 let meta_len = meta_buf.len() as u32;
                 payload.extend_from_slice(&meta_len.to_le_bytes());
                 payload.extend_from_slice(&meta_buf);
+
+                if let Some(stats) = col.stats() {
+                    payload.push(1u8);
+                    let mut stats_buf = Vec::new();
+                    stats.serialize_meta(&mut stats_buf)?;
+                    payload.extend_from_slice(&(stats_buf.len() as u32).to_le_bytes());
+                    payload.extend_from_slice(&stats_buf);
+                } else {
+                    payload.push(0u8);
+                }
             } else {
                 payload.push(0u8);
                 let (data, offsets, bitmap) = col.get_flush_data();
@@ -159,6 +169,16 @@ impl VertexTable {
                     payload.extend_from_slice(&bitmap_bit_len.to_le_bytes());
                     payload.extend_from_slice(&(bitmap_bytes.len() as u32).to_le_bytes());
                     payload.extend_from_slice(bitmap_bytes);
+                } else {
+                    payload.push(0u8);
+                }
+
+                if let Some(stats) = col.stats() {
+                    payload.push(1u8);
+                    let mut stats_buf = Vec::new();
+                    stats.serialize_meta(&mut stats_buf)?;
+                    payload.extend_from_slice(&(stats_buf.len() as u32).to_le_bytes());
+                    payload.extend_from_slice(&stats_buf);
                 } else {
                     payload.push(0u8);
                 }
@@ -350,6 +370,20 @@ impl VertexTable {
                 let encoding_type = EncodingType::from_u8(meta_bytes[0]);
                 let mut meta_cursor = &meta_bytes[1..];
                 self.load_column_with_encoding(&name, encoding_type, &mut meta_cursor)?;
+
+                let mut has_stats_bytes = [0u8; 1];
+                cursor.read_exact(&mut has_stats_bytes)?;
+                if has_stats_bytes[0] == 1 {
+                    let mut stats_len_bytes = [0u8; 4];
+                    cursor.read_exact(&mut stats_len_bytes)?;
+                    let stats_len = u32::from_le_bytes(stats_len_bytes) as usize;
+                    let mut stats_bytes = vec![0u8; stats_len];
+                    cursor.read_exact(&mut stats_bytes)?;
+                    let stats = crate::storage::column_stats::ColumnStats::deserialize_meta(&mut &stats_bytes[..])?;
+                    if let Some(col) = self.columns.get_column_mut(&name) {
+                        col.set_stats(stats);
+                    }
+                }
             } else {
                 let mut row_count_bytes = [0u8; 4];
                 cursor.read_exact(&mut row_count_bytes)?;
@@ -401,6 +435,20 @@ impl VertexTable {
                     null_bitmap_raw,
                     bitmap_bit_len,
                 )?;
+
+                let mut has_stats_bytes = [0u8; 1];
+                cursor.read_exact(&mut has_stats_bytes)?;
+                if has_stats_bytes[0] == 1 {
+                    let mut stats_len_bytes = [0u8; 4];
+                    cursor.read_exact(&mut stats_len_bytes)?;
+                    let stats_len = u32::from_le_bytes(stats_len_bytes) as usize;
+                    let mut stats_bytes = vec![0u8; stats_len];
+                    cursor.read_exact(&mut stats_bytes)?;
+                    let stats = crate::storage::column_stats::ColumnStats::deserialize_meta(&mut &stats_bytes[..])?;
+                    if let Some(col) = self.columns.get_column_mut(&name) {
+                        col.set_stats(stats);
+                    }
+                }
             }
         }
 

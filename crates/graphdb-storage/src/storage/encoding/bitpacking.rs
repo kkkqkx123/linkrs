@@ -160,6 +160,15 @@ impl BitPackedColumn {
             .unwrap_or(false)
     }
 
+    pub fn fits_value(&self, value: i64) -> bool {
+        if self.bit_width == 64 {
+            return true;
+        }
+        let max_representable = (1u64 << self.bit_width) as i64 - 1;
+        let adjusted = value - self.min_value;
+        adjusted >= 0 && adjusted <= max_representable
+    }
+
     pub fn set(&mut self, row_idx: usize, value: Option<i64>) -> StorageResult<()> {
         if row_idx >= self.row_count {
             return Err(StorageError::invalid_input(format!(

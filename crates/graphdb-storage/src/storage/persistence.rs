@@ -79,6 +79,15 @@ pub fn write_header_to<W: std::io::Write>(writer: &mut W, section_id: u32) -> st
     Ok(())
 }
 
+/// Validate that the persistence version matches the expected version.
+/// Returns `StorageError::UnsupportedVersion` on mismatch.
+pub fn check_version(version: u32) -> StorageResult<()> {
+    if version != CURRENT_VERSION {
+        return Err(StorageError::unsupported_version(version, CURRENT_VERSION));
+    }
+    Ok(())
+}
+
 /// Read a u64 from data at offset (little-endian), advancing offset
 pub fn read_u64_le(data: &[u8], offset: &mut usize) -> StorageResult<u64> {
     let end = *offset + 8;
@@ -113,4 +122,64 @@ pub fn read_u32_le(data: &[u8], offset: &mut usize) -> StorageResult<u32> {
         .map_err(|_| StorageError::deserialize_error("failed to read u32"))?;
     *offset = end;
     Ok(u32::from_le_bytes(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_read_header_valid() {
+        let mut buf = Vec::new();
+        write_header(&mut buf, section::VERTEX_META);
+        let mut slice = &buf[..];
+        let (version, section_id) = read_header(&mut slice).unwrap();
+        assert_eq!(version, CURRENT_VERSION);
+        assert_eq!(section_id, section::VERTEX_META);
+    }
+
+    #[test]
+    fn test_read_header_rejects_bad_magic() {
+        let mut buf = b"BADM".to_vec();
+        buf.extend_from_slice(&CURRENT_VERSION.to_le_bytes());
+        buf.extend_from_slice(&section::VERTEX_META.to_le_bytes());
+        let mut slice = &buf[..];
+        assert!(read_header(&mut slice).is_err());
+    }
+
+    #[test]
+    fn test_read_header_rejects_too_short() {
+        let buf = b"GR";
+        let mut slice = &buf[..];
+        assert!(read_header(&mut slice).is_err());
+    }
+
+    #[test]
+    fn test_check_version_accepts_current() {
+        check_version(CURRENT_VERSION).unwrap();
+    }
+
+    #[test]
+    fn test_check_version_rejects_unknown() {
+        let result = check_version(999);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().kind(),
+            crate::core::error::storage::StorageErrorKind::UnsupportedVersion
+        );
+    }
+
+    #[test]
+    fn test_read_u32_le_rejects_truncated() {
+        let data = [0x01, 0x02];
+        let mut offset = 0;
+        assert!(read_u32_le(&data, &mut offset).is_err());
+    }
+
+    #[test]
+    fn test_read_u64_le_rejects_truncated() {
+        let data = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07];
+        let mut offset = 0;
+        assert!(read_u64_le(&data, &mut offset).is_err());
+    }
 }
