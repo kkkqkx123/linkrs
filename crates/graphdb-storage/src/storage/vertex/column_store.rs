@@ -11,10 +11,7 @@
 use crate::core::value::{DateTimeValue, DateValue, TimeValue, VectorValue};
 use crate::core::{DataType, StorageError, StorageResult, Value};
 
-use crate::storage::encoding::{
-    ColumnEncoding, ColumnStats, CompressionConfig, CompressionSelector, EncodingType, FsstColumn,
-    FsstEncoder,
-};
+use crate::storage::encoding::{ColumnEncoding, EncodingType, FsstColumn, FsstEncoder};
 use crate::utils::NullBitmap;
 use bitvec::prelude::*;
 
@@ -40,13 +37,6 @@ pub trait ColumnStorage: Send + Sync + std::fmt::Debug {
         bitmap_bit_len: usize,
     );
     fn get_flush_data(&self) -> (Vec<u8>, Vec<u64>, Option<BitVec<u8, Lsb0>>);
-    /// Extract data for a specific row range [start_row, end_row).
-    /// Returns the same format as `get_flush_data()` but only for the given rows.
-    fn get_flush_data_range(
-        &self,
-        start_row: usize,
-        end_row: usize,
-    ) -> (Vec<u8>, Vec<u64>, Option<BitVec<u8, Lsb0>>);
 }
 
 /// Returns the element size for fixed-width data types.
@@ -243,30 +233,6 @@ impl ColumnStorage for FixedWidthColumn {
         (self.data.clone(), Vec::new(), self.null_bitmap.clone())
     }
 
-    fn get_flush_data_range(
-        &self,
-        start_row: usize,
-        end_row: usize,
-    ) -> (Vec<u8>, Vec<u64>, Option<BitVec<u8, Lsb0>>) {
-        let start_byte = start_row * self.element_size;
-        let end_byte = std::cmp::min(end_row * self.element_size, self.data.len());
-        let data = if end_byte > start_byte {
-            self.data[start_byte..end_byte].to_vec()
-        } else {
-            Vec::new()
-        };
-
-        let bitmap = self.null_bitmap.as_ref().map(|b| {
-            let mut chunk = BitVec::with_capacity(end_row - start_row);
-            for i in start_row..std::cmp::min(end_row, b.len()) {
-                chunk.push(b[i]);
-            }
-            chunk.resize(end_row - start_row, false);
-            chunk
-        });
-
-        (data, Vec::new(), bitmap)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -471,45 +437,6 @@ impl ColumnStorage for VariableWidthColumn {
         (self.data.clone(), offsets, self.null_bitmap.clone())
     }
 
-    fn get_flush_data_range(
-        &self,
-        start_row: usize,
-        end_row: usize,
-    ) -> (Vec<u8>, Vec<u64>, Option<BitVec<u8, Lsb0>>) {
-        let mut data = Vec::new();
-        let mut offsets: Vec<u64> = Vec::new();
-        let mut null_flags: Vec<bool> = Vec::new();
-
-        for row in start_row..end_row {
-            if row < self.offsets.len() && !self.is_null(row) {
-                let entry_start = self.offsets[row];
-                let entry_len = if row + 1 < self.offsets.len()
-                    && self.offsets[row + 1] != usize::MAX
-                    && self.offsets[row + 1] > 0
-                {
-                    self.offsets[row + 1] - entry_start
-                } else {
-                    self.data.len() - entry_start
-                };
-                offsets.push(data.len() as u64);
-                data.extend_from_slice(&self.data[entry_start..entry_start + entry_len]);
-                null_flags.push(false);
-            } else {
-                offsets.push(data.len() as u64);
-                null_flags.push(true);
-            }
-        }
-
-        let bitmap = self.null_bitmap.as_ref().map(|_| {
-            let mut chunk = BitVec::with_capacity(null_flags.len());
-            for &flag in &null_flags {
-                chunk.push(flag);
-            }
-            chunk
-        });
-
-        (data, offsets, bitmap)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -940,110 +867,6 @@ impl Column {
         (new_data, new_offsets, new_bitmap)
     }
 
-    /// Extract data for a specific row range [start_row, end_row).
-    /// Returns column data in the same format as `get_flush_data()`.
-    pub fn get_flush_data_range(
-        &self,
-        start_row: usize,
-        end_row: usize,
-    ) -> (Vec<u8>, Vec<u64>, Option<BitVec<u8, Lsb0>>) {
-        if !self.encoding.is_encoded() {
-            return self.inner().get_flush_data_range(start_row, end_row);
-        }
-
-        let row_count = self.len();
-        let end = std::cmp::min(end_row, row_count);
-        let start = std::cmp::min(start_row, end);
-
-        let mut new_data = Vec::new();
-        let mut new_offsets = Vec::new();
-        let mut new_bitmap = self
-            .null_bitmap()
-            .map(|_| BitVec::with_capacity(end - start));
-
-        let is_var = is_variable_length_type(&self.data_type);
-
-        for i in start..end {
-            let value = self.encoding.get(i);
-            match value {
-                Some(v) => {
-                    if let Some(ref mut bm) = new_bitmap {
-                        bm.push(false);
-                    }
-                    if is_var {
-                        new_offsets.push(new_data.len() as u64);
-                        match &v {
-                            Value::String(s) => {
-                                let bytes = s.as_bytes();
-                                new_data.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-                                new_data.extend_from_slice(bytes);
-                            }
-                            _ => {
-                                new_offsets.pop();
-                                new_offsets.push(u64::MAX);
-                            }
-                        }
-                    } else {
-                        let elem_size = element_size(&self.data_type);
-                        let offset = new_data.len();
-                        new_data.resize(offset + elem_size, 0);
-                        let _ = write_fixed_value(&mut new_data, offset, elem_size, &v);
-                    }
-                }
-                None => {
-                    if let Some(ref mut bm) = new_bitmap {
-                        bm.push(true);
-                    }
-                    if is_var {
-                        new_offsets.push(u64::MAX);
-                    }
-                }
-            }
-        }
-
-        (new_data, new_offsets, new_bitmap)
-    }
-
-    // -----------------------------------------------------------------------
-    // Statistics
-    // -----------------------------------------------------------------------
-
-    pub fn compute_stats(&self) -> ColumnStats {
-        let mut stats = ColumnStats::new(self.data_type.clone());
-        stats.row_count = self.len();
-        stats.null_count = self.null_count();
-
-        let mut distinct_values = std::collections::HashSet::new();
-        let mut total_length: usize = 0;
-        let mut run_count: usize = 0;
-        let mut prev_value: Option<Value> = None;
-
-        for i in 0..self.len() {
-            if let Some(value) = self.get(i) {
-                if prev_value.as_ref() != Some(&value) {
-                    run_count += 1;
-                }
-                prev_value = Some(value.clone());
-                distinct_values.insert(value.clone());
-                if matches!(self.data_type, DataType::String) {
-                    if let Value::String(s) = &value {
-                        total_length += s.len();
-                    }
-                }
-            }
-        }
-
-        stats.distinct_count = distinct_values.len();
-        stats.run_count = run_count.max(1);
-        stats.avg_length = if !self.is_empty() {
-            total_length as f64 / self.len() as f64
-        } else {
-            0.0
-        };
-
-        stats
-    }
-
     // -----------------------------------------------------------------------
     // Encoding
     // -----------------------------------------------------------------------
@@ -1407,45 +1230,6 @@ impl ColumnStore {
                 col.apply_alp_encoding()?;
             }
             EncodingType::None => {}
-        }
-
-        Ok(())
-    }
-
-    pub fn auto_apply_encodings(&mut self, config: Option<CompressionConfig>) -> StorageResult<()> {
-        let selector = match config {
-            Some(c) => CompressionSelector::with_config(c),
-            None => CompressionSelector::new(),
-        };
-
-        for col in &mut self.columns {
-            if col.is_empty() || col.encoding.is_encoded() {
-                continue;
-            }
-
-            let stats = col.compute_stats();
-            let encoding = selector.select(&stats);
-
-            match encoding {
-                EncodingType::Fsst => {
-                    if col.data_type == DataType::String {
-                        col.apply_fsst_encoding(1024)?;
-                    }
-                }
-                EncodingType::Dictionary => {
-                    col.apply_dictionary_encoding()?;
-                }
-                EncodingType::Rle => {
-                    col.apply_rle_encoding()?;
-                }
-                EncodingType::BitPacking => {
-                    col.apply_bitpacking_encoding()?;
-                }
-                EncodingType::Alp => {
-                    col.apply_alp_encoding()?;
-                }
-                EncodingType::None => {}
-            }
         }
 
         Ok(())

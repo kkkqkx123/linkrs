@@ -33,6 +33,7 @@ struct InsertedEdgeRecord {
     dst_label_id: LabelId,
     src: VertexId,
     dst: VertexId,
+    edge_type: String,
     rank: i64,
 }
 
@@ -410,7 +411,7 @@ pub(crate) fn insert_edge(ctx: &GraphStorageContext, space: &str, edge: Edge) ->
 fn insert_edge_at_timestamp(
     ctx: &GraphStorageContext,
     space: &str,
-    _space_id: u64,
+    space_id: u64,
     edge: Edge,
     ts: Timestamp,
     rollback: &mut Vec<InsertedEdgeRecord>,
@@ -434,6 +435,8 @@ fn insert_edge_at_timestamp(
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
+    let src_value = Value::from(edge.src);
+    let dst_value = Value::from(edge.dst);
     let redo = InsertEdgeRedo {
         src_label: src_label_id,
         src_vid: edge.src,
@@ -462,8 +465,19 @@ fn insert_edge_at_timestamp(
         dst_label_id,
         src: edge.src,
         dst: edge.dst,
+        edge_type: edge.edge_type.clone(),
         rank: edge.ranking,
     });
+
+    ctx.update_all_edge_indexes_mvcc(
+        space_id,
+        &src_value,
+        &dst_value,
+        &edge.edge_type,
+        edge.ranking,
+        &props,
+        ts,
+    )?;
 
     Ok(())
 }
@@ -480,11 +494,21 @@ fn resolve_edge_type(
 
 fn rollback_edges(
     ctx: &GraphStorageContext,
-    _space_id: u64,
+    space_id: u64,
     inserted: &[InsertedEdgeRecord],
     ts: Timestamp,
 ) {
     for item in inserted.iter().rev() {
+        let src_value = Value::from(item.src);
+        let dst_value = Value::from(item.dst);
+        let _ = ctx.delete_all_edge_indexes_mvcc(
+            space_id,
+            &src_value,
+            &dst_value,
+            &item.edge_type,
+            item.rank,
+            ts,
+        );
         let _ = ctx.delete_edge(
             &EdgeOperationParams {
                 edge_label: item.edge_label_id,
@@ -508,6 +532,7 @@ pub(crate) fn delete_edge_at_timestamp(
     rank: i64,
     ts: Timestamp,
 ) -> StorageResult<()> {
+    let space_id = ctx.schema_manager().get_space_id(space)?;
     let edge_label_id = edge_label_id(ctx, space, edge_type)?
         .ok_or_else(|| StorageError::not_found(format!("Edge type {} not found", edge_type)))?;
 
@@ -533,7 +558,7 @@ pub(crate) fn delete_edge_at_timestamp(
             };
             ctx.append_wal_redo(WalOpType::DeleteEdge, ts, &redo)?;
 
-            ctx.delete_edge(
+            let deleted_edge = ctx.delete_edge(
                 &EdgeOperationParams {
                     edge_label: edge_label_id,
                     src_label: src_label_id,
@@ -545,7 +570,19 @@ pub(crate) fn delete_edge_at_timestamp(
                 ts,
             )?;
 
-            deleted = true;
+            if deleted_edge {
+                let src_value = Value::from(*src);
+                let dst_value = Value::from(*dst);
+                ctx.delete_all_edge_indexes_mvcc(
+                    space_id,
+                    &src_value,
+                    &dst_value,
+                    edge_type,
+                    rank,
+                    ts,
+                )?;
+                deleted = true;
+            }
             break;
         }
     }
@@ -793,7 +830,35 @@ pub(crate) fn insert_edge_data(
     });
 
     let final_result = match result {
-        Ok(_) => Ok(true),
+        Ok(_) => {
+            let src_value = Value::from(src_vid);
+            let dst_value = Value::from(dst_vid);
+            match ctx.update_all_edge_indexes_mvcc(
+                space_info.space_id,
+                &src_value,
+                &dst_value,
+                &info.edge_name,
+                info.rank,
+                &info.props,
+                ts,
+            ) {
+                Ok(()) => Ok(true),
+                Err(error) => {
+                    let _ = ctx.delete_edge(
+                        &EdgeOperationParams {
+                            edge_label: edge_label_id,
+                            src_label: src_label_id,
+                            src_id: src_vid,
+                            dst_label: dst_label_id,
+                            dst_id: dst_vid,
+                            rank: info.rank,
+                        },
+                        ts,
+                    );
+                    Err(error)
+                }
+            }
+        }
         Err(ref e)
             if e.kind() == crate::core::error::storage::StorageErrorKind::EdgeAlreadyExists =>
         {
@@ -846,6 +911,7 @@ pub(crate) fn delete_edge_data(
     dst: &str,
     rank: i64,
 ) -> StorageResult<bool> {
+    let space_id = ctx.schema_manager().get_space_id(space)?;
     let edge_types = ctx.schema_manager().list_edge_types(space)?;
     let ts = ctx.get_write_timestamp();
     let mut deleted = false;
@@ -880,8 +946,18 @@ pub(crate) fn delete_edge_data(
                 },
                 ts,
             )
-            .is_ok()
+            .is_ok_and(|deleted_edge| deleted_edge)
         {
+            let src_value = Value::from(src_vid);
+            let dst_value = Value::from(dst_vid);
+            ctx.delete_all_edge_indexes_mvcc(
+                space_id,
+                &src_value,
+                &dst_value,
+                &et.edge_type_name,
+                rank,
+                ts,
+            )?;
             deleted = true;
         }
     }

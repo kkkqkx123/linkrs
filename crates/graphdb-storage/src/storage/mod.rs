@@ -17,7 +17,6 @@ pub(crate) mod index;
 pub(crate) mod mvcc;
 pub(crate) mod naming;
 pub(crate) mod schema;
-pub(crate) mod sync;
 
 mod metrics;
 pub(crate) mod persistence;

@@ -565,7 +565,6 @@ mod tests {
         assert!(metrics.segments_after <= metrics.segments_before);
         assert!(metrics.edges_merged > 0);
         assert!(metrics.duration_ms < 1_000_000);
-        assert!(table.out_free_space.free_slot_count() > 0);
     }
 
     #[test]

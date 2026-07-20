@@ -1,7 +1,8 @@
 use super::QueryPipelineManager;
 use crate::core::error::{DBError, DBResult, QueryError};
 use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-use crate::query::executor::base::{BaseExecutor, ExecutionContext, ExecutionResult, Executor};
+use crate::query::executor::base::ExecutionContext;
+use crate::query::executor::base::ExecutionResult;
 use crate::query::executor::explain::ProfileExecutor;
 use crate::query::executor::streaming::instance::{
     QueryBindings, QueryExecutionInstance, ResultSink,
@@ -124,7 +125,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         &mut self,
         profile_stmt: &ProfileStmt,
         qctx: Arc<QueryContext>,
-    ) -> DBResult<ExecutionResult> {
+    ) -> DBResult<crate::query::executor::base::ExecutionResult> {
         let inner_ast = &profile_stmt.statement;
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
         let validation_info = self.validate_query_with_context(
@@ -156,10 +157,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             base_ctx.space_name = Some(space_info.space_name.clone());
         }
 
-        let base = BaseExecutor::with_context(-1, "ProfileExecutor".to_string(), storage, base_ctx);
-
-        let mut profile_executor =
-            ProfileExecutor::new(base, optimized_plan, profile_stmt.format.clone());
+        let mut profile_executor = ProfileExecutor::new(
+            optimized_plan,
+            profile_stmt.format.clone(),
+            storage,
+            base_ctx,
+        );
 
         profile_executor
             .execute()

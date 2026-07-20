@@ -11,6 +11,8 @@
 //! 3. Apply BitPacking on the integers
 //! 4. Decompression reverses the process
 
+use std::io::{Read, Write};
+
 use super::bitpacking::BitPackedColumn;
 use crate::core::{DataType, StorageError, StorageResult, Value};
 use crate::utils::NullBitmap;
@@ -109,6 +111,22 @@ impl AlpEncoder {
 
     pub fn memory_usage(&self) -> usize {
         self.bit_packed.memory_usage() + std::mem::size_of::<Self>()
+    }
+
+    pub fn serialize_meta(&self, writer: &mut impl Write) -> StorageResult<usize> {
+        let mut written = 0usize;
+        writer.write_all(&self.factor.to_le_bytes())?;
+        written += 8;
+        written += self.bit_packed.serialize_meta(writer)?;
+        Ok(written)
+    }
+
+    pub fn deserialize_meta(reader: &mut impl Read) -> StorageResult<Self> {
+        let mut factor_bytes = [0u8; 8];
+        reader.read_exact(&mut factor_bytes)?;
+        let factor = f64::from_le_bytes(factor_bytes);
+        let bit_packed = BitPackedColumn::deserialize_meta(reader)?;
+        Ok(Self { factor, bit_packed })
     }
 }
 
@@ -257,6 +275,19 @@ impl AlpColumn {
 
     pub fn memory_usage(&self) -> usize {
         self.encoder.memory_usage() + self.null_bitmap.memory_usage()
+    }
+
+    pub fn serialize_meta(&self, writer: &mut impl Write) -> StorageResult<usize> {
+        self.encoder.serialize_meta(writer)
+    }
+
+    pub fn deserialize_meta(reader: &mut impl Read) -> StorageResult<Self> {
+        let encoder = AlpEncoder::deserialize_meta(reader)?;
+        Ok(Self {
+            encoder,
+            row_count: 0,
+            null_bitmap: NullBitmap::new(),
+        })
     }
 }
 

@@ -2,6 +2,8 @@
 //!
 //! Compresses columns with repeated values by storing (value, count) pairs.
 
+use std::io::{Read, Write};
+
 use crate::core::{DataType, StorageError, StorageResult, Value};
 use crate::utils::NullBitmap;
 
@@ -126,6 +128,39 @@ impl RleIntColumn {
     pub fn memory_usage(&self) -> usize {
         self.encoder.memory_usage() + self.null_bitmap.memory_usage()
     }
+
+    pub fn serialize_meta(&self, writer: &mut impl Write) -> StorageResult<usize> {
+        let mut written = 0usize;
+        let count = self.encoder.runs.len() as u32;
+        writer.write_all(&count.to_le_bytes())?;
+        written += 4;
+        for run in &self.encoder.runs {
+            writer.write_all(&run.value.to_le_bytes())?;
+            writer.write_all(&(run.count as u32).to_le_bytes())?;
+            written += 12;
+        }
+        Ok(written)
+    }
+
+    pub fn deserialize_meta(reader: &mut impl Read) -> StorageResult<Self> {
+        let mut count_bytes = [0u8; 4];
+        reader.read_exact(&mut count_bytes)?;
+        let count = u32::from_le_bytes(count_bytes) as usize;
+        let mut encoder = RleEncoder::new();
+        for _ in 0..count {
+            let mut val_bytes = [0u8; 8];
+            reader.read_exact(&mut val_bytes)?;
+            let val = i64::from_le_bytes(val_bytes);
+            let mut cnt_bytes = [0u8; 4];
+            reader.read_exact(&mut cnt_bytes)?;
+            let cnt = u32::from_le_bytes(cnt_bytes) as usize;
+            encoder.runs.push(RleRun { value: val, count: cnt });
+        }
+        Ok(Self {
+            encoder,
+            null_bitmap: NullBitmap::new(),
+        })
+    }
 }
 
 impl Default for RleIntColumn {
@@ -182,6 +217,39 @@ impl RleBoolColumn {
 
     pub fn memory_usage(&self) -> usize {
         self.encoder.memory_usage() + self.null_bitmap.memory_usage()
+    }
+
+    pub fn serialize_meta(&self, writer: &mut impl Write) -> StorageResult<usize> {
+        let mut written = 0usize;
+        let count = self.encoder.runs.len() as u32;
+        writer.write_all(&count.to_le_bytes())?;
+        written += 4;
+        for run in &self.encoder.runs {
+            writer.write_all(&[run.value as u8])?;
+            writer.write_all(&(run.count as u32).to_le_bytes())?;
+            written += 5;
+        }
+        Ok(written)
+    }
+
+    pub fn deserialize_meta(reader: &mut impl Read) -> StorageResult<Self> {
+        let mut count_bytes = [0u8; 4];
+        reader.read_exact(&mut count_bytes)?;
+        let count = u32::from_le_bytes(count_bytes) as usize;
+        let mut encoder = RleEncoder::new();
+        for _ in 0..count {
+            let mut val_byte = [0u8; 1];
+            reader.read_exact(&mut val_byte)?;
+            let val = val_byte[0] != 0;
+            let mut cnt_bytes = [0u8; 4];
+            reader.read_exact(&mut cnt_bytes)?;
+            let cnt = u32::from_le_bytes(cnt_bytes) as usize;
+            encoder.runs.push(RleRun { value: val, count: cnt });
+        }
+        Ok(Self {
+            encoder,
+            null_bitmap: NullBitmap::new(),
+        })
     }
 }
 

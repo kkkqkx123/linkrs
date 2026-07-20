@@ -18,6 +18,7 @@
 //! - Only extracts ngrams of length 2-8 (single bytes don't benefit from encoding)
 
 use std::collections::HashMap;
+use std::io::{Read, Write};
 
 use crate::utils::NullBitmap;
 
@@ -71,6 +72,53 @@ impl FsstSymbolTable {
         self.code_to_symbol.iter().map(|v| v.len()).sum::<usize>()
             + self.byte_to_code.keys().map(|k| k.len()).sum::<usize>()
             + std::mem::size_of::<Self>()
+    }
+
+    pub fn serialize(&self, writer: &mut impl Write) -> std::io::Result<usize> {
+        let mut written = 0usize;
+        let entries: Vec<(u8, &Vec<u8>)> = (0..=SYMBOL_TABLE_SIZE as u8)
+            .filter_map(|code| {
+                let sym = &self.code_to_symbol[code as usize];
+                if !sym.is_empty() {
+                    Some((code, sym))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let count = entries.len() as u16;
+        writer.write_all(&count.to_le_bytes())?;
+        written += 2;
+        for (code, sym) in entries {
+            writer.write_all(&[code])?;
+            written += 1;
+            let len = sym.len() as u8;
+            writer.write_all(&[len])?;
+            written += 1;
+            writer.write_all(sym)?;
+            written += sym.len();
+        }
+        Ok(written)
+    }
+
+    pub fn deserialize(reader: &mut impl Read) -> std::io::Result<Self> {
+        let mut count_bytes = [0u8; 2];
+        reader.read_exact(&mut count_bytes)?;
+        let count = u16::from_le_bytes(count_bytes) as usize;
+        let mut table = Self::new();
+        for _ in 0..count {
+            let mut code_buf = [0u8; 1];
+            reader.read_exact(&mut code_buf)?;
+            let code = code_buf[0];
+            let mut len_buf = [0u8; 1];
+            reader.read_exact(&mut len_buf)?;
+            let len = len_buf[0] as usize;
+            let mut sym = vec![0u8; len];
+            reader.read_exact(&mut sym)?;
+            table.code_to_symbol[code as usize] = sym.clone();
+            table.byte_to_code.insert(sym, code);
+        }
+        Ok(table)
     }
 }
 
@@ -139,10 +187,12 @@ impl FsstEncoder {
             score_b.cmp(&score_a)
         });
 
-        for (code, (ngram, _freq)) in (1_u8..).zip(ngrams) {
-            if code as usize >= max_symbols.min(SYMBOL_TABLE_SIZE) {
+        let max_symbols = max_symbols.min(SYMBOL_TABLE_SIZE);
+        for (idx, (ngram, _freq)) in ngrams.into_iter().enumerate() {
+            if idx >= max_symbols - 1 {
                 break;
             }
+            let code = (idx + 1) as u8;
             self.table.insert(ngram, code);
         }
     }
@@ -216,6 +266,15 @@ impl FsstEncoder {
     pub fn with_table(table: FsstSymbolTable) -> Self {
         Self { table }
     }
+
+    pub fn serialize(&self, writer: &mut impl Write) -> std::io::Result<usize> {
+        self.table.serialize(writer)
+    }
+
+    pub fn deserialize(reader: &mut impl Read) -> std::io::Result<Self> {
+        let table = FsstSymbolTable::deserialize(reader)?;
+        Ok(Self { table })
+    }
 }
 
 impl Default for FsstEncoder {
@@ -276,6 +335,22 @@ impl FsstColumn {
         let table_size = self.encoder.table().memory_usage();
 
         data_size + null_size + table_size
+    }
+
+    pub fn serialize_meta(&self, writer: &mut impl Write) -> crate::core::StorageResult<usize> {
+        self.encoder
+            .serialize(writer)
+            .map_err(|e| crate::core::StorageError::io_error(format!("FsstColumn serialize: {}", e)))
+    }
+
+    pub fn deserialize_meta(reader: &mut impl Read) -> crate::core::StorageResult<Self> {
+        let encoder = FsstEncoder::deserialize(reader)
+            .map_err(|e| crate::core::StorageError::io_error(format!("FsstColumn deserialize: {}", e)))?;
+        Ok(Self {
+            encoder,
+            encoded_data: Vec::new(),
+            null_bitmap: NullBitmap::new(),
+        })
     }
 }
 

@@ -9,8 +9,9 @@ use std::time::Instant;
 use parking_lot::RwLock;
 
 use crate::core::error::{DBError, DBResult as ExecutorDBResult, QueryError};
+use crate::core::stats::executor_stats::ExecutorStats;
 use crate::core::Value;
-use crate::query::executor::base::{BaseExecutor, ExecutionResult, Executor, ExecutorStats};
+use crate::query::executor::base::ExecutionContext;
 use crate::query::executor::streaming::plan::PhysicalPlanBuilder;
 use crate::query::executor::streaming::runtime::ExecutionRuntime;
 use crate::query::executor::streaming::{
@@ -29,18 +30,25 @@ use super::execution_stats_context::ExecutionStatsContext;
 ///
 /// Handles PROFILE statements.
 /// Executes the query and returns detailed performance statistics similar to PostgreSQL's EXPLAIN ANALYZE.
-pub struct ProfileExecutor<S: QueryStorage> {
-    base: BaseExecutor<S>,
+pub struct ProfileExecutor {
     inner_plan: ExecutionPlan,
     format: ExplainFormat,
+    storage: Arc<RwLock<dyn QueryStorage>>,
+    exec_context: ExecutionContext,
 }
 
-impl<S: QueryStorage + Send + 'static> ProfileExecutor<S> {
-    pub fn new(base: BaseExecutor<S>, inner_plan: ExecutionPlan, format: ExplainFormat) -> Self {
+impl ProfileExecutor {
+    pub fn new(
+        inner_plan: ExecutionPlan,
+        format: ExplainFormat,
+        storage: Arc<RwLock<dyn QueryStorage>>,
+        exec_context: ExecutionContext,
+    ) -> Self {
         Self {
-            base,
             inner_plan,
             format,
+            storage,
+            exec_context,
         }
     }
 
@@ -67,7 +75,7 @@ impl<S: QueryStorage + Send + 'static> ProfileExecutor<S> {
     fn execute_profiled(
         &mut self,
     ) -> ExecutorDBResult<(
-        ExecutionResult,
+        crate::query::executor::base::ExecutionResult,
         Arc<ExecutionStatsContext>,
         Option<Arc<ExecutionRuntime>>,
     )> {
@@ -78,11 +86,8 @@ impl<S: QueryStorage + Send + 'static> ProfileExecutor<S> {
             DBError::from(QueryError::execution("Empty execution plan".to_string()))
         })?;
 
-        let mut exec_context = self.base.context.clone();
-        if let Some(ref storage) = self.base.storage {
-            let dyn_storage: Arc<RwLock<dyn QueryStorage>> = storage.clone();
-            exec_context.storage = Some(dyn_storage);
-        }
+        let mut exec_context = self.exec_context.clone();
+        exec_context.storage = Some(self.storage.clone());
 
         // Propagate max_workers/max_buffered_chunks from plan to context
         exec_context.max_workers = self.inner_plan.max_workers.max(1);
@@ -106,13 +111,12 @@ impl<S: QueryStorage + Send + 'static> ProfileExecutor<S> {
             .map_err(|error| DBError::from(QueryError::execution(error.to_string())))?;
 
         let exec_time_us = start.elapsed().as_micros() as u64;
-        let mut executor_stats = ExecutorStats {
+        let exec_stats = ExecutorStats {
             num_rows: result.count(),
             exec_time_us,
             ..ExecutorStats::default()
         };
-        executor_stats.total_time_us = exec_time_us;
-        stats_context.on_node_complete(root_node.id(), executor_stats);
+        stats_context.on_node_complete(root_node.id(), exec_stats);
         stats_context.record_global_execution_time(exec_time_us);
 
         Ok((result, stats_context, runtime))
@@ -276,10 +280,9 @@ impl<S: QueryStorage + Send + 'static> ProfileExecutor<S> {
                 .collect(),
         }
     }
-}
 
-impl<S: QueryStorage + Send + 'static> Executor<S> for ProfileExecutor<S> {
-    fn execute(&mut self) -> ExecutorDBResult<ExecutionResult> {
+    /// Execute the profile query
+    pub fn execute(&mut self) -> ExecutorDBResult<crate::query::executor::base::ExecutionResult> {
         let start = Instant::now();
         let (_exec_result, stats_context, runtime) = self.execute_profiled()?;
         let execution_time_ms = start.elapsed().as_micros() as f64 / 1000.0;
@@ -307,41 +310,9 @@ impl<S: QueryStorage + Send + 'static> Executor<S> for ProfileExecutor<S> {
         let result_dataset =
             self.build_profile_result(&plan_desc, &stats_context, execution_time_ms);
 
-        Ok(ExecutionResult::DataSet {
+        Ok(crate::query::executor::base::ExecutionResult::DataSet {
             data: result_dataset,
         })
-    }
-
-    fn open(&mut self) -> ExecutorDBResult<()> {
-        self.base.open()
-    }
-
-    fn close(&mut self) -> ExecutorDBResult<()> {
-        self.base.close()
-    }
-
-    fn is_open(&self) -> bool {
-        self.base.is_open()
-    }
-
-    fn id(&self) -> i64 {
-        self.base.id
-    }
-
-    fn name(&self) -> &str {
-        &self.base.name
-    }
-
-    fn description(&self) -> &str {
-        &self.base.description
-    }
-
-    fn stats(&self) -> &ExecutorStats {
-        self.base.get_stats()
-    }
-
-    fn stats_mut(&mut self) -> &mut ExecutorStats {
-        self.base.get_stats_mut()
     }
 }
 

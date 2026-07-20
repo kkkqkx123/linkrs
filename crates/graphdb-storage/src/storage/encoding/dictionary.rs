@@ -4,6 +4,7 @@
 //! in a dictionary and using indices to reference them.
 
 use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::sync::Arc;
 
 use crate::core::{StorageError, StorageResult, Value};
@@ -45,6 +46,44 @@ impl StringDictionary {
         let map_overhead =
             self.index_map.len() * (std::mem::size_of::<Arc<str>>() + std::mem::size_of::<u32>());
         values_size + overhead + map_overhead
+    }
+
+    pub fn serialize(&self, writer: &mut impl Write) -> std::io::Result<usize> {
+        let mut written = 0usize;
+        let count = self.values.len() as u32;
+        writer.write_all(&count.to_le_bytes())?;
+        written += 4;
+        for (idx, value) in self.values.iter().enumerate() {
+            let len = value.len() as u32;
+            writer.write_all(&len.to_le_bytes())?;
+            writer.write_all(value.as_bytes())?;
+            written += 4 + value.len();
+            let code = idx as u32;
+            writer.write_all(&code.to_le_bytes())?;
+            written += 4;
+        }
+        Ok(written)
+    }
+
+    pub fn deserialize(reader: &mut impl Read) -> std::io::Result<Self> {
+        let mut count_bytes = [0u8; 4];
+        reader.read_exact(&mut count_bytes)?;
+        let count = u32::from_le_bytes(count_bytes) as usize;
+        let mut dict = Self::new();
+        for _ in 0..count {
+            let mut len_bytes = [0u8; 4];
+            reader.read_exact(&mut len_bytes)?;
+            let len = u32::from_le_bytes(len_bytes) as usize;
+            let mut buf = vec![0u8; len];
+            reader.read_exact(&mut buf)?;
+            let value = String::from_utf8(buf)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            let mut code_bytes = [0u8; 4];
+            reader.read_exact(&mut code_bytes)?;
+            let _code = u32::from_le_bytes(code_bytes);
+            dict.insert(&value);
+        }
+        Ok(dict)
     }
 }
 
@@ -102,6 +141,19 @@ impl DictionaryEncoder {
         self.dictionary.memory_usage()
             + self.indices.len() * std::mem::size_of::<u32>()
             + self.null_bitmap.memory_usage()
+    }
+
+    pub fn serialize(&self, writer: &mut impl Write) -> std::io::Result<usize> {
+        self.dictionary.serialize(writer)
+    }
+
+    pub fn deserialize(reader: &mut impl Read) -> std::io::Result<Self> {
+        let dictionary = StringDictionary::deserialize(reader)?;
+        Ok(Self {
+            dictionary,
+            indices: Vec::new(),
+            null_bitmap: NullBitmap::new(),
+        })
     }
 }
 
@@ -171,6 +223,25 @@ impl DictionaryColumn {
 
     pub fn memory_usage(&self) -> usize {
         self.encoder.memory_usage()
+    }
+
+    pub fn serialize_meta(&self, writer: &mut impl Write) -> StorageResult<usize> {
+        self.encoder
+            .dictionary
+            .serialize(writer)
+            .map_err(|e| StorageError::io_error(format!("DictionaryColumn serialize: {}", e)))
+    }
+
+    pub fn deserialize_meta(reader: &mut impl Read) -> StorageResult<Self> {
+        let dictionary = StringDictionary::deserialize(reader)
+            .map_err(|e| StorageError::io_error(format!("DictionaryColumn deserialize: {}", e)))?;
+        Ok(Self {
+            encoder: DictionaryEncoder {
+                dictionary,
+                indices: Vec::new(),
+                null_bitmap: NullBitmap::new(),
+            },
+        })
     }
 }
 

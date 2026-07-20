@@ -1,3 +1,4 @@
+use crate::core::metadata::IndexMetadataManager;
 use crate::core::types::{LabelId, Timestamp};
 use crate::core::{StorageResult, Value};
 use crate::storage::edge::ExportedEdgeSnapshot;
@@ -67,6 +68,51 @@ impl GraphStorageContext {
         ts: Timestamp,
     ) -> StorageResult<()> {
         super::super::index_engine::delete_edge_indexes_mvcc(self, edge, index_names, ts)
+    }
+
+    pub(crate) fn update_all_edge_indexes_mvcc(
+        &self,
+        space_id: u64,
+        src: &Value,
+        dst: &Value,
+        edge_type: &str,
+        ranking: i64,
+        props: &[(String, Value)],
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        let edge = EdgeIdentity::new(space_id, src, dst, edge_type, ranking);
+        for index in self
+            .index_metadata_manager()
+            .list_edge_indexes(space_id)?
+            .into_iter()
+            .filter(|index| index.schema_name == edge_type)
+        {
+            self.update_edge_indexes_mvcc(&edge, &index.name, props, ts)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn delete_all_edge_indexes_mvcc(
+        &self,
+        space_id: u64,
+        src: &Value,
+        dst: &Value,
+        edge_type: &str,
+        ranking: i64,
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        let edge = EdgeIdentity::new(space_id, src, dst, edge_type, ranking);
+        let index_names: Vec<String> = self
+            .index_metadata_manager()
+            .list_edge_indexes(space_id)?
+            .into_iter()
+            .filter(|index| index.schema_name == edge_type)
+            .map(|index| index.name)
+            .collect();
+        if !index_names.is_empty() {
+            self.delete_edge_indexes_mvcc(&edge, &index_names, ts)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn gc_index_tombstones(&self, ts: Timestamp) -> StorageResult<GcStats> {

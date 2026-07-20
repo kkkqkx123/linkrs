@@ -3,6 +3,8 @@
 //! Compresses integer columns by storing values using minimal bits.
 //! Effective for columns with small value ranges.
 
+use std::io::{Read, Write};
+
 use bitvec::prelude::*;
 
 use crate::core::{DataType, StorageError, StorageResult, Value};
@@ -214,6 +216,66 @@ impl BitPackedColumn {
             .unwrap_or(0);
         data_size + null_size + std::mem::size_of::<Self>()
     }
+
+    pub fn serialize_meta(&self, writer: &mut impl Write) -> StorageResult<usize> {
+        let mut written = 0usize;
+        writer.write_all(&self.bit_width.to_le_bytes())?;
+        writer.write_all(&self.min_value.to_le_bytes())?;
+        writer.write_all(&(self.row_count as u32).to_le_bytes())?;
+        written += 12;
+        let has_bitmap = self.null_bitmap.is_some() as u8;
+        writer.write_all(&[has_bitmap])?;
+        written += 1;
+        if let Some(ref bitmap) = self.null_bitmap {
+            let bitmap_bytes = bitmap.as_raw_slice();
+            writer.write_all(&(bitmap_bytes.len() as u32).to_le_bytes())?;
+            writer.write_all(bitmap_bytes)?;
+            written += 4 + bitmap_bytes.len();
+        }
+        let data_bytes = self.data.as_raw_slice();
+        writer.write_all(&(data_bytes.len() as u32).to_le_bytes())?;
+        writer.write_all(data_bytes)?;
+        written += 4 + data_bytes.len();
+        Ok(written)
+    }
+
+    pub fn deserialize_meta(reader: &mut impl Read) -> StorageResult<Self> {
+        let mut bit_width_buf = [0u8; 1];
+        reader.read_exact(&mut bit_width_buf)?;
+        let bit_width = bit_width_buf[0];
+        let mut min_value_bytes = [0u8; 8];
+        reader.read_exact(&mut min_value_bytes)?;
+        let min_value = i64::from_le_bytes(min_value_bytes);
+        let mut row_count_bytes = [0u8; 4];
+        reader.read_exact(&mut row_count_bytes)?;
+        let row_count = u32::from_le_bytes(row_count_bytes) as usize;
+        let mut has_bitmap_buf = [0u8; 1];
+        reader.read_exact(&mut has_bitmap_buf)?;
+        let has_bitmap = has_bitmap_buf[0] != 0;
+        let null_bitmap = if has_bitmap {
+            let mut bitmap_len_bytes = [0u8; 4];
+            reader.read_exact(&mut bitmap_len_bytes)?;
+            let bitmap_len = u32::from_le_bytes(bitmap_len_bytes) as usize;
+            let mut bitmap_bytes = vec![0u8; bitmap_len];
+            reader.read_exact(&mut bitmap_bytes)?;
+            Some(BitVec::<u8, Lsb0>::from_slice(&bitmap_bytes))
+        } else {
+            None
+        };
+        let mut data_len_bytes = [0u8; 4];
+        reader.read_exact(&mut data_len_bytes)?;
+        let data_len = u32::from_le_bytes(data_len_bytes) as usize;
+        let mut data_bytes = vec![0u8; data_len];
+        reader.read_exact(&mut data_bytes)?;
+        let data = BitVec::<u8, Lsb0>::from_vec(data_bytes);
+        Ok(Self {
+            data,
+            bit_width,
+            min_value,
+            row_count,
+            null_bitmap,
+        })
+    }
 }
 
 impl Default for BitPackedColumn {
@@ -274,6 +336,33 @@ impl BitPackedIntColumn {
 
     pub fn memory_usage(&self) -> usize {
         self.packed.memory_usage()
+    }
+
+    pub fn serialize_meta(&self, writer: &mut impl Write) -> StorageResult<usize> {
+        let mut written = 0usize;
+        let type_tag = match self.data_type {
+            DataType::SmallInt => 1u8,
+            DataType::Int => 2u8,
+            DataType::BigInt => 3u8,
+            _ => 0u8,
+        };
+        writer.write_all(&[type_tag])?;
+        written += 1;
+        written += self.packed.serialize_meta(writer)?;
+        Ok(written)
+    }
+
+    pub fn deserialize_meta(reader: &mut impl Read) -> StorageResult<Self> {
+        let mut type_tag_buf = [0u8; 1];
+        reader.read_exact(&mut type_tag_buf)?;
+        let data_type = match type_tag_buf[0] {
+            1 => DataType::SmallInt,
+            2 => DataType::Int,
+            3 => DataType::BigInt,
+            _ => DataType::BigInt,
+        };
+        let packed = BitPackedColumn::deserialize_meta(reader)?;
+        Ok(Self { packed, data_type })
     }
 }
 
