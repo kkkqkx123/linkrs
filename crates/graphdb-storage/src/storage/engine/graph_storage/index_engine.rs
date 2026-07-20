@@ -1,6 +1,6 @@
 use crate::core::types::Timestamp;
 use crate::core::{StorageResult, Value};
-use crate::storage::index::index_data_manager::EdgeIdentity;
+use crate::storage::index::types::EdgeIdentity;
 use crate::storage::index::{EdgeIndexOps, VertexIndexOps};
 
 use super::context::GraphStorageContext;

@@ -3,7 +3,7 @@ use crate::core::types::{CommitLsn, Index, IndexGeneration, IndexStatus, Snapsho
 use crate::core::wal::EntityRef;
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::index::generic_index_manager::GenericIndexManager;
-use crate::storage::index::index_data_manager::IndexRecord;
+use crate::storage::index::types::IndexRecord;
 use crate::storage::index::key_codec::{EdgeIndexKeyGen, KeyBuilder, KeyParser, VertexIndexKeyGen};
 use crate::storage::index::manifest::{
     GenerationBuildState, GenerationState, IndexManifest, IndexShard,
@@ -1004,7 +1004,7 @@ mod tests {
     use crate::core::wal::{EntityRef, IndexMutation, IndexOperation, OutboxIntent};
     use crate::core::Value;
     use crate::storage::engine::graph_storage::context::GraphStorageContext;
-    use crate::storage::index::index_data_manager::IndexRecord;
+    use crate::storage::index::types::IndexRecord;
     use crate::storage::index::manifest::{GenerationBuildState, GenerationState};
     use crate::storage::{
         GraphStorage, StoragePersistenceOps, StorageReader, StorageSchemaOps, StorageWriter,
@@ -1607,7 +1607,7 @@ mod tests {
     fn test_flush_index_data_writes_valid_files() {
         use crate::core::types::MAX_TIMESTAMP;
         use crate::storage::index::generic_index_manager::GenericIndexManager;
-        use crate::storage::index::index_data_manager::IndexRecord;
+use crate::storage::index::types::IndexRecord;
         use crate::storage::index::key_codec::VertexIndexKeyGen;
         use std::collections::BTreeMap;
         use std::fs;

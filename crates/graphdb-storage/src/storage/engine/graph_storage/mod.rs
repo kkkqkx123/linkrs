@@ -37,7 +37,7 @@ use crate::storage::cursor::{
 use crate::storage::engine::background_freeze::{BackgroundFreezeManager, FreezeStats};
 use crate::storage::engine::graph_storage::context::ExportedEdgeSnapshotRecord;
 use crate::storage::engine::PersistenceConfig;
-use crate::storage::index::index_data_manager::IndexIdentity;
+use crate::storage::index::types::IndexIdentity;
 use crate::storage::index::key_codec::KeyBuilder;
 use crate::storage::index::IndexGcConfig;
 use crate::storage::{
@@ -673,7 +673,7 @@ impl StorageReader for GraphStorage {
             let space_id = self.ctx.schema_manager().get_space_id(&plan.space)?;
             let space_name = plan.space.clone();
             let ctx = self.ctx.clone();
-            let stale_checker: Option<crate::storage::index::index_data_manager::StaleChecker> =
+            let stale_checker: Option<crate::storage::index::types::StaleChecker> =
                 Some(Arc::new(
                     move |entity_ref, _entity_version| match entity_ref {
                         crate::core::wal::EntityRef::Vertex(vid) => {
@@ -697,7 +697,7 @@ impl StorageReader for GraphStorage {
             let space_id = self.ctx.schema_manager().get_space_id(&plan.space)?;
             let space_name = plan.space.clone();
             let ctx = self.ctx.clone();
-            let stale_checker: Option<crate::storage::index::index_data_manager::StaleChecker> =
+            let stale_checker: Option<crate::storage::index::types::StaleChecker> =
                 Some(Arc::new(
                     move |entity_ref, _entity_version| match entity_ref {
                         crate::core::wal::EntityRef::Vertex(vid) => {

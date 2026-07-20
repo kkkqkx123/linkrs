@@ -273,7 +273,6 @@ fn test_schema_version_history_recovery() {
             .expect("history should exist");
 
         version_before_recovery = history.latest_version();
-        println!("Version before recovery: {}", version_before_recovery);
     }
 
     // Reopen and verify version_history is still there
@@ -286,7 +285,6 @@ fn test_schema_version_history_recovery() {
             .expect("history should exist after recovery");
 
         let version_after_recovery = history.latest_version();
-        println!("Version after recovery: {}", version_after_recovery);
 
         // Verify: version history should be there (even if same as before)
         assert!(

@@ -45,7 +45,9 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use crate::storage::index::index_data_manager::{GcStats, IndexDataManagerImpl, IndexGcOps};
+use crate::storage::index::traits::IndexGcOps;
+use crate::storage::index::types::GcStats;
+use crate::storage::index::IndexDataManagerImpl;
 
 /// GC manager configuration
 #[derive(Debug, Clone)]

@@ -6,7 +6,7 @@
 use crate::core::types::{CommitLsn, IndexGeneration};
 use crate::core::{StorageError, StorageResult};
 use crate::storage::index::generic_index_manager::GenericIndexManager;
-use crate::storage::index::index_data_manager::IndexRecord;
+use crate::storage::index::types::IndexRecord;
 use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
 use crate::storage::index::key_codec::IndexKeyGenerator;
 use crate::storage::index::manifest::IndexManifest;

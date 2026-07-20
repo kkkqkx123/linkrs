@@ -4,7 +4,7 @@ use crate::core::wal::EntityRef;
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::cursor::{IndexCursor, IndexPredicate, IndexRow, IndexScanPlan};
 use crate::storage::index::generic_index_manager::GenericIndexManager;
-use crate::storage::index::index_data_manager::{EdgeIdentity, IndexRecord, StaleChecker};
+use crate::storage::index::types::{EdgeIdentity, IndexRecord, StaleChecker};
 use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
 use crate::storage::index::key_codec::{EdgeIndexKeyGen, KeyBuilder, KeyParser};
 use crate::storage::index::manifest::{ManifestCatalog, ManifestHandle};

@@ -3,8 +3,8 @@ use crate::core::types::{LabelId, Timestamp};
 use crate::core::{StorageResult, Value};
 use crate::storage::edge::ExportedEdgeSnapshot;
 use crate::storage::engine::data_store::EdgeTableKey;
-use crate::storage::index::index_data_manager::EdgeIdentity;
-use crate::storage::index::{GcStats, IndexGcOps};
+use crate::storage::index::traits::IndexGcOps;
+use crate::storage::index::types::{EdgeIdentity, GcStats};
 
 use super::GraphStorageContext;
 
