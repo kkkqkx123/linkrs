@@ -193,7 +193,10 @@ impl FsstEncoder {
     }
 
     pub fn encode(&self, s: &str) -> Vec<u8> {
-        let bytes = s.as_bytes();
+        self.encode_bytes(s.as_bytes())
+    }
+
+    pub fn encode_bytes(&self, bytes: &[u8]) -> Vec<u8> {
         if bytes.is_empty() {
             return Vec::new();
         }
@@ -297,21 +300,33 @@ impl FsstColumn {
     }
 
     pub fn get(&self, row_idx: usize) -> Option<String> {
+        self.get_bytes(row_idx)
+            .and_then(|b| String::from_utf8(b).ok())
+    }
+
+    pub fn get_bytes(&self, row_idx: usize) -> Option<Vec<u8>> {
         if row_idx >= self.encoded_data.len() || self.null_bitmap.is_null(row_idx) {
             return None;
         }
-
-        self.encoder.decode_to_string(&self.encoded_data[row_idx])
+        Some(self.encoder.decode(&self.encoded_data[row_idx]))
     }
 
     pub fn set(&mut self, row_idx: usize, value: Option<&str>) -> crate::core::StorageResult<()> {
+        self.set_bytes(row_idx, value.map(|s| s.as_bytes()))
+    }
+
+    pub fn set_bytes(
+        &mut self,
+        row_idx: usize,
+        value: Option<&[u8]>,
+    ) -> crate::core::StorageResult<()> {
         if row_idx >= self.encoded_data.len() {
             return Err(crate::core::StorageError::invalid_offset(row_idx as u32));
         }
 
         match value {
-            Some(s) => {
-                self.encoded_data[row_idx] = self.encoder.encode(s);
+            Some(bytes) => {
+                self.encoded_data[row_idx] = self.encoder.encode_bytes(bytes);
                 self.null_bitmap.set(row_idx, false);
             }
             None => {
@@ -325,9 +340,13 @@ impl FsstColumn {
     }
 
     pub fn append(&mut self, value: Option<&str>) -> crate::core::StorageResult<()> {
+        self.append_bytes(value.map(|s| s.as_bytes()))
+    }
+
+    pub fn append_bytes(&mut self, value: Option<&[u8]>) -> crate::core::StorageResult<()> {
         match value {
-            Some(s) => {
-                self.encoded_data.push(self.encoder.encode(s));
+            Some(bytes) => {
+                self.encoded_data.push(self.encoder.encode_bytes(bytes));
                 self.null_bitmap.push(false);
             }
             None => {
@@ -344,33 +363,36 @@ impl FsstColumn {
     }
 
     pub fn rebuild(&mut self, new_strings: &[String]) -> crate::core::StorageResult<()> {
-        let mut existing_strings: Vec<(usize, String)> =
-            Vec::with_capacity(self.encoded_data.len());
+        let new_bytes: Vec<&[u8]> = new_strings.iter().map(|s| s.as_bytes()).collect();
+        self.rebuild_bytes(&new_bytes)
+    }
+
+    pub fn rebuild_bytes(
+        &mut self,
+        new_bytes: &[&[u8]],
+    ) -> crate::core::StorageResult<()> {
+        let mut existing: Vec<(usize, Vec<u8>)> = Vec::with_capacity(self.encoded_data.len());
         for (idx, encoded) in self.encoded_data.iter().enumerate() {
             if self.null_bitmap.is_null(idx) {
                 continue;
             }
-            let decoded = self.encoder.decode(encoded);
-            let value = String::from_utf8(decoded).map_err(|e| {
-                crate::core::StorageError::io_error(format!("FSST rebuild decode utf8: {}", e))
-            })?;
-            existing_strings.push((idx, value));
+            existing.push((idx, self.encoder.decode(encoded)));
         }
 
-        let mut training_strings: Vec<String> = existing_strings
-            .iter()
-            .map(|(_, value)| value.clone())
-            .collect();
-        training_strings.extend_from_slice(new_strings);
-        if training_strings.is_empty() {
+        let mut training: Vec<&[u8]> = existing.iter().map(|(_, v)| v.as_slice()).collect();
+        training.extend_from_slice(new_bytes);
+        if training.is_empty() {
             self.updates_since_rebuild = 0;
             return Ok(());
         }
 
-        let refs: Vec<&str> = training_strings.iter().map(String::as_str).collect();
+        let refs: Vec<&str> = training
+            .iter()
+            .map(|b| std::str::from_utf8(b).unwrap_or(""))
+            .collect();
         let new_encoder = FsstEncoder::train(&refs, SYMBOL_TABLE_SIZE);
-        for (idx, value) in existing_strings {
-            self.encoded_data[idx] = new_encoder.encode(&value);
+        for (idx, value) in existing {
+            self.encoded_data[idx] = new_encoder.encode_bytes(&value);
         }
         self.encoder = new_encoder;
         self.updates_since_rebuild = 0;

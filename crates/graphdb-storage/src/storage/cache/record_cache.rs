@@ -327,6 +327,8 @@ impl RecordCache {
     }
 
     pub fn stats(&self) -> RecordCacheStats {
+        self.vertex_cache.run_pending_tasks();
+        self.id_index_cache.run_pending_tasks();
         RecordCacheStats {
             vertex_weighted_size: self.vertex_cache.weighted_size(),
             id_index_weighted_size: self.id_index_cache.weighted_size(),

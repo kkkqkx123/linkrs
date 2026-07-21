@@ -205,8 +205,8 @@ pub struct TransactionManager {
     id_generator: AtomicU64,
     /// Statistics
     stats: Arc<TransactionStats>,
-    commit_callbacks: RwLock<Vec<CommitCallback>>,
-    rollback_callbacks: RwLock<Vec<RollbackCallback>>,
+    commit_callbacks: RwLock<Arc<[CommitCallback]>>,
+    rollback_callbacks: RwLock<Arc<[RollbackCallback]>>,
     /// Whether shutdown
     shutdown_flag: AtomicU64,
     /// Transaction monitor for metrics collection
@@ -241,8 +241,8 @@ impl TransactionManager {
             active_transactions: DashMap::new(),
             id_generator: AtomicU64::new(1),
             stats,
-            commit_callbacks: RwLock::new(Vec::new()),
-            rollback_callbacks: RwLock::new(Vec::new()),
+            commit_callbacks: RwLock::new(Arc::from(Vec::new())),
+            rollback_callbacks: RwLock::new(Arc::from(Vec::new())),
             shutdown_flag: AtomicU64::new(0),
             monitor,
             sync_manager: None,
@@ -273,24 +273,42 @@ impl TransactionManager {
     }
 
     pub fn register_commit_callback(&self, callback: CommitCallback) {
-        self.commit_callbacks.write().push(callback);
+        let mut guard = self.commit_callbacks.write();
+        let mut buf = guard.to_vec();
+        buf.push(callback);
+        *guard = Arc::from(buf);
     }
 
     pub fn register_rollback_callback(&self, callback: RollbackCallback) {
-        self.rollback_callbacks.write().push(callback);
+        let mut guard = self.rollback_callbacks.write();
+        let mut buf = guard.to_vec();
+        buf.push(callback);
+        *guard = Arc::from(buf);
     }
 
     fn emit_commit_event(&self, event: TransactionEvent) {
-        let callbacks = self.commit_callbacks.read().clone();
-        for callback in callbacks {
-            callback(&event);
+        let callbacks = Arc::clone(&self.commit_callbacks.read());
+        for callback in callbacks.iter() {
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                callback(&event);
+            }))
+            .is_err()
+            {
+                log::warn!("commit callback panicked; continuing dispatch");
+            }
         }
     }
 
     fn emit_rollback_event(&self, event: TransactionEvent) {
-        let callbacks = self.rollback_callbacks.read().clone();
-        for callback in callbacks {
-            callback(&event);
+        let callbacks = Arc::clone(&self.rollback_callbacks.read());
+        for callback in callbacks.iter() {
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                callback(&event);
+            }))
+            .is_err()
+            {
+                log::warn!("rollback callback panicked; continuing dispatch");
+            }
         }
     }
 

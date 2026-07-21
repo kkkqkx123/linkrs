@@ -335,11 +335,13 @@ impl Csr {
     }
 
     /// Serialize this CSR to a file for later reload (segment eviction).
-    /// Returns the number of bytes written.
+    /// Data is zstd-compressed if it reduces size. Returns the number of bytes written.
     pub fn dump_to_file(&self, path: &Path) -> StorageResult<u64> {
         let data = self.dump();
-        let bytes = data.len() as u64;
-        std::fs::write(path, &data).map_err(|e| {
+        let mut buf = Vec::new();
+        crate::storage::compression::compress_to_writer(&mut buf, &data, 3)?;
+        let bytes = buf.len() as u64;
+        std::fs::write(path, &buf).map_err(|e| {
             StorageError::io_error(format!("failed to write CSR spill file: {}", e))
         })?;
         Ok(bytes)
@@ -347,8 +349,10 @@ impl Csr {
 
     /// Load CSR data from a file, replacing current contents (segment reload).
     pub fn load_from_file(&mut self, path: &Path) -> StorageResult<()> {
-        let data = std::fs::read(path)
+        let raw = std::fs::read(path)
             .map_err(|e| StorageError::io_error(format!("failed to read CSR spill file: {}", e)))?;
+        let mut cursor = std::io::Cursor::new(&raw);
+        let data = crate::storage::compression::decompress_from_reader(&mut cursor)?;
         self.load(&data)
     }
 }

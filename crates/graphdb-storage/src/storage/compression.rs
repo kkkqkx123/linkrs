@@ -464,6 +464,63 @@ pub fn cleanup_shadow_files<P: AsRef<std::path::Path>>(dir: P) -> StorageResult<
     Ok(cleaned)
 }
 
+/// Compress data with zstd and write in spill file format:
+/// [1-byte marker][4-byte CRC32][4-byte compressed_len][zstd data]
+/// Falls back to uncompressed if compression doesn't reduce size.
+pub fn compress_to_writer(writer: &mut impl std::io::Write, data: &[u8], level: i32) -> StorageResult<usize> {
+    let compressed = zstd::encode_all(data, level).map_err(|e| {
+        StorageError::io_error(format!("zstd compression failed: {}", e))
+    })?;
+
+    if compressed.len() < data.len() {
+        let crc = crc32fast::hash(&compressed);
+        writer.write_all(&[COMPRESSION_MARKER_ZSTD])?;
+        writer.write_all(&crc.to_le_bytes())?;
+        writer.write_all(&(compressed.len() as u32).to_le_bytes())?;
+        writer.write_all(&compressed)?;
+        Ok(1 + 4 + 4 + compressed.len())
+    } else {
+        writer.write_all(&[COMPRESSION_MARKER_NONE])?;
+        writer.write_all(data)?;
+        Ok(1 + data.len())
+    }
+}
+
+/// Read data written by `compress_to_writer`, decompressing as needed.
+pub fn decompress_from_reader(reader: &mut impl std::io::Read) -> StorageResult<Vec<u8>> {
+    let mut marker = [0u8; 1];
+    reader.read_exact(&mut marker)?;
+    match marker[0] {
+        COMPRESSION_MARKER_NONE => {
+            let mut data = Vec::new();
+            reader.read_to_end(&mut data)?;
+            Ok(data)
+        }
+        COMPRESSION_MARKER_ZSTD => {
+            let mut crc_bytes = [0u8; 4];
+            reader.read_exact(&mut crc_bytes)?;
+            let expected_crc = u32::from_le_bytes(crc_bytes);
+            let mut len_bytes = [0u8; 4];
+            reader.read_exact(&mut len_bytes)?;
+            let compressed_len = u32::from_le_bytes(len_bytes) as usize;
+            let mut compressed = vec![0u8; compressed_len];
+            reader.read_exact(&mut compressed)?;
+            let actual_crc = crc32fast::hash(&compressed);
+            if actual_crc != expected_crc {
+                return Err(StorageError::data_corruption(format!(
+                    "spill file CRC mismatch: expected {expected_crc:#x}, got {actual_crc:#x}"
+                )));
+            }
+            zstd::decode_all(&compressed[..]).map_err(|e| {
+                StorageError::io_error(format!("zstd decompression failed: {}", e))
+            })
+        }
+        other => Err(StorageError::deserialize_error(format!(
+            "unknown spill compression marker: {other:#x}"
+        ))),
+    }
+}
+
 impl SafeSerializable for PageHeader {
     fn serialize(&self, writer: &mut impl std::io::Write) -> StorageResult<()> {
         PageHeader::serialize(self, writer).map(|_| ())

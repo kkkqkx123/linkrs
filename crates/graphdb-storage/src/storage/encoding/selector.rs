@@ -21,6 +21,8 @@ pub struct EncodingThresholds {
     /// When the average compressed_size/raw_size exceeds this threshold,
     /// the column should be re-evaluated with a different encoding.
     pub reencode_threshold: f64,
+    /// Maximum number of symbols for FSST encoding.
+    pub fsst_max_symbols: usize,
 }
 
 impl Default for EncodingThresholds {
@@ -31,6 +33,7 @@ impl Default for EncodingThresholds {
             cardinality_ratio_threshold: 0.5,
             fsst_rebuild_threshold: 0.2,
             reencode_threshold: 0.8,
+            fsst_max_symbols: 255,
         }
     }
 }
@@ -312,6 +315,7 @@ mod tests {
             cardinality_ratio_threshold: 0.3,
             fsst_rebuild_threshold: 0.5,
             reencode_threshold: 0.9,
+            fsst_max_symbols: 128,
         };
         let selector = EncodingSelector::new(thresholds);
         assert_eq!(selector.thresholds().string_min_rows, 10);

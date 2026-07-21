@@ -931,10 +931,11 @@ impl Column {
     }
 
     pub fn apply_fsst_encoding(&mut self, max_symbols: usize) -> StorageResult<()> {
-        if self.data_type != DataType::String {
-            return Err(StorageError::not_supported(
-                "FSST encoding only supports String type".to_string(),
-            ));
+        if self.data_type != DataType::String && self.data_type != DataType::Json {
+            return Err(StorageError::not_supported(format!(
+                "FSST encoding does not support type {:?}",
+                self.data_type
+            )));
         }
 
         let mut strings: Vec<Option<String>> = Vec::with_capacity(self.len());
@@ -944,6 +945,7 @@ impl Column {
             } else {
                 match self.get(i) {
                     Some(Value::String(s)) => strings.push(Some(s)),
+                    Some(Value::Json(j)) => strings.push(Some(j.as_str().to_string())),
                     _ => strings.push(None),
                 }
             }
@@ -1309,6 +1311,7 @@ impl ColumnStore {
         &mut self,
         col_name: &str,
         encoding_type: EncodingType,
+        fsst_max_symbols: usize,
     ) -> StorageResult<()> {
         let col = self
             .get_column_mut(col_name)
@@ -1320,12 +1323,13 @@ impl ColumnStore {
 
         match encoding_type {
             EncodingType::Fsst => {
-                if col.data_type != DataType::String {
-                    return Err(StorageError::not_supported(
-                        "FSST encoding only supports String type".to_string(),
-                    ));
+                if col.data_type != DataType::String && col.data_type != DataType::Json {
+                    return Err(StorageError::not_supported(format!(
+                        "FSST encoding does not support type {:?}",
+                        col.data_type
+                    )));
                 }
-                col.apply_fsst_encoding(1024)?;
+                col.apply_fsst_encoding(fsst_max_symbols)?;
             }
             EncodingType::Dictionary => {
                 col.apply_dictionary_encoding()?;

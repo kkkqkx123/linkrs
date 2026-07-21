@@ -86,10 +86,20 @@ fn test_cache_metrics_include_insertions_and_precise_invalidations() {
     let cache = RecordCache::new();
     cache.insert_id_index(1, "user", 42, 0);
     assert_eq!(cache.get_id_index(1, "user", 0), Some(42));
+
+    let stats_after_insert = cache.stats();
+    assert!(
+        stats_after_insert.id_index_weighted_size > 0,
+        "weighted_size should reflect inserted entry"
+    );
+
     cache.remove_id_index(1, "user");
 
-    let stats = cache.stats();
-    assert!(stats.id_index_weighted_size > 0);
+    let stats_after_remove = cache.stats();
+    assert_eq!(
+        stats_after_remove.id_index_weighted_size, 0,
+        "weighted_size should be 0 after invalidation"
+    );
 }
 
 #[test]

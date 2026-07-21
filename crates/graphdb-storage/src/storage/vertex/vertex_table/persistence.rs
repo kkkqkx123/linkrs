@@ -58,7 +58,7 @@ impl VertexTable {
         // Encoding is a flush-time concern. Work on a snapshot so active
         // writes keep using the unmodified in-memory representation.
         let mut columns = self.columns.clone();
-        let selector = EncodingSelector::default();
+        let mut selector = EncodingSelector::default();
         let selections = columns
             .columns()
             .iter()
@@ -70,9 +70,34 @@ impl VertexTable {
                 )
             })
             .collect::<Vec<_>>();
-        for (name, encoding_type) in selections {
-            if encoding_type != EncodingType::None {
-                columns.apply_encoding_to_column(&name, encoding_type)?;
+        for (name, encoding_type) in &selections {
+            if *encoding_type != EncodingType::None {
+                columns.apply_encoding_to_column(
+                    name,
+                    *encoding_type,
+                    selector.thresholds().fsst_max_symbols,
+                )?;
+            }
+        }
+        for (name, encoding_type) in &selections {
+            if *encoding_type != EncodingType::None {
+                if let Some(col) = columns.get_column(name) {
+                    if let Ok(stats) = col.compute_stats() {
+                        log::debug!(
+                            "flush column={} encoding={:?} ratio={:.2}% savings={:.2}% raw={} compressed={}",
+                            name,
+                            encoding_type,
+                            stats.compression_ratio() * 100.0,
+                            stats.space_savings() * 100.0,
+                            stats.raw_size,
+                            stats.compressed_size,
+                        );
+                        selector.record_compression_result(
+                            *encoding_type,
+                            stats.compression_ratio(),
+                        );
+                    }
+                }
             }
         }
         self.flush_columns(&columns_path, &columns)?;
