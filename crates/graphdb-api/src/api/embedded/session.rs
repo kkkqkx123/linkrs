@@ -10,7 +10,7 @@ use crate::core::Value;
 use crate::core::{SessionStatistics, StatsManager};
 use crate::query::executor::expression::functions::{CustomFunction, FunctionRegistry};
 use crate::search::FulltextIndexManager;
-use crate::storage::StorageClient;
+use crate::storage::{StorageClient, StorageOperationContextOps};
 use crate::sync::SyncManager;
 #[cfg(feature = "qdrant")]
 use crate::sync::vector_sync::SearchOptions;
@@ -208,7 +208,17 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
         };
 
         let mut query_api = self.db.query_api.write();
-        let result = query_api.execute(query, ctx)?;
+        let result = if self.auto_commit {
+            let storage = self
+                .db
+                .storage
+                .read()
+                .bind_auto_commit_context()
+                .map_err(|error| CoreError::StorageError(error.to_string()))?;
+            query_api.execute_with_operation_storage(query, ctx, storage)?
+        } else {
+            query_api.execute(query, ctx)?
+        };
 
         // Update statistical information
         self.statistics
@@ -243,7 +253,17 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
         };
 
         let mut query_api = self.db.query_api.write();
-        let result = query_api.execute(query, ctx)?;
+        let result = if self.auto_commit {
+            let storage = self
+                .db
+                .storage
+                .read()
+                .bind_auto_commit_context()
+                .map_err(|error| CoreError::StorageError(error.to_string()))?;
+            query_api.execute_with_operation_storage(query, ctx, storage)?
+        } else {
+            query_api.execute(query, ctx)?
+        };
 
         // Detect USE <space> results and persist space context
         self.update_space_from_result(&result);

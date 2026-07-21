@@ -4,8 +4,8 @@
 
 use std::collections::HashSet;
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -194,6 +194,12 @@ pub struct SavepointInfo {
 /// Operation Log
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum OperationLog {
+    /// Canonical mutation boundary recorded by the transaction mutation
+    /// recorder. The undo log remains the source of rollback actions.
+    Mutation {
+        entities: Vec<Vec<u8>>,
+        table: Option<String>,
+    },
     InsertVertex {
         space: String,
         vertex_id: Vec<u8>,
@@ -435,7 +441,6 @@ impl TransactionConfig {
         self.idle_timeout = timeout;
         self
     }
-
 }
 
 /// Transaction Manager Configuration
@@ -820,7 +825,8 @@ impl WriteSet {
         }
         // Schema changes affect the physical data layout. Certify them
         // against concurrent data writes even when the entity keys differ.
-        if (!self.schema_resources.is_empty() && (!other.vertices.is_empty() || !other.edges.is_empty()))
+        if (!self.schema_resources.is_empty()
+            && (!other.vertices.is_empty() || !other.edges.is_empty()))
             || (!other.schema_resources.is_empty()
                 && (!self.vertices.is_empty() || !self.edges.is_empty()))
         {
@@ -866,8 +872,7 @@ pub struct TransactionExecution {
     auto_commit_owner: bool,
     rollback_only: bool,
     owner: Option<String>,
-    mutation_recorder:
-        Option<Arc<dyn super::participant::TransactionMutationRecorder>>,
+    mutation_recorder: Option<Arc<dyn super::participant::TransactionMutationRecorder>>,
 }
 
 impl TransactionExecution {

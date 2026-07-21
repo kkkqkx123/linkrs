@@ -1,13 +1,14 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use parking_lot::{Mutex, RwLock};
 
+use crate::core::UserStorage;
 use crate::core::metadata::{IndexManager, SchemaManager};
 use crate::core::stats::StatsManager;
 use crate::core::types::{LabelId, TableTracker, TableTrackerConfig, Timestamp};
-use crate::core::UserStorage;
+use crate::storage::StorageOperationContext;
 use crate::storage::engine::background_freeze::BackgroundFreezeManager;
 use crate::storage::engine::cache_manager::CacheManager;
 use crate::storage::engine::config::PropertyGraphConfig;
@@ -18,7 +19,6 @@ use crate::storage::engine::resource_budget::{MemoryAccounting, MemoryBudget};
 use crate::storage::engine::spiller::Spiller;
 use crate::storage::index::{IndexDataManagerImpl, IndexGcConfig, IndexGcManager};
 use crate::storage::vertex::IdKey;
-use crate::storage::StorageOperationContext;
 use crate::transaction::VersionManager;
 
 type LastCompactedVertices = Arc<Mutex<Vec<(LabelId, Vec<IdKey>)>>>;

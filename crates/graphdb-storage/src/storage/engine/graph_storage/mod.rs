@@ -34,12 +34,12 @@ use crate::core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Va
 use crate::storage::cursor::{
     EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor,
 };
+use crate::storage::engine::PersistenceConfig;
 use crate::storage::engine::background_freeze::{BackgroundFreezeManager, FreezeStats};
 use crate::storage::engine::graph_storage::context::ExportedEdgeSnapshotRecord;
-use crate::storage::engine::PersistenceConfig;
+use crate::storage::index::IndexGcConfig;
 use crate::storage::index::key_codec::KeyBuilder;
 use crate::storage::index::types::IndexIdentity;
-use crate::storage::index::IndexGcConfig;
 use crate::storage::{
     StorageAdmin, StorageAuthOps, StorageGcOps, StorageOperationContext,
     StorageOperationContextOps, StoragePersistenceOps, StorageReader, StorageRecoveryOps,
@@ -61,6 +61,11 @@ impl std::fmt::Debug for GraphStorage {
 }
 
 impl GraphStorage {
+    /// Return the MVCC manager used by this storage instance.
+    pub fn version_manager(&self) -> Arc<crate::transaction::VersionManager> {
+        self.ctx.version_manager().clone()
+    }
+
     fn commit_auto_if_needed(&self) -> StorageResult<()> {
         let Some(context) = self.ctx.operation_context() else {
             return Ok(());
@@ -888,14 +893,17 @@ impl StorageWriter for GraphStorage {
 
 impl StorageSchemaOps for GraphStorage {
     fn create_space(&mut self, space: &mut SpaceInfo) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         schema_writer::create_space(&self.ctx, space)
     }
 
     fn drop_space(&mut self, space: &str) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         schema_writer::drop_space(&self.ctx, space)
     }
 
     fn clear_space(&mut self, space: &str) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         schema_writer::clear_space(&self.ctx, space)
     }
 
@@ -904,10 +912,12 @@ impl StorageSchemaOps for GraphStorage {
         space_id: u64,
         comment: String,
     ) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         schema_writer::alter_space_comment(&self.ctx, space_id, comment)
     }
 
     fn create_tag(&mut self, space: &str, tag: &TagInfo) -> Result<u32, StorageError> {
+        self.ctx.check_write_admission()?;
         schema_writer::create_tag(&self.ctx, space, tag)
     }
 
@@ -918,6 +928,7 @@ impl StorageSchemaOps for GraphStorage {
         additions: Vec<PropertyDef>,
         deletions: Vec<String>,
     ) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         schema_writer::alter_tag(&self.ctx, space, tag_name, additions, deletions)
     }
 
@@ -927,6 +938,7 @@ impl StorageSchemaOps for GraphStorage {
         old_name: &str,
         new_name: &str,
     ) -> Result<(), StorageError> {
+        self.ctx.check_write_admission()?;
         schema_engine::rename_vertex_property(&self.ctx, label, old_name, new_name)
     }
 
@@ -937,12 +949,14 @@ impl StorageSchemaOps for GraphStorage {
         old_name: &str,
         new_name: &str,
     ) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         self.ctx
             .schema_manager()
             .rename_tag_property(space, tag, old_name, new_name)
     }
 
     fn drop_tag(&mut self, space: &str, tag: &str) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         schema_writer::drop_tag(&self.ctx, space, tag)
     }
 
@@ -951,6 +965,7 @@ impl StorageSchemaOps for GraphStorage {
         space: &str,
         edge_type: &EdgeTypeInfo,
     ) -> Result<u32, StorageError> {
+        self.ctx.check_write_admission()?;
         schema_writer::create_edge_type(&self.ctx, space, edge_type)
     }
 
@@ -961,22 +976,27 @@ impl StorageSchemaOps for GraphStorage {
         additions: Vec<PropertyDef>,
         deletions: Vec<String>,
     ) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         schema_writer::alter_edge_type(&self.ctx, space, edge_type_name, additions, deletions)
     }
 
     fn drop_edge_type(&mut self, space: &str, edge_type: &str) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         schema_writer::drop_edge_type(&self.ctx, space, edge_type)
     }
 
     fn create_tag_index(&mut self, space: &str, index: &Index) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         schema_writer::create_tag_index(&self.ctx, space, index)
     }
 
     fn drop_tag_index(&mut self, space: &str, index_name: &str) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         schema_writer::drop_tag_index(&self.ctx, space, index_name)
     }
 
     fn rebuild_tag_index(&mut self, space: &str, index_name: &str) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         // Keep the exclusive rebuild guard from the table snapshot through
         // WAL catch-up and generation publication. Index writers take the
         // read side in index_engine, so they cannot update the old generation
@@ -1014,14 +1034,17 @@ impl StorageSchemaOps for GraphStorage {
     }
 
     fn create_edge_index(&mut self, space: &str, index: &Index) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         schema_writer::create_edge_index(&self.ctx, space, index)
     }
 
     fn drop_edge_index(&mut self, space: &str, index_name: &str) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         schema_writer::drop_edge_index(&self.ctx, space, index_name)
     }
 
     fn rebuild_edge_index(&mut self, space: &str, index_name: &str) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         // Keep the exclusive rebuild guard from the table snapshot through
         // WAL catch-up and generation publication. Index writers take the
         // read side in index_engine, so they cannot update the old generation
@@ -1061,18 +1084,22 @@ impl StorageSchemaOps for GraphStorage {
 
 impl StorageAuthOps for GraphStorage {
     fn change_password(&mut self, info: &PasswordInfo) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         ops::change_password(&self.ctx, info)
     }
 
     fn create_user(&mut self, info: &UserInfo) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         ops::create_user(&self.ctx, info)
     }
 
     fn alter_user(&mut self, info: &UserAlterInfo) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         ops::alter_user(&self.ctx, info)
     }
 
     fn drop_user(&mut self, username: &str) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         ops::drop_user(&self.ctx, username)
     }
 
@@ -1086,10 +1113,12 @@ impl StorageAuthOps for GraphStorage {
         space_id: u64,
         role: RoleType,
     ) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         ops::grant_role(&self.ctx, username, space_id, role)
     }
 
     fn revoke_role(&mut self, username: &str, space_id: u64) -> Result<bool, StorageError> {
+        self.ctx.check_write_admission()?;
         ops::revoke_role(&self.ctx, username, space_id)
     }
 }
@@ -1250,7 +1279,7 @@ impl crate::storage::StorageCommitOps for GraphStorage {
         &self,
         sync_manager: &crate::sync::SyncManager,
     ) -> StorageResult<usize> {
-        use crate::transaction::wal::{collect_committed_transactions, LocalWalParser, WalParser};
+        use crate::transaction::wal::{LocalWalParser, WalParser, collect_committed_transactions};
         let Some(paths) = self.ctx.storage_paths() else {
             return Ok(0);
         };

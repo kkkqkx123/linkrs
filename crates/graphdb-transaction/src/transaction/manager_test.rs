@@ -2,13 +2,15 @@
 //!
 //! Test transaction manager functionality, including transaction lifecycle management, concurrency control, timeout handling, etc.
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use crate::transaction::TransactionErrorKind;
 use crate::transaction::manager::TransactionManager;
+use crate::transaction::mvcc::VersionManager;
 use crate::transaction::types::{
     DurabilityLevel, TransactionId, TransactionManagerConfig, TransactionOptions, TransactionState,
 };
-use crate::transaction::TransactionErrorKind;
 
 fn create_test_manager() -> TransactionManager {
     let config = TransactionManagerConfig {
@@ -647,6 +649,18 @@ fn test_version_manager_integration() {
     manager
         .commit_transaction(insert_txn)
         .expect("Failed to commit insert transaction");
+}
+
+#[test]
+fn test_shared_version_manager_is_preserved() {
+    let version_manager = Arc::new(VersionManager::new());
+    let manager = TransactionManager::with_shared_version_manager(
+        TransactionManagerConfig::default(),
+        Arc::new(crate::core::stats::StatsManager::new()),
+        Arc::clone(&version_manager),
+    );
+
+    assert!(Arc::ptr_eq(manager.version_manager(), &version_manager));
 }
 
 #[test]

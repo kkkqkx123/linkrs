@@ -3,11 +3,11 @@ use crate::core::types::{CommitLsn, Index, IndexGeneration, IndexStatus, Snapsho
 use crate::core::wal::EntityRef;
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::index::generic_index_manager::GenericIndexManager;
-use crate::storage::index::types::IndexRecord;
 use crate::storage::index::key_codec::{EdgeIndexKeyGen, KeyBuilder, KeyParser, VertexIndexKeyGen};
 use crate::storage::index::manifest::{
     GenerationBuildState, GenerationState, IndexManifest, IndexShard,
 };
+use crate::storage::index::types::IndexRecord;
 use crate::storage::index::{EdgeIndexOps, VertexIndexOps};
 use std::collections::BTreeMap;
 use std::collections::HashSet;
@@ -22,8 +22,8 @@ type IndexDataMaps = (
 );
 
 use crate::transaction::wal::{
-    collect_committed_transactions, filter_intents_for_indexes, CommittedWalTransaction,
-    LocalWalParser, WalParser,
+    CommittedWalTransaction, LocalWalParser, WalParser, collect_committed_transactions,
+    filter_intents_for_indexes,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -997,15 +997,15 @@ pub(crate) fn lookup_edge_index(
 
 #[cfg(test)]
 mod tests {
+    use crate::core::Value;
     use crate::core::types::{
         CommitLsn, IdempotencyKey, Index, IndexConfig, IndexField, IndexGeneration, IndexType,
         OrderingKey, SnapshotTimestamp, TargetId, TransactionId, VertexId,
     };
     use crate::core::wal::{EntityRef, IndexMutation, IndexOperation, OutboxIntent};
-    use crate::core::Value;
     use crate::storage::engine::graph_storage::context::GraphStorageContext;
-    use crate::storage::index::types::IndexRecord;
     use crate::storage::index::manifest::{GenerationBuildState, GenerationState};
+    use crate::storage::index::types::IndexRecord;
     use crate::storage::{
         GraphStorage, StoragePersistenceOps, StorageReader, StorageSchemaOps, StorageWriter,
     };
@@ -1309,9 +1309,11 @@ mod tests {
 
         let mut storage = GraphStorage::open(temp_dir.path().to_path_buf())
             .expect("storage should reopen after the failed build");
-        assert!(storage
-            .rebuild_tag_index("test_space", "person_name_idx")
-            .expect("rebuild should restart after crash recovery"));
+        assert!(
+            storage
+                .rebuild_tag_index("test_space", "person_name_idx")
+                .expect("rebuild should restart after crash recovery")
+        );
         let indexed = storage
             .lookup_index(
                 "test_space",
@@ -1607,8 +1609,8 @@ mod tests {
     fn test_flush_index_data_writes_valid_files() {
         use crate::core::types::MAX_TIMESTAMP;
         use crate::storage::index::generic_index_manager::GenericIndexManager;
-use crate::storage::index::types::IndexRecord;
         use crate::storage::index::key_codec::VertexIndexKeyGen;
+        use crate::storage::index::types::IndexRecord;
         use std::collections::BTreeMap;
         use std::fs;
 

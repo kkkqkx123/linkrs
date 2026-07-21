@@ -1,12 +1,12 @@
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod tests {
+    use crate::core::DataType;
     use crate::core::types::{
         EdgeTypeInfo, Index, IndexConfig, IndexField, IndexType, PropertyDef, SpaceInfo, UserInfo,
         VertexId,
     };
     use crate::core::vertex_edge_path::Tag;
-    use crate::core::DataType;
     use crate::core::{Edge, EdgeDirection, RoleType, Value, Vertex};
     use crate::storage::{
         GraphStorage, PersistenceConfig, PropertyGraphConfig, ResourceConfig, ScanOptions,
@@ -86,9 +86,11 @@ mod tests {
             .expect("persistence should be enabled");
 
         assert!(checkpoint.snapshot_created);
-        assert!(storage
-            .verify_snapshot(checkpoint.checkpoint_id)
-            .expect("snapshot verification should succeed"));
+        assert!(
+            storage
+                .verify_snapshot(checkpoint.checkpoint_id)
+                .expect("snapshot verification should succeed")
+        );
 
         let stats = storage.snapshot_stats();
         assert_eq!(stats.snapshot_count, 1);
@@ -145,10 +147,12 @@ mod tests {
                         .expect("Bound context should remain available");
                     assert_eq!(context.transaction_id, Some(TransactionId::from(id + 100)));
                     assert_eq!(context.read_timestamp, 10);
-                    assert!(bound
-                        .get_vertex("test_space", &VertexId::from_int64(1))
-                        .expect("Concurrent read failed")
-                        .is_some());
+                    assert!(
+                        bound
+                            .get_vertex("test_space", &VertexId::from_int64(1))
+                            .expect("Concurrent read failed")
+                            .is_some()
+                    );
                 })
             })
             .collect();
@@ -469,10 +473,12 @@ mod tests {
         setup_knows_edge(&mut storage);
 
         storage.drop_edge_type("test_space", "KNOWS").unwrap();
-        assert!(storage
-            .get_edge_type("test_space", "KNOWS")
-            .unwrap()
-            .is_none());
+        assert!(
+            storage
+                .get_edge_type("test_space", "KNOWS")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -588,14 +594,18 @@ mod tests {
         let storage =
             GraphStorage::open(work_dir).expect("Failed to reopen persistent GraphStorage");
 
-        assert!(storage
-            .get_tag("test_space", "Person")
-            .expect("Failed to load tag")
-            .is_none());
-        assert!(storage
-            .get_edge_type("test_space", "KNOWS")
-            .expect("Failed to load edge type")
-            .is_none());
+        assert!(
+            storage
+                .get_tag("test_space", "Person")
+                .expect("Failed to load tag")
+                .is_none()
+        );
+        assert!(
+            storage
+                .get_edge_type("test_space", "KNOWS")
+                .expect("Failed to load edge type")
+                .is_none()
+        );
     }
 
     #[test]
@@ -693,10 +703,12 @@ mod tests {
             GraphStorage::open(work_dir).expect("Failed to reopen persistent GraphStorage");
 
         assert!(!storage.space_exists("test_space"));
-        assert!(storage
-            .list_spaces()
-            .expect("Failed to list spaces")
-            .is_empty());
+        assert!(
+            storage
+                .list_spaces()
+                .expect("Failed to list spaces")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -878,10 +890,12 @@ mod tests {
         storage
             .delete_vertex("test_space", &VertexId::from_int64(101))
             .unwrap();
-        assert!(storage
-            .get_vertex("test_space", &VertexId::from_int64(101))
-            .unwrap()
-            .is_none());
+        assert!(
+            storage
+                .get_vertex("test_space", &VertexId::from_int64(101))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -999,13 +1013,17 @@ mod tests {
             ),
         ];
 
-        assert!(storage
-            .batch_insert_vertices("test_space", vertices)
-            .is_err());
-        assert!(storage
-            .get_vertex("test_space", &VertexId::from_int64(1))
-            .unwrap()
-            .is_none());
+        assert!(
+            storage
+                .batch_insert_vertices("test_space", vertices)
+                .is_err()
+        );
+        assert!(
+            storage
+                .get_vertex("test_space", &VertexId::from_int64(1))
+                .unwrap()
+                .is_none()
+        );
     }
 
     // ==================== Edge Operations ====================

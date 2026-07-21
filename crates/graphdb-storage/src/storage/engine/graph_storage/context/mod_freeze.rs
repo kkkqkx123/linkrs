@@ -1,5 +1,5 @@
-use crate::core::types::CompactConfig;
 use crate::core::StorageResult;
+use crate::core::types::CompactConfig;
 use crate::storage::edge::edge_table::segment_eviction::SegmentEvictionEngine;
 use crate::storage::engine::background_freeze::{FreezeGuard, FreezeStats};
 

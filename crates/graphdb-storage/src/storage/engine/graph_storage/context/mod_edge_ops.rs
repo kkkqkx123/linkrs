@@ -6,8 +6,8 @@ use crate::storage::engine::{EdgeOperationParams, InsertEdgeParams};
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
-use super::helpers;
 use super::GraphStorageContext;
+use super::helpers;
 
 struct EdgeLabelLookupCtx<'a> {
     vertex_tables: &'a HashMap<LabelId, crate::storage::vertex::VertexTable>,

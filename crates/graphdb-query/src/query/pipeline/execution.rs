@@ -30,11 +30,30 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         query_text: &str,
         space_info: Option<SpaceInfo>,
     ) -> DBResult<ExecutionResult> {
+        // Parse before constructing the request context so direct DML can
+        // acquire a real auto-commit storage binding. The query layer must
+        // never invent a transaction identity for an unbound write.
+        let parser_result = self.parse_into_context(query_text)?;
+        let parsed_is_dml = Self::statement_requires_auto_commit(parser_result.ast.stmt());
+        let operation_storage = if parsed_is_dml {
+            Some(self.bind_auto_commit_storage()?)
+        } else {
+            None
+        };
+
         let mut rctx = QueryRequestContext::new(query_text.to_string());
 
         let space_name = space_info.as_ref().map(|s| s.space_name.clone());
         if let Some(ref name) = space_name {
             rctx.space_name = Some(name.clone());
+        }
+        if let Some(ref storage) = operation_storage {
+            rctx.transaction_id = storage
+                .read()
+                .operation_context()
+                .and_then(|context| context.transaction_id);
+            rctx.operation_context = storage.read().operation_context().as_deref().cloned();
+            rctx.operation_storage = Some(storage.clone());
         }
 
         let rctx = Arc::new(rctx);
@@ -72,7 +91,17 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 query_context.clone(),
                 ResultSink::Materialize,
                 txn_scope,
-            )?;
+            );
+            let result = match result {
+                Ok(result) => {
+                    self.finalize_operation_storage(operation_storage.as_ref(), true)?;
+                    result
+                }
+                Err(error) => {
+                    self.finalize_operation_storage(operation_storage.as_ref(), false)?;
+                    return Err(error);
+                }
+            };
             let execution_time_ms = execute_start.elapsed().as_millis() as f64;
             self.plan_cache.record_execution_with_space(
                 query_text,
@@ -83,8 +112,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             );
             return Ok(result);
         }
-
-        let parser_result = self.parse_into_context(query_text)?;
 
         let validation_info =
             self.validate_query_with_context(parser_result.ast.clone(), query_context.clone())?;
@@ -101,13 +128,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             _ => {}
         }
 
-        let is_dml = matches!(
-            validated.ast.stmt(),
-            crate::query::parser::ast::Stmt::Insert(_)
-                | crate::query::parser::ast::Stmt::Update(_)
-                | crate::query::parser::ast::Stmt::Delete(_)
-                | crate::query::parser::ast::Stmt::Merge(_)
-        );
+        let is_dml = Self::statement_requires_auto_commit(validated.ast.stmt());
         let is_transaction = Self::statement_is_transaction(validated.ast.stmt());
         let is_ddl = matches!(
             validated.ast.stmt(),
@@ -150,7 +171,17 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             query_context.clone(),
             ResultSink::Materialize,
             txn_scope,
-        )?;
+        );
+        let result = match result {
+            Ok(result) => {
+                self.finalize_operation_storage(operation_storage.as_ref(), true)?;
+                result
+            }
+            Err(error) => {
+                self.finalize_operation_storage(operation_storage.as_ref(), false)?;
+                return Err(error);
+            }
+        };
         let execution_time_ms = execute_start.elapsed().as_millis() as f64;
 
         let should_cache = !matches!(
@@ -200,6 +231,33 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         }
 
         Ok(result)
+    }
+
+    fn bind_auto_commit_storage(&self) -> DBResult<Arc<RwLock<dyn QueryStorage>>> {
+        let storage = self.storage.as_ref().ok_or_else(|| {
+            DBError::from(QueryError::execution(
+                "DML requires a storage binding".to_string(),
+            ))
+        })?;
+        let bound = storage
+            .read()
+            .bind_auto_commit_context()
+            .map_err(|error| DBError::from(QueryError::execution(error.to_string())))?;
+        Ok(Arc::new(RwLock::new(bound)))
+    }
+
+    fn finalize_operation_storage(
+        &self,
+        storage: Option<&Arc<RwLock<dyn QueryStorage>>>,
+        committed: bool,
+    ) -> DBResult<()> {
+        if let Some(storage) = storage {
+            storage
+                .write()
+                .finalize_operation(committed)
+                .map_err(|error| DBError::from(QueryError::execution(error.to_string())))?;
+        }
+        Ok(())
     }
 
     pub fn execute_query_with_streaming(

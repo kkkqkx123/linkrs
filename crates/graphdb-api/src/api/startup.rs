@@ -69,6 +69,7 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
     let mut graph_storage =
         GraphStorage::open_with_persistence_config(storage_path, persistence_config)?;
     graph_storage = graph_storage.set_stats_manager(stats_manager.clone());
+    let version_manager = graph_storage.version_manager();
     let inner_storage = Arc::new(MetricsStorage::new(graph_storage, stats_manager.clone()));
     info!(
         "Storage initialized (persistent mode at {}, metrics enabled)",
@@ -303,8 +304,11 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
         abort_retry_attempts: 3,
     };
 
-    let mut transaction_manager =
-        TransactionManager::with_stats_manager(txn_config, stats_manager.clone());
+    let mut transaction_manager = TransactionManager::with_shared_version_manager(
+        txn_config,
+        stats_manager.clone(),
+        version_manager,
+    );
     if let Some(ref sync_manager) = sync_manager {
         transaction_manager = transaction_manager.with_sync_manager(sync_manager.clone());
     }

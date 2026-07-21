@@ -55,17 +55,18 @@ fn record_vertex_insert(
     let Some(recorder) = ctx.mutation_recorder() else {
         return Ok(());
     };
-    recorder.record_mutation(MutationResult {
-        entity_keys: vec![MutationEntityKey::Vertex(vid)],
-        undo_entry: Some(UndoLogEntry::InsertVertex(InsertVertexUndo {
-            v_label: label,
-            vid,
-        })),
-        redo_entry,
-        modified_table: Some("vertex".to_string()),
-        ..MutationResult::default()
-    })
-    .map_err(|error| StorageError::db_error(error.to_string()))?;
+    recorder
+        .record_mutation(MutationResult {
+            entity_keys: vec![MutationEntityKey::Vertex(vid)],
+            undo_entry: Some(UndoLogEntry::InsertVertex(InsertVertexUndo {
+                v_label: label,
+                vid,
+            })),
+            redo_entry,
+            modified_table: Some("vertex".to_string()),
+            ..MutationResult::default()
+        })
+        .map_err(|error| StorageError::db_error(error.to_string()))?;
     Ok(())
 }
 
@@ -82,9 +83,9 @@ fn record_vertex_remove(
         .record_mutation(MutationResult {
             entity_keys: vec![MutationEntityKey::Vertex(vid)],
             undo_entry: Some(UndoLogEntry::RemoveVertex(RemoveVertexUndo {
-            v_label: label,
-            vid,
-            related_edges: Vec::new(),
+                v_label: label,
+                vid,
+                related_edges: Vec::new(),
             })),
             redo_entry,
             modified_table: Some("vertex".to_string()),
@@ -130,12 +131,12 @@ fn record_vertex_property_update(
         .record_mutation(MutationResult {
             entity_keys: vec![MutationEntityKey::Vertex(vid)],
             undo_entry: Some(UndoLogEntry::UpdateVertexProp(UpdateVertexPropUndo {
-            v_label: label,
-            vid,
-            col_id,
-            old_value: old_value
-                .map(value_to_property_value)
-                .unwrap_or(crate::transaction::undo_log::PropertyValue::Null),
+                v_label: label,
+                vid,
+                col_id,
+                old_value: old_value
+                    .map(value_to_property_value)
+                    .unwrap_or(crate::transaction::undo_log::PropertyValue::Null),
             })),
             redo_entry,
             modified_table: Some("vertex".to_string()),
@@ -157,14 +158,14 @@ fn record_edge_insert(
         .record_mutation(MutationResult {
             entity_keys: vec![MutationEntityKey::Edge(edge)],
             undo_entry: Some(UndoLogEntry::InsertEdge(InsertEdgeUndo {
-            src_label: edge.src_label,
-            src_vid: edge.src_vid,
-            dst_label: edge.dst_label,
-            dst_vid: edge.dst_vid,
-            edge_label: edge.edge_label,
-            rank: edge.rank,
-            oe_offset: -1,
-            ie_offset: -1,
+                src_label: edge.src_label,
+                src_vid: edge.src_vid,
+                dst_label: edge.dst_label,
+                dst_vid: edge.dst_vid,
+                edge_label: edge.edge_label,
+                rank: edge.rank,
+                oe_offset: -1,
+                ie_offset: -1,
             })),
             redo_entry,
             modified_table: Some("edge".to_string()),
@@ -187,13 +188,13 @@ fn record_edge_remove(
         .record_mutation(MutationResult {
             entity_keys: vec![MutationEntityKey::Edge(edge)],
             undo_entry: Some(UndoLogEntry::RestoreEdge(RestoreEdgeUndo {
-            src_label: edge.src_label,
-            src_vid: edge.src_vid,
-            dst_label: edge.dst_label,
-            dst_vid: edge.dst_vid,
-            edge_label: edge.edge_label,
-            rank: edge.rank,
-            properties,
+                src_label: edge.src_label,
+                src_vid: edge.src_vid,
+                dst_label: edge.dst_label,
+                dst_vid: edge.dst_vid,
+                edge_label: edge.edge_label,
+                rank: edge.rank,
+                properties,
             })),
             redo_entry,
             modified_table: Some("edge".to_string()),
@@ -457,14 +458,14 @@ pub(crate) fn delete_vertex_with_edges(
     let edges = reader::get_node_edges(ctx, space, id, EdgeDirection::Both)?;
 
     for edge in edges {
-        let _ = delete_edge(
+        delete_edge(
             ctx,
             space,
             &edge.src,
             &edge.dst,
             &edge.edge_type,
             edge.ranking,
-        );
+        )?;
     }
 
     delete_vertex(ctx, space, id)
@@ -880,13 +881,14 @@ pub(crate) fn update_edge(ctx: &GraphStorageContext, space: &str, edge: Edge) ->
     let ts = ctx.get_write_timestamp()?;
 
     // Delete the old edge
-    let delete_redo = match delete_edge_at_timestamp(ctx, space, &src, &dst, &edge_type, ranking, ts) {
-        Ok(entry) => entry,
-        Err(e) => {
-        ctx.abort_write_timestamp(ts);
-        return Err(e);
-        }
-    };
+    let delete_redo =
+        match delete_edge_at_timestamp(ctx, space, &src, &dst, &edge_type, ranking, ts) {
+            Ok(entry) => entry,
+            Err(e) => {
+                ctx.abort_write_timestamp(ts);
+                return Err(e);
+            }
+        };
 
     // Insert the new edge
     let mut rollback = Vec::new();
@@ -900,9 +902,7 @@ pub(crate) fn update_edge(ctx: &GraphStorageContext, space: &str, edge: Edge) ->
                 edge_info.edge_type_id,
                 ranking,
             );
-            let inserted_redo = rollback
-                .first()
-                .map(|record| record.redo_entry.clone());
+            let inserted_redo = rollback.first().map(|record| record.redo_entry.clone());
             record_edge_insert(ctx, edge_id, inserted_redo)?;
             record_edge_remove(
                 ctx,
@@ -1212,7 +1212,10 @@ pub(crate) fn delete_vertex_data(
     for tag in tags {
         let label_id = tag.tag_id;
         if ctx.delete_vertex(label_id, vertex_id, ts).is_ok() {
-            let redo = DeleteVertexRedo { label: label_id, vid };
+            let redo = DeleteVertexRedo {
+                label: label_id,
+                vid,
+            };
             let redo_entry = ctx.append_wal_redo(WalOpType::DeleteVertex, ts, &redo)?;
             record_vertex_remove(ctx, label_id, vid, Some(redo_entry))?;
             delete_vertex_indexes(
@@ -1263,17 +1266,20 @@ pub(crate) fn delete_edge_data(
             .map(VertexId::from_int64)
             .unwrap_or_else(|_| VertexId::from_string(dst));
         let previous = reader::get_edge(ctx, space, &src_vid, &dst_vid, &et.edge_type_name, rank)?;
-        let redo_entry = previous.as_ref().map(|_| {
-            let redo = DeleteEdgeRedo {
-                src_label: src_label_id,
-                src_vid,
-                dst_label: dst_label_id,
-                dst_vid,
-                edge_label: edge_label_id,
-                rank,
-            };
-            ctx.append_wal_redo(WalOpType::DeleteEdge, ts, &redo)
-        }).transpose()?;
+        let redo_entry = previous
+            .as_ref()
+            .map(|_| {
+                let redo = DeleteEdgeRedo {
+                    src_label: src_label_id,
+                    src_vid,
+                    dst_label: dst_label_id,
+                    dst_vid,
+                    edge_label: edge_label_id,
+                    rank,
+                };
+                ctx.append_wal_redo(WalOpType::DeleteEdge, ts, &redo)
+            })
+            .transpose()?;
         if ctx
             .delete_edge(
                 &EdgeOperationParams {

@@ -214,6 +214,7 @@ impl GraphDatabase<GraphStorage> {
             (storage, enable_wal, sync_policy)
         };
 
+        let version_manager = storage.version_manager();
         let storage = Arc::new(RwLock::new(storage));
 
         let fulltext_config = FulltextConfig::default();
@@ -274,8 +275,11 @@ impl GraphDatabase<GraphStorage> {
             manager.set_stats_manager(stats_manager.clone());
         }
 
-        let mut txn_manager =
-            TransactionManager::with_stats_manager(txn_manager_config, stats_manager.clone());
+        let mut txn_manager = TransactionManager::with_shared_version_manager(
+            txn_manager_config,
+            stats_manager.clone(),
+            version_manager,
+        );
         if let Some(ref sync) = sync_manager {
             txn_manager = txn_manager.with_sync_manager(sync.clone());
         }

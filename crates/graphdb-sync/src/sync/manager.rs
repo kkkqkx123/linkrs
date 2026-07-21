@@ -2,9 +2,9 @@
 //!
 //! Unified synchronization manager using SyncCoordinator.
 
+use crate::core::Value;
 use crate::core::stats::{OutboxState, StatsManager};
 use crate::core::types::{CommitLsn, TransactionContextInfo, TransactionId};
-use crate::core::Value;
 #[cfg(feature = "fulltext-search")]
 use crate::search::SyncConfig;
 use crate::sync::checkpoint_manifest::CheckpointManifestManager;
@@ -1002,6 +1002,24 @@ impl SyncManager {
             .unwrap_or_default())
     }
 
+    /// Return the last staged intent sequence for a transaction.
+    ///
+    /// Savepoints retain intents whose sequence is less than or equal to the
+    /// saved boundary, so an empty transaction maps to boundary zero.
+    pub fn pending_transaction_intent_sequence(
+        &self,
+        txn_id: crate::core::types::TransactionId,
+    ) -> u64 {
+        self.pending_intents
+            .get(&txn_id)
+            .and_then(|intents| {
+                intents
+                    .last()
+                    .map(|intent| u64::from(intent.intent_sequence))
+            })
+            .unwrap_or(0)
+    }
+
     pub fn materialize_committed_transaction(
         &self,
         txn_id: crate::core::types::TransactionId,
@@ -1642,10 +1660,12 @@ mod tests {
                 ChangeType::Insert,
             )
             .expect("event should stage");
-        assert!(manager
-            .pending_transaction_intents(txn_id)
-            .expect("intents should be available")
-            .is_empty());
+        assert!(
+            manager
+                .pending_transaction_intents(txn_id)
+                .expect("intents should be available")
+                .is_empty()
+        );
         manager.clear_transaction_intents(txn_id);
         assert_eq!(manager.outbox_stats().pending, 0);
     }

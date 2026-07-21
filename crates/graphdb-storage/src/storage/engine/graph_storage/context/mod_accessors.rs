@@ -1,11 +1,11 @@
 use crate::core::stats::StatsManager;
 use crate::core::types::{LabelId, TableId, Timestamp};
 use crate::core::{StorageError, StorageResult};
+use crate::storage::StorageOperationContext;
 use crate::storage::engine::resource_budget::{MemoryCategory, ResourceSnapshot};
 use crate::storage::index::IndexGcOps;
-use crate::storage::StorageOperationContext;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use super::{GraphStorageContext, WriteTimestampLease};
 
@@ -20,6 +20,11 @@ impl GraphStorageContext {
 
     pub fn get_write_timestamp(&self) -> StorageResult<u32> {
         if let Some(operation) = &self.operation_context {
+            if operation.read_only {
+                return Err(StorageError::invalid_operation(
+                    "Read-only transaction cannot perform writes",
+                ));
+            }
             operation.write_timestamp.ok_or_else(|| {
                 StorageError::db_error("No write timestamp is available for this operation")
             })
@@ -88,7 +93,9 @@ impl GraphStorageContext {
         if let Some(lease) = &self.write_timestamp_lease {
             lease.commit();
         } else if self.operation_context.is_none() {
-            self.persistent.version_manager.commit_write_timestamp(timestamp);
+            self.persistent
+                .version_manager
+                .commit_write_timestamp(timestamp);
         }
     }
 
@@ -96,7 +103,9 @@ impl GraphStorageContext {
         if let Some(lease) = &self.write_timestamp_lease {
             lease.abort();
         } else if self.operation_context.is_none() {
-            self.persistent.version_manager.abort_write_timestamp(timestamp);
+            self.persistent
+                .version_manager
+                .abort_write_timestamp(timestamp);
         }
     }
 
@@ -209,6 +218,15 @@ impl GraphStorageContext {
     }
 
     pub fn check_write_admission(&self) -> crate::core::StorageResult<()> {
+        if self
+            .operation_context
+            .as_ref()
+            .is_some_and(|context| context.read_only)
+        {
+            return Err(crate::core::StorageError::invalid_operation(
+                "Read-only transaction cannot perform writes",
+            ));
+        }
         let snapshot = self.resource_snapshot();
         if snapshot.hard_limit_exceeded() {
             return Err(crate::core::StorageError::capacity_exceeded());
@@ -332,10 +350,10 @@ impl GraphStorageContext {
             .and_then(|operation| operation.transaction_id)
         {
             let entry = crate::transaction::wal::TransactionWalEntry {
-                    op_type,
-                    timestamp,
-                    payload,
-                };
+                op_type,
+                timestamp,
+                payload,
+            };
             self.persistent
                 .staged_wal
                 .entry(transaction_id)

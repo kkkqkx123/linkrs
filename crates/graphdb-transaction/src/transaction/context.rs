@@ -16,6 +16,7 @@ use super::rollback::CombinedRollback;
 use super::types::*;
 use super::undo_log::{UndoLogEntry, UndoLogManager, UndoTarget};
 use super::wal::Timestamp;
+use crate::core::types::CommitLsn;
 use crate::core::types::VertexId;
 
 /// Transaction Context
@@ -75,6 +76,9 @@ pub struct TransactionContext {
     resources_released: AtomicCell<bool>,
     /// Estimated bytes staged by this transaction.
     staged_bytes: AtomicU64,
+    /// Durable commit metadata retained while post-commit cleanup is retried.
+    commit_published: AtomicCell<bool>,
+    commit_lsn: AtomicU64,
     /// Session or API owner of this transaction.
     owner: RwLock<Option<String>>,
 }
@@ -156,7 +160,8 @@ impl SavepointManager {
     fn find_by_name(&self, name: &str) -> Option<SavepointInfo> {
         self.savepoints
             .values()
-            .find(|sp| sp.name.as_deref() == Some(name))
+            .filter(|sp| sp.name.as_deref() == Some(name))
+            .max_by_key(|sp| sp.sequence)
             .cloned()
     }
 }
@@ -192,6 +197,8 @@ impl TransactionContext {
             rollback_only: AtomicCell::new(false),
             resources_released: AtomicCell::new(false),
             staged_bytes: AtomicU64::new(0),
+            commit_published: AtomicCell::new(false),
+            commit_lsn: AtomicU64::new(0),
             owner: RwLock::new(None),
         }
     }
@@ -230,6 +237,8 @@ impl TransactionContext {
             rollback_only: AtomicCell::new(false),
             resources_released: AtomicCell::new(false),
             staged_bytes: AtomicU64::new(0),
+            commit_published: AtomicCell::new(false),
+            commit_lsn: AtomicU64::new(0),
             owner: RwLock::new(None),
         }
     }
@@ -369,6 +378,19 @@ impl TransactionContext {
         self.staged_bytes.load(Ordering::Relaxed)
     }
 
+    pub fn mark_commit_published(&self, commit_lsn: CommitLsn) {
+        self.commit_lsn.store(commit_lsn.get(), Ordering::Release);
+        self.commit_published.store(true);
+    }
+
+    pub fn commit_published(&self) -> bool {
+        self.commit_published.load()
+    }
+
+    pub fn commit_lsn(&self) -> CommitLsn {
+        CommitLsn::new(self.commit_lsn.load(Ordering::Acquire))
+    }
+
     pub fn add_staged_bytes(&self, bytes: u64) {
         self.staged_bytes.fetch_add(bytes, Ordering::Relaxed);
     }
@@ -406,7 +428,13 @@ impl TransactionContext {
                 ) | (TransactionState::Committing, TransactionState::Committed)
                     | (TransactionState::Committing, TransactionState::Aborted)
                     | (TransactionState::Committing, TransactionState::CommitRetry)
+                    | (TransactionState::Committing, TransactionState::Aborting)
+                    | (
+                        TransactionState::Committing,
+                        TransactionState::RecoveryRequired
+                    )
                     | (TransactionState::CommitRetry, TransactionState::Committing)
+                    | (TransactionState::CommitRetry, TransactionState::Aborting)
                     | (TransactionState::CommitRetry, TransactionState::Committed)
                     | (TransactionState::CommitRetry, TransactionState::Aborted)
                     | (TransactionState::Aborting, TransactionState::Committed)
@@ -418,6 +446,10 @@ impl TransactionContext {
                     | (
                         TransactionState::RecoveryRequired,
                         TransactionState::Aborting
+                    )
+                    | (
+                        TransactionState::RecoveryRequired,
+                        TransactionState::Committed
                     )
             );
 
@@ -612,7 +644,17 @@ impl TransactionContext {
 
     /// Publish a complete mutation result in the canonical metadata order.
     pub fn record_mutation(&self, mutation: MutationResult) -> Result<(), TransactionError> {
-        for entity in mutation.entity_keys {
+        let entity_keys = mutation.entity_keys;
+        let operation_log = OperationLog::Mutation {
+            entities: entity_keys
+                .iter()
+                .map(|entity| format!("{entity:?}").into_bytes())
+                .collect(),
+            table: mutation.modified_table.clone(),
+        };
+        self.add_operation_log(operation_log);
+
+        for entity in entity_keys {
             match entity {
                 MutationEntityKey::Vertex(vertex_id) => self.record_vertex_write(vertex_id),
                 MutationEntityKey::Edge(edge) => self.record_edge_write(edge),

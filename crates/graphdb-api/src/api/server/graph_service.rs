@@ -11,9 +11,9 @@ use crate::core::metadata::SchemaManager;
 use crate::core::stats::StatsManager;
 use crate::core::types::SpaceSummary;
 use crate::core::{DataType, MetricType, Permission};
-use crate::query::executor::streaming::StreamingQueryResult;
-use crate::query::executor::ExecutionResult;
 use crate::query::DataSet;
+use crate::query::executor::ExecutionResult;
+use crate::query::executor::streaming::StreamingQueryResult;
 use crate::storage::{
     StorageClient, StorageOperationContext, StorageOperationContextOps, StorageSchemaContextOps,
     StorageSyncContextOps,
@@ -21,8 +21,8 @@ use crate::storage::{
 use crate::transaction::TransactionManager;
 use log::{info, warn};
 use parking_lot::RwLock;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 #[cfg(feature = "qdrant")]
 use vector_client::VectorManager;
@@ -46,13 +46,13 @@ pub struct GraphService<S: StorageClient + Clone + 'static> {
 }
 
 impl<
-        S: StorageClient
-            + StorageSchemaContextOps
-            + StorageSyncContextOps
-            + StorageOperationContextOps
-            + Clone
-            + 'static,
-    > GraphService<S>
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + 'static,
+> GraphService<S>
 {
     /// Create a new GraphService (without a transaction manager, for use in a production environment).
     pub async fn new(config: Config, storage: Arc<S>) -> Arc<Self> {
@@ -417,11 +417,7 @@ impl<
                 .bind_auto_commit_context()
                 .map_err(|error| error.to_string())?;
             query_api
-                .execute_stream_with_operation_storage(
-                    stmt,
-                    query_request,
-                    execution_storage,
-                )
+                .execute_stream_with_operation_storage(stmt, query_request, execution_storage)
                 .map_err(|e| e.to_string())?
         };
 
@@ -971,11 +967,9 @@ impl<
             .as_ref()
             .ok_or("Transaction manager not initialized")?;
 
-        let context = txn_manager
-            .get_context(txn_id)
-            .map_err(|e| format!("Failed to get transaction context: {}", e))?;
-
-        let savepoint_id = context.create_savepoint(Some(savepoint_name.to_string()), 0);
+        let savepoint_id = txn_manager
+            .create_savepoint(txn_id, Some(savepoint_name.to_string()))
+            .map_err(|e| format!("Failed to create savepoint: {}", e))?;
 
         info!(
             "Session {} created savepoint {} in transaction {} (ID: {})",
@@ -1012,14 +1006,11 @@ impl<
         let context = txn_manager
             .get_context(txn_id)
             .map_err(|e| format!("Failed to get transaction context: {}", e))?;
-
-        // Try to find the save point by using its name.
         let savepoint_info = context
             .find_savepoint_by_name(savepoint_name)
             .ok_or_else(|| format!("Savepoint '{}' does not exist", savepoint_name))?;
 
-        // Release the savepoint.
-        if let Err(e) = context.release_savepoint(savepoint_info.id) {
+        if let Err(e) = txn_manager.release_savepoint(txn_id, savepoint_info.id) {
             return Err(format!("Failed to release savepoint: {}", e));
         }
 
