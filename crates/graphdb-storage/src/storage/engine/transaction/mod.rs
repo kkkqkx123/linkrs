@@ -15,6 +15,6 @@ pub mod undo;
 
 pub use crate::core::types::UndoTarget;
 pub use ops::{
-    AddEdgeParams, DeleteEdgeParams, EdgeTypeLabelParams, RevertDeleteEdgeParams, TransactionOps,
+    AddEdgeParams, EdgeTypeLabelParams, RevertDeleteEdgeParams, TransactionOps,
     UpdateEdgePropertyUndoParams,
 };

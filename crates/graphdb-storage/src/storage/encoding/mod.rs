@@ -24,7 +24,7 @@ pub use bitpacking::BitPackedIntColumn;
 pub use dictionary::DictionaryColumn;
 pub use fsst::{FsstColumn, FsstEncoder};
 pub use rle::{RleBoolColumn, RleIntColumn};
-pub use selector::{EncodingSelector, EncodingThresholds};
+pub use selector::EncodingSelector;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EncodingType {

@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::core::StorageResult;
 use crate::core::stats::StatsManager;
-use crate::storage::engine::PersistenceConfig;
+use crate::core::StorageResult;
 use crate::storage::engine::background_freeze::BackgroundFreezeManager;
+use crate::storage::engine::PersistenceConfig;
 use crate::storage::index::IndexGcConfig;
 
 use super::{GraphStorageContext, GraphStoragePersistent, GraphStorageRuntime};

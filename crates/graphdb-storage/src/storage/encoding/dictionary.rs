@@ -232,53 +232,63 @@ impl DictionaryColumn {
 
     pub fn serialize_meta(&self, writer: &mut impl Write) -> StorageResult<usize> {
         let mut written = 0usize;
-        written += self.encoder.dictionary.serialize(writer)
-            .map_err(|e| StorageError::io_error(format!("DictionaryColumn serialize dict: {}", e)))?;
+        written += self.encoder.dictionary.serialize(writer).map_err(|e| {
+            StorageError::io_error(format!("DictionaryColumn serialize dict: {}", e))
+        })?;
         let idx_count = self.encoder.indices.len() as u32;
-        writer.write_all(&idx_count.to_le_bytes())
-            .map_err(|e| StorageError::io_error(format!("DictionaryColumn serialize idx count: {}", e)))?;
+        writer.write_all(&idx_count.to_le_bytes()).map_err(|e| {
+            StorageError::io_error(format!("DictionaryColumn serialize idx count: {}", e))
+        })?;
         written += 4;
         for &idx in &self.encoder.indices {
-            writer.write_all(&idx.to_le_bytes())
-                .map_err(|e| StorageError::io_error(format!("DictionaryColumn serialize idx: {}", e)))?;
+            writer.write_all(&idx.to_le_bytes()).map_err(|e| {
+                StorageError::io_error(format!("DictionaryColumn serialize idx: {}", e))
+            })?;
             written += 4;
         }
         let bm_len = self.encoder.null_bitmap.len() as u32;
-        writer.write_all(&bm_len.to_le_bytes())
-            .map_err(|e| StorageError::io_error(format!("DictionaryColumn serialize bm_len: {}", e)))?;
+        writer.write_all(&bm_len.to_le_bytes()).map_err(|e| {
+            StorageError::io_error(format!("DictionaryColumn serialize bm_len: {}", e))
+        })?;
         written += 4;
         for &word in self.encoder.null_bitmap.as_bits() {
-            writer.write_all(&word.to_le_bytes())
-                .map_err(|e| StorageError::io_error(format!("DictionaryColumn serialize bm word: {}", e)))?;
+            writer.write_all(&word.to_le_bytes()).map_err(|e| {
+                StorageError::io_error(format!("DictionaryColumn serialize bm word: {}", e))
+            })?;
             written += 8;
         }
         Ok(written)
     }
 
     pub fn deserialize_meta(reader: &mut impl Read) -> StorageResult<Self> {
-        let dictionary = StringDictionary::deserialize(reader)
-            .map_err(|e| StorageError::io_error(format!("DictionaryColumn deserialize dict: {}", e)))?;
+        let dictionary = StringDictionary::deserialize(reader).map_err(|e| {
+            StorageError::io_error(format!("DictionaryColumn deserialize dict: {}", e))
+        })?;
         let mut idx_count_bytes = [0u8; 4];
-        reader.read_exact(&mut idx_count_bytes)
-            .map_err(|e| StorageError::io_error(format!("DictionaryColumn deserialize idx count: {}", e)))?;
+        reader.read_exact(&mut idx_count_bytes).map_err(|e| {
+            StorageError::io_error(format!("DictionaryColumn deserialize idx count: {}", e))
+        })?;
         let idx_count = u32::from_le_bytes(idx_count_bytes) as usize;
         let mut indices = Vec::with_capacity(idx_count);
         for _ in 0..idx_count {
             let mut idx_bytes = [0u8; 4];
-            reader.read_exact(&mut idx_bytes)
-                .map_err(|e| StorageError::io_error(format!("DictionaryColumn deserialize idx: {}", e)))?;
+            reader.read_exact(&mut idx_bytes).map_err(|e| {
+                StorageError::io_error(format!("DictionaryColumn deserialize idx: {}", e))
+            })?;
             indices.push(u32::from_le_bytes(idx_bytes));
         }
         let mut bm_len_bytes = [0u8; 4];
-        reader.read_exact(&mut bm_len_bytes)
-            .map_err(|e| StorageError::io_error(format!("DictionaryColumn deserialize bm_len: {}", e)))?;
+        reader.read_exact(&mut bm_len_bytes).map_err(|e| {
+            StorageError::io_error(format!("DictionaryColumn deserialize bm_len: {}", e))
+        })?;
         let bm_len = u32::from_le_bytes(bm_len_bytes) as usize;
         let words = bm_len.div_ceil(64);
         let mut data = Vec::with_capacity(words);
         for _ in 0..words {
             let mut word_bytes = [0u8; 8];
-            reader.read_exact(&mut word_bytes)
-                .map_err(|e| StorageError::io_error(format!("DictionaryColumn deserialize bm word: {}", e)))?;
+            reader.read_exact(&mut word_bytes).map_err(|e| {
+                StorageError::io_error(format!("DictionaryColumn deserialize bm word: {}", e))
+            })?;
             data.push(u64::from_le_bytes(word_bytes));
         }
         let null_bitmap = NullBitmap::from_raw(data, bm_len);

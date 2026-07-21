@@ -2,9 +2,9 @@
 //!
 //! Unified synchronization manager using SyncCoordinator.
 
-use crate::core::Value;
 use crate::core::stats::{OutboxState, StatsManager};
 use crate::core::types::{CommitLsn, TransactionContextInfo, TransactionId};
+use crate::core::Value;
 #[cfg(feature = "fulltext-search")]
 use crate::search::SyncConfig;
 use crate::sync::checkpoint_manifest::CheckpointManifestManager;
@@ -1660,12 +1660,10 @@ mod tests {
                 ChangeType::Insert,
             )
             .expect("event should stage");
-        assert!(
-            manager
-                .pending_transaction_intents(txn_id)
-                .expect("intents should be available")
-                .is_empty()
-        );
+        assert!(manager
+            .pending_transaction_intents(txn_id)
+            .expect("intents should be available")
+            .is_empty());
         manager.clear_transaction_intents(txn_id);
         assert_eq!(manager.outbox_stats().pending, 0);
     }

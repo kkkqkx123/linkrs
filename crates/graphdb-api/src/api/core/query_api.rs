@@ -4,8 +4,8 @@
 
 use crate::api::core::error::{CoreError, CoreResult};
 use crate::api::core::types::{ExecutionMetadata, QueryRequest, QueryResult, Row};
-use crate::core::StatsManager;
 use crate::core::metadata::SchemaManager;
+use crate::core::StatsManager;
 use crate::query::executor::streaming::StreamingQueryResult;
 use crate::query::{OptimizerEngine, QueryPipelineManager};
 use crate::storage::{
@@ -188,14 +188,16 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
             execution.read_timestamp(),
             execution.write_timestamp(),
             execution.read_only(),
-            execution.auto_commit_owner(),
+            execution.auto_commit(),
         );
         let op_ctx = execution
             .mutation_recorder()
-            .map_or(op_ctx.clone(), |recorder| op_ctx.with_mutation_recorder(recorder));
+            .map_or(op_ctx.clone(), |recorder| {
+                op_ctx.with_mutation_recorder(recorder)
+            });
         let mut ctx = ctx;
         ctx.transaction_id = Some(execution.transaction_id());
-        ctx.auto_commit = execution.auto_commit_owner();
+        ctx.auto_commit = execution.auto_commit();
         self.execute_with_operation_context_and_storage(query, ctx, Some(op_ctx), None)
     }
 
@@ -270,10 +272,12 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         });
 
         // Execute the query (using the new execute_query_with_request method).
-        let execution_result = match self
-            .pipeline_manager
-            .execute_query_with_request_scope(query, rctx, space_info, ctx.transaction_id)
-        {
+        let execution_result = match self.pipeline_manager.execute_query_with_request_scope(
+            query,
+            rctx,
+            space_info,
+            ctx.transaction_id,
+        ) {
             Ok(result) => result,
             Err(error) => {
                 if ctx.auto_commit {
@@ -314,14 +318,16 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
             execution.read_timestamp(),
             execution.write_timestamp(),
             execution.read_only(),
-            execution.auto_commit_owner(),
+            execution.auto_commit(),
         );
         let op_ctx = execution
             .mutation_recorder()
-            .map_or(op_ctx.clone(), |recorder| op_ctx.with_mutation_recorder(recorder));
+            .map_or(op_ctx.clone(), |recorder| {
+                op_ctx.with_mutation_recorder(recorder)
+            });
         let mut ctx = ctx;
         ctx.transaction_id = Some(execution.transaction_id());
-        ctx.auto_commit = execution.auto_commit_owner();
+        ctx.auto_commit = execution.auto_commit();
         self.execute_stream_with_operation_context_and_storage(query, ctx, Some(op_ctx), None)
     }
 

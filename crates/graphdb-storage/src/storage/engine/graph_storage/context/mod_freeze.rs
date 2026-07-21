@@ -1,11 +1,39 @@
-use crate::core::StorageResult;
 use crate::core::types::CompactConfig;
+use crate::core::StorageResult;
 use crate::storage::edge::edge_table::segment_eviction::SegmentEvictionEngine;
 use crate::storage::engine::background_freeze::{FreezeGuard, FreezeStats};
 
 use super::GraphStorageContext;
 
 impl GraphStorageContext {
+    pub(crate) fn schedule_background_freeze(&self) {
+        if self
+            .runtime
+            .background_freeze_running
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            return;
+        }
+
+        let context = self.clone();
+        let running = self.runtime.background_freeze_running.clone();
+        let timeout = self.persistent.config.resources.operation_timeout;
+        std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            if let Err(error) = context.trigger_background_freeze() {
+                log::warn!("Background freeze failed: {}", error);
+            }
+            if started.elapsed() > timeout {
+                log::warn!(
+                    "Background freeze exceeded operation timeout: {:?} > {:?}",
+                    started.elapsed(),
+                    timeout
+                );
+            }
+            running.store(false, std::sync::atomic::Ordering::Release);
+        });
+    }
+
     pub fn get_freeze_stats(&self) -> Option<FreezeStats> {
         self.runtime
             .background_freeze_manager

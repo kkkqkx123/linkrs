@@ -34,12 +34,12 @@ use crate::core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Va
 use crate::storage::cursor::{
     EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor,
 };
-use crate::storage::engine::PersistenceConfig;
 use crate::storage::engine::background_freeze::{BackgroundFreezeManager, FreezeStats};
 use crate::storage::engine::graph_storage::context::ExportedEdgeSnapshotRecord;
-use crate::storage::index::IndexGcConfig;
+use crate::storage::engine::PersistenceConfig;
 use crate::storage::index::key_codec::KeyBuilder;
 use crate::storage::index::types::IndexIdentity;
+use crate::storage::index::IndexGcConfig;
 use crate::storage::{
     StorageAdmin, StorageAuthOps, StorageGcOps, StorageOperationContext,
     StorageOperationContextOps, StoragePersistenceOps, StorageReader, StorageRecoveryOps,
@@ -1279,7 +1279,7 @@ impl crate::storage::StorageCommitOps for GraphStorage {
         &self,
         sync_manager: &crate::sync::SyncManager,
     ) -> StorageResult<usize> {
-        use crate::transaction::wal::{LocalWalParser, WalParser, collect_committed_transactions};
+        use crate::transaction::wal::{collect_committed_transactions, LocalWalParser, WalParser};
         let Some(paths) = self.ctx.storage_paths() else {
             return Ok(0);
         };

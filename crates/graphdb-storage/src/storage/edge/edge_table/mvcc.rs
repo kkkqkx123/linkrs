@@ -15,6 +15,7 @@ use crate::core::types::{EdgeId, Timestamp};
 use std::collections::HashMap;
 
 const HOT_TOMBSTONE_GC_THRESHOLD: usize = 150_000;
+const DEFAULT_TOMBSTONE_GC_BATCH: usize = 10_000;
 
 /// MVCC and snapshot management for EdgeTable
 pub struct MVCCManager {
@@ -35,6 +36,7 @@ pub struct MVCCManager {
     pub min_active_snapshot_ts: Timestamp,
     /// Active snapshot timestamps and their reference count
     pub active_snapshots: HashMap<Timestamp, usize>,
+    cold_gc_cursor: usize,
 }
 
 impl Default for MVCCManager {
@@ -56,6 +58,7 @@ impl MVCCManager {
             cold_bloom_filter: EdgeDeletionBloomFilter::with_capacity(BLOOM_FILTER_CAPACITY),
             min_active_snapshot_ts: u32::MAX,
             active_snapshots: HashMap::new(),
+            cold_gc_cursor: 0,
         }
     }
 
@@ -117,15 +120,51 @@ impl MVCCManager {
     /// Also manages hot/cold layer promotion: if hot layer exceeds threshold,
     /// older entries are moved to cold layer (kept sorted by EdgeId for binary search).
     pub fn gc_tombstones(&mut self, min_active_snapshot_ts: Timestamp) -> usize {
-        let before = self.tombstones.len() + self.cold_tombstones.len();
+        self.gc_tombstones_batch(min_active_snapshot_ts, usize::MAX)
+    }
 
-        // Clean hot layer
-        self.tombstones
-            .retain(|_edge_id, delete_ts| *delete_ts >= min_active_snapshot_ts);
+    /// Inspect at most `batch_size` tombstones and retain a cold-layer cursor.
+    pub fn gc_tombstones_batch(
+        &mut self,
+        min_active_snapshot_ts: Timestamp,
+        batch_size: usize,
+    ) -> usize {
+        if batch_size == 0 {
+            return 0;
+        }
 
-        // Clean cold layer
-        self.cold_tombstones
-            .retain(|(_, delete_ts)| *delete_ts >= min_active_snapshot_ts);
+        let mut remaining = batch_size;
+        let mut removed = 0;
+        let hot_keys: Vec<EdgeId> = self
+            .tombstones
+            .iter()
+            .filter_map(|(edge_id, delete_ts)| {
+                (*delete_ts < min_active_snapshot_ts).then_some(*edge_id)
+            })
+            .take(remaining)
+            .collect();
+        remaining = remaining.saturating_sub(hot_keys.len());
+        for edge_id in hot_keys {
+            if self.tombstones.remove(&edge_id).is_some() {
+                removed += 1;
+            }
+        }
+
+        let cold_budget = remaining.min(self.cold_tombstones.len());
+        for _ in 0..cold_budget {
+            if self.cold_tombstones.is_empty() {
+                break;
+            }
+            if self.cold_gc_cursor >= self.cold_tombstones.len() {
+                self.cold_gc_cursor = 0;
+            }
+            if self.cold_tombstones[self.cold_gc_cursor].1 < min_active_snapshot_ts {
+                self.cold_tombstones.remove(self.cold_gc_cursor);
+                removed += 1;
+            } else {
+                self.cold_gc_cursor += 1;
+            }
+        }
 
         self.min_active_snapshot_ts = min_active_snapshot_ts;
 
@@ -139,26 +178,19 @@ impl MVCCManager {
             // Sort by EdgeId to maintain cold layer invariant for binary search
             to_move.sort_by_key(|k| k.0);
 
-            let move_count = (to_move.len() as f64 * 0.3) as usize;
+            let move_count =
+                ((to_move.len() as f64 * 0.3) as usize).min(DEFAULT_TOMBSTONE_GC_BATCH);
             for (edge_id, ts) in to_move.iter().take(move_count) {
                 self.tombstones.remove(edge_id);
                 self.cold_tombstones.push((*edge_id, *ts));
+                self.cold_bloom_filter.insert(edge_id.0);
             }
 
             // Ensure cold layer remains sorted for binary search
             self.cold_tombstones.sort_by_key(|k| k.0);
         }
 
-        // Rebuild bloom filter from current cold layer state
-        self.cold_bloom_filter.clear();
-        let new_capacity = (self.cold_tombstones.len() * 2).max(BLOOM_FILTER_CAPACITY);
-        self.cold_bloom_filter = EdgeDeletionBloomFilter::with_capacity(new_capacity);
-        for &(edge_id, _) in &self.cold_tombstones {
-            self.cold_bloom_filter.insert(edge_id.0);
-        }
-
-        let after = self.tombstones.len() + self.cold_tombstones.len();
-        before.saturating_sub(after)
+        removed
     }
 
     /// Register a new active snapshot at the given timestamp.
@@ -197,7 +229,7 @@ impl MVCCManager {
                 .copied()
                 .min()
                 .unwrap_or(u32::MAX);
-            self.gc_tombstones(new_min_ts);
+            self.gc_tombstones_batch(new_min_ts, DEFAULT_TOMBSTONE_GC_BATCH);
         }
 
         new_count
@@ -319,6 +351,18 @@ mod tests {
         let removed = table.mvcc.gc_tombstones(201);
         assert_eq!(removed, 1);
         assert_eq!(table.mvcc.tombstones.len(), 0);
+    }
+
+    #[test]
+    fn test_incremental_gc_never_exceeds_batch() {
+        let mut manager = MVCCManager::new();
+        for id in 0..100u64 {
+            manager.tombstones.insert(EdgeId(id), 10);
+        }
+
+        let removed = manager.gc_tombstones_batch(20, 11);
+        assert_eq!(removed, 11);
+        assert_eq!(manager.tombstones.len(), 89);
     }
 
     #[test]

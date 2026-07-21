@@ -90,6 +90,7 @@ fn test_transaction_config_default() {
     assert_eq!(config.query_timeout, None);
     assert_eq!(config.statement_timeout, None);
     assert_eq!(config.idle_timeout, None);
+    assert!(!config.auto_commit);
 }
 
 /// Test TransactionConfig builder pattern
@@ -101,13 +102,15 @@ fn test_transaction_config_builder() {
         .with_isolation_level(IsolationLevel::RepeatableRead)
         .with_query_timeout(Some(Duration::from_secs(15)))
         .with_statement_timeout(Some(Duration::from_secs(7)))
-        .with_idle_timeout(Some(Duration::from_secs(600)));
+        .with_idle_timeout(Some(Duration::from_secs(600)))
+        .with_auto_commit(true);
 
     assert_eq!(config.timeout, Duration::from_secs(60));
     assert_eq!(config.durability, DurabilityLevel::None);
     assert_eq!(config.isolation_level, IsolationLevel::RepeatableRead);
     assert_eq!(config.query_timeout, Some(Duration::from_secs(15)));
     assert_eq!(config.statement_timeout, Some(Duration::from_secs(7)));
+    assert!(config.auto_commit);
     assert_eq!(config.idle_timeout, Some(Duration::from_secs(600)));
 }
 

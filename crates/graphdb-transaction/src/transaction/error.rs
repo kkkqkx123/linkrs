@@ -292,11 +292,7 @@ impl TransactionError {
         Self::new(TransactionErrorKind::Internal, message)
     }
 
-    pub fn transaction_budget_exceeded(
-        resource: &str,
-        current: u64,
-        limit: u64,
-    ) -> Self {
+    pub fn transaction_budget_exceeded(resource: &str, current: u64, limit: u64) -> Self {
         Self::new(
             TransactionErrorKind::TransactionBudgetExceeded,
             format!("Transaction budget exceeded: {resource} {current} > {limit}"),
@@ -304,10 +300,7 @@ impl TransactionError {
     }
 
     pub fn ddl_dml_boundary_violation(message: impl Into<String>) -> Self {
-        Self::new(
-            TransactionErrorKind::DdlDmlBoundaryViolation,
-            message,
-        )
+        Self::new(TransactionErrorKind::DdlDmlBoundaryViolation, message)
     }
 
     pub fn is_timeout(&self) -> bool {
@@ -357,7 +350,11 @@ impl RetryableTransactionError {
 
     pub fn from_transaction_error(error: &TransactionError, attempt: u32) -> Option<Self> {
         if error.is_retryable() {
-            Some(Self::new(error.kind(), error.message().to_string(), attempt))
+            Some(Self::new(
+                error.kind(),
+                error.message().to_string(),
+                attempt,
+            ))
         } else {
             None
         }

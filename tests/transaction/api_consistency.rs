@@ -4,9 +4,7 @@
 //! produce the same transactional results for the same script.
 
 use graphdb::core::types::TransactionId;
-use graphdb::transaction::{
-    TransactionManager, TransactionManagerConfig, TransactionOptions,
-};
+use graphdb::transaction::{TransactionManager, TransactionManagerConfig, TransactionOptions};
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -54,16 +52,10 @@ fn test_owner_check_enforcement() {
         .expect("begin owned txn");
 
     let result = manager.check_transaction_owner(txn, Some("session-beta"));
-    assert!(
-        result.is_err(),
-        "wrong owner should fail ownership check"
-    );
+    assert!(result.is_err(), "wrong owner should fail ownership check");
 
     let result = manager.check_transaction_owner(txn, Some("session-alpha"));
-    assert!(
-        result.is_ok(),
-        "correct owner should pass ownership check"
-    );
+    assert!(result.is_ok(), "correct owner should pass ownership check");
 
     manager.commit_transaction(txn).expect("commit owned txn");
 }
@@ -97,16 +89,10 @@ fn test_commit_requires_owner() {
         .expect("begin owned txn");
 
     let result = manager.commit_transaction_as_owner(txn, Some("owner-2"));
-    assert!(
-        result.is_err(),
-        "commit with wrong owner should fail"
-    );
+    assert!(result.is_err(), "commit with wrong owner should fail");
 
     let result = manager.commit_transaction_as_owner(txn, Some("owner-1"));
-    assert!(
-        result.is_ok(),
-        "commit with correct owner should succeed"
-    );
+    assert!(result.is_ok(), "commit with correct owner should succeed");
 }
 
 /// Verify that the transaction info includes owner information.
@@ -115,15 +101,10 @@ fn test_transaction_info_includes_owner() {
     let manager = TransactionManager::new(TransactionManagerConfig::default());
 
     let txn = manager
-        .begin_transaction_with_owner(
-            TransactionOptions::default(),
-            "test-session".to_string(),
-        )
+        .begin_transaction_with_owner(TransactionOptions::default(), "test-session".to_string())
         .expect("begin owned txn");
 
-    let info = manager
-        .get_transaction_info(txn)
-        .expect("get txn info");
+    let info = manager.get_transaction_info(txn).expect("get txn info");
     assert_eq!(info.owner.as_deref(), Some("test-session"));
 
     manager.commit_transaction(txn).expect("commit txn");
@@ -206,5 +187,7 @@ fn test_readonly_with_owner() {
     assert_eq!(info.owner.as_deref(), Some("reader-session"));
     assert!(info.is_read_only);
 
-    manager.commit_transaction(txn).expect("commit readonly txn");
+    manager
+        .commit_transaction(txn)
+        .expect("commit readonly txn");
 }

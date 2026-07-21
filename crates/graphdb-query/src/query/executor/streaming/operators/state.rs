@@ -7,8 +7,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::core::Value;
 use crate::core::types::expr::Expression;
+use crate::core::Value;
 use crate::query::executor::base::MemoryTracker;
 use crate::storage::{EdgeCursor, IndexCursor, VertexCursor};
 

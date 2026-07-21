@@ -64,6 +64,13 @@
   5. **设计简洁**：避免编译时特性组合导致的代码复杂度爆炸
 - **维持理由**: ✅ 保留 - 运行时多态的需求大于性能开销
 
+#### 1.8 事务生命周期回调
+
+- **文件**: `crates/graphdb-transaction/src/transaction/types.rs`
+- **代码**: `Arc<dyn Fn(&TransactionEvent) + Send + Sync>`
+- **分析**: 提交和回滚订阅者由统计、存储及后续扩展组件在运行时注册，闭包捕获的状态类型无法预先枚举。回调仅在事务终结后执行，不位于读写操作的逐记录热路径，动态分发开销可忽略。
+- **状态**: ✅ 保留
+
 ### 2. 存储层抽象
 
 #### 2.1 存储客户端
@@ -176,6 +183,7 @@
 | `Box<dyn FnOnce() + Send>`                         | 线程任务       | 闭包类型编译时无法确定           |
 | `Arc<dyn SearchEngine>`                            | 搜索引擎抽象   | I/O 密集型操作，扩展性优先       |
 | `Arc<dyn VectorEngine>`                            | 向量引擎抽象   | 运行时多态，支持多协议（gRPC/HTTP）和禁用状态 |
+| `Arc<dyn Fn(&TransactionEvent)>`                  | 事务生命周期回调 | 运行时注册提交和回滚订阅者       |
 
 ### 已优化的 dyn 使用
 
@@ -295,7 +303,3 @@ pub enum StorageEnum {
 6. 在性能关键路径上，定期审查是否存在可以通过静态分派优化的机会
 7. 添加注释说明为什么在特定位置使用 `dyn`，以便未来的维护者理解设计决策
 
-## 相关文档
-
-- [动态分发分析报告](file:///d:\项目\database\graphDB\docs\archive\dynamic_analysis_report.md) - 详细的分析报告
-- [动态分发优化实施报告](file:///d:\项目\database\graphDB\docs\archive\dynamic_optimization_implementation_report.md) - 优化实施详情

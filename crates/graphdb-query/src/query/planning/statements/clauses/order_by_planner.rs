@@ -4,15 +4,15 @@
 //! Supports both simple column references and complex expressions (e.g., function calls).
 
 use crate::core::types::ContextualExpression;
-use crate::query::QueryContext;
-use crate::query::parser::OrderByItem;
 use crate::query::parser::ast::Stmt;
-use crate::query::planning::plan::SubPlan;
+use crate::query::parser::OrderByItem;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::query::planning::plan::core::nodes::operation::sort_node::{SortItem, SortNode};
+use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::PlannerError;
 use crate::query::planning::statements::statement_planner::ClausePlanner;
 use crate::query::validator::structs::CypherClauseKind;
+use crate::query::QueryContext;
 use std::sync::Arc;
 
 /// The ORDER BY clause planner
@@ -98,12 +98,12 @@ impl ClausePlanner for OrderByClausePlanner {
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
     use super::*;
-    use crate::core::Expression;
-    use crate::core::types::OrderDirection;
     use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+    use crate::core::types::OrderDirection;
+    use crate::core::Expression;
     use crate::query::parser::ast::{OrderByItem, Span};
-    use crate::query::planning::plan::core::PlanNodeEnum;
     use crate::query::planning::plan::core::nodes::StartNode;
+    use crate::query::planning::plan::core::PlanNodeEnum;
     use std::sync::Arc;
 
     #[test]

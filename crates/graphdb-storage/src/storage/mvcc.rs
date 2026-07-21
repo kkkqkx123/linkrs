@@ -85,6 +85,7 @@ pub struct TieredTombstoneManager<T: Clone + Copy + Eq + std::hash::Hash> {
 
     /// Threshold for triggering hot→cold demotion (hot_max_size * 1.5)
     hot_gc_threshold: usize,
+    cold_gc_cursor: usize,
 }
 
 impl<T: Clone + Copy + Eq + std::hash::Hash + Ord> TieredTombstoneManager<T> {
@@ -99,6 +100,7 @@ impl<T: Clone + Copy + Eq + std::hash::Hash + Ord> TieredTombstoneManager<T> {
             cold_tombstones: Vec::new(),
             hot_max_size,
             hot_gc_threshold,
+            cold_gc_cursor: 0,
         }
     }
 
@@ -185,6 +187,40 @@ impl<T: Clone + Copy + Eq + std::hash::Hash + Ord> TieredTombstoneManager<T> {
         (before_hot - after_hot) + (before_cold - after_cold)
     }
 
+    pub fn gc_batch(&mut self, min_ts: Timestamp, batch_size: usize) -> usize {
+        if batch_size == 0 || self.is_empty() {
+            return 0;
+        }
+        let mut remaining = batch_size;
+        let hot_keys: Vec<T> = self
+            .hot_tombstones
+            .iter()
+            .filter_map(|(key, ts)| (*ts < min_ts).then_some(*key))
+            .take(remaining)
+            .collect();
+        remaining -= hot_keys.len();
+        let mut removed = 0;
+        for key in hot_keys {
+            removed += usize::from(self.hot_tombstones.remove(&key).is_some());
+        }
+        let cold_budget = remaining.min(self.cold_tombstones.len());
+        for _ in 0..cold_budget {
+            if self.cold_tombstones.is_empty() {
+                break;
+            }
+            if self.cold_gc_cursor >= self.cold_tombstones.len() {
+                self.cold_gc_cursor = 0;
+            }
+            if self.cold_tombstones[self.cold_gc_cursor].delete_ts < min_ts {
+                self.cold_tombstones.remove(self.cold_gc_cursor);
+                removed += 1;
+            } else {
+                self.cold_gc_cursor += 1;
+            }
+        }
+        removed
+    }
+
     /// Get the total number of tombstones (hot + cold)
     #[inline]
     pub fn len(&self) -> usize {
@@ -241,6 +277,23 @@ mod tests {
         assert!(mgr.is_tombstoned(1u32, 50));
         assert!(mgr.is_tombstoned(1u32, 100));
         assert!(!mgr.is_tombstoned(1u32, 40));
+    }
+
+    #[test]
+    fn test_gc_batch_bounds_work_and_eventually_completes() {
+        let mut manager = TieredTombstoneManager::new(4);
+        for key in 0..100u32 {
+            manager.add_tombstone(key, 10);
+        }
+
+        let mut total_removed = 0;
+        while !manager.is_empty() {
+            let removed = manager.gc_batch(20, 7);
+            assert!(removed <= 7);
+            assert!(removed > 0);
+            total_removed += removed;
+        }
+        assert_eq!(total_removed, 100);
     }
 
     #[test]

@@ -7,9 +7,7 @@
 //! - Out-of-order commit does not expose lower-timestamp writes
 
 use graphdb::core::types::TransactionId;
-use graphdb::transaction::{
-    TransactionManager, TransactionManagerConfig, TransactionOptions,
-};
+use graphdb::transaction::{TransactionManager, TransactionManagerConfig, TransactionOptions};
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -215,9 +213,7 @@ fn test_insert_txn_info_is_writable() {
         .begin_insert_transaction(TransactionOptions::default())
         .expect("begin write txn");
 
-    let info = manager
-        .get_transaction_info(txn)
-        .expect("get txn info");
+    let info = manager.get_transaction_info(txn).expect("get txn info");
     assert!(!info.is_read_only, "insert txn must not be read-only");
 
     manager.commit_transaction(txn).expect("commit txn");

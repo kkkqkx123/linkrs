@@ -187,7 +187,10 @@ impl RleIntColumn {
             let mut cnt_bytes = [0u8; 4];
             reader.read_exact(&mut cnt_bytes)?;
             let cnt = u32::from_le_bytes(cnt_bytes) as usize;
-            encoder.runs.push(RleRun { value: val, count: cnt });
+            encoder.runs.push(RleRun {
+                value: val,
+                count: cnt,
+            });
         }
         encoder.rebuild_cumulative_counts();
         let mut bm_len_bytes = [0u8; 4];
@@ -289,14 +292,17 @@ impl RleBoolColumn {
         reader.read_exact(&mut count_bytes)?;
         let count = u32::from_le_bytes(count_bytes) as usize;
         let mut encoder = RleEncoder::new();
-        for _  in 0..count {
+        for _ in 0..count {
             let mut val_byte = [0u8; 1];
             reader.read_exact(&mut val_byte)?;
             let val = val_byte[0] != 0;
             let mut cnt_bytes = [0u8; 4];
             reader.read_exact(&mut cnt_bytes)?;
             let cnt = u32::from_le_bytes(cnt_bytes) as usize;
-            encoder.runs.push(RleRun { value: val, count: cnt });
+            encoder.runs.push(RleRun {
+                value: val,
+                count: cnt,
+            });
         }
         encoder.rebuild_cumulative_counts();
         let mut bm_len_bytes = [0u8; 4];
@@ -409,8 +415,14 @@ mod tests {
     #[test]
     fn test_rle_rebuild_cumulative_counts() {
         let mut encoder = RleEncoder::<i64>::new();
-        encoder.runs.push(RleRun { value: 10, count: 5 });
-        encoder.runs.push(RleRun { value: 20, count: 3 });
+        encoder.runs.push(RleRun {
+            value: 10,
+            count: 5,
+        });
+        encoder.runs.push(RleRun {
+            value: 20,
+            count: 3,
+        });
         encoder.rebuild_cumulative_counts();
         assert_eq!(encoder.cumulative_counts, vec![5, 8]);
         assert_eq!(encoder.total_count, 8);

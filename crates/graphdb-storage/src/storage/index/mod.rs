@@ -47,4 +47,3 @@ pub use manifest::{
     ManifestCatalogStats, ManifestHandle,
 };
 pub use traits::{EdgeIndexOps, IndexGcOps, VertexIndexOps};
-pub use types::GcStats;

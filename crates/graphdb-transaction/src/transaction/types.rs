@@ -4,14 +4,14 @@
 
 use std::collections::HashSet;
 use std::fmt;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
 use crate::core::stats::{MetricType, StatsManager};
-use crate::core::types::{EdgeIdentifier, VertexId};
+use crate::core::types::{CommitLsn, EdgeIdentifier, VertexId};
 use crate::transaction::undo_log::UndoLogEntry;
 use crate::transaction::wal::TransactionWalEntry;
 
@@ -245,6 +245,38 @@ pub enum TransactionState {
     Aborted,
 }
 
+/// Logical transaction category.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TransactionType {
+    ReadOnly,
+    Write,
+    Checkpoint,
+}
+
+/// Immutable lifecycle notification emitted after a transaction leaves the
+/// active transaction table.
+#[derive(Debug, Clone)]
+pub enum TransactionEvent {
+    Committed {
+        txn_id: TransactionId,
+        write_timestamp: u32,
+        write_set: WriteSet,
+        schema_catalog_version: u64,
+    },
+    Aborted {
+        txn_id: TransactionId,
+        write_timestamp: u32,
+    },
+    CommitDurableButUnfinalized {
+        txn_id: TransactionId,
+        write_timestamp: u32,
+        commit_lsn: CommitLsn,
+    },
+}
+
+pub type CommitCallback = Arc<dyn Fn(&TransactionEvent) + Send + Sync>;
+pub type RollbackCallback = Arc<dyn Fn(&TransactionEvent) + Send + Sync>;
+
 impl TransactionState {
     /// Check if operation can be executed
     pub fn can_execute(&self) -> bool {
@@ -375,10 +407,11 @@ pub struct TransactionConfig {
     pub query_timeout: Option<Duration>,
     pub statement_timeout: Option<Duration>,
     pub idle_timeout: Option<Duration>,
+    /// Whether execution bindings created from this configuration own
+    /// statement-level transaction finalization.
+    pub auto_commit: bool,
     /// Maximum number of mutations per transaction. 0 = unlimited.
     pub max_mutation_count: u64,
-    /// Maximum WAL bytes a transaction may stage. 0 = unlimited.
-    pub max_wal_bytes: u64,
     /// Maximum undo log bytes a transaction may accumulate. 0 = unlimited.
     pub max_undo_bytes: u64,
 }
@@ -392,8 +425,8 @@ impl Default for TransactionConfig {
             query_timeout: None,
             statement_timeout: None,
             idle_timeout: None,
+            auto_commit: false,
             max_mutation_count: 100_000,
-            max_wal_bytes: 256 * 1024 * 1024,
             max_undo_bytes: 128 * 1024 * 1024,
         }
     }
@@ -434,13 +467,13 @@ impl TransactionConfig {
         self
     }
 
-    pub fn with_max_mutation_count(mut self, max: u64) -> Self {
-        self.max_mutation_count = max;
+    pub fn with_auto_commit(mut self, auto_commit: bool) -> Self {
+        self.auto_commit = auto_commit;
         self
     }
 
-    pub fn with_max_wal_bytes(mut self, max: u64) -> Self {
-        self.max_wal_bytes = max;
+    pub fn with_max_mutation_count(mut self, max: u64) -> Self {
+        self.max_mutation_count = max;
         self
     }
 
@@ -609,7 +642,6 @@ impl TransactionStats {
         }
     }
 
-
     pub fn increment_cleanup_failure(&self) {
         self.cleanup_failure_transactions
             .fetch_add(1, Ordering::Relaxed);
@@ -641,16 +673,17 @@ impl TransactionStats {
         checkpoint_drain_time: Duration,
     ) {
         if let Some(ref sm) = self.stats_manager {
-            sm.set_txn_resource_metrics(
-                self.active_statements.load(Ordering::Relaxed),
+            let metrics = graphdb_core::core::stats::TxnResourceMetrics {
+                active_statements: self.active_statements.load(Ordering::Relaxed),
                 active_snapshots,
-                pending_writes.max(0) as u64,
-                u64::from(frontier_lag),
+                pending_writes: pending_writes.max(0) as u64,
+                frontier_lag: u64::from(frontier_lag),
                 staged_wal_bytes,
                 undo_bytes,
                 prepared_transactions,
-                checkpoint_drain_time.as_millis() as u64,
-            );
+                checkpoint_drain_time_ms: checkpoint_drain_time.as_millis() as u64,
+            };
+            sm.set_txn_resource_metrics(metrics);
         }
     }
 
@@ -845,6 +878,7 @@ impl WriteSet {
 pub struct TransactionInfo {
     pub id: TransactionId,
     pub state: TransactionState,
+    pub txn_type: TransactionType,
     pub start_time: Instant,
     pub elapsed: Duration,
     pub is_read_only: bool,
@@ -874,7 +908,7 @@ pub struct TransactionExecution {
     read_timestamp: u32,
     write_timestamp: Option<u32>,
     read_only: bool,
-    auto_commit_owner: bool,
+    auto_commit: bool,
     rollback_only: bool,
     owner: Option<String>,
     mutation_recorder: Option<Arc<dyn super::participant::TransactionMutationRecorder>>,
@@ -886,7 +920,7 @@ impl TransactionExecution {
         read_timestamp: u32,
         write_timestamp: Option<u32>,
         read_only: bool,
-        auto_commit_owner: bool,
+        auto_commit: bool,
         owner: Option<String>,
     ) -> Self {
         Self {
@@ -894,7 +928,7 @@ impl TransactionExecution {
             read_timestamp,
             write_timestamp,
             read_only,
-            auto_commit_owner,
+            auto_commit,
             rollback_only: false,
             owner,
             mutation_recorder: None,
@@ -917,8 +951,8 @@ impl TransactionExecution {
         self.read_only
     }
 
-    pub fn auto_commit_owner(&self) -> bool {
-        self.auto_commit_owner
+    pub fn auto_commit(&self) -> bool {
+        self.auto_commit
     }
 
     pub fn rollback_only(&self) -> bool {
@@ -953,7 +987,7 @@ impl TransactionExecution {
     }
 
     pub fn requires_finalization(&self) -> bool {
-        self.auto_commit_owner
+        self.auto_commit
     }
 }
 

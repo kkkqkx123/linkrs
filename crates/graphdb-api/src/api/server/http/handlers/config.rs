@@ -37,6 +37,7 @@ pub async fn get<
         "transaction": {
             "default_timeout": config.common.transaction.default_timeout,
             "max_concurrent_transactions": config.common.transaction.max_concurrent_transactions,
+            "auto_commit": config.common.transaction.auto_commit,
         },
         "log": {
             "level": config.common.log.level,
@@ -215,6 +216,7 @@ fn get_config_value(config: &crate::config::Config, section: &str, key: &str) ->
             "max_concurrent_transactions" => {
                 serde_json::json!(config.common.transaction.max_concurrent_transactions)
             }
+            "auto_commit" => serde_json::json!(config.common.transaction.auto_commit),
             _ => serde_json::Value::Null,
         },
         "log" => match key {

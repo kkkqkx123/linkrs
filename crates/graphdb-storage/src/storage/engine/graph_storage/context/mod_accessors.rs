@@ -1,11 +1,11 @@
 use crate::core::stats::StatsManager;
 use crate::core::types::{LabelId, TableId, Timestamp};
 use crate::core::{StorageError, StorageResult};
-use crate::storage::StorageOperationContext;
 use crate::storage::engine::resource_budget::{MemoryCategory, ResourceSnapshot};
 use crate::storage::index::IndexGcOps;
-use std::sync::Arc;
+use crate::storage::StorageOperationContext;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use super::{GraphStorageContext, WriteTimestampLease};
 
@@ -248,13 +248,18 @@ impl GraphStorageContext {
     }
 
     pub fn check_snapshot_admission(&self) -> crate::core::StorageResult<()> {
-        let active = self
-            .persistent
-            .version_manager
-            .snapshot_tracker()
-            .active_count();
+        let tracker = self.persistent.version_manager.snapshot_tracker();
+        let active = tracker.active_count();
         if active >= self.persistent.config.resources.max_active_snapshots {
             return Err(crate::core::StorageError::capacity_exceeded());
+        }
+        if tracker
+            .oldest_age()
+            .is_some_and(|age| age >= self.persistent.config.resources.max_snapshot_age)
+        {
+            return Err(crate::core::StorageError::invalid_operation(
+                "Oldest active snapshot exceeded max_snapshot_age",
+            ));
         }
         Ok(())
     }

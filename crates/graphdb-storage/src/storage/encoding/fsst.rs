@@ -330,7 +330,8 @@ impl FsstColumn {
     }
 
     pub fn rebuild(&mut self, new_strings: &[String]) -> crate::core::StorageResult<()> {
-        let mut all_strings: Vec<String> = Vec::with_capacity(self.encoded_data.len() + new_strings.len());
+        let mut all_strings: Vec<String> =
+            Vec::with_capacity(self.encoded_data.len() + new_strings.len());
 
         for (idx, encoded) in self.encoded_data.iter().enumerate() {
             if self.null_bitmap.is_null(idx) {
@@ -375,60 +376,78 @@ impl FsstColumn {
 
     pub fn serialize_meta(&self, writer: &mut impl Write) -> crate::core::StorageResult<usize> {
         let mut written = 0usize;
-        written += self.encoder.serialize(writer)
-            .map_err(|e| crate::core::StorageError::io_error(format!("FsstColumn serialize encoder: {}", e)))?;
+        written += self.encoder.serialize(writer).map_err(|e| {
+            crate::core::StorageError::io_error(format!("FsstColumn serialize encoder: {}", e))
+        })?;
         let data_count = self.encoded_data.len() as u32;
-        writer.write_all(&data_count.to_le_bytes())
-            .map_err(|e| crate::core::StorageError::io_error(format!("FsstColumn serialize count: {}", e)))?;
+        writer.write_all(&data_count.to_le_bytes()).map_err(|e| {
+            crate::core::StorageError::io_error(format!("FsstColumn serialize count: {}", e))
+        })?;
         written += 4;
         for item in &self.encoded_data {
             let len = item.len() as u16;
-            writer.write_all(&len.to_le_bytes())
-                .map_err(|e| crate::core::StorageError::io_error(format!("FsstColumn serialize item len: {}", e)))?;
-            writer.write_all(item)
-                .map_err(|e| crate::core::StorageError::io_error(format!("FsstColumn serialize item: {}", e)))?;
+            writer.write_all(&len.to_le_bytes()).map_err(|e| {
+                crate::core::StorageError::io_error(format!("FsstColumn serialize item len: {}", e))
+            })?;
+            writer.write_all(item).map_err(|e| {
+                crate::core::StorageError::io_error(format!("FsstColumn serialize item: {}", e))
+            })?;
             written += 2 + item.len();
         }
         let bm_len = self.null_bitmap.len() as u32;
-        writer.write_all(&bm_len.to_le_bytes())
-            .map_err(|e| crate::core::StorageError::io_error(format!("FsstColumn serialize bm_len: {}", e)))?;
+        writer.write_all(&bm_len.to_le_bytes()).map_err(|e| {
+            crate::core::StorageError::io_error(format!("FsstColumn serialize bm_len: {}", e))
+        })?;
         written += 4;
         for &word in self.null_bitmap.as_bits() {
-            writer.write_all(&word.to_le_bytes())
-                .map_err(|e| crate::core::StorageError::io_error(format!("FsstColumn serialize bm word: {}", e)))?;
+            writer.write_all(&word.to_le_bytes()).map_err(|e| {
+                crate::core::StorageError::io_error(format!("FsstColumn serialize bm word: {}", e))
+            })?;
             written += 8;
         }
         Ok(written)
     }
 
     pub fn deserialize_meta(reader: &mut impl Read) -> crate::core::StorageResult<Self> {
-        let encoder = FsstEncoder::deserialize(reader)
-            .map_err(|e| crate::core::StorageError::io_error(format!("FsstColumn deserialize encoder: {}", e)))?;
+        let encoder = FsstEncoder::deserialize(reader).map_err(|e| {
+            crate::core::StorageError::io_error(format!("FsstColumn deserialize encoder: {}", e))
+        })?;
         let mut count_bytes = [0u8; 4];
-        reader.read_exact(&mut count_bytes)
-            .map_err(|e| crate::core::StorageError::io_error(format!("FsstColumn deserialize count: {}", e)))?;
+        reader.read_exact(&mut count_bytes).map_err(|e| {
+            crate::core::StorageError::io_error(format!("FsstColumn deserialize count: {}", e))
+        })?;
         let data_count = u32::from_le_bytes(count_bytes) as usize;
         let mut encoded_data = Vec::with_capacity(data_count);
         for _ in 0..data_count {
             let mut len_bytes = [0u8; 2];
-            reader.read_exact(&mut len_bytes)
-                .map_err(|e| crate::core::StorageError::io_error(format!("FsstColumn deserialize item len: {}", e)))?;
+            reader.read_exact(&mut len_bytes).map_err(|e| {
+                crate::core::StorageError::io_error(format!(
+                    "FsstColumn deserialize item len: {}",
+                    e
+                ))
+            })?;
             let len = u16::from_le_bytes(len_bytes) as usize;
             let mut item = vec![0u8; len];
-            reader.read_exact(&mut item)
-                .map_err(|e| crate::core::StorageError::io_error(format!("FsstColumn deserialize item: {}", e)))?;
+            reader.read_exact(&mut item).map_err(|e| {
+                crate::core::StorageError::io_error(format!("FsstColumn deserialize item: {}", e))
+            })?;
             encoded_data.push(item);
         }
         let mut bm_len_bytes = [0u8; 4];
-        reader.read_exact(&mut bm_len_bytes)
-            .map_err(|e| crate::core::StorageError::io_error(format!("FsstColumn deserialize bm_len: {}", e)))?;
+        reader.read_exact(&mut bm_len_bytes).map_err(|e| {
+            crate::core::StorageError::io_error(format!("FsstColumn deserialize bm_len: {}", e))
+        })?;
         let bm_len = u32::from_le_bytes(bm_len_bytes) as usize;
         let words = bm_len.div_ceil(64);
         let mut data = Vec::with_capacity(words);
         for _ in 0..words {
             let mut word_bytes = [0u8; 8];
-            reader.read_exact(&mut word_bytes)
-                .map_err(|e| crate::core::StorageError::io_error(format!("FsstColumn deserialize bm word: {}", e)))?;
+            reader.read_exact(&mut word_bytes).map_err(|e| {
+                crate::core::StorageError::io_error(format!(
+                    "FsstColumn deserialize bm word: {}",
+                    e
+                ))
+            })?;
             data.push(u64::from_le_bytes(word_bytes));
         }
         let null_bitmap = NullBitmap::from_raw(data, bm_len);
@@ -722,11 +741,7 @@ mod tests {
 
     #[test]
     fn test_fsst_rebuild_empty_new_strings() {
-        let strings = vec![
-            Some("hello world"),
-            Some("hello rust"),
-            Some("hello code"),
-        ];
+        let strings = vec![Some("hello world"), Some("hello rust"), Some("hello code")];
         let non_null: Vec<&str> = strings.iter().filter_map(|s| *s).collect();
         let encoder = FsstEncoder::train(&non_null, 100);
 

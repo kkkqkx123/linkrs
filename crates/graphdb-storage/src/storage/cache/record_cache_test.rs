@@ -235,7 +235,7 @@ fn test_invalidate_by_label() {
 }
 
 #[test]
-fn test_timestamp_staleness() {
+fn test_vertex_cache_is_snapshot_exact() {
     let cache = RecordCache::new();
 
     let key = VertexCacheKey::new(1, 42);
@@ -247,30 +247,21 @@ fn test_timestamp_staleness() {
     };
     cache.insert_vertex(key, vertex);
 
-    // query_ts < cached_at_ts → miss (data from future)
+    // A cached version is only valid for its exact snapshot.
     assert!(cache.get_vertex(&key, 50).is_none());
-
-    // query_ts == cached_at_ts → hit
     assert!(cache.get_vertex(&key, 100).is_some());
-
-    // query_ts > cached_at_ts → hit
-    assert!(cache.get_vertex(&key, 200).is_some());
+    assert!(cache.get_vertex(&key, 200).is_none());
 }
 
 #[test]
-fn test_id_index_timestamp_staleness() {
+fn test_id_index_cache_is_snapshot_exact() {
     let cache = RecordCache::new();
 
     cache.insert_id_index(1, "user", 42, 100);
 
-    // query_ts < cached_at_ts → miss
     assert_eq!(cache.get_id_index(1, "user", 50), None);
-
-    // query_ts == cached_at_ts → hit
     assert_eq!(cache.get_id_index(1, "user", 100), Some(42));
-
-    // query_ts > cached_at_ts → hit
-    assert_eq!(cache.get_id_index(1, "user", 200), Some(42));
+    assert_eq!(cache.get_id_index(1, "user", 200), None);
 }
 
 #[test]

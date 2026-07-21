@@ -215,8 +215,9 @@ impl VertexTable {
     }
 
     fn read_pages_from_file(path: &Path) -> StorageResult<(Vec<u8>, u32)> {
-        let file = std::fs::File::open(path)
-            .map_err(|e| StorageError::io_error(format!("Failed to open {}: {}", path.display(), e)))?;
+        let file = std::fs::File::open(path).map_err(|e| {
+            StorageError::io_error(format!("Failed to open {}: {}", path.display(), e))
+        })?;
         let mut reader = std::io::BufReader::new(file);
         let header = crate::storage::compression::ColumnFileHeader::deserialize(&mut reader)?;
         let total_rows = header.total_rows;
@@ -391,7 +392,9 @@ impl VertexTable {
                     let stats_len = u32::from_le_bytes(stats_len_bytes) as usize;
                     let mut stats_bytes = vec![0u8; stats_len];
                     cursor.read_exact(&mut stats_bytes)?;
-                    let stats = crate::storage::column_stats::ColumnStats::deserialize_meta(&mut &stats_bytes[..])?;
+                    let stats = crate::storage::column_stats::ColumnStats::deserialize_meta(
+                        &mut &stats_bytes[..],
+                    )?;
                     if let Some(col) = self.columns.get_column_mut(&name) {
                         col.set_stats(stats);
                     }
@@ -456,7 +459,9 @@ impl VertexTable {
                     let stats_len = u32::from_le_bytes(stats_len_bytes) as usize;
                     let mut stats_bytes = vec![0u8; stats_len];
                     cursor.read_exact(&mut stats_bytes)?;
-                    let stats = crate::storage::column_stats::ColumnStats::deserialize_meta(&mut &stats_bytes[..])?;
+                    let stats = crate::storage::column_stats::ColumnStats::deserialize_meta(
+                        &mut &stats_bytes[..],
+                    )?;
                     if let Some(col) = self.columns.get_column_mut(&name) {
                         col.set_stats(stats);
                     }
@@ -482,7 +487,7 @@ impl VertexTable {
         meta_cursor: &mut &[u8],
     ) -> StorageResult<()> {
         use crate::storage::encoding::{
-            AlpColumn, BitPackedIntColumn, DictionaryColumn, FsstColumn, RleBoolColumn, RleIntColumn,
+            AlpColumn, BitPackedIntColumn, DictionaryColumn, FsstColumn, RleIntColumn,
         };
 
         match encoding_type {

@@ -16,7 +16,7 @@
 //!   - All operations are single-threaded at runtime
 //!   - External synchronization via GraphDataStore's RwLock ensures correctness
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -134,6 +134,7 @@ impl IdIndexerConfig {
 pub struct IdManager {
     keys: Vec<Option<IdKey>>,
     key_to_id: HashMap<IdKey, u32>,
+    live_ids: BTreeSet<u32>,
     config: IdIndexerConfig,
 }
 
@@ -151,6 +152,7 @@ impl IdManager {
         Self {
             keys: Vec::with_capacity(capacity),
             key_to_id: HashMap::with_capacity(capacity),
+            live_ids: BTreeSet::new(),
             config,
         }
     }
@@ -179,6 +181,7 @@ impl IdManager {
         let index = self.keys.len() as u32;
         self.keys.push(Some(key.clone()));
         self.key_to_id.insert(key, index);
+        self.live_ids.insert(index);
 
         Ok(index)
     }
@@ -208,6 +211,7 @@ impl IdManager {
             if (idx as usize) < self.keys.len() {
                 self.keys[idx as usize] = None;
             }
+            self.live_ids.remove(&idx);
         })
     }
 
@@ -218,9 +222,14 @@ impl IdManager {
             .collect()
     }
 
+    pub fn live_ids(&self) -> Vec<u32> {
+        self.live_ids.iter().copied().collect()
+    }
+
     pub fn clear(&mut self) {
         self.key_to_id.clear();
         self.keys.clear();
+        self.live_ids.clear();
     }
 
     pub fn compact(&mut self) -> StorageResult<HashMap<u32, u32>> {
@@ -267,6 +276,7 @@ impl IdManager {
 
         self.keys = new_keys;
         self.key_to_id = new_key_to_id;
+        self.live_ids = (0..entries.len() as u32).collect();
 
         Ok(())
     }
@@ -280,6 +290,7 @@ impl IdManager {
         }
         self.keys[index as usize] = Some(key.clone());
         self.key_to_id.insert(key, index);
+        self.live_ids.insert(index);
     }
 
     pub fn memory_usage(&self) -> usize {
@@ -366,6 +377,10 @@ impl IdIndexer {
     pub fn iter(&self) -> Vec<(IdKey, u32)> {
         let manager = self.manager.lock();
         manager.iter()
+    }
+
+    pub fn live_ids(&self) -> Vec<u32> {
+        self.manager.lock().live_ids()
     }
 
     pub fn clear(&self) {
@@ -459,6 +474,21 @@ mod tests {
         assert_eq!(idx3, 2);
 
         assert_eq!(indexer.len(), 3);
+    }
+
+    #[test]
+    fn test_live_ids_skip_deleted_gaps_in_stable_order() {
+        let indexer = IdIndexer::new();
+        for value in 0..10 {
+            indexer
+                .insert(IdKey::Int(value))
+                .expect("insert must succeed");
+        }
+        indexer.remove(&IdKey::Int(1));
+        indexer.remove(&IdKey::Int(5));
+        indexer.remove(&IdKey::Int(8));
+
+        assert_eq!(indexer.live_ids(), vec![0, 2, 3, 4, 6, 7, 9]);
     }
 
     #[test]

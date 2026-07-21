@@ -80,6 +80,12 @@ impl EdgeStore {
         )?))
     }
 
+    pub fn needs_background_freeze(&self) -> bool {
+        match self {
+            EdgeStore::TimeTravel(store) => store.needs_background_freeze(),
+        }
+    }
+
     // ── Accessors ──
     pub fn label(&self) -> super::LabelId {
         match self {
@@ -724,7 +730,13 @@ impl core::TimeTravelEdgeStore {
             &self.mvcc.tombstones,
             self.mvcc.min_active_snapshot_ts,
         )?;
-        persistence::write_pages_to_file(&path.join("meta.bin"), &meta_payload, page_size, level, 1)?;
+        persistence::write_pages_to_file(
+            &path.join("meta.bin"),
+            &meta_payload,
+            page_size,
+            level,
+            1,
+        )?;
 
         let mut out_csr_payload = Vec::new();
         persistence::serialize_csr(
@@ -734,7 +746,13 @@ impl core::TimeTravelEdgeStore {
             &mut out_csr_payload,
         )?;
         let out_edge_count = self.out_csr.edge_count() as u32;
-        persistence::write_pages_to_file(&path.join("out_csr.bin"), &out_csr_payload, page_size, level, out_edge_count)?;
+        persistence::write_pages_to_file(
+            &path.join("out_csr.bin"),
+            &out_csr_payload,
+            page_size,
+            level,
+            out_edge_count,
+        )?;
 
         let mut in_csr_payload = Vec::new();
         persistence::serialize_csr(
@@ -744,12 +762,24 @@ impl core::TimeTravelEdgeStore {
             &mut in_csr_payload,
         )?;
         let in_edge_count = self.in_csr.edge_count() as u32;
-        persistence::write_pages_to_file(&path.join("in_csr.bin"), &in_csr_payload, page_size, level, in_edge_count)?;
+        persistence::write_pages_to_file(
+            &path.join("in_csr.bin"),
+            &in_csr_payload,
+            page_size,
+            level,
+            in_edge_count,
+        )?;
 
         let mut props_payload = Vec::new();
         persistence::serialize_properties(&self.properties, &mut props_payload)?;
         let edge_count = self.next_edge_id.0 as u32;
-        persistence::write_pages_to_file(&path.join("properties.bin"), &props_payload, page_size, level, edge_count)?;
+        persistence::write_pages_to_file(
+            &path.join("properties.bin"),
+            &props_payload,
+            page_size,
+            level,
+            edge_count,
+        )?;
 
         Ok(())
     }

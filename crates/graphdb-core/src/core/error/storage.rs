@@ -295,7 +295,10 @@ impl StorageError {
     pub fn unsupported_version(found: u32, expected: u32) -> Self {
         Self::new(
             StorageErrorKind::UnsupportedVersion,
-            format!("unsupported format version: found {}, expected {}", found, expected),
+            format!(
+                "unsupported format version: found {}, expected {}",
+                found, expected
+            ),
         )
     }
 }

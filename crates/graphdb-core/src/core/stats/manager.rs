@@ -456,6 +456,19 @@ pub struct SlowQueryStats {
     pub avg_duration_secs: f64,
 }
 
+/// Transaction resource metrics
+#[derive(Debug, Clone, Copy)]
+pub struct TxnResourceMetrics {
+    pub active_statements: u64,
+    pub active_snapshots: u64,
+    pub pending_writes: u64,
+    pub frontier_lag: u64,
+    pub staged_wal_bytes: u64,
+    pub undo_bytes: u64,
+    pub prepared_transactions: u64,
+    pub checkpoint_drain_time_ms: u64,
+}
+
 impl StatsManager {
     pub fn get_query_profile(&self, trace_id: &str) -> Option<QueryProfile> {
         let profiles = self.query_profiles.write();
@@ -1008,27 +1021,21 @@ impl StatsManager {
         self.add_value(MetricType::TxnCleanupFailureCount);
     }
 
-    pub fn set_txn_resource_metrics(
-        &self,
-        active_statements: u64,
-        active_snapshots: u64,
-        pending_writes: u64,
-        frontier_lag: u64,
-        staged_wal_bytes: u64,
-        undo_bytes: u64,
-        prepared_transactions: u64,
-        checkpoint_drain_time_ms: u64,
-    ) {
-        self.set_value(MetricType::TxnActiveStatements, active_statements);
-        self.set_value(MetricType::TxnActiveSnapshots, active_snapshots);
-        self.set_value(MetricType::TxnPendingWrites, pending_writes);
-        self.set_value(MetricType::TxnFrontierLag, frontier_lag);
-        self.set_value(MetricType::TxnStagedWalBytes, staged_wal_bytes);
-        self.set_value(MetricType::TxnUndoBytes, undo_bytes);
-        self.set_value(MetricType::TxnPreparedTransactions, prepared_transactions);
+    /// Transaction resource metrics
+    pub fn set_txn_resource_metrics(&self, metrics: TxnResourceMetrics) {
+        self.set_value(MetricType::TxnActiveStatements, metrics.active_statements);
+        self.set_value(MetricType::TxnActiveSnapshots, metrics.active_snapshots);
+        self.set_value(MetricType::TxnPendingWrites, metrics.pending_writes);
+        self.set_value(MetricType::TxnFrontierLag, metrics.frontier_lag);
+        self.set_value(MetricType::TxnStagedWalBytes, metrics.staged_wal_bytes);
+        self.set_value(MetricType::TxnUndoBytes, metrics.undo_bytes);
+        self.set_value(
+            MetricType::TxnPreparedTransactions,
+            metrics.prepared_transactions,
+        );
         self.set_value(
             MetricType::TxnCheckpointDrainTimeMs,
-            checkpoint_drain_time_ms,
+            metrics.checkpoint_drain_time_ms,
         );
     }
 

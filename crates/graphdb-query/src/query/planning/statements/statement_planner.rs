@@ -9,11 +9,11 @@
 //! **StatementPlanner**: A trait at the statement level, responsible for the planning of entire sentences.
 //! **ClausePlanner**: A trait at the clause level, responsible for the planning of individual clauses.
 
-use crate::query::QueryContext;
 use crate::query::parser::ast::Stmt;
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::Planner;
 use crate::query::validator::structs::CypherClauseKind;
+use crate::query::QueryContext;
 use std::sync::Arc;
 
 /// Statement-level planner trait
@@ -49,11 +49,11 @@ pub trait ClausePlanner: std::fmt::Debug {
 mod tests {
     use super::*;
     use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::query::QueryRequestContext;
     use crate::query::parser::ast::{Ast, Span};
-    use crate::query::planning::plan::core::PlanNodeEnum;
     use crate::query::planning::plan::core::nodes::StartNode;
+    use crate::query::planning::plan::core::PlanNodeEnum;
     use crate::query::validator::ValidatedStatement;
+    use crate::query::QueryRequestContext;
     use std::collections::HashMap;
 
     #[derive(Debug)]
@@ -229,26 +229,18 @@ mod tests {
         ];
         let planner = MockStatementPlanner::new("MATCH", supported_kinds.clone());
         assert_eq!(planner.supported_clause_kinds().len(), 4);
-        assert!(
-            planner
-                .supported_clause_kinds()
-                .contains(&CypherClauseKind::Match)
-        );
-        assert!(
-            planner
-                .supported_clause_kinds()
-                .contains(&CypherClauseKind::Where)
-        );
-        assert!(
-            planner
-                .supported_clause_kinds()
-                .contains(&CypherClauseKind::Return)
-        );
-        assert!(
-            planner
-                .supported_clause_kinds()
-                .contains(&CypherClauseKind::With)
-        );
+        assert!(planner
+            .supported_clause_kinds()
+            .contains(&CypherClauseKind::Match));
+        assert!(planner
+            .supported_clause_kinds()
+            .contains(&CypherClauseKind::Where));
+        assert!(planner
+            .supported_clause_kinds()
+            .contains(&CypherClauseKind::Return));
+        assert!(planner
+            .supported_clause_kinds()
+            .contains(&CypherClauseKind::With));
     }
 
     #[test]

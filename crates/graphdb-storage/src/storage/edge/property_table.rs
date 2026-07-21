@@ -740,18 +740,16 @@ impl PropertyTable {
         let mut values = Vec::with_capacity(self.records.len());
         for record in &self.records {
             match record {
-                Some(rec) => {
-                    match self.deserialize_row(&rec.data) {
-                        Ok(row) => {
-                            if col_idx < row.len() {
-                                values.push(row[col_idx].1.clone());
-                            } else {
-                                values.push(None);
-                            }
+                Some(rec) => match self.deserialize_row(&rec.data) {
+                    Ok(row) => {
+                        if col_idx < row.len() {
+                            values.push(row[col_idx].1.clone());
+                        } else {
+                            values.push(None);
                         }
-                        Err(_) => values.push(None),
                     }
-                }
+                    Err(_) => values.push(None),
+                },
                 None => values.push(None),
             }
         }
@@ -767,7 +765,8 @@ impl PropertyTable {
         }
         let schema = &self.schema[col_idx];
         let values = self.column_values(col_idx);
-        let raw_size = values.len() as u64 * crate::storage::vertex::column_store::element_size(&schema.data_type).max(1) as u64;
+        let raw_size = values.len() as u64
+            * crate::storage::vertex::column_store::element_size(&schema.data_type).max(1) as u64;
         Some(crate::storage::column_stats::compute_stats(
             &values,
             crate::storage::encoding::EncodingType::None,
@@ -776,10 +775,7 @@ impl PropertyTable {
         ))
     }
 
-    pub fn select_encodings(
-        &mut self,
-        selector: &crate::storage::encoding::EncodingSelector,
-    ) {
+    pub fn select_encodings(&mut self, selector: &crate::storage::encoding::EncodingSelector) {
         for i in 0..self.schema.len() {
             let data_type = self.schema[i].data_type.clone();
             let values = self.column_values(i);

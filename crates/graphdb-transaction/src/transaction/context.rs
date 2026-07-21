@@ -26,6 +26,8 @@ use crate::core::types::VertexId;
 pub struct TransactionContext {
     /// Transaction ID
     pub id: TransactionId,
+    /// Logical category used by lifecycle and monitoring code.
+    pub txn_type: TransactionType,
     /// Current state
     state: AtomicCell<TransactionState>,
     /// Start timestamp (MVCC)
@@ -38,6 +40,8 @@ pub struct TransactionContext {
     timeout: Duration,
     /// Whether read-only
     pub read_only: bool,
+    /// Whether query execution owns statement-level finalization.
+    pub auto_commit: bool,
     /// Isolation level
     pub isolation_level: IsolationLevel,
     /// Query timeout duration
@@ -83,8 +87,6 @@ pub struct TransactionContext {
     owner: RwLock<Option<String>>,
     /// Maximum mutations allowed (0 = unlimited).
     max_mutation_count: u64,
-    /// Maximum WAL bytes allowed (0 = unlimited).
-    max_wal_bytes: u64,
     /// Maximum undo bytes allowed (0 = unlimited).
     max_undo_bytes: u64,
     /// Current mutation count.
@@ -100,10 +102,12 @@ impl fmt::Debug for TransactionContext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TransactionContext")
             .field("id", &self.id)
+            .field("txn_type", &self.txn_type)
             .field("state", &self.state.load())
             .field("start_timestamp", &self.start_timestamp)
             .field("snapshot_timestamp", &self.effective_snapshot_timestamp())
             .field("read_only", &self.read_only)
+            .field("auto_commit", &self.auto_commit)
             .field("isolation_level", &self.isolation_level)
             .field("durability", &self.durability)
             .finish()
@@ -185,12 +189,14 @@ impl TransactionContext {
         let now = Instant::now();
         Self {
             id,
+            txn_type: TransactionType::Write,
             state: AtomicCell::new(TransactionState::Active),
             start_timestamp,
             snapshot_timestamp: RwLock::new(None),
             start_time: now,
             timeout: config.timeout,
             read_only: false,
+            auto_commit: config.auto_commit,
             isolation_level: config.isolation_level,
             query_timeout: config.query_timeout,
             statement_timeout: config.statement_timeout,
@@ -214,7 +220,6 @@ impl TransactionContext {
             commit_lsn: AtomicU64::new(0),
             owner: RwLock::new(None),
             max_mutation_count: config.max_mutation_count,
-            max_wal_bytes: config.max_wal_bytes,
             max_undo_bytes: config.max_undo_bytes,
             mutation_count: AtomicU64::new(0),
             undo_bytes: AtomicU64::new(0),
@@ -231,12 +236,14 @@ impl TransactionContext {
         let now = Instant::now();
         Self {
             id,
+            txn_type: TransactionType::ReadOnly,
             state: AtomicCell::new(TransactionState::Active),
             start_timestamp,
             snapshot_timestamp: RwLock::new(None),
             start_time: now,
             timeout: config.timeout,
             read_only: true,
+            auto_commit: config.auto_commit,
             isolation_level: config.isolation_level,
             query_timeout: config.query_timeout,
             statement_timeout: config.statement_timeout,
@@ -260,12 +267,26 @@ impl TransactionContext {
             commit_lsn: AtomicU64::new(0),
             owner: RwLock::new(None),
             max_mutation_count: config.max_mutation_count,
-            max_wal_bytes: config.max_wal_bytes,
             max_undo_bytes: config.max_undo_bytes,
             mutation_count: AtomicU64::new(0),
             undo_bytes: AtomicU64::new(0),
             schema_catalog_version: AtomicU64::new(0),
         }
+    }
+
+    /// Create a checkpoint context without acquiring an MVCC read or write slot.
+    pub fn new_checkpoint(
+        id: TransactionId,
+        write_timestamp: Timestamp,
+        config: TransactionConfig,
+    ) -> Self {
+        let mut context = Self::new(id, write_timestamp, config);
+        context.txn_type = TransactionType::Checkpoint;
+        context
+    }
+
+    pub fn get_type(&self) -> TransactionType {
+        self.txn_type
     }
 
     /// Get current state
@@ -465,9 +486,13 @@ impl TransactionContext {
 
             let valid_transition = matches!(
                 (current, new_state),
-                (TransactionState::Active, TransactionState::Committing | TransactionState::Aborting)
-                    | (TransactionState::Committing, TransactionState::Aborting | TransactionState::Aborted)
-                    | (TransactionState::Aborting, TransactionState::Aborted)
+                (
+                    TransactionState::Active,
+                    TransactionState::Committing | TransactionState::Aborting
+                ) | (
+                    TransactionState::Committing,
+                    TransactionState::Aborting | TransactionState::Aborted
+                ) | (TransactionState::Aborting, TransactionState::Aborted)
             );
 
             if !valid_transition {
@@ -565,6 +590,7 @@ impl TransactionContext {
         TransactionInfo {
             id: self.id,
             state: self.state.load(),
+            txn_type: self.txn_type,
             start_time: self.start_time,
             elapsed: self.start_time.elapsed(),
             is_read_only: self.read_only,

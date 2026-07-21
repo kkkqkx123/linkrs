@@ -727,10 +727,7 @@ impl MVCCTable for VertexTable {
 pub struct VertexIterator<'a> {
     table: &'a VertexTable,
     ts: Timestamp,
-    /// Current internal ID to check
-    current: u32,
-    /// Total internal IDs in the table
-    end: u32,
+    live_ids: std::vec::IntoIter<u32>,
 }
 
 impl<'a> VertexIterator<'a> {
@@ -738,8 +735,7 @@ impl<'a> VertexIterator<'a> {
         Self {
             table,
             ts,
-            current: 0,
-            end: table.total_count() as u32,
+            live_ids: table.id_indexer.live_ids().into_iter(),
         }
     }
 }
@@ -748,11 +744,7 @@ impl<'a> Iterator for VertexIterator<'a> {
     type Item = VertexRecord;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.current < self.end {
-            let id = self.current;
-            self.current += 1;
-
-            // Lazy check: only validate timestamp when actually retrieving the record
+        for id in self.live_ids.by_ref() {
             if let Some(record) = self.table.get_by_internal_id(id, self.ts) {
                 return Some(record);
             }

@@ -142,11 +142,23 @@ impl CsrVariant {
         vertex_capacity: usize,
         edge_capacity: usize,
     ) -> StorageResult<Self> {
+        Self::from_strategy_with_overflow(strategy, vertex_capacity, edge_capacity, 4096)
+    }
+
+    pub fn from_strategy_with_overflow(
+        strategy: EdgeStrategy,
+        vertex_capacity: usize,
+        edge_capacity: usize,
+        overflow_chunk_edges: usize,
+    ) -> StorageResult<Self> {
         match strategy {
-            EdgeStrategy::Multiple => Ok(CsrVariant::Multiple(MutableCsr::with_capacity(
-                vertex_capacity,
-                edge_capacity,
-            ))),
+            EdgeStrategy::Multiple => {
+                Ok(CsrVariant::Multiple(MutableCsr::with_overflow_chunk_edges(
+                    vertex_capacity,
+                    edge_capacity,
+                    overflow_chunk_edges,
+                )))
+            }
             EdgeStrategy::Single => Ok(CsrVariant::Single(SingleMutableCsr::with_capacity(
                 vertex_capacity,
             ))),

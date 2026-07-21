@@ -58,10 +58,7 @@ fn test_shutdown_prevents_new_transactions() {
     manager.clone().shutdown();
 
     let result = manager.begin_insert_transaction(TransactionOptions::default());
-    assert!(
-        result.is_err(),
-        "new txn should be rejected after shutdown"
-    );
+    assert!(result.is_err(), "new txn should be rejected after shutdown");
 }
 
 /// Verify that the version manager's commit_write_timestamp properly advances
@@ -135,7 +132,9 @@ async fn test_concurrent_reads_after_abort() {
     let write_txn = manager
         .begin_insert_transaction(TransactionOptions::default())
         .expect("begin write txn");
-    manager.abort_transaction(write_txn).expect("abort write txn");
+    manager
+        .abort_transaction(write_txn)
+        .expect("abort write txn");
 
     let mut handles = vec![];
     for _ in 0..3 {
@@ -181,15 +180,10 @@ fn test_rollback_only_prevents_commit() {
         .begin_insert_transaction(TransactionOptions::default())
         .expect("begin write txn");
 
-    manager
-        .mark_disconnect(txn)
-        .expect("mark disconnect");
+    manager.mark_disconnect(txn).expect("mark disconnect");
 
     let result = manager.commit_transaction(txn);
-    assert!(
-        result.is_err(),
-        "commit of rollback-only txn should fail"
-    );
+    assert!(result.is_err(), "commit of rollback-only txn should fail");
 }
 
 /// Verify that stats track commits and aborts correctly.
@@ -200,9 +194,7 @@ fn test_stats_commit_abort_tracking() {
     let commit_txn = manager
         .begin_insert_transaction(TransactionOptions::default())
         .expect("begin commit txn");
-    manager
-        .commit_transaction(commit_txn)
-        .expect("commit txn");
+    manager.commit_transaction(commit_txn).expect("commit txn");
 
     let abort_txn = manager
         .begin_insert_transaction(TransactionOptions::default())

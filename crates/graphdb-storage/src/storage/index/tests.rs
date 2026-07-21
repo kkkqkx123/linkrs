@@ -163,13 +163,10 @@ fn split_writes_only_the_selected_index_to_each_shard() {
         )
         .expect("write unrelated index key");
 
-    let boundary = KeyBuilder::build_vertex_index_value_prefix(
-        1,
-        "first",
-        &Value::String("M".to_string()),
-    )
-    .expect("build split boundary")
-    .0;
+    let boundary =
+        KeyBuilder::build_vertex_index_value_prefix(1, "first", &Value::String("M".to_string()))
+            .expect("build split boundary")
+            .0;
     manager
         .split_native_index(
             IndexIdentity {
@@ -569,7 +566,10 @@ fn included_columns_not_visible_after_delete() {
         std::iter::from_fn(|| cursor.next_batch(64).ok().filter(|b| !b.is_empty()))
             .flatten()
             .collect();
-    assert!(rows.is_empty(), "covering query must not return deleted edge");
+    assert!(
+        rows.is_empty(),
+        "covering query must not return deleted edge"
+    );
 }
 
 #[test]

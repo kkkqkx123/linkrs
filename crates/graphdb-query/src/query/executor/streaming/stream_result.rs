@@ -17,8 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 type DropCallback = Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>;
 type TransactionCallback = Box<dyn FnOnce() -> Result<(), String> + Send>;
-type TransactionFinalizer =
-    Arc<Mutex<Option<(TransactionCallback, TransactionCallback)>>>;
+type TransactionFinalizer = Arc<Mutex<Option<(TransactionCallback, TransactionCallback)>>>;
 
 #[derive(Clone)]
 pub struct StreamingQueryResult {
@@ -170,8 +169,7 @@ impl StreamingQueryResult {
                     Err(error) => {
                         *guard = StreamState::Closed;
                         drop(guard);
-                        self.finalize_transaction()
-                            .map_err(QueryError::execution)?;
+                        self.finalize_transaction().map_err(QueryError::execution)?;
                         return Err(error);
                     }
                 };
@@ -186,8 +184,7 @@ impl StreamingQueryResult {
                 }
                 drop(guard);
                 if exhausted {
-                    self.finalize_transaction()
-                        .map_err(QueryError::execution)?;
+                    self.finalize_transaction().map_err(QueryError::execution)?;
                 }
                 Ok(result)
             }
@@ -199,8 +196,7 @@ impl StreamingQueryResult {
                 if *exhausted {
                     *guard = StreamState::Exhausted;
                     drop(guard);
-                    self.finalize_transaction()
-                        .map_err(QueryError::execution)?;
+                    self.finalize_transaction().map_err(QueryError::execution)?;
                     return Ok(None);
                 }
                 *exhausted = true;

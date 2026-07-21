@@ -7,9 +7,9 @@ use std::collections::HashMap;
 use crate::core::types::{LabelId, PasswordInfo, UserAlterInfo, UserInfo, VertexId};
 use crate::core::vertex_edge_path::Tag;
 use crate::core::{Edge, RoleType, StorageError, StorageResult, Value, Vertex};
-use crate::storage::StorageStats;
 use crate::storage::edge::EdgeRecord;
 use crate::storage::vertex::VertexRecord;
+use crate::storage::StorageStats;
 
 use super::context::GraphStorageContext;
 use super::writer;
@@ -324,8 +324,8 @@ pub(crate) fn repair_dangling_edges(
 
 #[cfg(test)]
 mod tests {
-    use crate::core::Value;
     use crate::core::types::VertexId;
+    use crate::core::Value;
     use crate::storage::edge::EdgeRecord;
     use crate::storage::vertex::VertexRecord;
 

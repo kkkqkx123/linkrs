@@ -8,8 +8,8 @@ pub mod traversal;
 
 // Re-export from the base module: The basic types are uniformly exported from the base module.
 pub use base::{
-    ExecutionContext, ExecutionResult, ExecutorStats, MemoryBudget, MemoryReservation, MemoryTracker,
-    MemoryTrackerReservation, Spillable,
+    ExecutionContext, ExecutionResult, ExecutorStats, MemoryBudget, MemoryReservation,
+    MemoryTracker, MemoryTrackerReservation, Spillable,
 };
 
 // Re-export streaming executors (Primary Execution Framework)

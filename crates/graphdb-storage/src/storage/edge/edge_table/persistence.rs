@@ -12,7 +12,7 @@ use crate::storage::edge::PropertyTable;
 use crate::storage::persistence::{read_header, section, write_header_to, HEADER_SIZE};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::Path;
 
 const EDGE_META_VERSION: u32 = 2;

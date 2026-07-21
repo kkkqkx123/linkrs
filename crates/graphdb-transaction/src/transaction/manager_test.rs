@@ -5,12 +5,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::transaction::TransactionErrorKind;
 use crate::transaction::manager::TransactionManager;
 use crate::transaction::mvcc::VersionManager;
 use crate::transaction::types::{
     DurabilityLevel, TransactionId, TransactionManagerConfig, TransactionOptions, TransactionState,
 };
+use crate::transaction::TransactionErrorKind;
 
 fn create_test_manager() -> TransactionManager {
     let config = TransactionManagerConfig {

@@ -25,6 +25,7 @@
 //! - Storage integration - transaction integration with storage layer
 //! - Edge advanced - advanced edge operations and patterns
 
+mod admission_timeout;
 mod advanced;
 mod api_consistency;
 mod basic;
@@ -44,4 +45,3 @@ mod semantics;
 mod storage_integration;
 mod timeout;
 mod vertex;
-mod admission_timeout;

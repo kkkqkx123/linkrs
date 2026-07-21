@@ -4,7 +4,7 @@ use crate::core::types::{
     EdgeTypeInfo, EdgeTypeSchema, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo,
     PropertyDef, SpaceInfo, TagInfo, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
 };
-use crate::core::{Edge, EdgeDirection, RoleType, Value, Vertex};
+use crate::core::{Edge, EdgeDirection, RoleType, StorageResult, Value, Vertex};
 use crate::storage::engine::graph_storage::GraphStorageContext;
 use crate::storage::{
     LabelVersionHistory, PropertyChange, StorageAdmin, StorageAuthOps, StorageGcOps,

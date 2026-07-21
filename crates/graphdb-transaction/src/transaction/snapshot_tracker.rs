@@ -11,6 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 use parking_lot::Mutex;
@@ -48,8 +49,14 @@ pub struct SnapshotTracker {
     /// Only contains snapshots with ref_count > 0
     ordered_snapshots: Mutex<BTreeMap<u64, u64>>,
 
+    /// First registration time for each active snapshot timestamp.
+    registered_at: DashMap<u64, Instant>,
+
     /// Minimum active snapshot (cached for O(1) queries)
     min_active: AtomicU64,
+
+    /// Total registrations, including multiple readers at the same timestamp.
+    active_references: AtomicU64,
 }
 
 impl SnapshotTracker {
@@ -58,13 +65,16 @@ impl SnapshotTracker {
         Self {
             snapshots: DashMap::new(),
             ordered_snapshots: Mutex::new(BTreeMap::new()),
+            registered_at: DashMap::new(),
             min_active: AtomicU64::new(u64::MAX),
+            active_references: AtomicU64::new(0),
         }
     }
 
     /// Add a new snapshot, incrementing its reference count
     pub fn add_snapshot(&self, ts: Timestamp) -> Result<(), StorageError> {
         let ts = ts as u64;
+        self.active_references.fetch_add(1, Ordering::SeqCst);
 
         // Increment reference count or create new entry
         match self.snapshots.get(&ts) {
@@ -79,6 +89,7 @@ impl SnapshotTracker {
             }
             None => {
                 self.snapshots.insert(ts, AtomicU64::new(1));
+                self.registered_at.insert(ts, Instant::now());
                 log::trace!("Snapshot {} added with ref count 1", ts);
 
                 // Add to ordered map and update min_active
@@ -112,6 +123,7 @@ impl SnapshotTracker {
                 if new_count == 0 {
                     drop(count); // Release the entry guard
                     self.snapshots.remove(&ts);
+                    self.registered_at.remove(&ts);
                     log::trace!("Snapshot {} removed (ref count = 0)", ts);
 
                     // Remove from ordered map and update min_active
@@ -121,6 +133,7 @@ impl SnapshotTracker {
                     }
                     self.update_min_active_from_tree();
                 }
+                self.active_references.fetch_sub(1, Ordering::SeqCst);
                 Ok(())
             }
             None => Err(StorageError::new(
@@ -169,7 +182,15 @@ impl SnapshotTracker {
 
     /// Get the total number of active snapshots (for testing)
     pub fn active_count(&self) -> usize {
-        self.snapshots.len()
+        self.active_references.load(Ordering::Acquire) as usize
+    }
+
+    /// Age of the oldest active snapshot registration.
+    pub fn oldest_age(&self) -> Option<Duration> {
+        self.registered_at
+            .iter()
+            .map(|entry| entry.value().elapsed())
+            .max()
     }
 }
 
@@ -226,6 +247,25 @@ mod tests {
 
         assert!(tracker.release_snapshot(100).is_ok());
         assert_eq!(tracker.min_active_snapshot(), u32::MAX);
+    }
+
+    #[test]
+    fn test_active_count_includes_same_timestamp_references() {
+        let tracker = SnapshotTracker::new();
+        tracker
+            .add_snapshot(100)
+            .expect("first snapshot must register");
+        tracker
+            .add_snapshot(100)
+            .expect("second snapshot must register");
+
+        assert_eq!(tracker.active_count(), 2);
+        assert!(tracker.oldest_age().is_some());
+
+        tracker
+            .release_snapshot(100)
+            .expect("first snapshot must release");
+        assert_eq!(tracker.active_count(), 1);
     }
 
     #[test]

@@ -193,10 +193,16 @@ impl EncodingSelector {
     }
 
     /// Select encoding based on data type and values.
-    pub fn select_for_column(&self, data_type: &DataType, values: &[Option<Value>]) -> EncodingType {
+    pub fn select_for_column(
+        &self,
+        data_type: &DataType,
+        values: &[Option<Value>],
+    ) -> EncodingType {
         match data_type {
             DataType::Bool => self.select_for_booleans(values),
-            DataType::SmallInt | DataType::Int | DataType::BigInt => self.select_for_integers(values),
+            DataType::SmallInt | DataType::Int | DataType::BigInt => {
+                self.select_for_integers(values)
+            }
             DataType::Float | DataType::Double => self.select_for_floats(values),
             DataType::String => self.select_for_strings(values),
             _ => EncodingType::None,
@@ -238,7 +244,10 @@ mod tests {
     fn test_select_bitpacking_for_high_cardinality_integers() {
         let selector = EncodingSelector::default();
         let values: Vec<Option<Value>> = (0..100).map(|i| Some(Value::Int(i))).collect();
-        assert_eq!(selector.select_for_integers(&values), EncodingType::BitPacking);
+        assert_eq!(
+            selector.select_for_integers(&values),
+            EncodingType::BitPacking
+        );
     }
 
     #[test]
@@ -247,7 +256,10 @@ mod tests {
         let values: Vec<Option<Value>> = (0..100)
             .map(|i| Some(Value::String(format!("val_{}", i % 5))))
             .collect();
-        assert_eq!(selector.select_for_strings(&values), EncodingType::Dictionary);
+        assert_eq!(
+            selector.select_for_strings(&values),
+            EncodingType::Dictionary
+        );
     }
 
     #[test]
@@ -270,7 +282,10 @@ mod tests {
         let values: Vec<Option<Value>> = (0..100)
             .map(|i| Some(Value::String(format!("s{}", i % 60))))
             .collect();
-        assert_eq!(selector.select_for_strings(&values), EncodingType::Dictionary);
+        assert_eq!(
+            selector.select_for_strings(&values),
+            EncodingType::Dictionary
+        );
     }
 
     #[test]
@@ -285,9 +300,7 @@ mod tests {
     #[test]
     fn test_select_rle_for_booleans() {
         let selector = EncodingSelector::default();
-        let values: Vec<Option<Value>> = (0..100)
-            .map(|i| Some(Value::Bool(i % 2 == 0)))
-            .collect();
+        let values: Vec<Option<Value>> = (0..100).map(|i| Some(Value::Bool(i % 2 == 0))).collect();
         assert_eq!(selector.select_for_booleans(&values), EncodingType::Rle);
     }
 
@@ -344,7 +357,8 @@ mod tests {
             EncodingType::BitPacking
         );
 
-        let bool_values: Vec<Option<Value>> = (0..100).map(|i| Some(Value::Bool(i % 2 == 0))).collect();
+        let bool_values: Vec<Option<Value>> =
+            (0..100).map(|i| Some(Value::Bool(i % 2 == 0))).collect();
         assert_eq!(
             selector.select_for_column(&DataType::Bool, &bool_values),
             EncodingType::Rle

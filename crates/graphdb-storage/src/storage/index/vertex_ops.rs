@@ -1,6 +1,8 @@
 use crate::core::types::{Index, IndexType, Timestamp, MAX_TIMESTAMP};
 use crate::core::{StorageError, Value};
-use crate::storage::index::helpers::{effective_index_values, merged_included_columns, vertex_entity_ref};
+use crate::storage::index::helpers::{
+    effective_index_values, merged_included_columns, vertex_entity_ref,
+};
 use crate::storage::index::key_codec::{KeyBuilder, KeyParser};
 use crate::storage::index::traits::VertexIndexOps;
 use crate::storage::index::types::{IndexIdentity, IndexRecord};

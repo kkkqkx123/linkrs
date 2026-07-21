@@ -1,14 +1,13 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
 
-use crate::core::UserStorage;
 use crate::core::metadata::{IndexManager, SchemaManager};
 use crate::core::stats::StatsManager;
 use crate::core::types::{LabelId, TableTracker, TableTrackerConfig, Timestamp};
-use crate::storage::StorageOperationContext;
+use crate::core::UserStorage;
 use crate::storage::engine::background_freeze::BackgroundFreezeManager;
 use crate::storage::engine::cache_manager::CacheManager;
 use crate::storage::engine::config::PropertyGraphConfig;
@@ -19,6 +18,7 @@ use crate::storage::engine::resource_budget::{MemoryAccounting, MemoryBudget};
 use crate::storage::engine::spiller::Spiller;
 use crate::storage::index::{IndexDataManagerImpl, IndexGcConfig, IndexGcManager};
 use crate::storage::vertex::IdKey;
+use crate::storage::StorageOperationContext;
 use crate::transaction::VersionManager;
 
 type LastCompactedVertices = Arc<Mutex<Vec<(LabelId, Vec<IdKey>)>>>;
@@ -326,6 +326,7 @@ struct GraphStorageRuntime {
     index_gc_manager: Option<Arc<IndexGcManager>>,
     background_freeze_manager: Option<Arc<BackgroundFreezeManager>>,
     deferred_wal_ops: DeferredWalOps,
+    background_freeze_running: Arc<AtomicBool>,
 }
 
 struct WriteTimestampLease {
@@ -362,6 +363,7 @@ impl GraphStorageRuntime {
             index_gc_manager: None,
             background_freeze_manager: None,
             deferred_wal_ops: DeferredWalOps::new(),
+            background_freeze_running: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -378,6 +380,7 @@ impl GraphStorageRuntime {
             index_gc_manager: Some(Arc::new(gc_manager)),
             background_freeze_manager: self.background_freeze_manager.clone(),
             deferred_wal_ops: self.deferred_wal_ops.clone(),
+            background_freeze_running: self.background_freeze_running.clone(),
         }
     }
 
@@ -386,6 +389,7 @@ impl GraphStorageRuntime {
             index_gc_manager: self.index_gc_manager.clone(),
             background_freeze_manager: Some(manager),
             deferred_wal_ops: self.deferred_wal_ops.clone(),
+            background_freeze_running: self.background_freeze_running.clone(),
         }
     }
 

@@ -239,7 +239,12 @@ fn deserialize_value(reader: &mut impl Read) -> StorageResult<Value> {
     }
 }
 
-pub fn compute_stats(values: &[Option<Value>], encoding_type: EncodingType, compressed_size: u64, raw_size: u64) -> ColumnStats {
+pub fn compute_stats(
+    values: &[Option<Value>],
+    encoding_type: EncodingType,
+    compressed_size: u64,
+    raw_size: u64,
+) -> ColumnStats {
     let mut stats = ColumnStats::new(encoding_type, compressed_size, raw_size);
 
     let mut distinct = HashSet::new();

@@ -410,7 +410,7 @@ fn test_p0_multi_edge_segment_delete_consistency() {
 }
 
 #[test]
-fn test_write_backpressure_triggers_freeze() {
+fn test_write_backpressure_requests_background_freeze() {
     use crate::core::stats::StatsManager;
     use std::sync::Arc;
 
@@ -444,19 +444,14 @@ fn test_write_backpressure_triggers_freeze() {
         }
     }
 
-    // Check that freeze was triggered (segments should be created)
+    // The write path only records pressure; maintenance owns the freeze.
     let final_segments = table.out_segments.len();
-    assert!(
-        final_segments > initial_segments,
-        "Backpressure should trigger freeze and create segments"
-    );
+    assert_eq!(final_segments, initial_segments);
+    assert!(table.needs_background_freeze());
 
     // Verify metrics were recorded
     let freeze_count = stats.get_value(crate::core::stats::MetricType::MutableCsrFreezeCount);
-    assert!(
-        freeze_count.is_some() && freeze_count.unwrap() > 0,
-        "Freeze count should be recorded"
-    );
+    assert_eq!(freeze_count.unwrap_or(0), 0);
 
     let mutable_size = stats.get_value(crate::core::stats::MetricType::MutableCsrBytes);
     assert!(

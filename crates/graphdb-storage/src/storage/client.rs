@@ -391,7 +391,9 @@ pub trait StoragePersistenceOps: Send + Sync + std::fmt::Debug {
 
     fn set_outbox_materialized_lsn_provider(
         &self,
-        _provider: Arc<dyn Fn() -> StorageResult<Option<crate::core::types::CommitLsn>> + Send + Sync>,
+        _provider: Arc<
+            dyn Fn() -> StorageResult<Option<crate::core::types::CommitLsn>> + Send + Sync,
+        >,
     ) {
     }
 }

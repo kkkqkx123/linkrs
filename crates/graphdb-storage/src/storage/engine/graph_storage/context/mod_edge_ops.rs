@@ -6,8 +6,8 @@ use crate::storage::engine::{EdgeOperationParams, InsertEdgeParams};
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
-use super::GraphStorageContext;
 use super::helpers;
+use super::GraphStorageContext;
 
 struct EdgeLabelLookupCtx<'a> {
     vertex_tables: &'a HashMap<LabelId, crate::storage::vertex::VertexTable>,
@@ -68,7 +68,7 @@ impl GraphStorageContext {
         let key = EdgeTableKey::new(actual_src_label, actual_dst_label, params.edge_label);
         let template_key = EdgeTableKey::new(0, 0, params.edge_label);
         let stats_manager = self.persistent.stats_manager.clone();
-        self.persistent.data_store.with_edge_partition_mut(
+        let freeze_requested = self.persistent.data_store.with_edge_partition_mut(
             key,
             template_key,
             |template| {
@@ -91,7 +91,7 @@ impl GraphStorageContext {
                         params.properties,
                         params.ts,
                     ) {
-                        Ok(()) => return Ok(()),
+                        Ok(()) => return Ok(edge_table.needs_background_freeze()),
                         Err(ref error)
                             if error.kind()
                                 == crate::core::error::storage::StorageErrorKind::EdgeAlreadyExists
@@ -104,6 +104,9 @@ impl GraphStorageContext {
                 }
             },
         )?;
+        if freeze_requested {
+            self.schedule_background_freeze();
+        }
         self.mark_edge_modified(params.edge_label);
         Ok(())
     }

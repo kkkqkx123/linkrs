@@ -190,12 +190,10 @@ impl VersionManager {
             let next = current
                 .checked_add(1)
                 .ok_or(VersionManagerError::TimestampExhausted)?;
-            match self.write_ts.compare_exchange(
-                current,
-                next,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
+            match self
+                .write_ts
+                .compare_exchange(current, next, Ordering::SeqCst, Ordering::SeqCst)
+            {
                 Ok(_) => return Ok(next),
                 Err(observed) => current = observed,
             }
@@ -715,9 +713,8 @@ mod tests {
 
     #[test]
     fn test_historical_read_before_retention_is_rejected() {
-        let vm = VersionManager::with_config(
-            VersionManagerConfig::default().with_retention_frontier(3),
-        );
+        let vm =
+            VersionManager::with_config(VersionManagerConfig::default().with_retention_frontier(3));
         vm.init_ts(3);
 
         let error = vm

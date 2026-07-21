@@ -6,10 +6,10 @@
 use crate::core::types::{CommitLsn, IndexGeneration};
 use crate::core::{StorageError, StorageResult};
 use crate::storage::index::generic_index_manager::GenericIndexManager;
-use crate::storage::index::types::IndexRecord;
 use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
 use crate::storage::index::key_codec::IndexKeyGenerator;
 use crate::storage::index::manifest::IndexManifest;
+use crate::storage::index::types::IndexRecord;
 use parking_lot::{Condvar, Mutex, RwLock};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;

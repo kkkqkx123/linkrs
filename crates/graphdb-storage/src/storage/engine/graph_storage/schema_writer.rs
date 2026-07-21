@@ -3,13 +3,13 @@ use crate::core::types::{EdgeTypeInfo, Index, PropertyDef, SpaceInfo, TagInfo};
 use crate::core::{StorageError, StorageResult};
 use crate::storage::engine::params::CreateEdgeTypeParams;
 use crate::storage::types::StoragePropertyDef;
-use crate::transaction::MutationResult;
 use crate::transaction::wal::{
     AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
     CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
     DeleteEdgePropRedo, DeleteEdgeTypeRedo, DeleteVertexPropRedo, DeleteVertexTypeRedo,
     DropEdgeIndexRedo, DropSpaceRedo, DropTagIndexRedo, WalOpType,
 };
+use crate::transaction::MutationResult;
 
 use super::context::GraphStorageContext;
 use super::ops::{

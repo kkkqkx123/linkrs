@@ -113,7 +113,11 @@ impl AlpEncoder {
             let min_val = *int_values.iter().min().unwrap_or(&0);
             let max_val = *int_values.iter().max().unwrap_or(&0);
             let range = (max_val - min_val) as u64;
-            let bit_width = if range == 0 { 1 } else { (64 - range.leading_zeros()) as u8 };
+            let bit_width = if range == 0 {
+                1
+            } else {
+                (64 - range.leading_zeros()) as u8
+            };
 
             if valid_count > best_valid_count
                 || (valid_count == best_valid_count && bit_width < best_bit_width)
@@ -177,9 +181,16 @@ impl AlpEncoder {
             let mut val_bytes = [0u8; 8];
             reader.read_exact(&mut val_bytes)?;
             let original_value = f64::from_le_bytes(val_bytes);
-            exceptions.push(ExceptionEntry { row_idx, original_value });
+            exceptions.push(ExceptionEntry {
+                row_idx,
+                original_value,
+            });
         }
-        Ok(Self { factor, bit_packed, exceptions })
+        Ok(Self {
+            factor,
+            bit_packed,
+            exceptions,
+        })
     }
 }
 
@@ -310,7 +321,9 @@ impl AlpColumn {
 
                 if fits_in_range {
                     self.encoder.bit_packed.set(row_idx, Some(int_val))?;
-                    self.encoder.exceptions.retain(|e| e.row_idx as usize != row_idx);
+                    self.encoder
+                        .exceptions
+                        .retain(|e| e.row_idx as usize != row_idx);
                 } else if is_lossless {
                     self.encoder.bit_packed.set(row_idx, Some(0))?;
                     match self
@@ -526,7 +539,10 @@ mod tests {
 
         assert!(!encoder.exceptions.is_empty());
         assert_eq!(encoder.exceptions[0].row_idx, 2);
-        assert_eq!(encoder.exceptions[0].original_value.to_bits(), (1.0_f64 / 3.0).to_bits());
+        assert_eq!(
+            encoder.exceptions[0].original_value.to_bits(),
+            (1.0_f64 / 3.0).to_bits()
+        );
     }
 
     #[test]
@@ -565,7 +581,10 @@ mod tests {
 
         assert_eq!(restored.len(), 3);
         assert_eq!(restored.get(0).unwrap().to_bits(), 1.5f64.to_bits());
-        assert_eq!(restored.get(1).unwrap().to_bits(), (1.0_f64 / 3.0).to_bits());
+        assert_eq!(
+            restored.get(1).unwrap().to_bits(),
+            (1.0_f64 / 3.0).to_bits()
+        );
         assert_eq!(restored.get(2).unwrap().to_bits(), 2.5f64.to_bits());
     }
 

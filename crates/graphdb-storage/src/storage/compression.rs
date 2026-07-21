@@ -91,8 +91,6 @@ pub fn decompress_payload(data: &[u8]) -> StorageResult<Vec<u8>> {
     }
 }
 
-
-
 #[derive(Debug)]
 pub struct ColumnFileHeader {
     pub page_size: usize,
@@ -103,26 +101,34 @@ pub struct ColumnFileHeader {
 impl ColumnFileHeader {
     pub fn serialize(&self, writer: &mut impl std::io::Write) -> StorageResult<usize> {
         let mut written = 0usize;
-        writer.write_all(&COLUMN_FILE_MAGIC).map_err(|e| {
-            StorageError::io_error(format!("ColumnFileHeader write magic: {}", e))
-        })?;
+        writer
+            .write_all(&COLUMN_FILE_MAGIC)
+            .map_err(|e| StorageError::io_error(format!("ColumnFileHeader write magic: {}", e)))?;
         written += 8;
-        writer.write_all(&COLUMN_FILE_VERSION.to_le_bytes()).map_err(|e| {
-            StorageError::io_error(format!("ColumnFileHeader write version: {}", e))
-        })?;
+        writer
+            .write_all(&COLUMN_FILE_VERSION.to_le_bytes())
+            .map_err(|e| {
+                StorageError::io_error(format!("ColumnFileHeader write version: {}", e))
+            })?;
         written += 2;
         let page_size_u16 = self.page_size.min(u16::MAX as usize) as u16;
-        writer.write_all(&page_size_u16.to_le_bytes()).map_err(|e| {
-            StorageError::io_error(format!("ColumnFileHeader write page_size: {}", e))
-        })?;
+        writer
+            .write_all(&page_size_u16.to_le_bytes())
+            .map_err(|e| {
+                StorageError::io_error(format!("ColumnFileHeader write page_size: {}", e))
+            })?;
         written += 2;
-        writer.write_all(&self.page_count.to_le_bytes()).map_err(|e| {
-            StorageError::io_error(format!("ColumnFileHeader write page_count: {}", e))
-        })?;
+        writer
+            .write_all(&self.page_count.to_le_bytes())
+            .map_err(|e| {
+                StorageError::io_error(format!("ColumnFileHeader write page_count: {}", e))
+            })?;
         written += 4;
-        writer.write_all(&self.total_rows.to_le_bytes()).map_err(|e| {
-            StorageError::io_error(format!("ColumnFileHeader write total_rows: {}", e))
-        })?;
+        writer
+            .write_all(&self.total_rows.to_le_bytes())
+            .map_err(|e| {
+                StorageError::io_error(format!("ColumnFileHeader write total_rows: {}", e))
+            })?;
         written += 4;
         let reserved = [0u8; 32];
         writer.write_all(&reserved).map_err(|e| {
@@ -134,9 +140,9 @@ impl ColumnFileHeader {
 
     pub fn deserialize(reader: &mut impl std::io::Read) -> StorageResult<Self> {
         let mut magic = [0u8; 8];
-        reader.read_exact(&mut magic).map_err(|e| {
-            StorageError::io_error(format!("ColumnFileHeader read magic: {}", e))
-        })?;
+        reader
+            .read_exact(&mut magic)
+            .map_err(|e| StorageError::io_error(format!("ColumnFileHeader read magic: {}", e)))?;
         if magic != COLUMN_FILE_MAGIC {
             return Err(StorageError::deserialize_error(format!(
                 "Invalid column file magic: {:?}, expected {:?}",
@@ -144,9 +150,9 @@ impl ColumnFileHeader {
             )));
         }
         let mut version_bytes = [0u8; 2];
-        reader.read_exact(&mut version_bytes).map_err(|e| {
-            StorageError::io_error(format!("ColumnFileHeader read version: {}", e))
-        })?;
+        reader
+            .read_exact(&mut version_bytes)
+            .map_err(|e| StorageError::io_error(format!("ColumnFileHeader read version: {}", e)))?;
         let version = u16::from_le_bytes(version_bytes);
         if version != COLUMN_FILE_VERSION {
             return Err(StorageError::unsupported_version(
@@ -193,34 +199,36 @@ impl PageHeader {
 
     pub fn serialize(&self, writer: &mut impl std::io::Write) -> StorageResult<usize> {
         let mut written = 0usize;
-        writer.write_all(&PAGE_MAGIC).map_err(|e| {
-            StorageError::io_error(format!("PageHeader write magic: {}", e))
-        })?;
+        writer
+            .write_all(&PAGE_MAGIC)
+            .map_err(|e| StorageError::io_error(format!("PageHeader write magic: {}", e)))?;
         written += 4;
-        writer.write_all(&self.page_size.to_le_bytes()).map_err(|e| {
-            StorageError::io_error(format!("PageHeader write page_size: {}", e))
-        })?;
+        writer
+            .write_all(&self.page_size.to_le_bytes())
+            .map_err(|e| StorageError::io_error(format!("PageHeader write page_size: {}", e)))?;
         written += 4;
         writer.write_all(&[self.compression_type]).map_err(|e| {
             StorageError::io_error(format!("PageHeader write compression_type: {}", e))
         })?;
         written += 1;
-        writer.write_all(&self.crc32.to_le_bytes()).map_err(|e| {
-            StorageError::io_error(format!("PageHeader write crc32: {}", e))
-        })?;
+        writer
+            .write_all(&self.crc32.to_le_bytes())
+            .map_err(|e| StorageError::io_error(format!("PageHeader write crc32: {}", e)))?;
         written += 4;
-        writer.write_all(&(self.compressed_len as u16).to_le_bytes()).map_err(|e| {
-            StorageError::io_error(format!("PageHeader write compressed_len: {}", e))
-        })?;
+        writer
+            .write_all(&(self.compressed_len as u16).to_le_bytes())
+            .map_err(|e| {
+                StorageError::io_error(format!("PageHeader write compressed_len: {}", e))
+            })?;
         written += 2;
         Ok(written)
     }
 
     pub fn deserialize(reader: &mut impl std::io::Read) -> StorageResult<Self> {
         let mut magic = [0u8; 4];
-        reader.read_exact(&mut magic).map_err(|e| {
-            StorageError::io_error(format!("PageHeader read magic: {}", e))
-        })?;
+        reader
+            .read_exact(&mut magic)
+            .map_err(|e| StorageError::io_error(format!("PageHeader read magic: {}", e)))?;
         if magic != PAGE_MAGIC {
             return Err(StorageError::deserialize_error(format!(
                 "Invalid page magic: {:?}, expected {:?}",
@@ -228,9 +236,9 @@ impl PageHeader {
             )));
         }
         let mut page_size_bytes = [0u8; 4];
-        reader.read_exact(&mut page_size_bytes).map_err(|e| {
-            StorageError::io_error(format!("PageHeader read page_size: {}", e))
-        })?;
+        reader
+            .read_exact(&mut page_size_bytes)
+            .map_err(|e| StorageError::io_error(format!("PageHeader read page_size: {}", e)))?;
         let page_size = u32::from_le_bytes(page_size_bytes);
         let mut compression_type_buf = [0u8; 1];
         reader.read_exact(&mut compression_type_buf).map_err(|e| {
@@ -238,9 +246,9 @@ impl PageHeader {
         })?;
         let compression_type = compression_type_buf[0];
         let mut crc32_bytes = [0u8; 4];
-        reader.read_exact(&mut crc32_bytes).map_err(|e| {
-            StorageError::io_error(format!("PageHeader read crc32: {}", e))
-        })?;
+        reader
+            .read_exact(&mut crc32_bytes)
+            .map_err(|e| StorageError::io_error(format!("PageHeader read crc32: {}", e)))?;
         let crc32 = u32::from_le_bytes(crc32_bytes);
         let mut compressed_len_bytes = [0u8; 2];
         reader.read_exact(&mut compressed_len_bytes).map_err(|e| {
@@ -282,9 +290,8 @@ impl PageWriter {
             COMPRESSION_MARKER_ZSTD
         };
         let (compressed, crc32) = if compression_type == COMPRESSION_MARKER_ZSTD {
-            let compressed = zstd::encode_all(data, self.compression_level).map_err(|e| {
-                StorageError::io_error(format!("zstd compress failed: {}", e))
-            })?;
+            let compressed = zstd::encode_all(data, self.compression_level)
+                .map_err(|e| StorageError::io_error(format!("zstd compress failed: {}", e)))?;
             let crc = crc32fast::hash(&compressed);
             (compressed, crc)
         } else {
@@ -298,9 +305,9 @@ impl PageWriter {
             compressed_len: compressed.len() as u32,
         };
         header.serialize(writer)?;
-        writer.write_all(&compressed).map_err(|e| {
-            StorageError::io_error(format!("PageWriter write page data: {}", e))
-        })?;
+        writer
+            .write_all(&compressed)
+            .map_err(|e| StorageError::io_error(format!("PageWriter write page data: {}", e)))?;
         self.page_count += 1;
         Ok(())
     }
@@ -357,9 +364,8 @@ impl PageReader {
             ));
         }
         let decompressed = if header.compression_type == COMPRESSION_MARKER_ZSTD {
-            zstd::decode_all(std::io::Cursor::new(&compressed)).map_err(|e| {
-                StorageError::io_error(format!("zstd decompress failed: {}", e))
-            })?
+            zstd::decode_all(std::io::Cursor::new(&compressed))
+                .map_err(|e| StorageError::io_error(format!("zstd decompress failed: {}", e)))?
         } else {
             compressed
         };
@@ -375,17 +381,19 @@ impl PageReader {
 
     pub fn skip_page<R: std::io::Read>(&self, reader: &mut R) -> StorageResult<()> {
         let header = PageHeader::deserialize(reader)?;
-        let mut bounded = crate::storage::safe_read::BoundedReader::new(
-            reader,
-            header.compressed_len as usize,
-        );
-        bounded.skip_all().map_err(|e| {
-            StorageError::io_error(format!("PageReader skip page data: {}", e))
-        })?;
+        let mut bounded =
+            crate::storage::safe_read::BoundedReader::new(reader, header.compressed_len as usize);
+        bounded
+            .skip_all()
+            .map_err(|e| StorageError::io_error(format!("PageReader skip page data: {}", e)))?;
         Ok(())
     }
 
-    pub fn read_all<R: std::io::Read>(&self, reader: &mut R, page_count: u32) -> StorageResult<Vec<u8>> {
+    pub fn read_all<R: std::io::Read>(
+        &self,
+        reader: &mut R,
+        page_count: u32,
+    ) -> StorageResult<Vec<u8>> {
         let mut result = Vec::new();
         for _ in 0..page_count {
             let page = self.read_page(reader)?;
@@ -422,10 +430,7 @@ impl PageReader {
     }
 }
 
-pub fn write_shadow_file<P: AsRef<std::path::Path>>(
-    path: P,
-    data: &[u8],
-) -> StorageResult<()> {
+pub fn write_shadow_file<P: AsRef<std::path::Path>>(path: P, data: &[u8]) -> StorageResult<()> {
     let path = path.as_ref();
     let shadow_path = path.with_extension("tmp");
     std::fs::write(&shadow_path, data).map_err(|e| {
@@ -637,7 +642,10 @@ mod tests {
         let result = ColumnFileHeader::deserialize(&mut cursor);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert_eq!(err.kind(), crate::core::error::storage::StorageErrorKind::UnsupportedVersion);
+        assert_eq!(
+            err.kind(),
+            crate::core::error::storage::StorageErrorKind::UnsupportedVersion
+        );
     }
 
     #[test]

@@ -7,9 +7,7 @@
 //! - Snapshot tracker has no leaks after commit/abort
 
 use graphdb::core::types::TransactionId;
-use graphdb::transaction::{
-    TransactionManager, TransactionManagerConfig, TransactionOptions,
-};
+use graphdb::transaction::{TransactionManager, TransactionManagerConfig, TransactionOptions};
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -92,14 +90,18 @@ fn test_timeout_cleanup_updates_stats() {
         .expect("begin txn");
 
     let stats_before = manager.stats();
-    let active_before = stats_before.active_transactions.load(std::sync::atomic::Ordering::Relaxed);
+    let active_before = stats_before
+        .active_transactions
+        .load(std::sync::atomic::Ordering::Relaxed);
     assert!(active_before >= 1);
 
     std::thread::sleep(Duration::from_millis(50));
     manager.cleanup_expired_transactions();
 
     let stats_after = manager.stats();
-    let active_after = stats_after.active_transactions.load(std::sync::atomic::Ordering::Relaxed);
+    let active_after = stats_after
+        .active_transactions
+        .load(std::sync::atomic::Ordering::Relaxed);
     assert!(
         active_after < active_before,
         "active count should decrease after timeout cleanup"
@@ -139,7 +141,9 @@ fn test_snapshot_read_accepts_past_timestamp() {
         "snapshot should read at the requested timestamp"
     );
 
-    manager.commit_transaction(txn).expect("commit snapshot read");
+    manager
+        .commit_transaction(txn)
+        .expect("commit snapshot read");
 }
 
 /// Verify that a transaction can be force-killed and becomes inactive.
@@ -152,9 +156,7 @@ fn test_kill_transaction() {
         .expect("begin write txn");
     assert!(manager.is_transaction_active(txn));
 
-    manager
-        .kill_transaction(txn, None)
-        .expect("kill txn");
+    manager.kill_transaction(txn, None).expect("kill txn");
 
     assert!(
         !manager.is_transaction_active(txn),
@@ -203,10 +205,7 @@ fn test_double_commit_rejected() {
     manager.commit_transaction(txn).expect("first commit");
 
     let result = manager.commit_transaction(txn);
-    assert!(
-        result.is_err(),
-        "double commit should be rejected"
-    );
+    assert!(result.is_err(), "double commit should be rejected");
 }
 
 /// Verify that commit of a non-existent transaction is rejected.
@@ -215,8 +214,5 @@ fn test_commit_invalid_transaction() {
     let manager = TransactionManager::new(TransactionManagerConfig::default());
 
     let result = manager.commit_transaction(TransactionId(99999));
-    assert!(
-        result.is_err(),
-        "commit of non-existent txn should fail"
-    );
+    assert!(result.is_err(), "commit of non-existent txn should fail");
 }

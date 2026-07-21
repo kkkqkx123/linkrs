@@ -302,7 +302,10 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
         admission_timeout: std::time::Duration::from_secs(10),
         commit_retry_attempts: 3,
         abort_retry_attempts: 3,
-        txn_config: TransactionConfig::default(),
+        txn_config: TransactionConfig {
+            auto_commit: config.transaction.auto_commit,
+            ..TransactionConfig::default()
+        },
     };
 
     let mut transaction_manager = TransactionManager::with_shared_version_manager(

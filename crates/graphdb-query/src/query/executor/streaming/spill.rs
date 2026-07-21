@@ -11,11 +11,11 @@
 
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
-use crate::core::Value;
 use crate::core::error::QueryError;
+use crate::core::Value;
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
@@ -1190,12 +1190,10 @@ mod tests {
         };
         let result = RunReader::open(&wrong_meta);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("schema fingerprint mismatch")
-        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("schema fingerprint mismatch"));
     }
 
     #[test]
@@ -1248,12 +1246,10 @@ mod tests {
         // This should exceed
         let result = quota.try_reserve(30);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Disk quota exceeded")
-        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Disk quota exceeded"));
     }
 
     #[test]

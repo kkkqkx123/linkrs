@@ -1,4 +1,6 @@
-use crate::core::types::{Index, IndexType, Timestamp};
+#[cfg(test)]
+use crate::core::types::IndexType;
+use crate::core::types::{Index, Timestamp};
 use crate::core::wal::{EntityRef, OutboxIntent};
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::index::generic_index_manager::GenericIndexManager;
@@ -155,7 +157,12 @@ pub(crate) fn vertex_entity_ref(value: &Value) -> Option<EntityRef> {
     }
 }
 
-pub(crate) fn edge_entity_ref(src: &Value, dst: &Value, edge_type: &str, ranking: i64) -> Option<EntityRef> {
+pub(crate) fn edge_entity_ref(
+    src: &Value,
+    dst: &Value,
+    edge_type: &str,
+    ranking: i64,
+) -> Option<EntityRef> {
     let EntityRef::Vertex(src) = vertex_entity_ref(src)? else {
         return None;
     };
@@ -278,7 +285,10 @@ mod tests {
     fn vertex_entity_ref_string_non_numeric() {
         let v = Value::String("uuid-abc".to_string());
         let entity = vertex_entity_ref(&v).expect("should resolve");
-        assert_eq!(entity, EntityRef::Vertex(VertexId::from_string("uuid-abc".to_string())));
+        assert_eq!(
+            entity,
+            EntityRef::Vertex(VertexId::from_string("uuid-abc".to_string()))
+        );
     }
 
     #[test]
@@ -292,7 +302,13 @@ mod tests {
         let src = Value::Int(1);
         let dst = Value::Int(2);
         let entity = edge_entity_ref(&src, &dst, "KNOWS", 0).expect("should resolve");
-        let EntityRef::Edge { src: s, dst: d, edge_type, ranking } = entity else {
+        let EntityRef::Edge {
+            src: s,
+            dst: d,
+            edge_type,
+            ranking,
+        } = entity
+        else {
             panic!("expected Edge entity ref");
         };
         assert_eq!(s, VertexId::from_int64(1));
@@ -325,7 +341,11 @@ mod tests {
             name: "idx_name".to_string(),
             space_id: 1,
             schema_name: "person".to_string(),
-            fields: vec![IndexField::new("name".to_string(), Value::String("".to_string()), false)],
+            fields: vec![IndexField::new(
+                "name".to_string(),
+                Value::String("".to_string()),
+                false,
+            )],
             properties: vec![],
             index_type: IndexType::TagIndex,
             is_unique: false,
@@ -346,7 +366,11 @@ mod tests {
             name: "idx_name".to_string(),
             space_id: 1,
             schema_name: "person".to_string(),
-            fields: vec![IndexField::new("name".to_string(), Value::String("".to_string()), false)],
+            fields: vec![IndexField::new(
+                "name".to_string(),
+                Value::String("".to_string()),
+                false,
+            )],
             properties: vec![],
             index_type: IndexType::TagIndex,
             is_unique: false,

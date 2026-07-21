@@ -9,6 +9,9 @@ pub struct TransactionConfig {
     pub default_timeout: u64,
     /// Maximum concurrent transactions
     pub max_concurrent_transactions: usize,
+    /// Whether each successful statement is committed automatically.
+    #[serde(default)]
+    pub auto_commit: bool,
 }
 
 impl Default for TransactionConfig {
@@ -16,6 +19,7 @@ impl Default for TransactionConfig {
         Self {
             default_timeout: 30,
             max_concurrent_transactions: 1000,
+            auto_commit: false,
         }
     }
 }
@@ -40,6 +44,7 @@ mod tests {
         let config = TransactionConfig::default();
         assert_eq!(config.default_timeout, 30);
         assert_eq!(config.max_concurrent_transactions, 1000);
+        assert!(!config.auto_commit);
     }
 
     #[test]

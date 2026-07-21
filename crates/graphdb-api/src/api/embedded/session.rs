@@ -11,9 +11,9 @@ use crate::core::{SessionStatistics, StatsManager};
 use crate::query::executor::expression::functions::{CustomFunction, FunctionRegistry};
 use crate::search::FulltextIndexManager;
 use crate::storage::{StorageClient, StorageOperationContextOps};
-use crate::sync::SyncManager;
 #[cfg(feature = "qdrant")]
 use crate::sync::vector_sync::SearchOptions;
+use crate::sync::SyncManager;
 use crate::transaction::TransactionManager;
 use crate::transaction::TransactionOptions;
 use parking_lot::RwLock;

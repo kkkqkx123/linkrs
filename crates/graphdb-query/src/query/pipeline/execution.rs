@@ -5,16 +5,16 @@ use crate::core::types::TransactionId;
 use crate::core::{
     ErrorInfo, ErrorType, MetricType, QueryMetrics, QueryPhase, QueryProfile, StatsManager,
 };
-use crate::query::QueryContext;
-use crate::query::QueryRequestContext;
 use crate::query::executor::base::{ExecutionContext, ExecutionResult};
-use crate::query::executor::streaming::StreamingQueryResult;
 use crate::query::executor::streaming::instance::{
     QueryBindings, QueryExecutionInstance, ResultSink,
 };
 use crate::query::executor::streaming::plan::PhysicalPlan;
 use crate::query::executor::streaming::transaction_scope::TransactionScope;
+use crate::query::executor::streaming::StreamingQueryResult;
 use crate::query::validator::ValidatedStatement;
+use crate::query::QueryContext;
+use crate::query::QueryRequestContext;
 use crate::storage::QueryStorage;
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -308,7 +308,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         }
 
         let (physical_plan, _) = self.compile(query_context.clone(), &validated)?;
-        let scope = Self::scope_for_request(&validated.ast.stmt(), query_context.request_context());
+        let scope = Self::scope_for_request(validated.ast.stmt(), query_context.request_context());
         self.execute_compiled_stream_with_scope(
             physical_plan,
             query_context,
@@ -681,9 +681,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     crate::query::executor::streaming::SessionTransactionController::new(),
                 );
                 if let Some(txn_id) = query_context.request_context().transaction_id {
-                    ctrl.begin_tracking(txn_id, true).map_err(|error| {
-                        DBError::from(QueryError::execution(error.to_string()))
-                    })?;
+                    ctrl.begin_tracking(txn_id, true)
+                        .map_err(|error| DBError::from(QueryError::execution(error.to_string())))?;
                 }
                 *ctrl_guard = Some(ctrl.clone());
                 ctrl

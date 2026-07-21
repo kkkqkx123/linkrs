@@ -14,8 +14,7 @@ fn transaction_extended_error_code(message: &str) -> graphdb_extended_error_code
         || message.contains("conflict")
     {
         graphdb_extended_error_code_t::GRAPHDB_ERROR_CONFLICT
-    } else if message.contains("transaction_not_owner")
-        || message.contains("not owned by another")
+    } else if message.contains("transaction_not_owner") || message.contains("not owned by another")
     {
         graphdb_extended_error_code_t::GRAPHDB_ERROR_NOT_OWNER
     } else if message.contains("invalid_state_for_commit")
@@ -380,8 +379,12 @@ pub fn extended_error_code_to_message(code: graphdb_extended_error_code_t) -> &'
         }
         graphdb_extended_error_code_t::GRAPHDB_ERROR_DEADLOCK => "Deadlock\0".as_bytes(),
         graphdb_extended_error_code_t::GRAPHDB_ERROR_LOCK_TIMEOUT => "Lock timeout\0".as_bytes(),
-        graphdb_extended_error_code_t::GRAPHDB_ERROR_CONFLICT => "Transaction conflict\0".as_bytes(),
-        graphdb_extended_error_code_t::GRAPHDB_ERROR_NOT_OWNER => "Transaction owner mismatch\0".as_bytes(),
+        graphdb_extended_error_code_t::GRAPHDB_ERROR_CONFLICT => {
+            "Transaction conflict\0".as_bytes()
+        }
+        graphdb_extended_error_code_t::GRAPHDB_ERROR_NOT_OWNER => {
+            "Transaction owner mismatch\0".as_bytes()
+        }
         graphdb_extended_error_code_t::GRAPHDB_ERROR_ALREADY_COMPLETED => {
             "Transaction already completed\0".as_bytes()
         }

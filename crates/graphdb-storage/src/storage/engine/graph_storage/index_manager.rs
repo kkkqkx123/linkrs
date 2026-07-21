@@ -22,8 +22,8 @@ type IndexDataMaps = (
 );
 
 use crate::transaction::wal::{
-    CommittedWalTransaction, LocalWalParser, WalParser, collect_committed_transactions,
-    filter_intents_for_indexes,
+    collect_committed_transactions, filter_intents_for_indexes, CommittedWalTransaction,
+    LocalWalParser, WalParser,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -997,12 +997,12 @@ pub(crate) fn lookup_edge_index(
 
 #[cfg(test)]
 mod tests {
-    use crate::core::Value;
     use crate::core::types::{
         CommitLsn, IdempotencyKey, Index, IndexConfig, IndexField, IndexGeneration, IndexType,
         OrderingKey, SnapshotTimestamp, TargetId, TransactionId, VertexId,
     };
     use crate::core::wal::{EntityRef, IndexMutation, IndexOperation, OutboxIntent};
+    use crate::core::Value;
     use crate::storage::engine::graph_storage::context::GraphStorageContext;
     use crate::storage::index::manifest::{GenerationBuildState, GenerationState};
     use crate::storage::index::types::IndexRecord;
@@ -1309,11 +1309,9 @@ mod tests {
 
         let mut storage = GraphStorage::open(temp_dir.path().to_path_buf())
             .expect("storage should reopen after the failed build");
-        assert!(
-            storage
-                .rebuild_tag_index("test_space", "person_name_idx")
-                .expect("rebuild should restart after crash recovery")
-        );
+        assert!(storage
+            .rebuild_tag_index("test_space", "person_name_idx")
+            .expect("rebuild should restart after crash recovery"));
         let indexed = storage
             .lookup_index(
                 "test_space",

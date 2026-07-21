@@ -141,7 +141,6 @@ impl SegmentLockState {
             None
         }
     }
-
 }
 
 impl Default for SegmentLockState {
@@ -203,5 +202,4 @@ mod tests {
         let result = state.try_optimistic_read(|| data.iter().sum::<u8>());
         assert_eq!(result, None);
     }
-
 }

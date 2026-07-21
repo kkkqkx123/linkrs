@@ -245,11 +245,7 @@ impl IndexDataManagerImpl {
         &self,
         space_id: u64,
         index_id: u64,
-    ) -> StorageResult<(
-        ManifestHandle,
-        Arc<IndexRuntime>,
-        Arc<GenerationRuntime>,
-    )> {
+    ) -> StorageResult<(ManifestHandle, Arc<IndexRuntime>, Arc<GenerationRuntime>)> {
         let catalog = self
             .manifest_catalog(space_id, index_id)
             .ok_or_else(|| StorageError::not_found(format!("Index {index_id} has no manifest")))?;
@@ -345,7 +341,10 @@ impl IndexDataManagerImpl {
         Ok(())
     }
 
-    pub(crate) fn load_build_state(&self, index_root: &Path) -> StorageResult<Option<GenerationBuildState>> {
+    pub(crate) fn load_build_state(
+        &self,
+        index_root: &Path,
+    ) -> StorageResult<Option<GenerationBuildState>> {
         let path = self.build_state_path(index_root);
         if !path.exists() {
             return Ok(None);

@@ -248,12 +248,10 @@ impl ColumnStats {
                     true
                 }
             }
-            (Some(l), Some(u)) => {
-                match (&self.min_value, &self.max_value) {
-                    (Some(min), Some(max)) => l <= max && u >= min,
-                    _ => true,
-                }
-            }
+            (Some(l), Some(u)) => match (&self.min_value, &self.max_value) {
+                (Some(min), Some(max)) => l <= max && u >= min,
+                _ => true,
+            },
         }
     }
 }

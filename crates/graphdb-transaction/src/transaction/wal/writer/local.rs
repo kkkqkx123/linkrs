@@ -838,7 +838,7 @@ impl LocalWalWriter {
     pub fn append_transaction_batch(
         &mut self,
         transaction_id: crate::core::types::TransactionId,
-        mut entries: Vec<crate::transaction::wal::TransactionWalEntry>,
+        entries: Vec<crate::transaction::wal::TransactionWalEntry>,
         intents: &[crate::core::wal::OutboxIntent],
     ) -> WalResult<crate::core::types::CommitLsn> {
         self.append_transaction_batch_with_durability(

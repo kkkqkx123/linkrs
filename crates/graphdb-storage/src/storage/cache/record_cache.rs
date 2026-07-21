@@ -19,8 +19,8 @@ use super::types::*;
 /// Entries with `cached_at_ts > query_ts` are treated as misses to prevent
 /// serving data from the future in MVCC time-travel queries.
 pub struct RecordCache {
-    vertex_cache: Cache<VertexCacheKey, CachedVertex>,
-    id_index_cache: Cache<IdIndexCacheKey, IdIndexCacheValue>,
+    vertex_cache: Cache<(VertexCacheKey, Timestamp), CachedVertex>,
+    id_index_cache: Cache<(IdIndexCacheKey, Timestamp), IdIndexCacheValue>,
     config: RecordCacheConfig,
     vertex_stats: Arc<CacheStats>,
     id_index_stats: Arc<CacheStats>,
@@ -86,20 +86,21 @@ impl RecordCache {
         let eviction_callback = Arc::new(Mutex::new(None::<EvictionCallback>));
         let eviction_callback_with_size = Arc::new(Mutex::new(None::<EvictionCallbackWithSize>));
 
-        let vertex_weigher: WeigherFn<VertexCacheKey, CachedVertex> =
-            Arc::new(|_key: &VertexCacheKey, value: &CachedVertex| {
-                let key_size = std::mem::size_of::<VertexCacheKey>() as u32;
+        let vertex_weigher: WeigherFn<(VertexCacheKey, Timestamp), CachedVertex> =
+            Arc::new(|_key: &(VertexCacheKey, Timestamp), value: &CachedVertex| {
+                let key_size = std::mem::size_of::<(VertexCacheKey, Timestamp)>() as u32;
                 let value_size = value.estimated_size();
                 key_size.saturating_add(value_size)
             });
 
-        let id_index_weigher: WeigherFn<IdIndexCacheKey, IdIndexCacheValue> =
-            Arc::new(|key: &IdIndexCacheKey, _value: &IdIndexCacheValue| {
-                let key_size = std::mem::size_of::<IdIndexCacheKey>() as u32
-                    + key.external_id.capacity() as u32;
+        let id_index_weigher: WeigherFn<(IdIndexCacheKey, Timestamp), IdIndexCacheValue> = Arc::new(
+            |key: &(IdIndexCacheKey, Timestamp), _value: &IdIndexCacheValue| {
+                let key_size = std::mem::size_of::<(IdIndexCacheKey, Timestamp)>() as u32
+                    + key.0.external_id.capacity() as u32;
                 let value_size = std::mem::size_of::<IdIndexCacheValue>() as u32;
                 key_size.saturating_add(value_size)
-            });
+            },
+        );
 
         let vertex_cache = Self::build_vertex_cache(
             vertex_memory,
@@ -143,10 +144,10 @@ impl RecordCache {
         stats: Arc<CacheStats>,
         eviction_callback: Arc<Mutex<Option<EvictionCallback>>>,
         eviction_callback_with_size: Arc<Mutex<Option<EvictionCallbackWithSize>>>,
-        weigher: WeigherFn<VertexCacheKey, CachedVertex>,
+        weigher: WeigherFn<(VertexCacheKey, Timestamp), CachedVertex>,
         ttl: Option<std::time::Duration>,
         tti: Option<std::time::Duration>,
-    ) -> Cache<VertexCacheKey, CachedVertex> {
+    ) -> Cache<(VertexCacheKey, Timestamp), CachedVertex> {
         let weigher_for_eviction = weigher.clone();
         let mut builder = Cache::builder()
             .max_capacity(max_capacity)
@@ -186,10 +187,10 @@ impl RecordCache {
         stats: Arc<CacheStats>,
         eviction_callback: Arc<Mutex<Option<EvictionCallback>>>,
         eviction_callback_with_size: Arc<Mutex<Option<EvictionCallbackWithSize>>>,
-        weigher: WeigherFn<IdIndexCacheKey, IdIndexCacheValue>,
+        weigher: WeigherFn<(IdIndexCacheKey, Timestamp), IdIndexCacheValue>,
         ttl: Option<std::time::Duration>,
         tti: Option<std::time::Duration>,
-    ) -> Cache<IdIndexCacheKey, IdIndexCacheValue> {
+    ) -> Cache<(IdIndexCacheKey, Timestamp), IdIndexCacheValue> {
         let weigher_for_eviction = weigher.clone();
         let mut builder = Cache::builder()
             .max_capacity(max_capacity)
@@ -238,15 +239,14 @@ impl RecordCache {
         external_id: &str,
         query_ts: Timestamp,
     ) -> Option<u32> {
-        let key = IdIndexCacheKey::new(label_id, external_id.to_string());
+        let key = (
+            IdIndexCacheKey::new(label_id, external_id.to_string()),
+            query_ts,
+        );
         match self.id_index_cache.get(&key) {
-            Some(cached) if cached.cached_at_ts <= query_ts => {
+            Some(cached) => {
                 self.id_index_stats.record_hit();
                 Some(cached.internal_id)
-            }
-            Some(_) => {
-                self.id_index_stats.record_miss();
-                None
             }
             None => {
                 self.id_index_stats.record_miss();
@@ -262,7 +262,7 @@ impl RecordCache {
         internal_id: u32,
         ts: Timestamp,
     ) {
-        let key = IdIndexCacheKey::new(label_id, external_id.to_string());
+        let key = (IdIndexCacheKey::new(label_id, external_id.to_string()), ts);
         self.id_index_cache.insert(
             key,
             IdIndexCacheValue {
@@ -275,23 +275,20 @@ impl RecordCache {
 
     pub fn remove_id_index(&self, label_id: u32, external_id: &str) {
         let key = IdIndexCacheKey::new(label_id, external_id.to_string());
-        if self.id_index_cache.remove(&key).is_some() {
-            self.id_index_stats.record_invalidation();
-            self.notify_eviction("id_index", EvictionCause::Explicit);
-        }
+        let _ = self
+            .id_index_cache
+            .invalidate_entries_if(move |candidate, _| candidate.0 == key);
+        self.id_index_cache.run_pending_tasks();
+        self.id_index_stats.record_invalidation();
     }
 
     // ==================== Vertex Operations ====================
 
     pub fn get_vertex(&self, key: &VertexCacheKey, query_ts: Timestamp) -> Option<CachedVertex> {
-        match self.vertex_cache.get(key) {
-            Some(vertex) if vertex.cached_at_ts <= query_ts => {
+        match self.vertex_cache.get(&(*key, query_ts)) {
+            Some(vertex) => {
                 self.vertex_stats.record_hit();
                 Some(vertex)
-            }
-            Some(_) => {
-                self.vertex_stats.record_miss();
-                None
             }
             None => {
                 self.vertex_stats.record_miss();
@@ -301,15 +298,17 @@ impl RecordCache {
     }
 
     pub fn insert_vertex(&self, key: VertexCacheKey, vertex: CachedVertex) {
-        self.vertex_cache.insert(key, vertex);
+        self.vertex_cache.insert((key, vertex.cached_at_ts), vertex);
         self.vertex_stats.record_insertion();
     }
 
     pub fn remove_vertex(&self, key: &VertexCacheKey) {
-        if self.vertex_cache.remove(key).is_some() {
-            self.vertex_stats.record_invalidation();
-            self.notify_eviction("vertex", EvictionCause::Explicit);
-        }
+        let key = *key;
+        let _ = self
+            .vertex_cache
+            .invalidate_entries_if(move |candidate, _| candidate.0 == key);
+        self.vertex_cache.run_pending_tasks();
+        self.vertex_stats.record_invalidation();
     }
 
     // ==================== Invalidation ====================
@@ -321,7 +320,7 @@ impl RecordCache {
     pub fn invalidate_vertices_by_label(&self, label_id: u32) {
         let _ = self
             .vertex_cache
-            .invalidate_entries_if(move |k, _| k.label_id == label_id);
+            .invalidate_entries_if(move |k, _| k.0.label_id == label_id);
         self.vertex_cache.run_pending_tasks();
         self.vertex_stats.record_invalidation();
     }
@@ -330,7 +329,7 @@ impl RecordCache {
     pub fn invalidate_id_indexes_by_label(&self, label_id: u32) {
         let _ = self
             .id_index_cache
-            .invalidate_entries_if(move |k, _| k.label_id == label_id);
+            .invalidate_entries_if(move |k, _| k.0.label_id == label_id);
         self.id_index_cache.run_pending_tasks();
         self.id_index_stats.record_invalidation();
     }

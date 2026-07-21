@@ -182,7 +182,13 @@ pub struct PersistenceCoordinator {
     state: RwLock<PersistenceState>,
     fault_points: Arc<RwLock<HashSet<PersistenceFaultPoint>>>,
     outbox_frontier_provider: RwLock<
-        Option<Arc<dyn Fn() -> StorageResult<Option<graphdb_core::core::types::CommitLsn>> + Send + Sync>>,
+        Option<
+            Arc<
+                dyn Fn() -> StorageResult<Option<graphdb_core::core::types::CommitLsn>>
+                    + Send
+                    + Sync,
+            >,
+        >,
     >,
 }
 
@@ -582,8 +588,9 @@ impl PersistenceCoordinator {
                 .transpose()?
                 .flatten()
                 .map(|lsn| lsn.get());
-            let safe_lsn = outbox_safe_lsn
-                .map_or(manifest_safe_lsn.get(), |outbox| manifest_safe_lsn.get().min(outbox));
+            let safe_lsn = outbox_safe_lsn.map_or(manifest_safe_lsn.get(), |outbox| {
+                manifest_safe_lsn.get().min(outbox)
+            });
             let safe_wal_lsn = Lsn::new(safe_lsn);
             wal.read().truncate(safe_wal_lsn)?;
             safe_wal_lsn

@@ -21,6 +21,8 @@ use std::sync::{Arc, Mutex};
 pub struct EdgeTableConfig {
     pub initial_vertex_capacity: usize,
     pub initial_edge_capacity: usize,
+    /// Fixed number of edges allocated per high-degree overflow chunk.
+    pub overflow_chunk_edges: usize,
     pub max_segments_per_direction: usize,
     /// Write backpressure: max size of mutable CSR (in bytes) before triggering freeze.
     /// Set to 0 to disable. Typical value: 100MB (100 * 1024 * 1024).
@@ -43,6 +45,7 @@ impl Default for EdgeTableConfig {
         Self {
             initial_vertex_capacity: 4096,
             initial_edge_capacity: 4096,
+            overflow_chunk_edges: 4096,
             max_segments_per_direction: 100,
             // Default: 100MB per direction
             max_mutable_csr_bytes: 100 * 1024 * 1024,
@@ -123,15 +126,23 @@ impl TimeTravelEdgeStore {
     pub fn with_config(schema: EdgeSchema, config: EdgeTableConfig) -> StorageResult<Self> {
         schema.validate()?;
 
-        let out_csr = CsrVariant::from_strategy(
+        if config.overflow_chunk_edges == 0 {
+            return Err(StorageError::invalid_operation(
+                "overflow_chunk_edges must be greater than zero",
+            ));
+        }
+
+        let out_csr = CsrVariant::from_strategy_with_overflow(
             schema.oe_strategy,
             config.initial_vertex_capacity,
             config.initial_edge_capacity,
+            config.overflow_chunk_edges,
         )?;
-        let in_csr = CsrVariant::from_strategy(
+        let in_csr = CsrVariant::from_strategy_with_overflow(
             schema.ie_strategy,
             config.initial_vertex_capacity,
             config.initial_edge_capacity,
+            config.overflow_chunk_edges,
         )?;
 
         let mut properties = PropertyTable::with_capacity(config.initial_edge_capacity);
@@ -1263,9 +1274,8 @@ impl TimeTravelEdgeStore {
         result
     }
 
-    /// Check write backpressure and trigger freeze if necessary.
-    /// Returns true if a freeze was triggered.
-    pub fn check_and_apply_write_backpressure(&mut self, current_ts: Timestamp) -> bool {
+    /// Record mutable CSR pressure without performing maintenance on the write path.
+    pub fn check_and_apply_write_backpressure(&mut self, _current_ts: Timestamp) -> bool {
         if self.config.max_mutable_csr_bytes == 0 {
             return false; // Backpressure disabled
         }
@@ -1278,18 +1288,15 @@ impl TimeTravelEdgeStore {
         }
 
         if mutable_size > self.config.max_mutable_csr_bytes {
-            // Trigger freeze
-            let _frozen = self.freeze_csr_only(current_ts);
-
-            // Record freeze event
-            if let Some(stats) = &self.stats_manager {
-                stats.record_mutable_csr_freeze();
-            }
-
             return true;
         }
 
         false
+    }
+
+    pub fn needs_background_freeze(&self) -> bool {
+        self.config.max_mutable_csr_bytes > 0
+            && self.estimate_memory_usage() > self.config.max_mutable_csr_bytes
     }
 }
 

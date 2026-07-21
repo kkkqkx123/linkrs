@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use parking_lot::{Condvar, Mutex};
+use parking_lot::{Condvar, Mutex, RwLock};
 
 use dashmap::DashMap;
 
@@ -142,31 +142,15 @@ impl Default for CheckpointGate {
 /// This mirrors Ladybug's `TRANSACTION_TYPE::CHECKPOINT` behavior: checkpoint
 /// is an exclusive operation that prevents new writes from starting and drains
 /// in-flight writes before proceeding.
-pub struct CheckpointTransaction {
+pub struct CheckpointTransaction<'a> {
+    manager: &'a TransactionManager,
     gate: Arc<CheckpointGate>,
+    txn_id: TransactionId,
     write_ts: Timestamp,
-    committed: bool,
+    finished: bool,
 }
 
-impl CheckpointTransaction {
-    /// Begin a checkpoint transaction.
-    ///
-    /// Pauses new write transactions and waits for active writes to drain
-    /// (up to `timeout`). Returns `Err(TransactionError::CheckpointTimeout)` if
-    /// the drain does not complete in time.
-    pub fn begin(
-        gate: Arc<CheckpointGate>,
-        write_ts: Timestamp,
-        timeout: Duration,
-    ) -> Result<Self, TransactionError> {
-        gate.pause_writes_and_drain(timeout)?;
-        Ok(Self {
-            gate,
-            write_ts,
-            committed: false,
-        })
-    }
-
+impl CheckpointTransaction<'_> {
     /// The write timestamp captured at checkpoint begin time.
     ///
     /// All data with `ts <= write_ts` is guaranteed to be visible at checkpoint.
@@ -179,21 +163,26 @@ impl CheckpointTransaction {
     /// The caller is responsible for persisting checkpoint metadata (via the
     /// `CheckpointManager`) before calling this method. After commit, writes
     /// are resumed.
-    pub fn commit(mut self) {
-        self.committed = true;
+    pub fn commit(mut self) -> Result<(), TransactionError> {
+        self.finished = true;
+        let result = self.manager.commit_transaction(self.txn_id);
         self.gate.resume_writes();
+        result
     }
 
     /// Abort the checkpoint without writing a WAL marker. Writes are resumed.
-    pub fn abort(mut self) {
-        self.committed = false;
+    pub fn abort(mut self) -> Result<(), TransactionError> {
+        self.finished = true;
+        let result = self.manager.abort_transaction(self.txn_id);
         self.gate.resume_writes();
+        result
     }
 }
 
-impl Drop for CheckpointTransaction {
+impl Drop for CheckpointTransaction<'_> {
     fn drop(&mut self) {
-        if !self.committed {
+        if !self.finished {
+            let _ = self.manager.abort_transaction(self.txn_id);
             self.gate.resume_writes();
         }
     }
@@ -215,6 +204,8 @@ pub struct TransactionManager {
     id_generator: AtomicU64,
     /// Statistics
     stats: Arc<TransactionStats>,
+    commit_callbacks: RwLock<Vec<CommitCallback>>,
+    rollback_callbacks: RwLock<Vec<RollbackCallback>>,
     /// Whether shutdown
     shutdown_flag: AtomicU64,
     /// Transaction monitor for metrics collection
@@ -238,12 +229,14 @@ impl TransactionManager {
         version_manager: Arc<VersionManager>,
     ) -> Self {
         let monitor = TransactionMonitor::new(Arc::clone(&stats));
-        Self {
+        let manager = Self {
             version_manager,
             config,
             active_transactions: DashMap::new(),
             id_generator: AtomicU64::new(1),
             stats,
+            commit_callbacks: RwLock::new(Vec::new()),
+            rollback_callbacks: RwLock::new(Vec::new()),
             shutdown_flag: AtomicU64::new(0),
             monitor,
             sync_manager: None,
@@ -251,6 +244,44 @@ impl TransactionManager {
             checkpoint_gate: Arc::new(CheckpointGate::new()),
             certification_lock: Mutex::new(()),
             committed_write_sets: Mutex::new(Vec::new()),
+        };
+        let commit_stats = Arc::clone(&manager.stats);
+        manager.register_commit_callback(Arc::new(move |event| match event {
+            TransactionEvent::Committed { .. } => commit_stats.record_txn_commit(),
+            TransactionEvent::CommitDurableButUnfinalized { .. } => {
+                commit_stats.record_txn_commit();
+                commit_stats.increment_cleanup_failure();
+            }
+            TransactionEvent::Aborted { .. } => {}
+        }));
+        let rollback_stats = Arc::clone(&manager.stats);
+        manager.register_rollback_callback(Arc::new(move |event| {
+            if let TransactionEvent::Aborted { .. } = event {
+                rollback_stats.record_txn_rollback();
+            }
+        }));
+        manager
+    }
+
+    pub fn register_commit_callback(&self, callback: CommitCallback) {
+        self.commit_callbacks.write().push(callback);
+    }
+
+    pub fn register_rollback_callback(&self, callback: RollbackCallback) {
+        self.rollback_callbacks.write().push(callback);
+    }
+
+    fn emit_commit_event(&self, event: TransactionEvent) {
+        let callbacks = self.commit_callbacks.read().clone();
+        for callback in callbacks {
+            callback(&event);
+        }
+    }
+
+    fn emit_rollback_event(&self, event: TransactionEvent) {
+        let callbacks = self.rollback_callbacks.read().clone();
+        for callback in callbacks {
+            callback(&event);
         }
     }
 
@@ -318,17 +349,15 @@ impl TransactionManager {
         }
 
         let manager = Arc::downgrade(self);
-        Some(std::thread::spawn(move || {
-            loop {
-                std::thread::sleep(Duration::from_millis(250));
-                let Some(manager) = Weak::upgrade(&manager) else {
-                    break;
-                };
-                if manager.shutdown_flag.load(Ordering::SeqCst) != 0 {
-                    break;
-                }
-                manager.cleanup_expired_transactions();
+        Some(std::thread::spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(250));
+            let Some(manager) = Weak::upgrade(&manager) else {
+                break;
+            };
+            if manager.shutdown_flag.load(Ordering::SeqCst) != 0 {
+                break;
             }
+            manager.cleanup_expired_transactions();
         }))
     }
 
@@ -440,7 +469,7 @@ impl TransactionManager {
             ..self.config.txn_config.clone()
         };
 
-        let mut context = TransactionContext::new_readonly(txn_id, timestamp, config);
+        let context = TransactionContext::new_readonly(txn_id, timestamp, config);
         context.set_snapshot_timestamp(snapshot_ts);
 
         self.active_transactions.insert(txn_id, Arc::new(context));
@@ -549,8 +578,7 @@ impl TransactionManager {
             return Ok(());
         }
 
-        let is_full_scan =
-            serializable && txn_read_set.size() > Self::FULL_SCAN_READ_SET_THRESHOLD;
+        let is_full_scan = serializable && txn_read_set.size() > Self::FULL_SCAN_READ_SET_THRESHOLD;
 
         for entry in self.active_transactions.iter() {
             let (other_id, other_ctx) = entry.pair();
@@ -723,7 +751,7 @@ impl TransactionManager {
     pub fn create_execution(
         &self,
         txn_id: TransactionId,
-        auto_commit_owner: bool,
+        auto_commit: bool,
     ) -> Result<TransactionExecution, TransactionError> {
         let context = self.get_context(txn_id)?;
         let recorder: Arc<dyn TransactionMutationRecorder> = context.clone();
@@ -736,7 +764,7 @@ impl TransactionManager {
                 Some(context.timestamp())
             },
             context.read_only,
-            auto_commit_owner,
+            auto_commit || context.auto_commit,
             context.owner(),
         )
         .with_rollback_only(context.is_rollback_only())
@@ -786,16 +814,18 @@ impl TransactionManager {
             ctx
         };
 
-        if let Err(conflict) = self.check_write_set_conflict(txn_id) {
-            if let Err(error) = self.abort_transaction_internal(&context) {
-                log::error!(
-                    "Abort-after-conflict failed for transaction {}: {}",
-                    txn_id,
-                    error
-                );
-                self.stats.increment_cleanup_failure();
+        if context.txn_type != TransactionType::Checkpoint {
+            if let Err(conflict) = self.check_write_set_conflict(txn_id) {
+                if let Err(error) = self.abort_transaction_internal(&context) {
+                    log::error!(
+                        "Abort-after-conflict failed for transaction {}: {}",
+                        txn_id,
+                        error
+                    );
+                    self.stats.increment_cleanup_failure();
+                }
+                return Err(conflict);
             }
-            return Err(conflict);
         }
 
         context.transition_to(TransactionState::Committing)?;
@@ -807,99 +837,117 @@ impl TransactionManager {
         };
         let mut commit_lsn = CommitLsn::ZERO;
 
-        if let Some(ref commit_sink) = self.commit_sink {
-            let max_retries = self.config.commit_retry_attempts;
-            let mut last_error = None;
+        if context.txn_type != TransactionType::Checkpoint {
+            if let Some(ref commit_sink) = self.commit_sink {
+                let max_retries = self.config.commit_retry_attempts;
+                let mut last_error = None;
 
-            for attempt in 0..=max_retries {
-                match commit_sink.commit_transaction_with_descriptor(&descriptor) {
-                    Ok(lsn) => {
-                        commit_lsn = lsn;
-                        last_error = None;
-                        break;
-                    }
-                    Err(e) => {
-                        last_error = Some(e);
-                        if attempt < max_retries {
-                            std::thread::sleep(Self::backoff_delay(attempt));
+                for attempt in 0..=max_retries {
+                    match commit_sink.commit_transaction_with_descriptor(&descriptor) {
+                        Ok(lsn) => {
+                            commit_lsn = lsn;
+                            last_error = None;
+                            break;
+                        }
+                        Err(e) => {
+                            last_error = Some(e);
+                            if attempt < max_retries {
+                                std::thread::sleep(Self::backoff_delay(attempt));
+                            }
                         }
                     }
                 }
-            }
 
-            if let Some(err) = last_error {
-                if let Err(abort_error) = self.abort_transaction_internal(&context) {
-                    log::error!(
-                        "Commit failure for transaction {} also failed abort finalization: {}",
-                        txn_id,
-                        abort_error
-                    );
-                    self.stats.increment_cleanup_failure();
+                if let Some(err) = last_error {
+                    if let Err(abort_error) = self.abort_transaction_internal(&context) {
+                        log::error!(
+                            "Commit failure for transaction {} also failed abort finalization: {}",
+                            txn_id,
+                            abort_error
+                        );
+                        self.stats.increment_cleanup_failure();
+                    }
+                    return Err(TransactionError::commit_failed(format!(
+                        "Failed to persist transaction {} after {} retries: {}",
+                        txn_id, max_retries, err
+                    )));
                 }
-                return Err(TransactionError::commit_failed(format!(
-                    "Failed to persist transaction {} after {} retries: {}",
-                    txn_id, max_retries, err
-                )));
             }
         }
 
-        if context.read_only {
-            self.version_manager
-                .release_read_timestamp_at(context.start_timestamp);
-        } else {
-            self.version_manager
-                .commit_write_timestamp(context.timestamp());
-            if !descriptor.write_set.is_empty() {
-                self.committed_write_sets
-                    .lock()
-                    .push((descriptor.write_timestamp, descriptor.write_set.clone()));
+        match context.txn_type {
+            TransactionType::ReadOnly => self
+                .version_manager
+                .release_read_timestamp_at(context.start_timestamp),
+            TransactionType::Write => {
+                self.version_manager
+                    .commit_write_timestamp(context.timestamp());
+                if !descriptor.write_set.is_empty() {
+                    self.committed_write_sets
+                        .lock()
+                        .push((descriptor.write_timestamp, descriptor.write_set.clone()));
+                }
+                self.checkpoint_gate.release_write();
             }
-            self.checkpoint_gate.release_write();
+            TransactionType::Checkpoint => {}
         }
         context.mark_commit_published(commit_lsn);
 
-        if let Some(ref commit_sink) = self.commit_sink {
-            let max_retries = self.config.commit_retry_attempts;
-            let mut last_error = None;
-            for attempt in 0..=max_retries {
-                match commit_sink.finalize_commit(&descriptor, commit_lsn) {
-                    Ok(()) => {
-                        last_error = None;
-                        break;
-                    }
-                    Err(error) => {
-                        last_error = Some(error);
-                        if attempt < max_retries {
-                            std::thread::sleep(Self::backoff_delay(attempt));
+        if context.txn_type != TransactionType::Checkpoint {
+            if let Some(ref commit_sink) = self.commit_sink {
+                let max_retries = self.config.commit_retry_attempts;
+                let mut last_error = None;
+                for attempt in 0..=max_retries {
+                    match commit_sink.finalize_commit(&descriptor, commit_lsn) {
+                        Ok(()) => {
+                            last_error = None;
+                            break;
+                        }
+                        Err(error) => {
+                            last_error = Some(error);
+                            if attempt < max_retries {
+                                std::thread::sleep(Self::backoff_delay(attempt));
+                            }
                         }
                     }
                 }
-            }
-            if let Some(error) = last_error {
-                log::error!(
-                    "Commit {} is durable but finalization failed after {} retries: {}",
-                    txn_id, max_retries, error
-                );
-                self.active_transactions.remove(&txn_id);
-                let _ = context.transition_to(TransactionState::Aborting);
-                let _ = context.transition_to(TransactionState::Aborted);
-                self.stats.record_txn_rollback();
-                return Err(TransactionError::commit_failed(format!(
-                    "Commit {} is durable but finalization failed: {}",
-                    txn_id, error
-                )));
+                if let Some(error) = last_error {
+                    log::error!(
+                        "Commit {} is durable but finalization failed after {} retries: {}",
+                        txn_id,
+                        max_retries,
+                        error
+                    );
+                    self.active_transactions.remove(&txn_id);
+                    let _ = context.transition_to(TransactionState::Aborting);
+                    let _ = context.transition_to(TransactionState::Aborted);
+                    self.emit_commit_event(TransactionEvent::CommitDurableButUnfinalized {
+                        txn_id,
+                        write_timestamp: context.timestamp(),
+                        commit_lsn,
+                    });
+                    return Err(TransactionError::commit_failed(format!(
+                        "Commit {} is durable but finalization failed: {}",
+                        txn_id, error
+                    )));
+                }
             }
         }
 
         if let Err(error) = context.clear_undo_logs() {
             log::error!(
                 "Commit {} is durable but undo-log cleanup failed: {}",
-                txn_id, error
+                txn_id,
+                error
             );
             self.active_transactions.remove(&txn_id);
             let _ = context.transition_to(TransactionState::Aborting);
             let _ = context.transition_to(TransactionState::Aborted);
-            self.stats.record_txn_rollback();
+            self.emit_commit_event(TransactionEvent::CommitDurableButUnfinalized {
+                txn_id,
+                write_timestamp: context.timestamp(),
+                commit_lsn,
+            });
             return Err(TransactionError::commit_failed(format!(
                 "Commit {} is durable but undo-log cleanup failed: {}",
                 txn_id, error
@@ -907,7 +955,12 @@ impl TransactionManager {
         }
 
         self.active_transactions.remove(&txn_id);
-        self.stats.record_txn_commit();
+        self.emit_commit_event(TransactionEvent::Committed {
+            txn_id,
+            write_timestamp: context.timestamp(),
+            write_set: descriptor.write_set,
+            schema_catalog_version: context.schema_catalog_version(),
+        });
 
         log::info!(
             "transaction committed: txn={:?} commit_lsn={:?} write_ts={}",
@@ -928,6 +981,32 @@ impl TransactionManager {
         match outcome {
             TransactionOutcome::Commit => self.commit_transaction(txn_id),
             TransactionOutcome::Abort => self.abort_transaction(txn_id),
+        }
+    }
+
+    /// Run one write operation in a transaction owned by this call.
+    pub fn auto_commit<F, T, E>(&self, operation: F) -> Result<T, TransactionError>
+    where
+        F: FnOnce(&TransactionContext) -> Result<T, E>,
+        E: Into<TransactionError>,
+    {
+        let txn_id = self.begin_insert_transaction(TransactionOptions::default())?;
+        let context = self.get_context(txn_id)?;
+        match operation(&context) {
+            Ok(result) => {
+                self.commit_transaction(txn_id)?;
+                Ok(result)
+            }
+            Err(error) => {
+                if let Err(abort_error) = self.abort_transaction(txn_id) {
+                    log::error!(
+                        "Auto-commit rollback failed for transaction {}: {}",
+                        txn_id,
+                        abort_error
+                    );
+                }
+                Err(error.into())
+            }
         }
     }
 
@@ -1042,62 +1121,64 @@ impl TransactionManager {
     ) -> Result<(), TransactionError> {
         let max_retries = self.config.abort_retry_attempts;
 
-        if let Some(ref commit_sink) = self.commit_sink {
-            let mut last_error = None;
-            for attempt in 0..=max_retries {
-                let descriptor = TransactionAbortDescriptor {
-                    transaction_id: context.id,
-                    write_timestamp: context.timestamp(),
-                    context: Arc::clone(context),
-                };
-                match commit_sink.abort_transaction_with_descriptor(&descriptor) {
-                    Ok(_) => {
-                        last_error = None;
-                        break;
-                    }
-                    Err(e) => {
-                        last_error = Some(e);
-                        if attempt < max_retries {
-                            std::thread::sleep(Self::backoff_delay(attempt));
+        if context.txn_type != TransactionType::Checkpoint {
+            if let Some(ref commit_sink) = self.commit_sink {
+                let mut last_error = None;
+                for attempt in 0..=max_retries {
+                    let descriptor = TransactionAbortDescriptor {
+                        transaction_id: context.id,
+                        write_timestamp: context.timestamp(),
+                        context: Arc::clone(context),
+                    };
+                    match commit_sink.abort_transaction_with_descriptor(&descriptor) {
+                        Ok(_) => {
+                            last_error = None;
+                            break;
+                        }
+                        Err(e) => {
+                            last_error = Some(e);
+                            if attempt < max_retries {
+                                std::thread::sleep(Self::backoff_delay(attempt));
+                            }
                         }
                     }
                 }
-            }
-            if let Some(err) = last_error {
-                self.finalize_resources_after_sink_failure(context);
-                return Err(TransactionError::rollback_failed(format!(
-                    "Failed to discard transaction {} persistence state after {} retries: {}",
-                    context.id, max_retries, err
-                )));
-            }
-        } else if let Some(ref sync_manager) = self.sync_manager {
-            let mut last_error = None;
-            for attempt in 0..=max_retries {
-                match sync_manager.rollback_transaction_sync(context.id) {
-                    Ok(_) => {
-                        last_error = None;
-                        break;
-                    }
-                    Err(e) => {
-                        last_error = Some(e);
-                        if attempt < max_retries {
-                            std::thread::sleep(Self::backoff_delay(attempt));
+                if let Some(err) = last_error {
+                    self.finalize_resources_after_sink_failure(context);
+                    return Err(TransactionError::rollback_failed(format!(
+                        "Failed to discard transaction {} persistence state after {} retries: {}",
+                        context.id, max_retries, err
+                    )));
+                }
+            } else if let Some(ref sync_manager) = self.sync_manager {
+                let mut last_error = None;
+                for attempt in 0..=max_retries {
+                    match sync_manager.rollback_transaction_sync(context.id) {
+                        Ok(_) => {
+                            last_error = None;
+                            break;
+                        }
+                        Err(e) => {
+                            last_error = Some(e);
+                            if attempt < max_retries {
+                                std::thread::sleep(Self::backoff_delay(attempt));
+                            }
                         }
                     }
                 }
-            }
-            if let Some(e) = last_error {
-                log::warn!(
-                    "Sync rollback failed for transaction {} after {} retries, aborting: {}",
-                    context.id,
-                    max_retries,
-                    e
-                );
-                self.finalize_resources_after_sink_failure(context);
-                return Err(TransactionError::sync_failed(format!(
-                    "Failed to rollback sync data for transaction {} after {} retries: {}",
-                    context.id, max_retries, e
-                )));
+                if let Some(e) = last_error {
+                    log::warn!(
+                        "Sync rollback failed for transaction {} after {} retries, aborting: {}",
+                        context.id,
+                        max_retries,
+                        e
+                    );
+                    self.finalize_resources_after_sink_failure(context);
+                    return Err(TransactionError::sync_failed(format!(
+                        "Failed to rollback sync data for transaction {} after {} retries: {}",
+                        context.id, max_retries, e
+                    )));
+                }
             }
         }
 
@@ -1109,12 +1190,12 @@ impl TransactionManager {
     /// Release every manager-owned resource exactly once after abort, even if
     /// persistence cleanup reported an error.
     fn finalize_abort_resources(&self, context: &Arc<TransactionContext>) {
-        if context.mark_resources_released() {
+        let released = context.mark_resources_released();
+        if released {
             self.rollback_context_timestamp(context);
-            if !context.read_only {
+            if context.txn_type == TransactionType::Write {
                 self.checkpoint_gate.release_write();
             }
-            self.stats.record_txn_rollback();
         }
         self.active_transactions.remove(&context.id);
         if let Err(error) = context.clear_undo_logs() {
@@ -1139,31 +1220,30 @@ impl TransactionManager {
                 context.owner()
             );
         }
+        if released {
+            self.emit_rollback_event(TransactionEvent::Aborted {
+                txn_id: context.id,
+                write_timestamp: context.timestamp(),
+            });
+        }
     }
 
     /// Called when the commit sink's abort fails after retries.
     /// Logs the failure, releases resources, and removes the context.
     fn finalize_resources_after_sink_failure(&self, context: &Arc<TransactionContext>) {
-        if context.mark_resources_released() {
-            self.rollback_context_timestamp(context);
-            if !context.read_only {
-                self.checkpoint_gate.release_write();
-            }
-            self.stats.record_txn_rollback();
-        }
+        self.finalize_abort_resources(context);
         self.stats.increment_cleanup_failure();
-        self.active_transactions.remove(&context.id);
-        let _ = context.transition_to(TransactionState::Aborting);
-        let _ = context.transition_to(TransactionState::Aborted);
     }
 
     fn rollback_context_timestamp(&self, context: &TransactionContext) {
-        if context.read_only {
-            self.version_manager
-                .release_read_timestamp_at(context.start_timestamp);
-        } else {
-            self.version_manager
-                .abort_write_timestamp(context.timestamp());
+        match context.txn_type {
+            TransactionType::ReadOnly => self
+                .version_manager
+                .release_read_timestamp_at(context.start_timestamp),
+            TransactionType::Write => self
+                .version_manager
+                .abort_write_timestamp(context.timestamp()),
+            TransactionType::Checkpoint => {}
         }
     }
 
@@ -1439,11 +1519,20 @@ impl TransactionManager {
     where
         F: FnOnce(Timestamp) -> Result<Lsn, TransactionError>,
     {
-        self.begin_checkpoint(timeout)?;
-        let write_ts = self.version_manager.write_timestamp();
-        let result = f(write_ts);
-        self.end_checkpoint();
-        result.map(|lsn| (write_ts, lsn))
+        let checkpoint = self.begin_checkpoint_transaction(timeout)?;
+        let write_ts = checkpoint.write_timestamp();
+        match f(write_ts) {
+            Ok(lsn) => {
+                checkpoint.commit()?;
+                Ok((write_ts, lsn))
+            }
+            Err(error) => {
+                if let Err(abort_error) = checkpoint.abort() {
+                    log::error!("Checkpoint rollback failed: {}", abort_error);
+                }
+                Err(error)
+            }
+        }
     }
 
     /// Begin a checkpoint transaction.
@@ -1462,9 +1551,34 @@ impl TransactionManager {
     pub fn begin_checkpoint_transaction(
         &self,
         timeout: Duration,
-    ) -> Result<CheckpointTransaction, TransactionError> {
+    ) -> Result<CheckpointTransaction<'_>, TransactionError> {
+        if self.shutdown_flag.load(Ordering::SeqCst) != 0 {
+            return Err(TransactionError::internal(
+                "Transaction manager is shutdown".to_string(),
+            ));
+        }
+        if self.active_transactions.len() >= self.config.max_concurrent_transactions {
+            return Err(TransactionError::too_many_transactions());
+        }
+
+        self.checkpoint_gate.pause_writes_and_drain(timeout)?;
         let write_ts = self.version_manager.write_timestamp();
-        CheckpointTransaction::begin(Arc::clone(&self.checkpoint_gate), write_ts, timeout)
+        let txn_id = TransactionId(self.id_generator.fetch_add(1, Ordering::SeqCst));
+        let context = Arc::new(TransactionContext::new_checkpoint(
+            txn_id,
+            write_ts,
+            self.config.txn_config.clone(),
+        ));
+        self.active_transactions.insert(txn_id, context);
+        self.stats.record_txn_begin();
+
+        Ok(CheckpointTransaction {
+            manager: self,
+            gate: Arc::clone(&self.checkpoint_gate),
+            txn_id,
+            write_ts,
+            finished: false,
+        })
     }
 }
 
@@ -1524,6 +1638,91 @@ mod tests {
             .expect("transaction should abort");
         assert_eq!(sink.commits.load(Ordering::SeqCst), 0);
         assert_eq!(sink.aborts.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn lifecycle_callbacks_observe_terminal_events() {
+        let manager = TransactionManager::new(TransactionManagerConfig::default());
+        let commits = Arc::new(AtomicUsize::new(0));
+        let aborts = Arc::new(AtomicUsize::new(0));
+
+        let commit_count = Arc::clone(&commits);
+        manager.register_commit_callback(Arc::new(move |event| {
+            if let TransactionEvent::Committed { .. } = event {
+                commit_count.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+        let abort_count = Arc::clone(&aborts);
+        manager.register_rollback_callback(Arc::new(move |event| {
+            if let TransactionEvent::Aborted { .. } = event {
+                abort_count.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+
+        let committed = manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .expect("committed transaction should begin");
+        manager
+            .commit_transaction(committed)
+            .expect("transaction should commit");
+        let aborted = manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .expect("aborted transaction should begin");
+        manager
+            .abort_transaction(aborted)
+            .expect("transaction should abort");
+
+        assert_eq!(commits.load(Ordering::SeqCst), 1);
+        assert_eq!(aborts.load(Ordering::SeqCst), 1);
+        assert!(manager.list_transactions().is_empty());
+    }
+
+    #[test]
+    fn auto_commit_finalizes_success_and_failure() {
+        let manager = TransactionManager::new(TransactionManagerConfig::default());
+
+        let value = manager
+            .auto_commit(|context| Ok::<_, TransactionError>(context.id.0))
+            .expect("auto-commit operation should commit");
+        assert!(value > 0);
+        assert!(manager.list_transactions().is_empty());
+
+        let result = manager.auto_commit(|_| {
+            Err::<(), _>(TransactionError::internal("operation failed".to_string()))
+        });
+        assert!(result.is_err());
+        assert!(manager.list_transactions().is_empty());
+        assert_eq!(
+            manager
+                .stats()
+                .committed_transactions
+                .load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            manager.stats().aborted_transactions.load(Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[test]
+    fn configured_auto_commit_is_carried_by_execution_binding() {
+        let mut config = TransactionManagerConfig::default();
+        config.txn_config.auto_commit = true;
+        let manager = TransactionManager::new(config);
+        let txn_id = manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .expect("transaction should begin");
+
+        let execution = manager
+            .create_execution(txn_id, false)
+            .expect("execution binding should be created");
+        assert!(execution.auto_commit());
+        assert!(execution.requires_finalization());
+
+        manager
+            .abort_transaction(txn_id)
+            .expect("transaction should abort");
     }
 
     #[test]
@@ -2021,7 +2220,7 @@ mod tests {
                 .begin_checkpoint_transaction(Duration::from_secs(5))
                 .expect("checkpoint should begin after drain");
             assert!(checkpoint.write_timestamp() > 0);
-            checkpoint.commit();
+            checkpoint.commit().expect("checkpoint should commit");
         });
 
         // Give the checkpoint thread a moment to start draining.
@@ -2050,8 +2249,31 @@ mod tests {
         assert!(manager.checkpoint_gate().is_paused());
 
         // Abort resumes writes.
-        checkpoint.abort();
+        checkpoint.abort().expect("checkpoint should abort");
         assert!(!manager.checkpoint_gate().is_paused());
+    }
+
+    #[test]
+    fn checkpoint_transaction_is_monitored_and_emits_commit() {
+        let manager = TransactionManager::new(TransactionManagerConfig::default());
+        let commits = Arc::new(AtomicUsize::new(0));
+        let commit_count = Arc::clone(&commits);
+        manager.register_commit_callback(Arc::new(move |event| {
+            if let TransactionEvent::Committed { .. } = event {
+                commit_count.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+
+        let checkpoint = manager
+            .begin_checkpoint_transaction(Duration::from_secs(5))
+            .expect("checkpoint should begin");
+        let transactions = manager.list_transactions();
+        assert_eq!(transactions.len(), 1);
+        assert_eq!(transactions[0].txn_type, TransactionType::Checkpoint);
+
+        checkpoint.commit().expect("checkpoint should commit");
+        assert!(manager.list_transactions().is_empty());
+        assert_eq!(commits.load(Ordering::SeqCst), 1);
     }
 
     #[test]
