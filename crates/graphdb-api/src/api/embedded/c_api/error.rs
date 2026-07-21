@@ -23,8 +23,6 @@ fn transaction_extended_error_code(message: &str) -> graphdb_extended_error_code
         || message.contains("already aborted")
     {
         graphdb_extended_error_code_t::GRAPHDB_ERROR_ALREADY_COMPLETED
-    } else if message.contains("recovery_required") {
-        graphdb_extended_error_code_t::GRAPHDB_ERROR_RECOVERY_REQUIRED
     } else if message.contains("timeout") {
         graphdb_extended_error_code_t::GRAPHDB_ERROR_LOCK_TIMEOUT
     } else {

@@ -515,64 +515,6 @@ pub async fn kill_transaction<
     })))
 }
 
-/// Retry persistence cleanup for a transaction in RecoveryRequired.
-pub async fn retry_recovery<
-    S: StorageClient
-        + StorageSchemaContextOps
-        + StorageSyncContextOps
-        + StorageOperationContextOps
-        + Clone
-        + Send
-        + Sync
-        + 'static,
->(
-    State(state): State<AppState<S>>,
-    Path(txn_id): Path<u64>,
-    headers: HeaderMap,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
-    let owner = headers
-        .get("x-transaction-owner")
-        .and_then(|value| value.to_str().ok());
-    let manager = state.server.get_txn_manager();
-    manager
-        .check_transaction_owner(txn_id.into(), owner)
-        .and_then(|_| manager.retry_recovery(txn_id.into()))
-        .map_err(|error| HttpError::transaction_message(error.to_string()))?;
-    Ok(JsonResponse(serde_json::json!({
-        "transaction_id": txn_id,
-        "status": "Aborted",
-    })))
-}
-
-/// Force cleanup of a transaction in any manager-owned state.
-pub async fn force_cleanup<
-    S: StorageClient
-        + StorageSchemaContextOps
-        + StorageSyncContextOps
-        + StorageOperationContextOps
-        + Clone
-        + Send
-        + Sync
-        + 'static,
->(
-    State(state): State<AppState<S>>,
-    Path(txn_id): Path<u64>,
-    headers: HeaderMap,
-) -> Result<JsonResponse<serde_json::Value>, HttpError> {
-    let owner = headers
-        .get("x-transaction-owner")
-        .and_then(|value| value.to_str().ok());
-    let manager = state.server.get_txn_manager();
-    manager
-        .check_transaction_owner(txn_id.into(), owner)
-        .and_then(|_| manager.force_cleanup(txn_id.into()))
-        .map_err(|error| HttpError::transaction_message(error.to_string()))?;
-    Ok(JsonResponse(serde_json::json!({
-        "transaction_id": txn_id,
-        "status": "cleaned",
-    })))
-}
-
 /// Retry outbox projection for a specific transaction's pending intents.
 pub async fn retry_transaction_outbox<
     S: StorageClient

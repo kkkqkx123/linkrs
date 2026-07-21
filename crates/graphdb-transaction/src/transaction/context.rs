@@ -454,41 +454,20 @@ impl TransactionContext {
     }
 
     /// State transition
+    ///
+    /// Valid transitions form a DAG:
+    ///   Active → Committing | Aborting
+    ///   Committing → Aborting | Aborted
+    ///   Aborting → Aborted
     pub fn transition_to(&self, new_state: TransactionState) -> Result<(), TransactionError> {
         loop {
             let current = self.state.load();
 
             let valid_transition = matches!(
                 (current, new_state),
-                (
-                    TransactionState::Active,
-                    TransactionState::Committing | TransactionState::Aborting
-                ) | (TransactionState::Committing, TransactionState::Committed)
-                    | (TransactionState::Committing, TransactionState::Aborted)
-                    | (TransactionState::Committing, TransactionState::CommitRetry)
-                    | (TransactionState::Committing, TransactionState::Aborting)
-                    | (
-                        TransactionState::Committing,
-                        TransactionState::RecoveryRequired
-                    )
-                    | (TransactionState::CommitRetry, TransactionState::Committing)
-                    | (TransactionState::CommitRetry, TransactionState::Aborting)
-                    | (TransactionState::CommitRetry, TransactionState::Committed)
-                    | (TransactionState::CommitRetry, TransactionState::Aborted)
-                    | (TransactionState::Aborting, TransactionState::Committed)
+                (TransactionState::Active, TransactionState::Committing | TransactionState::Aborting)
+                    | (TransactionState::Committing, TransactionState::Aborting | TransactionState::Aborted)
                     | (TransactionState::Aborting, TransactionState::Aborted)
-                    | (
-                        TransactionState::Aborting,
-                        TransactionState::RecoveryRequired
-                    )
-                    | (
-                        TransactionState::RecoveryRequired,
-                        TransactionState::Aborting
-                    )
-                    | (
-                        TransactionState::RecoveryRequired,
-                        TransactionState::Committed
-                    )
             );
 
             if !valid_transition {
@@ -599,9 +578,7 @@ impl TransactionContext {
             owner: self.owner(),
             last_activity: self.last_activity.load().elapsed(),
             rollback_only: self.is_rollback_only(),
-            blocking_reason: if self.state() == TransactionState::RecoveryRequired {
-                Some("abort cleanup failed; recovery retry required".to_string())
-            } else if self.is_rollback_only() {
+            blocking_reason: if self.is_rollback_only() {
                 Some("transaction is marked rollback-only".to_string())
             } else {
                 None
@@ -1046,8 +1023,10 @@ mod tests {
 
         assert!(ctx.transition_to(TransactionState::Committing).is_ok());
         assert_eq!(ctx.state(), TransactionState::Committing);
-        assert!(ctx.transition_to(TransactionState::Committed).is_ok());
-        assert_eq!(ctx.state(), TransactionState::Committed);
+        assert!(ctx.transition_to(TransactionState::Aborting).is_ok());
+        assert_eq!(ctx.state(), TransactionState::Aborting);
+        assert!(ctx.transition_to(TransactionState::Aborted).is_ok());
+        assert_eq!(ctx.state(), TransactionState::Aborted);
     }
 
     #[test]

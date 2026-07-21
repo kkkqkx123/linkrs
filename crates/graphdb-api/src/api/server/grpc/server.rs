@@ -967,8 +967,7 @@ fn transaction_status(error: TransactionError) -> Status {
         TransactionErrorKind::InvalidStateForCommit
         | TransactionErrorKind::InvalidStateForAbort
         | TransactionErrorKind::InvalidStateForExecution
-        | TransactionErrorKind::InvalidStateTransition
-        | TransactionErrorKind::RecoveryRequired => Status::failed_precondition(message),
+        | TransactionErrorKind::InvalidStateTransition => Status::failed_precondition(message),
         TransactionErrorKind::SavepointNotFound
         | TransactionErrorKind::SavepointFailed
         | TransactionErrorKind::SavepointNotActive

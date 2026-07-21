@@ -92,14 +92,6 @@ pub fn create_router<
             post(transaction::kill_transaction),
         )
         .route(
-            "/transactions/{id}/recovery",
-            post(transaction::retry_recovery),
-        )
-        .route(
-            "/transactions/{id}/cleanup",
-            post(transaction::force_cleanup),
-        )
-        .route(
             "/transactions/{id}/outbox/retry",
             post(transaction::retry_transaction_outbox),
         )

@@ -153,8 +153,11 @@ fn test_transaction_context_state_transitions() {
     assert!(ctx.transition_to(TransactionState::Committing).is_ok());
     assert_eq!(ctx.state(), TransactionState::Committing);
 
-    assert!(ctx.transition_to(TransactionState::Committed).is_ok());
-    assert_eq!(ctx.state(), TransactionState::Committed);
+    assert!(ctx.transition_to(TransactionState::Aborting).is_ok());
+    assert_eq!(ctx.state(), TransactionState::Aborting);
+
+    assert!(ctx.transition_to(TransactionState::Aborted).is_ok());
+    assert_eq!(ctx.state(), TransactionState::Aborted);
 }
 
 #[test]
@@ -165,7 +168,8 @@ fn test_transaction_context_invalid_state_transition() {
 
     let ctx = TransactionContext::new(txn_id, 1, config);
 
-    let result = ctx.transition_to(TransactionState::Committed);
+    // Cannot jump directly to Aborted from Active.
+    let result = ctx.transition_to(TransactionState::Aborted);
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert_eq!(err.kind(), TransactionErrorKind::InvalidStateTransition);
@@ -173,8 +177,9 @@ fn test_transaction_context_invalid_state_transition() {
     assert!(ctx.transition_to(TransactionState::Committing).is_ok());
     assert_eq!(ctx.state(), TransactionState::Committing);
 
-    assert!(ctx.transition_to(TransactionState::Committed).is_ok());
-    assert_eq!(ctx.state(), TransactionState::Committed);
+    // Committing → Aborted is valid (commit failed).
+    assert!(ctx.transition_to(TransactionState::Aborted).is_ok());
+    assert_eq!(ctx.state(), TransactionState::Aborted);
 }
 
 #[test]
@@ -669,7 +674,7 @@ fn test_query_timeout_is_measured_from_statement_start() {
 }
 
 #[test]
-fn test_transaction_owner_and_recovery_metadata() {
+fn test_transaction_owner_and_abort_metadata() {
     let ctx = TransactionContext::new(
         TransactionId(7),
         9,
@@ -681,10 +686,10 @@ fn test_transaction_owner_and_recovery_metadata() {
 
     ctx.transition_to(TransactionState::Aborting)
         .expect("abort should start");
-    ctx.transition_to(TransactionState::RecoveryRequired)
-        .expect("failed cleanup should be observable");
+    ctx.transition_to(TransactionState::Aborted)
+        .expect("abort should complete");
     let info = ctx.info();
-    assert_eq!(info.state, TransactionState::RecoveryRequired);
+    assert_eq!(info.state, TransactionState::Aborted);
     assert_eq!(info.owner.as_deref(), Some("session-1"));
-    assert!(info.blocking_reason.is_some());
+    assert!(info.blocking_reason.is_none());
 }

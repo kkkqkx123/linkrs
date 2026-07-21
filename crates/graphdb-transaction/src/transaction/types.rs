@@ -237,18 +237,12 @@ pub enum OperationLog {
 pub enum TransactionState {
     /// Active state, can execute read-write operations
     Active,
-    /// Committing
+    /// Commit in progress
     Committing,
-    /// Commit failed with retryable error, retrying after backoff
-    CommitRetry,
-    /// Committed
-    Committed,
-    /// Aborting
+    /// Abort in progress
     Aborting,
-    /// Aborted
+    /// Aborted (terminal)
     Aborted,
-    /// Abort cleanup could not be completed and requires an explicit retry.
-    RecoveryRequired,
 }
 
 impl TransactionState {
@@ -266,21 +260,13 @@ impl TransactionState {
     pub fn can_abort(&self) -> bool {
         matches!(
             self,
-            TransactionState::Active
-                | TransactionState::Committing
-                | TransactionState::CommitRetry
-                | TransactionState::Aborting
+            TransactionState::Active | TransactionState::Committing | TransactionState::Aborting
         )
     }
 
-    /// Check if has ended
+    /// Check if has reached a terminal state
     pub fn is_terminal(&self) -> bool {
-        matches!(
-            self,
-            TransactionState::Committed
-                | TransactionState::Aborted
-                | TransactionState::RecoveryRequired
-        )
+        matches!(self, TransactionState::Aborted)
     }
 }
 
@@ -289,11 +275,8 @@ impl fmt::Display for TransactionState {
         match self {
             TransactionState::Active => write!(f, "Active"),
             TransactionState::Committing => write!(f, "Committing"),
-            TransactionState::CommitRetry => write!(f, "CommitRetry"),
-            TransactionState::Committed => write!(f, "Committed"),
             TransactionState::Aborting => write!(f, "Aborting"),
             TransactionState::Aborted => write!(f, "Aborted"),
-            TransactionState::RecoveryRequired => write!(f, "RecoveryRequired"),
         }
     }
 }
@@ -626,13 +609,6 @@ impl TransactionStats {
         }
     }
 
-    pub fn increment_recovery_abort(&self) {
-        self.recovery_abort_transactions
-            .fetch_add(1, Ordering::Relaxed);
-        if let Some(ref sm) = self.stats_manager {
-            sm.record_txn_recovery_abort();
-        }
-    }
 
     pub fn increment_cleanup_failure(&self) {
         self.cleanup_failure_transactions
@@ -998,29 +974,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_transaction_state_transitions() {
+    fn test_transaction_state_predicates() {
         assert!(TransactionState::Active.can_execute());
         assert!(TransactionState::Active.can_commit());
         assert!(TransactionState::Active.can_abort());
         assert!(!TransactionState::Active.is_terminal());
 
-        assert!(!TransactionState::Committed.can_execute());
-        assert!(!TransactionState::Committed.can_commit());
-        assert!(!TransactionState::Committed.can_abort());
-        assert!(TransactionState::Committed.is_terminal());
-    }
+        assert!(!TransactionState::Committing.can_execute());
+        assert!(!TransactionState::Committing.can_commit());
+        assert!(TransactionState::Committing.can_abort());
+        assert!(!TransactionState::Committing.is_terminal());
 
-    #[test]
-    fn test_commit_retry_state_not_terminal() {
-        assert!(!TransactionState::CommitRetry.is_terminal());
-        assert!(!TransactionState::CommitRetry.can_execute());
-        assert!(!TransactionState::CommitRetry.can_commit());
-        assert!(TransactionState::CommitRetry.can_abort());
-    }
+        assert!(!TransactionState::Aborting.can_execute());
+        assert!(!TransactionState::Aborting.can_commit());
+        assert!(TransactionState::Aborting.can_abort());
+        assert!(!TransactionState::Aborting.is_terminal());
 
-    #[test]
-    fn test_commit_retry_display() {
-        assert_eq!(format!("{}", TransactionState::CommitRetry), "CommitRetry");
+        assert!(!TransactionState::Aborted.can_execute());
+        assert!(!TransactionState::Aborted.can_commit());
+        assert!(!TransactionState::Aborted.can_abort());
+        assert!(TransactionState::Aborted.is_terminal());
     }
 
     #[test]

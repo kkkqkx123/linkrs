@@ -748,12 +748,10 @@ impl TransactionManager {
     /// Follows atomic commit protocol:
     /// 1. Check state and timeout (transaction still active)
     /// 2. Transition to Committing (marks in-progress, prevents concurrent operations)
-    /// 3. Persist through the configured storage commit sink. On retryable failure,
-    ///    transitions to CommitRetry, backs off, and retries up to N times.
-    /// 4. Release timestamp
-    /// 5. Remove from active_transactions (only after all steps succeed)
-    /// 6. Transition to Committed
-    /// 7. Update stats
+    /// 3. Persist through the configured storage commit sink with exponential backoff retries
+    /// 4. Finalize commit and clear undo logs
+    /// 5. Remove from active_transactions
+    /// 6. Update stats
     pub fn commit_transaction(&self, txn_id: TransactionId) -> Result<(), TransactionError> {
         let context = {
             let entry = self
@@ -823,9 +821,7 @@ impl TransactionManager {
                     Err(e) => {
                         last_error = Some(e);
                         if attempt < max_retries {
-                            context.transition_to(TransactionState::CommitRetry)?;
                             std::thread::sleep(Self::backoff_delay(attempt));
-                            context.transition_to(TransactionState::Committing)?;
                         }
                     }
                 }
@@ -874,34 +870,43 @@ impl TransactionManager {
                     Err(error) => {
                         last_error = Some(error);
                         if attempt < max_retries {
-                            context.transition_to(TransactionState::CommitRetry)?;
                             std::thread::sleep(Self::backoff_delay(attempt));
-                            context.transition_to(TransactionState::Committing)?;
                         }
                     }
                 }
             }
             if let Some(error) = last_error {
-                context.transition_to(TransactionState::RecoveryRequired)?;
+                log::error!(
+                    "Commit {} is durable but finalization failed after {} retries: {}",
+                    txn_id, max_retries, error
+                );
+                self.active_transactions.remove(&txn_id);
+                let _ = context.transition_to(TransactionState::Aborting);
+                let _ = context.transition_to(TransactionState::Aborted);
+                self.stats.record_txn_rollback();
                 return Err(TransactionError::commit_failed(format!(
-                    "Commit {} is durable but finalization requires recovery: {}",
+                    "Commit {} is durable but finalization failed: {}",
                     txn_id, error
                 )));
             }
         }
 
         if let Err(error) = context.clear_undo_logs() {
-            context.transition_to(TransactionState::RecoveryRequired)?;
+            log::error!(
+                "Commit {} is durable but undo-log cleanup failed: {}",
+                txn_id, error
+            );
+            self.active_transactions.remove(&txn_id);
+            let _ = context.transition_to(TransactionState::Aborting);
+            let _ = context.transition_to(TransactionState::Aborted);
+            self.stats.record_txn_rollback();
             return Err(TransactionError::commit_failed(format!(
-                "Commit {} is durable but undo-log cleanup requires recovery: {}",
+                "Commit {} is durable but undo-log cleanup failed: {}",
                 txn_id, error
             )));
         }
 
         self.active_transactions.remove(&txn_id);
-
-        context.transition_to(TransactionState::Committed)?;
-
         self.stats.record_txn_commit();
 
         log::info!(
@@ -1059,7 +1064,7 @@ impl TransactionManager {
                 }
             }
             if let Some(err) = last_error {
-                self.finalize_recovery_resources(context);
+                self.finalize_resources_after_sink_failure(context);
                 return Err(TransactionError::rollback_failed(format!(
                     "Failed to discard transaction {} persistence state after {} retries: {}",
                     context.id, max_retries, err
@@ -1088,7 +1093,7 @@ impl TransactionManager {
                     max_retries,
                     e
                 );
-                self.finalize_recovery_resources(context);
+                self.finalize_resources_after_sink_failure(context);
                 return Err(TransactionError::sync_failed(format!(
                     "Failed to rollback sync data for transaction {} after {} retries: {}",
                     context.id, max_retries, e
@@ -1136,9 +1141,9 @@ impl TransactionManager {
         }
     }
 
-    /// Release in-memory coordination resources while retaining the context so
-    /// an administrator can retry the persistence cleanup.
-    fn finalize_recovery_resources(&self, context: &Arc<TransactionContext>) {
+    /// Called when the commit sink's abort fails after retries.
+    /// Logs the failure, releases resources, and removes the context.
+    fn finalize_resources_after_sink_failure(&self, context: &Arc<TransactionContext>) {
         if context.mark_resources_released() {
             self.rollback_context_timestamp(context);
             if !context.read_only {
@@ -1147,7 +1152,9 @@ impl TransactionManager {
             self.stats.record_txn_rollback();
         }
         self.stats.increment_cleanup_failure();
-        let _ = context.transition_to(TransactionState::RecoveryRequired);
+        self.active_transactions.remove(&context.id);
+        let _ = context.transition_to(TransactionState::Aborting);
+        let _ = context.transition_to(TransactionState::Aborted);
     }
 
     fn rollback_context_timestamp(&self, context: &TransactionContext) {
@@ -1203,71 +1210,6 @@ impl TransactionManager {
     ) -> Result<(), TransactionError> {
         self.check_transaction_owner(txn_id, owner)?;
         self.abort_transaction(txn_id)
-    }
-
-    /// Retry persistence cleanup for a transaction in RecoveryRequired.
-    pub fn retry_recovery(&self, txn_id: TransactionId) -> Result<(), TransactionError> {
-        let context = self.get_context(txn_id)?;
-        if context.state() != TransactionState::RecoveryRequired {
-            return Err(TransactionError::recovery_required(format!(
-                "Transaction {} is not waiting for recovery",
-                txn_id
-            )));
-        }
-        if context.commit_published() {
-            let descriptor = TransactionCommitDescriptor {
-                transaction_id: context.id,
-                write_timestamp: context.timestamp(),
-                durability: context.durability,
-                write_set: context.get_write_set(),
-            };
-            if let Some(ref sink) = self.commit_sink {
-                sink.finalize_commit(&descriptor, context.commit_lsn())
-                    .map_err(TransactionError::commit_failed)?;
-            }
-            context
-                .clear_undo_logs()
-                .map_err(|error| TransactionError::commit_failed(error.to_string()))?;
-            self.active_transactions.remove(&txn_id);
-            context.transition_to(TransactionState::Committed)?;
-            self.stats.record_txn_commit();
-            return Ok(());
-        }
-
-        context.transition_to(TransactionState::Aborting)?;
-        if let Some(ref sink) = self.commit_sink {
-            let descriptor = TransactionAbortDescriptor {
-                transaction_id: context.id,
-                write_timestamp: context.timestamp(),
-                context: Arc::clone(&context),
-            };
-            if let Err(error) = sink.abort_transaction_with_descriptor(&descriptor) {
-                self.stats.increment_cleanup_failure();
-                let _ = context.transition_to(TransactionState::RecoveryRequired);
-                return Err(TransactionError::rollback_failed(error));
-            }
-        }
-        self.active_transactions.remove(&txn_id);
-        let _ = context.clear_undo_logs();
-        context.transition_to(TransactionState::Aborted)?;
-        self.stats.increment_recovery_abort();
-        Ok(())
-    }
-
-    /// Force cleanup of a transaction regardless of whether it is active or
-    /// waiting for persistence recovery. Terminal contexts are removed from
-    /// the manager without changing their already-recorded outcome.
-    pub fn force_cleanup(&self, txn_id: TransactionId) -> Result<(), TransactionError> {
-        let context = self.get_context(txn_id)?;
-        match context.state() {
-            TransactionState::RecoveryRequired => self.retry_recovery(txn_id),
-            state if state.can_abort() => self.abort_transaction(txn_id),
-            state if state.is_terminal() => {
-                self.active_transactions.remove(&txn_id);
-                Ok(())
-            }
-            state => Err(TransactionError::invalid_state_for_abort(state)),
-        }
     }
 
     /// Retry delivery of pending synchronization outbox entries.
@@ -1357,19 +1299,7 @@ impl TransactionManager {
         };
 
         for txn_id in txn_ids {
-            if self
-                .get_context(txn_id)
-                .is_ok_and(|context| context.state() == TransactionState::RecoveryRequired)
-            {
-                if let Err(error) = self.retry_recovery(txn_id) {
-                    log::error!(
-                        "Recovery retry failed for transaction {} during shutdown: {}",
-                        txn_id,
-                        error
-                    );
-                    self.stats.increment_cleanup_failure();
-                }
-            } else if let Err(error) = self.abort_transaction(txn_id) {
+            if let Err(error) = self.abort_transaction(txn_id) {
                 log::error!(
                     "Abort failed for transaction {} during shutdown: {}",
                     txn_id,
@@ -1934,36 +1864,24 @@ mod tests {
     }
 
     #[test]
-    fn state_transition_commit_retry_roundtrip() {
+    fn state_transition_committing_to_aborted() {
         let config = TransactionConfig::default();
         let ctx = TransactionContext::new(TransactionId(1), 1, config);
 
         assert!(ctx.transition_to(TransactionState::Committing).is_ok());
-        assert!(ctx.transition_to(TransactionState::CommitRetry).is_ok());
-        assert!(ctx.transition_to(TransactionState::Committing).is_ok());
-        assert!(ctx.transition_to(TransactionState::Committed).is_ok());
-        assert_eq!(ctx.state(), TransactionState::Committed);
-    }
-
-    #[test]
-    fn state_transition_commit_retry_to_aborted() {
-        let config = TransactionConfig::default();
-        let ctx = TransactionContext::new(TransactionId(1), 1, config);
-
-        assert!(ctx.transition_to(TransactionState::Committing).is_ok());
-        assert!(ctx.transition_to(TransactionState::CommitRetry).is_ok());
+        assert!(ctx.transition_to(TransactionState::Aborting).is_ok());
         assert!(ctx.transition_to(TransactionState::Aborted).is_ok());
         assert_eq!(ctx.state(), TransactionState::Aborted);
     }
 
     #[test]
-    fn state_transition_commit_retry_from_aborting() {
+    fn state_transition_committing_direct_to_aborted() {
         let config = TransactionConfig::default();
         let ctx = TransactionContext::new(TransactionId(1), 1, config);
 
-        // CommitRetry is only reachable from Committing.
         assert!(ctx.transition_to(TransactionState::Committing).is_ok());
-        assert!(ctx.transition_to(TransactionState::Aborting).is_ok());
+        assert!(ctx.transition_to(TransactionState::Aborted).is_ok());
+        assert_eq!(ctx.state(), TransactionState::Aborted);
     }
 
     #[test]

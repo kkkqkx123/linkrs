@@ -67,7 +67,8 @@ fn test_error_invalid_state_transition() {
         .transition_to(TransactionState::Committing)
         .expect("Failed to transition to Committing");
 
-    let result = context.transition_to(TransactionState::Aborting);
+    // Committing → Aborting is valid.
+    let result = context.transition_to(TransactionState::Aborted);
     assert!(result.is_err(), "Expected error");
     let err = result.unwrap_err();
     assert_eq!(
@@ -77,8 +78,12 @@ fn test_error_invalid_state_transition() {
     );
 
     context
-        .transition_to(TransactionState::Committed)
-        .expect("Failed to transition to Committed");
+        .transition_to(TransactionState::Aborting)
+        .expect("Failed to transition to Aborting");
+
+    context
+        .transition_to(TransactionState::Aborted)
+        .expect("Failed to transition to Aborted");
 
     let result = context.transition_to(TransactionState::Active);
     assert!(result.is_err(), "Expected error from terminal state");
@@ -370,7 +375,6 @@ fn test_error_no_savepoints() {
 fn test_transaction_state_display() {
     assert_eq!(format!("{}", TransactionState::Active), "Active");
     assert_eq!(format!("{}", TransactionState::Committing), "Committing");
-    assert_eq!(format!("{}", TransactionState::Committed), "Committed");
     assert_eq!(format!("{}", TransactionState::Aborting), "Aborting");
     assert_eq!(format!("{}", TransactionState::Aborted), "Aborted");
 }
@@ -383,10 +387,15 @@ fn test_transaction_state_helpers() {
     assert!(TransactionState::Active.can_abort());
     assert!(!TransactionState::Active.is_terminal());
 
-    assert!(!TransactionState::Committed.can_execute());
-    assert!(!TransactionState::Committed.can_commit());
-    assert!(!TransactionState::Committed.can_abort());
-    assert!(TransactionState::Committed.is_terminal());
+    assert!(!TransactionState::Committing.can_execute());
+    assert!(!TransactionState::Committing.can_commit());
+    assert!(TransactionState::Committing.can_abort());
+    assert!(!TransactionState::Committing.is_terminal());
+
+    assert!(!TransactionState::Aborting.can_execute());
+    assert!(!TransactionState::Aborting.can_commit());
+    assert!(TransactionState::Aborting.can_abort());
+    assert!(!TransactionState::Aborting.is_terminal());
 
     assert!(!TransactionState::Aborted.can_execute());
     assert!(!TransactionState::Aborted.can_commit());

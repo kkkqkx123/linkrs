@@ -48,7 +48,6 @@ pub enum TransactionErrorKind {
     TransactionBudgetExceeded,
     DdlDmlBoundaryViolation,
     Internal,
-    RecoveryRequired,
 }
 
 impl TransactionErrorKind {
@@ -83,7 +82,6 @@ impl TransactionErrorKind {
             TransactionErrorKind::TransactionBudgetExceeded => "transaction_budget_exceeded",
             TransactionErrorKind::DdlDmlBoundaryViolation => "ddl_dml_boundary_violation",
             TransactionErrorKind::Internal => "internal",
-            TransactionErrorKind::RecoveryRequired => "recovery_required",
         }
     }
 }
@@ -292,10 +290,6 @@ impl TransactionError {
 
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(TransactionErrorKind::Internal, message)
-    }
-
-    pub fn recovery_required(message: impl Into<String>) -> Self {
-        Self::new(TransactionErrorKind::RecoveryRequired, message)
     }
 
     pub fn transaction_budget_exceeded(

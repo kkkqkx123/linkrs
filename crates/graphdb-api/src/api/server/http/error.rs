@@ -84,10 +84,7 @@ impl HttpError {
             || message.contains("[admission_timeout]")
         {
             Self::BadRequest(message)
-        } else if message.contains("[invalid_state")
-            || message.contains("[recovery_required]")
-            || message.contains("[savepoint")
-        {
+        } else if message.contains("[invalid_state") || message.contains("[savepoint") {
             Self::Conflict(message)
         } else {
             Self::InternalError(message)
