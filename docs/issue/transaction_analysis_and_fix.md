@@ -20,7 +20,7 @@
 
 ## 仍需关注
 
-1. `auto_cleanup`、`write_lock_timeout`、`two_phase_commit` 目前仍是部分功能，尚未形成完整执行链。
+1. `auto_cleanup`、`admission_timeout`、`two_phase_commit` 目前仍是部分功能，尚未形成完整执行链。
 2. 独立的 `ReadTransaction` / `InsertTransaction` / `UpdateTransaction` 仍然与 `TransactionManager` 的主链路并存，需要后续统一设计。
 3. `commit_transaction_with_undo` 目前仍是薄封装，后续可按真实语义决定是否保留。
 

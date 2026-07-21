@@ -91,6 +91,42 @@ pub struct InsertEdgeUndo {
     pub ie_offset: i32,
 }
 
+/// Undo log for restoring an edge removed by a transaction.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RestoreEdgeUndo {
+    pub src_label: LabelId,
+    pub src_vid: VertexId,
+    pub dst_label: LabelId,
+    pub dst_vid: VertexId,
+    pub edge_label: LabelId,
+    pub rank: i64,
+    pub properties: Vec<(String, crate::core::Value)>,
+}
+
+impl RestoreEdgeUndo {
+    pub fn undo<T: UndoTarget + ?Sized>(&self, graph: &T, ts: Timestamp) -> UndoLogResult<()> {
+        graph.restore_edge(
+            EdgeIdentifier::new(
+                self.src_label,
+                self.src_vid,
+                self.dst_label,
+                self.dst_vid,
+                self.edge_label,
+                self.rank,
+            ),
+            self.properties.clone(),
+            ts,
+        )
+    }
+
+    pub fn description(&self) -> String {
+        format!(
+            "RestoreEdgeUndo(src={}, dst={}, edge={})",
+            self.src_vid, self.dst_vid, self.edge_label
+        )
+    }
+}
+
 impl InsertEdgeUndo {
     pub fn undo<T: UndoTarget + ?Sized>(&self, graph: &T, ts: Timestamp) -> UndoLogResult<()> {
         graph.delete_edge(EdgeDeletionContext::new(EdgeDeletionContextParams {
@@ -488,6 +524,7 @@ pub enum UndoLogEntry {
     CreateEdgeType(CreateEdgeTypeUndo),
     InsertVertex(InsertVertexUndo),
     InsertEdge(InsertEdgeUndo),
+    RestoreEdge(RestoreEdgeUndo),
     UpdateVertexProp(UpdateVertexPropUndo),
     UpdateEdgeProp(UpdateEdgePropUndo),
     RemoveVertex(RemoveVertexUndo),
@@ -509,6 +546,7 @@ impl UndoLogEntry {
             UndoLogEntry::CreateEdgeType(u) => u.undo(graph, ts),
             UndoLogEntry::InsertVertex(u) => u.undo(graph, ts),
             UndoLogEntry::InsertEdge(u) => u.undo(graph, ts),
+            UndoLogEntry::RestoreEdge(u) => u.undo(graph, ts),
             UndoLogEntry::UpdateVertexProp(u) => u.undo(graph, ts),
             UndoLogEntry::UpdateEdgeProp(u) => u.undo(graph, ts),
             UndoLogEntry::RemoveVertex(u) => u.undo(graph, ts),
@@ -530,6 +568,7 @@ impl UndoLogEntry {
             UndoLogEntry::CreateEdgeType(u) => u.description(),
             UndoLogEntry::InsertVertex(u) => u.description(),
             UndoLogEntry::InsertEdge(u) => u.description(),
+            UndoLogEntry::RestoreEdge(u) => u.description(),
             UndoLogEntry::UpdateVertexProp(u) => u.description(),
             UndoLogEntry::UpdateEdgeProp(u) => u.description(),
             UndoLogEntry::RemoveVertex(u) => u.description(),

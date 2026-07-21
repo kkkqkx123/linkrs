@@ -33,7 +33,7 @@ fn test_manager_config_custom() {
         default_timeout: Duration::from_secs(60),
         max_concurrent_transactions: 500,
         auto_cleanup: false,
-        write_lock_timeout: Duration::from_secs(10),
+        admission_timeout: Duration::from_secs(10),
         commit_retry_attempts: 3,
         abort_retry_attempts: 3,
     };
@@ -55,7 +55,6 @@ fn test_transaction_options_default() {
     assert_eq!(options.query_timeout, None);
     assert_eq!(options.statement_timeout, None);
     assert_eq!(options.idle_timeout, None);
-    assert!(!options.two_phase_commit);
 }
 
 /// Test TransactionOptions builder pattern
@@ -79,15 +78,6 @@ fn test_transaction_options_builder() {
     assert_eq!(options.idle_timeout, Some(Duration::from_secs(300)));
 }
 
-/// Test TransactionOptions with two-phase commit
-#[test]
-fn test_transaction_options_two_phase_commit() {
-    let mut options = TransactionOptions::new();
-    options.two_phase_commit = true;
-
-    assert!(options.two_phase_commit);
-}
-
 /// Test TransactionConfig default values
 #[test]
 fn test_transaction_config_default() {
@@ -99,7 +89,6 @@ fn test_transaction_config_default() {
     assert_eq!(config.query_timeout, None);
     assert_eq!(config.statement_timeout, None);
     assert_eq!(config.idle_timeout, None);
-    assert!(!config.two_phase_commit);
 }
 
 /// Test TransactionConfig builder pattern
@@ -111,8 +100,7 @@ fn test_transaction_config_builder() {
         .with_isolation_level(IsolationLevel::RepeatableRead)
         .with_query_timeout(Some(Duration::from_secs(15)))
         .with_statement_timeout(Some(Duration::from_secs(7)))
-        .with_idle_timeout(Some(Duration::from_secs(600)))
-        .with_two_phase_commit(true);
+        .with_idle_timeout(Some(Duration::from_secs(600)));
 
     assert_eq!(config.timeout, Duration::from_secs(60));
     assert_eq!(config.durability, DurabilityLevel::None);
@@ -120,7 +108,6 @@ fn test_transaction_config_builder() {
     assert_eq!(config.query_timeout, Some(Duration::from_secs(15)));
     assert_eq!(config.statement_timeout, Some(Duration::from_secs(7)));
     assert_eq!(config.idle_timeout, Some(Duration::from_secs(600)));
-    assert!(config.two_phase_commit);
 }
 
 /// Test RetryConfig default values
@@ -176,7 +163,7 @@ fn test_manager_with_custom_config() {
         default_timeout: Duration::from_secs(60),
         max_concurrent_transactions: 100,
         auto_cleanup: true,
-        write_lock_timeout: Duration::from_secs(10),
+        admission_timeout: Duration::from_secs(10),
         commit_retry_attempts: 3,
         abort_retry_attempts: 3,
     };
@@ -338,14 +325,12 @@ fn test_transaction_options_clone() {
 fn test_transaction_config_clone() {
     let original = TransactionConfig::new()
         .with_timeout(Duration::from_secs(30))
-        .with_durability(DurabilityLevel::None)
-        .with_two_phase_commit(true);
+        .with_durability(DurabilityLevel::None);
 
     let cloned = original.clone();
 
     assert_eq!(original.timeout, cloned.timeout);
     assert_eq!(original.durability, cloned.durability);
-    assert_eq!(original.two_phase_commit, cloned.two_phase_commit);
 }
 
 /// Test RetryConfig clone and copy
@@ -367,7 +352,7 @@ fn test_manager_config_clone() {
         default_timeout: Duration::from_secs(45),
         max_concurrent_transactions: 200,
         auto_cleanup: false,
-        write_lock_timeout: Duration::from_secs(10),
+        admission_timeout: Duration::from_secs(10),
         commit_retry_attempts: 3,
         abort_retry_attempts: 3,
     };

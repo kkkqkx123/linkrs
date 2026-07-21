@@ -1,5 +1,4 @@
 use super::QueryPipelineManager;
-use super::next_transaction_id;
 use crate::core::error::{DBError, DBResult, QueryError};
 use crate::core::types::SpaceInfo;
 use crate::core::types::TransactionId;
@@ -62,9 +61,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             log::debug!("Query plan cache hit");
             let execute_start = Instant::now();
             let txn_scope = if cached_plan.is_dml {
-                TransactionScope::auto_commit(crate::core::types::TransactionId::new(
-                    next_transaction_id(),
-                ))
+                Self::scope_for_bound_request(query_context.request_context())
             } else if cached_plan.is_transaction {
                 TransactionScope::CommandScope
             } else {
@@ -142,9 +139,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let execute_start = Instant::now();
         let (physical_plan, _) = self.compile(query_context.clone(), &validated)?;
         let txn_scope = if is_dml {
-            TransactionScope::auto_commit(crate::core::types::TransactionId::new(
-                next_transaction_id(),
-            ))
+            Self::scope_for_request(validated.ast.stmt(), query_context.request_context())
         } else if is_transaction {
             TransactionScope::CommandScope
         } else {
@@ -305,7 +300,14 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
 
         let (physical_plan, _) = self.compile(query_context.clone(), &validated)?;
         let scope = if let Some(transaction_id) = transaction_id {
-            TransactionScope::explicit(transaction_id, true)
+            if query_context.request_context().auto_commit {
+                TransactionScope::auto_commit(transaction_id)
+            } else {
+                TransactionScope::explicit(
+                    transaction_id,
+                    !query_context.request_context().read_only,
+                )
+            }
         } else if Self::statement_requires_auto_commit(&stmt) {
             Self::scope_for_request(&stmt, query_context.request_context())
         } else if Self::statement_is_transaction(&stmt) {
@@ -325,12 +327,14 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         stmt: &crate::query::parser::ast::Stmt,
         request: &crate::query::QueryRequestContext,
     ) -> TransactionScope {
-        let transaction_id = request.transaction_id.or_else(|| {
-            request
-                .operation_context
-                .as_ref()
-                .and_then(|ctx| ctx.transaction_id)
-        });
+        if let Some(scope) = Self::scope_for_bound_request(request).transaction_id() {
+            return if request.auto_commit {
+                TransactionScope::auto_commit(scope)
+            } else {
+                TransactionScope::explicit(scope, !request.read_only)
+            };
+        }
+        let transaction_id = request.transaction_id;
         if let Some(transaction_id) = transaction_id {
             if request.auto_commit {
                 TransactionScope::auto_commit(transaction_id)
@@ -338,12 +342,33 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 TransactionScope::explicit(transaction_id, !request.read_only)
             }
         } else if Self::statement_requires_auto_commit(stmt) {
-            TransactionScope::auto_commit(TransactionId(next_transaction_id()))
+            // The query layer never invents transaction identities. API and
+            // storage bindings must provide one for DML execution.
+            TransactionScope::None
         } else if Self::statement_is_transaction(stmt) {
             TransactionScope::CommandScope
         } else {
             TransactionScope::None
         }
+    }
+
+    fn scope_for_bound_request(request: &crate::query::QueryRequestContext) -> TransactionScope {
+        request
+            .transaction_id
+            .or_else(|| {
+                request
+                    .operation_context
+                    .as_ref()
+                    .and_then(|context| context.transaction_id)
+            })
+            .map(|transaction_id| {
+                if request.auto_commit {
+                    TransactionScope::auto_commit(transaction_id)
+                } else {
+                    TransactionScope::explicit(transaction_id, !request.read_only)
+                }
+            })
+            .unwrap_or(TransactionScope::None)
     }
 
     /// Check if a statement needs an auto-commit transaction scope.
@@ -597,8 +622,11 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 let ctrl = Arc::new(
                     crate::query::executor::streaming::SessionTransactionController::new(),
                 );
-                let txn_id = crate::core::types::TransactionId::new(next_transaction_id());
-                ctrl.begin_tracking(txn_id, true).ok();
+                if let Some(txn_id) = query_context.request_context().transaction_id {
+                    ctrl.begin_tracking(txn_id, true).map_err(|error| {
+                        DBError::from(QueryError::execution(error.to_string()))
+                    })?;
+                }
                 *ctrl_guard = Some(ctrl.clone());
                 ctrl
             };

@@ -8,8 +8,11 @@ use crate::core::StatsManager;
 use crate::core::metadata::SchemaManager;
 use crate::query::executor::streaming::StreamingQueryResult;
 use crate::query::{OptimizerEngine, QueryPipelineManager};
-use crate::storage::{QueryStorage, StorageClient, StorageOperationContext};
+use crate::storage::{
+    QueryStorage, StorageClient, StorageOperationContext, StorageOperationContextOps,
+};
 use crate::sync::SyncManager;
+use crate::transaction::TransactionExecution;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Instant;
@@ -22,12 +25,6 @@ pub struct QueryApi<S: StorageClient + 'static> {
 }
 
 impl<S: StorageClient + Clone + 'static> QueryApi<S> {
-    /// Bind a storage handle for the next execution scope.
-    pub fn replace_storage(&mut self, storage: S) {
-        self.pipeline_manager
-            .replace_storage(Arc::new(RwLock::new(storage)));
-    }
-
     /// Create a new QueryApi instance with external StatsManager
     pub fn new(storage: Arc<RwLock<S>>, stats_manager: Arc<StatsManager>) -> Self {
         let optimizer_engine = Arc::new(OptimizerEngine::default());
@@ -175,6 +172,33 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         Ok(Self { pipeline_manager })
     }
 
+    /// Execute a query with an explicit transaction execution binding.
+    ///
+    /// The `execution` parameter carries the full transaction identity
+    /// (ID, timestamps, mode, owner) from `TransactionManager`.
+    /// This is the preferred entry point for all transactional DML.
+    pub fn execute_with_execution(
+        &mut self,
+        query: &str,
+        ctx: QueryRequest,
+        execution: &TransactionExecution,
+    ) -> CoreResult<QueryResult> {
+        let op_ctx = StorageOperationContext::transaction_with_timestamps(
+            execution.transaction_id(),
+            execution.read_timestamp(),
+            execution.write_timestamp(),
+            execution.read_only(),
+            execution.auto_commit_owner(),
+        );
+        let op_ctx = execution
+            .mutation_recorder()
+            .map_or(op_ctx.clone(), |recorder| op_ctx.with_mutation_recorder(recorder));
+        let mut ctx = ctx;
+        ctx.transaction_id = Some(execution.transaction_id());
+        ctx.auto_commit = execution.auto_commit_owner();
+        self.execute_with_operation_context_and_storage(query, ctx, Some(op_ctx), None)
+    }
+
     /// Execute a query with the given query request
     ///
     /// # Parameters
@@ -219,6 +243,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         operation_storage: Option<S>,
     ) -> CoreResult<QueryResult> {
         let start_time = Instant::now();
+        let operation_finalizer = operation_storage.clone();
 
         // Constructing a QueryRequestContext
         let mut request_context = crate::query::QueryRequestContext::new(query.to_string());
@@ -245,16 +270,59 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         });
 
         // Execute the query (using the new execute_query_with_request method).
-        let execution_result = self
+        let execution_result = match self
             .pipeline_manager
             .execute_query_with_request_scope(query, rctx, space_info, ctx.transaction_id)
-            .map_err(|e| CoreError::QueryExecutionFailed(e.to_string()))?;
+        {
+            Ok(result) => result,
+            Err(error) => {
+                if ctx.auto_commit {
+                    if let Some(storage) = operation_finalizer.as_ref() {
+                        storage
+                            .finalize_operation(false)
+                            .map_err(|cleanup| CoreError::StorageError(cleanup.to_string()))?;
+                    }
+                }
+                return Err(CoreError::QueryExecutionFailed(error.to_string()));
+            }
+        };
+
+        if ctx.auto_commit {
+            if let Some(storage) = operation_finalizer.as_ref() {
+                storage
+                    .finalize_operation(true)
+                    .map_err(|error| CoreError::StorageError(error.to_string()))?;
+            }
+        }
 
         // Conversion to structured results
         let mut result = Self::convert_to_query_result(execution_result)?;
         result.metadata.execution_time_ms = start_time.elapsed().as_millis() as u64;
 
         Ok(result)
+    }
+
+    /// Execute a query with an explicit transaction execution binding (streaming).
+    pub fn execute_stream_with_execution(
+        &mut self,
+        query: &str,
+        ctx: QueryRequest,
+        execution: &TransactionExecution,
+    ) -> CoreResult<StreamingQueryResult> {
+        let op_ctx = StorageOperationContext::transaction_with_timestamps(
+            execution.transaction_id(),
+            execution.read_timestamp(),
+            execution.write_timestamp(),
+            execution.read_only(),
+            execution.auto_commit_owner(),
+        );
+        let op_ctx = execution
+            .mutation_recorder()
+            .map_or(op_ctx.clone(), |recorder| op_ctx.with_mutation_recorder(recorder));
+        let mut ctx = ctx;
+        ctx.transaction_id = Some(execution.transaction_id());
+        ctx.auto_commit = execution.auto_commit_owner();
+        self.execute_stream_with_operation_context_and_storage(query, ctx, Some(op_ctx), None)
     }
 
     /// Execute a query and return a [`StreamingQueryResult`] for chunk-at-a-time consumption.
@@ -301,6 +369,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
         operation_context: Option<StorageOperationContext>,
         operation_storage: Option<S>,
     ) -> CoreResult<StreamingQueryResult> {
+        let operation_owned = operation_storage.is_some() && ctx.auto_commit;
         let mut request_context = crate::query::QueryRequestContext::new(query.to_string());
         request_context.transaction_id = ctx.transaction_id.or_else(|| {
             operation_context
@@ -323,9 +392,32 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
             space_info
         });
 
-        self.pipeline_manager
+        let result = self
+            .pipeline_manager
             .execute_query_stream_with_request_scope(query, rctx, space_info, ctx.transaction_id)
-            .map_err(|e| CoreError::QueryExecutionFailed(e.to_string()))
+            .map_err(|e| CoreError::QueryExecutionFailed(e.to_string()))?;
+
+        if operation_owned {
+            if let Some(storage) = result.runtime().storage.clone() {
+                let commit_storage = storage.clone();
+                let abort_storage = storage;
+                result.set_transaction_finalizer_with_result(
+                    Box::new(move || {
+                        commit_storage
+                            .write()
+                            .finalize_operation(true)
+                            .map_err(|error| error.to_string())
+                    }),
+                    Box::new(move || {
+                        abort_storage
+                            .write()
+                            .finalize_operation(false)
+                            .map_err(|error| error.to_string())
+                    }),
+                );
+            }
+        }
+        Ok(result)
     }
 
     /// Execute a parameterized query

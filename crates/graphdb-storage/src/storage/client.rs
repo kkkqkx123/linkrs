@@ -15,6 +15,8 @@ use crate::transaction::wal::recovery::{RecoveryConfig, RecoveryStats};
 use crate::transaction::UndoTarget;
 use std::sync::Arc;
 
+use graphdb_transaction::transaction::TransactionMutationRecorder;
+
 /// Read-only data and schema operations.
 pub trait StorageReader: Send + Sync + std::fmt::Debug {
     fn get_vertex(&self, space: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError>;
@@ -386,6 +388,12 @@ pub trait StoragePersistenceOps: Send + Sync + std::fmt::Debug {
     fn should_flush(&self) -> bool;
 
     fn should_checkpoint(&self) -> bool;
+
+    fn set_outbox_materialized_lsn_provider(
+        &self,
+        _provider: Arc<dyn Fn() -> StorageResult<Option<crate::core::types::CommitLsn>> + Send + Sync>,
+    ) {
+    }
 }
 
 /// Access to persistent schema context shared with higher-level components.
@@ -395,14 +403,27 @@ pub trait StorageSchemaContextOps: Send + Sync + std::fmt::Debug {
 }
 
 /// Immutable context bound to one storage operation scope.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct StorageOperationContext {
     pub transaction_id: Option<TransactionId>,
     pub read_timestamp: Timestamp,
     pub write_timestamp: Option<Timestamp>,
     pub read_only: bool,
     pub auto_commit: bool,
+    pub mutation_recorder: Option<Arc<dyn TransactionMutationRecorder>>,
 }
+
+impl PartialEq for StorageOperationContext {
+    fn eq(&self, other: &Self) -> bool {
+        self.transaction_id == other.transaction_id
+            && self.read_timestamp == other.read_timestamp
+            && self.write_timestamp == other.write_timestamp
+            && self.read_only == other.read_only
+            && self.auto_commit == other.auto_commit
+    }
+}
+
+impl Eq for StorageOperationContext {}
 
 impl StorageOperationContext {
     pub fn transaction(
@@ -416,7 +437,33 @@ impl StorageOperationContext {
             write_timestamp: (!read_only).then_some(timestamp),
             read_only,
             auto_commit: false,
+            mutation_recorder: None,
         }
+    }
+
+    pub fn transaction_with_timestamps(
+        transaction_id: TransactionId,
+        read_timestamp: Timestamp,
+        write_timestamp: Option<Timestamp>,
+        read_only: bool,
+        auto_commit: bool,
+    ) -> Self {
+        Self {
+            transaction_id: Some(transaction_id),
+            read_timestamp,
+            write_timestamp,
+            read_only,
+            auto_commit,
+            mutation_recorder: None,
+        }
+    }
+
+    pub fn with_mutation_recorder(
+        mut self,
+        recorder: Arc<dyn TransactionMutationRecorder>,
+    ) -> Self {
+        self.mutation_recorder = Some(recorder);
+        self
     }
 }
 
@@ -429,6 +476,15 @@ pub trait StorageCommitOps: Send + Sync + std::fmt::Debug {
 
     fn abort_staged_writes(&self, transaction_id: TransactionId) -> StorageResult<()>;
 
+    fn commit_staged_writes_with_durability(
+        &self,
+        transaction_id: TransactionId,
+        intents: &[crate::core::wal::OutboxIntent],
+        _durability: crate::core::types::DurabilityLevel,
+    ) -> StorageResult<crate::core::types::CommitLsn> {
+        self.commit_staged_writes(transaction_id, intents)
+    }
+
     fn recover_outbox_projection(
         &self,
         sync_manager: &crate::sync::SyncManager,
@@ -437,7 +493,7 @@ pub trait StorageCommitOps: Send + Sync + std::fmt::Debug {
 
 /// Creates an immutable storage handle bound to a single operation context.
 pub trait StorageOperationContextOps: Send + Sync + std::fmt::Debug {
-    fn bind_auto_commit_context(&self) -> Self
+    fn bind_auto_commit_context(&self) -> StorageResult<Self>
     where
         Self: Sized;
 
@@ -446,6 +502,14 @@ pub trait StorageOperationContextOps: Send + Sync + std::fmt::Debug {
         Self: Sized;
 
     fn operation_context(&self) -> Option<Arc<StorageOperationContext>>;
+
+    /// Finalize an operation-owned auto-commit timestamp.
+    ///
+    /// Explicit transaction contexts are finalized by `TransactionManager`
+    /// and therefore treat this as a no-op.
+    fn finalize_operation(&self, _committed: bool) -> StorageResult<()> {
+        Ok(())
+    }
 }
 
 /// Access to sync runtime context shared with higher-level components.

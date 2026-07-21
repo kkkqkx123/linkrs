@@ -37,8 +37,8 @@ use crate::storage::cursor::{
 use crate::storage::engine::background_freeze::{BackgroundFreezeManager, FreezeStats};
 use crate::storage::engine::graph_storage::context::ExportedEdgeSnapshotRecord;
 use crate::storage::engine::PersistenceConfig;
-use crate::storage::index::types::IndexIdentity;
 use crate::storage::index::key_codec::KeyBuilder;
+use crate::storage::index::types::IndexIdentity;
 use crate::storage::index::IndexGcConfig;
 use crate::storage::{
     StorageAdmin, StorageAuthOps, StorageGcOps, StorageOperationContext,
@@ -673,18 +673,17 @@ impl StorageReader for GraphStorage {
             let space_id = self.ctx.schema_manager().get_space_id(&plan.space)?;
             let space_name = plan.space.clone();
             let ctx = self.ctx.clone();
-            let stale_checker: Option<crate::storage::index::types::StaleChecker> =
-                Some(Arc::new(
-                    move |entity_ref, _entity_version| match entity_ref {
-                        crate::core::wal::EntityRef::Vertex(vid) => {
-                            reader::get_vertex(&ctx, &space_name, vid)
-                                .ok()
-                                .flatten()
-                                .is_some()
-                        }
-                        crate::core::wal::EntityRef::Edge { .. } => true,
-                    },
-                ));
+            let stale_checker: Option<crate::storage::index::types::StaleChecker> = Some(Arc::new(
+                move |entity_ref, _entity_version| match entity_ref {
+                    crate::core::wal::EntityRef::Vertex(vid) => {
+                        reader::get_vertex(&ctx, &space_name, vid)
+                            .ok()
+                            .flatten()
+                            .is_some()
+                    }
+                    crate::core::wal::EntityRef::Edge { .. } => true,
+                },
+            ));
             let cursor = self
                 .ctx
                 .index_data_manager()
@@ -697,18 +696,17 @@ impl StorageReader for GraphStorage {
             let space_id = self.ctx.schema_manager().get_space_id(&plan.space)?;
             let space_name = plan.space.clone();
             let ctx = self.ctx.clone();
-            let stale_checker: Option<crate::storage::index::types::StaleChecker> =
-                Some(Arc::new(
-                    move |entity_ref, _entity_version| match entity_ref {
-                        crate::core::wal::EntityRef::Vertex(vid) => {
-                            reader::get_vertex(&ctx, &space_name, vid)
-                                .ok()
-                                .flatten()
-                                .is_some()
-                        }
-                        crate::core::wal::EntityRef::Edge { .. } => true,
-                    },
-                ));
+            let stale_checker: Option<crate::storage::index::types::StaleChecker> = Some(Arc::new(
+                move |entity_ref, _entity_version| match entity_ref {
+                    crate::core::wal::EntityRef::Vertex(vid) => {
+                        reader::get_vertex(&ctx, &space_name, vid)
+                            .ok()
+                            .flatten()
+                            .is_some()
+                    }
+                    crate::core::wal::EntityRef::Edge { .. } => true,
+                },
+            ));
             let cursor = self
                 .ctx
                 .index_data_manager()
@@ -996,6 +994,7 @@ impl StorageSchemaOps for GraphStorage {
             write_timestamp: None,
             read_only: true,
             auto_commit: false,
+            mutation_recorder: None,
         });
         let vertices = reader::scan_vertices(&snapshot_ctx, space)?;
         let result = index_manager::rebuild_tag_index(
@@ -1040,6 +1039,7 @@ impl StorageSchemaOps for GraphStorage {
             write_timestamp: None,
             read_only: true,
             auto_commit: false,
+            mutation_recorder: None,
         });
         let edges = reader::scan_all_edges(&snapshot_ctx, space)?;
         let result = index_manager::rebuild_edge_index(
@@ -1172,6 +1172,19 @@ impl StoragePersistenceOps for GraphStorage {
     fn should_checkpoint(&self) -> bool {
         persistence::should_checkpoint(&self.ctx)
     }
+
+    fn set_outbox_materialized_lsn_provider(
+        &self,
+        provider: Arc<
+            dyn Fn() -> StorageResult<Option<crate::core::types::CommitLsn>> + Send + Sync,
+        >,
+    ) {
+        if let Some(persistence) = self.ctx.persistence() {
+            persistence
+                .read()
+                .set_outbox_materialized_lsn_provider(provider);
+        }
+    }
 }
 
 impl StorageSchemaContextOps for GraphStorage {
@@ -1185,10 +1198,10 @@ impl StorageSchemaContextOps for GraphStorage {
 }
 
 impl StorageOperationContextOps for GraphStorage {
-    fn bind_auto_commit_context(&self) -> Self {
-        Self {
-            ctx: Arc::new(self.ctx.with_auto_commit_context()),
-        }
+    fn bind_auto_commit_context(&self) -> StorageResult<Self> {
+        Ok(Self {
+            ctx: Arc::new(self.ctx.with_auto_commit_context()?),
+        })
     }
 
     fn bind_operation_context(&self, context: StorageOperationContext) -> Self {
@@ -1199,6 +1212,10 @@ impl StorageOperationContextOps for GraphStorage {
 
     fn operation_context(&self) -> Option<Arc<StorageOperationContext>> {
         self.ctx.operation_context()
+    }
+
+    fn finalize_operation(&self, committed: bool) -> crate::core::StorageResult<()> {
+        self.ctx.finalize_operation(committed)
     }
 }
 
@@ -1217,6 +1234,16 @@ impl crate::storage::StorageCommitOps for GraphStorage {
     ) -> StorageResult<()> {
         self.ctx.abort_staged_writes(transaction_id);
         Ok(())
+    }
+
+    fn commit_staged_writes_with_durability(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+        intents: &[crate::core::wal::OutboxIntent],
+        durability: crate::core::types::DurabilityLevel,
+    ) -> StorageResult<crate::core::types::CommitLsn> {
+        self.ctx
+            .commit_staged_writes_with_durability(transaction_id, intents, durability)
     }
 
     fn recover_outbox_projection(
@@ -1382,6 +1409,15 @@ impl crate::transaction::UndoTarget for GraphStorage {
         edge_ctx: crate::core::types::EdgeDeletionContext,
     ) -> crate::transaction::undo_log::UndoLogResult<()> {
         crate::core::types::UndoTarget::delete_edge(&*self.ctx, edge_ctx)
+    }
+
+    fn restore_edge(
+        &self,
+        edge: crate::core::types::EdgeIdentifier,
+        properties: Vec<(String, crate::core::Value)>,
+        ts: crate::transaction::wal::Timestamp,
+    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        crate::core::types::UndoTarget::restore_edge(&*self.ctx, edge, properties, ts)
     }
 
     fn undo_update_vertex_property(

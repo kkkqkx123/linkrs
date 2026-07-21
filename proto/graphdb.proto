@@ -25,6 +25,9 @@ service GraphDBService {
   rpc BeginTransaction(BeginTransactionRequest) returns (BeginTransactionResponse);
   rpc CommitTransaction(CommitTransactionRequest) returns (CommitTransactionResponse);
   rpc RollbackTransaction(RollbackTransactionRequest) returns (RollbackTransactionResponse);
+  rpc CreateSavepoint(CreateSavepointRequest) returns (CreateSavepointResponse);
+  rpc RollbackToSavepoint(RollbackToSavepointRequest) returns (RollbackToSavepointResponse);
+  rpc ReleaseSavepoint(ReleaseSavepointRequest) returns (ReleaseSavepointResponse);
   
   // Schema Management - Space
   rpc CreateSpace(CreateSpaceRequest) returns (CreateSpaceResponse);
@@ -259,6 +262,7 @@ message BeginTransactionResponse {
 
 message CommitTransactionRequest {
   string transaction_id = 1;
+  optional string session_id = 2;
 }
 
 message CommitTransactionResponse {
@@ -268,9 +272,44 @@ message CommitTransactionResponse {
 
 message RollbackTransactionRequest {
   string transaction_id = 1;
+  optional string session_id = 2;
 }
 
 message RollbackTransactionResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message CreateSavepointRequest {
+  string transaction_id = 1;
+  optional string session_id = 2;
+  optional string name = 3;
+}
+
+message CreateSavepointResponse {
+  bool success = 1;
+  uint64 savepoint_id = 2;
+  string error = 3;
+}
+
+message RollbackToSavepointRequest {
+  string transaction_id = 1;
+  uint64 savepoint_id = 2;
+  optional string session_id = 3;
+}
+
+message RollbackToSavepointResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message ReleaseSavepointRequest {
+  string transaction_id = 1;
+  uint64 savepoint_id = 2;
+  optional string session_id = 3;
+}
+
+message ReleaseSavepointResponse {
   bool success = 1;
   string error = 2;
 }

@@ -7,6 +7,31 @@ use crate::api::embedded::c_api::types::{graphdb_extended_error_code_t, graphdb_
 use std::cell::RefCell;
 use std::ffi::CString;
 
+fn transaction_extended_error_code(message: &str) -> graphdb_extended_error_code_t {
+    let message = message.to_ascii_lowercase();
+    if message.contains("write_transaction_conflict")
+        || message.contains("transaction conflict")
+        || message.contains("conflict")
+    {
+        graphdb_extended_error_code_t::GRAPHDB_ERROR_CONFLICT
+    } else if message.contains("transaction_not_owner")
+        || message.contains("not owned by another")
+    {
+        graphdb_extended_error_code_t::GRAPHDB_ERROR_NOT_OWNER
+    } else if message.contains("invalid_state_for_commit")
+        || message.contains("already committed")
+        || message.contains("already aborted")
+    {
+        graphdb_extended_error_code_t::GRAPHDB_ERROR_ALREADY_COMPLETED
+    } else if message.contains("recovery_required") {
+        graphdb_extended_error_code_t::GRAPHDB_ERROR_RECOVERY_REQUIRED
+    } else if message.contains("timeout") {
+        graphdb_extended_error_code_t::GRAPHDB_ERROR_LOCK_TIMEOUT
+    } else {
+        graphdb_extended_error_code_t::GRAPHDB_EXTENDED_NONE
+    }
+}
+
 thread_local! {
     static LAST_ERROR_MESSAGE: RefCell<Option<CString>> = const { RefCell::new(None) };
 }
@@ -62,7 +87,7 @@ pub fn extended_error_code_from_core_error(error: &CoreError) -> graphdb_extende
             }
         }
         CoreError::StorageError(_) => graphdb_extended_error_code_t::GRAPHDB_EXTENDED_NONE,
-        CoreError::TransactionFailed(_) => graphdb_extended_error_code_t::GRAPHDB_EXTENDED_NONE,
+        CoreError::TransactionFailed(message) => transaction_extended_error_code(message),
         CoreError::SchemaOperationFailed(_) => graphdb_extended_error_code_t::GRAPHDB_EXTENDED_NONE,
         CoreError::InvalidParameter(_) => graphdb_extended_error_code_t::GRAPHDB_EXTENDED_NONE,
         CoreError::NotFound(_) => graphdb_extended_error_code_t::GRAPHDB_EXTENDED_NONE,
@@ -252,10 +277,26 @@ pub fn error_code_from_core_error(error: &CoreError) -> (i32, graphdb_extended_e
             };
             (graphdb_error_code_t::GRAPHDB_ERROR as i32, extended_code)
         }
-        CoreError::TransactionFailed(_) => (
-            graphdb_error_code_t::GRAPHDB_ABORT as i32,
-            graphdb_extended_error_code_t::GRAPHDB_EXTENDED_NONE,
-        ),
+        CoreError::TransactionFailed(message) => {
+            let extended_code = transaction_extended_error_code(message);
+            let basic_code = match extended_code {
+                graphdb_extended_error_code_t::GRAPHDB_ERROR_NOT_OWNER => {
+                    graphdb_error_code_t::GRAPHDB_PERM
+                }
+                graphdb_extended_error_code_t::GRAPHDB_ERROR_CONFLICT
+                | graphdb_extended_error_code_t::GRAPHDB_ERROR_LOCK_TIMEOUT => {
+                    graphdb_error_code_t::GRAPHDB_BUSY
+                }
+                graphdb_extended_error_code_t::GRAPHDB_ERROR_RECOVERY_REQUIRED => {
+                    graphdb_error_code_t::GRAPHDB_CORRUPT
+                }
+                graphdb_extended_error_code_t::GRAPHDB_ERROR_ALREADY_COMPLETED => {
+                    graphdb_error_code_t::GRAPHDB_ABORT
+                }
+                _ => graphdb_error_code_t::GRAPHDB_ABORT,
+            };
+            (basic_code as i32, extended_code)
+        }
         CoreError::SchemaOperationFailed(_) => (
             graphdb_error_code_t::GRAPHDB_SCHEMA as i32,
             graphdb_extended_error_code_t::GRAPHDB_EXTENDED_NONE,
@@ -341,6 +382,14 @@ pub fn extended_error_code_to_message(code: graphdb_extended_error_code_t) -> &'
         }
         graphdb_extended_error_code_t::GRAPHDB_ERROR_DEADLOCK => "Deadlock\0".as_bytes(),
         graphdb_extended_error_code_t::GRAPHDB_ERROR_LOCK_TIMEOUT => "Lock timeout\0".as_bytes(),
+        graphdb_extended_error_code_t::GRAPHDB_ERROR_CONFLICT => "Transaction conflict\0".as_bytes(),
+        graphdb_extended_error_code_t::GRAPHDB_ERROR_NOT_OWNER => "Transaction owner mismatch\0".as_bytes(),
+        graphdb_extended_error_code_t::GRAPHDB_ERROR_ALREADY_COMPLETED => {
+            "Transaction already completed\0".as_bytes()
+        }
+        graphdb_extended_error_code_t::GRAPHDB_ERROR_RECOVERY_REQUIRED => {
+            "Transaction recovery required\0".as_bytes()
+        }
         graphdb_extended_error_code_t::GRAPHDB_ERROR_INVALID_VERTEX => {
             "Invalid vertex\0".as_bytes()
         }

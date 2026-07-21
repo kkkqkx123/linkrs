@@ -5,7 +5,7 @@
 
 use crate::core::metadata::{IndexMetadataManager, SchemaManager};
 use crate::core::types::{EdgeTypeInfo, TagInfo, VertexId};
-use crate::core::{Edge, StorageError, Value, Vertex};
+use crate::core::{Edge, StorageError, StorageResult, Value, Vertex};
 use crate::storage::{
     StorageAdmin, StorageAuthOps, StorageClient, StorageCommitOps, StorageGcOps,
     StorageOperationContext, StorageOperationContextOps, StoragePersistenceOps, StorageReader,
@@ -37,6 +37,12 @@ impl<S: StorageClient> SyncWrapper<S> {
 
     /// Create a new wrapper with a SyncManager for index synchronization.
     pub fn with_sync_manager(storage: S, sync_manager: Arc<crate::sync::SyncManager>) -> Self {
+        let frontier_manager = sync_manager.clone();
+        storage.set_outbox_materialized_lsn_provider(Arc::new(move || {
+            frontier_manager
+                .outbox_materialized_lsn()
+                .map_err(|error| StorageError::db_error(error.to_string()))
+        }));
         Self {
             inner: storage,
             sync_manager: Some(sync_manager),
@@ -83,6 +89,17 @@ impl<S: StorageClient> SyncWrapper<S> {
         &self,
         transaction_id: crate::core::types::TransactionId,
     ) -> Result<crate::core::types::CommitLsn, StorageError> {
+        self.commit_transaction_fact_with_durability(
+            transaction_id,
+            crate::core::types::DurabilityLevel::Sync,
+        )
+    }
+
+    fn commit_transaction_fact_with_durability(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+        durability: crate::core::types::DurabilityLevel,
+    ) -> Result<crate::core::types::CommitLsn, StorageError> {
         let intents = match self.sync_manager.as_ref() {
             Some(manager) => manager
                 .pending_transaction_intents(transaction_id)
@@ -94,7 +111,11 @@ impl<S: StorageClient> SyncWrapper<S> {
                 })?,
             None => Vec::new(),
         };
-        let commit_lsn = match self.inner.commit_staged_writes(transaction_id, &intents) {
+        let commit_lsn = match self.inner.commit_staged_writes_with_durability(
+            transaction_id,
+            &intents,
+            durability,
+        ) {
             Ok(commit_lsn) => commit_lsn,
             Err(error) => {
                 // A failed durability fence must not leave redo or target
@@ -107,7 +128,23 @@ impl<S: StorageClient> SyncWrapper<S> {
                 return Err(error);
             }
         };
+        Ok(commit_lsn)
+    }
+
+    fn finalize_commit_fact(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+        commit_lsn: crate::core::types::CommitLsn,
+    ) -> Result<(), StorageError> {
         if let Some(manager) = self.sync_manager.as_ref() {
+            let intents = manager
+                .pending_transaction_intents(transaction_id)
+                .map_err(|error| {
+                    StorageError::db_error(format!(
+                        "Failed to load committed transaction intents: {}",
+                        error
+                    ))
+                })?;
             if let Err(error) =
                 manager.materialize_committed_transaction(transaction_id, commit_lsn, &intents)
             {
@@ -136,7 +173,7 @@ impl<S: StorageClient> SyncWrapper<S> {
                 );
             }
         }
-        Ok(commit_lsn)
+        Ok(())
     }
 
     fn commit_auto_transaction(
@@ -254,7 +291,9 @@ impl<S: StorageClient> SyncWrapper<S> {
     }
 }
 
-impl<S: StorageClient + 'static> crate::transaction::TransactionCommitSink for SyncWrapper<S> {
+impl<S: StorageClient + crate::transaction::UndoTarget + 'static>
+    crate::transaction::TransactionCommitSink for SyncWrapper<S>
+{
     fn commit_transaction(
         &self,
         transaction_id: crate::core::types::TransactionId,
@@ -263,11 +302,47 @@ impl<S: StorageClient + 'static> crate::transaction::TransactionCommitSink for S
             .map_err(|error| error.to_string())
     }
 
+    fn commit_transaction_with_descriptor(
+        &self,
+        descriptor: &crate::transaction::TransactionCommitDescriptor,
+    ) -> Result<crate::core::types::CommitLsn, String> {
+        self.commit_transaction_fact_with_durability(
+            descriptor.transaction_id,
+            descriptor.durability,
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    fn finalize_commit(
+        &self,
+        descriptor: &crate::transaction::TransactionCommitDescriptor,
+        commit_lsn: crate::core::types::CommitLsn,
+    ) -> Result<(), String> {
+        self.finalize_commit_fact(descriptor.transaction_id, commit_lsn)
+            .map_err(|error| error.to_string())
+    }
+
     fn abort_transaction(
         &self,
         transaction_id: crate::core::types::TransactionId,
     ) -> Result<(), String> {
         self.abort_transaction_fact(transaction_id)
+            .map_err(|error| error.to_string())
+    }
+
+    fn abort_transaction_with_descriptor(
+        &self,
+        descriptor: &crate::transaction::TransactionAbortDescriptor,
+    ) -> Result<(), String> {
+        descriptor
+            .context
+            .execute_undo_logs(&self.inner)
+            .map_err(|error| error.to_string())?;
+        descriptor
+            .context
+            .clear_undo_logs()
+            .map_err(|error| error.to_string())?;
+        self.abort_transaction_fact(descriptor.transaction_id)
             .map_err(|error| error.to_string())
     }
 }
@@ -308,6 +383,15 @@ impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::Undo
         edge_ctx: crate::core::types::EdgeDeletionContext,
     ) -> crate::transaction::undo_log::UndoLogResult<()> {
         self.inner.delete_edge(edge_ctx)
+    }
+
+    fn restore_edge(
+        &self,
+        edge: crate::core::types::EdgeIdentifier,
+        properties: Vec<(String, crate::core::Value)>,
+        ts: crate::transaction::wal::Timestamp,
+    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        self.inner.restore_edge(edge, properties, ts)
     }
 
     fn undo_update_vertex_property(
@@ -839,22 +923,20 @@ impl<S: StorageClient + StorageSchemaContextOps + 'static> StorageSchemaContextO
 }
 
 impl<S: StorageClient + 'static> StorageOperationContextOps for SyncWrapper<S> {
-    fn bind_auto_commit_context(&self) -> Self {
-        let inner = self.inner.bind_auto_commit_context();
+    fn bind_auto_commit_context(&self) -> StorageResult<Self> {
+        let inner = self.inner.bind_auto_commit_context()?;
         let inner = match inner.operation_context() {
             Some(context) => {
-                let mut delegated = (*context).clone();
-                delegated.auto_commit = false;
-                inner.bind_operation_context(delegated)
+                inner.bind_operation_context((*context).clone())
             }
             None => inner,
         };
-        Self {
+        Ok(Self {
             inner,
             sync_manager: self.sync_manager.clone(),
             enabled: self.enabled,
             auto_commit_owner: true,
-        }
+        })
     }
 
     fn bind_operation_context(&self, context: StorageOperationContext) -> Self {
@@ -868,6 +950,10 @@ impl<S: StorageClient + 'static> StorageOperationContextOps for SyncWrapper<S> {
 
     fn operation_context(&self) -> Option<Arc<StorageOperationContext>> {
         self.inner.operation_context()
+    }
+
+    fn finalize_operation(&self, committed: bool) -> crate::core::StorageResult<()> {
+        self.inner.finalize_operation(committed)
     }
 }
 
@@ -885,6 +971,16 @@ impl<S: StorageClient + 'static> StorageCommitOps for SyncWrapper<S> {
         transaction_id: crate::core::types::TransactionId,
     ) -> crate::core::StorageResult<()> {
         self.inner.abort_staged_writes(transaction_id)
+    }
+
+    fn commit_staged_writes_with_durability(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+        intents: &[crate::core::wal::OutboxIntent],
+        durability: crate::core::types::DurabilityLevel,
+    ) -> crate::core::StorageResult<crate::core::types::CommitLsn> {
+        self.inner
+            .commit_staged_writes_with_durability(transaction_id, intents, durability)
     }
 
     fn recover_outbox_projection(

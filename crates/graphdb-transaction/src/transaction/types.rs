@@ -12,12 +12,72 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::stats::{MetricType, StatsManager};
 use crate::core::types::{EdgeIdentifier, VertexId};
+use crate::transaction::undo_log::UndoLogEntry;
+use crate::transaction::wal::TransactionWalEntry;
 
 /// Transaction ID
 pub use crate::core::types::TransactionId;
 
 /// Savepoint ID
 pub type SavepointId = u64;
+
+/// Requested terminal action for a transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionOutcome {
+    Commit,
+    Abort,
+}
+
+/// Entity identity captured by one logical mutation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MutationEntityKey {
+    Vertex(VertexId),
+    Edge(EdgeIdentifier),
+}
+
+/// Complete result of preparing and applying one storage mutation.
+///
+/// Storage participants can use this value to publish all transaction metadata
+/// through one ordered operation: the entity write set is certified first,
+/// then undo/redo records and external index intents are retained for the
+/// transaction's commit or abort protocol.
+#[derive(Debug, Clone, Default)]
+pub struct MutationResult {
+    pub entity_keys: Vec<MutationEntityKey>,
+    pub undo_entry: Option<UndoLogEntry>,
+    pub redo_entry: Option<TransactionWalEntry>,
+    pub modified_table: Option<String>,
+    pub index_intents: Vec<crate::core::wal::OutboxIntent>,
+}
+
+impl MutationResult {
+    pub fn new(entity_key: MutationEntityKey) -> Self {
+        Self {
+            entity_keys: vec![entity_key],
+            ..Self::default()
+        }
+    }
+
+    pub fn with_undo(mut self, entry: UndoLogEntry) -> Self {
+        self.undo_entry = Some(entry);
+        self
+    }
+
+    pub fn with_redo(mut self, entry: TransactionWalEntry) -> Self {
+        self.redo_entry = Some(entry);
+        self
+    }
+
+    pub fn with_table(mut self, table: impl Into<String>) -> Self {
+        self.modified_table = Some(table.into());
+        self
+    }
+
+    pub fn with_index_intent(mut self, intent: crate::core::wal::OutboxIntent) -> Self {
+        self.index_intents.push(intent);
+        self
+    }
+}
 
 /// Transaction Isolation Level
 pub use crate::core::types::TransactionIsolationLevel as IsolationLevel;
@@ -91,6 +151,13 @@ pub struct TransactionMetrics {
     pub conflict_rate: f64,
     /// Windowed conflicts per second (60s sliding window)
     pub conflict_rate_windowed: f64,
+    pub active_transactions: u64,
+    pub committed_transactions: u64,
+    pub aborted_transactions: u64,
+    pub timeout_transactions: u64,
+    pub disconnect_transactions: u64,
+    pub cleanup_failure_transactions: u64,
+    pub active_statements: u64,
 }
 
 impl TransactionMetrics {
@@ -114,6 +181,14 @@ pub struct SavepointInfo {
     pub undo_log_index: usize,
     /// Snapshot of the transaction-local sync sequence at savepoint creation
     pub sync_sequence: u64,
+    /// Write set as of savepoint creation.
+    pub write_set: WriteSet,
+    /// Read set used by Serializable certification as of savepoint creation.
+    pub read_set: WriteSet,
+    /// Staged redo metadata boundary at savepoint creation.
+    pub redo_log_index: usize,
+    /// Modified-table metadata as of savepoint creation.
+    pub modified_tables: Vec<String>,
 }
 
 /// Operation Log
@@ -166,6 +241,8 @@ pub enum TransactionState {
     Aborting,
     /// Aborted
     Aborted,
+    /// Abort cleanup could not be completed and requires an explicit retry.
+    RecoveryRequired,
 }
 
 impl TransactionState {
@@ -181,14 +258,22 @@ impl TransactionState {
 
     /// Check if can abort
     pub fn can_abort(&self) -> bool {
-        matches!(self, TransactionState::Active)
+        matches!(
+            self,
+            TransactionState::Active
+                | TransactionState::Committing
+                | TransactionState::CommitRetry
+                | TransactionState::Aborting
+        )
     }
 
     /// Check if has ended
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            TransactionState::Committed | TransactionState::Aborted
+            TransactionState::Committed
+                | TransactionState::Aborted
+                | TransactionState::RecoveryRequired
         )
     }
 }
@@ -202,6 +287,7 @@ impl fmt::Display for TransactionState {
             TransactionState::Committed => write!(f, "Committed"),
             TransactionState::Aborting => write!(f, "Aborting"),
             TransactionState::Aborted => write!(f, "Aborted"),
+            TransactionState::RecoveryRequired => write!(f, "RecoveryRequired"),
         }
     }
 }
@@ -223,8 +309,6 @@ pub struct TransactionOptions {
     pub statement_timeout: Option<Duration>,
     /// Idle timeout duration
     pub idle_timeout: Option<Duration>,
-    /// Whether to enable two-phase commit
-    pub two_phase_commit: bool,
 }
 
 impl Default for TransactionOptions {
@@ -237,7 +321,6 @@ impl Default for TransactionOptions {
             query_timeout: None,
             statement_timeout: None,
             idle_timeout: None,
-            two_phase_commit: false,
         }
     }
 }
@@ -303,8 +386,6 @@ pub struct TransactionConfig {
     pub query_timeout: Option<Duration>,
     pub statement_timeout: Option<Duration>,
     pub idle_timeout: Option<Duration>,
-    /// Whether to enable two-phase commit
-    pub two_phase_commit: bool,
 }
 
 impl Default for TransactionConfig {
@@ -316,7 +397,6 @@ impl Default for TransactionConfig {
             query_timeout: None,
             statement_timeout: None,
             idle_timeout: None,
-            two_phase_commit: false,
         }
     }
 }
@@ -356,10 +436,6 @@ impl TransactionConfig {
         self
     }
 
-    pub fn with_two_phase_commit(mut self, enabled: bool) -> Self {
-        self.two_phase_commit = enabled;
-        self
-    }
 }
 
 /// Transaction Manager Configuration
@@ -371,9 +447,9 @@ pub struct TransactionManagerConfig {
     pub max_concurrent_transactions: usize,
     /// Whether to automatically cleanup expired transactions
     pub auto_cleanup: bool,
-    /// Timeout for acquiring storage write lock when beginning a write transaction.
-    /// If the write lock cannot be acquired within this duration, the begin operation fails.
-    pub write_lock_timeout: Duration,
+    /// Timeout for transaction admission when beginning a write transaction.
+    /// If admission cannot complete within this duration, the begin operation fails.
+    pub admission_timeout: Duration,
     /// Maximum number of retry attempts for commit sink failures before aborting the transaction.
     pub commit_retry_attempts: u32,
     /// Maximum number of retry attempts for abort/sync rollback failures before reporting failure.
@@ -386,7 +462,7 @@ impl Default for TransactionManagerConfig {
             default_timeout: Duration::from_secs(30),
             max_concurrent_transactions: 1000,
             auto_cleanup: true,
-            write_lock_timeout: Duration::from_secs(10),
+            admission_timeout: Duration::from_secs(10),
             commit_retry_attempts: 3,
             abort_retry_attempts: 3,
         }
@@ -411,6 +487,14 @@ pub struct TransactionStats {
     pub timeout_transactions: AtomicU64,
     /// Transactions aborted due to write-set conflicts
     pub conflict_transactions: AtomicU64,
+    /// Transactions aborted after a client disconnect.
+    pub disconnect_transactions: AtomicU64,
+    /// Transactions aborted by recovery processing.
+    pub recovery_abort_transactions: AtomicU64,
+    /// Transactions whose cleanup protocol reported an error.
+    pub cleanup_failure_transactions: AtomicU64,
+    /// Number of statements currently being executed.
+    pub active_statements: AtomicU64,
     /// Sliding window of conflict counts per second (circular buffer).
     /// `window_buckets[i]` holds the count for the second at index `(window_head + i) % N`.
     window_buckets: Vec<AtomicU64>,
@@ -431,6 +515,10 @@ impl Default for TransactionStats {
             aborted_transactions: AtomicU64::new(0),
             timeout_transactions: AtomicU64::new(0),
             conflict_transactions: AtomicU64::new(0),
+            disconnect_transactions: AtomicU64::new(0),
+            recovery_abort_transactions: AtomicU64::new(0),
+            cleanup_failure_transactions: AtomicU64::new(0),
+            active_statements: AtomicU64::new(0),
             window_buckets: (0..CONFLICT_WINDOW_BUCKETS)
                 .map(|_| AtomicU64::new(0))
                 .collect(),
@@ -454,6 +542,10 @@ impl TransactionStats {
             aborted_transactions: AtomicU64::new(0),
             timeout_transactions: AtomicU64::new(0),
             conflict_transactions: AtomicU64::new(0),
+            disconnect_transactions: AtomicU64::new(0),
+            recovery_abort_transactions: AtomicU64::new(0),
+            cleanup_failure_transactions: AtomicU64::new(0),
+            active_statements: AtomicU64::new(0),
             window_buckets: (0..CONFLICT_WINDOW_BUCKETS)
                 .map(|_| AtomicU64::new(0))
                 .collect(),
@@ -485,6 +577,72 @@ impl TransactionStats {
 
     pub fn increment_timeout(&self) {
         self.timeout_transactions.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_timeout(&self) {
+        self.increment_timeout();
+        if let Some(ref sm) = self.stats_manager {
+            sm.record_txn_timeout();
+        }
+    }
+
+    pub fn increment_disconnect(&self) {
+        self.disconnect_transactions.fetch_add(1, Ordering::Relaxed);
+        if let Some(ref sm) = self.stats_manager {
+            sm.record_txn_disconnect();
+        }
+    }
+
+    pub fn increment_recovery_abort(&self) {
+        self.recovery_abort_transactions
+            .fetch_add(1, Ordering::Relaxed);
+        if let Some(ref sm) = self.stats_manager {
+            sm.record_txn_recovery_abort();
+        }
+    }
+
+    pub fn increment_cleanup_failure(&self) {
+        self.cleanup_failure_transactions
+            .fetch_add(1, Ordering::Relaxed);
+        if let Some(ref sm) = self.stats_manager {
+            sm.record_txn_cleanup_failure();
+        }
+    }
+
+    pub fn begin_statement(&self) {
+        self.active_statements.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn end_statement(&self) {
+        let _ =
+            self.active_statements
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                    value.checked_sub(1)
+                });
+    }
+
+    pub fn record_resource_metrics(
+        &self,
+        active_snapshots: u64,
+        pending_writes: i32,
+        frontier_lag: u32,
+        staged_wal_bytes: u64,
+        undo_bytes: u64,
+        prepared_transactions: u64,
+        checkpoint_drain_time: Duration,
+    ) {
+        if let Some(ref sm) = self.stats_manager {
+            sm.set_txn_resource_metrics(
+                self.active_statements.load(Ordering::Relaxed),
+                active_snapshots,
+                pending_writes.max(0) as u64,
+                u64::from(frontier_lag),
+                staged_wal_bytes,
+                undo_bytes,
+                prepared_transactions,
+                checkpoint_drain_time.as_millis() as u64,
+            );
+        }
     }
 
     pub fn record_txn_begin(&self) {
@@ -584,6 +742,13 @@ pub struct WriteSet {
     /// Vertex IDs used as edge endpoints (source/destination).
     /// Collected for O(1) endpoint lookup.
     pub edge_endpoints: HashSet<VertexId>,
+    /// Vertices deleted by this transaction. This is narrower than `vertices`
+    /// and is used for vertex-delete versus edge-write certification.
+    pub deleted_vertices: HashSet<VertexId>,
+    /// Schema resources changed by this transaction.
+    pub schema_resources: HashSet<String>,
+    /// Index resources changed by this transaction.
+    pub index_resources: HashSet<String>,
 }
 
 impl WriteSet {
@@ -597,6 +762,12 @@ impl WriteSet {
         self.vertices.insert(vid);
     }
 
+    /// Record a vertex deletion and retain the deletion kind for certification.
+    pub fn record_vertex_delete(&mut self, vid: VertexId) {
+        self.vertices.insert(vid);
+        self.deleted_vertices.insert(vid);
+    }
+
     /// Record an edge write
     pub fn record_edge(&mut self, edge: EdgeIdentifier) {
         self.edge_endpoints.insert(edge.src_vid);
@@ -604,9 +775,20 @@ impl WriteSet {
         self.edges.insert(edge);
     }
 
+    pub fn record_schema_resource(&mut self, resource: impl Into<String>) {
+        self.schema_resources.insert(resource.into());
+    }
+
+    pub fn record_index_resource(&mut self, resource: impl Into<String>) {
+        self.index_resources.insert(resource.into());
+    }
+
     /// Check if write set is empty
     pub fn is_empty(&self) -> bool {
-        self.vertices.is_empty() && self.edges.is_empty()
+        self.vertices.is_empty()
+            && self.edges.is_empty()
+            && self.schema_resources.is_empty()
+            && self.index_resources.is_empty()
     }
 
     /// Get the number of modified entities
@@ -626,6 +808,24 @@ impl WriteSet {
         if !self.edges.is_disjoint(&other.edges) {
             return true;
         }
+        if !self.deleted_vertices.is_disjoint(&other.edge_endpoints)
+            || !other.deleted_vertices.is_disjoint(&self.edge_endpoints)
+        {
+            return true;
+        }
+        if !self.schema_resources.is_disjoint(&other.schema_resources)
+            || !self.index_resources.is_disjoint(&other.index_resources)
+        {
+            return true;
+        }
+        // Schema changes affect the physical data layout. Certify them
+        // against concurrent data writes even when the entity keys differ.
+        if (!self.schema_resources.is_empty() && (!other.vertices.is_empty() || !other.edges.is_empty()))
+            || (!other.schema_resources.is_empty()
+                && (!self.vertices.is_empty() || !self.edges.is_empty()))
+        {
+            return true;
+        }
         false
     }
 }
@@ -642,6 +842,121 @@ pub struct TransactionInfo {
     pub query_count: u64,
     pub modified_tables: Vec<String>,
     pub savepoint_count: usize,
+    pub read_timestamp: u32,
+    pub write_timestamp: u32,
+    pub owner: Option<String>,
+    pub last_activity: Duration,
+    pub rollback_only: bool,
+    pub blocking_reason: Option<String>,
+    pub staged_bytes: u64,
+    pub undo_bytes: u64,
+}
+
+/// Immutable execution binding for a single query request.
+///
+/// Created by `TransactionManager` and passed explicitly into the query layer.
+/// Guarantees that every DML operation carries a single, consistent transaction
+/// identity from API entry through storage/WAL.
+#[derive(Debug, Clone)]
+pub struct TransactionExecution {
+    transaction_id: TransactionId,
+    read_timestamp: u32,
+    write_timestamp: Option<u32>,
+    read_only: bool,
+    auto_commit_owner: bool,
+    rollback_only: bool,
+    owner: Option<String>,
+    mutation_recorder:
+        Option<Arc<dyn super::participant::TransactionMutationRecorder>>,
+}
+
+impl TransactionExecution {
+    pub fn new(
+        transaction_id: TransactionId,
+        read_timestamp: u32,
+        write_timestamp: Option<u32>,
+        read_only: bool,
+        auto_commit_owner: bool,
+        owner: Option<String>,
+    ) -> Self {
+        Self {
+            transaction_id,
+            read_timestamp,
+            write_timestamp,
+            read_only,
+            auto_commit_owner,
+            rollback_only: false,
+            owner,
+            mutation_recorder: None,
+        }
+    }
+
+    pub fn transaction_id(&self) -> TransactionId {
+        self.transaction_id
+    }
+
+    pub fn read_timestamp(&self) -> u32 {
+        self.read_timestamp
+    }
+
+    pub fn write_timestamp(&self) -> Option<u32> {
+        self.write_timestamp
+    }
+
+    pub fn read_only(&self) -> bool {
+        self.read_only
+    }
+
+    pub fn auto_commit_owner(&self) -> bool {
+        self.auto_commit_owner
+    }
+
+    pub fn rollback_only(&self) -> bool {
+        self.rollback_only
+    }
+
+    pub fn owner(&self) -> Option<&str> {
+        self.owner.as_deref()
+    }
+
+    pub fn mutation_recorder(
+        &self,
+    ) -> Option<Arc<dyn super::participant::TransactionMutationRecorder>> {
+        self.mutation_recorder.clone()
+    }
+
+    pub fn with_mutation_recorder(
+        mut self,
+        recorder: Arc<dyn super::participant::TransactionMutationRecorder>,
+    ) -> Self {
+        self.mutation_recorder = Some(recorder);
+        self
+    }
+
+    pub fn with_rollback_only(mut self, rollback_only: bool) -> Self {
+        self.rollback_only = rollback_only;
+        self
+    }
+
+    pub fn is_writable(&self) -> bool {
+        !self.read_only && !self.rollback_only
+    }
+
+    pub fn requires_finalization(&self) -> bool {
+        self.auto_commit_owner
+    }
+}
+
+/// Resource gauges collected from the transaction manager.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TransactionResourceMetrics {
+    pub active_snapshots: u64,
+    pub pending_writes: i32,
+    pub committed_frontier_lag: u32,
+    pub staged_wal_bytes: u64,
+    pub undo_bytes: u64,
+    pub prepared_transactions: u64,
+    pub checkpoint_drain_time: Duration,
 }
 
 #[cfg(test)]
@@ -666,7 +981,7 @@ mod tests {
         assert!(!TransactionState::CommitRetry.is_terminal());
         assert!(!TransactionState::CommitRetry.can_execute());
         assert!(!TransactionState::CommitRetry.can_commit());
-        assert!(!TransactionState::CommitRetry.can_abort());
+        assert!(TransactionState::CommitRetry.can_abort());
     }
 
     #[test]

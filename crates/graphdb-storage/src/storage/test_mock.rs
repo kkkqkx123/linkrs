@@ -265,14 +265,15 @@ impl StorageSchemaContextOps for MockStorage {
 }
 
 impl StorageOperationContextOps for MockStorage {
-    fn bind_auto_commit_context(&self) -> Self {
-        self.bind_operation_context(StorageOperationContext {
+    fn bind_auto_commit_context(&self) -> StorageResult<Self> {
+        Ok(self.bind_operation_context(StorageOperationContext {
             transaction_id: None,
             read_timestamp: 1,
             write_timestamp: Some(1),
             read_only: false,
             auto_commit: true,
-        })
+            mutation_recorder: None,
+        }))
     }
 
     fn bind_operation_context(&self, context: StorageOperationContext) -> Self {
@@ -283,6 +284,10 @@ impl StorageOperationContextOps for MockStorage {
 
     fn operation_context(&self) -> Option<Arc<StorageOperationContext>> {
         self.operation_context.clone()
+    }
+
+    fn finalize_operation(&self, _committed: bool) -> crate::core::StorageResult<()> {
+        Ok(())
     }
 }
 

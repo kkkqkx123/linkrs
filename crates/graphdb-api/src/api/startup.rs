@@ -298,7 +298,7 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
         default_timeout: std::time::Duration::from_secs(config.transaction.default_timeout),
         max_concurrent_transactions: config.transaction.max_concurrent_transactions,
         auto_cleanup: true,
-        write_lock_timeout: std::time::Duration::from_secs(10),
+        admission_timeout: std::time::Duration::from_secs(10),
         commit_retry_attempts: 3,
         abort_retry_attempts: 3,
     };
@@ -310,6 +310,7 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
     }
     transaction_manager = transaction_manager.with_commit_sink(storage.clone());
     let transaction_manager = Arc::new(transaction_manager);
+    let _cleanup_task = transaction_manager.start_auto_cleanup_task();
     info!("Transaction manager initialized with StatsManager");
 
     // Create GraphService with shared VectorManager to avoid duplicate initialization

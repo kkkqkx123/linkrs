@@ -20,13 +20,13 @@
 //! - HTTP API - BEGIN/COMMIT/ROLLBACK via HTTP API, concurrent HTTP requests, async/await pattern
 //! - Deadlock prevention - verifies fix for spawn_blocking + block_on deadlock issue
 //! - Rollback operations - operation log rollback for vertices and edges
-//! - Two-phase commit - distributed transaction coordination
 //! - Error scenarios - various error conditions and edge cases
 //! - Config options - transaction and manager configuration
 //! - Storage integration - transaction integration with storage layer
 //! - Edge advanced - advanced edge operations and patterns
 
 mod advanced;
+mod api_consistency;
 mod basic;
 mod common;
 mod complex;
@@ -37,9 +37,11 @@ mod edge;
 mod edge_advanced;
 mod error_scenarios;
 mod http_api;
+mod lifecycle;
+mod recovery;
 mod rollback_operations;
+mod semantics;
 mod storage_integration;
 mod timeout;
-mod two_phase_commit;
 mod vertex;
-mod write_lock_timeout;
+mod admission_timeout;

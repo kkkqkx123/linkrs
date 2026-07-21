@@ -124,7 +124,6 @@ impl TransactionConfig {
             query_timeout: self.query_timeout,
             statement_timeout: self.statement_timeout,
             idle_timeout: self.idle_timeout,
-            two_phase_commit: false,
         }
     }
 }
@@ -190,9 +189,8 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoT
         self.check_active()?;
 
         let txn_manager = self.session.txn_manager();
-        let ctx = txn_manager.get_context(self.txn_handle.0)?;
-        ctx.check_timeouts()
-            .map_err(|e| CoreError::TransactionFailed(format!("Transaction timeout: {}", e)))?;
+        let (ctx, statement_start) = txn_manager.begin_statement(self.txn_handle.0)?;
+        let execution = txn_manager.create_execution(self.txn_handle.0, false)?;
 
         let query_ctx = QueryRequest {
             space_id: self.session.space_id(),
@@ -202,17 +200,11 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoT
             parameters: None,
         };
 
-        let mut query_api = self.session.query_api_mut();
-        let storage =
-            self.session
-                .storage()
-                .bind_operation_context(StorageOperationContext::transaction(
-                    ctx.id,
-                    ctx.start_timestamp,
-                    ctx.read_only,
-                ));
-        let result = query_api.execute_with_operation_storage(query, query_ctx, storage)?;
-        ctx.update_activity();
+        let result = {
+            let mut query_api = self.session.query_api_mut();
+            query_api.execute_with_execution(query, query_ctx, &execution)?
+        };
+        txn_manager.finish_statement(&ctx, statement_start)?;
         Ok(QueryResult::from_core(result))
     }
 
@@ -233,9 +225,8 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoT
         self.check_active()?;
 
         let txn_manager = self.session.txn_manager();
-        let ctx = txn_manager.get_context(self.txn_handle.0)?;
-        ctx.check_timeouts()
-            .map_err(|e| CoreError::TransactionFailed(format!("Transaction timeout: {}", e)))?;
+        let (ctx, statement_start) = txn_manager.begin_statement(self.txn_handle.0)?;
+        let execution = txn_manager.create_execution(self.txn_handle.0, false)?;
 
         let query_ctx = QueryRequest {
             space_id: self.session.space_id(),
@@ -245,17 +236,11 @@ impl<'sess, S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoT
             parameters: Some(params),
         };
 
-        let mut query_api = self.session.query_api_mut();
-        let storage =
-            self.session
-                .storage()
-                .bind_operation_context(StorageOperationContext::transaction(
-                    ctx.id,
-                    ctx.start_timestamp,
-                    ctx.read_only,
-                ));
-        let result = query_api.execute_with_operation_storage(query, query_ctx, storage)?;
-        ctx.update_activity();
+        let result = {
+            let mut query_api = self.session.query_api_mut();
+            query_api.execute_with_execution(query, query_ctx, &execution)?
+        };
+        txn_manager.finish_statement(&ctx, statement_start)?;
         Ok(QueryResult::from_core(result))
     }
 

@@ -109,7 +109,9 @@ fn checkpoint_reopens_storage_and_rebuilds_outbox_from_remaining_wal() {
         .expect("outbox should be configured");
     let manager = Arc::new(manager);
     let storage = SyncWrapper::with_sync_manager(inner, manager.clone());
-    let mut writer = storage.bind_auto_commit_context();
+    let mut writer = storage
+        .bind_auto_commit_context()
+        .expect("auto-commit context should be available");
 
     writer
         .insert_vertex(

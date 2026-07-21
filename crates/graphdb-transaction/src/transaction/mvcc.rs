@@ -14,8 +14,8 @@
 //! proper timeout support.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use parking_lot::{Condvar, Mutex};
@@ -40,6 +40,15 @@ pub enum VersionManagerError {
 
     #[error("Failed to track snapshot for timestamp")]
     SnapshotTrackingFailed,
+
+    #[error("Timestamp space exhausted")]
+    TimestampExhausted,
+
+    #[error("Timestamp {timestamp} is older than retention frontier {frontier}")]
+    TimestampBeforeRetention {
+        timestamp: Timestamp,
+        frontier: Timestamp,
+    },
 }
 
 pub type VersionManagerResult<T> = Result<T, VersionManagerError>;
@@ -49,6 +58,9 @@ pub struct VersionManagerConfig {
     pub max_concurrent_reads: u32,
     pub max_concurrent_inserts: u32,
     pub wait_timeout: Duration,
+    /// The oldest timestamp that may be opened as a historical snapshot.
+    /// Zero disables the retention check.
+    pub retention_frontier: Timestamp,
 }
 
 impl Default for VersionManagerConfig {
@@ -57,6 +69,7 @@ impl Default for VersionManagerConfig {
             max_concurrent_reads: 1000,
             max_concurrent_inserts: 100,
             wait_timeout: Duration::from_secs(5),
+            retention_frontier: 0,
         }
     }
 }
@@ -75,6 +88,11 @@ impl VersionManagerConfig {
         self.max_concurrent_inserts = max;
         self
     }
+
+    pub fn with_retention_frontier(mut self, timestamp: Timestamp) -> Self {
+        self.retention_frontier = timestamp;
+        self
+    }
 }
 
 pub struct VersionManager {
@@ -86,6 +104,7 @@ pub struct VersionManager {
     config: VersionManagerConfig,
     snapshot_tracker: Arc<SnapshotTracker>,
     write_states: Mutex<BTreeMap<Timestamp, WriteTimestampState>>,
+    retention_frontier: AtomicU32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +120,7 @@ impl VersionManager {
     }
 
     pub fn with_config(config: VersionManagerConfig) -> Self {
+        let retention_frontier = config.retention_frontier;
         Self {
             write_ts: AtomicU32::new(1),
             read_ts: AtomicU32::new(1),
@@ -110,13 +130,28 @@ impl VersionManager {
             config,
             snapshot_tracker: Arc::new(SnapshotTracker::new()),
             write_states: Mutex::new(BTreeMap::new()),
+            retention_frontier: AtomicU32::new(retention_frontier),
         }
     }
 
     pub fn init_ts(&self, ts: Timestamp) {
-        self.write_ts.store(ts + 1, Ordering::SeqCst);
+        // `write_ts` is the last allocated timestamp. Keeping the baseline at
+        // the recovered timestamp makes the next allocation checked and
+        // contiguous, including at the u32 boundary.
+        self.write_ts.store(ts, Ordering::SeqCst);
         self.read_ts.store(ts, Ordering::SeqCst);
         self.write_states.lock().clear();
+    }
+
+    /// Set the oldest timestamp that can be retained as a historical snapshot.
+    /// The frontier only moves forward.
+    pub fn set_retention_frontier(&self, timestamp: Timestamp) {
+        self.retention_frontier
+            .fetch_max(timestamp, Ordering::SeqCst);
+    }
+
+    pub fn retention_frontier(&self) -> Timestamp {
+        self.retention_frontier.load(Ordering::SeqCst)
     }
 
     pub fn clear(&self) {
@@ -132,16 +167,39 @@ impl VersionManager {
         self.write_ts.load(Ordering::SeqCst)
     }
 
-    pub fn next_write_timestamp(&self) -> Timestamp {
-        let ts = self.write_ts.fetch_add(1, Ordering::SeqCst) + 1;
+    /// Allocate the next write timestamp.
+    pub fn next_write_timestamp(&self) -> VersionManagerResult<Timestamp> {
+        self.try_next_write_timestamp()
+    }
+
+    pub fn try_next_write_timestamp(&self) -> VersionManagerResult<Timestamp> {
+        let ts = self.reserve_timestamp()?;
         self.pending_reqs.fetch_add(1, Ordering::SeqCst);
         self.snapshot_tracker
             .add_snapshot(ts)
-            .expect("write timestamp snapshot tracking must succeed");
+            .map_err(|_| VersionManagerError::SnapshotTrackingFailed)?;
         self.write_states
             .lock()
             .insert(ts, WriteTimestampState::Pending);
-        ts
+        Ok(ts)
+    }
+
+    fn reserve_timestamp(&self) -> VersionManagerResult<Timestamp> {
+        let mut current = self.write_ts.load(Ordering::SeqCst);
+        loop {
+            let next = current
+                .checked_add(1)
+                .ok_or(VersionManagerError::TimestampExhausted)?;
+            match self.write_ts.compare_exchange(
+                current,
+                next,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return Ok(next),
+                Err(observed) => current = observed,
+            }
+        }
     }
 
     pub fn read_timestamp(&self) -> Timestamp {
@@ -233,6 +291,13 @@ impl VersionManager {
         if timestamp > self.read_timestamp() {
             return Err(VersionManagerError::InvalidTimestamp(timestamp));
         }
+        let retention_frontier = self.retention_frontier();
+        if retention_frontier != 0 && timestamp < retention_frontier {
+            return Err(VersionManagerError::TimestampBeforeRetention {
+                timestamp,
+                frontier: retention_frontier,
+            });
+        }
         let guard = self.lock.lock();
         let pending = self.pending_reqs.load(Ordering::SeqCst);
         if pending < 0 || pending >= self.config.max_concurrent_reads as i32 {
@@ -280,7 +345,7 @@ impl VersionManager {
                     continue;
                 }
 
-                let ts = self.write_ts.fetch_add(1, Ordering::SeqCst) + 1;
+                let ts = self.reserve_timestamp()?;
                 if let Err(e) = self.snapshot_tracker.add_snapshot(ts) {
                     log::error!("Failed to pre-reserve snapshot {}: {}", ts, e);
                     return Err(VersionManagerError::SnapshotTrackingFailed);
@@ -320,7 +385,7 @@ impl VersionManager {
                     continue;
                 }
 
-                let ts = self.write_ts.fetch_add(1, Ordering::SeqCst) + 1;
+                let ts = self.reserve_timestamp().ok()?;
                 if let Err(e) = self.snapshot_tracker.add_snapshot(ts) {
                     log::error!("Failed to pre-reserve snapshot {}: {}", ts, e);
                     return None;
@@ -344,10 +409,6 @@ impl VersionManager {
                 return None;
             }
         }
-    }
-
-    pub fn release_write_timestamp(&self, ts: Timestamp) {
-        self.commit_write_timestamp(ts);
     }
 
     pub fn commit_write_timestamp(&self, ts: Timestamp) {
@@ -391,11 +452,17 @@ impl VersionManager {
     }
 
     pub fn get_safe_gc_timestamp(&self) -> Timestamp {
-        self.snapshot_tracker.min_active_snapshot()
+        let active = self.snapshot_tracker.min_active_snapshot();
+        let retention = self.retention_frontier();
+        if retention == 0 {
+            active
+        } else {
+            active.min(retention)
+        }
     }
 
     pub fn get_safe_gc_timestamp_with_margin(&self, margin: Timestamp) -> Timestamp {
-        let safe_ts = self.snapshot_tracker.min_active_snapshot();
+        let safe_ts = self.get_safe_gc_timestamp();
         safe_ts.saturating_sub(margin)
     }
 
@@ -493,7 +560,7 @@ mod tests {
 
         let ts2 = vm.acquire_insert_timestamp().expect("acquire insert");
         assert!(ts2 >= 1);
-        vm.release_write_timestamp(ts2);
+        vm.commit_write_timestamp(ts2);
     }
 
     #[test]
@@ -573,15 +640,15 @@ mod tests {
         assert_eq!(tracker.cleanup_threshold(), ts1);
 
         // Release first
-        vm.release_write_timestamp(ts1);
+        vm.commit_write_timestamp(ts1);
         assert_eq!(tracker.cleanup_threshold(), ts2);
 
         // Release second
-        vm.release_write_timestamp(ts2);
+        vm.commit_write_timestamp(ts2);
         assert_eq!(tracker.cleanup_threshold(), ts3);
 
         // Release last
-        vm.release_write_timestamp(ts3);
+        vm.commit_write_timestamp(ts3);
         assert_eq!(tracker.cleanup_threshold(), u32::MAX); // No active snapshots
     }
 
@@ -644,5 +711,54 @@ mod tests {
 
         vm.release_read_timestamp_at(timestamp);
         assert_eq!(vm.snapshot_tracker().ref_count(timestamp), None);
+    }
+
+    #[test]
+    fn test_historical_read_before_retention_is_rejected() {
+        let vm = VersionManager::with_config(
+            VersionManagerConfig::default().with_retention_frontier(3),
+        );
+        vm.init_ts(3);
+
+        let error = vm
+            .acquire_read_timestamp_at(2)
+            .expect_err("historical snapshots before retention must be rejected");
+        assert!(matches!(
+            error,
+            VersionManagerError::TimestampBeforeRetention {
+                timestamp: 2,
+                frontier: 3
+            }
+        ));
+    }
+
+    #[test]
+    fn test_timestamp_exhaustion_is_reported() {
+        let vm = VersionManager::new();
+        vm.init_ts(u32::MAX);
+
+        assert!(matches!(
+            vm.try_next_write_timestamp(),
+            Err(VersionManagerError::TimestampExhausted)
+        ));
+        assert_eq!(vm.pending_count(), 0);
+    }
+
+    #[test]
+    fn test_retention_frontier_limits_safe_gc_timestamp() {
+        let vm = VersionManager::with_config(
+            VersionManagerConfig::default().with_retention_frontier(10),
+        );
+        vm.init_ts(20);
+
+        assert_eq!(vm.get_safe_gc_timestamp(), 10);
+
+        let snapshot = vm
+            .acquire_read_timestamp_at(15)
+            .expect("snapshot inside retention should be accepted");
+        assert_eq!(vm.get_safe_gc_timestamp(), 10);
+
+        vm.release_read_timestamp_at(snapshot);
+        assert_eq!(vm.get_safe_gc_timestamp(), 10);
     }
 }

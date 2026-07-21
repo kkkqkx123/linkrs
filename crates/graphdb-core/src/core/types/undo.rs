@@ -7,6 +7,7 @@ use super::storage_ids::{
     ColumnId, EdgeDeletionContext, EdgeId, EdgeIdentifier, EdgeKey, LabelId, Timestamp, VertexId,
     VertexIdentifier,
 };
+use crate::core::Value;
 
 /// Undo log error
 #[derive(Debug, Clone, thiserror::Error)]
@@ -39,6 +40,20 @@ pub trait UndoTarget: Send + Sync {
     fn delete_edge_type(&self, edge_key: EdgeKey) -> UndoLogResult<()>;
     fn delete_vertex(&self, vertex: VertexIdentifier, ts: Timestamp) -> UndoLogResult<()>;
     fn delete_edge(&self, edge_ctx: EdgeDeletionContext) -> UndoLogResult<()>;
+    /// Restore an edge that was deleted by a transaction.
+    ///
+    /// Implementations that cannot restore full edge properties may keep the
+    /// default error and reject undo rather than silently losing data.
+    fn restore_edge(
+        &self,
+        _edge: EdgeIdentifier,
+        _properties: Vec<(String, Value)>,
+        _ts: Timestamp,
+    ) -> UndoLogResult<()> {
+        Err(UndoLogError::UndoFailed(
+            "Edge restoration is not supported by this undo target".to_string(),
+        ))
+    }
     fn undo_update_vertex_property(
         &self,
         vertex: VertexIdentifier,

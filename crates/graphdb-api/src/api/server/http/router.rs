@@ -80,9 +80,29 @@ pub fn create_router<
         .route("/sessions/{id}", get(get_session).delete(delete_session))
         .route("/query", post(query::execute))
         .route("/query/validate", post(query::validate))
-        .route("/transactions", post(transaction::begin))
+        .route(
+            "/transactions",
+            post(transaction::begin).get(transaction::list_transactions),
+        )
+        .route("/transactions/metrics", get(transaction::metrics))
         .route("/transactions/{id}/commit", post(transaction::commit))
         .route("/transactions/{id}/rollback", post(transaction::rollback))
+        .route(
+            "/transactions/{id}/kill",
+            post(transaction::kill_transaction),
+        )
+        .route(
+            "/transactions/{id}/recovery",
+            post(transaction::retry_recovery),
+        )
+        .route(
+            "/transactions/{id}/cleanup",
+            post(transaction::force_cleanup),
+        )
+        .route(
+            "/transactions/{id}/outbox/retry",
+            post(transaction::retry_transaction_outbox),
+        )
         .route(
             "/transactions/{id}/savepoints",
             post(transaction::create_savepoint).get(transaction::get_savepoints),
@@ -125,6 +145,7 @@ pub fn create_router<
         .route("/query/stream", post(execute_stream))
         // Sync Management Routes
         .route("/sync/status", get(sync::status))
+        .route("/sync/outbox/retry", post(sync::retry_outbox))
         // Schema Routes
         .route(
             "/schema/spaces",

@@ -52,6 +52,8 @@ pub struct RecoveryStats {
     pub errors_encountered: usize,
     pub last_lsn: crate::transaction::wal::Lsn,
     pub max_timestamp: Timestamp,
+    /// Highest transaction identity observed in WAL control records.
+    pub max_transaction_id: u64,
 }
 
 /// Trait for applying recovered operations to the storage engine.
@@ -82,6 +84,11 @@ impl RecoveryManager {
         self.stats.last_lsn = self.config.start_lsn.unwrap_or(Lsn::ZERO);
 
         let wal_result = self.parse_wal_files()?;
+        // Keep the parser's maximum before committed-only filtering. A crash
+        // can leave an aborted or incomplete transaction with the newest
+        // timestamp/ID, and reopening must not allocate either value again.
+        self.stats.max_timestamp = wal_result.last_timestamp;
+        self.stats.max_transaction_id = self.max_transaction_id(&wal_result);
         self.stats.errors_encountered = wal_result
             .corrupted_count
             .saturating_add(wal_result.skipped_count);
@@ -99,6 +106,35 @@ impl RecoveryManager {
         self.stats.recovery_time_ms = start.elapsed().as_millis() as u64;
 
         Ok(self.stats.clone())
+    }
+
+    fn max_transaction_id(&self, wal_result: &RecoveryResult) -> u64 {
+        wal_result
+            .all_entries
+            .iter()
+            .filter_map(|entry| {
+                let op_type = WalOpType::try_from(entry.header.op_type).ok()?;
+                match op_type {
+                    WalOpType::OutboxIntent => {
+                        from_bytes::<crate::core::wal::OutboxIntent>(&entry.payload)
+                            .ok()
+                            .map(|intent| intent.transaction_id.as_u64())
+                    }
+                    WalOpType::TransactionCommit => {
+                        from_bytes::<crate::core::wal::TransactionCommit>(&entry.payload)
+                            .ok()
+                            .map(|commit| commit.transaction_id.as_u64())
+                    }
+                    WalOpType::TransactionAbort => {
+                        from_bytes::<crate::core::wal::TransactionAbort>(&entry.payload)
+                            .ok()
+                            .map(|abort| abort.transaction_id.as_u64())
+                    }
+                    _ => None,
+                }
+            })
+            .max()
+            .unwrap_or(0)
     }
 
     /// Parse WAL files

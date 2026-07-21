@@ -12,6 +12,10 @@ use crate::config::Config;
 use crate::storage::{
     StorageClient, StorageOperationContextOps, StorageSchemaContextOps, StorageSyncContextOps,
 };
+use crate::transaction::{
+    DurabilityLevel, IsolationLevel, TransactionError, TransactionErrorKind, TransactionId,
+    TransactionOptions,
+};
 
 // Import generated proto types
 use super::proto::graph_db_service_server::{
@@ -312,23 +316,59 @@ impl<
 
     async fn begin_transaction(
         &self,
-        _request: Request<BeginTransactionRequest>,
+        request: Request<BeginTransactionRequest>,
     ) -> Result<Response<BeginTransactionResponse>, Status> {
-        // TODO: Implement transaction begin logic
+        let request = request.into_inner();
+        let proto_options = request.options.unwrap_or_default();
+        let isolation_level = match proto_options.isolation_level {
+            0 => IsolationLevel::RepeatableRead,
+            1 => IsolationLevel::ReadCommitted,
+            2 => IsolationLevel::Serializable,
+            value => {
+                return Err(Status::invalid_argument(format!(
+                    "Unsupported isolation level: {}",
+                    value
+                )))
+            }
+        };
+        let options = TransactionOptions {
+            timeout: (proto_options.timeout_ms > 0).then_some(std::time::Duration::from_millis(
+                proto_options.timeout_ms as u64,
+            )),
+            read_only: proto_options.read_only,
+            durability: DurabilityLevel::Sync,
+            isolation_level,
+            query_timeout: None,
+            statement_timeout: None,
+            idle_timeout: None,
+        };
+        let manager = self.app_state.server.get_txn_manager();
+        let txn_id = match request.session_id {
+            Some(owner) => manager.begin_transaction_with_owner(options, owner),
+            None => manager.begin_transaction(options),
+        }
+        .map_err(transaction_status)?;
 
         Ok(Response::new(BeginTransactionResponse {
             success: true,
-            transaction_id: "txn_id".to_string(),
+            transaction_id: txn_id.as_u64().to_string(),
             error: String::new(),
         }))
     }
 
     async fn commit_transaction(
         &self,
-        _request: Request<CommitTransactionRequest>,
+        request: Request<CommitTransactionRequest>,
     ) -> Result<Response<CommitTransactionResponse>, Status> {
-        // TODO: Implement transaction commit logic
-
+        let request = request.into_inner();
+        let txn_id = parse_transaction_id(&request.transaction_id)?;
+        let manager = self.app_state.server.get_txn_manager();
+        manager
+            .check_transaction_owner(txn_id, request.session_id.as_deref())
+            .map_err(transaction_status)?;
+        manager
+            .commit_transaction(txn_id)
+            .map_err(transaction_status)?;
         Ok(Response::new(CommitTransactionResponse {
             success: true,
             error: String::new(),
@@ -337,11 +377,80 @@ impl<
 
     async fn rollback_transaction(
         &self,
-        _request: Request<RollbackTransactionRequest>,
+        request: Request<RollbackTransactionRequest>,
     ) -> Result<Response<RollbackTransactionResponse>, Status> {
-        // TODO: Implement transaction rollback logic
-
+        let request = request.into_inner();
+        let txn_id = parse_transaction_id(&request.transaction_id)?;
+        let manager = self.app_state.server.get_txn_manager();
+        manager
+            .check_transaction_owner(txn_id, request.session_id.as_deref())
+            .map_err(transaction_status)?;
+        manager
+            .abort_transaction(txn_id)
+            .map_err(transaction_status)?;
         Ok(Response::new(RollbackTransactionResponse {
+            success: true,
+            error: String::new(),
+        }))
+    }
+
+    async fn create_savepoint(
+        &self,
+        request: Request<CreateSavepointRequest>,
+    ) -> Result<Response<CreateSavepointResponse>, Status> {
+        let request = request.into_inner();
+        let txn_id = parse_transaction_id(&request.transaction_id)?;
+        let manager = self.app_state.server.get_txn_manager();
+        manager
+            .check_transaction_owner(txn_id, request.session_id.as_deref())
+            .map_err(transaction_status)?;
+        let savepoint_id = manager
+            .create_savepoint(txn_id, request.name)
+            .map_err(transaction_status)?;
+        Ok(Response::new(CreateSavepointResponse {
+            success: true,
+            savepoint_id,
+            error: String::new(),
+        }))
+    }
+
+    async fn rollback_to_savepoint(
+        &self,
+        request: Request<RollbackToSavepointRequest>,
+    ) -> Result<Response<RollbackToSavepointResponse>, Status> {
+        let request = request.into_inner();
+        let txn_id = parse_transaction_id(&request.transaction_id)?;
+        let manager = self.app_state.server.get_txn_manager();
+        manager
+            .check_transaction_owner(txn_id, request.session_id.as_deref())
+            .map_err(transaction_status)?;
+        let storage = self.app_state.server.get_storage();
+        let storage_guard = storage.read();
+        manager
+            .rollback_to_savepoint(txn_id, request.savepoint_id, &*storage_guard)
+            .map_err(transaction_status)?;
+        Ok(Response::new(RollbackToSavepointResponse {
+            success: true,
+            error: String::new(),
+        }))
+    }
+
+    async fn release_savepoint(
+        &self,
+        request: Request<ReleaseSavepointRequest>,
+    ) -> Result<Response<ReleaseSavepointResponse>, Status> {
+        let request = request.into_inner();
+        let txn_id = parse_transaction_id(&request.transaction_id)?;
+        let manager = self.app_state.server.get_txn_manager();
+        manager
+            .check_transaction_owner(txn_id, request.session_id.as_deref())
+            .map_err(transaction_status)?;
+        manager
+            .get_context(txn_id)
+            .map_err(transaction_status)?
+            .release_savepoint(request.savepoint_id)
+            .map_err(transaction_status)?;
+        Ok(Response::new(ReleaseSavepointResponse {
             success: true,
             error: String::new(),
         }))
@@ -837,6 +946,35 @@ pub async fn run_server_with_grpc_service<
         .await?;
 
     Ok(())
+}
+
+fn parse_transaction_id(value: &str) -> Result<TransactionId, Status> {
+    value
+        .parse::<u64>()
+        .map(TransactionId::from)
+        .map_err(|_| Status::invalid_argument("transaction_id must be an unsigned integer"))
+}
+
+fn transaction_status(error: TransactionError) -> Status {
+    let message = error.to_string();
+    match error.kind() {
+        TransactionErrorKind::TransactionNotFound => Status::not_found(message),
+        TransactionErrorKind::TransactionNotOwner => Status::permission_denied(message),
+        TransactionErrorKind::TransactionTimeout
+        | TransactionErrorKind::TransactionExpired
+        | TransactionErrorKind::AdmissionTimeout => Status::deadline_exceeded(message),
+        TransactionErrorKind::WriteTransactionConflict => Status::aborted(message),
+        TransactionErrorKind::InvalidStateForCommit
+        | TransactionErrorKind::InvalidStateForAbort
+        | TransactionErrorKind::InvalidStateForExecution
+        | TransactionErrorKind::InvalidStateTransition
+        | TransactionErrorKind::RecoveryRequired => Status::failed_precondition(message),
+        TransactionErrorKind::SavepointNotFound
+        | TransactionErrorKind::SavepointFailed
+        | TransactionErrorKind::SavepointNotActive
+        | TransactionErrorKind::NoSavepointsInTransaction => Status::failed_precondition(message),
+        _ => Status::internal(message),
+    }
 }
 
 /// Convert a core [`Value`] to a protobuf [`super::proto::Value`].

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use crate::core::metadata::IndexMetadataManager;
 use crate::core::types::{
-    EdgeTypeInfo, InsertEdgeInfo, InsertVertexInfo, LabelId, Timestamp, UpdateInfo, UpdateOp,
-    UpdateTarget, VertexId,
+    ColumnId, EdgeIdentifier, EdgeTypeInfo, InsertEdgeInfo, InsertVertexInfo, LabelId, Timestamp,
+    UpdateInfo, UpdateOp, UpdateTarget, VertexId,
 };
 use crate::core::wal::redo::{
     DeleteEdgeRedo, DeleteVertexRedo, InsertEdgeRedo, InsertVertexRedo, UpdateVertexPropRedo,
@@ -12,6 +12,13 @@ use crate::core::wal::types::WalOpType;
 use crate::core::{Edge, EdgeDirection, StorageError, StorageResult, Value, Vertex};
 use crate::storage::engine::params::{EdgeOperationParams, InsertEdgeParams};
 use crate::storage::index::traits::VertexIndexOps;
+use crate::transaction::codec::value_to_property_value;
+use crate::transaction::undo_log::{
+    InsertEdgeUndo, InsertVertexUndo, RemoveVertexUndo, RestoreEdgeUndo, UndoLogEntry,
+    UpdateVertexPropUndo,
+};
+use crate::transaction::wal::TransactionWalEntry;
+use crate::transaction::{MutationEntityKey, MutationResult};
 
 use super::context::GraphStorageContext;
 use super::ops::{edge_label_id, endpoint_label_id, tag_label_id};
@@ -24,6 +31,7 @@ struct InsertedVertexTag {
     vid: VertexId,
     vertex_id: Value,
     tag_name: String,
+    redo_entry: TransactionWalEntry,
 }
 
 #[derive(Debug)]
@@ -35,6 +43,164 @@ struct InsertedEdgeRecord {
     dst: VertexId,
     edge_type: String,
     rank: i64,
+    redo_entry: TransactionWalEntry,
+}
+
+fn record_vertex_insert(
+    ctx: &GraphStorageContext,
+    label: LabelId,
+    vid: VertexId,
+    redo_entry: Option<TransactionWalEntry>,
+) -> StorageResult<()> {
+    let Some(recorder) = ctx.mutation_recorder() else {
+        return Ok(());
+    };
+    recorder.record_mutation(MutationResult {
+        entity_keys: vec![MutationEntityKey::Vertex(vid)],
+        undo_entry: Some(UndoLogEntry::InsertVertex(InsertVertexUndo {
+            v_label: label,
+            vid,
+        })),
+        redo_entry,
+        modified_table: Some("vertex".to_string()),
+        ..MutationResult::default()
+    })
+    .map_err(|error| StorageError::db_error(error.to_string()))?;
+    Ok(())
+}
+
+fn record_vertex_remove(
+    ctx: &GraphStorageContext,
+    label: LabelId,
+    vid: VertexId,
+    redo_entry: Option<TransactionWalEntry>,
+) -> StorageResult<()> {
+    let Some(recorder) = ctx.mutation_recorder() else {
+        return Ok(());
+    };
+    recorder
+        .record_mutation(MutationResult {
+            entity_keys: vec![MutationEntityKey::Vertex(vid)],
+            undo_entry: Some(UndoLogEntry::RemoveVertex(RemoveVertexUndo {
+            v_label: label,
+            vid,
+            related_edges: Vec::new(),
+            })),
+            redo_entry,
+            modified_table: Some("vertex".to_string()),
+            ..MutationResult::default()
+        })
+        .map_err(|error| StorageError::db_error(error.to_string()))?;
+    Ok(())
+}
+
+fn vertex_column_id(
+    ctx: &GraphStorageContext,
+    label: LabelId,
+    property_name: &str,
+) -> Option<ColumnId> {
+    ctx.data_store().with_vertex_tables(|tables| {
+        tables.get(&label).and_then(|table| {
+            table
+                .schema()
+                .properties
+                .iter()
+                .position(|property| property.name == property_name)
+                .and_then(|index| u32::try_from(index).ok())
+                .map(ColumnId)
+        })
+    })
+}
+
+fn record_vertex_property_update(
+    ctx: &GraphStorageContext,
+    label: LabelId,
+    vid: VertexId,
+    property_name: &str,
+    old_value: Option<&Value>,
+    redo_entry: Option<TransactionWalEntry>,
+) -> StorageResult<()> {
+    let Some(recorder) = ctx.mutation_recorder() else {
+        return Ok(());
+    };
+    let Some(col_id) = vertex_column_id(ctx, label, property_name) else {
+        return Err(StorageError::column_not_found(property_name.to_string()));
+    };
+    recorder
+        .record_mutation(MutationResult {
+            entity_keys: vec![MutationEntityKey::Vertex(vid)],
+            undo_entry: Some(UndoLogEntry::UpdateVertexProp(UpdateVertexPropUndo {
+            v_label: label,
+            vid,
+            col_id,
+            old_value: old_value
+                .map(value_to_property_value)
+                .unwrap_or(crate::transaction::undo_log::PropertyValue::Null),
+            })),
+            redo_entry,
+            modified_table: Some("vertex".to_string()),
+            ..MutationResult::default()
+        })
+        .map_err(|error| StorageError::db_error(error.to_string()))?;
+    Ok(())
+}
+
+fn record_edge_insert(
+    ctx: &GraphStorageContext,
+    edge: EdgeIdentifier,
+    redo_entry: Option<TransactionWalEntry>,
+) -> StorageResult<()> {
+    let Some(recorder) = ctx.mutation_recorder() else {
+        return Ok(());
+    };
+    recorder
+        .record_mutation(MutationResult {
+            entity_keys: vec![MutationEntityKey::Edge(edge)],
+            undo_entry: Some(UndoLogEntry::InsertEdge(InsertEdgeUndo {
+            src_label: edge.src_label,
+            src_vid: edge.src_vid,
+            dst_label: edge.dst_label,
+            dst_vid: edge.dst_vid,
+            edge_label: edge.edge_label,
+            rank: edge.rank,
+            oe_offset: -1,
+            ie_offset: -1,
+            })),
+            redo_entry,
+            modified_table: Some("edge".to_string()),
+            ..MutationResult::default()
+        })
+        .map_err(|error| StorageError::db_error(error.to_string()))?;
+    Ok(())
+}
+
+fn record_edge_remove(
+    ctx: &GraphStorageContext,
+    edge: EdgeIdentifier,
+    properties: Vec<(String, Value)>,
+    redo_entry: Option<TransactionWalEntry>,
+) -> StorageResult<()> {
+    let Some(recorder) = ctx.mutation_recorder() else {
+        return Ok(());
+    };
+    recorder
+        .record_mutation(MutationResult {
+            entity_keys: vec![MutationEntityKey::Edge(edge)],
+            undo_entry: Some(UndoLogEntry::RestoreEdge(RestoreEdgeUndo {
+            src_label: edge.src_label,
+            src_vid: edge.src_vid,
+            dst_label: edge.dst_label,
+            dst_vid: edge.dst_vid,
+            edge_label: edge.edge_label,
+            rank: edge.rank,
+            properties,
+            })),
+            redo_entry,
+            modified_table: Some("edge".to_string()),
+            ..MutationResult::default()
+        })
+        .map_err(|error| StorageError::db_error(error.to_string()))?;
+    Ok(())
 }
 
 pub(crate) fn insert_vertex(
@@ -47,16 +213,24 @@ pub(crate) fn insert_vertex(
         .get_space(space)?
         .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
 
-    let ts = ctx.get_write_timestamp();
+    let ts = ctx.get_write_timestamp()?;
     let mut rollback = Vec::new();
     let result =
         insert_vertex_at_timestamp(ctx, space, space_info.space_id, vertex, ts, &mut rollback);
 
     if result.is_err() {
         rollback_vertex_tags(ctx, space_info.space_id, &rollback, ts);
+    } else {
+        for item in &rollback {
+            record_vertex_insert(ctx, item.label_id, item.vid, Some(item.redo_entry.clone()))?;
+        }
     }
 
-    ctx.release_write_timestamp(ts);
+    if result.is_ok() {
+        ctx.commit_write_timestamp(ts);
+    } else {
+        ctx.abort_write_timestamp(ts);
+    }
 
     result
 }
@@ -82,7 +256,7 @@ fn insert_vertex_at_timestamp(
             vid: vertex.vid,
             properties: props.clone(),
         };
-        ctx.append_wal_redo(WalOpType::InsertVertex, ts, &redo)?;
+        let redo_entry = ctx.append_wal_redo(WalOpType::InsertVertex, ts, &redo)?;
 
         if let Some(vid_int) = vertex.vid.as_int64() {
             ctx.insert_vertex_by_i64(label_id, vid_int, &props, ts)?;
@@ -100,6 +274,7 @@ fn insert_vertex_at_timestamp(
             vid: vertex.vid,
             vertex_id: vid_value.clone(),
             tag_name: tag.name.clone(),
+            redo_entry,
         });
 
         update_vertex_indexes(
@@ -149,7 +324,7 @@ pub(crate) fn update_vertex(
         .get_space(space)?
         .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
 
-    let ts = ctx.get_write_timestamp();
+    let ts = ctx.get_write_timestamp()?;
     let vid_int = vertex.vid.as_int64();
 
     for tag in &vertex.tags {
@@ -172,13 +347,20 @@ pub(crate) fn update_vertex(
             }
 
             for (prop_name, value) in &tag.properties {
+                let old_value = current_record.as_ref().and_then(|record| {
+                    record
+                        .properties
+                        .iter()
+                        .find(|(name, _)| name == prop_name)
+                        .map(|(_, value)| value)
+                });
                 let redo = UpdateVertexPropRedo {
                     label: label_id,
                     vid: vertex.vid,
                     prop_name: prop_name.clone(),
                     value: value.clone(),
                 };
-                ctx.append_wal_redo(WalOpType::UpdateVertexProp, ts, &redo)?;
+                let redo_entry = ctx.append_wal_redo(WalOpType::UpdateVertexProp, ts, &redo)?;
 
                 if let Some(id_int) = vid_int {
                     ctx.update_vertex_property_by_i64(label_id, id_int, prop_name, value, ts)?;
@@ -188,6 +370,14 @@ pub(crate) fn update_vertex(
                     let id_str = vertex.vid.to_string();
                     ctx.update_vertex_property(label_id, &id_str, prop_name, value, ts)?;
                 }
+                record_vertex_property_update(
+                    ctx,
+                    label_id,
+                    vertex.vid,
+                    prop_name,
+                    old_value,
+                    Some(redo_entry),
+                )?;
             }
 
             let props: Vec<(String, Value)> = merged_props.into_iter().collect();
@@ -204,7 +394,7 @@ pub(crate) fn update_vertex(
         }
     }
 
-    ctx.release_write_timestamp(ts);
+    ctx.commit_write_timestamp(ts);
 
     Ok(())
 }
@@ -220,7 +410,7 @@ pub(crate) fn delete_vertex(
         .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
 
     let tags = ctx.schema_manager().list_tags(space)?;
-    let ts = ctx.get_write_timestamp();
+    let ts = ctx.get_write_timestamp()?;
     let id_int = id.as_int64();
 
     for tag in &tags {
@@ -229,29 +419,32 @@ pub(crate) fn delete_vertex(
             label: label_id,
             vid: *id,
         };
-        ctx.append_wal_redo(WalOpType::DeleteVertex, ts, &redo)?;
+        let redo_entry = ctx.append_wal_redo(WalOpType::DeleteVertex, ts, &redo)?;
 
-        if let Some(vid_int) = id_int {
-            let _ = ctx.delete_vertex_by_i64(label_id, vid_int, ts);
+        let delete_result = if let Some(vid_int) = id_int {
+            ctx.delete_vertex_by_i64(label_id, vid_int, ts)
         } else if let Some(id_str) = id.as_str() {
-            let _ = ctx.delete_vertex(label_id, id_str, ts);
+            ctx.delete_vertex(label_id, id_str, ts)
         } else {
             let id_str = id.to_string();
-            let _ = ctx.delete_vertex(label_id, &id_str, ts);
-        }
+            ctx.delete_vertex(label_id, &id_str, ts)
+        };
 
-        let id_value = Value::from(*id);
-        delete_vertex_indexes(
-            ctx,
-            ctx.index_metadata_manager(),
-            space_info.space_id,
-            &id_value,
-            &tag.tag_name,
-            ts,
-        )?;
+        if delete_result.is_ok() {
+            record_vertex_remove(ctx, label_id, *id, Some(redo_entry))?;
+            let id_value = Value::from(*id);
+            delete_vertex_indexes(
+                ctx,
+                ctx.index_metadata_manager(),
+                space_info.space_id,
+                &id_value,
+                &tag.tag_name,
+                ts,
+            )?;
+        }
     }
 
-    ctx.release_write_timestamp(ts);
+    ctx.commit_write_timestamp(ts);
 
     Ok(())
 }
@@ -289,7 +482,7 @@ pub(crate) fn batch_insert_vertices(
 
     validate_vertex_batch(ctx, space, &vertices)?;
 
-    let ts = ctx.get_write_timestamp();
+    let ts = ctx.get_write_timestamp()?;
     let mut ids = Vec::with_capacity(vertices.len());
     let mut rollback = Vec::new();
 
@@ -305,14 +498,18 @@ pub(crate) fn batch_insert_vertices(
             Ok(id) => id,
             Err(e) => {
                 rollback_vertex_tags(ctx, space_info.space_id, &rollback, ts);
-                ctx.release_write_timestamp(ts);
+                ctx.abort_write_timestamp(ts);
                 return Err(e);
             }
         };
         ids.push(id);
     }
 
-    ctx.release_write_timestamp(ts);
+    for item in &rollback {
+        record_vertex_insert(ctx, item.label_id, item.vid, Some(item.redo_entry.clone()))?;
+    }
+
+    ctx.commit_write_timestamp(ts);
 
     Ok(ids)
 }
@@ -346,7 +543,7 @@ pub(crate) fn delete_tags(
         .get_space(space)?
         .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
 
-    let ts = ctx.get_write_timestamp();
+    let ts = ctx.get_write_timestamp()?;
     let mut deleted_count = 0;
 
     let id_int = vertex_id.as_int64();
@@ -358,7 +555,7 @@ pub(crate) fn delete_tags(
                 label: label_id,
                 vid: *vertex_id,
             };
-            ctx.append_wal_redo(WalOpType::DeleteVertex, ts, &redo)?;
+            let redo_entry = ctx.append_wal_redo(WalOpType::DeleteVertex, ts, &redo)?;
 
             let result = if let Some(vid_int) = id_int {
                 ctx.delete_vertex_by_i64(label_id, vid_int, ts)
@@ -370,6 +567,7 @@ pub(crate) fn delete_tags(
             };
 
             if result.is_ok() {
+                record_vertex_remove(ctx, label_id, *vertex_id, Some(redo_entry))?;
                 let vertex_id_value = Value::from(*vertex_id);
                 delete_vertex_indexes(
                     ctx,
@@ -384,7 +582,7 @@ pub(crate) fn delete_tags(
         }
     }
 
-    ctx.release_write_timestamp(ts);
+    ctx.commit_write_timestamp(ts);
 
     Ok(deleted_count)
 }
@@ -395,15 +593,34 @@ pub(crate) fn insert_edge(ctx: &GraphStorageContext, space: &str, edge: Edge) ->
         .get_space(space)?
         .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
 
-    let ts = ctx.get_write_timestamp();
+    let ts = ctx.get_write_timestamp()?;
     let mut rollback = Vec::new();
     let result = insert_edge_at_timestamp(ctx, space, space_info.space_id, edge, ts, &mut rollback);
 
     if result.is_err() {
         rollback_edges(ctx, space_info.space_id, &rollback, ts);
+    } else {
+        for item in &rollback {
+            record_edge_insert(
+                ctx,
+                EdgeIdentifier::new(
+                    item.src_label_id,
+                    item.src,
+                    item.dst_label_id,
+                    item.dst,
+                    item.edge_label_id,
+                    item.rank,
+                ),
+                Some(item.redo_entry.clone()),
+            )?;
+        }
     }
 
-    ctx.release_write_timestamp(ts);
+    if result.is_ok() {
+        ctx.commit_write_timestamp(ts);
+    } else {
+        ctx.abort_write_timestamp(ts);
+    }
 
     result
 }
@@ -446,7 +663,7 @@ fn insert_edge_at_timestamp(
         rank: edge.ranking,
         properties: props.clone(),
     };
-    ctx.append_wal_redo(WalOpType::InsertEdge, ts, &redo)?;
+    let redo_entry = ctx.append_wal_redo(WalOpType::InsertEdge, ts, &redo)?;
 
     ctx.insert_edge(InsertEdgeParams {
         edge_label: edge_label_id,
@@ -467,6 +684,7 @@ fn insert_edge_at_timestamp(
         dst: edge.dst,
         edge_type: edge.edge_type.clone(),
         rank: edge.ranking,
+        redo_entry,
     });
 
     ctx.update_all_edge_indexes_mvcc(
@@ -531,13 +749,14 @@ pub(crate) fn delete_edge_at_timestamp(
     edge_type: &str,
     rank: i64,
     ts: Timestamp,
-) -> StorageResult<()> {
+) -> StorageResult<Option<TransactionWalEntry>> {
     let space_id = ctx.schema_manager().get_space_id(space)?;
     let edge_label_id = edge_label_id(ctx, space, edge_type)?
         .ok_or_else(|| StorageError::not_found(format!("Edge type {} not found", edge_type)))?;
 
     let edge_types = ctx.schema_manager().list_edge_types(space)?;
     let mut deleted = false;
+    let mut redo_entry = None;
     for et in edge_types {
         if et.edge_type_name == edge_type {
             let src_label_id = match endpoint_label_id(ctx, space, &et.src_tag_name)? {
@@ -556,7 +775,7 @@ pub(crate) fn delete_edge_at_timestamp(
                 edge_label: edge_label_id,
                 rank,
             };
-            ctx.append_wal_redo(WalOpType::DeleteEdge, ts, &redo)?;
+            redo_entry = Some(ctx.append_wal_redo(WalOpType::DeleteEdge, ts, &redo)?);
 
             let deleted_edge = ctx.delete_edge(
                 &EdgeOperationParams {
@@ -574,12 +793,7 @@ pub(crate) fn delete_edge_at_timestamp(
                 let src_value = Value::from(*src);
                 let dst_value = Value::from(*dst);
                 ctx.delete_all_edge_indexes_mvcc(
-                    space_id,
-                    &src_value,
-                    &dst_value,
-                    edge_type,
-                    rank,
-                    ts,
+                    space_id, &src_value, &dst_value, edge_type, rank, ts,
                 )?;
                 deleted = true;
             }
@@ -594,7 +808,7 @@ pub(crate) fn delete_edge_at_timestamp(
         )));
     }
 
-    Ok(())
+    Ok(redo_entry)
 }
 
 pub(crate) fn delete_edge(
@@ -605,10 +819,37 @@ pub(crate) fn delete_edge(
     edge_type: &str,
     rank: i64,
 ) -> StorageResult<()> {
-    let ts = ctx.get_write_timestamp();
+    let previous = reader::get_edge(ctx, space, src, dst, edge_type, rank)?;
+    let ts = ctx.get_write_timestamp()?;
     let result = delete_edge_at_timestamp(ctx, space, src, dst, edge_type, rank, ts);
-    ctx.release_write_timestamp(ts);
-    result
+    if result.is_ok() {
+        if let Some(previous) = previous {
+            let edge_info = resolve_edge_type(ctx, space, edge_type)?;
+            let src_label = endpoint_label_id(ctx, space, &edge_info.src_tag_name)?
+                .ok_or_else(|| StorageError::not_found("Source tag not found"))?;
+            let dst_label = endpoint_label_id(ctx, space, &edge_info.dst_tag_name)?
+                .ok_or_else(|| StorageError::not_found("Destination tag not found"))?;
+            record_edge_remove(
+                ctx,
+                EdgeIdentifier::new(
+                    src_label,
+                    *src,
+                    dst_label,
+                    *dst,
+                    edge_info.edge_type_id,
+                    rank,
+                ),
+                previous.props.into_iter().collect(),
+                result.as_ref().ok().and_then(Clone::clone),
+            )?;
+        }
+    }
+    if result.is_ok() {
+        ctx.commit_write_timestamp(ts);
+    } else {
+        ctx.abort_write_timestamp(ts);
+    }
+    result.map(|_| ())
 }
 
 /// Atomically replace an edge's properties: delete the old edge and insert the
@@ -630,20 +871,46 @@ pub(crate) fn update_edge(ctx: &GraphStorageContext, space: &str, edge: Edge) ->
     let current_props = super::reader::get_edge(ctx, space, &src, &dst, &edge_type, ranking)?
         .map(|e| e.props)
         .unwrap_or_default();
+    let edge_info = resolve_edge_type(ctx, space, &edge_type)?;
+    let src_label = endpoint_label_id(ctx, space, &edge_info.src_tag_name)?
+        .ok_or_else(|| StorageError::not_found("Source tag not found"))?;
+    let dst_label = endpoint_label_id(ctx, space, &edge_info.dst_tag_name)?
+        .ok_or_else(|| StorageError::not_found("Destination tag not found"))?;
 
-    let ts = ctx.get_write_timestamp();
+    let ts = ctx.get_write_timestamp()?;
 
     // Delete the old edge
-    if let Err(e) = delete_edge_at_timestamp(ctx, space, &src, &dst, &edge_type, ranking, ts) {
-        ctx.release_write_timestamp(ts);
+    let delete_redo = match delete_edge_at_timestamp(ctx, space, &src, &dst, &edge_type, ranking, ts) {
+        Ok(entry) => entry,
+        Err(e) => {
+        ctx.abort_write_timestamp(ts);
         return Err(e);
-    }
+        }
+    };
 
     // Insert the new edge
     let mut rollback = Vec::new();
     match insert_edge_at_timestamp(ctx, space, space_info.space_id, edge, ts, &mut rollback) {
         Ok(()) => {
-            ctx.release_write_timestamp(ts);
+            let edge_id = EdgeIdentifier::new(
+                src_label,
+                src,
+                dst_label,
+                dst,
+                edge_info.edge_type_id,
+                ranking,
+            );
+            let inserted_redo = rollback
+                .first()
+                .map(|record| record.redo_entry.clone());
+            record_edge_insert(ctx, edge_id, inserted_redo)?;
+            record_edge_remove(
+                ctx,
+                edge_id,
+                current_props.clone().into_iter().collect(),
+                delete_redo,
+            )?;
+            ctx.commit_write_timestamp(ts);
             Ok(())
         }
         Err(e) => {
@@ -664,7 +931,7 @@ pub(crate) fn update_edge(ctx: &GraphStorageContext, space: &str, edge: Edge) ->
                 ts,
                 &mut Vec::new(),
             );
-            ctx.release_write_timestamp(ts);
+            ctx.abort_write_timestamp(ts);
             Err(e)
         }
     }
@@ -682,7 +949,7 @@ pub(crate) fn batch_insert_edges(
 
     validate_edge_batch(ctx, space, &edges)?;
 
-    let ts = ctx.get_write_timestamp();
+    let ts = ctx.get_write_timestamp()?;
     let mut rollback = Vec::new();
 
     for edge in edges {
@@ -694,7 +961,22 @@ pub(crate) fn batch_insert_edges(
         }
     }
 
-    ctx.release_write_timestamp(ts);
+    for item in &rollback {
+        record_edge_insert(
+            ctx,
+            EdgeIdentifier::new(
+                item.src_label_id,
+                item.src,
+                item.dst_label_id,
+                item.dst,
+                item.edge_label_id,
+                item.rank,
+            ),
+            Some(item.redo_entry.clone()),
+        )?;
+    }
+
+    ctx.commit_write_timestamp(ts);
 
     Ok(())
 }
@@ -741,12 +1023,18 @@ pub(crate) fn insert_vertex_data(
         return Err(StorageError::db_error("Space ID mismatch".to_string()));
     }
 
-    let ts = ctx.get_write_timestamp();
+    let ts = ctx.get_write_timestamp()?;
 
     let label_id = tag.tag_id;
     let vid = VertexId::try_from(&info.vertex_id)
         .map_err(|e| StorageError::invalid_input(e.to_string()))?;
 
+    let redo = InsertVertexRedo {
+        label: label_id,
+        vid,
+        properties: info.props.clone(),
+    };
+    let redo_entry = ctx.append_wal_redo(WalOpType::InsertVertex, ts, &redo)?;
     let result = if let Some(id_int) = vid.as_int64() {
         ctx.insert_vertex_by_i64(label_id, id_int, &info.props, ts)
     } else if let Some(id_str) = vid.as_str() {
@@ -766,6 +1054,7 @@ pub(crate) fn insert_vertex_data(
                 &info.props,
                 ts,
             )?;
+            record_vertex_insert(ctx, label_id, vid, Some(redo_entry))?;
             Ok(true)
         }
         Err(ref e)
@@ -775,7 +1064,11 @@ pub(crate) fn insert_vertex_data(
         }
         Err(e) => Err(e),
     };
-    ctx.release_write_timestamp(ts);
+    if final_result.is_ok() {
+        ctx.commit_write_timestamp(ts);
+    } else {
+        ctx.abort_write_timestamp(ts);
+    }
     final_result
 }
 
@@ -800,7 +1093,7 @@ pub(crate) fn insert_edge_data(
         return Err(StorageError::db_error("Space ID mismatch".to_string()));
     }
 
-    let ts = ctx.get_write_timestamp();
+    let ts = ctx.get_write_timestamp()?;
 
     let edge_label_id = edge_type.edge_type_id;
     let src_vid = VertexId::try_from(&info.src_vertex_id)
@@ -818,6 +1111,16 @@ pub(crate) fn insert_edge_data(
                 edge_type.dst_tag_name
             ))
         })?;
+    let redo = InsertEdgeRedo {
+        src_label: src_label_id,
+        src_vid,
+        dst_label: dst_label_id,
+        dst_vid,
+        edge_label: edge_label_id,
+        rank: info.rank,
+        properties: info.props.clone(),
+    };
+    let redo_entry = ctx.append_wal_redo(WalOpType::InsertEdge, ts, &redo)?;
     let result = ctx.insert_edge(InsertEdgeParams {
         edge_label: edge_label_id,
         src_label: src_label_id,
@@ -842,7 +1145,21 @@ pub(crate) fn insert_edge_data(
                 &info.props,
                 ts,
             ) {
-                Ok(()) => Ok(true),
+                Ok(()) => {
+                    record_edge_insert(
+                        ctx,
+                        EdgeIdentifier::new(
+                            src_label_id,
+                            src_vid,
+                            dst_label_id,
+                            dst_vid,
+                            edge_label_id,
+                            info.rank,
+                        ),
+                        Some(redo_entry),
+                    )?;
+                    Ok(true)
+                }
                 Err(error) => {
                     let _ = ctx.delete_edge(
                         &EdgeOperationParams {
@@ -866,7 +1183,11 @@ pub(crate) fn insert_edge_data(
         }
         Err(e) => Err(e),
     };
-    ctx.release_write_timestamp(ts);
+    if final_result.is_ok() {
+        ctx.commit_write_timestamp(ts);
+    } else {
+        ctx.abort_write_timestamp(ts);
+    }
     final_result
 }
 
@@ -881,12 +1202,19 @@ pub(crate) fn delete_vertex_data(
         .ok_or_else(|| StorageError::not_found(format!("Space {} not found", space)))?;
 
     let tags = ctx.schema_manager().list_tags(space)?;
-    let ts = ctx.get_write_timestamp();
+    let ts = ctx.get_write_timestamp()?;
     let mut deleted = false;
+    let vid = vertex_id
+        .parse::<i64>()
+        .map(VertexId::from_int64)
+        .unwrap_or_else(|_| VertexId::from_string(vertex_id));
 
     for tag in tags {
         let label_id = tag.tag_id;
         if ctx.delete_vertex(label_id, vertex_id, ts).is_ok() {
+            let redo = DeleteVertexRedo { label: label_id, vid };
+            let redo_entry = ctx.append_wal_redo(WalOpType::DeleteVertex, ts, &redo)?;
+            record_vertex_remove(ctx, label_id, vid, Some(redo_entry))?;
             delete_vertex_indexes(
                 ctx,
                 ctx.index_metadata_manager(),
@@ -899,7 +1227,7 @@ pub(crate) fn delete_vertex_data(
         }
     }
 
-    ctx.release_write_timestamp(ts);
+    ctx.commit_write_timestamp(ts);
 
     Ok(deleted)
 }
@@ -913,7 +1241,7 @@ pub(crate) fn delete_edge_data(
 ) -> StorageResult<bool> {
     let space_id = ctx.schema_manager().get_space_id(space)?;
     let edge_types = ctx.schema_manager().list_edge_types(space)?;
-    let ts = ctx.get_write_timestamp();
+    let ts = ctx.get_write_timestamp()?;
     let mut deleted = false;
 
     for et in edge_types {
@@ -934,6 +1262,18 @@ pub(crate) fn delete_edge_data(
             .parse::<i64>()
             .map(VertexId::from_int64)
             .unwrap_or_else(|_| VertexId::from_string(dst));
+        let previous = reader::get_edge(ctx, space, &src_vid, &dst_vid, &et.edge_type_name, rank)?;
+        let redo_entry = previous.as_ref().map(|_| {
+            let redo = DeleteEdgeRedo {
+                src_label: src_label_id,
+                src_vid,
+                dst_label: dst_label_id,
+                dst_vid,
+                edge_label: edge_label_id,
+                rank,
+            };
+            ctx.append_wal_redo(WalOpType::DeleteEdge, ts, &redo)
+        }).transpose()?;
         if ctx
             .delete_edge(
                 &EdgeOperationParams {
@@ -948,6 +1288,21 @@ pub(crate) fn delete_edge_data(
             )
             .is_ok_and(|deleted_edge| deleted_edge)
         {
+            if let Some(previous) = previous {
+                record_edge_remove(
+                    ctx,
+                    EdgeIdentifier::new(
+                        src_label_id,
+                        src_vid,
+                        dst_label_id,
+                        dst_vid,
+                        edge_label_id,
+                        rank,
+                    ),
+                    previous.props.into_iter().collect(),
+                    redo_entry,
+                )?;
+            }
             let src_value = Value::from(src_vid);
             let dst_value = Value::from(dst_vid);
             ctx.delete_all_edge_indexes_mvcc(
@@ -962,7 +1317,7 @@ pub(crate) fn delete_edge_data(
         }
     }
 
-    ctx.release_write_timestamp(ts);
+    ctx.commit_write_timestamp(ts);
 
     Ok(deleted)
 }
@@ -982,7 +1337,7 @@ pub(crate) fn update_data(
         return Err(StorageError::db_error("Space ID mismatch".to_string()));
     }
 
-    let ts = ctx.get_write_timestamp();
+    let ts = ctx.get_write_timestamp()?;
 
     let UpdateTarget {
         space_name,
@@ -1047,6 +1402,14 @@ pub(crate) fn update_data(
         };
 
         ctx.update_vertex_property(label_id, &id_str, prop, &value, ts)?;
+        let old_value = current_record.as_ref().and_then(|record| {
+            record
+                .properties
+                .iter()
+                .find(|(name, _)| name == prop)
+                .map(|(_, value)| value)
+        });
+        record_vertex_property_update(ctx, label_id, vid, prop, old_value, None)?;
 
         let mut merged_props: HashMap<String, Value> = current_record
             .as_ref()
@@ -1063,10 +1426,10 @@ pub(crate) fn update_data(
             &merged_props.into_iter().collect::<Vec<_>>(),
             ts,
         )?;
-        ctx.release_write_timestamp(ts);
+        ctx.commit_write_timestamp(ts);
         Ok(true)
     } else {
-        ctx.release_write_timestamp(ts);
+        ctx.abort_write_timestamp(ts);
         Err(StorageError::not_found(format!(
             "Label {} not found",
             label

@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
@@ -331,11 +331,28 @@ struct GraphStorageRuntime {
 struct WriteTimestampLease {
     version_manager: Arc<VersionManager>,
     timestamp: Timestamp,
+    finalized: AtomicBool,
 }
 
 impl Drop for WriteTimestampLease {
     fn drop(&mut self) {
-        self.version_manager.release_write_timestamp(self.timestamp);
+        if !self.finalized.swap(true, Ordering::SeqCst) {
+            self.version_manager.abort_write_timestamp(self.timestamp);
+        }
+    }
+}
+
+impl WriteTimestampLease {
+    fn commit(&self) {
+        if !self.finalized.swap(true, Ordering::SeqCst) {
+            self.version_manager.commit_write_timestamp(self.timestamp);
+        }
+    }
+
+    fn abort(&self) {
+        if !self.finalized.swap(true, Ordering::SeqCst) {
+            self.version_manager.abort_write_timestamp(self.timestamp);
+        }
     }
 }
 

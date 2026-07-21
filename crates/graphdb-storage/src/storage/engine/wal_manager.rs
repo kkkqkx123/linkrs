@@ -167,6 +167,21 @@ impl WalManager {
         entries: Vec<TransactionWalEntry>,
         intents: &[OutboxIntent],
     ) -> StorageResult<CommitLsn> {
+        self.append_transaction_with_durability(
+            transaction_id,
+            entries,
+            intents,
+            crate::core::types::DurabilityLevel::Sync,
+        )
+    }
+
+    pub fn append_transaction_with_durability(
+        &self,
+        transaction_id: TransactionId,
+        entries: Vec<TransactionWalEntry>,
+        intents: &[OutboxIntent],
+        durability: crate::core::types::DurabilityLevel,
+    ) -> StorageResult<CommitLsn> {
         let Some(writer) = self.local_writer.as_ref() else {
             return Err(StorageError::wal_error(
                 "WAL writer is not initialized".to_string(),
@@ -174,7 +189,7 @@ impl WalManager {
         };
         writer
             .write()
-            .append_transaction_batch(transaction_id, entries, intents)
+            .append_transaction_batch_with_durability(transaction_id, entries, intents, durability)
             .map_err(|error| {
                 StorageError::wal_error(format!(
                     "Failed to append committed WAL transaction: {}",

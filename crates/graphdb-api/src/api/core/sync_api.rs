@@ -41,6 +41,13 @@ impl SyncApi {
         self.sync_manager.outbox_stats()
     }
 
+    /// Retry delivery of all pending durable outbox entries.
+    pub fn retry_outbox_projection(&self) -> Result<usize, String> {
+        self.sync_manager
+            .retry_outbox_sync()
+            .map_err(|error| error.to_string())
+    }
+
     /// Get vector coordinator
     #[cfg(feature = "qdrant")]
     pub fn vector_coordinator(&self) -> Option<&Arc<crate::sync::VectorSyncCoordinator>> {

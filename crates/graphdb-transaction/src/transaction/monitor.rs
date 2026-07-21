@@ -47,29 +47,38 @@ impl TransactionMonitor {
             .map(|entry| entry.value().start_time.elapsed())
             .collect();
 
-        if durations.is_empty() {
-            return metrics;
-        }
-
-        let mut sorted_durations = durations.clone();
-        sorted_durations.sort();
-
-        metrics.p50_duration = sorted_durations[sorted_durations.len() * 50 / 100];
-        metrics.p95_duration = sorted_durations[sorted_durations.len() * 95 / 100];
-        metrics.p99_duration = sorted_durations[sorted_durations.len() * 99 / 100];
-
-        let total: Duration = durations.iter().sum();
-        metrics.avg_duration = total / durations.len() as u32;
-
-        metrics.long_transactions = active_transactions
-            .iter()
-            .filter(|entry| entry.value().start_time.elapsed() > Duration::from_secs(10))
-            .map(|entry| entry.value().info())
-            .collect();
-
         metrics.total_count = self.stats.total_transactions.load(Ordering::Relaxed);
         metrics.conflict_rate = self.stats.conflict_rate();
         metrics.conflict_rate_windowed = self.stats.conflict_rate_windowed();
+        metrics.active_transactions = self.stats.active_transactions.load(Ordering::Relaxed);
+        metrics.committed_transactions = self.stats.committed_transactions.load(Ordering::Relaxed);
+        metrics.aborted_transactions = self.stats.aborted_transactions.load(Ordering::Relaxed);
+        metrics.timeout_transactions = self.stats.timeout_transactions.load(Ordering::Relaxed);
+        metrics.disconnect_transactions =
+            self.stats.disconnect_transactions.load(Ordering::Relaxed);
+        metrics.cleanup_failure_transactions = self
+            .stats
+            .cleanup_failure_transactions
+            .load(Ordering::Relaxed);
+        metrics.active_statements = self.stats.active_statements.load(Ordering::Relaxed);
+
+        if !durations.is_empty() {
+            let mut sorted_durations = durations.clone();
+            sorted_durations.sort();
+
+            metrics.p50_duration = sorted_durations[sorted_durations.len() * 50 / 100];
+            metrics.p95_duration = sorted_durations[sorted_durations.len() * 95 / 100];
+            metrics.p99_duration = sorted_durations[sorted_durations.len() * 99 / 100];
+
+            let total: Duration = durations.iter().sum();
+            metrics.avg_duration = total / durations.len() as u32;
+
+            metrics.long_transactions = active_transactions
+                .iter()
+                .filter(|entry| entry.value().start_time.elapsed() > Duration::from_secs(10))
+                .map(|entry| entry.value().info())
+                .collect();
+        }
 
         metrics
     }
@@ -136,6 +145,17 @@ impl TransactionMonitor {
     /// # Returns
     /// * `Vec<TransactionInfo>` - Active transactions info
     pub fn list_active_transactions(
+        &self,
+        active_transactions: &DashMap<TransactionId, Arc<TransactionContext>>,
+    ) -> Vec<TransactionInfo> {
+        active_transactions
+            .iter()
+            .filter(|entry| entry.value().state().can_execute())
+            .map(|entry| entry.value().info())
+            .collect()
+    }
+
+    pub fn list_transactions(
         &self,
         active_transactions: &DashMap<TransactionId, Arc<TransactionContext>>,
     ) -> Vec<TransactionInfo> {

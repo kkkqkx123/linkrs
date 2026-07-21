@@ -16,12 +16,16 @@ use crate::query::executor::base::ExecutionResult;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 type DropCallback = Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>;
+type TransactionCallback = Box<dyn FnOnce() -> Result<(), String> + Send>;
+type TransactionFinalizer =
+    Arc<Mutex<Option<(TransactionCallback, TransactionCallback)>>>;
 
 #[derive(Clone)]
 pub struct StreamingQueryResult {
     inner: Arc<Mutex<StreamState>>,
     runtime: Arc<ExecutionRuntime>,
     on_drop: DropCallback,
+    transaction_finalizer: TransactionFinalizer,
     dropped: Arc<AtomicBool>,
 }
 
@@ -35,6 +39,9 @@ impl Drop for StreamingQueryResult {
         }
         if self.dropped.swap(true, Ordering::Relaxed) {
             return;
+        }
+        if let Err(error) = self.finalize_transaction() {
+            log::error!("Streaming transaction finalization failed: {}", error);
         }
         if let Some(f) = self.on_drop.lock().take() {
             f();
@@ -56,6 +63,8 @@ enum StreamState {
     },
     /// Stream is exhausted.
     Exhausted,
+    /// Stream was explicitly closed before normal exhaustion.
+    Closed,
 }
 
 impl StreamingQueryResult {
@@ -75,6 +84,7 @@ impl StreamingQueryResult {
             inner: Arc::new(Mutex::new(StreamState::Streaming(stream, Some(col_names)))),
             runtime,
             on_drop: Arc::new(Mutex::new(None)),
+            transaction_finalizer: Arc::new(Mutex::new(None)),
             dropped: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -96,6 +106,7 @@ impl StreamingQueryResult {
                     })),
                     runtime,
                     on_drop: Arc::new(Mutex::new(None)),
+                    transaction_finalizer: Arc::new(Mutex::new(None)),
                     dropped: Arc::new(AtomicBool::new(false)),
                 }
             }
@@ -105,6 +116,7 @@ impl StreamingQueryResult {
                     inner: Arc::new(Mutex::new(StreamState::Exhausted)),
                     runtime,
                     on_drop: Arc::new(Mutex::new(None)),
+                    transaction_finalizer: Arc::new(Mutex::new(None)),
                     dropped: Arc::new(AtomicBool::new(false)),
                 }
             }
@@ -123,6 +135,7 @@ impl StreamingQueryResult {
                     })),
                     runtime,
                     on_drop: Arc::new(Mutex::new(None)),
+                    transaction_finalizer: Arc::new(Mutex::new(None)),
                     dropped: Arc::new(AtomicBool::new(false)),
                 }
             }
@@ -137,6 +150,7 @@ impl StreamingQueryResult {
                     })),
                     runtime,
                     on_drop: Arc::new(Mutex::new(None)),
+                    transaction_finalizer: Arc::new(Mutex::new(None)),
                     dropped: Arc::new(AtomicBool::new(false)),
                 }
             }
@@ -151,11 +165,29 @@ impl StreamingQueryResult {
         let mut guard = self.inner.lock();
         match &mut *guard {
             StreamState::Streaming(ref mut stream, ref mut cached) => {
-                let result = stream.next_chunk()?;
+                let result = match stream.next_chunk() {
+                    Ok(result) => result,
+                    Err(error) => {
+                        *guard = StreamState::Closed;
+                        drop(guard);
+                        self.finalize_transaction()
+                            .map_err(QueryError::execution)?;
+                        return Err(error);
+                    }
+                };
                 if let Some(ref chunk) = result {
                     if cached.is_none() {
                         *cached = Some(chunk.col_names());
                     }
+                }
+                let exhausted = result.is_none();
+                if exhausted {
+                    *guard = StreamState::Exhausted;
+                }
+                drop(guard);
+                if exhausted {
+                    self.finalize_transaction()
+                        .map_err(QueryError::execution)?;
                 }
                 Ok(result)
             }
@@ -165,6 +197,10 @@ impl StreamingQueryResult {
                 exhausted,
             } => {
                 if *exhausted {
+                    *guard = StreamState::Exhausted;
+                    drop(guard);
+                    self.finalize_transaction()
+                        .map_err(QueryError::execution)?;
                     return Ok(None);
                 }
                 *exhausted = true;
@@ -180,13 +216,16 @@ impl StreamingQueryResult {
                 let chunk = DataChunk::new(data, Arc::new(Schema::new(columns)));
                 Ok(Some(chunk))
             }
-            StreamState::Exhausted => Ok(None),
+            StreamState::Exhausted | StreamState::Closed => Ok(None),
         }
     }
 
     /// Cancel the query execution.
     pub fn cancel(&self) {
         self.runtime.cancel();
+        if let Err(error) = self.abort_transaction() {
+            log::error!("Streaming transaction cancellation failed: {}", error);
+        }
     }
 
     /// Check whether the query has been cancelled.
@@ -197,13 +236,14 @@ impl StreamingQueryResult {
     /// Close the stream and release resources.
     pub fn close(&self) -> Result<(), QueryError> {
         let mut guard = self.inner.lock();
-        match &mut *guard {
+        let result = match &mut *guard {
             StreamState::Streaming(ref mut stream, _) => stream.close(),
-            _ => {
-                *guard = StreamState::Exhausted;
-                Ok(())
-            }
-        }
+            _ => Ok(()),
+        };
+        *guard = StreamState::Closed;
+        drop(guard);
+        result?;
+        self.abort_transaction().map_err(QueryError::execution)
     }
 
     /// Consume all remaining chunks and materialise into a `DataSet`.
@@ -232,7 +272,7 @@ impl StreamingQueryResult {
         match &*guard {
             StreamState::Streaming(_, cached) => cached.clone(),
             StreamState::Materialized { col_names, .. } => Some(col_names.clone()),
-            StreamState::Exhausted => None,
+            StreamState::Exhausted | StreamState::Closed => None,
         }
     }
 
@@ -251,7 +291,67 @@ impl StreamingQueryResult {
     /// Used by the API layer to deregister the query from the session
     /// when the stream ends (via either completion, error, or client disconnect).
     pub fn set_on_drop(&self, f: Box<dyn FnOnce() + Send>) {
-        *self.on_drop.lock() = Some(f);
+        let previous = self.on_drop.lock().take();
+        *self.on_drop.lock() = Some(Box::new(move || {
+            if let Some(previous) = previous {
+                previous();
+            }
+            f();
+        }));
+    }
+
+    /// Register a transaction finalizer that fires when the stream is dropped.
+    ///
+    /// - `commit`: called when the stream is fully consumed without error.
+    /// - `abort`: called on error, cancellation, or premature drop.
+    ///
+    /// Only one finalizer can be registered. The `on_drop` callback is used
+    /// internally to invoke the appropriate branch.
+    pub fn set_transaction_finalizer(
+        &self,
+        commit: Box<dyn FnOnce() + Send>,
+        abort: Box<dyn FnOnce() + Send>,
+    ) {
+        self.set_transaction_finalizer_with_result(
+            Box::new(move || {
+                commit();
+                Ok(())
+            }),
+            Box::new(move || {
+                abort();
+                Ok(())
+            }),
+        );
+    }
+
+    /// Register a finalizer whose error is returned at stream exhaustion.
+    /// A finalizer triggered by `Drop` logs the error because no result can be
+    /// returned after ownership has been released.
+    pub fn set_transaction_finalizer_with_result(
+        &self,
+        commit: TransactionCallback,
+        abort: TransactionCallback,
+    ) {
+        *self.transaction_finalizer.lock() = Some((commit, abort));
+    }
+
+    fn finalize_transaction(&self) -> Result<(), String> {
+        let is_exhausted = matches!(*self.inner.lock(), StreamState::Exhausted);
+        let Some((commit, abort)) = self.transaction_finalizer.lock().take() else {
+            return Ok(());
+        };
+        if is_exhausted {
+            commit()
+        } else {
+            abort()
+        }
+    }
+
+    fn abort_transaction(&self) -> Result<(), String> {
+        let Some((_, abort)) = self.transaction_finalizer.lock().take() else {
+            return Ok(());
+        };
+        abort()
     }
 
     /// Set fallback column names that are available even before the first

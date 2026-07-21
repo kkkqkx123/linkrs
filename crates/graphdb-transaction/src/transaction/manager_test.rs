@@ -674,3 +674,53 @@ fn test_savepoint_basic() {
         .commit_transaction(txn_id)
         .expect("Failed to commit transaction");
 }
+
+#[test]
+fn test_read_committed_refreshes_statement_snapshot() {
+    let manager = create_test_manager();
+    let reader = manager
+        .begin_read_transaction(
+            TransactionOptions::default()
+                .read_only()
+                .with_isolation_level(crate::transaction::IsolationLevel::ReadCommitted),
+        )
+        .expect("reader should begin");
+    let initial = manager
+        .get_context(reader)
+        .expect("reader context should exist")
+        .effective_snapshot_timestamp();
+
+    let writer = manager
+        .begin_insert_transaction(TransactionOptions::default())
+        .expect("writer should begin");
+    manager
+        .commit_transaction(writer)
+        .expect("writer should commit");
+
+    let (context, statement_start) = manager
+        .begin_statement(reader)
+        .expect("reader statement should begin");
+    assert!(context.effective_snapshot_timestamp() > initial);
+    manager
+        .finish_statement(&context, statement_start)
+        .expect("reader statement should finish");
+    manager
+        .commit_transaction(reader)
+        .expect("reader should commit");
+}
+
+#[test]
+fn test_owner_is_required_for_kill() {
+    let manager = create_test_manager();
+    let txn_id = manager
+        .begin_transaction_with_owner(TransactionOptions::default(), "session-1")
+        .expect("transaction should begin");
+
+    let error = manager
+        .kill_transaction(txn_id, Some("session-2"))
+        .expect_err("a different owner must not kill the transaction");
+    assert_eq!(error.kind(), TransactionErrorKind::TransactionNotOwner);
+    manager
+        .kill_transaction(txn_id, Some("session-1"))
+        .expect("the owner should be able to kill the transaction");
+}

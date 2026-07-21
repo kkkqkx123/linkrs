@@ -11,9 +11,9 @@ use crate::core::metadata::SchemaManager;
 use crate::core::stats::StatsManager;
 use crate::core::types::SpaceSummary;
 use crate::core::{DataType, MetricType, Permission};
-use crate::query::DataSet;
-use crate::query::executor::ExecutionResult;
 use crate::query::executor::streaming::StreamingQueryResult;
+use crate::query::executor::ExecutionResult;
+use crate::query::DataSet;
 use crate::storage::{
     StorageClient, StorageOperationContext, StorageOperationContextOps, StorageSchemaContextOps,
     StorageSyncContextOps,
@@ -21,8 +21,8 @@ use crate::storage::{
 use crate::transaction::TransactionManager;
 use log::{info, warn};
 use parking_lot::RwLock;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 #[cfg(feature = "qdrant")]
 use vector_client::VectorManager;
@@ -46,13 +46,13 @@ pub struct GraphService<S: StorageClient + Clone + 'static> {
 }
 
 impl<
-    S: StorageClient
-        + StorageSchemaContextOps
-        + StorageSyncContextOps
-        + StorageOperationContextOps
-        + Clone
-        + 'static,
-> GraphService<S>
+        S: StorageClient
+            + StorageSchemaContextOps
+            + StorageSyncContextOps
+            + StorageOperationContextOps
+            + Clone
+            + 'static,
+    > GraphService<S>
 {
     /// Create a new GraphService (without a transaction manager, for use in a production environment).
     pub async fn new(config: Config, storage: Arc<S>) -> Arc<Self> {
@@ -396,29 +396,34 @@ impl<
             parameters: None,
         };
 
-        let execution_storage = session
-            .current_transaction()
-            .and_then(|txn_id| {
-                self.transaction_manager.as_ref().and_then(|manager| {
-                    manager.get_context(txn_id).ok().map(|context| {
-                        self.storage
-                            .bind_operation_context(StorageOperationContext::transaction(
-                                context.id,
-                                context.start_timestamp,
-                                context.read_only,
-                            ))
-                    })
-                })
-            })
-            .or_else(|| Some(self.storage.bind_auto_commit_context()));
         let mut query_api = self.query_api.write();
-        let result = query_api
-            .execute_stream_with_operation_storage(
-                stmt,
-                query_request,
-                execution_storage.ok_or_else(|| "Failed to bind query storage".to_string())?,
-            )
-            .map_err(|e| e.to_string())?;
+        let result = if let Some(txn_id) = session.current_transaction() {
+            let manager = self
+                .transaction_manager
+                .as_ref()
+                .ok_or_else(|| "Transaction manager is not configured".to_string())?;
+            manager
+                .refresh_statement_snapshot(txn_id)
+                .map_err(|error| error.to_string())?;
+            let execution = manager
+                .create_execution(txn_id, false)
+                .map_err(|error| error.to_string())?;
+            query_api
+                .execute_stream_with_execution(stmt, query_request, &execution)
+                .map_err(|e| e.to_string())?
+        } else {
+            let execution_storage = self
+                .storage
+                .bind_auto_commit_context()
+                .map_err(|error| error.to_string())?;
+            query_api
+                .execute_stream_with_operation_storage(
+                    stmt,
+                    query_request,
+                    execution_storage,
+                )
+                .map_err(|e| e.to_string())?
+        };
 
         // Assign a server-side monotonic query ID (not from SQL text hash).
         let query_id = self.next_query_id.fetch_add(1, Ordering::Relaxed) as u32;
@@ -465,29 +470,22 @@ impl<
         }
 
         // Resolve the immutable operation context for this query.
+        let mut statement_guard = None;
         let txn_context = if let Some(txn_id) = session.current_transaction() {
             if let Some(ref txn_manager) = self.transaction_manager {
-                match txn_manager.get_context(txn_id) {
-                    Ok(ctx) => {
-                        if !ctx.state().can_execute() {
-                            warn!(
-                                "Transaction {} is in invalid state {}, cleaning up session binding",
-                                txn_id,
-                                ctx.state()
-                            );
-                            session.unbind_transaction();
-                            None
-                        } else {
-                            Some(ctx)
-                        }
+                match txn_manager.begin_statement(txn_id) {
+                    Ok((ctx, statement_start)) => {
+                        statement_guard = Some((txn_manager.clone(), ctx.clone(), statement_start));
+                        Some(ctx)
                     }
                     Err(e) => {
-                        warn!(
-                            "Failed to get transaction context for {}: {}, unbinding from session",
-                            txn_id, e
-                        );
-                        session.unbind_transaction();
-                        None
+                        if e.is_timeout() {
+                            warn!(
+                                "Transaction {} exceeded a timeout before statement execution",
+                                txn_id
+                            );
+                        }
+                        return Err(e.to_string());
                     }
                 }
             } else {
@@ -507,19 +505,32 @@ impl<
         };
 
         let mut query_api = self.query_api.write();
-        let execution_storage = txn_context.map_or_else(
-            || self.storage.bind_auto_commit_context(),
-            |ctx| {
-                self.storage
-                    .bind_operation_context(StorageOperationContext::transaction(
-                        ctx.id,
-                        ctx.start_timestamp,
-                        ctx.read_only,
-                    ))
-            },
-        );
-        let result =
-            query_api.execute_with_operation_storage(stmt, query_request, execution_storage);
+        let mut result = if let Some(context) = txn_context.as_ref() {
+            let manager = self
+                .transaction_manager
+                .as_ref()
+                .ok_or_else(|| "Transaction manager is not configured".to_string())?;
+            let execution = manager
+                .create_execution(context.id, false)
+                .map_err(|error| error.to_string())?;
+            query_api
+                .execute_with_execution(stmt, query_request, &execution)
+                .map_err(|e| e.to_string())
+        } else {
+            let execution_storage = self
+                .storage
+                .bind_auto_commit_context()
+                .map_err(|error| error.to_string())?;
+            query_api
+                .execute_with_operation_storage(stmt, query_request, execution_storage)
+                .map_err(|e| e.to_string())
+        };
+
+        if let Some((txn_manager, context, statement_start)) = statement_guard {
+            if let Err(error) = txn_manager.finish_statement(&context, statement_start) {
+                result = Err(error.to_string());
+            }
+        }
 
         // If the query failed and we have an active transaction, check if the
         // transaction is still in a valid state. If the transaction has become
@@ -802,7 +813,7 @@ impl<
             .ok_or("Transaction manager not initialized")?;
 
         let options = session.transaction_options();
-        match txn_manager.begin_transaction(options) {
+        match txn_manager.begin_transaction_with_owner(options, session.id().to_string()) {
             Ok(txn_id) => {
                 session.bind_transaction(txn_id);
                 session.set_auto_commit(false);
@@ -819,7 +830,9 @@ impl<
                 ) {
                     txn_manager.cleanup_expired_transactions();
                     let options = session.transaction_options();
-                    match txn_manager.begin_transaction(options) {
+                    match txn_manager
+                        .begin_transaction_with_owner(options, session.id().to_string())
+                    {
                         Ok(txn_id) => {
                             session.bind_transaction(txn_id);
                             session.set_auto_commit(false);

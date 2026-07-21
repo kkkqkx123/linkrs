@@ -111,7 +111,6 @@ fn create_default_config(timeout: Duration) -> TransactionConfig {
         query_timeout: None,
         statement_timeout: None,
         idle_timeout: None,
-        two_phase_commit: false,
     }
 }
 
@@ -581,25 +580,6 @@ fn test_update_activity() {
 }
 
 #[test]
-fn test_two_phase_commit_flag() {
-    let txn_id = TransactionId(1);
-    let timeout = Duration::from_secs(30);
-    let config = TransactionConfig {
-        timeout,
-        durability: DurabilityLevel::Sync,
-        isolation_level: crate::transaction::types::IsolationLevel::default(),
-        query_timeout: None,
-        statement_timeout: None,
-        idle_timeout: None,
-        two_phase_commit: true,
-    };
-
-    let ctx = TransactionContext::new(txn_id, 1, config);
-
-    assert!(ctx.is_two_phase_enabled());
-}
-
-#[test]
 fn test_abort_state_transitions() {
     let txn_id = TransactionId(1);
     let timeout = Duration::from_secs(30);
@@ -666,4 +646,44 @@ fn test_get_operation_log_range() {
 
     let empty_range = ctx.get_operation_logs_range(10, 15);
     assert_eq!(empty_range.len(), 0);
+}
+
+#[test]
+fn test_query_timeout_is_measured_from_statement_start() {
+    let mut config = create_default_config(Duration::from_secs(1));
+    config.query_timeout = Some(Duration::from_millis(20));
+    let ctx = TransactionContext::new(TransactionId(1), 1, config);
+
+    std::thread::sleep(Duration::from_millis(30));
+    let statement_start = ctx
+        .begin_statement()
+        .expect("transaction should not time out before a statement");
+    std::thread::sleep(Duration::from_millis(30));
+
+    let error = ctx
+        .finish_statement(statement_start)
+        .expect_err("statement should exceed its query timeout");
+    assert_eq!(error.kind(), TransactionErrorKind::TransactionTimeout);
+    assert!(ctx.is_rollback_only());
+}
+
+#[test]
+fn test_transaction_owner_and_recovery_metadata() {
+    let ctx = TransactionContext::new(
+        TransactionId(7),
+        9,
+        create_default_config(Duration::from_secs(30)),
+    );
+    ctx.set_owner("session-1");
+    assert!(ctx.owner_matches(Some("session-1")));
+    assert!(!ctx.owner_matches(Some("session-2")));
+
+    ctx.transition_to(TransactionState::Aborting)
+        .expect("abort should start");
+    ctx.transition_to(TransactionState::RecoveryRequired)
+        .expect("failed cleanup should be observable");
+    let info = ctx.info();
+    assert_eq!(info.state, TransactionState::RecoveryRequired);
+    assert_eq!(info.owner.as_deref(), Some("session-1"));
+    assert!(info.blocking_reason.is_some());
 }

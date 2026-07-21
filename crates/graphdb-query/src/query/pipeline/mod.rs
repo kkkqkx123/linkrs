@@ -41,17 +41,7 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     pub(crate) session_controller: parking_lot::RwLock<Option<Arc<SessionTransactionController>>>,
 }
 
-fn next_transaction_id() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT_TXN_ID: AtomicU64 = AtomicU64::new(1);
-    NEXT_TXN_ID.fetch_add(1, Ordering::Relaxed)
-}
-
 impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
-    pub fn replace_storage(&mut self, storage: Arc<RwLock<S>>) {
-        self.storage = Some(storage);
-    }
-
     pub fn with_optimizer(
         storage: Arc<RwLock<S>>,
         stats_manager: Arc<StatsManager>,

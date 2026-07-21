@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 
+use super::manager::CheckpointGate;
 use super::mvcc::VersionManager;
 use crate::sync::SyncManager;
 use crate::transaction::context::TransactionContext;
@@ -14,7 +15,7 @@ use crate::transaction::types::{TransactionId, TransactionState, TransactionStat
 
 /// Transaction Cleaner
 ///
-/// Responsible for cleaning up expired transactions and releasing their resources.
+/// Provides cleanup functionality for expired and stale transactions
 ///
 /// When sync rollback fails during cleanup, the failure is tracked via stats
 /// for observability. The cleanup itself remains best-effort to avoid blocking
@@ -22,6 +23,7 @@ use crate::transaction::types::{TransactionId, TransactionState, TransactionStat
 pub struct TransactionCleaner {
     sync_manager: Option<Arc<SyncManager>>,
     version_manager: Arc<VersionManager>,
+    checkpoint_gate: Arc<CheckpointGate>,
     stats: Arc<TransactionStats>,
 }
 
@@ -29,11 +31,13 @@ impl TransactionCleaner {
     pub fn new(
         sync_manager: Option<Arc<SyncManager>>,
         version_manager: Arc<VersionManager>,
+        checkpoint_gate: Arc<CheckpointGate>,
         stats: Arc<TransactionStats>,
     ) -> Self {
         Self {
             sync_manager,
             version_manager,
+            checkpoint_gate,
             stats,
         }
     }
@@ -78,9 +82,14 @@ impl TransactionCleaner {
                 }
             };
 
-            // Use unified abort path for consistency
-            let _ = self.abort_transaction_internal_unified(context);
-            // Timeout stat is incremented inside abort_transaction_internal_unified
+            if let Err(error) = self.abort_transaction_internal_unified(context) {
+                log::error!(
+                    "Cleanup failed to abort expired transaction {:?}: {}",
+                    txn_id,
+                    error
+                );
+                self.stats.increment_cleanup_failure();
+            }
         }
     }
 
@@ -91,7 +100,6 @@ impl TransactionCleaner {
         context: Arc<TransactionContext>,
     ) -> Result<(), TransactionError> {
         if !context.state().can_abort() {
-            // Transaction already in terminal state, just update stats
             self.stats.decrement_active();
             self.stats.increment_aborted();
             self.stats.increment_timeout();
@@ -103,13 +111,11 @@ impl TransactionCleaner {
         let txn_id = context.id;
         if let Some(ref sync_manager) = self.sync_manager {
             if let Err(e) = sync_manager.rollback_transaction_sync(txn_id) {
-                log::warn!(
+                log::error!(
                     "Index sync rollback failed for expired transaction {:?}: {}",
                     txn_id,
                     e
                 );
-                // Track sync rollback failure for observability
-                // This is a best-effort cleanup, but failures should be monitored
                 log::error!(
                     "Sync rollback failed during cleanup for transaction {:?}. \
                      This may leave stale index data. Manual recovery may be needed.",
@@ -124,11 +130,11 @@ impl TransactionCleaner {
         } else {
             self.version_manager
                 .abort_write_timestamp(context.timestamp());
+            self.checkpoint_gate.release_write();
         }
 
         context.transition_to(TransactionState::Aborted)?;
 
-        // Update stats in correct order: decrement active first, then increment terminal states
         self.stats.decrement_active();
         self.stats.increment_aborted();
         self.stats.increment_timeout();
@@ -158,6 +164,7 @@ impl Default for TransactionCleaner {
         Self::new(
             None,
             Arc::new(VersionManager::new()),
+            Arc::new(CheckpointGate::new()),
             Arc::new(TransactionStats::new()),
         )
     }

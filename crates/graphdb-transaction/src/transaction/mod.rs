@@ -57,7 +57,10 @@ pub use context::TransactionContext;
 pub use error::{TransactionError, TransactionErrorKind, TransactionResult};
 pub use manager::{CheckpointGate, CheckpointTransaction, TransactionManager};
 pub use monitor::TransactionMonitor;
-pub use participant::TransactionCommitSink;
+pub use participant::{
+    TransactionAbortDescriptor, TransactionCommitDescriptor, TransactionCommitSink,
+    TransactionMutationRecorder,
+};
 pub use rollback::{
     CreateRemoveEdgeUndoParams, CreateRemoveVertexUndoParams, CreateUpdateEdgePropUndoParams,
     RollbackHelper,
@@ -67,8 +70,8 @@ pub use undo_log::{
     AddEdgePropUndo, AddVertexPropUndo, CreateEdgeTypeUndo, CreateVertexTypeUndo,
     DeleteEdgePropUndo, DeleteEdgeTypeUndo, DeleteVertexPropUndo, DeleteVertexTypeUndo,
     FileBackedUndoLog, InsertEdgeUndo, InsertVertexUndo, PropertyValue, RelatedEdgeInfo,
-    RemoveEdgeUndo, RemoveVertexUndo, UndoLogConfig, UndoLogEntry, UndoLogError, UndoLogManager,
-    UndoLogResult, UndoTarget, UpdateEdgePropUndo, UpdateVertexPropUndo,
+    RemoveEdgeUndo, RemoveVertexUndo, RestoreEdgeUndo, UndoLogConfig, UndoLogEntry, UndoLogError,
+    UndoLogManager, UndoLogResult, UndoTarget, UpdateEdgePropUndo, UpdateVertexPropUndo,
 };
 pub use wal::{
     ColumnId, CreateEdgeTypeRedo, CreateVertexTypeRedo, DeleteEdgeRedo, DeleteVertexRedo, EdgeId,

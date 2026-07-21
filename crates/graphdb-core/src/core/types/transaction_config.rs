@@ -22,12 +22,18 @@ pub enum TransactionIsolationLevel {
     /// Repeatable Read - all statements in the transaction see a snapshot as of the start of the transaction
     #[default]
     RepeatableRead,
+    /// Read Committed - each statement sees the latest committed snapshot.
+    ReadCommitted,
+    /// Serializable - certify read and write dependencies at commit.
+    Serializable,
 }
 
 impl fmt::Display for TransactionIsolationLevel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TransactionIsolationLevel::RepeatableRead => write!(f, "REPEATABLE READ"),
+            TransactionIsolationLevel::ReadCommitted => write!(f, "READ COMMITTED"),
+            TransactionIsolationLevel::Serializable => write!(f, "SERIALIZABLE"),
         }
     }
 }

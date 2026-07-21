@@ -77,6 +77,18 @@ pub enum MetricType {
     TxnRollbackCount,
     TxnActiveCount,
     TxnConflictCount,
+    TxnTimeoutCount,
+    TxnDisconnectCount,
+    TxnRecoveryAbortCount,
+    TxnCleanupFailureCount,
+    TxnActiveStatements,
+    TxnActiveSnapshots,
+    TxnPendingWrites,
+    TxnFrontierLag,
+    TxnStagedWalBytes,
+    TxnUndoBytes,
+    TxnPreparedTransactions,
+    TxnCheckpointDrainTimeMs,
     // Sync metrics
     SyncOperations,
     SyncLatencyMs,
@@ -978,6 +990,46 @@ impl StatsManager {
     /// Record transaction conflict
     pub fn record_txn_conflict(&self) {
         self.add_value(MetricType::TxnConflictCount);
+    }
+
+    pub fn record_txn_timeout(&self) {
+        self.add_value(MetricType::TxnTimeoutCount);
+    }
+
+    pub fn record_txn_disconnect(&self) {
+        self.add_value(MetricType::TxnDisconnectCount);
+    }
+
+    pub fn record_txn_recovery_abort(&self) {
+        self.add_value(MetricType::TxnRecoveryAbortCount);
+    }
+
+    pub fn record_txn_cleanup_failure(&self) {
+        self.add_value(MetricType::TxnCleanupFailureCount);
+    }
+
+    pub fn set_txn_resource_metrics(
+        &self,
+        active_statements: u64,
+        active_snapshots: u64,
+        pending_writes: u64,
+        frontier_lag: u64,
+        staged_wal_bytes: u64,
+        undo_bytes: u64,
+        prepared_transactions: u64,
+        checkpoint_drain_time_ms: u64,
+    ) {
+        self.set_value(MetricType::TxnActiveStatements, active_statements);
+        self.set_value(MetricType::TxnActiveSnapshots, active_snapshots);
+        self.set_value(MetricType::TxnPendingWrites, pending_writes);
+        self.set_value(MetricType::TxnFrontierLag, frontier_lag);
+        self.set_value(MetricType::TxnStagedWalBytes, staged_wal_bytes);
+        self.set_value(MetricType::TxnUndoBytes, undo_bytes);
+        self.set_value(MetricType::TxnPreparedTransactions, prepared_transactions);
+        self.set_value(
+            MetricType::TxnCheckpointDrainTimeMs,
+            checkpoint_drain_time_ms,
+        );
     }
 
     pub fn record_sync_operation(&self, latency_ms: u64, success: bool) {

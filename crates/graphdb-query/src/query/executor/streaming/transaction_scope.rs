@@ -8,6 +8,11 @@
 //!   the controller, not fake text results.
 //! - Client disconnect rolls back auto-commit transactions owned by the
 //!   instance, but does NOT end the session's explicit transaction.
+//!
+//! The `SessionTransactionController` is the single state machine that all
+//! transaction paths (SQL text, plan-based `TxnOperator`, embedded) flow through.
+//! The API layer (`GraphService`) owns the `TransactionManager` reference and
+//! performs the actual begin/commit/rollback; the controller tracks state.
 
 use crate::core::error::QueryError;
 use crate::query::executor::base::ExecutionResult;

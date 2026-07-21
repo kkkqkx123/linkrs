@@ -11,6 +11,7 @@ pub enum HttpError {
     BadRequest(String),
     Unauthorized(String),
     NotFound(String),
+    Conflict(String),
     InternalError(String),
 }
 
@@ -20,6 +21,7 @@ impl fmt::Display for HttpError {
             HttpError::BadRequest(msg) => write!(f, "Bad Request: {}", msg),
             HttpError::Unauthorized(msg) => write!(f, "Unauthorized: {}", msg),
             HttpError::NotFound(msg) => write!(f, "Not Found: {}", msg),
+            HttpError::Conflict(msg) => write!(f, "Conflict: {}", msg),
             HttpError::InternalError(msg) => write!(f, "Internal Error: {}", msg),
         }
     }
@@ -33,6 +35,7 @@ impl IntoResponse for HttpError {
             HttpError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             HttpError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
             HttpError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+            HttpError::Conflict(msg) => (StatusCode::CONFLICT, msg),
             HttpError::InternalError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
 
@@ -65,6 +68,52 @@ impl HttpError {
     pub fn internal<T: Into<String>>(msg: T) -> Self {
         HttpError::InternalError(msg.into())
     }
+
+    /// Classify the stable transaction error code emitted by the transaction
+    /// crate instead of collapsing every operation into HTTP 500.
+    pub fn transaction_message<T: Into<String>>(message: T) -> Self {
+        let message = message.into();
+        if message.contains("[transaction_not_found]") {
+            Self::NotFound(message)
+        } else if message.contains("[transaction_not_owner]") {
+            Self::Unauthorized(message)
+        } else if message.contains("[write_transaction_conflict]") {
+            Self::Conflict(message)
+        } else if message.contains("[transaction_timeout]")
+            || message.contains("[transaction_expired]")
+            || message.contains("[admission_timeout]")
+        {
+            Self::BadRequest(message)
+        } else if message.contains("[invalid_state")
+            || message.contains("[recovery_required]")
+            || message.contains("[savepoint")
+        {
+            Self::Conflict(message)
+        } else {
+            Self::InternalError(message)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HttpError;
+
+    #[test]
+    fn transaction_error_codes_survive_handler_context() {
+        assert!(matches!(
+            HttpError::transaction_message("Failed to commit: [transaction_not_owner] denied"),
+            HttpError::Unauthorized(_)
+        ));
+        assert!(matches!(
+            HttpError::transaction_message("Failed to commit: [write_transaction_conflict]"),
+            HttpError::Conflict(_)
+        ));
+        assert!(matches!(
+            HttpError::transaction_message("Failed to commit: [transaction_timeout]"),
+            HttpError::BadRequest(_)
+        ));
+    }
 }
 
 impl From<crate::api::core::CoreError> for HttpError {
@@ -74,7 +123,7 @@ impl From<crate::api::core::CoreError> for HttpError {
             CoreError::NotFound(msg) => HttpError::NotFound(msg),
             CoreError::InvalidParameter(msg) => HttpError::BadRequest(msg),
             CoreError::QueryExecutionFailed(msg) => HttpError::InternalError(msg),
-            CoreError::TransactionFailed(msg) => HttpError::InternalError(msg),
+            CoreError::TransactionFailed(msg) => HttpError::transaction_message(msg),
             CoreError::SchemaOperationFailed(msg) => HttpError::InternalError(msg),
             CoreError::StorageError(msg) => HttpError::InternalError(msg),
             CoreError::Internal(msg) => HttpError::InternalError(msg),

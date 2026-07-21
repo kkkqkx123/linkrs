@@ -7,7 +7,7 @@ use crate::core::types::{
     EdgeTypeInfo, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo, PropertyDef,
     SpaceInfo, TagInfo, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
 };
-use crate::core::{Edge, EdgeDirection, RoleType, StorageError, Value, Vertex};
+use crate::core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
 use crate::storage::{
     StorageAdmin, StorageAuthOps, StorageClient, StorageCommitOps, StorageGcOps,
     StorageOperationContext, StorageOperationContextOps, StoragePersistenceOps, StorageReader,
@@ -324,11 +324,11 @@ impl<S: StorageClient + StorageSchemaContextOps> StorageSchemaContextOps for Met
 }
 
 impl<S: StorageClient> StorageOperationContextOps for MetricsStorage<S> {
-    fn bind_auto_commit_context(&self) -> Self {
-        Self {
-            inner: self.inner.bind_auto_commit_context(),
+    fn bind_auto_commit_context(&self) -> StorageResult<Self> {
+        Ok(Self {
+            inner: self.inner.bind_auto_commit_context()?,
             stats_manager: self.stats_manager.clone(),
-        }
+        })
     }
 
     fn bind_operation_context(&self, context: StorageOperationContext) -> Self {
@@ -340,6 +340,10 @@ impl<S: StorageClient> StorageOperationContextOps for MetricsStorage<S> {
 
     fn operation_context(&self) -> Option<Arc<StorageOperationContext>> {
         self.inner.operation_context()
+    }
+
+    fn finalize_operation(&self, committed: bool) -> crate::core::StorageResult<()> {
+        self.inner.finalize_operation(committed)
     }
 }
 
@@ -467,6 +471,15 @@ impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::Undo
         edge_ctx: crate::core::types::EdgeDeletionContext,
     ) -> crate::transaction::undo_log::UndoLogResult<()> {
         crate::transaction::UndoTarget::delete_edge(&self.inner, edge_ctx)
+    }
+
+    fn restore_edge(
+        &self,
+        edge: crate::core::types::EdgeIdentifier,
+        properties: Vec<(String, crate::core::Value)>,
+        ts: crate::transaction::wal::Timestamp,
+    ) -> crate::transaction::undo_log::UndoLogResult<()> {
+        crate::transaction::UndoTarget::restore_edge(&self.inner, edge, properties, ts)
     }
 
     fn undo_update_vertex_property(

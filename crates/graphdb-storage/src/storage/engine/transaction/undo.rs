@@ -4,8 +4,7 @@ use crate::core::types::{
 };
 use crate::storage::engine::graph_storage::GraphStorageContext;
 use crate::storage::engine::transaction::{
-    DeleteEdgeParams, EdgeTypeLabelParams, RevertDeleteEdgeParams, TransactionOps,
-    UpdateEdgePropertyUndoParams,
+    EdgeTypeLabelParams, RevertDeleteEdgeParams, TransactionOps, UpdateEdgePropertyUndoParams,
 };
 
 fn checked_internal_vertex_id(vid: &crate::core::types::VertexId) -> UndoLogResult<u32> {
@@ -52,26 +51,41 @@ impl UndoTarget for GraphStorageContext {
     }
 
     fn delete_edge(&self, edge_ctx: EdgeDeletionContext) -> UndoLogResult<()> {
-        let params = DeleteEdgeParams {
-            src_label: edge_ctx.edge_id.src_label,
-            src_vid: checked_internal_vertex_id(&edge_ctx.edge_id.src_vid)?,
-            dst_label: edge_ctx.edge_id.dst_label,
-            dst_vid: checked_internal_vertex_id(&edge_ctx.edge_id.dst_vid)?,
-            edge_label: edge_ctx.edge_id.edge_label,
-            rank: edge_ctx.edge_id.rank,
-        };
-        self.data_store()
-            .with_edge_tables_mut_result(|edge_tables| {
-                TransactionOps::delete_edge(
-                    edge_tables,
-                    params,
-                    edge_ctx.oe_offset,
-                    edge_ctx.ie_offset,
-                    edge_ctx.timestamp,
-                )?;
-                Ok(())
-            })?;
+        let edge = edge_ctx.edge_id;
+        self.delete_edge(
+            &crate::storage::engine::params::EdgeOperationParams {
+                edge_label: edge.edge_label,
+                src_label: edge.src_label,
+                src_id: edge.src_vid,
+                dst_label: edge.dst_label,
+                dst_id: edge.dst_vid,
+                rank: edge.rank,
+            },
+            edge_ctx.timestamp,
+        )
+        .map_err(|error| UndoLogError::UndoFailed(error.to_string()))?;
         self.mark_edge_modified(edge_ctx.edge_id.edge_label);
+        Ok(())
+    }
+
+    fn restore_edge(
+        &self,
+        edge: EdgeIdentifier,
+        properties: Vec<(String, crate::core::Value)>,
+        ts: Timestamp,
+    ) -> UndoLogResult<()> {
+        self.insert_edge(crate::storage::engine::params::InsertEdgeParams {
+            edge_label: edge.edge_label,
+            src_label: edge.src_label,
+            src_id: edge.src_vid,
+            dst_label: edge.dst_label,
+            dst_id: edge.dst_vid,
+            rank: edge.rank,
+            properties: &properties,
+            ts,
+        })
+        .map_err(|error| UndoLogError::UndoFailed(error.to_string()))?;
+        self.mark_edge_modified(edge.edge_label);
         Ok(())
     }
 

@@ -181,6 +181,9 @@ pub struct PersistenceCoordinator {
     last_snapshot_error: RwLock<Option<String>>,
     state: RwLock<PersistenceState>,
     fault_points: Arc<RwLock<HashSet<PersistenceFaultPoint>>>,
+    outbox_frontier_provider: RwLock<
+        Option<Arc<dyn Fn() -> StorageResult<Option<graphdb_core::core::types::CommitLsn>> + Send + Sync>>,
+    >,
 }
 
 impl PersistenceCoordinator {
@@ -254,6 +257,7 @@ impl PersistenceCoordinator {
             last_snapshot_error: RwLock::new(None),
             state: RwLock::new(PersistenceState::Idle),
             fault_points: Arc::new(RwLock::new(HashSet::new())),
+            outbox_frontier_provider: RwLock::new(None),
         })
     }
 
@@ -567,10 +571,20 @@ impl PersistenceCoordinator {
         self.mark_checkpointed(wal_lsn);
 
         let safe_wal_lsn = if let Some(ref wal) = self.wal_manager {
-            let safe_lsn = self.manifest_manager.latest_safe_lsn().map_err(|error| {
+            let manifest_safe_lsn = self.manifest_manager.latest_safe_lsn().map_err(|error| {
                 StorageError::db_error(format!("Failed to get safe LSN: {}", error))
             })?;
-            let safe_wal_lsn = Lsn::new(safe_lsn.get());
+            let outbox_safe_lsn = self
+                .outbox_frontier_provider
+                .read()
+                .as_ref()
+                .map(|provider| provider())
+                .transpose()?
+                .flatten()
+                .map(|lsn| lsn.get());
+            let safe_lsn = outbox_safe_lsn
+                .map_or(manifest_safe_lsn.get(), |outbox| manifest_safe_lsn.get().min(outbox));
+            let safe_wal_lsn = Lsn::new(safe_lsn);
             wal.read().truncate(safe_wal_lsn)?;
             safe_wal_lsn
         } else {
@@ -1136,6 +1150,15 @@ impl PersistenceCoordinator {
         self.manifest_manager
             .load_latest()
             .map_err(StorageError::db_error)
+    }
+
+    pub fn set_outbox_materialized_lsn_provider(
+        &self,
+        provider: Arc<
+            dyn Fn() -> StorageResult<Option<graphdb_core::core::types::CommitLsn>> + Send + Sync,
+        >,
+    ) {
+        *self.outbox_frontier_provider.write() = Some(provider);
     }
 }
 

@@ -1,5 +1,6 @@
 use crate::core::stats::StatsManager;
 use crate::core::types::{LabelId, TableId, Timestamp};
+use crate::core::{StorageError, StorageResult};
 use crate::storage::engine::resource_budget::{MemoryCategory, ResourceSnapshot};
 use crate::storage::index::IndexGcOps;
 use crate::storage::StorageOperationContext;
@@ -17,18 +18,29 @@ impl GraphStorageContext {
         }
     }
 
-    pub fn get_write_timestamp(&self) -> u32 {
+    pub fn get_write_timestamp(&self) -> StorageResult<u32> {
         if let Some(operation) = &self.operation_context {
-            operation
-                .write_timestamp
-                .unwrap_or(operation.read_timestamp)
+            operation.write_timestamp.ok_or_else(|| {
+                StorageError::db_error("No write timestamp is available for this operation")
+            })
         } else {
-            self.persistent.version_manager.next_write_timestamp()
+            self.persistent
+                .version_manager
+                .try_next_write_timestamp()
+                .map_err(|error| StorageError::db_error(error.to_string()))
         }
     }
 
     pub fn operation_context(&self) -> Option<Arc<StorageOperationContext>> {
         self.operation_context.clone()
+    }
+
+    pub fn mutation_recorder(
+        &self,
+    ) -> Option<Arc<dyn graphdb_transaction::transaction::TransactionMutationRecorder>> {
+        self.operation_context
+            .as_ref()
+            .and_then(|context| context.mutation_recorder.clone())
     }
 
     pub fn with_operation_context(&self, context: StorageOperationContext) -> Self {
@@ -38,8 +50,12 @@ impl GraphStorageContext {
         bound
     }
 
-    pub fn with_auto_commit_context(&self) -> Self {
-        let timestamp = self.persistent.version_manager.next_write_timestamp();
+    pub fn with_auto_commit_context(&self) -> StorageResult<Self> {
+        let timestamp = self
+            .persistent
+            .version_manager
+            .try_next_write_timestamp()
+            .map_err(|error| StorageError::db_error(error.to_string()))?;
         let transaction_id = crate::core::types::TransactionId::new(
             self.persistent
                 .next_auto_transaction_id
@@ -52,20 +68,54 @@ impl GraphStorageContext {
             write_timestamp: Some(timestamp),
             read_only: false,
             auto_commit: true,
+            mutation_recorder: None,
         }));
         bound.write_timestamp_lease = Some(Arc::new(WriteTimestampLease {
             version_manager: self.persistent.version_manager.clone(),
             timestamp,
+            finalized: std::sync::atomic::AtomicBool::new(false),
         }));
-        bound
+        Ok(bound)
     }
 
-    pub(crate) fn release_write_timestamp(&self, timestamp: Timestamp) {
-        if self.operation_context.is_none() {
-            self.persistent
-                .version_manager
-                .release_write_timestamp(timestamp);
+    pub(crate) fn restore_auto_transaction_id(&self, max_transaction_id: u64) {
+        self.persistent
+            .next_auto_transaction_id
+            .fetch_max(max_transaction_id.saturating_add(1), Ordering::SeqCst);
+    }
+
+    pub(crate) fn commit_write_timestamp(&self, timestamp: Timestamp) {
+        if let Some(lease) = &self.write_timestamp_lease {
+            lease.commit();
+        } else if self.operation_context.is_none() {
+            self.persistent.version_manager.commit_write_timestamp(timestamp);
         }
+    }
+
+    pub(crate) fn abort_write_timestamp(&self, timestamp: Timestamp) {
+        if let Some(lease) = &self.write_timestamp_lease {
+            lease.abort();
+        } else if self.operation_context.is_none() {
+            self.persistent.version_manager.abort_write_timestamp(timestamp);
+        }
+    }
+
+    pub(crate) fn finalize_operation(&self, committed: bool) -> StorageResult<()> {
+        let Some(operation) = &self.operation_context else {
+            return Ok(());
+        };
+        if !operation.auto_commit {
+            return Ok(());
+        }
+        let timestamp = operation.write_timestamp.ok_or_else(|| {
+            StorageError::db_error("Auto-commit operation has no write timestamp")
+        })?;
+        if committed {
+            self.commit_write_timestamp(timestamp);
+        } else {
+            self.abort_write_timestamp(timestamp);
+        }
+        Ok(())
     }
 
     pub fn start_index_gc(&self) -> Option<std::thread::JoinHandle<()>> {
@@ -269,28 +319,29 @@ impl GraphStorageContext {
         op_type: crate::core::wal::types::WalOpType,
         timestamp: Timestamp,
         redo: &T,
-    ) -> crate::core::StorageResult<()> {
+    ) -> crate::core::StorageResult<crate::transaction::wal::TransactionWalEntry> {
+        let payload = postcard::to_allocvec(redo).map_err(|error| {
+            crate::core::StorageError::serialize_error(format!(
+                "Failed to serialize WAL redo: {}",
+                error
+            ))
+        })?;
         if let Some(transaction_id) = self
             .operation_context
             .as_ref()
             .and_then(|operation| operation.transaction_id)
         {
-            let payload = postcard::to_allocvec(redo).map_err(|error| {
-                crate::core::StorageError::serialize_error(format!(
-                    "Failed to serialize staged WAL redo: {}",
-                    error
-                ))
-            })?;
+            let entry = crate::transaction::wal::TransactionWalEntry {
+                    op_type,
+                    timestamp,
+                    payload,
+                };
             self.persistent
                 .staged_wal
                 .entry(transaction_id)
                 .or_default()
-                .push(crate::transaction::wal::TransactionWalEntry {
-                    op_type,
-                    timestamp,
-                    payload,
-                });
-            return Ok(());
+                .push(entry.clone());
+            return Ok(entry);
         }
         if let Some(persistence) = self.persistent.persistence.as_ref() {
             let wal_manager = {
@@ -298,17 +349,39 @@ impl GraphStorageContext {
                 coordinator.wal_manager()
             };
             if let Some(wal) = wal_manager {
-                return wal.read().append_redo(op_type, timestamp, redo);
+                wal.read().append_redo(op_type, timestamp, redo)?;
+                return Ok(crate::transaction::wal::TransactionWalEntry {
+                    op_type,
+                    timestamp,
+                    payload,
+                });
             }
         }
 
-        Ok(())
+        Ok(crate::transaction::wal::TransactionWalEntry {
+            op_type,
+            timestamp,
+            payload,
+        })
     }
 
     pub(crate) fn commit_staged_writes(
         &self,
         transaction_id: crate::core::types::TransactionId,
         intents: &[crate::core::wal::OutboxIntent],
+    ) -> crate::core::StorageResult<crate::core::types::CommitLsn> {
+        self.commit_staged_writes_with_durability(
+            transaction_id,
+            intents,
+            crate::core::types::DurabilityLevel::Sync,
+        )
+    }
+
+    pub(crate) fn commit_staged_writes_with_durability(
+        &self,
+        transaction_id: crate::core::types::TransactionId,
+        intents: &[crate::core::wal::OutboxIntent],
+        durability: crate::core::types::DurabilityLevel,
     ) -> crate::core::StorageResult<crate::core::types::CommitLsn> {
         let entries = self
             .persistent
@@ -320,9 +393,12 @@ impl GraphStorageContext {
             let wal_manager = persistence.read().wal_manager().ok_or_else(|| {
                 crate::core::StorageError::wal_error("WAL manager is not initialized".to_string())
             })?;
-            let result = wal_manager
-                .read()
-                .append_transaction(transaction_id, entries, intents)?;
+            let result = wal_manager.read().append_transaction_with_durability(
+                transaction_id,
+                entries,
+                intents,
+                durability,
+            )?;
             result
         } else {
             crate::core::types::CommitLsn::ZERO

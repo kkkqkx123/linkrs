@@ -28,11 +28,31 @@ fn vid_to_string(vid: &VertexId) -> String {
     }
 }
 
+fn record_vertex_read(ctx: &GraphStorageContext, vid: VertexId) {
+    if let Some(recorder) = ctx.mutation_recorder() {
+        recorder.record_vertex_read(vid);
+    }
+}
+
+fn record_edge_read(ctx: &GraphStorageContext, edge: crate::core::types::EdgeIdentifier) {
+    if let Some(recorder) = ctx.mutation_recorder() {
+        recorder.record_edge_read(edge);
+    }
+}
+
+fn record_schema_read(ctx: &GraphStorageContext, space: &str) {
+    if let Some(recorder) = ctx.mutation_recorder() {
+        recorder.record_schema_read(space);
+    }
+}
+
 pub(crate) fn get_vertex(
     ctx: &GraphStorageContext,
     space: &str,
     id: &VertexId,
 ) -> StorageResult<Option<Vertex>> {
+    record_vertex_read(ctx, *id);
+    record_schema_read(ctx, space);
     let _space_info = ctx
         .schema_manager()
         .get_space(space)?
@@ -80,6 +100,7 @@ pub(crate) fn get_vertex(
 }
 
 pub(crate) fn scan_vertices(ctx: &GraphStorageContext, space: &str) -> StorageResult<Vec<Vertex>> {
+    record_schema_read(ctx, space);
     let tags = ctx.schema_manager().list_tags(space)?;
     let ts = ctx.get_read_timestamp();
 
@@ -96,6 +117,7 @@ pub(crate) fn scan_vertices(ctx: &GraphStorageContext, space: &str) -> StorageRe
     for tag in &tags {
         if let Some(iterator) = ctx.scan_vertices(tag.tag_id, ts) {
             for record in iterator {
+                record_vertex_read(ctx, record.vid);
                 let entry = merged.entry(record.vid).or_insert(MergedVertex {
                     vid: record.vid,
                     internal_id: record.internal_id,
@@ -128,6 +150,7 @@ pub(crate) fn scan_vertices_by_tag(
     space: &str,
     tag: &str,
 ) -> StorageResult<Vec<Vertex>> {
+    record_schema_read(ctx, space);
     let tag_info = ctx.schema_manager().get_tag(space, tag)?.ok_or_else(|| {
         StorageError::not_found(format!("Tag {} not found in space {}", tag, space))
     })?;
@@ -138,6 +161,7 @@ pub(crate) fn scan_vertices_by_tag(
     let label_id = tag_info.tag_id;
     if let Some(iterator) = ctx.scan_vertices(label_id, ts) {
         for record in iterator {
+            record_vertex_read(ctx, record.vid);
             let vertex = vertex_record_to_vertex(&record, tag);
             vertices.push(vertex);
         }
@@ -153,6 +177,7 @@ pub(crate) fn scan_vertices_by_prop(
     prop: &str,
     value: &Value,
 ) -> StorageResult<Vec<Vertex>> {
+    record_schema_read(ctx, space);
     let tag_info = ctx.schema_manager().get_tag(space, tag)?.ok_or_else(|| {
         StorageError::not_found(format!("Tag {} not found in space {}", tag, space))
     })?;
@@ -163,6 +188,7 @@ pub(crate) fn scan_vertices_by_prop(
     let label_id = tag_info.tag_id;
     if let Some(iterator) = ctx.scan_vertices(label_id, ts) {
         for record in iterator {
+            record_vertex_read(ctx, record.vid);
             if record
                 .properties
                 .iter()
@@ -185,6 +211,7 @@ pub(crate) fn get_edge(
     edge_type: &str,
     rank: i64,
 ) -> StorageResult<Option<Edge>> {
+    record_schema_read(ctx, space);
     let edge_info = ctx
         .schema_manager()
         .get_edge_type(space, edge_type)?
@@ -206,6 +233,17 @@ pub(crate) fn get_edge(
         Some(id) => id,
         None => return Ok(None),
     };
+    record_edge_read(
+        ctx,
+        crate::core::types::EdgeIdentifier::new(
+            src_label_id,
+            *src,
+            dst_label_id,
+            *dst,
+            edge_label_id,
+            rank,
+        ),
+    );
     let src_str = src.to_string();
     let dst_str = dst.to_string();
 
@@ -233,6 +271,8 @@ pub(crate) fn get_node_edges(
     node_id: &VertexId,
     direction: EdgeDirection,
 ) -> StorageResult<Vec<Edge>> {
+    record_schema_read(ctx, space);
+    record_vertex_read(ctx, *node_id);
     let edge_types = ctx.schema_manager().list_edge_types(space)?;
     if edge_types.is_empty() {
         return Ok(Vec::new());
@@ -361,6 +401,7 @@ pub(crate) fn scan_edges_by_type(
     space: &str,
     edge_type: &str,
 ) -> StorageResult<Vec<Edge>> {
+    record_schema_read(ctx, space);
     let edge_info = ctx
         .schema_manager()
         .get_edge_type(space, edge_type)?
@@ -439,6 +480,17 @@ pub(crate) fn scan_edges_by_type(
     let records = ctx.scan_edges(src_label_id, dst_label_id, edge_label_id, ts);
 
     for record in records {
+        record_edge_read(
+            ctx,
+            crate::core::types::EdgeIdentifier::new(
+                src_label_id,
+                record.src_vid,
+                dst_label_id,
+                record.dst_vid,
+                edge_label_id,
+                record.rank,
+            ),
+        );
         let src_internal = record.src_vid.as_int64().unwrap_or(0) as u32;
         let dst_internal = record.dst_vid.as_int64().unwrap_or(0) as u32;
 
@@ -564,6 +616,7 @@ pub(crate) fn count_edges_by_type(
 }
 
 pub(crate) fn scan_all_edges(ctx: &GraphStorageContext, space: &str) -> StorageResult<Vec<Edge>> {
+    record_schema_read(ctx, space);
     let _space_info = ctx
         .schema_manager()
         .get_space(space)?

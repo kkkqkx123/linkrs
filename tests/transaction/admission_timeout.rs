@@ -13,21 +13,21 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::{sleep, timeout};
 
-/// Test that TransactionManagerConfig has write_lock_timeout field with default
+/// Test that TransactionManagerConfig has admission_timeout field with default
 #[test]
-fn test_write_lock_timeout_config_default() {
+fn test_admission_timeout_config_default() {
     let config = TransactionManagerConfig::default();
-    assert_eq!(config.write_lock_timeout, Duration::from_secs(10));
+    assert_eq!(config.admission_timeout, Duration::from_secs(10));
 }
 
-/// Test that TransactionManagerConfig can be customized with a short write_lock_timeout
+/// Test that TransactionManagerConfig can be customized with a short admission_timeout
 #[test]
-fn test_write_lock_timeout_config_custom() {
+fn test_admission_timeout_config_custom() {
     let config = TransactionManagerConfig {
-        write_lock_timeout: Duration::from_secs(5),
+        admission_timeout: Duration::from_secs(5),
         ..Default::default()
     };
-    assert_eq!(config.write_lock_timeout, Duration::from_secs(5));
+    assert_eq!(config.admission_timeout, Duration::from_secs(5));
 }
 
 /// Test that write transaction can be acquired when no other write is active
@@ -231,12 +231,12 @@ async fn test_concurrent_read_only_transactions() {
     );
 }
 
-/// Test that write transactions with short write_lock_timeout fail quickly
+/// Test that write transactions with short admission_timeout fail quickly
 /// when another write is active
 #[test]
-fn test_short_write_lock_timeout_fails_quickly() {
+fn test_short_admission_timeout_fails_quickly() {
     let config = TransactionManagerConfig {
-        write_lock_timeout: Duration::from_millis(100),
+        admission_timeout: Duration::from_millis(100),
         ..Default::default()
     };
     let manager = TransactionManager::new(config);

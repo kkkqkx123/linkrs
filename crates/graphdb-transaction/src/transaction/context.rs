@@ -11,6 +11,7 @@ use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};
 
 use super::error::TransactionError;
+use super::participant::TransactionMutationRecorder;
 use super::rollback::CombinedRollback;
 use super::types::*;
 use super::undo_log::{UndoLogEntry, UndoLogManager, UndoTarget};
@@ -29,7 +30,7 @@ pub struct TransactionContext {
     /// Start timestamp (MVCC)
     pub start_timestamp: Timestamp,
     /// Snapshot timestamp for time-travel reads (None = use start_timestamp)
-    pub snapshot_timestamp: Option<Timestamp>,
+    snapshot_timestamp: RwLock<Option<Timestamp>>,
     /// Start time (for timeout tracking)
     pub start_time: Instant,
     /// Timeout duration
@@ -46,6 +47,8 @@ pub struct TransactionContext {
     pub idle_timeout: Option<Duration>,
     /// Last activity timestamp
     last_activity: AtomicCell<Instant>,
+    /// Start timestamp of the currently executing statement.
+    statement_start: AtomicCell<Instant>,
     /// Query count
     query_count: AtomicU64,
     /// Durability level
@@ -58,12 +61,22 @@ pub struct TransactionContext {
     savepoint_manager: RwLock<SavepointManager>,
     /// Undo log manager for rollback
     undo_logs: RwLock<UndoLogManager>,
-    /// Whether to enable two-phase commit
-    two_phase_enabled: bool,
     /// Write set for conflict detection
     write_set: Mutex<WriteSet>,
+    /// Read set for Serializable certification.
+    read_set: Mutex<WriteSet>,
+    /// Redo metadata retained for savepoint and certification boundaries.
+    redo_entries: RwLock<Vec<crate::transaction::wal::TransactionWalEntry>>,
     /// Whether this transaction has passed write set conflict validation
     write_validated: AtomicCell<bool>,
+    /// Whether a failed statement requires the transaction to be aborted.
+    rollback_only: AtomicCell<bool>,
+    /// Whether manager-owned resources have already been released.
+    resources_released: AtomicCell<bool>,
+    /// Estimated bytes staged by this transaction.
+    staged_bytes: AtomicU64,
+    /// Session or API owner of this transaction.
+    owner: RwLock<Option<String>>,
 }
 
 impl fmt::Debug for TransactionContext {
@@ -72,7 +85,7 @@ impl fmt::Debug for TransactionContext {
             .field("id", &self.id)
             .field("state", &self.state.load())
             .field("start_timestamp", &self.start_timestamp)
-            .field("snapshot_timestamp", &self.snapshot_timestamp)
+            .field("snapshot_timestamp", &self.effective_snapshot_timestamp())
             .field("read_only", &self.read_only)
             .field("isolation_level", &self.isolation_level)
             .field("durability", &self.durability)
@@ -102,6 +115,10 @@ impl SavepointManager {
         operation_log_index: usize,
         undo_log_index: usize,
         sync_sequence: u64,
+        write_set: WriteSet,
+        read_set: WriteSet,
+        redo_log_index: usize,
+        modified_tables: Vec<String>,
     ) -> SavepointId {
         let id = self.next_id;
         self.next_id += 1;
@@ -115,6 +132,10 @@ impl SavepointManager {
             operation_log_index,
             undo_log_index,
             sync_sequence,
+            write_set,
+            read_set,
+            redo_log_index,
+            modified_tables,
         };
         self.savepoints.insert(id, info);
         id
@@ -148,7 +169,7 @@ impl TransactionContext {
             id,
             state: AtomicCell::new(TransactionState::Active),
             start_timestamp,
-            snapshot_timestamp: None,
+            snapshot_timestamp: RwLock::new(None),
             start_time: now,
             timeout: config.timeout,
             read_only: false,
@@ -157,15 +178,21 @@ impl TransactionContext {
             statement_timeout: config.statement_timeout,
             idle_timeout: config.idle_timeout,
             last_activity: AtomicCell::new(now),
+            statement_start: AtomicCell::new(now),
             query_count: AtomicU64::new(0),
             durability: config.durability,
             operation_logs: RwLock::new(Vec::new()),
             modified_tables: Mutex::new(Vec::new()),
             savepoint_manager: RwLock::new(SavepointManager::new()),
             undo_logs: RwLock::new(UndoLogManager::new()),
-            two_phase_enabled: config.two_phase_commit,
             write_set: Mutex::new(WriteSet::new()),
+            read_set: Mutex::new(WriteSet::new()),
+            redo_entries: RwLock::new(Vec::new()),
             write_validated: AtomicCell::new(false),
+            rollback_only: AtomicCell::new(false),
+            resources_released: AtomicCell::new(false),
+            staged_bytes: AtomicU64::new(0),
+            owner: RwLock::new(None),
         }
     }
 
@@ -180,7 +207,7 @@ impl TransactionContext {
             id,
             state: AtomicCell::new(TransactionState::Active),
             start_timestamp,
-            snapshot_timestamp: None,
+            snapshot_timestamp: RwLock::new(None),
             start_time: now,
             timeout: config.timeout,
             read_only: true,
@@ -189,15 +216,21 @@ impl TransactionContext {
             statement_timeout: config.statement_timeout,
             idle_timeout: config.idle_timeout,
             last_activity: AtomicCell::new(now),
+            statement_start: AtomicCell::new(now),
             query_count: AtomicU64::new(0),
-            durability: DurabilityLevel::Sync,
+            durability: config.durability,
             operation_logs: RwLock::new(Vec::new()),
             modified_tables: Mutex::new(Vec::new()),
             savepoint_manager: RwLock::new(SavepointManager::new()),
             undo_logs: RwLock::new(UndoLogManager::new()),
-            two_phase_enabled: config.two_phase_commit,
             write_set: Mutex::new(WriteSet::new()),
+            read_set: Mutex::new(WriteSet::new()),
+            redo_entries: RwLock::new(Vec::new()),
             write_validated: AtomicCell::new(false),
+            rollback_only: AtomicCell::new(false),
+            resources_released: AtomicCell::new(false),
+            staged_bytes: AtomicU64::new(0),
+            owner: RwLock::new(None),
         }
     }
 
@@ -213,12 +246,14 @@ impl TransactionContext {
 
     /// Get the effective snapshot timestamp for reads
     pub fn effective_snapshot_timestamp(&self) -> Timestamp {
-        self.snapshot_timestamp.unwrap_or(self.start_timestamp)
+        self.snapshot_timestamp
+            .read()
+            .unwrap_or(self.start_timestamp)
     }
 
     /// Set the snapshot timestamp for time-travel reads
-    pub fn set_snapshot_timestamp(&mut self, ts: Timestamp) {
-        self.snapshot_timestamp = Some(ts);
+    pub fn set_snapshot_timestamp(&self, ts: Timestamp) {
+        *self.snapshot_timestamp.write() = Some(ts);
     }
 
     /// Check if transaction has expired
@@ -229,7 +264,7 @@ impl TransactionContext {
     /// Check if query timeout has been exceeded
     pub fn is_query_timeout(&self) -> bool {
         if let Some(query_timeout) = self.query_timeout {
-            self.start_time.elapsed() > query_timeout
+            self.statement_start.load().elapsed() > query_timeout
         } else {
             false
         }
@@ -259,10 +294,6 @@ impl TransactionContext {
             return Err(TransactionError::transaction_timeout());
         }
 
-        if self.is_query_timeout() {
-            return Err(TransactionError::transaction_timeout());
-        }
-
         if self.is_idle_timeout() {
             return Err(TransactionError::transaction_timeout());
         }
@@ -273,6 +304,73 @@ impl TransactionContext {
     /// Update last activity timestamp
     pub fn update_activity(&self) {
         self.last_activity.store(Instant::now());
+    }
+
+    /// Begin one statement and return its monotonic start time.
+    pub fn begin_statement(&self) -> Result<Instant, TransactionError> {
+        self.can_execute()?;
+        self.check_timeouts()?;
+        let start = Instant::now();
+        self.statement_start.store(start);
+        self.increment_query_count();
+        Ok(start)
+    }
+
+    /// Finish one statement and enforce query and statement timeouts.
+    pub fn finish_statement(&self, statement_start: Instant) -> Result<(), TransactionError> {
+        let query_timed_out = self
+            .query_timeout
+            .is_some_and(|timeout| statement_start.elapsed() > timeout);
+        let statement_timed_out = self.is_statement_timeout(statement_start);
+        self.statement_start.store(Instant::now());
+        self.update_activity();
+        if query_timed_out || statement_timed_out {
+            self.mark_rollback_only();
+            return Err(TransactionError::transaction_timeout());
+        }
+        Ok(())
+    }
+
+    pub fn mark_rollback_only(&self) {
+        self.rollback_only.store(true);
+    }
+
+    pub fn is_rollback_only(&self) -> bool {
+        self.rollback_only.load()
+    }
+
+    pub fn set_owner(&self, owner: impl Into<String>) {
+        *self.owner.write() = Some(owner.into());
+    }
+
+    pub fn owner(&self) -> Option<String> {
+        self.owner.read().clone()
+    }
+
+    pub fn owner_matches(&self, owner: Option<&str>) -> bool {
+        match (self.owner.read().as_deref(), owner) {
+            (None, _) => true,
+            (Some(expected), Some(actual)) => expected == actual,
+            (Some(_), None) => false,
+        }
+    }
+
+    pub fn mark_resources_released(&self) -> bool {
+        self.resources_released
+            .compare_exchange(false, true)
+            .is_ok()
+    }
+
+    pub fn resources_released(&self) -> bool {
+        self.resources_released.load()
+    }
+
+    pub fn staged_bytes(&self) -> u64 {
+        self.staged_bytes.load(Ordering::Relaxed)
+    }
+
+    pub fn add_staged_bytes(&self, bytes: u64) {
+        self.staged_bytes.fetch_add(bytes, Ordering::Relaxed);
     }
 
     /// Increment query count
@@ -313,6 +411,14 @@ impl TransactionContext {
                     | (TransactionState::CommitRetry, TransactionState::Aborted)
                     | (TransactionState::Aborting, TransactionState::Committed)
                     | (TransactionState::Aborting, TransactionState::Aborted)
+                    | (
+                        TransactionState::Aborting,
+                        TransactionState::RecoveryRequired
+                    )
+                    | (
+                        TransactionState::RecoveryRequired,
+                        TransactionState::Aborting
+                    )
             );
 
             if !valid_transition {
@@ -325,11 +431,6 @@ impl TransactionContext {
                 return Ok(());
             }
         }
-    }
-
-    /// Whether to enable two-phase commit
-    pub fn is_two_phase_enabled(&self) -> bool {
-        self.two_phase_enabled
     }
 
     /// Get the write set for this transaction
@@ -364,11 +465,40 @@ impl TransactionContext {
         ws1.has_conflict_with(&ws2)
     }
 
+    /// Get the read set captured by this transaction.
+    pub fn get_read_set(&self) -> WriteSet {
+        self.read_set.lock().clone()
+    }
+
+    pub fn record_vertex_read(&self, vid: VertexId) {
+        self.read_set.lock().record_vertex(vid);
+    }
+
+    pub fn record_edge_read(&self, edge: crate::core::types::EdgeIdentifier) {
+        self.read_set.lock().record_edge(edge);
+    }
+
+    pub fn record_schema_read(&self, resource: &str) {
+        self.read_set.lock().record_schema_resource(resource);
+    }
+
+    pub fn redo_log_len(&self) -> usize {
+        self.redo_entries.read().len()
+    }
+
+    pub fn truncate_redo_log(&self, index: usize) {
+        self.redo_entries.write().truncate(index);
+    }
+
     /// Check if operation can be executed
     pub fn can_execute(&self) -> Result<(), TransactionError> {
         let state = self.state.load();
 
         if !state.can_execute() {
+            return Err(TransactionError::invalid_state_for_execution(state));
+        }
+
+        if self.is_rollback_only() {
             return Err(TransactionError::invalid_state_for_execution(state));
         }
 
@@ -393,6 +523,20 @@ impl TransactionContext {
             query_count: self.query_count.load(Ordering::Relaxed),
             modified_tables,
             savepoint_count,
+            read_timestamp: self.effective_snapshot_timestamp(),
+            write_timestamp: if self.read_only { 0 } else { self.timestamp() },
+            owner: self.owner(),
+            last_activity: self.last_activity.load().elapsed(),
+            rollback_only: self.is_rollback_only(),
+            blocking_reason: if self.state() == TransactionState::RecoveryRequired {
+                Some("abort cleanup failed; recovery retry required".to_string())
+            } else if self.is_rollback_only() {
+                Some("transaction is marked rollback-only".to_string())
+            } else {
+                None
+            },
+            staged_bytes: self.staged_bytes(),
+            undo_bytes: self.undo_log_len() as u64,
         }
     }
 
@@ -449,6 +593,62 @@ impl TransactionContext {
         self.write_set.lock().record_vertex(vid);
     }
 
+    pub fn record_vertex_delete(&self, vid: VertexId) {
+        self.write_set.lock().record_vertex_delete(vid);
+    }
+
+    /// Record an edge write for conflict certification.
+    pub fn record_edge_write(&self, edge: crate::core::types::EdgeIdentifier) {
+        self.write_set.lock().record_edge(edge);
+    }
+
+    pub fn record_schema_write(&self, resource: &str) {
+        self.write_set.lock().record_schema_resource(resource);
+    }
+
+    pub fn record_index_write(&self, resource: &str) {
+        self.write_set.lock().record_index_resource(resource);
+    }
+
+    /// Publish a complete mutation result in the canonical metadata order.
+    pub fn record_mutation(&self, mutation: MutationResult) -> Result<(), TransactionError> {
+        for entity in mutation.entity_keys {
+            match entity {
+                MutationEntityKey::Vertex(vertex_id) => self.record_vertex_write(vertex_id),
+                MutationEntityKey::Edge(edge) => self.record_edge_write(edge),
+            }
+        }
+        if let Some(entry) = mutation.undo_entry {
+            self.add_undo_log(entry)?;
+        }
+        if let Some(entry) = mutation.redo_entry {
+            self.redo_entries.write().push(entry);
+        }
+        for intent in mutation.index_intents {
+            self.record_index_write(&format!("{}", intent.mutation.ordering_key));
+        }
+        if let Some(table) = mutation.modified_table {
+            self.record_table_modification(&table);
+        }
+        self.write_validated.store(false);
+        Ok(())
+    }
+
+    /// Replace the write set after a savepoint rollback.
+    pub fn restore_write_set(&self, write_set: WriteSet) {
+        *self.write_set.lock() = write_set;
+        self.write_validated.store(false);
+    }
+
+    pub fn restore_read_set(&self, read_set: WriteSet) {
+        *self.read_set.lock() = read_set;
+    }
+
+    /// Clear certification state after a partial rollback.
+    pub fn clear_write_validation(&self) {
+        self.write_validated.store(false);
+    }
+
     /// Clear operation logs
     pub fn clear_operation_log(&self) {
         let mut logs = self.operation_logs.write();
@@ -473,8 +673,21 @@ impl TransactionContext {
     pub fn create_savepoint(&self, name: Option<String>, sync_sequence: u64) -> SavepointId {
         let operation_log_index = self.operation_log_len();
         let undo_log_index = self.undo_log_len();
+        let write_set = self.get_write_set();
+        let read_set = self.get_read_set();
+        let redo_log_index = self.redo_log_len();
+        let modified_tables = self.get_modified_tables();
         let mut manager = self.savepoint_manager.write();
-        manager.create_savepoint(name, operation_log_index, undo_log_index, sync_sequence)
+        manager.create_savepoint(
+            name,
+            operation_log_index,
+            undo_log_index,
+            sync_sequence,
+            write_set,
+            read_set,
+            redo_log_index,
+            modified_tables,
+        )
     }
 
     /// Get savepoint info
@@ -564,6 +777,14 @@ impl TransactionContext {
             )
             .map_err(|e| TransactionError::rollback_failed(e.to_string()))?;
 
+        self.restore_write_set(savepoint_info.write_set);
+        self.restore_read_set(savepoint_info.read_set);
+        self.truncate_redo_log(savepoint_info.redo_log_index);
+        {
+            let mut tables = self.modified_tables.lock();
+            *tables = savepoint_info.modified_tables;
+        }
+
         Ok(())
     }
 
@@ -617,6 +838,14 @@ impl TransactionContext {
         self.clear_undo_logs()?;
         self.clear_operation_log();
         {
+            let mut write_set = self.write_set.lock();
+            *write_set = WriteSet::new();
+        }
+        self.write_validated.store(false);
+        self.rollback_only.store(false);
+        self.resources_released.store(false);
+        self.staged_bytes.store(0, Ordering::Relaxed);
+        {
             let mut tables = self.modified_tables.lock();
             tables.clear();
         }
@@ -624,7 +853,55 @@ impl TransactionContext {
             let mut manager = self.savepoint_manager.write();
             manager.clear();
         }
+        self.truncate_redo_log(0);
+        self.restore_read_set(WriteSet::new());
         Ok(())
+    }
+}
+
+impl TransactionMutationRecorder for TransactionContext {
+    fn record_mutation(&self, mutation: MutationResult) -> Result<(), TransactionError> {
+        self.record_mutation(mutation)
+    }
+
+    fn record_vertex_write(&self, vertex_id: VertexId) {
+        self.record_vertex_write(vertex_id);
+    }
+
+    fn record_vertex_delete(&self, vertex_id: VertexId) {
+        self.record_vertex_delete(vertex_id);
+    }
+
+    fn record_edge_write(&self, edge: crate::core::types::EdgeIdentifier) {
+        self.record_edge_write(edge);
+    }
+
+    fn add_undo_log(&self, entry: UndoLogEntry) -> Result<(), TransactionError> {
+        self.add_undo_log(entry)
+    }
+
+    fn record_table_modification(&self, table_name: &str) {
+        self.record_table_modification(table_name);
+    }
+
+    fn record_schema_write(&self, resource: &str) {
+        self.record_schema_write(resource);
+    }
+
+    fn record_index_write(&self, resource: &str) {
+        self.record_index_write(resource);
+    }
+
+    fn record_vertex_read(&self, vertex_id: VertexId) {
+        self.record_vertex_read(vertex_id);
+    }
+
+    fn record_edge_read(&self, edge: crate::core::types::EdgeIdentifier) {
+        self.record_edge_read(edge);
+    }
+
+    fn record_schema_read(&self, resource: &str) {
+        self.record_schema_read(resource);
     }
 }
 

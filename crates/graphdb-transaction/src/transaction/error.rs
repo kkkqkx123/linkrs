@@ -22,6 +22,7 @@ pub enum TransactionErrorKind {
     CommitFailed,
     AbortFailed,
     TransactionNotFound,
+    TransactionNotOwner,
     SavepointFailed,
     SavepointNotFound,
     SavepointNotActive,
@@ -31,6 +32,7 @@ pub enum TransactionErrorKind {
     InvalidStateForAbort,
     InvalidStateForExecution,
     TransactionTimeout,
+    AdmissionTimeout,
     TransactionExpired,
     RollbackFailed,
     TooManyTransactions,
@@ -43,6 +45,7 @@ pub enum TransactionErrorKind {
     CheckpointInProgress,
     CheckpointTimeout,
     Internal,
+    RecoveryRequired,
 }
 
 impl TransactionErrorKind {
@@ -52,6 +55,7 @@ impl TransactionErrorKind {
             TransactionErrorKind::CommitFailed => "commit_failed",
             TransactionErrorKind::AbortFailed => "abort_failed",
             TransactionErrorKind::TransactionNotFound => "transaction_not_found",
+            TransactionErrorKind::TransactionNotOwner => "transaction_not_owner",
             TransactionErrorKind::SavepointFailed => "savepoint_failed",
             TransactionErrorKind::SavepointNotFound => "savepoint_not_found",
             TransactionErrorKind::SavepointNotActive => "savepoint_not_active",
@@ -61,6 +65,7 @@ impl TransactionErrorKind {
             TransactionErrorKind::InvalidStateForAbort => "invalid_state_for_abort",
             TransactionErrorKind::InvalidStateForExecution => "invalid_state_for_execution",
             TransactionErrorKind::TransactionTimeout => "transaction_timeout",
+            TransactionErrorKind::AdmissionTimeout => "admission_timeout",
             TransactionErrorKind::TransactionExpired => "transaction_expired",
             TransactionErrorKind::RollbackFailed => "rollback_failed",
             TransactionErrorKind::TooManyTransactions => "too_many_transactions",
@@ -73,6 +78,7 @@ impl TransactionErrorKind {
             TransactionErrorKind::CheckpointInProgress => "checkpoint_in_progress",
             TransactionErrorKind::CheckpointTimeout => "checkpoint_timeout",
             TransactionErrorKind::Internal => "internal",
+            TransactionErrorKind::RecoveryRequired => "recovery_required",
         }
     }
 }
@@ -137,6 +143,13 @@ impl TransactionError {
         Self::new(
             TransactionErrorKind::TransactionNotFound,
             format!("Transaction not found: {}", id),
+        )
+    }
+
+    pub fn transaction_not_owner(id: TransactionId) -> Self {
+        Self::new(
+            TransactionErrorKind::TransactionNotOwner,
+            format!("Transaction {} is owned by another session", id),
         )
     }
 
@@ -207,6 +220,13 @@ impl TransactionError {
         )
     }
 
+    pub fn admission_timeout() -> Self {
+        Self::new(
+            TransactionErrorKind::AdmissionTimeout,
+            "Timed out waiting for transaction admission",
+        )
+    }
+
     pub fn rollback_failed(message: impl Into<String>) -> Self {
         Self::new(TransactionErrorKind::RollbackFailed, message)
     }
@@ -267,6 +287,19 @@ impl TransactionError {
 
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(TransactionErrorKind::Internal, message)
+    }
+
+    pub fn recovery_required(message: impl Into<String>) -> Self {
+        Self::new(TransactionErrorKind::RecoveryRequired, message)
+    }
+
+    pub fn is_timeout(&self) -> bool {
+        matches!(
+            self.kind,
+            TransactionErrorKind::TransactionTimeout
+                | TransactionErrorKind::TransactionExpired
+                | TransactionErrorKind::AdmissionTimeout
+        )
     }
 }
 

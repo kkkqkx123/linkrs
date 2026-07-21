@@ -185,7 +185,7 @@ pub(crate) fn create_checkpoint(
         None => return Ok(None),
     };
 
-    let ts = ctx.get_write_timestamp();
+    let ts = ctx.get_write_timestamp()?;
     let graph = ctx.clone();
     let user_storage = ctx.user_storage().clone();
 
@@ -221,9 +221,16 @@ pub(crate) fn create_checkpoint(
         ts,
     );
 
-    ctx.release_write_timestamp(ts);
-
-    let stats = result?;
+    let stats = match result {
+        Ok(stats) => {
+            ctx.commit_write_timestamp(ts);
+            stats
+        }
+        Err(error) => {
+            ctx.abort_write_timestamp(ts);
+            return Err(error);
+        }
+    };
 
     Ok(Some(stats))
 }
@@ -389,7 +396,7 @@ pub(crate) fn compact_transactional(
 
     match result {
         Ok(()) => {
-            version_manager.release_write_timestamp(timestamp);
+            version_manager.commit_write_timestamp(timestamp);
 
             let after_stats = ctx.get_compact_stats();
             log::info!(
@@ -404,7 +411,7 @@ pub(crate) fn compact_transactional(
             Ok(())
         }
         Err(e) => {
-            version_manager.release_write_timestamp(timestamp);
+            version_manager.abort_write_timestamp(timestamp);
             Err(e)
         }
     }
@@ -457,6 +464,7 @@ pub(crate) fn recover_from_wal(ctx: &GraphStorageContext) -> StorageResult<Recov
     let mut manager = RecoveryManager::new(config);
 
     let stats = manager.recover_with_applier(ctx)?;
+    ctx.restore_auto_transaction_id(stats.max_transaction_id);
 
     // Phase 2: Replay deferred edge operations (two-phase recovery)
     ctx.replay_deferred_edges()?;
@@ -489,8 +497,8 @@ pub(crate) fn recover_from_wal(ctx: &GraphStorageContext) -> StorageResult<Recov
     }
 
     // Update read_ts so recovered data is visible to subsequent reads.
-    let checkpoint_ts = ctx.version_manager().write_timestamp().saturating_sub(1);
-    ctx.version_manager().init_ts(checkpoint_ts);
+    ctx.version_manager()
+        .init_ts(ctx.version_manager().read_timestamp());
 
     Ok(stats)
 }
@@ -508,6 +516,7 @@ pub(crate) fn recover_from_wal_with_config(
     let mut manager = RecoveryManager::new(config);
 
     let stats = manager.recover_with_applier(ctx)?;
+    ctx.restore_auto_transaction_id(stats.max_transaction_id);
 
     // Phase 2: Replay deferred edge operations (two-phase recovery)
     ctx.replay_deferred_edges()?;
@@ -533,8 +542,8 @@ pub(crate) fn recover_from_wal_with_config(
     }
 
     // Update read_ts so recovered data is visible to subsequent reads.
-    let checkpoint_ts = ctx.version_manager().write_timestamp().saturating_sub(1);
-    ctx.version_manager().init_ts(checkpoint_ts);
+    ctx.version_manager()
+        .init_ts(ctx.version_manager().read_timestamp());
 
     Ok(stats)
 }

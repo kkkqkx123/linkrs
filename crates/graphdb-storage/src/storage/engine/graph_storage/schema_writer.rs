@@ -3,6 +3,7 @@ use crate::core::types::{EdgeTypeInfo, Index, PropertyDef, SpaceInfo, TagInfo};
 use crate::core::{StorageError, StorageResult};
 use crate::storage::engine::params::CreateEdgeTypeParams;
 use crate::storage::types::StoragePropertyDef;
+use crate::transaction::MutationResult;
 use crate::transaction::wal::{
     AddEdgePropRedo, AddVertexPropRedo, AlterSpaceCommentRedo, ClearSpaceRedo, CreateEdgeIndexRedo,
     CreateEdgeTypeRedo, CreateSpaceRedo, CreateTagIndexRedo, CreateVertexTypeRedo,
@@ -26,11 +27,35 @@ fn append_schema_redo<T: serde::Serialize>(
     ctx: &GraphStorageContext,
     op_type: WalOpType,
     redo: &T,
-) -> StorageResult<()> {
-    let timestamp = ctx.get_write_timestamp();
+) -> StorageResult<crate::transaction::wal::TransactionWalEntry> {
+    let timestamp = ctx.get_write_timestamp()?;
     let result = ctx.append_wal_redo(op_type, timestamp, redo);
-    ctx.release_write_timestamp(timestamp);
-    result
+    match result {
+        Ok(entry) => {
+            if let Some(recorder) = ctx.mutation_recorder() {
+                recorder
+                    .record_mutation(MutationResult {
+                        redo_entry: Some(entry.clone()),
+                        modified_table: Some("schema".to_string()),
+                        ..MutationResult::default()
+                    })
+                    .map_err(|error| StorageError::db_error(error.to_string()))?;
+                match op_type {
+                    WalOpType::CreateTagIndex
+                    | WalOpType::DropTagIndex
+                    | WalOpType::CreateEdgeIndex
+                    | WalOpType::DropEdgeIndex => recorder.record_index_write("index"),
+                    _ => recorder.record_schema_write("schema"),
+                }
+            }
+            ctx.commit_write_timestamp(timestamp);
+            Ok(entry)
+        }
+        Err(error) => {
+            ctx.abort_write_timestamp(timestamp);
+            Err(error)
+        }
+    }
 }
 
 fn validate_index_space(

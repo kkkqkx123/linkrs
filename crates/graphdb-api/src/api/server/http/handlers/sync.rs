@@ -70,3 +70,29 @@ pub async fn status<
         }))
     }
 }
+
+/// Retry delivery of pending durable outbox entries.
+pub async fn retry_outbox<
+    S: StorageClient
+        + StorageSchemaContextOps
+        + StorageSyncContextOps
+        + StorageOperationContextOps
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+>(
+    State(state): State<AppState<S>>,
+) -> Result<JsonResponse<serde_json::Value>, HttpError> {
+    let graph_service = state.server.get_graph_service();
+    let sync_api = graph_service
+        .sync_api()
+        .ok_or_else(|| HttpError::bad_request("Synchronization is not configured"))?;
+    let delivered = sync_api
+        .retry_outbox_projection()
+        .map_err(HttpError::transaction_message)?;
+    Ok(JsonResponse(serde_json::json!({
+        "delivered": delivered,
+        "status": "completed",
+    })))
+}
