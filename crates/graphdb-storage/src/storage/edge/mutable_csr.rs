@@ -374,7 +374,6 @@ impl MutableCsr {
         deleted
     }
 
-    /// Delete an edge by offset position in the CSR primary block
     pub fn delete_edge_by_offset(&mut self, src_vid: u32, offset: i32, ts: Timestamp) -> bool {
         if offset < 0 {
             return false;
@@ -383,14 +382,10 @@ impl MutableCsr {
         if src_idx >= self.vertex_capacity() {
             return false;
         }
-
-        let base_offset = self.adj_offsets[src_idx] as usize;
-        let idx = base_offset + offset as usize;
-
+        let idx = self.adj_offsets[src_idx] as usize + offset as usize;
         if idx >= self.nbr_list.len() {
             return false;
         }
-
         let nbr = &mut self.nbr_list[idx];
         if nbr.delete_ts == u32::MAX && nbr.create_ts <= ts {
             nbr.delete_ts = ts;

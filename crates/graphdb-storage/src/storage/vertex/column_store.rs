@@ -891,6 +891,40 @@ impl Column {
         self.stats = Some(stats);
     }
 
+    /// Compute statistics for the bytes that this column will persist.
+    ///
+    /// Encoded columns persist their encoding metadata, while unencoded
+    /// columns persist the raw buffers. Keeping the size calculation here
+    /// makes flush-time statistics reflect the actual column format.
+    pub fn compute_stats(&self) -> StorageResult<ColumnStats> {
+        let values = (0..self.len()).map(|row_idx| self.get(row_idx)).collect::<Vec<_>>();
+        let (data, offsets, bitmap) = self.get_flush_data();
+        let raw_size = data
+            .len()
+            .saturating_add(offsets.len().saturating_mul(std::mem::size_of::<u64>()))
+            .saturating_add(
+                bitmap
+                    .as_ref()
+                    .map(|bits| bits.as_raw_slice().len())
+                    .unwrap_or(0),
+            ) as u64;
+
+        let compressed_size = if self.encoding.is_encoded() {
+            let mut metadata = Vec::new();
+            self.encoding.serialize_meta(&mut metadata)?;
+            metadata.len() as u64
+        } else {
+            raw_size
+        };
+
+        Ok(crate::storage::column_stats::compute_stats(
+            &values,
+            self.encoding_type(),
+            compressed_size,
+            raw_size,
+        ))
+    }
+
     fn sync_row_count_from_encoding(&mut self) {
         let encoded_len = self.encoding.len();
         self.inner_mut().resize(encoded_len);
@@ -944,6 +978,7 @@ impl Column {
             encoder,
             encoded_data,
             null_bitmap,
+            updates_since_rebuild: 0,
         };
 
         self.encoding = ColumnEncoding::Fsst(fsst_col);
@@ -1065,6 +1100,22 @@ impl Column {
     pub fn apply_rle_int_from_meta(&mut self, rle_col: RleIntColumn) -> StorageResult<()> {
         let encoded_len = rle_col.len();
         self.encoding = ColumnEncoding::RleInt(rle_col);
+        self.inner_mut().resize(encoded_len);
+        Ok(())
+    }
+
+    pub fn apply_rle_bool_from_meta(
+        &mut self,
+        rle_col: crate::storage::encoding::RleBoolColumn,
+    ) -> StorageResult<()> {
+        if self.data_type != DataType::Bool {
+            return Err(StorageError::type_mismatch(
+                DataType::Bool,
+                self.data_type.clone(),
+            ));
+        }
+        let encoded_len = rle_col.len();
+        self.encoding = ColumnEncoding::RleBool(rle_col);
         self.inner_mut().resize(encoded_len);
         Ok(())
     }

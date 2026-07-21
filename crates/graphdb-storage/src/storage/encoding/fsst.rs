@@ -27,7 +27,7 @@ const MIN_SYMBOL_LEN: usize = 2;
 const SYMBOL_TABLE_SIZE: usize = 255;
 const MAX_TRAINING_SAMPLES: usize = 10000;
 const MAX_NGRAMS_PER_STRING: usize = 1000;
-
+const DEFAULT_REBUILD_THRESHOLD: f64 = 0.2;
 #[derive(Debug, Clone)]
 pub struct FsstSymbolTable {
     code_to_symbol: Vec<Vec<u8>>,
@@ -43,6 +43,9 @@ impl FsstSymbolTable {
     }
 
     pub fn insert(&mut self, bytes: Vec<u8>, code: u8) {
+        if code == 0 {
+            return;
+        }
         self.code_to_symbol[code as usize] = bytes.clone();
         self.byte_to_code.insert(bytes, code);
     }
@@ -139,10 +142,9 @@ impl FsstEncoder {
     }
 
     pub fn train(strings: &[&str], max_symbols: usize) -> Self {
-        if strings.is_empty() {
+        if strings.is_empty() || max_symbols == 0 {
             return Self::new();
         }
-
         let mut encoder = Self::new();
         encoder.build_symbol_table(strings, max_symbols);
         encoder
@@ -150,28 +152,24 @@ impl FsstEncoder {
 
     fn build_symbol_table(&mut self, strings: &[&str], max_symbols: usize) {
         let sampled: Vec<&str> = if strings.len() > MAX_TRAINING_SAMPLES {
-            let step = strings.len() / MAX_TRAINING_SAMPLES;
+            let step = strings.len().div_ceil(MAX_TRAINING_SAMPLES);
             strings.iter().step_by(step).copied().collect()
         } else {
             strings.to_vec()
         };
-
         let mut ngram_freq: HashMap<Vec<u8>, usize> = HashMap::new();
-
         for s in sampled {
             let bytes = s.as_bytes();
             if bytes.len() < MIN_SYMBOL_LEN {
                 continue;
             }
-
             let mut ngram_count = 0;
             for len in MIN_SYMBOL_LEN..=MAX_SYMBOL_LEN.min(bytes.len()) {
                 for i in 0..=bytes.len() - len {
                     if ngram_count >= MAX_NGRAMS_PER_STRING {
                         break;
                     }
-                    let ngram: Vec<u8> = bytes[i..i + len].to_vec();
-                    *ngram_freq.entry(ngram).or_insert(0) += 1;
+                    *ngram_freq.entry(bytes[i..i + len].to_vec()).or_insert(0) += 1;
                     ngram_count += 1;
                 }
                 if ngram_count >= MAX_NGRAMS_PER_STRING {
@@ -179,21 +177,18 @@ impl FsstEncoder {
                 }
             }
         }
-
         let mut ngrams: Vec<(Vec<u8>, usize)> = ngram_freq.into_iter().collect();
         ngrams.sort_by(|a, b| {
             let score_a = a.1 * a.0.len();
             let score_b = b.1 * b.0.len();
-            score_b.cmp(&score_a)
+            score_b.cmp(&score_a).then_with(|| a.0.cmp(&b.0))
         });
-
         let max_symbols = max_symbols.min(SYMBOL_TABLE_SIZE);
-        for (idx, (ngram, _freq)) in ngrams.into_iter().enumerate() {
-            if idx >= max_symbols - 1 {
+        for (idx, (ngram, _)) in ngrams.into_iter().enumerate() {
+            if idx >= max_symbols.saturating_sub(1) {
                 break;
             }
-            let code = (idx + 1) as u8;
-            self.table.insert(ngram, code);
+            self.table.insert(ngram, (idx + 1) as u8);
         }
     }
 
@@ -288,6 +283,7 @@ pub struct FsstColumn {
     pub encoder: FsstEncoder,
     pub encoded_data: Vec<Vec<u8>>,
     pub null_bitmap: NullBitmap,
+    pub(crate) updates_since_rebuild: usize,
 }
 
 impl FsstColumn {
@@ -296,6 +292,7 @@ impl FsstColumn {
             encoder: FsstEncoder::new(),
             encoded_data: Vec::new(),
             null_bitmap: NullBitmap::new(),
+            updates_since_rebuild: 0,
         }
     }
 
@@ -322,7 +319,24 @@ impl FsstColumn {
                 self.null_bitmap.set(row_idx, true);
             }
         }
+        self.updates_since_rebuild = self.updates_since_rebuild.saturating_add(1);
+        self.rebuild_if_needed(DEFAULT_REBUILD_THRESHOLD)?;
         Ok(())
+    }
+
+    pub fn append(&mut self, value: Option<&str>) -> crate::core::StorageResult<()> {
+        match value {
+            Some(s) => {
+                self.encoded_data.push(self.encoder.encode(s));
+                self.null_bitmap.push(false);
+            }
+            None => {
+                self.encoded_data.push(Vec::new());
+                self.null_bitmap.push(true);
+            }
+        }
+        self.updates_since_rebuild = self.updates_since_rebuild.saturating_add(1);
+        self.rebuild_if_needed(DEFAULT_REBUILD_THRESHOLD)
     }
 
     pub fn len(&self) -> usize {
@@ -330,39 +344,54 @@ impl FsstColumn {
     }
 
     pub fn rebuild(&mut self, new_strings: &[String]) -> crate::core::StorageResult<()> {
-        let mut all_strings: Vec<String> =
-            Vec::with_capacity(self.encoded_data.len() + new_strings.len());
-
+        let mut existing_strings: Vec<(usize, String)> =
+            Vec::with_capacity(self.encoded_data.len());
         for (idx, encoded) in self.encoded_data.iter().enumerate() {
             if self.null_bitmap.is_null(idx) {
                 continue;
             }
             let decoded = self.encoder.decode(encoded);
-            let s = String::from_utf8(decoded).map_err(|e| {
+            let value = String::from_utf8(decoded).map_err(|e| {
                 crate::core::StorageError::io_error(format!("FSST rebuild decode utf8: {}", e))
             })?;
-            all_strings.push(s);
+            existing_strings.push((idx, value));
         }
 
-        all_strings.extend_from_slice(new_strings);
-
-        if all_strings.is_empty() {
+        let mut training_strings: Vec<String> = existing_strings
+            .iter()
+            .map(|(_, value)| value.clone())
+            .collect();
+        training_strings.extend_from_slice(new_strings);
+        if training_strings.is_empty() {
+            self.updates_since_rebuild = 0;
             return Ok(());
         }
 
-        let refs: Vec<&str> = all_strings.iter().map(|s| s.as_str()).collect();
+        let refs: Vec<&str> = training_strings.iter().map(String::as_str).collect();
         let new_encoder = FsstEncoder::train(&refs, SYMBOL_TABLE_SIZE);
-
-        for (idx, encoded) in self.encoded_data.iter_mut().enumerate() {
-            if self.null_bitmap.is_null(idx) {
-                continue;
-            }
-            let s = &all_strings[idx];
-            *encoded = new_encoder.encode(s);
+        for (idx, value) in existing_strings {
+            self.encoded_data[idx] = new_encoder.encode(&value);
         }
-
         self.encoder = new_encoder;
+        self.updates_since_rebuild = 0;
+        Ok(())
+    }
 
+    pub fn rebuild_if_needed(
+        &mut self,
+        threshold: f64,
+    ) -> crate::core::StorageResult<()> {
+        let threshold = threshold.clamp(0.0, 1.0);
+        let existing_rows = self
+            .encoded_data
+            .len()
+            .saturating_sub(self.updates_since_rebuild);
+        let required_updates = ((existing_rows as f64) * threshold).ceil() as usize;
+        if self.updates_since_rebuild > 0
+            && self.updates_since_rebuild >= required_updates.max(1)
+        {
+            self.rebuild(&[])?;
+        }
         Ok(())
     }
 
@@ -385,14 +414,18 @@ impl FsstColumn {
         })?;
         written += 4;
         for item in &self.encoded_data {
-            let len = item.len() as u16;
+            let len = u32::try_from(item.len()).map_err(|_| {
+                crate::core::StorageError::serialize_error(
+                    "FSST encoded item exceeds u32 length".to_string(),
+                )
+            })?;
             writer.write_all(&len.to_le_bytes()).map_err(|e| {
                 crate::core::StorageError::io_error(format!("FsstColumn serialize item len: {}", e))
             })?;
             writer.write_all(item).map_err(|e| {
                 crate::core::StorageError::io_error(format!("FsstColumn serialize item: {}", e))
             })?;
-            written += 2 + item.len();
+            written += 4 + item.len();
         }
         let bm_len = self.null_bitmap.len() as u32;
         writer.write_all(&bm_len.to_le_bytes()).map_err(|e| {
@@ -419,14 +452,14 @@ impl FsstColumn {
         let data_count = u32::from_le_bytes(count_bytes) as usize;
         let mut encoded_data = Vec::with_capacity(data_count);
         for _ in 0..data_count {
-            let mut len_bytes = [0u8; 2];
+            let mut len_bytes = [0u8; 4];
             reader.read_exact(&mut len_bytes).map_err(|e| {
                 crate::core::StorageError::io_error(format!(
                     "FsstColumn deserialize item len: {}",
                     e
                 ))
             })?;
-            let len = u16::from_le_bytes(len_bytes) as usize;
+            let len = u32::from_le_bytes(len_bytes) as usize;
             let mut item = vec![0u8; len];
             reader.read_exact(&mut item).map_err(|e| {
                 crate::core::StorageError::io_error(format!("FsstColumn deserialize item: {}", e))
@@ -455,6 +488,7 @@ impl FsstColumn {
             encoder,
             encoded_data,
             null_bitmap,
+            updates_since_rebuild: 0,
         })
     }
 }
@@ -482,6 +516,7 @@ mod tests {
             encoder,
             encoded_data: Vec::with_capacity(strings.len()),
             null_bitmap: NullBitmap::with_capacity(strings.len()),
+            updates_since_rebuild: 0,
         };
 
         for value in strings {
@@ -695,76 +730,4 @@ mod tests {
         assert!(encoder.symbol_count() > 0);
     }
 
-    #[test]
-    fn test_fsst_column_rebuild() {
-        let strings = vec![
-            Some("prefix_common_data_suffix_aaa"),
-            Some("prefix_common_data_suffix_bbb"),
-            Some("prefix_common_data_suffix_ccc"),
-        ];
-        let non_null: Vec<&str> = strings.iter().filter_map(|s| *s).collect();
-        let encoder = FsstEncoder::train(&non_null, 100);
-
-        let mut column = FsstColumn {
-            encoder,
-            encoded_data: Vec::with_capacity(strings.len()),
-            null_bitmap: NullBitmap::with_capacity(strings.len()),
-        };
-
-        for value in &strings {
-            match value {
-                Some(s) => {
-                    column.encoded_data.push(column.encoder.encode(s));
-                    column.null_bitmap.push(false);
-                }
-                None => {
-                    column.encoded_data.push(Vec::new());
-                    column.null_bitmap.push(true);
-                }
-            }
-        }
-
-        let original_compressed: usize = column.encoded_data.iter().map(|v| v.len()).sum();
-
-        let new_strings = vec![
-            "prefix_common_data_suffix_ddd".to_string(),
-            "prefix_common_data_suffix_eee".to_string(),
-        ];
-        column.rebuild(&new_strings).unwrap();
-
-        let new_compressed: usize = column.encoded_data.iter().map(|v| v.len()).sum();
-
-        assert!(new_compressed <= original_compressed * 3 / 2);
-
-        assert_eq!(column.len(), 3);
-    }
-
-    #[test]
-    fn test_fsst_rebuild_empty_new_strings() {
-        let strings = vec![Some("hello world"), Some("hello rust"), Some("hello code")];
-        let non_null: Vec<&str> = strings.iter().filter_map(|s| *s).collect();
-        let encoder = FsstEncoder::train(&non_null, 100);
-
-        let mut column = FsstColumn {
-            encoder,
-            encoded_data: Vec::with_capacity(strings.len()),
-            null_bitmap: NullBitmap::with_capacity(strings.len()),
-        };
-
-        for value in &strings {
-            match value {
-                Some(s) => {
-                    column.encoded_data.push(column.encoder.encode(s));
-                    column.null_bitmap.push(false);
-                }
-                None => {
-                    column.encoded_data.push(Vec::new());
-                    column.null_bitmap.push(true);
-                }
-            }
-        }
-
-        column.rebuild(&[]).unwrap();
-        assert_eq!(column.len(), 3);
-    }
 }

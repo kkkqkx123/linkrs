@@ -581,15 +581,12 @@ impl TimeTravelEdgeStore {
         if !self.is_open {
             return Err(StorageError::storage_not_open());
         }
-
         let dst_key = Self::edge_endpoint_key(dst, rank);
         if self.out_csr.get_edge(src, dst_key, ts).is_some() {
             self.out_csr.delete_edge_by_offset(src, oe_offset, ts);
             self.in_csr.delete_edge_by_offset(dst, ie_offset, ts);
-
             return Ok(true);
         }
-
         Ok(false)
     }
 

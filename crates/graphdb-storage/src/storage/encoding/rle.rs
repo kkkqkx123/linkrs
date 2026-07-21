@@ -245,15 +245,11 @@ impl RleBoolColumn {
                 self.encoder.encode(false);
             }
         }
-
         Ok(())
     }
 
     pub fn get(&self, row_idx: usize) -> Option<Value> {
-        if row_idx >= self.encoder.len() {
-            return None;
-        }
-        if self.null_bitmap.is_null(row_idx) {
+        if row_idx >= self.encoder.len() || self.null_bitmap.is_null(row_idx) {
             return None;
         }
         self.encoder.get(row_idx).map(|&v| Value::Bool(v))
@@ -277,8 +273,8 @@ impl RleBoolColumn {
             writer.write_all(&(run.count as u32).to_le_bytes())?;
             written += 5;
         }
-        let bm_len = self.null_bitmap.len() as u32;
-        writer.write_all(&bm_len.to_le_bytes())?;
+        let bitmap_len = self.null_bitmap.len() as u32;
+        writer.write_all(&bitmap_len.to_le_bytes())?;
         written += 4;
         for &word in self.null_bitmap.as_bits() {
             writer.write_all(&word.to_le_bytes())?;
@@ -287,6 +283,56 @@ impl RleBoolColumn {
         Ok(written)
     }
 
+    pub fn deserialize_meta(reader: &mut impl Read) -> StorageResult<Self> {
+        let mut count_bytes = [0u8; 4];
+        reader.read_exact(&mut count_bytes)?;
+        let count = u32::from_le_bytes(count_bytes) as usize;
+        let mut encoder = RleEncoder::new();
+        for _ in 0..count {
+            let mut value_bytes = [0u8; 1];
+            reader.read_exact(&mut value_bytes)?;
+            if value_bytes[0] > 1 {
+                return Err(StorageError::deserialize_error(format!(
+                    "invalid RLE boolean value: {}",
+                    value_bytes[0]
+                )));
+            }
+            let mut run_count_bytes = [0u8; 4];
+            reader.read_exact(&mut run_count_bytes)?;
+            let run_count = u32::from_le_bytes(run_count_bytes) as usize;
+            if run_count == 0 {
+                return Err(StorageError::deserialize_error(
+                    "RLE boolean run has zero length".to_string(),
+                ));
+            }
+            encoder.runs.push(RleRun {
+                value: value_bytes[0] != 0,
+                count: run_count,
+            });
+        }
+        encoder.rebuild_cumulative_counts();
+
+        let mut bitmap_len_bytes = [0u8; 4];
+        reader.read_exact(&mut bitmap_len_bytes)?;
+        let bitmap_len = u32::from_le_bytes(bitmap_len_bytes) as usize;
+        let words = bitmap_len.div_ceil(64);
+        let mut data = Vec::with_capacity(words);
+        for _ in 0..words {
+            let mut word_bytes = [0u8; 8];
+            reader.read_exact(&mut word_bytes)?;
+            data.push(u64::from_le_bytes(word_bytes));
+        }
+        if bitmap_len != encoder.len() {
+            return Err(StorageError::deserialize_error(format!(
+                "RLE boolean row count mismatch: runs={}, bitmap={}",
+                encoder.len(), bitmap_len
+            )));
+        }
+        Ok(Self {
+            encoder,
+            null_bitmap: NullBitmap::from_raw(data, bitmap_len),
+        })
+    }
 }
 
 impl Default for RleBoolColumn {
@@ -336,18 +382,20 @@ mod tests {
     }
 
     #[test]
-    fn test_rle_bool_column() {
+    fn test_rle_bool_column_roundtrip() {
         let mut col = RleBoolColumn::new();
+        col.append(Some(&Value::Bool(true))).expect("append true");
+        col.append(Some(&Value::Bool(true))).expect("append true");
+        col.append(Some(&Value::Bool(false))).expect("append false");
+        col.append(None).expect("append null");
 
-        col.append(Some(&Value::Bool(true))).unwrap();
-        col.append(Some(&Value::Bool(true))).unwrap();
-        col.append(Some(&Value::Bool(false))).unwrap();
-        col.append(None).unwrap();
-
-        assert_eq!(col.get(0), Some(Value::Bool(true)));
-        assert_eq!(col.get(2), Some(Value::Bool(false)));
-        assert!(col.null_bitmap.is_null(3));
-        assert_eq!(col.encoder.runs.len(), 2);
+        let mut bytes = Vec::new();
+        col.serialize_meta(&mut bytes).expect("serialize bool RLE");
+        let restored = RleBoolColumn::deserialize_meta(&mut &bytes[..])
+            .expect("deserialize bool RLE");
+        assert_eq!(restored.get(0), Some(Value::Bool(true)));
+        assert_eq!(restored.get(2), Some(Value::Bool(false)));
+        assert_eq!(restored.get(3), None);
     }
 
     #[test]

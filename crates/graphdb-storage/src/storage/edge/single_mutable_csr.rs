@@ -250,23 +250,6 @@ impl SingleMutableCsr {
         }
     }
 
-    pub fn delete_edge_by_offset(&mut self, src: u32, offset: i32, ts: Timestamp) -> bool {
-        if offset != 0 {
-            return false;
-        }
-
-        let src_idx = src as usize;
-        if src_idx >= self.vertex_capacity() {
-            return false;
-        }
-
-        let nbr = &self.nbr_list[src_idx];
-        let edge_id = nbr.edge_id;
-
-        // Call delete_edge with the actual edge_id for validation
-        self.delete_edge(src, edge_id, ts)
-    }
-
     pub fn revert_delete_by_offset(&mut self, src: u32, offset: i32, ts: Timestamp) -> bool {
         if offset != 0 {
             return false;
@@ -288,6 +271,18 @@ impl SingleMutableCsr {
         }
 
         false
+    }
+
+    pub fn delete_edge_by_offset(&mut self, src: u32, offset: i32, ts: Timestamp) -> bool {
+        if offset != 0 {
+            return false;
+        }
+        let src_idx = src as usize;
+        if src_idx >= self.vertex_capacity() {
+            return false;
+        }
+        let edge_id = self.nbr_list[src_idx].edge_id;
+        self.delete_edge(src, edge_id, ts)
     }
 
     pub fn edges_of(&self, src: u32, ts: Timestamp) -> Vec<Nbr> {

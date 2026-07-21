@@ -167,8 +167,8 @@ impl EdgeStore {
         ts: Timestamp,
     ) -> StorageResult<bool> {
         match self {
-            EdgeStore::TimeTravel(s) => {
-                s.delete_edge_by_offset(src, dst, rank, oe_offset, ie_offset, ts)
+            EdgeStore::TimeTravel(store) => {
+                store.delete_edge_by_offset(src, dst, rank, oe_offset, ie_offset, ts)
             }
         }
     }
@@ -707,9 +707,6 @@ impl core::TimeTravelEdgeStore {
 
         let crate::storage::compression::CompressionType::Zstd { level } = compression;
         let page_size = crate::storage::compression::DEFAULT_PAGE_SIZE;
-
-        let selector = crate::storage::encoding::EncodingSelector::default();
-        self.properties.select_encodings(&selector);
 
         let mut meta_payload = Vec::new();
         write_header_to(

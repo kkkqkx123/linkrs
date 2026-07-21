@@ -10,14 +10,17 @@
 //! Files without a marker (older format) are rejected. There is no
 //! backward compatibility with pre-marker file formats.
 
+use std::io::Read;
+
 use crate::core::{StorageError, StorageResult};
 
 use crate::storage::safe_read::{BoundedReader, SafeSerializable};
 
 pub const DEFAULT_PAGE_SIZE: usize = 64 * 1024 - 1;
+pub const MAX_PAGE_SIZE: usize = 64 * 1024 * 1024;
 pub const PAGE_MAGIC: [u8; 4] = *b"PGZC";
 pub const COLUMN_FILE_MAGIC: [u8; 8] = *b"GRPHDCOL";
-pub const COLUMN_FILE_VERSION: u16 = 1;
+pub const COLUMN_FILE_VERSION: u16 = 2;
 
 const COMPRESSION_MARKER_NONE: u8 = 0x00;
 const COMPRESSION_MARKER_ZSTD: u8 = 0x01;
@@ -48,13 +51,18 @@ impl ColumnFileHeader {
                 StorageError::io_error(format!("ColumnFileHeader write version: {}", e))
             })?;
         written += 2;
-        let page_size_u16 = self.page_size.min(u16::MAX as usize) as u16;
+        if self.page_size == 0 || self.page_size > MAX_PAGE_SIZE {
+            return Err(StorageError::invalid_input(format!(
+                "invalid column page size: {}",
+                self.page_size
+            )));
+        }
         writer
-            .write_all(&page_size_u16.to_le_bytes())
+            .write_all(&(self.page_size as u32).to_le_bytes())
             .map_err(|e| {
                 StorageError::io_error(format!("ColumnFileHeader write page_size: {}", e))
             })?;
-        written += 2;
+        written += 4;
         writer
             .write_all(&self.page_count.to_le_bytes())
             .map_err(|e| {
@@ -67,11 +75,11 @@ impl ColumnFileHeader {
                 StorageError::io_error(format!("ColumnFileHeader write total_rows: {}", e))
             })?;
         written += 4;
-        let reserved = [0u8; 32];
+        let reserved = [0u8; 30];
         writer.write_all(&reserved).map_err(|e| {
             StorageError::io_error(format!("ColumnFileHeader write reserved: {}", e))
         })?;
-        written += 32;
+        written += 30;
         Ok(written)
     }
 
@@ -97,11 +105,17 @@ impl ColumnFileHeader {
                 COLUMN_FILE_VERSION as u32,
             ));
         }
-        let mut page_size_bytes = [0u8; 2];
+        let mut page_size_bytes = [0u8; 4];
         reader.read_exact(&mut page_size_bytes).map_err(|e| {
             StorageError::io_error(format!("ColumnFileHeader read page_size: {}", e))
         })?;
-        let page_size = u16::from_le_bytes(page_size_bytes) as usize;
+        let page_size = u32::from_le_bytes(page_size_bytes) as usize;
+        if page_size == 0 || page_size > MAX_PAGE_SIZE {
+            return Err(StorageError::deserialize_error(format!(
+                "invalid column page size: {}",
+                page_size
+            )));
+        }
         let mut page_count_bytes = [0u8; 4];
         reader.read_exact(&mut page_count_bytes).map_err(|e| {
             StorageError::io_error(format!("ColumnFileHeader read page_count: {}", e))
@@ -112,7 +126,7 @@ impl ColumnFileHeader {
             StorageError::io_error(format!("ColumnFileHeader read total_rows: {}", e))
         })?;
         let total_rows = u32::from_le_bytes(total_rows_bytes);
-        let mut _reserved = [0u8; 32];
+        let mut _reserved = [0u8; 30];
         reader.read_exact(&mut _reserved).map_err(|e| {
             StorageError::io_error(format!("ColumnFileHeader read reserved: {}", e))
         })?;
@@ -151,11 +165,11 @@ impl PageHeader {
             .map_err(|e| StorageError::io_error(format!("PageHeader write crc32: {}", e)))?;
         written += 4;
         writer
-            .write_all(&(self.compressed_len as u16).to_le_bytes())
+            .write_all(&self.compressed_len.to_le_bytes())
             .map_err(|e| {
                 StorageError::io_error(format!("PageHeader write compressed_len: {}", e))
             })?;
-        written += 2;
+        written += 4;
         Ok(written)
     }
 
@@ -185,11 +199,11 @@ impl PageHeader {
             .read_exact(&mut crc32_bytes)
             .map_err(|e| StorageError::io_error(format!("PageHeader read crc32: {}", e)))?;
         let crc32 = u32::from_le_bytes(crc32_bytes);
-        let mut compressed_len_bytes = [0u8; 2];
+        let mut compressed_len_bytes = [0u8; 4];
         reader.read_exact(&mut compressed_len_bytes).map_err(|e| {
             StorageError::io_error(format!("PageHeader read compressed_len: {}", e))
         })?;
-        let compressed_len = u16::from_le_bytes(compressed_len_bytes) as u32;
+        let compressed_len = u32::from_le_bytes(compressed_len_bytes);
         Ok(Self {
             page_size,
             compression_type,
@@ -252,6 +266,12 @@ impl PageWriter {
         writer: &mut W,
         data: &[u8],
     ) -> StorageResult<()> {
+        if self.page_size == 0 || self.page_size > MAX_PAGE_SIZE {
+            return Err(StorageError::invalid_input(format!(
+                "invalid page size: {}",
+                self.page_size
+            )));
+        }
         let mut offset = 0;
         while offset < data.len() {
             let end = (offset + self.page_size).min(data.len());
@@ -279,7 +299,28 @@ impl PageReader {
 
     pub fn read_page<R: std::io::Read>(&self, reader: &mut R) -> StorageResult<Vec<u8>> {
         let header = PageHeader::deserialize(reader)?;
+        if header.page_size == 0 || header.page_size as usize > self.page_size {
+            return Err(StorageError::deserialize_error(format!(
+                "invalid page size: {}, reader page size: {}",
+                header.page_size, self.page_size
+            )));
+        }
+        if !matches!(
+            header.compression_type,
+            COMPRESSION_MARKER_NONE | COMPRESSION_MARKER_ZSTD
+        ) {
+            return Err(StorageError::deserialize_error(format!(
+                "unknown page compression type: {}",
+                header.compression_type
+            )));
+        }
         let compressed_len = header.compressed_len as usize;
+        if compressed_len > MAX_PAGE_SIZE.saturating_mul(2) {
+            return Err(StorageError::deserialize_error(format!(
+                "compressed page is too large: {}",
+                compressed_len
+            )));
+        }
         let mut bounded = crate::storage::safe_read::BoundedReader::new(reader, compressed_len);
         let mut compressed = vec![0u8; compressed_len];
         bounded.read_exact(&mut compressed).map_err(|e| {
@@ -299,8 +340,13 @@ impl PageReader {
             ));
         }
         let decompressed = if header.compression_type == COMPRESSION_MARKER_ZSTD {
-            zstd::decode_all(std::io::Cursor::new(&compressed))
-                .map_err(|e| StorageError::io_error(format!("zstd decompress failed: {}", e)))?
+            let decoder = zstd::stream::read::Decoder::new(std::io::Cursor::new(&compressed))
+                .map_err(|e| StorageError::io_error(format!("zstd decompress failed: {}", e)))?;
+            let mut limited = decoder.take(header.page_size as u64 + 1);
+            let mut decompressed = Vec::with_capacity(header.page_size as usize);
+            std::io::Read::read_to_end(&mut limited, &mut decompressed)
+                .map_err(|e| StorageError::io_error(format!("zstd decompress failed: {}", e)))?;
+            decompressed
         } else {
             compressed
         };
@@ -325,6 +371,53 @@ impl PageReader {
             result.extend_from_slice(&page);
         }
         Ok(result)
+    }
+
+    /// Skip one page without allocating or decompressing its payload.
+    pub fn skip_page<R: std::io::Read>(&self, reader: &mut R) -> StorageResult<()> {
+        let header = PageHeader::deserialize(reader)?;
+        if header.page_size == 0 || header.page_size as usize > self.page_size {
+            return Err(StorageError::deserialize_error(format!(
+                "invalid page size: {}, reader page size: {}",
+                header.page_size, self.page_size
+            )));
+        }
+        if !matches!(
+            header.compression_type,
+            COMPRESSION_MARKER_NONE | COMPRESSION_MARKER_ZSTD
+        ) {
+            return Err(StorageError::deserialize_error(format!(
+                "unknown page compression type: {}",
+                header.compression_type
+            )));
+        }
+        if header.compressed_len as usize > MAX_PAGE_SIZE.saturating_mul(2) {
+            return Err(StorageError::deserialize_error(format!(
+                "compressed page is too large: {}",
+                header.compressed_len
+            )));
+        }
+        let mut bounded = BoundedReader::new(reader, header.compressed_len as usize);
+        bounded.skip_all()?;
+        if bounded.remaining() != 0 {
+            return Err(StorageError::io_error(
+                "truncated page payload while skipping".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Read a page by ordinal. The current format has no offset index, so this
+    /// seeks forward page by page while avoiding decompression of skipped pages.
+    pub fn read_page_at<R: std::io::Read>(
+        &self,
+        reader: &mut R,
+        page_index: u32,
+    ) -> StorageResult<Vec<u8>> {
+        for _ in 0..page_index {
+            self.skip_page(reader)?;
+        }
+        self.read_page(reader)
     }
 
 }
@@ -385,12 +478,24 @@ impl SafeSerializable for PageHeader {
                 magic, PAGE_MAGIC
             )));
         }
-        let mut buf = [0u8; 11];
+        let mut buf = [0u8; 13];
         reader.read_exact(&mut buf)?;
-        let page_size = u32::from_le_bytes(buf[0..4].try_into().unwrap());
+        let page_size = u32::from_le_bytes(
+            buf[0..4]
+                .try_into()
+                .map_err(|_| StorageError::deserialize_error("invalid page size bytes"))?,
+        );
         let compression_type = buf[4];
-        let crc32 = u32::from_le_bytes(buf[5..9].try_into().unwrap());
-        let compressed_len = u16::from_le_bytes(buf[9..11].try_into().unwrap()) as u32;
+        let crc32 = u32::from_le_bytes(
+            buf[5..9]
+                .try_into()
+                .map_err(|_| StorageError::deserialize_error("invalid page crc bytes"))?,
+        );
+        let compressed_len = u32::from_le_bytes(
+            buf[9..13]
+                .try_into()
+                .map_err(|_| StorageError::deserialize_error("invalid page length bytes"))?,
+        );
         Ok(Self {
             page_size,
             compression_type,
@@ -414,18 +519,40 @@ impl SafeSerializable for ColumnFileHeader {
                 magic, COLUMN_FILE_MAGIC
             )));
         }
-        let mut buf = [0u8; 42];
+        let mut buf = [0u8; 44];
         reader.read_exact(&mut buf)?;
-        let version = u16::from_le_bytes(buf[0..2].try_into().unwrap());
+        let version = u16::from_le_bytes(
+            buf[0..2]
+                .try_into()
+                .map_err(|_| StorageError::deserialize_error("invalid column version bytes"))?,
+        );
         if version != COLUMN_FILE_VERSION {
             return Err(StorageError::unsupported_version(
                 version as u32,
                 COLUMN_FILE_VERSION as u32,
             ));
         }
-        let page_size = u16::from_le_bytes(buf[2..4].try_into().unwrap()) as usize;
-        let page_count = u32::from_le_bytes(buf[4..8].try_into().unwrap());
-        let total_rows = u32::from_le_bytes(buf[8..12].try_into().unwrap());
+        let page_size = u32::from_le_bytes(
+            buf[2..6]
+                .try_into()
+                .map_err(|_| StorageError::deserialize_error("invalid column page size bytes"))?,
+        ) as usize;
+        if page_size == 0 || page_size > MAX_PAGE_SIZE {
+            return Err(StorageError::deserialize_error(format!(
+                "invalid column page size: {}",
+                page_size
+            )));
+        }
+        let page_count = u32::from_le_bytes(
+            buf[6..10]
+                .try_into()
+                .map_err(|_| StorageError::deserialize_error("invalid page count bytes"))?,
+        );
+        let total_rows = u32::from_le_bytes(
+            buf[10..14]
+                .try_into()
+                .map_err(|_| StorageError::deserialize_error("invalid row count bytes"))?,
+        );
         Ok(Self {
             page_size,
             page_count,

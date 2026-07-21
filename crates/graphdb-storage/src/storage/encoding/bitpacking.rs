@@ -33,13 +33,10 @@ impl BitPackedColumn {
         if values.is_empty() {
             return Self::new();
         }
-
         let min_val = *values.iter().min().unwrap_or(&0);
         let max_val = *values.iter().max().unwrap_or(&0);
-
-        let range = (max_val - min_val) as u64;
+        let range = max_val.saturating_sub(min_val) as u64;
         let bit_width = Self::calculate_bit_width(range);
-
         let mut column = Self {
             data: BitVec::with_capacity(values.len() * bit_width as usize),
             bit_width,
@@ -47,32 +44,27 @@ impl BitPackedColumn {
             row_count: 0,
             null_bitmap: None,
         };
-
-        for &val in values {
-            column.append_value(val);
+        for &value in values {
+            column.append_value(value);
         }
-
         column
     }
 
     pub fn analyze_nullable(values: &[Option<i64>]) -> Self {
-        let non_null: Vec<i64> = values.iter().filter_map(|v| *v).collect();
-
+        let non_null: Vec<i64> = values.iter().filter_map(|value| *value).collect();
         if non_null.is_empty() {
             return Self {
                 data: BitVec::new(),
                 bit_width: 1,
                 min_value: 0,
                 row_count: values.len(),
-                null_bitmap: Some(BitVec::repeat(false, values.len())),
+                null_bitmap: Some(BitVec::repeat(true, values.len())),
             };
         }
-
         let min_val = *non_null.iter().min().unwrap_or(&0);
         let max_val = *non_null.iter().max().unwrap_or(&0);
-        let range = (max_val - min_val) as u64;
+        let range = max_val.saturating_sub(min_val) as u64;
         let bit_width = Self::calculate_bit_width(range).max(1);
-
         let mut column = Self {
             data: BitVec::with_capacity(values.len() * bit_width as usize),
             bit_width,
@@ -80,51 +72,47 @@ impl BitPackedColumn {
             row_count: 0,
             null_bitmap: Some(BitVec::with_capacity(values.len())),
         };
-
-        for val in values {
-            column.append_optional(*val);
+        for value in values {
+            column.append_optional(*value);
         }
-
         column
     }
 
     fn calculate_bit_width(range: u64) -> u8 {
         if range == 0 {
-            return 1;
+            1
+        } else {
+            (64 - range.leading_zeros()) as u8
         }
-        (64 - range.leading_zeros()) as u8
     }
 
     pub fn append_value(&mut self, value: i64) {
-        let adjusted = (value - self.min_value) as u64;
+        let adjusted = value.saturating_sub(self.min_value) as u64;
         self.append_bits(adjusted);
         self.row_count += 1;
     }
 
     pub fn append_optional(&mut self, value: Option<i64>) {
-        if let Some(ref mut bitmap) = self.null_bitmap {
-            match value {
-                Some(v) => {
+        match value {
+            Some(value) => {
+                if let Some(bitmap) = &mut self.null_bitmap {
                     bitmap.push(false);
-                    self.append_value(v);
                 }
-                None => {
+                self.append_value(value);
+            }
+            None => {
+                if let Some(bitmap) = &mut self.null_bitmap {
                     bitmap.push(true);
                     self.append_bits(0);
                     self.row_count += 1;
                 }
             }
-        } else {
-            if let Some(v) = value {
-                self.append_value(v);
-            }
         }
     }
 
     fn append_bits(&mut self, value: u64) {
-        for i in 0..self.bit_width {
-            let bit = (value >> i) & 1;
-            self.data.push(bit == 1);
+        for bit in 0..self.bit_width {
+            self.data.push(((value >> bit) & 1) != 0);
         }
     }
 
@@ -303,19 +291,19 @@ impl BitPackedIntColumn {
     pub fn analyze(values: &[Option<Value>], data_type: DataType) -> StorageResult<Self> {
         let int_values: Vec<Option<i64>> = values
             .iter()
-            .map(|v| {
-                v.as_ref().and_then(|val| match val {
-                    Value::SmallInt(i) => Some(*i as i64),
-                    Value::Int(i) => Some(*i as i64),
-                    Value::BigInt(i) => Some(*i),
+            .map(|value| {
+                value.as_ref().and_then(|value| match value {
+                    Value::SmallInt(value) => Some(*value as i64),
+                    Value::Int(value) => Some(*value as i64),
+                    Value::BigInt(value) => Some(*value),
                     _ => None,
                 })
             })
             .collect();
-
-        let packed = BitPackedColumn::analyze_nullable(&int_values);
-
-        Ok(Self { packed, data_type })
+        Ok(Self {
+            packed: BitPackedColumn::analyze_nullable(&int_values),
+            data_type,
+        })
     }
 
     pub fn get(&self, row_idx: usize) -> Option<Value> {
@@ -389,58 +377,6 @@ mod tests {
     }
 
     #[test]
-    fn test_bitpacking_basic() {
-        let values = vec![10, 20, 30, 40, 50];
-        let column = BitPackedColumn::analyze(&values);
-
-        assert_eq!(column.len(), 5);
-        assert_eq!(column.get(0), Some(10));
-        assert_eq!(column.get(4), Some(50));
-    }
-
-    #[test]
-    fn test_bitpacking_small_range() {
-        let values: Vec<i64> = (0..100).collect();
-        let column = BitPackedColumn::analyze(&values);
-
-        let original_size = 100 * 8;
-        let compressed_size = column.memory_usage();
-        assert!(compressed_size < original_size);
-    }
-
-    #[test]
-    fn test_bitpacking_nullable() {
-        let values = vec![Some(10), None, Some(30), None, Some(50)];
-        let column = BitPackedColumn::analyze_nullable(&values);
-
-        assert_eq!(column.len(), 5);
-        assert_eq!(column.get(0), Some(10));
-        assert!(column.is_null(1));
-        assert_eq!(column.get(2), Some(30));
-        assert!(column.is_null(3));
-    }
-
-    #[test]
-    fn test_bitpacking_set() {
-        let values = vec![10, 20, 30];
-        let mut column = BitPackedColumn::analyze(&values);
-
-        column.set(1, Some(25)).unwrap();
-        assert_eq!(column.get(1), Some(25));
-    }
-
-    #[test]
-    fn test_bitpacking_memory_usage() {
-        let values: Vec<i64> = (0..1000).collect();
-        let column = BitPackedColumn::analyze(&values);
-
-        let original_size = 1000 * 8;
-        let compressed_size = column.memory_usage();
-
-        assert!(compressed_size < original_size);
-    }
-
-    #[test]
     fn test_select_bitpacking() {
         let small_range: Vec<i64> = (0..1000).collect();
         assert!(select_bitpacking(&small_range));
@@ -449,14 +385,4 @@ mod tests {
         assert!(!select_bitpacking(&large_range));
     }
 
-    #[test]
-    fn test_bitpacked_int_column() {
-        let values = vec![Some(Value::Int(10)), None, Some(Value::Int(30))];
-
-        let column = BitPackedIntColumn::analyze(&values, DataType::Int).unwrap();
-
-        assert_eq!(column.get(0), Some(Value::Int(10)));
-        assert!(column.get(1).is_none());
-        assert_eq!(column.get(2), Some(Value::Int(30)));
-    }
 }

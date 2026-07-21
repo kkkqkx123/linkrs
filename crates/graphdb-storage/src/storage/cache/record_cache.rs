@@ -24,17 +24,13 @@ pub struct RecordCache {
     config: RecordCacheConfig,
     vertex_stats: Arc<CacheStats>,
     id_index_stats: Arc<CacheStats>,
-    eviction_callback: Arc<Mutex<Option<EvictionCallback>>>,
     eviction_callback_with_size: Arc<Mutex<Option<EvictionCallbackWithSize>>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct RecordCacheStats {
-    pub vertex: CacheStats,
-    pub id_index: CacheStats,
     pub vertex_weighted_size: u64,
     pub id_index_weighted_size: u64,
-    pub max_memory: usize,
 }
 
 impl std::fmt::Debug for RecordCache {
@@ -128,7 +124,6 @@ impl RecordCache {
             config,
             vertex_stats,
             id_index_stats,
-            eviction_callback,
             eviction_callback_with_size,
         }
     }
@@ -225,12 +220,6 @@ impl RecordCache {
         builder.build()
     }
 
-    fn notify_eviction(&self, cache_type: &str, cause: EvictionCause) {
-        if let Some(ref callback) = *self.eviction_callback.lock() {
-            callback(cache_type, cause);
-        }
-    }
-
     // ==================== ID Index Operations ====================
 
     pub fn get_id_index(
@@ -263,13 +252,7 @@ impl RecordCache {
         ts: Timestamp,
     ) {
         let key = (IdIndexCacheKey::new(label_id, external_id.to_string()), ts);
-        self.id_index_cache.insert(
-            key,
-            IdIndexCacheValue {
-                internal_id,
-                cached_at_ts: ts,
-            },
-        );
+        self.id_index_cache.insert(key, IdIndexCacheValue { internal_id });
         self.id_index_stats.record_insertion();
     }
 
@@ -345,11 +328,8 @@ impl RecordCache {
 
     pub fn stats(&self) -> RecordCacheStats {
         RecordCacheStats {
-            vertex: self.vertex_stats.as_ref().clone(),
-            id_index: self.id_index_stats.as_ref().clone(),
             vertex_weighted_size: self.vertex_cache.weighted_size(),
             id_index_weighted_size: self.id_index_cache.weighted_size(),
-            max_memory: self.config.max_memory,
         }
     }
 }

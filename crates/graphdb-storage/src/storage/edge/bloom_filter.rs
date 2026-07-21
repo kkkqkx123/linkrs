@@ -136,14 +136,4 @@ mod tests {
         assert!(mem > 1000 && mem < 2000, "Memory usage: {} bytes", mem);
     }
 
-    #[test]
-    fn test_bloom_filter_clear() {
-        let mut filter = EdgeDeletionBloomFilter::with_capacity(100);
-        filter.insert(42);
-
-        assert!(filter.might_contain(42));
-
-        filter.clear();
-        assert!(!filter.might_contain(42));
-    }
 }

@@ -91,11 +91,10 @@ pub struct CachedVertex {
     pub cached_at_ts: Timestamp,
 }
 
-/// Cached ID index value with timestamp for validation.
+/// Cached ID index value.
 #[derive(Debug, Clone, Copy)]
 pub struct IdIndexCacheValue {
     pub internal_id: u32,
-    pub cached_at_ts: Timestamp,
 }
 
 impl CachedVertex {

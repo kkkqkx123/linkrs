@@ -11,11 +11,26 @@ use std::path::Path;
 
 use crate::core::{StorageError, StorageResult};
 use crate::storage::compression::CompressionType;
-use crate::storage::encoding::EncodingType;
+use crate::storage::encoding::{EncodingSelector, EncodingType};
 use crate::storage::persistence::{read_header, section, write_header_to, HEADER_SIZE};
 use crate::storage::vertex::IdKey;
 
 use super::core::VertexTable;
+
+fn take_bytes(cursor: &mut &[u8], len: u32, field: &str) -> StorageResult<Vec<u8>> {
+    let len = len as usize;
+    if len > cursor.len() {
+        return Err(StorageError::deserialize_error(format!(
+            "{} length {} exceeds remaining input {}",
+            field,
+            len,
+            cursor.len()
+        )));
+    }
+    let (value, remaining) = cursor.split_at(len);
+    *cursor = remaining;
+    Ok(value.to_vec())
+}
 
 impl VertexTable {
     pub fn flush<P: AsRef<Path>>(
@@ -40,7 +55,27 @@ impl VertexTable {
         self.flush_id_indexer(&id_indexer_path)?;
 
         let columns_path = path.join("columns.bin");
-        self.flush_columns(&columns_path)?;
+        // Encoding is a flush-time concern. Work on a snapshot so active
+        // writes keep using the unmodified in-memory representation.
+        let mut columns = self.columns.clone();
+        let selector = EncodingSelector::default();
+        let selections = columns
+            .columns()
+            .iter()
+            .map(|col| {
+                let values = (0..col.len()).map(|row_idx| col.get(row_idx)).collect::<Vec<_>>();
+                (
+                    col.name.clone(),
+                    selector.select_for_column(&col.data_type, &values),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (name, encoding_type) in selections {
+            if encoding_type != EncodingType::None {
+                columns.apply_encoding_to_column(&name, encoding_type)?;
+            }
+        }
+        self.flush_columns(&columns_path, &columns)?;
 
         let timestamps_path = path.join("timestamps.bin");
         self.flush_timestamps(&timestamps_path)?;
@@ -115,16 +150,16 @@ impl VertexTable {
         Self::write_pages_to_file(path, &payload, page_size, 3, total_rows)
     }
 
-    fn flush_columns(&self, path: &Path) -> StorageResult<()> {
+    fn flush_columns(&self, path: &Path, columns: &crate::storage::vertex::ColumnStore) -> StorageResult<()> {
         let mut payload = Vec::new();
         write_header_to(&mut payload, section::VERTEX_COLUMNS).map_err(|e| {
             StorageError::io_error(format!("Failed to write columns header: {}", e))
         })?;
 
-        let column_count = self.columns.column_count() as u32;
+        let column_count = columns.column_count() as u32;
         payload.extend_from_slice(&column_count.to_le_bytes());
 
-        for col in self.columns.columns() {
+        for col in columns.columns() {
             let name_bytes = col.name.as_bytes();
             payload.extend_from_slice(&(name_bytes.len() as u32).to_le_bytes());
             payload.extend_from_slice(name_bytes);
@@ -137,15 +172,12 @@ impl VertexTable {
                 payload.extend_from_slice(&meta_len.to_le_bytes());
                 payload.extend_from_slice(&meta_buf);
 
-                if let Some(stats) = col.stats() {
-                    payload.push(1u8);
-                    let mut stats_buf = Vec::new();
-                    stats.serialize_meta(&mut stats_buf)?;
-                    payload.extend_from_slice(&(stats_buf.len() as u32).to_le_bytes());
-                    payload.extend_from_slice(&stats_buf);
-                } else {
-                    payload.push(0u8);
-                }
+                let stats = col.compute_stats()?;
+                payload.push(1u8);
+                let mut stats_buf = Vec::new();
+                stats.serialize_meta(&mut stats_buf)?;
+                payload.extend_from_slice(&(stats_buf.len() as u32).to_le_bytes());
+                payload.extend_from_slice(&stats_buf);
             } else {
                 payload.push(0u8);
                 let (data, offsets, bitmap) = col.get_flush_data();
@@ -175,15 +207,12 @@ impl VertexTable {
                     payload.push(0u8);
                 }
 
-                if let Some(stats) = col.stats() {
-                    payload.push(1u8);
-                    let mut stats_buf = Vec::new();
-                    stats.serialize_meta(&mut stats_buf)?;
-                    payload.extend_from_slice(&(stats_buf.len() as u32).to_le_bytes());
-                    payload.extend_from_slice(&stats_buf);
-                } else {
-                    payload.push(0u8);
-                }
+                let stats = col.compute_stats()?;
+                payload.push(1u8);
+                let mut stats_buf = Vec::new();
+                stats.serialize_meta(&mut stats_buf)?;
+                payload.extend_from_slice(&(stats_buf.len() as u32).to_le_bytes());
+                payload.extend_from_slice(&stats_buf);
             }
         }
 
@@ -223,6 +252,12 @@ impl VertexTable {
         let total_rows = header.total_rows;
         let page_reader = crate::storage::compression::PageReader::new(header.page_size);
         let data = page_reader.read_all(&mut reader, header.page_count)?;
+        let mut trailing = [0u8; 1];
+        if reader.read(&mut trailing)? != 0 {
+            return Err(StorageError::deserialize_error(
+                "trailing bytes after column file pages",
+            ));
+        }
         Ok((data, total_rows))
     }
 
@@ -252,19 +287,21 @@ impl VertexTable {
 
         let mut label_name_len_bytes = [0u8; 4];
         meta_cursor.read_exact(&mut label_name_len_bytes)?;
-        let label_name_len = u32::from_le_bytes(label_name_len_bytes) as usize;
-
-        let mut label_name_bytes = vec![0u8; label_name_len];
-        meta_cursor.read_exact(&mut label_name_bytes)?;
+        let label_name_bytes = take_bytes(
+            &mut meta_cursor,
+            u32::from_le_bytes(label_name_len_bytes),
+            "vertex label name",
+        )?;
         self.label_name = String::from_utf8(label_name_bytes)
             .map_err(|e| StorageError::deserialize_error(e.to_string()))?;
 
         let mut schema_len_bytes = [0u8; 4];
         meta_cursor.read_exact(&mut schema_len_bytes)?;
-        let schema_len = u32::from_le_bytes(schema_len_bytes) as usize;
-
-        let mut schema_bytes = vec![0u8; schema_len];
-        meta_cursor.read_exact(&mut schema_bytes)?;
+        let schema_bytes = take_bytes(
+            &mut meta_cursor,
+            u32::from_le_bytes(schema_len_bytes),
+            "vertex schema",
+        )?;
         let schema_json = String::from_utf8(schema_bytes)
             .map_err(|e| StorageError::deserialize_error(e.to_string()))?;
         self.schema = serde_json::from_str(&schema_json)
@@ -273,6 +310,11 @@ impl VertexTable {
         // Rebuild property index cache
         for (idx, prop) in self.schema.properties.iter().enumerate() {
             self.property_index_cache.insert(prop.name.clone(), idx);
+        }
+        if !meta_cursor.is_empty() {
+            return Err(StorageError::deserialize_error(
+                "trailing bytes in vertex metadata",
+            ));
         }
 
         let id_indexer_path = path.join("id_indexer.bin");
@@ -318,20 +360,26 @@ impl VertexTable {
 
             let mut key_len_bytes = [0u8; 4];
             cursor.read_exact(&mut key_len_bytes)?;
-            let key_len = u32::from_le_bytes(key_len_bytes) as usize;
-
-            let mut key_bytes = vec![0u8; key_len];
-            cursor.read_exact(&mut key_bytes)?;
+            let key_bytes = take_bytes(
+                &mut cursor,
+                u32::from_le_bytes(key_len_bytes),
+                "vertex id key",
+            )?;
             let key = IdKey::from_bytes(&key_bytes)?;
 
             self.id_indexer.set_at(internal_id, key);
         }
 
-        if total_rows > 0 && total_rows != count as u32 {
+        if total_rows != count as u32 {
             return Err(StorageError::deserialize_error(format!(
                 "id_indexer total_rows mismatch: header={}, actual={}",
                 total_rows, count
             )));
+        }
+        if !cursor.is_empty() {
+            return Err(StorageError::deserialize_error(
+                "trailing bytes in vertex id index",
+            ));
         }
 
         Ok(())
@@ -487,7 +535,8 @@ impl VertexTable {
         meta_cursor: &mut &[u8],
     ) -> StorageResult<()> {
         use crate::storage::encoding::{
-            AlpColumn, BitPackedIntColumn, DictionaryColumn, FsstColumn, RleIntColumn,
+            AlpColumn, BitPackedIntColumn, DictionaryColumn, FsstColumn, RleBoolColumn,
+            RleIntColumn,
         };
 
         match encoding_type {
@@ -506,11 +555,16 @@ impl VertexTable {
                 column.apply_dictionary_from_meta(col)?;
             }
             EncodingType::Rle => {
-                let col = RleIntColumn::deserialize_meta(meta_cursor)?;
                 let Some(column) = self.columns.get_column_mut(name) else {
                     return Err(StorageError::column_not_found(name.to_string()));
                 };
-                column.apply_rle_int_from_meta(col)?;
+                if column.data_type == crate::core::DataType::Bool {
+                    let col = RleBoolColumn::deserialize_meta(meta_cursor)?;
+                    column.apply_rle_bool_from_meta(col)?;
+                } else {
+                    let col = RleIntColumn::deserialize_meta(meta_cursor)?;
+                    column.apply_rle_int_from_meta(col)?;
+                }
             }
             EncodingType::BitPacking => {
                 let col = BitPackedIntColumn::deserialize_meta(meta_cursor)?;

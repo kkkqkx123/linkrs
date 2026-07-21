@@ -45,9 +45,6 @@ pub trait MutableCsrTrait: CsrBase {
     fn delete_edge_by_dst(&mut self, src_vid: u32, dst: VertexId, ts: Timestamp) -> bool;
 
     /// Delete an edge by its offset position in the primary block.
-    ///
-    /// - `MutableCsr`: offset indexes into the primary block of the vertex.
-    /// - `SingleMutableCsr`: only offset == 0 is valid; returns false otherwise.
     fn delete_edge_by_offset(&mut self, src_vid: u32, offset: i32, ts: Timestamp) -> bool;
 
     /// Revert a deleted edge by its offset position.

@@ -151,12 +151,20 @@ impl ColumnEncoding {
             )),
             Self::Fsst(col) => match value {
                 Some(Value::String(s)) => {
-                    col.set(row_idx, Some(s.as_str()))?;
+                    if row_idx == col.len() {
+                        col.append(Some(s.as_str()))?;
+                    } else {
+                        col.set(row_idx, Some(s.as_str()))?;
+                    }
                     Ok(())
                 }
                 Some(v) => Err(StorageError::type_mismatch(DataType::String, v.data_type())),
                 None => {
-                    col.set(row_idx, None)?;
+                    if row_idx == col.len() {
+                        col.append(None)?;
+                    } else {
+                        col.set(row_idx, None)?;
+                    }
                     Ok(())
                 }
             },
@@ -194,18 +202,14 @@ mod tests {
     use super::*;
     use crate::utils::NullBitmap;
 
-    fn build_fsst_column(strings: &[Option<&str>], max_symbols: usize) -> FsstColumn {
-        let non_null: Vec<&str> = strings.iter().filter_map(|s| *s).collect();
-        let encoder = if non_null.is_empty() {
-            FsstEncoder::new()
-        } else {
-            FsstEncoder::train(&non_null, max_symbols)
-        };
+    fn build_fsst_column(strings: &[Option<&str>], _max_symbols: usize) -> FsstColumn {
+        let encoder = FsstEncoder::new();
 
         let mut column = FsstColumn {
             encoder,
             encoded_data: Vec::with_capacity(strings.len()),
             null_bitmap: NullBitmap::with_capacity(strings.len()),
+            updates_since_rebuild: 0,
         };
 
         for value in strings {

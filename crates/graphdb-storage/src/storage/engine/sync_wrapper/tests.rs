@@ -4,12 +4,15 @@ use std::sync::Arc;
 use super::SyncWrapper;
 use crate::core::stats::{MetricType, StatsManager};
 use crate::core::types::VertexId;
+#[cfg(feature = "fulltext-search")]
 use crate::core::types::{PropertyDef, SpaceInfo, TagInfo};
+#[cfg(feature = "fulltext-search")]
 use crate::core::vertex_edge_path::Tag;
-use crate::core::{DataType, Edge};
+#[cfg(feature = "fulltext-search")]
+use crate::core::DataType;
+use crate::core::Edge;
 use crate::storage::{
-    GraphStorage, MetricsStorage, MockStorage, StorageCommitOps, StorageOperationContextOps,
-    StoragePersistenceOps, StorageReader, StorageSchemaOps, StorageWriter,
+    GraphStorage, MetricsStorage, MockStorage, StoragePersistenceOps, StorageReader, StorageWriter,
 };
 use crate::sync::SyncManager;
 

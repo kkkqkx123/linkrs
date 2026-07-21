@@ -38,7 +38,7 @@ use std::io::{Cursor, Read};
 use crate::core::types::Timestamp;
 use crate::core::{DataType, DateValue, StorageError, StorageResult, Value};
 use crate::storage::encoding::EncodingType;
-use crate::storage::mvcc::{MVCCTable, SnapshotHandle, TieredTombstoneManager};
+use crate::storage::mvcc::TieredTombstoneManager;
 use crate::storage::naming::NameIndexer;
 use crate::storage::persistence::{read_header, read_u32_le, section, write_header};
 use crate::storage::types::PropertyId;
@@ -85,10 +85,6 @@ pub struct PropertyTable {
     // Tiered tombstone manager for efficient deletion tracking (hot/cold layers)
     tombstones_manager: TieredTombstoneManager<u32>,
 
-    // MVCC snapshot management
-    active_snapshots: HashMap<Timestamp, usize>,
-    min_active_snapshot_ts: Timestamp,
-
     /// Pre-computed byte offsets for each column in the serialized row format.
     /// Only meaningful for fixed-size schemas. Used for direct byte manipulation
     /// in set_property to avoid full deserialize-merge-serialize cycle.
@@ -104,8 +100,6 @@ impl PropertyTable {
             row_count: 0,
             free_list: Vec::new(),
             tombstones_manager: TieredTombstoneManager::new(10_000),
-            active_snapshots: HashMap::new(),
-            min_active_snapshot_ts: u32::MAX,
             column_byte_offsets: Vec::new(),
         }
     }
@@ -118,8 +112,6 @@ impl PropertyTable {
             row_count: 0,
             free_list: Vec::with_capacity(capacity / 10),
             tombstones_manager: TieredTombstoneManager::new(10_000),
-            active_snapshots: HashMap::with_capacity(capacity / 100),
-            min_active_snapshot_ts: u32::MAX,
             column_byte_offsets: Vec::new(),
         }
     }
@@ -775,15 +767,6 @@ impl PropertyTable {
         ))
     }
 
-    pub fn select_encodings(&mut self, selector: &crate::storage::encoding::EncodingSelector) {
-        for i in 0..self.schema.len() {
-            let data_type = self.schema[i].data_type.clone();
-            let values = self.column_values(i);
-            let encoding = selector.select_for_column(&data_type, &values);
-            self.schema[i].encoding_type = encoding;
-        }
-    }
-
     pub fn dump(&self) -> Vec<u8> {
         let mut result = Vec::new();
 
@@ -1374,74 +1357,6 @@ impl PropertyTable {
 impl Default for PropertyTable {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Implement MVCCTable trait for PropertyTable to support snapshot isolation
-impl MVCCTable for PropertyTable {
-    fn register_snapshot(&mut self, ts: Timestamp) -> StorageResult<SnapshotHandle> {
-        *self.active_snapshots.entry(ts).or_insert(0) += 1;
-        self.min_active_snapshot_ts = self
-            .active_snapshots
-            .keys()
-            .copied()
-            .min()
-            .unwrap_or(u32::MAX);
-        Ok(SnapshotHandle::new(ts, self.active_snapshots.len() as u64))
-    }
-
-    fn unregister_snapshot(&mut self, handle: SnapshotHandle) -> StorageResult<()> {
-        if let Some(count) = self.active_snapshots.get_mut(&handle.ts) {
-            *count = count.saturating_sub(1);
-            if *count == 0 {
-                self.active_snapshots.remove(&handle.ts);
-            }
-        }
-        Ok(())
-    }
-
-    fn active_snapshot_count(&self) -> usize {
-        self.active_snapshots.len()
-    }
-
-    fn min_active_snapshot_ts(&self) -> Timestamp {
-        self.min_active_snapshot_ts
-    }
-
-    fn gc(&mut self, _min_ts: Timestamp) -> StorageResult<usize> {
-        // Update min_active_snapshot_ts first
-        self.min_active_snapshot_ts = self
-            .active_snapshots
-            .keys()
-            .copied()
-            .min()
-            .unwrap_or(u32::MAX);
-
-        // GC tiered tombstones
-        let _tombstone_removed = self.tombstones_manager.gc(self.min_active_snapshot_ts);
-
-        // GC records and count reclaimed
-        let mut reclaimed = 0;
-        let mut indices_to_clear = Vec::new();
-
-        for (idx, record_opt) in self.records.iter().enumerate() {
-            if let Some(record) = record_opt {
-                if let Some(delete_ts) = record.delete_ts {
-                    if delete_ts < self.min_active_snapshot_ts {
-                        let offset = prop_index_to_offset(idx);
-                        indices_to_clear.push((idx, offset));
-                        reclaimed += 1;
-                    }
-                }
-            }
-        }
-
-        for (idx, offset) in indices_to_clear {
-            self.records[idx] = None;
-            self.free_list.push(offset);
-        }
-
-        Ok(reclaimed)
     }
 }
 

@@ -61,16 +61,29 @@ impl StringDictionary {
 
     pub fn serialize(&self, writer: &mut impl Write) -> std::io::Result<usize> {
         let mut written = 0usize;
-        let count = self.values.len() as u32;
+        let entries = self.sorted_entries();
+        let count = entries.len() as u32;
         writer.write_all(&count.to_le_bytes())?;
         written += 4;
-        for value in self.values.iter() {
+        for (_, value) in entries {
             let len = value.len() as u32;
             writer.write_all(&len.to_le_bytes())?;
             writer.write_all(value.as_bytes())?;
             written += 4 + value.len();
         }
         Ok(written)
+    }
+
+    fn sorted_with_remap(&self) -> (Self, Vec<u32>) {
+        let entries = self.sorted_entries();
+        let mut sorted = Self::new();
+        let mut remap = vec![0u32; self.values.len()];
+        for (new_index, (old_index, value)) in entries.into_iter().enumerate() {
+            let inserted = sorted.insert(value);
+            debug_assert_eq!(inserted, new_index as u32);
+            remap[old_index as usize] = inserted;
+        }
+        (sorted, remap)
     }
 
     pub fn deserialize(reader: &mut impl Read) -> std::io::Result<Self> {
@@ -148,18 +161,6 @@ impl DictionaryEncoder {
             + self.null_bitmap.memory_usage()
     }
 
-    pub fn serialize(&self, writer: &mut impl Write) -> std::io::Result<usize> {
-        self.dictionary.serialize(writer)
-    }
-
-    pub fn deserialize(reader: &mut impl Read) -> std::io::Result<Self> {
-        let dictionary = StringDictionary::deserialize(reader)?;
-        Ok(Self {
-            dictionary,
-            indices: Vec::new(),
-            null_bitmap: NullBitmap::new(),
-        })
-    }
 }
 
 impl Default for DictionaryEncoder {
@@ -232,7 +233,8 @@ impl DictionaryColumn {
 
     pub fn serialize_meta(&self, writer: &mut impl Write) -> StorageResult<usize> {
         let mut written = 0usize;
-        written += self.encoder.dictionary.serialize(writer).map_err(|e| {
+        let (sorted_dictionary, remap) = self.encoder.dictionary.sorted_with_remap();
+        written += sorted_dictionary.serialize(writer).map_err(|e| {
             StorageError::io_error(format!("DictionaryColumn serialize dict: {}", e))
         })?;
         let idx_count = self.encoder.indices.len() as u32;
@@ -241,7 +243,13 @@ impl DictionaryColumn {
         })?;
         written += 4;
         for &idx in &self.encoder.indices {
-            writer.write_all(&idx.to_le_bytes()).map_err(|e| {
+            let remapped = remap.get(idx as usize).copied().ok_or_else(|| {
+                StorageError::serialize_error(format!(
+                    "dictionary index {} is outside dictionary",
+                    idx
+                ))
+            })?;
+            writer.write_all(&remapped.to_le_bytes()).map_err(|e| {
                 StorageError::io_error(format!("DictionaryColumn serialize idx: {}", e))
             })?;
             written += 4;

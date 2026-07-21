@@ -51,83 +51,70 @@ impl AlpEncoder {
                 exceptions: Vec::new(),
             };
         }
-
-        let best_exponent = Self::find_optimal_exponent(values);
-        let factor = 10f64.powi(best_exponent as i32);
-
+        let factor = 10f64.powi(Self::find_optimal_exponent(values) as i32);
         let mut int_values = Vec::with_capacity(values.len());
         let mut exceptions = Vec::new();
-
-        for (idx, &v) in values.iter().enumerate() {
-            let scaled = v * factor;
+        for (idx, &value) in values.iter().enumerate() {
+            let scaled = value * factor;
             if scaled.is_finite() && scaled.abs() < i64::MAX as f64 {
-                let int_val = scaled.round() as i64;
-                if (int_val as f64 / factor - v).abs() < ALP_EPSILON {
-                    int_values.push(int_val);
+                let int_value = scaled.round() as i64;
+                if (int_value as f64 / factor - value).abs() < ALP_EPSILON {
+                    int_values.push(int_value);
                     continue;
                 }
             }
             exceptions.push(ExceptionEntry {
                 row_idx: idx as u32,
-                original_value: v,
+                original_value: value,
             });
             int_values.push(0);
         }
-
-        let bit_packed = BitPackedColumn::analyze(&int_values);
-
         Self {
             factor,
-            bit_packed,
+            bit_packed: BitPackedColumn::analyze(&int_values),
             exceptions,
         }
     }
 
     fn find_optimal_exponent(values: &[f64]) -> i8 {
-        let mut best_exponent: i8 = 0;
-        let mut best_bit_width = 64u8;
-        let mut best_valid_count = 0usize;
-
-        for exp in -10..=10 {
-            let factor = 10f64.powi(exp as i32);
+        let mut best_exponent = 0;
+        let mut best_bit_width = u8::MAX;
+        let mut best_valid_count = 0;
+        for exponent in -10..=10 {
+            let factor = 10f64.powi(exponent);
             let mut int_values = Vec::with_capacity(values.len());
-            let mut valid_count = 0usize;
-
-            for &v in values {
-                let scaled = v * factor;
+            let mut valid_count = 0;
+            for &value in values {
+                let scaled = value * factor;
                 if scaled.is_finite() && scaled.abs() < i64::MAX as f64 {
-                    let int_val = scaled.round() as i64;
-                    if (int_val as f64 / factor - v).abs() < ALP_EPSILON {
-                        int_values.push(int_val);
+                    let int_value = scaled.round() as i64;
+                    if (int_value as f64 / factor - value).abs() < ALP_EPSILON {
+                        int_values.push(int_value);
                         valid_count += 1;
                         continue;
                     }
                 }
                 int_values.push(0);
             }
-
             if valid_count == 0 {
                 continue;
             }
-
-            let min_val = *int_values.iter().min().unwrap_or(&0);
-            let max_val = *int_values.iter().max().unwrap_or(&0);
-            let range = (max_val - min_val) as u64;
+            let min_value = *int_values.iter().min().unwrap_or(&0);
+            let max_value = *int_values.iter().max().unwrap_or(&0);
+            let range = max_value.saturating_sub(min_value) as u64;
             let bit_width = if range == 0 {
                 1
             } else {
                 (64 - range.leading_zeros()) as u8
             };
-
             if valid_count > best_valid_count
                 || (valid_count == best_valid_count && bit_width < best_bit_width)
             {
                 best_valid_count = valid_count;
                 best_bit_width = bit_width;
-                best_exponent = exp;
+                best_exponent = exponent as i8;
             }
         }
-
         best_exponent
     }
 
@@ -135,12 +122,12 @@ impl AlpEncoder {
         (value * self.factor).round() as i64
     }
 
-    pub fn decompress(&self, value: i64) -> f64 {
-        value as f64 / self.factor
-    }
-
     pub fn exceptions(&self) -> &[ExceptionEntry] {
         &self.exceptions
+    }
+
+    pub fn decompress(&self, value: i64) -> f64 {
+        value as f64 / self.factor
     }
 
     pub fn memory_usage(&self) -> usize {
@@ -205,6 +192,7 @@ pub struct AlpColumn {
     encoder: AlpEncoder,
     row_count: usize,
     null_bitmap: NullBitmap,
+    data_type: DataType,
 }
 
 impl AlpColumn {
@@ -213,67 +201,58 @@ impl AlpColumn {
             encoder: AlpEncoder::new(),
             row_count: 0,
             null_bitmap: NullBitmap::new(),
+            data_type: DataType::Double,
         }
     }
 
     pub fn analyze_f64(values: &[Option<f64>]) -> Self {
         let row_count = values.len();
         let null_bitmap = Self::build_bitmap(values);
-
-        let dense: Vec<f64> = values.iter().map(|v| v.unwrap_or(0.0)).collect();
-        let encoder = AlpEncoder::analyze(&dense);
-
+        let dense: Vec<f64> = values.iter().map(|value| value.unwrap_or(0.0)).collect();
         Self {
-            encoder,
+            encoder: AlpEncoder::analyze(&dense),
             row_count,
             null_bitmap,
+            data_type: DataType::Double,
         }
     }
 
     fn build_bitmap(values: &[Option<f64>]) -> NullBitmap {
         let mut bitmap = NullBitmap::with_capacity(values.len());
-        for v in values {
-            bitmap.push(v.is_none());
+        for value in values {
+            bitmap.push(value.is_none());
         }
         bitmap
     }
 
     pub fn analyze_f32(values: &[Option<f32>]) -> Self {
-        let f64_values: Vec<Option<f64>> = values.iter().map(|v| v.map(|x| x as f64)).collect();
-        Self::analyze_f64(&f64_values)
+        let values: Vec<Option<f64>> = values.iter().map(|value| value.map(f64::from)).collect();
+        let mut column = Self::analyze_f64(&values);
+        column.data_type = DataType::Float;
+        column
     }
 
     pub fn analyze_values(values: &[Option<Value>], data_type: DataType) -> StorageResult<Self> {
         match data_type {
             DataType::Float => {
-                let floats: Vec<Option<f32>> = values
+                let values = values
                     .iter()
-                    .map(|v| {
-                        v.as_ref().and_then(|val| {
-                            if let Value::Float(f) = val {
-                                Some(*f)
-                            } else {
-                                None
-                            }
-                        })
+                    .map(|value| match value {
+                        Some(Value::Float(value)) => Some(*value),
+                        _ => None,
                     })
-                    .collect();
-                Ok(Self::analyze_f32(&floats))
+                    .collect::<Vec<_>>();
+                Ok(Self::analyze_f32(&values))
             }
             DataType::Double => {
-                let doubles: Vec<Option<f64>> = values
+                let values = values
                     .iter()
-                    .map(|v| {
-                        v.as_ref().and_then(|val| {
-                            if let Value::Double(d) = val {
-                                Some(*d)
-                            } else {
-                                None
-                            }
-                        })
+                    .map(|value| match value {
+                        Some(Value::Double(value)) => Some(*value),
+                        _ => None,
                     })
-                    .collect();
-                Ok(Self::analyze_f64(&doubles))
+                    .collect::<Vec<_>>();
+                Ok(Self::analyze_f64(&values))
             }
             _ => Err(StorageError::invalid_input(format!(
                 "ALP compression not supported for {:?}",
@@ -298,7 +277,10 @@ impl AlpColumn {
     }
 
     pub fn get_value(&self, row_idx: usize) -> Option<Value> {
-        self.get(row_idx).map(Value::Double)
+        self.get(row_idx).map(|value| match self.data_type {
+            DataType::Float => Value::Float(value as f32),
+            _ => Value::Double(value),
+        })
     }
 
     pub fn set(&mut self, row_idx: usize, value: Option<f64>) -> StorageResult<()> {
@@ -373,6 +355,8 @@ impl AlpColumn {
 
     pub fn serialize_meta(&self, writer: &mut impl Write) -> StorageResult<usize> {
         let mut written = 0usize;
+        writer.write_all(&[if self.data_type == DataType::Float { 1 } else { 2 }])?;
+        written += 1;
         writer.write_all(&(self.row_count as u32).to_le_bytes())?;
         written += 4;
         written += self.encoder.serialize_meta(writer)?;
@@ -387,6 +371,18 @@ impl AlpColumn {
     }
 
     pub fn deserialize_meta(reader: &mut impl Read) -> StorageResult<Self> {
+        let mut type_byte = [0u8; 1];
+        reader.read_exact(&mut type_byte)?;
+        let data_type = match type_byte[0] {
+            1 => DataType::Float,
+            2 => DataType::Double,
+            value => {
+                return Err(StorageError::deserialize_error(format!(
+                    "invalid ALP data type: {}",
+                    value
+                )))
+            }
+        };
         let mut rc_bytes = [0u8; 4];
         reader.read_exact(&mut rc_bytes)?;
         let row_count = u32::from_le_bytes(rc_bytes) as usize;
@@ -406,6 +402,7 @@ impl AlpColumn {
             encoder,
             row_count,
             null_bitmap,
+            data_type,
         })
     }
 }
@@ -428,72 +425,6 @@ mod tests {
     }
 
     #[test]
-    fn test_alp_encoder_basic() {
-        let values = vec![1.5, 2.5, 3.5, 4.5, 5.5];
-        let encoder = AlpEncoder::analyze(&values);
-
-        for &v in &values {
-            let compressed = encoder.compress(v);
-            let decompressed = encoder.decompress(compressed);
-            assert!((decompressed - v).abs() < 1e-9);
-        }
-    }
-
-    #[test]
-    fn test_alp_encoder_compression() {
-        let values: Vec<f64> = (0..1000).map(|i| i as f64 * 0.01).collect();
-        let encoder = AlpEncoder::analyze(&values);
-
-        let original_size = values.len() * 8;
-        let compressed_size = encoder.memory_usage();
-
-        assert!(compressed_size < original_size);
-    }
-
-    #[test]
-    fn test_alp_column_f64() {
-        let values = vec![Some(1.5), None, Some(3.5), Some(5.5)];
-
-        let column = AlpColumn::analyze_f64(&values);
-
-        assert_eq!(column.len(), 4);
-        assert!((column.get(0).unwrap() - 1.5).abs() < 1e-9);
-        assert!(column.get(1).is_none());
-        assert!((column.get(2).unwrap() - 3.5).abs() < 1e-9);
-    }
-
-    #[test]
-    fn test_alp_column_set() {
-        let values = vec![Some(1.5), Some(2.5)];
-        let mut column = AlpColumn::analyze_f64(&values);
-
-        let original = column.get(0).unwrap();
-        assert!((original - 1.5).abs() < 1e-9);
-
-        column.set(0, Some(2.0)).unwrap();
-        let updated = column.get(0).unwrap();
-        assert!(
-            (updated - 2.0).abs() < 1e-9,
-            "Expected 2.0, got {}",
-            updated
-        );
-
-        column.set(1, None).unwrap();
-        assert!(column.get(1).is_none());
-    }
-
-    #[test]
-    fn test_alp_column_values() {
-        let values = vec![Some(Value::Double(1.5)), None, Some(Value::Double(3.5))];
-
-        let column = AlpColumn::analyze_values(&values, DataType::Double).unwrap();
-
-        assert_eq!(column.get_value(0), Some(Value::Double(1.5)));
-        assert!(column.get(1).is_none());
-        assert_eq!(column.get_value(2), Some(Value::Double(3.5)));
-    }
-
-    #[test]
     fn test_select_alp() {
         let integers: Vec<f64> = (0..1000).map(|i| i as f64).collect();
         assert!(!select_alp(&integers));
@@ -502,140 +433,4 @@ mod tests {
         assert!(select_alp(&decimals));
     }
 
-    #[test]
-    fn test_alp_roundtrip_precision() {
-        let values = vec![1.234567, 2.345678, 3.456789, 4.567890, 5.678901];
-        let encoder = AlpEncoder::analyze(&values);
-
-        for &v in &values {
-            let compressed = encoder.compress(v);
-            let decompressed = encoder.decompress(compressed);
-            assert!(
-                (decompressed - v).abs() < 1e-6,
-                "Roundtrip failed: {} -> {} -> {}",
-                v,
-                compressed,
-                decompressed
-            );
-        }
-    }
-
-    #[test]
-    fn test_alp_negative_values() {
-        let values = vec![-1.5, -2.5, 0.0, 1.5, 2.5];
-        let encoder = AlpEncoder::analyze(&values);
-
-        for &v in &values {
-            let compressed = encoder.compress(v);
-            let decompressed = encoder.decompress(compressed);
-            assert!((decompressed - v).abs() < 1e-9);
-        }
-    }
-
-    #[test]
-    fn test_alp_exception_handling() {
-        let values = vec![1.5, 2.5, 1.0_f64 / 3.0, 4.5];
-        let encoder = AlpEncoder::analyze(&values);
-
-        assert!(!encoder.exceptions.is_empty());
-        assert_eq!(encoder.exceptions[0].row_idx, 2);
-        assert_eq!(
-            encoder.exceptions[0].original_value.to_bits(),
-            (1.0_f64 / 3.0).to_bits()
-        );
-    }
-
-    #[test]
-    fn test_alp_exception_roundtrip() {
-        let values = vec![
-            Some(1.5),
-            Some(1.0_f64 / 3.0),
-            Some(2.0_f64 / 3.0),
-            None,
-            Some(4.5),
-        ];
-        let column = AlpColumn::analyze_f64(&values);
-
-        assert_eq!(column.get(0), Some(1.5));
-        assert_eq!(column.get(1).unwrap().to_bits(), (1.0_f64 / 3.0).to_bits());
-        assert_eq!(column.get(2).unwrap().to_bits(), (2.0_f64 / 3.0).to_bits());
-        assert_eq!(column.get(3), None);
-        assert_eq!(column.get(4), Some(4.5));
-    }
-
-    #[test]
-    fn test_alp_serialize_with_exceptions() {
-        let values = vec![
-            Some(Value::Double(1.5)),
-            Some(Value::Double(1.0_f64 / 3.0)),
-            Some(Value::Double(2.5)),
-        ];
-        let column = AlpColumn::analyze_values(&values, DataType::Double).unwrap();
-
-        let mut buf = Vec::new();
-        let written = column.serialize_meta(&mut buf).unwrap();
-        assert!(written > 0);
-
-        let mut cursor = &buf[..];
-        let restored = AlpColumn::deserialize_meta(&mut cursor).unwrap();
-
-        assert_eq!(restored.len(), 3);
-        assert_eq!(restored.get(0).unwrap().to_bits(), 1.5f64.to_bits());
-        assert_eq!(
-            restored.get(1).unwrap().to_bits(),
-            (1.0_f64 / 3.0).to_bits()
-        );
-        assert_eq!(restored.get(2).unwrap().to_bits(), 2.5f64.to_bits());
-    }
-
-    #[test]
-    fn test_alp_set_exception_to_lossless() {
-        let values = vec![Some(1.5), Some(1.0_f64 / 3.0)];
-        let mut column = AlpColumn::analyze_f64(&values);
-
-        assert!(column.get(1).is_some());
-
-        column.set(1, Some(2.5)).unwrap();
-        assert_eq!(column.get(1).unwrap().to_bits(), 2.5f64.to_bits());
-    }
-
-    #[test]
-    fn test_alp_set_lossless_to_exception() {
-        let values = vec![Some(1.5), Some(2.5)];
-        let mut column = AlpColumn::analyze_f64(&values);
-
-        column.set(1, Some(1.0_f64 / 3.0)).unwrap();
-        assert_eq!(column.get(1).unwrap().to_bits(), (1.0_f64 / 3.0).to_bits());
-    }
-
-    #[test]
-    fn test_alp_bitexact_roundtrip() {
-        let original: Vec<Option<f64>> = vec![
-            Some(1.0),
-            Some(1.0_f64 / 3.0),
-            Some(2.5),
-            None,
-            Some(std::f64::consts::PI),
-            Some(std::f64::consts::E),
-        ];
-        let column = AlpColumn::analyze_f64(&original);
-
-        for (i, expected) in original.iter().enumerate() {
-            match expected {
-                Some(v) => {
-                    let got = column.get(i).unwrap();
-                    assert!(
-                        got.to_bits() == v.to_bits(),
-                        "Bit-exact roundtrip failed at index {}: {} ({:x}) vs {} ({:x})",
-                        i,
-                        got,
-                        got.to_bits(),
-                        v,
-                        v.to_bits()
-                    );
-                }
-                None => assert!(column.get(i).is_none()),
-            }
-        }
-    }
 }

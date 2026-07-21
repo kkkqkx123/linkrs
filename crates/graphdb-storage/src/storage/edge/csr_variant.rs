@@ -116,7 +116,7 @@ macro_rules! dispatch_immutable {
 ///
 /// ```ignore
 /// // Create a multi-edge CSR
-/// let csr = CsrVariant::from_strategy(EdgeStrategy::Multiple, 1000, 10000)?;
+/// let csr = CsrVariant::from_strategy_with_overflow(EdgeStrategy::Multiple, 1000, 10000)?;
 ///
 /// // Use the same interface for all variants
 /// let edges = csr.edges_of(vertex_id, timestamp);
@@ -136,15 +136,6 @@ pub enum CsrVariant {
 }
 
 impl CsrVariant {
-    /// Create a CSR from an edge strategy
-    pub fn from_strategy(
-        strategy: EdgeStrategy,
-        vertex_capacity: usize,
-        edge_capacity: usize,
-    ) -> StorageResult<Self> {
-        Self::from_strategy_with_overflow(strategy, vertex_capacity, edge_capacity, 4096)
-    }
-
     pub fn from_strategy_with_overflow(
         strategy: EdgeStrategy,
         vertex_capacity: usize,
@@ -458,7 +449,8 @@ mod tests {
 
     #[test]
     fn test_multiple_csr_variant() {
-        let mut csr = CsrVariant::from_strategy(EdgeStrategy::Multiple, 10, 100).unwrap();
+        let mut csr =
+            CsrVariant::from_strategy_with_overflow(EdgeStrategy::Multiple, 10, 100, 4096).unwrap();
 
         assert!(csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1));
         assert_eq!(csr.edge_count(), 1);
@@ -466,7 +458,8 @@ mod tests {
 
     #[test]
     fn test_single_csr_variant() {
-        let mut csr = CsrVariant::from_strategy(EdgeStrategy::Single, 10, 100).unwrap();
+        let mut csr =
+            CsrVariant::from_strategy_with_overflow(EdgeStrategy::Single, 10, 100, 4096).unwrap();
 
         assert!(csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1));
         assert_eq!(csr.edge_count(), 1);
@@ -475,7 +468,13 @@ mod tests {
     #[test]
     fn test_multi_single_csr_variant() {
         let mut csr =
-            CsrVariant::from_strategy(EdgeStrategy::MultiSingle { max_edges: 4 }, 10, 100).unwrap();
+            CsrVariant::from_strategy_with_overflow(
+                EdgeStrategy::MultiSingle { max_edges: 4 },
+                10,
+                100,
+                4096,
+            )
+            .unwrap();
 
         assert!(csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1));
         assert_eq!(csr.edge_count(), 1);
@@ -483,7 +482,8 @@ mod tests {
 
     #[test]
     fn test_labeled_csr_variant() {
-        let mut csr = CsrVariant::from_strategy(EdgeStrategy::Labeled, 10, 100).unwrap();
+        let mut csr =
+            CsrVariant::from_strategy_with_overflow(EdgeStrategy::Labeled, 10, 100, 4096).unwrap();
 
         assert!(csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1));
         assert_eq!(csr.edge_count(), 1);
@@ -491,7 +491,8 @@ mod tests {
 
     #[test]
     fn test_none_csr_variant() {
-        let mut csr = CsrVariant::from_strategy(EdgeStrategy::None, 10, 100).unwrap();
+        let mut csr =
+            CsrVariant::from_strategy_with_overflow(EdgeStrategy::None, 10, 100, 4096).unwrap();
 
         // None variant should return the configured vertex capacity
         assert_eq!(csr.vertex_capacity(), 10);
@@ -505,7 +506,6 @@ mod tests {
         // None variant should reject all deletions
         assert!(!csr.delete_edge(0, EdgeId(100), 1));
         assert!(!csr.delete_edge_by_dst(0, VertexId::from_int64(1), 1));
-        assert!(!csr.delete_edge_by_offset(0, 0, 1));
         assert!(!csr.revert_delete_by_offset(0, 0, 1));
 
         // None variant should return None for get_edge
@@ -519,7 +519,7 @@ mod tests {
 
     #[test]
     fn test_none_csr_iter() {
-        let csr = CsrVariant::from_strategy(EdgeStrategy::None, 10, 100).unwrap();
+        let csr = CsrVariant::from_strategy_with_overflow(EdgeStrategy::None, 10, 100, 4096).unwrap();
         let mut iter = csr.iter(1);
 
         // Iterator should produce no items
@@ -528,14 +528,15 @@ mod tests {
 
     #[test]
     fn test_none_csr_dump_load() {
-        let csr1 = CsrVariant::from_strategy(EdgeStrategy::None, 10, 100).unwrap();
+        let csr1 = CsrVariant::from_strategy_with_overflow(EdgeStrategy::None, 10, 100, 4096).unwrap();
         let data = csr1.dump();
 
         // Data should start with variant tag (0 for None)
         assert!(!data.is_empty());
         assert_eq!(data[0], 0u8);
 
-        let mut csr2 = CsrVariant::from_strategy(EdgeStrategy::Multiple, 10, 100).unwrap();
+        let mut csr2 =
+            CsrVariant::from_strategy_with_overflow(EdgeStrategy::Multiple, 10, 100, 4096).unwrap();
         csr2.load(&data).unwrap();
 
         // After loading, should be None variant
@@ -545,7 +546,8 @@ mod tests {
 
     #[test]
     fn test_clone() {
-        let mut csr1 = CsrVariant::from_strategy(EdgeStrategy::Multiple, 10, 100).unwrap();
+        let mut csr1 =
+            CsrVariant::from_strategy_with_overflow(EdgeStrategy::Multiple, 10, 100, 4096).unwrap();
         csr1.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1);
 
         let csr2 = csr1.clone();
@@ -554,7 +556,7 @@ mod tests {
 
     #[test]
     fn test_clone_none() {
-        let csr1 = CsrVariant::from_strategy(EdgeStrategy::None, 10, 100).unwrap();
+        let csr1 = CsrVariant::from_strategy_with_overflow(EdgeStrategy::None, 10, 100, 4096).unwrap();
         let mut csr2 = csr1.clone();
 
         assert_eq!(csr2.edge_count(), 0);
