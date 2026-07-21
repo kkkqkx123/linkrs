@@ -11,10 +11,10 @@
 use crate::core::value::{DateTimeValue, DateValue, TimeValue, VectorValue};
 use crate::core::{DataType, StorageError, StorageResult, Value};
 
-use crate::storage::column_stats::{self, ColumnStats};
+use crate::storage::column_stats::ColumnStats;
 use crate::storage::encoding::{
     AlpColumn, BitPackedIntColumn, ColumnEncoding, DictionaryColumn, EncodingType, FsstColumn,
-    FsstEncoder, RleBoolColumn, RleIntColumn,
+    FsstEncoder, RleIntColumn,
 };
 use crate::utils::NullBitmap;
 use bitvec::prelude::*;
@@ -883,32 +883,11 @@ impl Column {
         &self.encoding
     }
 
-    pub fn encoding_mut(&mut self) -> &mut ColumnEncoding {
-        &mut self.encoding
-    }
-
     pub fn stats(&self) -> Option<&ColumnStats> {
         self.stats.as_ref()
     }
 
     pub fn set_stats(&mut self, stats: ColumnStats) {
-        self.stats = Some(stats);
-    }
-
-    pub fn compute_and_set_stats(&mut self) {
-        let values: Vec<Option<Value>> = (0..self.len()).map(|i| self.get(i)).collect();
-        let raw_size = self.len().max(1) * element_size(&self.data_type);
-        let compressed_size = if self.encoding.is_encoded() {
-            self.encoding.memory_usage() as u64
-        } else {
-            raw_size as u64
-        };
-        let stats = column_stats::compute_stats(
-            &values,
-            self.encoding.encoding_type(),
-            compressed_size,
-            raw_size as u64,
-        );
         self.stats = Some(stats);
     }
 
@@ -1086,13 +1065,6 @@ impl Column {
     pub fn apply_rle_int_from_meta(&mut self, rle_col: RleIntColumn) -> StorageResult<()> {
         let encoded_len = rle_col.len();
         self.encoding = ColumnEncoding::RleInt(rle_col);
-        self.inner_mut().resize(encoded_len);
-        Ok(())
-    }
-
-    pub fn apply_rle_bool_from_meta(&mut self, rle_col: RleBoolColumn) -> StorageResult<()> {
-        let encoded_len = rle_col.len();
-        self.encoding = ColumnEncoding::RleBool(rle_col);
         self.inner_mut().resize(encoded_len);
         Ok(())
     }

@@ -356,7 +356,7 @@ pub fn cleanup_shadow_files<P: AsRef<std::path::Path>>(dir: P) -> StorageResult<
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().map_or(false, |ext| ext == "tmp") {
+            if path.extension().is_some_and(|ext| ext == "tmp") {
                 std::fs::remove_file(&path).map_err(|e| {
                     StorageError::io_error(format!(
                         "Failed to remove shadow file {}: {}",

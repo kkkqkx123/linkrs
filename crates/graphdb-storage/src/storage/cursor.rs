@@ -342,18 +342,6 @@ pub fn open_vertex_scan<S: crate::storage::StorageReader + ?Sized>(
     reader.create_vertex_cursor(space, options)
 }
 
-/// Open a vertex scan cursor with a limit.
-///
-/// Convenience wrapper – delegates to [`open_vertex_scan`] with a limit.
-pub fn open_vertex_scan_with_limit<S: crate::storage::StorageReader + ?Sized>(
-    storage: &Arc<RwLock<S>>,
-    space: &str,
-    limit: usize,
-) -> Result<Box<dyn VertexCursor>, StorageError> {
-    let options = ScanOptions::new().with_limit(limit);
-    open_vertex_scan(storage, space, &options)
-}
-
 /// Open an edge scan cursor through a storage client.
 ///
 /// Prefers the storage engine's native cursor when available (via

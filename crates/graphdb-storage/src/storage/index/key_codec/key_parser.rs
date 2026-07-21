@@ -16,29 +16,6 @@ impl KeyParser {
     // Vertex Forward Index Key Parsing
     // ========================================================================
 
-    fn parse_key_parts(key_bytes: &[u8]) -> Result<(Vec<u8>, Vec<u8>, usize), StorageError> {
-        let mut pos = 9; // skip space_id (8) + key_type (1)
-
-        if key_bytes.len() < pos + 4 {
-            return Err(StorageError::db_error("Invalid key: too short".to_string()));
-        }
-        let index_name_len =
-            u32::from_le_bytes(key_bytes[pos..pos + 4].try_into().unwrap_or([0; 4])) as usize;
-        pos += 4 + index_name_len;
-
-        // Use OrderedCodec to decode the prop value (self-delimiting)
-        let (prop_value, consumed) = codec().decode_value_inner(&key_bytes[pos..])?;
-        let prop_value_bytes = codec().encode(&prop_value)?;
-        pos += consumed;
-
-        // Decode the vertex_id (entity tie-breaker)
-        let (vertex_id, consumed2) = codec().decode_value_inner(&key_bytes[pos..])?;
-        let vertex_id_bytes = codec().encode(&vertex_id)?;
-        pos += consumed2;
-
-        Ok((prop_value_bytes, vertex_id_bytes, pos))
-    }
-
     pub fn parse_vertex_id_from_key(key_bytes: &[u8]) -> Result<Value, StorageError> {
         let mut pos = 9;
         if key_bytes.len() < pos + 4 {

@@ -977,23 +977,7 @@ pub(crate) fn list_edge_indexes(
     ctx.index_metadata_manager().list_edge_indexes(space_id)
 }
 
-pub(crate) fn lookup_edge_index(
-    ctx: &GraphStorageContext,
-    space: &str,
-    index_name: &str,
-    value: &Value,
-) -> StorageResult<Vec<(Value, Value, String, i64)>> {
-    let space_id = ctx.schema_manager().get_space_id(space)?;
-    let index = ctx
-        .index_metadata_manager()
-        .get_edge_index(space_id, index_name)?
-        .ok_or_else(|| StorageError::not_found(format!("Edge index {} not found", index_name)))?;
-    let results = ctx
-        .index_data_manager()
-        .read()
-        .lookup_edge_index(space_id, &index, value)?;
-    Ok(results)
-}
+
 
 #[cfg(test)]
 mod tests {

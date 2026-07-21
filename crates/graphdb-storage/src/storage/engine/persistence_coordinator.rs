@@ -47,6 +47,10 @@ use crate::storage::engine::WalManager;
 use crate::storage::index::shard_runtime::IndexBarrierRegistry;
 use crate::transaction::wal::{CheckpointManager, Lsn, SyncPolicy, WalConfig};
 
+/// Type alias for the outbox frontier provider callback.
+type OutboxFrontierProvider =
+    Arc<dyn Fn() -> StorageResult<Option<graphdb_core::core::types::CommitLsn>> + Send + Sync>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PersistenceState {
     Idle,
@@ -181,15 +185,7 @@ pub struct PersistenceCoordinator {
     last_snapshot_error: RwLock<Option<String>>,
     state: RwLock<PersistenceState>,
     fault_points: Arc<RwLock<HashSet<PersistenceFaultPoint>>>,
-    outbox_frontier_provider: RwLock<
-        Option<
-            Arc<
-                dyn Fn() -> StorageResult<Option<graphdb_core::core::types::CommitLsn>>
-                    + Send
-                    + Sync,
-            >,
-        >,
-    >,
+    outbox_frontier_provider: RwLock<Option<OutboxFrontierProvider>>,
 }
 
 impl PersistenceCoordinator {
@@ -270,10 +266,6 @@ impl PersistenceCoordinator {
     /// Enable a deterministic failure at a persistence boundary.
     pub fn inject_failure(&self, point: PersistenceFaultPoint) {
         self.fault_points.write().insert(point);
-    }
-
-    pub fn clear_injected_failures(&self) {
-        self.fault_points.write().clear();
     }
 
     fn fail_if_injected(&self, point: PersistenceFaultPoint) -> StorageResult<()> {
@@ -1159,12 +1151,7 @@ impl PersistenceCoordinator {
             .map_err(StorageError::db_error)
     }
 
-    pub fn set_outbox_materialized_lsn_provider(
-        &self,
-        provider: Arc<
-            dyn Fn() -> StorageResult<Option<graphdb_core::core::types::CommitLsn>> + Send + Sync,
-        >,
-    ) {
+    pub fn set_outbox_materialized_lsn_provider(&self, provider: OutboxFrontierProvider) {
         *self.outbox_frontier_provider.write() = Some(provider);
     }
 }

@@ -702,30 +702,6 @@ impl IndexDataManagerImpl {
         Ok(())
     }
 
-    pub fn take_reclaimable_index_files(&self) -> Vec<std::path::PathBuf> {
-        let mut files = Vec::new();
-        for (index_id, catalog) in self.manifest_catalogs.read().iter() {
-            let runtime = self.runtimes.read().get(index_id).cloned();
-            let files_before = files.len();
-            for manifest in catalog.take_reclaimable_manifests() {
-                if let Some(runtime) = &runtime {
-                    runtime.remove_generation(manifest.generation);
-                }
-                files.extend(
-                    manifest
-                        .shards
-                        .into_iter()
-                        .map(|shard| shard.checkpoint_file),
-                );
-            }
-            if let Some(stats) = &self.stats_manager {
-                stats.record_reclaimed_index_files((files.len() - files_before) as u64);
-            }
-            self.record_manifest_state(catalog);
-        }
-        files
-    }
-
     pub fn flush<P: AsRef<Path>>(&self, path: P) -> StorageResult<()> {
         if self.index_root.is_none() && !self.manifest_catalogs.read().is_empty() {
             return Err(StorageError::invalid_operation(

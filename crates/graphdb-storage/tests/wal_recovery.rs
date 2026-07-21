@@ -257,7 +257,6 @@ fn test_schema_version_history_recovery() {
     let temp_dir = common::create_test_workdir();
     let dir = temp_dir.path();
 
-    let version_before_recovery: u64;
     {
         let mut storage = common::create_persistent_storage(dir);
         common::create_space(&mut storage, "test_space");
@@ -266,13 +265,13 @@ fn test_schema_version_history_recovery() {
         // Create Person tag with initial property
         common::create_person_tag(&mut storage, "test_space");
 
-        // Get version history - should be v1 after tag creation
+        // Verify version history is correct after tag creation
         let history = storage
             .get_vertex_version_history("test_space", "Person")
             .expect("get_vertex_version_history failed")
             .expect("history should exist");
 
-        version_before_recovery = history.latest_version();
+        assert_eq!(history.latest_version(), 1, "version should be v1 after tag creation");
     }
 
     // Reopen and verify version_history is still there

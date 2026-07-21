@@ -347,16 +347,6 @@ impl VertexIndexManager {
         self.open_tag_index_cursor_full(space_id, index, plan, None, None)
     }
 
-    pub fn open_tag_index_cursor_with_checker(
-        &self,
-        space_id: u64,
-        index: &Index,
-        plan: &IndexScanPlan,
-        stale_checker: Option<StaleChecker>,
-    ) -> StorageResult<VertexIndexCursor> {
-        self.open_tag_index_cursor_full(space_id, index, plan, stale_checker, None)
-    }
-
     pub fn open_tag_index_cursor_full(
         &self,
         space_id: u64,

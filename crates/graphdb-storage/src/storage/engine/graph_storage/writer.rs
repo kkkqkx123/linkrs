@@ -12,6 +12,7 @@ use crate::core::wal::types::WalOpType;
 use crate::core::{Edge, EdgeDirection, StorageError, StorageResult, Value, Vertex};
 use crate::storage::engine::params::{EdgeOperationParams, InsertEdgeParams};
 use crate::storage::index::traits::VertexIndexOps;
+use crate::storage::index::types::EdgeIdentity;
 use crate::transaction::codec::value_to_property_value;
 use crate::transaction::undo_log::{
     InsertEdgeUndo, InsertVertexUndo, RemoveVertexUndo, RestoreEdgeUndo, UndoLogEntry,
@@ -688,15 +689,8 @@ fn insert_edge_at_timestamp(
         redo_entry,
     });
 
-    ctx.update_all_edge_indexes_mvcc(
-        space_id,
-        &src_value,
-        &dst_value,
-        &edge.edge_type,
-        edge.ranking,
-        &props,
-        ts,
-    )?;
+    let edge_identity = EdgeIdentity::new(space_id, &src_value, &dst_value, &edge.edge_type, edge.ranking);
+    ctx.update_all_edge_indexes_mvcc(&edge_identity, &props, ts)?;
 
     Ok(())
 }
@@ -720,14 +714,8 @@ fn rollback_edges(
     for item in inserted.iter().rev() {
         let src_value = Value::from(item.src);
         let dst_value = Value::from(item.dst);
-        let _ = ctx.delete_all_edge_indexes_mvcc(
-            space_id,
-            &src_value,
-            &dst_value,
-            &item.edge_type,
-            item.rank,
-            ts,
-        );
+        let edge_identity = EdgeIdentity::new(space_id, &src_value, &dst_value, &item.edge_type, item.rank);
+        let _ = ctx.delete_all_edge_indexes_mvcc(&edge_identity, ts);
         let _ = ctx.delete_edge(
             &EdgeOperationParams {
                 edge_label: item.edge_label_id,
@@ -793,9 +781,8 @@ pub(crate) fn delete_edge_at_timestamp(
             if deleted_edge {
                 let src_value = Value::from(*src);
                 let dst_value = Value::from(*dst);
-                ctx.delete_all_edge_indexes_mvcc(
-                    space_id, &src_value, &dst_value, edge_type, rank, ts,
-                )?;
+                let edge_identity = EdgeIdentity::new(space_id, &src_value, &dst_value, edge_type, rank);
+                ctx.delete_all_edge_indexes_mvcc(&edge_identity, ts)?;
                 deleted = true;
             }
             break;
@@ -1136,12 +1123,9 @@ pub(crate) fn insert_edge_data(
         Ok(_) => {
             let src_value = Value::from(src_vid);
             let dst_value = Value::from(dst_vid);
+            let edge_identity = EdgeIdentity::new(space_info.space_id, &src_value, &dst_value, &info.edge_name, info.rank);
             match ctx.update_all_edge_indexes_mvcc(
-                space_info.space_id,
-                &src_value,
-                &dst_value,
-                &info.edge_name,
-                info.rank,
+                &edge_identity,
                 &info.props,
                 ts,
             ) {
@@ -1311,14 +1295,8 @@ pub(crate) fn delete_edge_data(
             }
             let src_value = Value::from(src_vid);
             let dst_value = Value::from(dst_vid);
-            ctx.delete_all_edge_indexes_mvcc(
-                space_id,
-                &src_value,
-                &dst_value,
-                &et.edge_type_name,
-                rank,
-                ts,
-            )?;
+            let edge_identity = EdgeIdentity::new(space_id, &src_value, &dst_value, &et.edge_type_name, rank);
+            ctx.delete_all_edge_indexes_mvcc(&edge_identity, ts)?;
             deleted = true;
         }
     }

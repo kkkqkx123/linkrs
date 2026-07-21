@@ -72,45 +72,35 @@ impl GraphStorageContext {
 
     pub(crate) fn update_all_edge_indexes_mvcc(
         &self,
-        space_id: u64,
-        src: &Value,
-        dst: &Value,
-        edge_type: &str,
-        ranking: i64,
+        edge: &EdgeIdentity<'_>,
         props: &[(String, Value)],
         ts: Timestamp,
     ) -> StorageResult<()> {
-        let edge = EdgeIdentity::new(space_id, src, dst, edge_type, ranking);
         for index in self
             .index_metadata_manager()
-            .list_edge_indexes(space_id)?
+            .list_edge_indexes(edge.space_id)?
             .into_iter()
-            .filter(|index| index.schema_name == edge_type)
+            .filter(|index| index.schema_name == edge.edge_type)
         {
-            self.update_edge_indexes_mvcc(&edge, &index.name, props, ts)?;
+            self.update_edge_indexes_mvcc(edge, &index.name, props, ts)?;
         }
         Ok(())
     }
 
     pub(crate) fn delete_all_edge_indexes_mvcc(
         &self,
-        space_id: u64,
-        src: &Value,
-        dst: &Value,
-        edge_type: &str,
-        ranking: i64,
+        edge: &EdgeIdentity<'_>,
         ts: Timestamp,
     ) -> StorageResult<()> {
-        let edge = EdgeIdentity::new(space_id, src, dst, edge_type, ranking);
         let index_names: Vec<String> = self
             .index_metadata_manager()
-            .list_edge_indexes(space_id)?
+            .list_edge_indexes(edge.space_id)?
             .into_iter()
-            .filter(|index| index.schema_name == edge_type)
+            .filter(|index| index.schema_name == edge.edge_type)
             .map(|index| index.name)
             .collect();
         if !index_names.is_empty() {
-            self.delete_edge_indexes_mvcc(&edge, &index_names, ts)?;
+            self.delete_edge_indexes_mvcc(edge, &index_names, ts)?;
         }
         Ok(())
     }
