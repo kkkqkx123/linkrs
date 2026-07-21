@@ -51,6 +51,12 @@ pub trait TransactionMutationRecorder: Send + Sync + std::fmt::Debug {
     fn record_edge_read(&self, _edge: EdgeIdentifier) {}
 
     fn record_schema_read(&self, _resource: &str) {}
+
+    /// Returns true if the transaction already has DML entries (vertex/edge mutations).
+    /// Used to enforce DDL/DML boundary at the storage layer.
+    fn has_dml_entries(&self) -> bool {
+        false
+    }
 }
 
 pub trait TransactionCommitSink: Send + Sync {

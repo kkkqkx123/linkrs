@@ -392,6 +392,12 @@ pub struct TransactionConfig {
     pub query_timeout: Option<Duration>,
     pub statement_timeout: Option<Duration>,
     pub idle_timeout: Option<Duration>,
+    /// Maximum number of mutations per transaction. 0 = unlimited.
+    pub max_mutation_count: u64,
+    /// Maximum WAL bytes a transaction may stage. 0 = unlimited.
+    pub max_wal_bytes: u64,
+    /// Maximum undo log bytes a transaction may accumulate. 0 = unlimited.
+    pub max_undo_bytes: u64,
 }
 
 impl Default for TransactionConfig {
@@ -403,6 +409,9 @@ impl Default for TransactionConfig {
             query_timeout: None,
             statement_timeout: None,
             idle_timeout: None,
+            max_mutation_count: 100_000,
+            max_wal_bytes: 256 * 1024 * 1024,
+            max_undo_bytes: 128 * 1024 * 1024,
         }
     }
 }
@@ -441,6 +450,21 @@ impl TransactionConfig {
         self.idle_timeout = timeout;
         self
     }
+
+    pub fn with_max_mutation_count(mut self, max: u64) -> Self {
+        self.max_mutation_count = max;
+        self
+    }
+
+    pub fn with_max_wal_bytes(mut self, max: u64) -> Self {
+        self.max_wal_bytes = max;
+        self
+    }
+
+    pub fn with_max_undo_bytes(mut self, max: u64) -> Self {
+        self.max_undo_bytes = max;
+        self
+    }
 }
 
 /// Transaction Manager Configuration
@@ -459,6 +483,9 @@ pub struct TransactionManagerConfig {
     pub commit_retry_attempts: u32,
     /// Maximum number of retry attempts for abort/sync rollback failures before reporting failure.
     pub abort_retry_attempts: u32,
+    /// Default per-transaction resource budget. Individual transactions inherit
+    /// these limits unless overridden.
+    pub txn_config: TransactionConfig,
 }
 
 impl Default for TransactionManagerConfig {
@@ -470,6 +497,7 @@ impl Default for TransactionManagerConfig {
             admission_timeout: Duration::from_secs(10),
             commit_retry_attempts: 3,
             abort_retry_attempts: 3,
+            txn_config: TransactionConfig::default(),
         }
     }
 }
@@ -846,6 +874,7 @@ pub struct TransactionInfo {
     pub is_read_only: bool,
     pub isolation_level: IsolationLevel,
     pub query_count: u64,
+    pub mutation_count: u64,
     pub modified_tables: Vec<String>,
     pub savepoint_count: usize,
     pub read_timestamp: u32,

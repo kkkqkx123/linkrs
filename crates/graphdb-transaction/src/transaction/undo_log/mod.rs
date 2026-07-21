@@ -540,6 +540,27 @@ pub enum UndoLogEntry {
 }
 
 impl UndoLogEntry {
+    /// Returns true if this entry is a DML operation (vertex/edge mutation).
+    /// DDL operations (schema/index changes) return false.
+    pub fn is_dml(&self) -> bool {
+        matches!(
+            self,
+            UndoLogEntry::InsertVertex(_)
+                | UndoLogEntry::InsertEdge(_)
+                | UndoLogEntry::RestoreEdge(_)
+                | UndoLogEntry::UpdateVertexProp(_)
+                | UndoLogEntry::UpdateEdgeProp(_)
+                | UndoLogEntry::RemoveVertex(_)
+                | UndoLogEntry::RemoveEdge(_)
+                | UndoLogEntry::AddVertexProp(_)
+                | UndoLogEntry::AddEdgeProp(_)
+                | UndoLogEntry::RenameVertexProp(_)
+                | UndoLogEntry::RenameEdgeProp(_)
+                | UndoLogEntry::DeleteVertexProp(_)
+                | UndoLogEntry::DeleteEdgeProp(_)
+        )
+    }
+
     pub fn undo<T: UndoTarget + ?Sized>(&self, graph: &T, ts: Timestamp) -> UndoLogResult<()> {
         match self {
             UndoLogEntry::CreateVertexType(u) => u.undo(graph, ts),
@@ -693,6 +714,12 @@ impl UndoLogManager {
 
     pub fn len(&self) -> usize {
         self.storage.len()
+    }
+
+    /// Returns true if the undo log contains any DML entries (vertex/edge mutations).
+    /// Used to enforce DDL/DML boundary: DDL cannot execute if DML has already occurred.
+    pub fn has_dml_entries(&self) -> bool {
+        self.storage.buffer_has_dml()
     }
 
     pub fn clear(&mut self) -> UndoLogResult<()> {

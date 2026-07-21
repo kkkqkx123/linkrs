@@ -36,6 +36,7 @@ fn test_manager_config_custom() {
         admission_timeout: Duration::from_secs(10),
         commit_retry_attempts: 3,
         abort_retry_attempts: 3,
+        ..Default::default()
     };
 
     assert_eq!(config.default_timeout, Duration::from_secs(60));
@@ -166,6 +167,7 @@ fn test_manager_with_custom_config() {
         admission_timeout: Duration::from_secs(10),
         commit_retry_attempts: 3,
         abort_retry_attempts: 3,
+        ..Default::default()
     };
 
     let manager = TransactionManager::new(config);
@@ -355,6 +357,7 @@ fn test_manager_config_clone() {
         admission_timeout: Duration::from_secs(10),
         commit_retry_attempts: 3,
         abort_retry_attempts: 3,
+        ..Default::default()
     };
 
     let cloned = original.clone();

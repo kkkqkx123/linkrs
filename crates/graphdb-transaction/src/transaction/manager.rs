@@ -375,6 +375,7 @@ impl TransactionManager {
             query_timeout: options.query_timeout,
             statement_timeout: options.statement_timeout,
             idle_timeout: options.idle_timeout,
+            ..self.config.txn_config.clone()
         };
 
         let context = Arc::new(TransactionContext::new_readonly(txn_id, timestamp, config));
@@ -436,6 +437,7 @@ impl TransactionManager {
             query_timeout: options.query_timeout,
             statement_timeout: options.statement_timeout,
             idle_timeout: options.idle_timeout,
+            ..self.config.txn_config.clone()
         };
 
         let mut context = TransactionContext::new_readonly(txn_id, timestamp, config);
@@ -499,6 +501,7 @@ impl TransactionManager {
             query_timeout: options.query_timeout,
             statement_timeout: options.statement_timeout,
             idle_timeout: options.idle_timeout,
+            ..self.config.txn_config.clone()
         };
 
         let context = Arc::new(TransactionContext::new(txn_id, timestamp, config));
@@ -523,6 +526,11 @@ impl TransactionManager {
     /// After a successful check, the transaction is marked as validated.
     ///
     /// Returns Ok(()) if no conflicts, or Err if conflicts are detected.
+    /// Threshold above which a read set is considered a full scan.
+    /// Serializable transactions with full-scan read sets use conservative
+    /// certification: any concurrent write since the transaction started causes abort.
+    const FULL_SCAN_READ_SET_THRESHOLD: usize = 10_000;
+
     pub fn check_write_set_conflict(&self, txn_id: TransactionId) -> Result<(), TransactionError> {
         let _certification_guard = self.certification_lock.lock();
         let ctx = self
@@ -540,6 +548,9 @@ impl TransactionManager {
         if txn_write_set.is_empty() && (!serializable || txn_read_set.is_empty()) {
             return Ok(());
         }
+
+        let is_full_scan =
+            serializable && txn_read_set.size() > Self::FULL_SCAN_READ_SET_THRESHOLD;
 
         for entry in self.active_transactions.iter() {
             let (other_id, other_ctx) = entry.pair();
@@ -564,18 +575,23 @@ impl TransactionManager {
             }
         }
 
-        if self
-            .committed_write_sets
-            .lock()
-            .iter()
-            .any(|(commit_ts, write_set)| {
-                *commit_ts > ctx.start_timestamp
-                    && (txn_write_set.has_conflict_with(write_set)
-                        || (serializable && txn_read_set.has_conflict_with(write_set)))
-            })
-        {
-            self.stats.record_txn_conflict();
-            return Err(TransactionError::write_transaction_conflict());
+        let committed = self.committed_write_sets.lock();
+        for (commit_ts, write_set) in committed.iter() {
+            if *commit_ts <= ctx.start_timestamp {
+                continue;
+            }
+            if txn_write_set.has_conflict_with(write_set)
+                || (serializable && txn_read_set.has_conflict_with(write_set))
+            {
+                self.stats.record_txn_conflict();
+                return Err(TransactionError::write_transaction_conflict());
+            }
+            if is_full_scan && !write_set.is_empty() {
+                self.stats.record_txn_conflict();
+                return Err(TransactionError::serialization_failed(
+                    "Serializable full-scan transaction aborted due to concurrent write",
+                ));
+            }
         }
 
         ctx.mark_write_validated();

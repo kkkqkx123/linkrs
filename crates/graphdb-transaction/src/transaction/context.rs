@@ -81,6 +81,19 @@ pub struct TransactionContext {
     commit_lsn: AtomicU64,
     /// Session or API owner of this transaction.
     owner: RwLock<Option<String>>,
+    /// Maximum mutations allowed (0 = unlimited).
+    max_mutation_count: u64,
+    /// Maximum WAL bytes allowed (0 = unlimited).
+    max_wal_bytes: u64,
+    /// Maximum undo bytes allowed (0 = unlimited).
+    max_undo_bytes: u64,
+    /// Current mutation count.
+    mutation_count: AtomicU64,
+    /// Current estimated undo bytes.
+    undo_bytes: AtomicU64,
+    /// Schema catalog version — incremented on every DDL operation.
+    /// Used by the query layer to invalidate stale plan caches.
+    schema_catalog_version: AtomicU64,
 }
 
 impl fmt::Debug for TransactionContext {
@@ -200,6 +213,12 @@ impl TransactionContext {
             commit_published: AtomicCell::new(false),
             commit_lsn: AtomicU64::new(0),
             owner: RwLock::new(None),
+            max_mutation_count: config.max_mutation_count,
+            max_wal_bytes: config.max_wal_bytes,
+            max_undo_bytes: config.max_undo_bytes,
+            mutation_count: AtomicU64::new(0),
+            undo_bytes: AtomicU64::new(0),
+            schema_catalog_version: AtomicU64::new(0),
         }
     }
 
@@ -240,6 +259,12 @@ impl TransactionContext {
             commit_published: AtomicCell::new(false),
             commit_lsn: AtomicU64::new(0),
             owner: RwLock::new(None),
+            max_mutation_count: config.max_mutation_count,
+            max_wal_bytes: config.max_wal_bytes,
+            max_undo_bytes: config.max_undo_bytes,
+            mutation_count: AtomicU64::new(0),
+            undo_bytes: AtomicU64::new(0),
+            schema_catalog_version: AtomicU64::new(0),
         }
     }
 
@@ -405,6 +430,19 @@ impl TransactionContext {
         self.query_count.load(Ordering::Relaxed)
     }
 
+    /// Get the current schema catalog version for this transaction.
+    /// The version is incremented on every DDL operation and can be used by the
+    /// query layer to detect schema changes and invalidate stale plan caches.
+    pub fn schema_catalog_version(&self) -> u64 {
+        self.schema_catalog_version.load(Ordering::Relaxed)
+    }
+
+    /// Increment the schema catalog version after a DDL operation.
+    /// Returns the new version.
+    pub fn bump_schema_catalog_version(&self) -> u64 {
+        self.schema_catalog_version.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
     /// Get remaining time
     pub fn remaining_time(&self) -> Duration {
         let elapsed = self.start_time.elapsed();
@@ -553,6 +591,7 @@ impl TransactionContext {
             is_read_only: self.read_only,
             isolation_level: self.isolation_level,
             query_count: self.query_count.load(Ordering::Relaxed),
+            mutation_count: self.mutation_count.load(Ordering::Relaxed),
             modified_tables,
             savepoint_count,
             read_timestamp: self.effective_snapshot_timestamp(),
@@ -644,6 +683,24 @@ impl TransactionContext {
 
     /// Publish a complete mutation result in the canonical metadata order.
     pub fn record_mutation(&self, mutation: MutationResult) -> Result<(), TransactionError> {
+        let new_count = self.mutation_count.fetch_add(1, Ordering::Relaxed) + 1;
+        if self.max_mutation_count > 0 && new_count > self.max_mutation_count {
+            return Err(TransactionError::transaction_budget_exceeded(
+                "mutation count",
+                new_count,
+                self.max_mutation_count,
+            ));
+        }
+
+        let undo_estimate = self.undo_bytes.fetch_add(64, Ordering::Relaxed) + 64;
+        if self.max_undo_bytes > 0 && undo_estimate > self.max_undo_bytes {
+            return Err(TransactionError::transaction_budget_exceeded(
+                "undo bytes",
+                undo_estimate,
+                self.max_undo_bytes,
+            ));
+        }
+
         let entity_keys = mutation.entity_keys;
         let operation_log = OperationLog::Mutation {
             entities: entity_keys
@@ -844,6 +901,14 @@ impl TransactionContext {
         undo_logs.len()
     }
 
+    /// Returns true if the undo log contains any DML entries (vertex/edge mutations).
+    /// Used to enforce DDL/DML boundary: DDL cannot execute if DML has already occurred
+    /// in this transaction, and vice versa.
+    pub fn has_dml_entries(&self) -> bool {
+        let undo_logs = self.undo_logs.read();
+        undo_logs.has_dml_entries()
+    }
+
     /// Clear undo logs
     pub fn clear_undo_logs(&self) -> Result<(), TransactionError> {
         let mut undo_logs = self.undo_logs.write();
@@ -944,6 +1009,10 @@ impl TransactionMutationRecorder for TransactionContext {
 
     fn record_schema_read(&self, resource: &str) {
         self.record_schema_read(resource);
+    }
+
+    fn has_dml_entries(&self) -> bool {
+        self.has_dml_entries()
     }
 }
 

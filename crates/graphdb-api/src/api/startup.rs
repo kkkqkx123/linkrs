@@ -21,7 +21,7 @@ use crate::storage::{
     GraphStorage, MetricsStorage, PersistenceConfig, PropertyGraphConfig, ResourceConfig,
     StorageCommitOps, SyncWrapper,
 };
-use crate::transaction::{TransactionManager, TransactionManagerConfig};
+use crate::transaction::{TransactionConfig, TransactionManager, TransactionManagerConfig};
 
 /// Start the service using the user configuration directory.
 pub async fn start_service() -> DBResult<()> {
@@ -302,6 +302,7 @@ pub async fn start_service_with_config(config: Config) -> DBResult<()> {
         admission_timeout: std::time::Duration::from_secs(10),
         commit_retry_attempts: 3,
         abort_retry_attempts: 3,
+        txn_config: TransactionConfig::default(),
     };
 
     let mut transaction_manager = TransactionManager::with_shared_version_manager(

@@ -8,6 +8,7 @@
 //! This follows the same pattern as other error types for consistency.
 
 use std::error::Error;
+use std::time::Duration;
 
 use super::types::{SavepointId, TransactionId, TransactionState};
 use crate::core::error::BoxedError;
@@ -44,6 +45,8 @@ pub enum TransactionErrorKind {
     SyncFailed,
     CheckpointInProgress,
     CheckpointTimeout,
+    TransactionBudgetExceeded,
+    DdlDmlBoundaryViolation,
     Internal,
     RecoveryRequired,
 }
@@ -77,6 +80,8 @@ impl TransactionErrorKind {
             TransactionErrorKind::SyncFailed => "sync_failed",
             TransactionErrorKind::CheckpointInProgress => "checkpoint_in_progress",
             TransactionErrorKind::CheckpointTimeout => "checkpoint_timeout",
+            TransactionErrorKind::TransactionBudgetExceeded => "transaction_budget_exceeded",
+            TransactionErrorKind::DdlDmlBoundaryViolation => "ddl_dml_boundary_violation",
             TransactionErrorKind::Internal => "internal",
             TransactionErrorKind::RecoveryRequired => "recovery_required",
         }
@@ -293,6 +298,24 @@ impl TransactionError {
         Self::new(TransactionErrorKind::RecoveryRequired, message)
     }
 
+    pub fn transaction_budget_exceeded(
+        resource: &str,
+        current: u64,
+        limit: u64,
+    ) -> Self {
+        Self::new(
+            TransactionErrorKind::TransactionBudgetExceeded,
+            format!("Transaction budget exceeded: {resource} {current} > {limit}"),
+        )
+    }
+
+    pub fn ddl_dml_boundary_violation(message: impl Into<String>) -> Self {
+        Self::new(
+            TransactionErrorKind::DdlDmlBoundaryViolation,
+            message,
+        )
+    }
+
     pub fn is_timeout(&self) -> bool {
         matches!(
             self.kind,
@@ -301,7 +324,66 @@ impl TransactionError {
                 | TransactionErrorKind::AdmissionTimeout
         )
     }
+
+    /// Returns true when this error indicates a transient failure that the client
+    /// may retry by re-executing the entire transaction.
+    pub fn is_retryable(&self) -> bool {
+        matches!(
+            self.kind,
+            TransactionErrorKind::WriteTransactionConflict
+                | TransactionErrorKind::SerializationFailed
+        )
+    }
 }
+
+/// Details for a retryable transaction failure.
+///
+/// Returned to the client when a transaction fails due to a conflict or
+/// serialization error, providing enough information to implement retry logic.
+#[derive(Debug, Clone)]
+pub struct RetryableTransactionError {
+    pub kind: TransactionErrorKind,
+    pub message: String,
+    /// Suggested backoff duration before retrying.
+    pub suggested_backoff: Duration,
+    /// Number of retries that have already been attempted.
+    pub attempt: u32,
+}
+
+impl RetryableTransactionError {
+    pub fn new(kind: TransactionErrorKind, message: impl Into<String>, attempt: u32) -> Self {
+        let suggested_backoff = Duration::from_millis(100 * 2_u64.pow(attempt.min(6)));
+        Self {
+            kind,
+            message: message.into(),
+            suggested_backoff,
+            attempt,
+        }
+    }
+
+    pub fn from_transaction_error(error: &TransactionError, attempt: u32) -> Option<Self> {
+        if error.is_retryable() {
+            Some(Self::new(error.kind(), error.message().to_string(), attempt))
+        } else {
+            None
+        }
+    }
+}
+
+impl std::fmt::Display for RetryableTransactionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "[{}] {} (attempt {}, retry after {:?})",
+            self.kind.as_str(),
+            self.message,
+            self.attempt,
+            self.suggested_backoff
+        )
+    }
+}
+
+impl std::error::Error for RetryableTransactionError {}
 
 impl std::fmt::Display for TransactionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
