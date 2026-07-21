@@ -405,43 +405,6 @@ pub fn read_pages_from_file(path: &Path) -> StorageResult<(Vec<u8>, u32)> {
     Ok((data, total_rows))
 }
 
-/// Read a single page from a page-compressed file.
-/// Returns the decompressed page contents.
-pub fn read_single_page_from_file(path: &Path, page_idx: u32) -> StorageResult<Vec<u8>> {
-    let file = File::open(path)
-        .map_err(|e| StorageError::io_error(format!("Failed to open {}: {}", path.display(), e)))?;
-    let mut reader = std::io::BufReader::new(file);
-    let header = crate::storage::compression::ColumnFileHeader::deserialize(&mut reader)?;
-    if page_idx >= header.page_count {
-        return Err(StorageError::invalid_input(format!(
-            "page index {} out of bounds (total pages: {})",
-            page_idx, header.page_count
-        )));
-    }
-    let page_reader = crate::storage::compression::PageReader::new(header.page_size);
-    page_reader.read_pages_in_range(&mut reader, page_idx, page_idx + 1)
-}
-
-/// Read pages in range [start_page, end_page) and concatenate their contents.
-pub fn read_pages_range_from_file(
-    path: &Path,
-    start_page: u32,
-    end_page: u32,
-) -> StorageResult<Vec<u8>> {
-    let file = File::open(path)
-        .map_err(|e| StorageError::io_error(format!("Failed to open {}: {}", path.display(), e)))?;
-    let mut reader = std::io::BufReader::new(file);
-    let header = crate::storage::compression::ColumnFileHeader::deserialize(&mut reader)?;
-    if end_page > header.page_count || start_page > end_page {
-        return Err(StorageError::invalid_input(format!(
-            "invalid page range [{}, {}) for file with {} pages",
-            start_page, end_page, header.page_count
-        )));
-    }
-    let page_reader = crate::storage::compression::PageReader::new(header.page_size);
-    page_reader.read_pages_in_range(&mut reader, start_page, end_page)
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::super::*;

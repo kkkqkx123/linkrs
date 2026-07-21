@@ -1,8 +1,7 @@
 //! Compression type definition and compression/decompression helpers for storage layer.
 //!
-//! This module provides the `CompressionType` enum for configuring
-//! compression in flush operations, along with `compress_payload` and
-//! `decompress_payload` helpers used by the table flush/load pipeline.
+//! This module provides the `CompressionType` enum and page-level compression
+//! helpers used by the table flush/load pipeline.
 //!
 //! Every persisted file uses the compression marker format:
 //! - Marker 0x00: raw data follows
@@ -27,68 +26,6 @@ const COMPRESSION_MARKER_ZSTD: u8 = 0x01;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompressionType {
     Zstd { level: i32 },
-}
-
-/// Compress payload with the given strategy.
-/// Output format: [1-byte marker][payload]
-/// - Marker 0x00: raw data follows
-/// - Marker 0x01: [4-byte CRC32][4-byte compressed_len][zstd compressed data]
-pub fn compress_payload(data: &[u8], ct: CompressionType) -> StorageResult<Vec<u8>> {
-    let mut result = Vec::new();
-    let CompressionType::Zstd { level } = ct;
-    result.push(COMPRESSION_MARKER_ZSTD);
-    let compressed = zstd::encode_all(data, level)
-        .map_err(|e| StorageError::io_error(format!("zstd compress failed: {}", e)))?;
-    let checksum = crc32fast::hash(&compressed);
-    result.extend_from_slice(&checksum.to_le_bytes());
-    result.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
-    result.extend_from_slice(&compressed);
-    Ok(result)
-}
-
-/// Decompress payload.
-/// Accepts only marker 0x00 (raw) or 0x01 (zstd).
-/// Rejects anything else — no backward compat with older format.
-pub fn decompress_payload(data: &[u8]) -> StorageResult<Vec<u8>> {
-    if data.is_empty() {
-        return Err(StorageError::deserialize_error(
-            "empty data, expected compression marker",
-        ));
-    }
-    match data[0] {
-        COMPRESSION_MARKER_NONE => Ok(data[1..].to_vec()),
-        COMPRESSION_MARKER_ZSTD => {
-            if data.len() < 9 {
-                return Err(StorageError::deserialize_error(
-                    "truncated compressed data header",
-                ));
-            }
-            let checksum =
-                u32::from_le_bytes(data[1..5].try_into().map_err(|_| {
-                    StorageError::deserialize_error("failed to read zstd checksum")
-                })?);
-            let compressed_len = u32::from_le_bytes(data[5..9].try_into().map_err(|_| {
-                StorageError::deserialize_error("failed to read zstd compressed length")
-            })?) as usize;
-            let compressed_end = 9 + compressed_len;
-            if compressed_end > data.len() {
-                return Err(StorageError::deserialize_error("truncated compressed data"));
-            }
-            let compressed = &data[9..compressed_end];
-            let actual_checksum = crc32fast::hash(compressed);
-            if checksum != actual_checksum {
-                return Err(StorageError::deserialize_error(
-                    "compressed data checksum mismatch",
-                ));
-            }
-            zstd::decode_all(compressed)
-                .map_err(|e| StorageError::io_error(format!("zstd decompress failed: {}", e)))
-        }
-        marker => Err(StorageError::deserialize_error(format!(
-            "unknown compression marker: {:#04x}, expected 0x00 or 0x01",
-            marker
-        ))),
-    }
 }
 
 #[derive(Debug)]
@@ -195,8 +132,6 @@ pub struct PageHeader {
 }
 
 impl PageHeader {
-    pub const SIZE: usize = 15;
-
     pub fn serialize(&self, writer: &mut impl std::io::Write) -> StorageResult<usize> {
         let mut written = 0usize;
         writer
@@ -379,16 +314,6 @@ impl PageReader {
         Ok(decompressed)
     }
 
-    pub fn skip_page<R: std::io::Read>(&self, reader: &mut R) -> StorageResult<()> {
-        let header = PageHeader::deserialize(reader)?;
-        let mut bounded =
-            crate::storage::safe_read::BoundedReader::new(reader, header.compressed_len as usize);
-        bounded
-            .skip_all()
-            .map_err(|e| StorageError::io_error(format!("PageReader skip page data: {}", e)))?;
-        Ok(())
-    }
-
     pub fn read_all<R: std::io::Read>(
         &self,
         reader: &mut R,
@@ -402,32 +327,6 @@ impl PageReader {
         Ok(result)
     }
 
-    /// Read a single page from the reader.
-    /// The reader must be positioned at the start of a page header.
-    pub fn read_single_page<R: std::io::Read>(&self, reader: &mut R) -> StorageResult<Vec<u8>> {
-        self.read_page(reader)
-    }
-
-    /// Read pages in range [start_page, end_page) and concatenate their contents.
-    /// Pages before start_page are skipped; pages from start_page up to (but not
-    /// including) end_page are read and concatenated.
-    pub fn read_pages_in_range<R: std::io::Read>(
-        &self,
-        reader: &mut R,
-        start_page: u32,
-        end_page: u32,
-    ) -> StorageResult<Vec<u8>> {
-        for _ in 0..start_page {
-            self.skip_page(reader)?;
-        }
-        let count = end_page - start_page;
-        let mut result = Vec::new();
-        for _ in 0..count {
-            let page = self.read_page(reader)?;
-            result.extend_from_slice(&page);
-        }
-        Ok(result)
-    }
 }
 
 pub fn write_shadow_file<P: AsRef<std::path::Path>>(path: P, data: &[u8]) -> StorageResult<()> {
@@ -470,42 +369,6 @@ pub fn cleanup_shadow_files<P: AsRef<std::path::Path>>(dir: P) -> StorageResult<
         }
     }
     Ok(cleaned)
-}
-
-/// Read a single page from a page-compressed file.
-pub fn read_single_page_from_file(path: &std::path::Path, page_idx: u32) -> StorageResult<Vec<u8>> {
-    let file = std::fs::File::open(path)
-        .map_err(|e| StorageError::io_error(format!("Failed to open {}: {}", path.display(), e)))?;
-    let mut reader = std::io::BufReader::new(file);
-    let header = ColumnFileHeader::deserialize(&mut reader)?;
-    if page_idx >= header.page_count {
-        return Err(StorageError::invalid_input(format!(
-            "page index {} out of bounds (total pages: {})",
-            page_idx, header.page_count
-        )));
-    }
-    let page_reader = PageReader::new(header.page_size);
-    page_reader.read_pages_in_range(&mut reader, page_idx, page_idx + 1)
-}
-
-/// Read pages in range [start_page, end_page) from a page-compressed file.
-pub fn read_pages_range_from_file(
-    path: &std::path::Path,
-    start_page: u32,
-    end_page: u32,
-) -> StorageResult<Vec<u8>> {
-    let file = std::fs::File::open(path)
-        .map_err(|e| StorageError::io_error(format!("Failed to open {}: {}", path.display(), e)))?;
-    let mut reader = std::io::BufReader::new(file);
-    let header = ColumnFileHeader::deserialize(&mut reader)?;
-    if end_page > header.page_count || start_page > end_page {
-        return Err(StorageError::invalid_input(format!(
-            "invalid page range [{}, {}) for file with {} pages",
-            start_page, end_page, header.page_count
-        )));
-    }
-    let page_reader = PageReader::new(header.page_size);
-    page_reader.read_pages_in_range(&mut reader, start_page, end_page)
 }
 
 impl SafeSerializable for PageHeader {
@@ -574,29 +437,7 @@ impl SafeSerializable for ColumnFileHeader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::safe_read::{BoundedReader, SafeSerializable};
-
-    #[test]
-    fn test_compress_decompress_roundtrip_zstd() {
-        let data = b"hello world this is a test string for zstd compression";
-        let compressed = compress_payload(data, CompressionType::Zstd { level: 3 }).unwrap();
-        assert_eq!(compressed[0], COMPRESSION_MARKER_ZSTD);
-        let decompressed = decompress_payload(&compressed).unwrap();
-        assert_eq!(&decompressed, data);
-    }
-
-    #[test]
-    fn test_decompress_rejects_unknown_marker() {
-        let data = vec![0xFF, 0x01, 0x02, 0x03];
-        let result = decompress_payload(&data);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_decompress_rejects_empty() {
-        let result = decompress_payload(&[]);
-        assert!(result.is_err());
-    }
+use crate::storage::safe_read::BoundedReader;
 
     #[test]
     fn test_page_write_read_roundtrip() {

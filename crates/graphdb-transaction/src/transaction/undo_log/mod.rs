@@ -517,6 +517,58 @@ impl DeleteEdgeTypeUndo {
     }
 }
 
+/// Undo log for sequence increment operation
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SequenceIncrementUndo {
+    pub sequence_name: String,
+    pub previous_value: i64,
+}
+
+impl SequenceIncrementUndo {
+    pub fn undo<T: UndoTarget + ?Sized>(&self, graph: &T, _ts: Timestamp) -> UndoLogResult<()> {
+        graph.revert_sequence_increment(&self.sequence_name, self.previous_value)
+    }
+
+    pub fn description(&self) -> String {
+        format!(
+            "SequenceIncrementUndo(name={}, prev={})",
+            self.sequence_name, self.previous_value
+        )
+    }
+}
+
+/// Undo log for sequence create operation
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SequenceCreateUndo {
+    pub sequence_name: String,
+}
+
+impl SequenceCreateUndo {
+    pub fn undo<T: UndoTarget + ?Sized>(&self, graph: &T, _ts: Timestamp) -> UndoLogResult<()> {
+        graph.revert_sequence_create(&self.sequence_name)
+    }
+
+    pub fn description(&self) -> String {
+        format!("SequenceCreateUndo(name={})", self.sequence_name)
+    }
+}
+
+/// Undo log for sequence drop operation
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SequenceDropUndo {
+    pub sequence_name: String,
+}
+
+impl SequenceDropUndo {
+    pub fn undo<T: UndoTarget + ?Sized>(&self, graph: &T, _ts: Timestamp) -> UndoLogResult<()> {
+        graph.revert_sequence_drop(&self.sequence_name)
+    }
+
+    pub fn description(&self) -> String {
+        format!("SequenceDropUndo(name={})", self.sequence_name)
+    }
+}
+
 /// Undo log entry enum - zero-cost abstraction for all undo types
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum UndoLogEntry {
@@ -537,6 +589,9 @@ pub enum UndoLogEntry {
     DeleteEdgeProp(DeleteEdgePropUndo),
     DeleteVertexType(DeleteVertexTypeUndo),
     DeleteEdgeType(DeleteEdgeTypeUndo),
+    SequenceIncrement(SequenceIncrementUndo),
+    SequenceCreate(SequenceCreateUndo),
+    SequenceDrop(SequenceDropUndo),
 }
 
 impl UndoLogEntry {
@@ -580,6 +635,9 @@ impl UndoLogEntry {
             UndoLogEntry::DeleteEdgeProp(u) => u.undo(graph, ts),
             UndoLogEntry::DeleteVertexType(u) => u.undo(graph, ts),
             UndoLogEntry::DeleteEdgeType(u) => u.undo(graph, ts),
+            UndoLogEntry::SequenceIncrement(u) => u.undo(graph, ts),
+            UndoLogEntry::SequenceCreate(u) => u.undo(graph, ts),
+            UndoLogEntry::SequenceDrop(u) => u.undo(graph, ts),
         }
     }
 
@@ -602,6 +660,9 @@ impl UndoLogEntry {
             UndoLogEntry::DeleteEdgeProp(u) => u.description(),
             UndoLogEntry::DeleteVertexType(u) => u.description(),
             UndoLogEntry::DeleteEdgeType(u) => u.description(),
+            UndoLogEntry::SequenceIncrement(u) => u.description(),
+            UndoLogEntry::SequenceCreate(u) => u.description(),
+            UndoLogEntry::SequenceDrop(u) => u.description(),
         }
     }
 }
@@ -705,6 +766,29 @@ impl UndoLogManager {
             ie_offset: params.ie_offset,
             col_id: params.col_id,
             old_value: params.old_value,
+        }))
+    }
+
+    pub fn add_sequence_increment(
+        &mut self,
+        sequence_name: String,
+        previous_value: i64,
+    ) -> UndoLogResult<()> {
+        self.add(UndoLogEntry::SequenceIncrement(SequenceIncrementUndo {
+            sequence_name,
+            previous_value,
+        }))
+    }
+
+    pub fn add_sequence_create(&mut self, sequence_name: String) -> UndoLogResult<()> {
+        self.add(UndoLogEntry::SequenceCreate(SequenceCreateUndo {
+            sequence_name,
+        }))
+    }
+
+    pub fn add_sequence_drop(&mut self, sequence_name: String) -> UndoLogResult<()> {
+        self.add(UndoLogEntry::SequenceDrop(SequenceDropUndo {
+            sequence_name,
         }))
     }
 
@@ -859,6 +943,22 @@ mod tests {
             _current_names: &[String],
             _original_names: &[String],
         ) -> UndoLogResult<()> {
+            Ok(())
+        }
+
+        fn revert_sequence_increment(
+            &self,
+            _sequence_name: &str,
+            _previous_value: i64,
+        ) -> UndoLogResult<()> {
+            Ok(())
+        }
+
+        fn revert_sequence_create(&self, _sequence_name: &str) -> UndoLogResult<()> {
+            Ok(())
+        }
+
+        fn revert_sequence_drop(&self, _sequence_name: &str) -> UndoLogResult<()> {
             Ok(())
         }
     }

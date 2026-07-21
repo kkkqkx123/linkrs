@@ -93,6 +93,16 @@ pub struct TransactionContext {
     mutation_count: AtomicU64,
     /// Current estimated undo bytes.
     undo_bytes: AtomicU64,
+    /// Fraction of budget at which a warning is emitted (0.0–1.0).
+    budget_warning_threshold: f64,
+    /// Whether a budget warning has already been emitted for mutation count.
+    mutation_warning_emitted: AtomicCell<bool>,
+    /// Whether a budget warning has already been emitted for undo bytes.
+    undo_warning_emitted: AtomicCell<bool>,
+    /// Whether this transaction holds the pessimistic write exclusion lock.
+    pessimistic_lock_held: AtomicCell<bool>,
+    /// Concurrency mode used by this transaction.
+    concurrency_mode: ConcurrencyMode,
     /// Schema catalog version — incremented on every DDL operation.
     /// Used by the query layer to invalidate stale plan caches.
     schema_catalog_version: AtomicU64,
@@ -223,6 +233,11 @@ impl TransactionContext {
             max_undo_bytes: config.max_undo_bytes,
             mutation_count: AtomicU64::new(0),
             undo_bytes: AtomicU64::new(0),
+            budget_warning_threshold: config.budget_warning_threshold,
+            mutation_warning_emitted: AtomicCell::new(false),
+            undo_warning_emitted: AtomicCell::new(false),
+            pessimistic_lock_held: AtomicCell::new(false),
+            concurrency_mode: config.concurrency_mode,
             schema_catalog_version: AtomicU64::new(0),
         }
     }
@@ -270,6 +285,11 @@ impl TransactionContext {
             max_undo_bytes: config.max_undo_bytes,
             mutation_count: AtomicU64::new(0),
             undo_bytes: AtomicU64::new(0),
+            budget_warning_threshold: config.budget_warning_threshold,
+            mutation_warning_emitted: AtomicCell::new(false),
+            undo_warning_emitted: AtomicCell::new(false),
+            pessimistic_lock_held: AtomicCell::new(false),
+            concurrency_mode: config.concurrency_mode,
             schema_catalog_version: AtomicU64::new(0),
         }
     }
@@ -287,6 +307,10 @@ impl TransactionContext {
 
     pub fn get_type(&self) -> TransactionType {
         self.txn_type
+    }
+
+    pub fn get_concurrency_mode(&self) -> ConcurrencyMode {
+        self.concurrency_mode
     }
 
     /// Get current state
@@ -462,6 +486,18 @@ impl TransactionContext {
     /// Returns the new version.
     pub fn bump_schema_catalog_version(&self) -> u64 {
         self.schema_catalog_version.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    pub fn set_pessimistic_lock(&self) {
+        self.pessimistic_lock_held.store(true);
+    }
+
+    pub fn has_pessimistic_lock(&self) -> bool {
+        self.pessimistic_lock_held.load()
+    }
+
+    pub fn clear_pessimistic_lock(&self) {
+        self.pessimistic_lock_held.store(false);
     }
 
     /// Get remaining time
@@ -695,6 +731,21 @@ impl TransactionContext {
             ));
         }
 
+        if self.budget_warning_threshold > 0.0
+            && self.max_mutation_count > 0
+            && !self.mutation_warning_emitted.load()
+            && new_count as f64 >= self.max_mutation_count as f64 * self.budget_warning_threshold
+        {
+            self.mutation_warning_emitted.store(true);
+            log::warn!(
+                "Transaction {} mutation count ({}) exceeds {:.0}% of limit ({})",
+                self.id,
+                new_count,
+                self.budget_warning_threshold * 100.0,
+                self.max_mutation_count,
+            );
+        }
+
         let undo_estimate = self.undo_bytes.fetch_add(64, Ordering::Relaxed) + 64;
         if self.max_undo_bytes > 0 && undo_estimate > self.max_undo_bytes {
             return Err(TransactionError::transaction_budget_exceeded(
@@ -702,6 +753,21 @@ impl TransactionContext {
                 undo_estimate,
                 self.max_undo_bytes,
             ));
+        }
+
+        if self.budget_warning_threshold > 0.0
+            && self.max_undo_bytes > 0
+            && !self.undo_warning_emitted.load()
+            && undo_estimate as f64 >= self.max_undo_bytes as f64 * self.budget_warning_threshold
+        {
+            self.undo_warning_emitted.store(true);
+            log::warn!(
+                "Transaction {} undo bytes ({}) exceeds {:.0}% of limit ({})",
+                self.id,
+                undo_estimate,
+                self.budget_warning_threshold * 100.0,
+                self.max_undo_bytes,
+            );
         }
 
         let entity_keys = mutation.entity_keys;
@@ -1012,6 +1078,14 @@ impl TransactionMutationRecorder for TransactionContext {
 
     fn record_schema_read(&self, resource: &str) {
         self.record_schema_read(resource);
+    }
+
+    fn record_sequence_change(&self, sequence_name: &str, previous_value: i64) {
+        let entry = UndoLogEntry::SequenceIncrement(super::undo_log::SequenceIncrementUndo {
+            sequence_name: sequence_name.to_string(),
+            previous_value,
+        });
+        let _ = self.add_undo_log(entry);
     }
 
     fn has_dml_entries(&self) -> bool {

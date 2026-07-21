@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::stats::{MetricType, StatsManager};
 use crate::core::types::{CommitLsn, EdgeIdentifier, VertexId};
 use crate::transaction::undo_log::UndoLogEntry;
 use crate::transaction::wal::TransactionWalEntry;
@@ -272,6 +271,12 @@ pub enum TransactionEvent {
         write_timestamp: u32,
         commit_lsn: CommitLsn,
     },
+    BudgetWarning {
+        txn_id: TransactionId,
+        resource: String,
+        current: u64,
+        limit: u64,
+    },
 }
 
 pub type CommitCallback = Arc<dyn Fn(&TransactionEvent) + Send + Sync>;
@@ -414,6 +419,11 @@ pub struct TransactionConfig {
     pub max_mutation_count: u64,
     /// Maximum undo log bytes a transaction may accumulate. 0 = unlimited.
     pub max_undo_bytes: u64,
+    /// Fraction of budget limit at which a warning is emitted (0.0–1.0).
+    /// 0.8 means warn at 80% of the limit. 0.0 disables warnings.
+    pub budget_warning_threshold: f64,
+    /// Concurrency control strategy for write transactions.
+    pub concurrency_mode: ConcurrencyMode,
 }
 
 impl Default for TransactionConfig {
@@ -428,6 +438,8 @@ impl Default for TransactionConfig {
             auto_commit: false,
             max_mutation_count: 100_000,
             max_undo_bytes: 128 * 1024 * 1024,
+            budget_warning_threshold: 0.8,
+            concurrency_mode: ConcurrencyMode::Optimistic,
         }
     }
 }
@@ -479,6 +491,16 @@ impl TransactionConfig {
 
     pub fn with_max_undo_bytes(mut self, max: u64) -> Self {
         self.max_undo_bytes = max;
+        self
+    }
+
+    pub fn with_budget_warning_threshold(mut self, threshold: f64) -> Self {
+        self.budget_warning_threshold = threshold.clamp(0.0, 1.0);
+        self
+    }
+
+    pub fn with_concurrency_mode(mut self, mode: ConcurrencyMode) -> Self {
+        self.concurrency_mode = mode;
         self
     }
 }
@@ -551,8 +573,6 @@ pub struct TransactionStats {
     window_head: AtomicU64,
     /// Last second timestamp when the window was updated.
     window_last_epoch_sec: AtomicU64,
-    /// Optional StatsManager for unified metrics
-    stats_manager: Option<Arc<StatsManager>>,
 }
 
 impl Default for TransactionStats {
@@ -573,7 +593,6 @@ impl Default for TransactionStats {
                 .collect(),
             window_head: AtomicU64::new(0),
             window_last_epoch_sec: AtomicU64::new(0),
-            stats_manager: None,
         }
     }
 }
@@ -581,27 +600,6 @@ impl Default for TransactionStats {
 impl TransactionStats {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    pub fn with_stats_manager(stats_manager: Arc<StatsManager>) -> Self {
-        Self {
-            total_transactions: AtomicU64::new(0),
-            active_transactions: AtomicU64::new(0),
-            committed_transactions: AtomicU64::new(0),
-            aborted_transactions: AtomicU64::new(0),
-            timeout_transactions: AtomicU64::new(0),
-            conflict_transactions: AtomicU64::new(0),
-            disconnect_transactions: AtomicU64::new(0),
-            recovery_abort_transactions: AtomicU64::new(0),
-            cleanup_failure_transactions: AtomicU64::new(0),
-            active_statements: AtomicU64::new(0),
-            window_buckets: (0..CONFLICT_WINDOW_BUCKETS)
-                .map(|_| AtomicU64::new(0))
-                .collect(),
-            window_head: AtomicU64::new(0),
-            window_last_epoch_sec: AtomicU64::new(0),
-            stats_manager: Some(stats_manager),
-        }
     }
 
     pub fn increment_total(&self) {
@@ -630,24 +628,15 @@ impl TransactionStats {
 
     pub fn record_timeout(&self) {
         self.increment_timeout();
-        if let Some(ref sm) = self.stats_manager {
-            sm.record_txn_timeout();
-        }
     }
 
     pub fn increment_disconnect(&self) {
         self.disconnect_transactions.fetch_add(1, Ordering::Relaxed);
-        if let Some(ref sm) = self.stats_manager {
-            sm.record_txn_disconnect();
-        }
     }
 
     pub fn increment_cleanup_failure(&self) {
         self.cleanup_failure_transactions
             .fetch_add(1, Ordering::Relaxed);
-        if let Some(ref sm) = self.stats_manager {
-            sm.record_txn_cleanup_failure();
-        }
     }
 
     pub fn begin_statement(&self) {
@@ -664,59 +653,34 @@ impl TransactionStats {
 
     pub fn record_resource_metrics(
         &self,
-        active_snapshots: u64,
-        pending_writes: i32,
-        frontier_lag: u32,
-        staged_wal_bytes: u64,
-        undo_bytes: u64,
-        prepared_transactions: u64,
-        checkpoint_drain_time: Duration,
+        _active_snapshots: u64,
+        _pending_writes: i32,
+        _frontier_lag: u32,
+        _staged_wal_bytes: u64,
+        _undo_bytes: u64,
+        _prepared_transactions: u64,
+        _checkpoint_drain_time: Duration,
     ) {
-        if let Some(ref sm) = self.stats_manager {
-            let metrics = graphdb_core::core::stats::TxnResourceMetrics {
-                active_statements: self.active_statements.load(Ordering::Relaxed),
-                active_snapshots,
-                pending_writes: pending_writes.max(0) as u64,
-                frontier_lag: u64::from(frontier_lag),
-                staged_wal_bytes,
-                undo_bytes,
-                prepared_transactions,
-                checkpoint_drain_time_ms: checkpoint_drain_time.as_millis() as u64,
-            };
-            sm.set_txn_resource_metrics(metrics);
-        }
     }
 
     pub fn record_txn_begin(&self) {
         self.increment_total();
         self.increment_active();
-        if let Some(ref sm) = self.stats_manager {
-            sm.record_txn_begin();
-        }
     }
 
     pub fn record_txn_commit(&self) {
         self.decrement_active();
         self.increment_committed();
-        if let Some(ref sm) = self.stats_manager {
-            sm.record_txn_commit();
-        }
     }
 
     pub fn record_txn_rollback(&self) {
         self.decrement_active();
         self.increment_aborted();
-        if let Some(ref sm) = self.stats_manager {
-            sm.record_txn_rollback();
-        }
     }
 
     pub fn record_txn_conflict(&self) {
         self.conflict_transactions.fetch_add(1, Ordering::Relaxed);
         self.record_conflict_in_window();
-        if let Some(ref sm) = self.stats_manager {
-            sm.add_value(MetricType::TxnConflictCount);
-        }
     }
 
     fn record_conflict_in_window(&self) {
@@ -771,6 +735,22 @@ impl TransactionStats {
             .map(|b| b.load(Ordering::Relaxed))
             .sum();
         total as f64 / CONFLICT_WINDOW_BUCKETS as f64
+    }
+}
+
+/// Concurrency mode for write transactions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConcurrencyMode {
+    /// Standard optimistic concurrency — conflict detection at commit time.
+    Optimistic,
+    /// Acquire an exclusive write lock at transaction begin time.
+    /// Guarantees no conflicts at commit, but limits write concurrency to 1.
+    Pessimistic,
+}
+
+impl Default for ConcurrencyMode {
+    fn default() -> Self {
+        Self::Optimistic
     }
 }
 

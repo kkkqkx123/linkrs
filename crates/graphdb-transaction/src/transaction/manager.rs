@@ -4,6 +4,7 @@
 //! transaction start, commit, and abort. Uses MVCC version management for
 //! snapshot isolation.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -24,7 +25,7 @@ use super::rollback::UndoLogRollback;
 use super::types::*;
 use super::undo_log::UndoTarget;
 use crate::core::stats::StatsManager;
-use crate::core::types::{CommitLsn, Timestamp};
+use crate::core::types::{CommitLsn, Timestamp, VertexId};
 use crate::core::wal::types::Lsn;
 use crate::sync::SyncManager;
 
@@ -220,6 +221,11 @@ pub struct TransactionManager {
     /// Committed write sets retained until no transaction can have started
     /// before the corresponding commit timestamp.
     committed_write_sets: Mutex<Vec<(Timestamp, WriteSet)>>,
+    /// Transaction ID that currently holds the pessimistic write lock (0 = unlocked).
+    write_exclusion_owner: AtomicU64,
+    /// Spatial index for O(1) vertex conflict lookup.
+    /// Maps each vertex ID to committed write timestamps + transaction IDs.
+    committed_vertex_writes: Mutex<HashMap<VertexId, Vec<(Timestamp, TransactionId)>>>,
 }
 
 impl TransactionManager {
@@ -244,6 +250,8 @@ impl TransactionManager {
             checkpoint_gate: Arc::new(CheckpointGate::new()),
             certification_lock: Mutex::new(()),
             committed_write_sets: Mutex::new(Vec::new()),
+            write_exclusion_owner: AtomicU64::new(0),
+            committed_vertex_writes: Mutex::new(HashMap::new()),
         };
         let commit_stats = Arc::clone(&manager.stats);
         manager.register_commit_callback(Arc::new(move |event| match event {
@@ -253,6 +261,7 @@ impl TransactionManager {
                 commit_stats.increment_cleanup_failure();
             }
             TransactionEvent::Aborted { .. } => {}
+            TransactionEvent::BudgetWarning { .. } => {}
         }));
         let rollback_stats = Arc::clone(&manager.stats);
         manager.register_rollback_callback(Arc::new(move |event| {
@@ -307,19 +316,19 @@ impl TransactionManager {
     /// Create a new transaction manager with StatsManager integration
     pub fn with_stats_manager(
         config: TransactionManagerConfig,
-        stats_manager: Arc<StatsManager>,
+        _stats_manager: Arc<StatsManager>,
     ) -> Self {
-        let stats = Arc::new(TransactionStats::with_stats_manager(stats_manager));
+        let stats = Arc::new(TransactionStats::new());
         Self::with_components(config, stats, Arc::new(VersionManager::new()))
     }
 
     /// Create a transaction manager using the storage engine's MVCC clock.
     pub fn with_shared_version_manager(
         config: TransactionManagerConfig,
-        stats_manager: Arc<StatsManager>,
+        _stats_manager: Arc<StatsManager>,
         version_manager: Arc<VersionManager>,
     ) -> Self {
-        let stats = Arc::new(TransactionStats::with_stats_manager(stats_manager));
+        let stats = Arc::new(TransactionStats::new());
         Self::with_components(config, stats, version_manager)
     }
 
@@ -535,6 +544,20 @@ impl TransactionManager {
 
         let context = Arc::new(TransactionContext::new(txn_id, timestamp, config));
 
+        if context.get_concurrency_mode() == ConcurrencyMode::Pessimistic {
+            let prev = self
+                .write_exclusion_owner
+                .swap(txn_id.0, Ordering::SeqCst);
+            if prev != 0 {
+                self.checkpoint_gate.release_write();
+                self.active_transactions.remove(&txn_id);
+                return Err(TransactionError::internal(
+                    "Pessimistic write lock is held by another transaction".to_string(),
+                ));
+            }
+            context.set_pessimistic_lock();
+        }
+
         self.active_transactions.insert(txn_id, context);
         self.stats.record_txn_begin();
 
@@ -571,6 +594,12 @@ impl TransactionManager {
             return Ok(());
         }
 
+        // Pessimistic mode guarantees serialization via the exclusive write lock.
+        if ctx.get_concurrency_mode() == ConcurrencyMode::Pessimistic {
+            ctx.mark_write_validated();
+            return Ok(());
+        }
+
         let txn_write_set = ctx.get_write_set();
         let txn_read_set = ctx.get_read_set();
         let serializable = ctx.isolation_level == IsolationLevel::Serializable;
@@ -604,13 +633,35 @@ impl TransactionManager {
         }
 
         let committed = self.committed_write_sets.lock();
+        // Use spatial index for O(1) vertex conflict lookup.
+        let mut vertex_idx = self.committed_vertex_writes.lock();
+        // Prune entries that are older than this transaction's start.
+        for entries in vertex_idx.values_mut() {
+            entries.retain(|(commit_ts, _)| *commit_ts > ctx.start_timestamp);
+        }
+        vertex_idx.retain(|_, entries| !entries.is_empty());
+        for vid in txn_write_set.vertices.iter() {
+            if let Some(entries) = vertex_idx.get(vid) {
+                if entries.iter().any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp) {
+                    drop(vertex_idx);
+                    drop(committed);
+                    self.stats.record_txn_conflict();
+                    return Err(TransactionError::write_transaction_conflict());
+                }
+            }
+        }
+        drop(vertex_idx);
+
+        // Fall back to committed_write_sets scan for edges and schema resources.
         for (commit_ts, write_set) in committed.iter() {
             if *commit_ts <= ctx.start_timestamp {
                 continue;
             }
-            if txn_write_set.has_conflict_with(write_set)
-                || (serializable && txn_read_set.has_conflict_with(write_set))
-            {
+            if txn_write_set.has_conflict_with(write_set) {
+                self.stats.record_txn_conflict();
+                return Err(TransactionError::write_transaction_conflict());
+            }
+            if serializable && txn_read_set.has_conflict_with(write_set) {
                 self.stats.record_txn_conflict();
                 return Err(TransactionError::write_transaction_conflict());
             }
@@ -883,9 +934,18 @@ impl TransactionManager {
                 self.version_manager
                     .commit_write_timestamp(context.timestamp());
                 if !descriptor.write_set.is_empty() {
-                    self.committed_write_sets
-                        .lock()
-                        .push((descriptor.write_timestamp, descriptor.write_set.clone()));
+                    let mut committed = self.committed_write_sets.lock();
+                    committed.push((descriptor.write_timestamp, descriptor.write_set.clone()));
+                    let mut vertex_idx = self.committed_vertex_writes.lock();
+                    for vid in descriptor.write_set.vertices.iter() {
+                        vertex_idx
+                            .entry(*vid)
+                            .or_default()
+                            .push((descriptor.write_timestamp, context.id));
+                    }
+                }
+                if context.has_pessimistic_lock() {
+                    self.write_exclusion_owner.store(0, Ordering::SeqCst);
                 }
                 self.checkpoint_gate.release_write();
             }
@@ -1194,6 +1254,9 @@ impl TransactionManager {
         if released {
             self.rollback_context_timestamp(context);
             if context.txn_type == TransactionType::Write {
+                if context.has_pessimistic_lock() {
+                    self.write_exclusion_owner.store(0, Ordering::SeqCst);
+                }
                 self.checkpoint_gate.release_write();
             }
         }
@@ -1917,6 +1980,22 @@ mod tests {
                 _current_names: &[String],
                 _original_names: &[String],
             ) -> UndoLogResult<()> {
+                Ok(())
+            }
+
+            fn revert_sequence_increment(
+                &self,
+                _sequence_name: &str,
+                _previous_value: i64,
+            ) -> UndoLogResult<()> {
+                Ok(())
+            }
+
+            fn revert_sequence_create(&self, _sequence_name: &str) -> UndoLogResult<()> {
+                Ok(())
+            }
+
+            fn revert_sequence_drop(&self, _sequence_name: &str) -> UndoLogResult<()> {
                 Ok(())
             }
         }
