@@ -4,6 +4,7 @@ use crate::core::types::{
     CompactConfig, EdgeTypeInfo, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo,
     PropertyDef, SpaceInfo, TagInfo, Timestamp, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
 };
+use crate::storage::mvcc::SnapshotHandle;
 use crate::core::{Edge, EdgeDirection, RoleType, StorageError, StorageResult, Value, Vertex};
 use crate::storage::cursor::{
     EdgeCursor, IndexCursor, IndexRow, IndexScanPlan, ScanOptions, VertexCursor,
@@ -413,6 +414,10 @@ pub struct StorageOperationContext {
     pub read_only: bool,
     pub auto_commit: bool,
     pub mutation_recorder: Option<Arc<dyn TransactionMutationRecorder>>,
+    /// MVCC snapshot handles for GC coordination - stores (label_id, handle) pairs for vertex tables
+    pub mvcc_vertex_snapshot_handles: Vec<(LabelId, SnapshotHandle)>,
+    /// Edge table snapshots tracked by timestamp only (no handles needed)
+    pub mvcc_edge_snapshot_registered: bool,
 }
 
 impl PartialEq for StorageOperationContext {
@@ -440,6 +445,8 @@ impl StorageOperationContext {
             read_only,
             auto_commit: false,
             mutation_recorder: None,
+            mvcc_vertex_snapshot_handles: Vec::new(),
+            mvcc_edge_snapshot_registered: false,
         }
     }
 
@@ -457,6 +464,8 @@ impl StorageOperationContext {
             read_only,
             auto_commit,
             mutation_recorder: None,
+            mvcc_vertex_snapshot_handles: Vec::new(),
+            mvcc_edge_snapshot_registered: false,
         }
     }
 

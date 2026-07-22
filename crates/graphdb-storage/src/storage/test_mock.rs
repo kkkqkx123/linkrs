@@ -273,6 +273,8 @@ impl StorageOperationContextOps for MockStorage {
             read_only: false,
             auto_commit: true,
             mutation_recorder: None,
+            mvcc_vertex_snapshot_handles: Vec::new(),
+            mvcc_edge_snapshot_registered: false,
         }))
     }
 

@@ -3,6 +3,7 @@ use crate::core::types::{LabelId, TableId, Timestamp};
 use crate::core::{StorageError, StorageResult};
 use crate::storage::engine::resource_budget::{MemoryCategory, ResourceSnapshot};
 use crate::storage::index::IndexGcOps;
+use crate::storage::mvcc::SnapshotHandle;
 use crate::storage::StorageOperationContext;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -66,15 +67,38 @@ impl GraphStorageContext {
                 .next_auto_transaction_id
                 .fetch_add(1, Ordering::SeqCst),
         );
+        
         let mut bound = self.clone();
-        bound.operation_context = Some(Arc::new(StorageOperationContext {
+        let mut context = StorageOperationContext {
             transaction_id: Some(transaction_id),
             read_timestamp: timestamp,
             write_timestamp: Some(timestamp),
             read_only: false,
             auto_commit: true,
             mutation_recorder: None,
-        }));
+            mvcc_vertex_snapshot_handles: Vec::new(),
+            mvcc_edge_snapshot_registered: false,
+        };
+        
+        // Register MVCC snapshots to prevent GC from cleaning data during the transaction
+        self.persistent.data_store.with_vertex_tables_mut(|vertex_tables| {
+            for (label_id, vertex_table) in vertex_tables.iter_mut() {
+                if let Ok(handle) = vertex_table.register_snapshot(timestamp) {
+                    context.mvcc_vertex_snapshot_handles.push((*label_id, handle));
+                }
+            }
+            Ok(())
+        })?;
+
+        self.persistent.data_store.with_edge_tables_mut(|edge_tables| {
+            for edge_store in edge_tables.values_mut() {
+                edge_store.register_snapshot(timestamp);
+            }
+            Ok(())
+        })?;
+        context.mvcc_edge_snapshot_registered = true;
+        
+        bound.operation_context = Some(Arc::new(context));
         bound.write_timestamp_lease = Some(Arc::new(WriteTimestampLease {
             version_manager: self.persistent.version_manager.clone(),
             timestamp,
@@ -119,6 +143,33 @@ impl GraphStorageContext {
         let timestamp = operation.write_timestamp.ok_or_else(|| {
             StorageError::db_error("Auto-commit operation has no write timestamp")
         })?;
+
+        // Clone handles to avoid borrowing issues
+        let vertex_snapshot_handles: Vec<(LabelId, SnapshotHandle)> =
+            operation.mvcc_vertex_snapshot_handles.clone();
+
+        // Unregister MVCC vertex snapshots
+        if !vertex_snapshot_handles.is_empty() {
+            self.persistent.data_store.with_vertex_tables_mut(|vertex_tables| {
+                for (label_id, handle) in &vertex_snapshot_handles {
+                    if let Some(vertex_table) = vertex_tables.get_mut(label_id) {
+                        let _ = vertex_table.unregister_snapshot(*handle);
+                    }
+                }
+                Ok(())
+            })?;
+        }
+
+        // Unregister MVCC edge snapshots
+        if operation.mvcc_edge_snapshot_registered {
+            self.persistent.data_store.with_edge_tables_mut(|edge_tables| {
+                for edge_store in edge_tables.values_mut() {
+                    edge_store.unregister_snapshot(timestamp);
+                }
+                Ok(())
+            })?;
+        }
+
         if committed {
             self.commit_write_timestamp(timestamp);
         } else {
