@@ -16,7 +16,7 @@
 //! ScanEdges(col1, col2)
 //! ```
 
-use crate::core::YieldColumn;
+use crate::core::types::expr::extract_property_refs;
 use crate::query::optimizer::heuristic::context::RewriteContext;
 use crate::query::optimizer::heuristic::pattern::Pattern;
 use crate::query::optimizer::heuristic::result::{RewriteResult, TransformResult};
@@ -45,15 +45,17 @@ impl PushProjectDownScanEdgesRule {
     fn create_scan_edges_with_projection(
         &self,
         scan_node: &ScanEdgesNode,
-        project_columns: &[YieldColumn],
+        project_columns: &[crate::core::YieldColumn],
     ) -> ScanEdgesNode {
-        let col_names: Vec<String> = project_columns
+        let mut properties: Vec<String> = project_columns
             .iter()
-            .map(|col| col.alias.clone())
+            .flat_map(|column| extract_property_refs(&column.expression))
             .collect();
+        properties.sort();
+        properties.dedup();
 
         let mut new_node = scan_node.clone();
-        new_node.set_col_names(col_names);
+        new_node.set_projected_properties(properties);
         new_node
     }
 }
@@ -87,18 +89,40 @@ impl RewriteRule for PushProjectDownScanEdgesRule {
             return Ok(None);
         }
 
-        let input = project_node.input();
-        let scan_node = match input {
-            PlanNodeEnum::ScanEdges(n) => n,
+        let mut new_project = project_node.clone();
+        let new_input = match project_node.input() {
+            PlanNodeEnum::ScanEdges(scan_node) => {
+                let new_scan =
+                    self.create_scan_edges_with_projection(scan_node, project_node.columns());
+                if new_scan.projected_properties() == scan_node.projected_properties() {
+                    return Ok(None);
+                }
+                PlanNodeEnum::ScanEdges(new_scan)
+            }
+            PlanNodeEnum::Filter(filter) => {
+                let PlanNodeEnum::ScanEdges(scan_node) = filter.input() else {
+                    return Ok(None);
+                };
+                let mut new_scan =
+                    self.create_scan_edges_with_projection(scan_node, project_node.columns());
+                let mut properties = new_scan.projected_properties().to_vec();
+                properties.extend(extract_property_refs(filter.condition()));
+                properties.sort();
+                properties.dedup();
+                if properties == scan_node.projected_properties() {
+                    return Ok(None);
+                }
+                new_scan.set_projected_properties(properties);
+                let mut new_filter = filter.clone();
+                new_filter.set_input(PlanNodeEnum::ScanEdges(new_scan));
+                PlanNodeEnum::Filter(new_filter)
+            }
             _ => return Ok(None),
         };
-
-        let columns = project_node.columns();
-        let new_scan_node = self.create_scan_edges_with_projection(scan_node, columns);
-        let new_node = PlanNodeEnum::ScanEdges(new_scan_node);
+        new_project.set_input(new_input);
+        let new_node = PlanNodeEnum::Project(new_project);
 
         let mut result = TransformResult::new();
-        result.erase_curr = true;
         result.add_new_node(new_node);
 
         Ok(Some(result))
@@ -171,8 +195,8 @@ mod tests {
         let scan = PlanNodeEnum::ScanEdges(scan_node);
 
         let columns = vec![
-            create_yield_column(Expression::Variable("src".to_string()), "src"),
-            create_yield_column(Expression::Variable("dst".to_string()), "dst"),
+            create_yield_column(Expression::property(Expression::variable("e"), "src"), "src"),
+            create_yield_column(Expression::property(Expression::variable("e"), "dst"), "dst"),
         ];
         let project =
             ProjectNode::new(scan.clone(), columns).expect("Failed to create ProjectNode");
@@ -184,14 +208,17 @@ mod tests {
 
         assert!(result.is_some());
         let transform = result.expect("Failed to apply rewrite rule");
-        assert!(transform.erase_curr);
+        assert!(!transform.erase_curr);
         assert_eq!(transform.new_nodes.len(), 1);
 
         match &transform.new_nodes[0] {
-            PlanNodeEnum::ScanEdges(node) => {
-                assert_eq!(node.col_names(), &["src", "dst"]);
-            }
-            _ => panic!("Expectation for the ScanEdges node"),
+            PlanNodeEnum::Project(node) => match node.input() {
+                PlanNodeEnum::ScanEdges(scan) => {
+                    assert_eq!(scan.projected_properties(), &["dst", "src"]);
+                }
+                _ => panic!("Expected ScanEdges below Project"),
+            },
+            _ => panic!("Expected Project to be preserved"),
         }
     }
 

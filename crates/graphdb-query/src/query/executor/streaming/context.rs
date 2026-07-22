@@ -11,6 +11,8 @@ use crate::query::executor::streaming::slot::{SlotId, SlotLayout};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use super::parameters::{ParameterFrame, ParameterSchema};
+
 /// Row context for expression evaluation with Value types
 ///
 /// Every context carries an [`Arc<SlotLayout>`] so that `get_variable(name)`
@@ -23,6 +25,8 @@ pub struct ValueRowContext {
     variables: HashMap<String, Value>,
     /// Slot layout — always set; drives all variable resolution
     layout: Arc<SlotLayout>,
+    /// Parameter name→value map (shared via Arc across rows).
+    parameters: Option<Arc<HashMap<String, Value>>>,
 }
 
 impl ValueRowContext {
@@ -32,7 +36,34 @@ impl ValueRowContext {
             row,
             variables: HashMap::new(),
             layout,
+            parameters: None,
         }
+    }
+
+    /// Create a new context with parameter values for `$name` resolution.
+    pub fn with_parameters(
+        row: Vec<Value>,
+        layout: Arc<SlotLayout>,
+        parameters: Arc<HashMap<String, Value>>,
+    ) -> Self {
+        Self {
+            row,
+            variables: HashMap::new(),
+            layout,
+            parameters: Some(parameters),
+        }
+    }
+
+    /// Build a name→value map from schema and frame.
+    pub fn build_parameter_map(
+        schema: &ParameterSchema,
+        frame: &ParameterFrame,
+    ) -> HashMap<String, Value> {
+        schema
+            .params
+            .iter()
+            .filter_map(|p| frame.get(p.slot).map(|v| (p.name.clone(), v.clone())))
+            .collect()
     }
 
     /// Create a new context by building a layout from column names.
@@ -54,8 +85,6 @@ impl ExpressionContext for ValueRowContext {
             return Some(value.clone());
         }
         // Slot-based access via layout — the ONLY resolution path at runtime.
-        // Column-name lookup by hash map is intentionally removed; all
-        // Variable(name) expressions must be resolvable through the layout.
         self.layout
             .slot_id(name)
             .and_then(|slot_id| self.row.get(slot_id).cloned())
@@ -67,6 +96,10 @@ impl ExpressionContext for ValueRowContext {
 
     fn set_variable(&mut self, name: String, value: Value) {
         self.variables.insert(name, value);
+    }
+
+    fn get_parameter(&self, name: &str) -> Option<Value> {
+        self.parameters.as_ref().and_then(|p| p.get(name).cloned())
     }
 }
 
@@ -81,6 +114,7 @@ pub struct BorrowedRowContext<'a> {
     row: &'a [Value],
     variables: HashMap<String, Value>,
     layout: Arc<SlotLayout>,
+    parameters: Option<Arc<HashMap<String, Value>>>,
 }
 
 impl<'a> BorrowedRowContext<'a> {
@@ -89,6 +123,21 @@ impl<'a> BorrowedRowContext<'a> {
             row,
             variables: HashMap::new(),
             layout,
+            parameters: None,
+        }
+    }
+
+    /// Create with parameter values for `$name` resolution.
+    pub fn with_parameters(
+        row: &'a [Value],
+        layout: Arc<SlotLayout>,
+        parameters: Arc<HashMap<String, Value>>,
+    ) -> Self {
+        Self {
+            row,
+            variables: HashMap::new(),
+            layout,
+            parameters: Some(parameters),
         }
     }
 }
@@ -109,6 +158,10 @@ impl ExpressionContext for BorrowedRowContext<'_> {
 
     fn set_variable(&mut self, name: String, value: Value) {
         self.variables.insert(name, value);
+    }
+
+    fn get_parameter(&self, name: &str) -> Option<Value> {
+        self.parameters.as_ref().and_then(|p| p.get(name).cloned())
     }
 }
 

@@ -294,10 +294,9 @@ impl ExpressionEvaluator {
             Expression::PathBuild(_) => Err(ExpressionError::type_error(
                 "Path construction expressions require a runtime context",
             )),
-            Expression::Parameter(name) => Err(ExpressionError::type_error(format!(
-                "The query parameter '{}' requires values provided by the runtime context.",
-                name
-            ))),
+            Expression::Parameter(name) => context
+                .get_parameter(name)
+                .ok_or_else(|| ExpressionError::undefined_parameter(name)),
             Expression::Exists { body } => {
                 let results = context.execute_subquery(body)?;
                 Ok(Value::Bool(!results.is_empty()))

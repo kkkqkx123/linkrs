@@ -6,7 +6,6 @@ use std::{error::Error, fmt};
 
 use crate::core::types::operators::AggregateFunction;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
-use crate::query::planning::plan::logical_plan::LogicalPlan;
 use crate::query::planning::plan::PlanNodeEnum;
 
 /// Identifies the data domain that a partition layout maps ranges over.
@@ -344,16 +343,11 @@ pub struct ExecutionPlan {
     /// Per-partition output channel capacity for P8 backpressure.
     pub max_buffered_chunks: usize,
 
-    /// M3.2: LogicalPlan produced alongside this execution plan.
-    /// Phase 1 wraps the PlanNodeEnum root; future phases will move
-    /// logical operators here and leave physical selection in ExecutionPlan.
-    pub logical_plan: Option<LogicalPlan>,
 }
 
 impl ExecutionPlan {
     /// Create a new execution plan.
     pub fn new(root: Option<PlanNodeEnum>) -> Self {
-        let logical_plan = root.as_ref().map(|r| LogicalPlan::new(r.clone()));
         Self {
             root,
             id: -1,
@@ -362,7 +356,6 @@ impl ExecutionPlan {
             partition_spec: None,
             max_workers: 1,
             max_buffered_chunks: 10,
-            logical_plan,
         }
     }
 

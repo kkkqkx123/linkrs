@@ -12,6 +12,8 @@
 
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 
 use crate::query::optimizer::heuristic::context::RewriteContext;
 use crate::query::optimizer::heuristic::result::RewriteResult;
@@ -120,8 +122,15 @@ impl PlanRewriter {
         let mut current_node = node;
         let mut changed = true;
         let mut iterations = 0;
+        let mut fingerprints = HashSet::new();
 
         while changed && iterations < self.max_iterations.load(Ordering::Relaxed) {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            format!("{:?}", current_node).hash(&mut hasher);
+            if !fingerprints.insert(hasher.finish()) {
+                log::warn!("Stopped heuristic rewrite after detecting a plan cycle");
+                break;
+            }
             changed = false;
             iterations += 1;
 

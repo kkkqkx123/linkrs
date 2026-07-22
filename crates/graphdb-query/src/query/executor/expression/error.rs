@@ -155,6 +155,14 @@ impl ExpressionError {
         )
     }
 
+    /// Create undefined parameter error.
+    pub fn undefined_parameter(name: impl Into<String>) -> Self {
+        Self::new(
+            ExpressionErrorType::UndefinedVariable,
+            format!("Undefined parameter: {}", name.into()),
+        )
+    }
+
     /// Create undefined function error
     pub fn undefined_function(name: impl Into<String>) -> Self {
         Self::new(

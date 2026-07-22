@@ -627,7 +627,7 @@ impl QueryPlanCache {
     ///
     /// M1.6: produces a hash of the parameter *types* (not values) so that
     /// plans with different param type declarations get different cache keys.
-    fn compute_param_type_signature(params: &[ParamPosition]) -> Option<u64> {
+    pub(crate) fn compute_param_type_signature(params: &[ParamPosition]) -> Option<u64> {
         if params.is_empty() {
             return None;
         }

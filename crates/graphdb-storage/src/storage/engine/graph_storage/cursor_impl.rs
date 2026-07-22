@@ -156,23 +156,19 @@ impl VertexCursor for GraphVertexCursor {
 
                 let label_id = tags.labels[self.current_table_idx];
                 if let Some(table) = tables.get(&label_id) {
-                    if let Some(record) = table.get_by_internal_id(internal_id, ts) {
+                    if let Some(record) = table.get_projected_by_internal_id(
+                        internal_id,
+                        ts,
+                        projection.as_deref(),
+                    ) {
                         let vid = record.vid;
                         let tag_name = tags
                             .names
                             .get(&label_id)
                             .map(|s| s.as_str())
                             .unwrap_or("unknown");
-                        let props: HashMap<String, Value> = record
-                            .properties
-                            .iter()
-                            .filter(|(name, _)| {
-                                projection
-                                    .as_ref()
-                                    .is_none_or(|projection| projection.iter().any(|p| name == p))
-                            })
-                            .cloned()
-                            .collect();
+                        let props: HashMap<String, Value> =
+                            record.properties.iter().cloned().collect();
                         let vertex_tag = Tag::new(tag_name.to_string(), props.clone());
 
                         if self.offset_remaining > 0 {

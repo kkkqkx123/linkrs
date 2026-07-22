@@ -694,12 +694,11 @@ impl<'a> ExprParser<'a> {
                 ctx.next_token();
                 let var_name = ctx.expect_identifier()?;
                 let mut span = ctx.merge_span(start_pos, ctx.current_position());
-                let mut expr = Expression::variable(format!("${}", var_name));
+                let mut expr = Expression::Parameter(var_name);
 
                 if ctx.match_token(TokenKind::Dot) {
                     let prop_name = ctx.expect_identifier()?;
                     expr = Expression::property(expr, prop_name);
-                    // Update the `<span>` element to include access to the attributes.
                     span = ctx.merge_span(start_pos, ctx.current_position());
                 }
 

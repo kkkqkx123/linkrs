@@ -255,6 +255,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
                 .and_then(|context| context.transaction_id)
         });
         request_context.auto_commit = ctx.auto_commit;
+        request_context.parameters = ctx.parameters.clone().unwrap_or_default();
         request_context.read_only = operation_context
             .as_ref()
             .is_some_and(|context| context.read_only);
@@ -383,6 +384,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
                 .and_then(|context| context.transaction_id)
         });
         request_context.auto_commit = ctx.auto_commit;
+        request_context.parameters = ctx.parameters.clone().unwrap_or_default();
         request_context.read_only = operation_context
             .as_ref()
             .is_some_and(|context| context.read_only);

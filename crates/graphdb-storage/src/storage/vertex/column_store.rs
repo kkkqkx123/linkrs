@@ -1206,6 +1206,23 @@ impl ColumnStore {
             .collect()
     }
 
+    /// Read only the requested columns for one row.
+    ///
+    /// Unlike `get`, this does not touch or decode unrequested columns.
+    pub fn get_projected(
+        &self,
+        row_idx: usize,
+        projection: &[String],
+    ) -> Vec<(String, Option<Value>)> {
+        projection
+            .iter()
+            .filter_map(|name| {
+                self.get_column(name)
+                    .map(|column| (name.clone(), column.get(row_idx)))
+            })
+            .collect()
+    }
+
     pub fn set_property(
         &mut self,
         row_idx: usize,

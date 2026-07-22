@@ -124,15 +124,32 @@ impl DataChunk {
 
     /// Create a DataChunk with explicit SlotLayout.
     /// Schema is derived from the layout's slot metadata.
+    ///
+    /// Panics if row width does not match layout width.
     pub fn new_with_layout(rows: Vec<Vec<Value>>, layout: Arc<SlotLayout>) -> Self {
-        debug_assert!(
-            layout.is_empty()
-                || rows.is_empty()
-                || rows.iter().all(|row| row.len() == layout.len()),
-            "DataChunk::new_with_layout: row width {} does not match layout width {}",
-            rows.first().map(Vec::len).unwrap_or(0),
-            layout.len()
-        );
+        Self::try_new_with_layout(rows, layout).expect("DataChunk row width mismatch")
+    }
+
+    /// Fallible variant of [`new_with_layout`](Self::new_with_layout).
+    ///
+    /// Returns `Err` when row width does not match layout width, instead of
+    /// panicking. Use this in production paths where the invariant is not
+    /// structurally guaranteed.
+    pub fn try_new_with_layout(
+        rows: Vec<Vec<Value>>,
+        layout: Arc<SlotLayout>,
+    ) -> Result<Self, crate::core::error::QueryError> {
+        let row_width = rows.first().map(Vec::len).unwrap_or(0);
+        if !layout.is_empty()
+            && !rows.is_empty()
+            && !rows.iter().all(|row| row.len() == layout.len())
+        {
+            return Err(crate::core::error::QueryError::execution(format!(
+                "DataChunk::new_with_layout: row width {} does not match layout width {}",
+                row_width,
+                layout.len()
+            )));
+        }
         let columns: Vec<ColumnInfo> = layout
             .slots
             .iter()
@@ -146,12 +163,12 @@ impl DataChunk {
             })
             .collect();
         let schema = Arc::new(Schema::new(columns));
-        Self {
+        Ok(Self {
             rows,
             schema,
             layout,
             memory_reservation: None,
-        }
+        })
     }
 
     /// Create a DataChunk from rows, inferring schema and generating col_N names.

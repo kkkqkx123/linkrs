@@ -170,7 +170,7 @@ impl OptimizerEngine {
             heuristic_rewriter,
             partitioning_planner: PartitioningPlanner::new(PartitioningConfig::default()),
             enable_heuristic: true,
-            enable_cost_based: true,
+            enable_cost_based: false,
             max_heuristic_iterations: 100,
         }
     }
@@ -386,36 +386,11 @@ impl OptimizerEngine {
 
     /// Apply cost-based optimization strategies
     fn apply_cost_based(&self, plan: ExecutionPlan) -> OptimizeResult<ExecutionPlan> {
-        use crate::query::optimizer::context::OptimizationContext;
-        use crate::query::optimizer::cost_based::trait_def::StrategyChain;
-        use crate::query::optimizer::cost_based::TraversalDirectionOptimizer;
-
-        // Create optimization context
-        let mut ctx = OptimizationContext::from(self);
-
-        // Perform batch plan analysis if we have a root
-        let mut current_plan = plan;
-        if let Some(ref root) = current_plan.root {
-            let batch_analyzer = self.batch_plan_analyzer();
-            let batch_analysis = batch_analyzer.analyze(root);
-            ctx.set_batch_plan_analysis(batch_analysis);
-
-            // Create optimizers
-            let traversal_direction_optimizer =
-                TraversalDirectionOptimizer::new(self.cost_calculator.clone());
-
-            // Create strategy chain with all registered cost-based strategies
-            let chain = StrategyChain::new().add_strategy(Box::new(traversal_direction_optimizer));
-
-            // Apply strategies to the plan root
-            let optimized_root = chain
-                .apply(root.clone(), &ctx)
-                .map_err(|e| OptimizeError::CostBasedFailed(e.to_string()))?;
-
-            current_plan.set_root(optimized_root);
-        }
-
-        Ok(current_plan)
+        // Cost-based selection remains disabled until versioned catalog
+        // statistics are connected to the production pipeline. Returning the
+        // plan unchanged is preferable to presenting a root-only strategy as
+        // a cost-based optimizer.
+        Ok(plan)
     }
 
     /// Get the heuristic rewriter

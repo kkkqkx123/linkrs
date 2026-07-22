@@ -16,8 +16,14 @@ use graphdb::query::executor::streaming::operators::join_operator::JoinOperator;
 use graphdb::query::executor::streaming::operators::set_operator::SetOperator;
 use graphdb::query::executor::streaming::operators::source_operator::SourceOperator;
 use graphdb::query::executor::streaming::operators::unary_operator::UnaryOperator;
+use graphdb::query::executor::streaming::operators::unary_operator::UnaryOperatorState;
 
 mod common;
+
+#[allow(dead_code)]
+fn unary_state() -> UnaryOperatorState {
+    UnaryOperatorState { parameters: None }
+}
 
 // ============ Test Helpers ============
 
@@ -97,6 +103,7 @@ fn test_filter_in_chain() {
         scan,
         UnaryOperator::Filter {
             predicate: Expression::Literal(Value::Bool(true)),
+            state: unary_state(),
         },
     );
     filter.open().unwrap();
@@ -114,6 +121,7 @@ fn test_project_in_chain() {
         UnaryOperator::Project {
             output_expressions: vec![Expression::Literal(Value::Int(0))],
             output_col_names: vec![],
+            state: unary_state(),
         },
     );
     project.open().unwrap();
@@ -182,6 +190,7 @@ fn test_pipeline_scan_filter() {
         scan,
         UnaryOperator::Filter {
             predicate: Expression::Literal(Value::Bool(true)),
+            state: unary_state(),
         },
     );
     pipeline.open().unwrap();
@@ -202,6 +211,7 @@ fn test_pipeline_scan_project() {
                 Expression::Literal(Value::String("const".to_string())),
             ],
             output_col_names: vec![],
+            state: unary_state(),
         },
     );
     pipeline.open().unwrap();
@@ -240,6 +250,7 @@ fn test_pipeline_scan_filter_project() {
         scan,
         UnaryOperator::Filter {
             predicate: Expression::Literal(Value::Bool(true)),
+            state: unary_state(),
         },
     ));
     let mut pipeline = StreamingExecutor::Unary(
@@ -248,6 +259,7 @@ fn test_pipeline_scan_filter_project() {
         UnaryOperator::Project {
             output_expressions: vec![Expression::Literal(Value::Int(42))],
             output_col_names: vec![],
+            state: unary_state(),
         },
     );
     pipeline.open().unwrap();
@@ -264,6 +276,7 @@ fn test_pipeline_scan_filter_limit() {
         scan,
         UnaryOperator::Filter {
             predicate: Expression::Literal(Value::Bool(true)),
+            state: unary_state(),
         },
     ));
     let mut pipeline = StreamingExecutor::Unary(
@@ -475,6 +488,7 @@ fn test_complex_pipeline_4step() {
         scan,
         UnaryOperator::Filter {
             predicate: Expression::Literal(Value::Bool(true)),
+            state: unary_state(),
         },
     ));
     let project = Box::new(StreamingExecutor::Unary(
@@ -483,6 +497,7 @@ fn test_complex_pipeline_4step() {
         UnaryOperator::Project {
             output_expressions: vec![Expression::Literal(Value::String("col".to_string()))],
             output_col_names: vec![],
+            state: unary_state(),
         },
     ));
     let mut limit = StreamingExecutor::Unary(
@@ -509,6 +524,7 @@ fn test_union_of_filtered_scans() {
         left_scan,
         UnaryOperator::Filter {
             predicate: Expression::Literal(Value::Bool(true)),
+            state: unary_state(),
         },
     ));
     let right_scan = Box::new(create_scan_executor(10));
@@ -517,6 +533,7 @@ fn test_union_of_filtered_scans() {
         right_scan,
         UnaryOperator::Filter {
             predicate: Expression::Literal(Value::Bool(true)),
+            state: unary_state(),
         },
     ));
 
@@ -546,6 +563,7 @@ fn test_filter_with_empty_input() {
         empty_scan,
         UnaryOperator::Filter {
             predicate: Expression::Literal(Value::Bool(true)),
+            state: unary_state(),
         },
     );
     filter.open().unwrap();

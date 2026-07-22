@@ -66,7 +66,23 @@ impl PhysicalPlanMaterializer {
             mutable_bindings.build_parameter_frame(&plan.parameter_schema);
         }
 
-        let runtime = Self::create_runtime(&mutable_bindings);
+        let parameter_values = if let Some(ref frame) = mutable_bindings.parameter_frame {
+            let map: std::collections::HashMap<String, crate::core::Value> = plan
+                .parameter_schema
+                .params
+                .iter()
+                .filter_map(|p| frame.get(p.slot).map(|v| (p.name.clone(), v.clone())))
+                .collect();
+            if map.is_empty() {
+                None
+            } else {
+                Some(std::sync::Arc::new(map))
+            }
+        } else {
+            None
+        };
+
+        let runtime = Self::create_runtime(&mutable_bindings, parameter_values);
 
         let topo_order = Self::topological_order(&plan.fragments)?;
 
@@ -353,15 +369,11 @@ impl PhysicalPlanMaterializer {
     /// compatibility.  Returns an error description listing all violations.
     fn validate_bindings(plan: &PhysicalPlan, bindings: &QueryBindings) -> Result<(), QueryError> {
         let schema = &plan.parameter_schema;
-        if schema.is_empty() {
-            return Ok(());
-        }
-
         let mut errors: Vec<String> = Vec::new();
 
         // Check missing required params.
         for param in &schema.params {
-            if !bindings.parameters.contains_key(&param.name) {
+            if !bindings.parameters.contains_key(&param.name) && param.default.is_none() {
                 errors.push(format!("Missing required parameter: {}", param.name));
             }
         }
@@ -422,7 +434,10 @@ impl PhysicalPlanMaterializer {
     /// M2: injects transaction scope and session controller into the runtime
     /// so that operators can check write permissions and transaction commands
     /// can drive real state transitions.
-    fn create_runtime(bindings: &QueryBindings) -> Arc<ExecutionRuntime> {
+    fn create_runtime(
+        bindings: &QueryBindings,
+        parameter_values: Option<std::sync::Arc<std::collections::HashMap<String, crate::core::Value>>>,
+    ) -> Arc<ExecutionRuntime> {
         let mut runtime = ExecutionRuntime::new(
             crate::query::executor::streaming::runtime::QueryIdentity {
                 query_id: bindings.query_id,
@@ -446,6 +461,11 @@ impl PhysicalPlanMaterializer {
             ref scope => {
                 runtime.set_transaction_scope(scope.clone());
             }
+        }
+
+        // M1.4: inject the parameter name→value map so operators can resolve $name.
+        if let Some(values) = parameter_values {
+            runtime.set_parameter_values(values);
         }
 
         // M6: shared scheduler takes priority.

@@ -183,6 +183,15 @@ impl VertexTable {
     }
 
     pub fn get_by_internal_id(&self, internal_id: u32, ts: Timestamp) -> Option<VertexRecord> {
+        self.get_projected_by_internal_id(internal_id, ts, None)
+    }
+
+    pub fn get_projected_by_internal_id(
+        &self,
+        internal_id: u32,
+        ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> Option<VertexRecord> {
         if !self.is_open {
             return None;
         }
@@ -192,7 +201,10 @@ impl VertexTable {
         }
 
         let external_id = self.id_indexer.get_key(internal_id)?;
-        let props = self.columns.get(internal_id as usize);
+        let props = projection.map_or_else(
+            || self.columns.get(internal_id as usize),
+            |names| self.columns.get_projected(internal_id as usize, names),
+        );
         let properties: Vec<(String, Value)> = props
             .into_iter()
             .filter_map(|(name, opt_val)| opt_val.map(|v| (name, v)))

@@ -93,6 +93,7 @@ pub enum SourceSpec {
         limit: Option<usize>,
         edge_type: Option<String>,
         col_names: Vec<String>,
+        projected_properties: Vec<String>,
     },
     GetVertices {
         space_name: String,

@@ -65,54 +65,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
 
         let query_context = Arc::new(query_context);
 
-        let schema_version = Some(
-            self.schema_generation
-                .load(std::sync::atomic::Ordering::Relaxed),
-        );
-        let index_version = schema_version;
-
-        if let Some(cached_plan) = self.plan_cache.get_with_full_space(
-            query_text,
-            space_name.clone(),
-            schema_version,
-            index_version,
-        ) {
-            log::debug!("Query plan cache hit");
-            let execute_start = Instant::now();
-            let txn_scope = if cached_plan.is_dml {
-                Self::scope_for_bound_request(query_context.request_context())
-            } else if cached_plan.is_transaction {
-                TransactionScope::CommandScope
-            } else {
-                TransactionScope::None
-            };
-            let result = self.execute_compiled_with_scope(
-                cached_plan.plan.clone(),
-                query_context.clone(),
-                ResultSink::Materialize,
-                txn_scope,
-            );
-            let result = match result {
-                Ok(result) => {
-                    self.finalize_operation_storage(operation_storage.as_ref(), true)?;
-                    result
-                }
-                Err(error) => {
-                    self.finalize_operation_storage(operation_storage.as_ref(), false)?;
-                    return Err(error);
-                }
-            };
-            let execution_time_ms = execute_start.elapsed().as_millis() as f64;
-            self.plan_cache.record_execution_with_space(
-                query_text,
-                execution_time_ms,
-                space_name,
-                schema_version,
-                index_version,
-            );
-            return Ok(result);
-        }
-
         let validation_info =
             self.validate_query_with_context(parser_result.ast.clone(), query_context.clone())?;
 
@@ -130,35 +82,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
 
         let is_dml = Self::statement_requires_auto_commit(validated.ast.stmt());
         let is_transaction = Self::statement_is_transaction(validated.ast.stmt());
-        let is_ddl = matches!(
-            validated.ast.stmt(),
-            crate::query::parser::ast::Stmt::Create(_)
-                | crate::query::parser::ast::Stmt::Drop(_)
-                | crate::query::parser::ast::Stmt::Alter(_)
-                | crate::query::parser::ast::Stmt::ClearSpace(_)
-                | crate::query::parser::ast::Stmt::CreateFulltextIndex(_)
-                | crate::query::parser::ast::Stmt::DropFulltextIndex(_)
-                | crate::query::parser::ast::Stmt::AlterFulltextIndex(_)
-                | crate::query::parser::ast::Stmt::CreateVectorIndex(_)
-                | crate::query::parser::ast::Stmt::DropVectorIndex(_)
-        );
-        if is_ddl {
-            self.schema_generation
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            if let Some(ref name) = space_name {
-                let removed = self.plan_cache.invalidate_space(name);
-                if removed > 0 {
-                    log::info!(
-                        "Invalidated {} cached plans for space '{}' after DDL",
-                        removed,
-                        name
-                    );
-                }
-            }
-        }
-
-        let execute_start = Instant::now();
-        let (physical_plan, _) = self.compile(query_context.clone(), &validated)?;
+        let is_ddl = Self::statement_is_ddl(validated.ast.stmt());
+        let physical_plan =
+            self.compile_or_get_cached(query_text, query_context.clone(), &validated)?;
         let txn_scope = if is_dml {
             Self::scope_for_request(validated.ast.stmt(), query_context.request_context())
         } else if is_transaction {
@@ -175,6 +101,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let result = match result {
             Ok(result) => {
                 self.finalize_operation_storage(operation_storage.as_ref(), true)?;
+                if is_ddl {
+                    self.invalidate_after_ddl(space_name.as_deref());
+                }
                 result
             }
             Err(error) => {
@@ -182,55 +111,24 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 return Err(error);
             }
         };
-        let execution_time_ms = execute_start.elapsed().as_millis() as f64;
-
-        let should_cache = !matches!(
-            validated.ast.stmt(),
-            crate::query::parser::ast::Stmt::Insert(_)
-        );
-        if should_cache {
-            let param_positions = self.param_handler.extract_params(query_text);
-
-            let dependent_tables: Vec<String> = validated
-                .validation_info
-                .semantic_info
-                .referenced_tags
-                .iter()
-                .chain(
-                    validated
-                        .validation_info
-                        .semantic_info
-                        .referenced_edges
-                        .iter(),
-                )
-                .cloned()
-                .collect();
-
-            let index_version = schema_version;
-
-            self.plan_cache.put_with_context(
-                query_text,
-                physical_plan,
-                param_positions,
-                crate::query::cache::plan_cache::PlanCachePutContext {
-                    dependent_tables,
-                    space_name: space_name.clone(),
-                    schema_version,
-                    index_version,
-                    is_dml,
-                    is_transaction,
-                },
-            );
-            self.plan_cache.record_execution_with_space(
-                query_text,
-                execution_time_ms,
-                space_name,
-                schema_version,
-                index_version,
-            );
-        }
-
         Ok(result)
+    }
+
+    fn invalidate_after_ddl(&self, space_name: Option<&str>) {
+        self.schema_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Some(space_name) = space_name {
+            let removed = self.plan_cache.invalidate_space(space_name);
+            if removed > 0 {
+                log::info!(
+                    "Invalidated {} cached plans for space '{}' after committed DDL",
+                    removed,
+                    space_name
+                );
+            }
+        } else {
+            self.plan_cache.clear();
+        }
     }
 
     fn bind_auto_commit_storage(&self) -> DBResult<Arc<RwLock<dyn QueryStorage>>> {
@@ -307,7 +205,17 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             _ => {}
         }
 
-        let (physical_plan, _) = self.compile(query_context.clone(), &validated)?;
+        if Self::statement_is_ddl(validated.ast.stmt()) {
+            let result = self.execute_query_with_request_scope(
+                query_text,
+                query_context.request_context_arc(),
+                space_info,
+                transaction_id,
+            )?;
+            return Ok(StreamingQueryResult::from_execution_result(result));
+        }
+        let physical_plan =
+            self.compile_or_get_cached(query_text, query_context.clone(), &validated)?;
         let scope = Self::scope_for_request(validated.ast.stmt(), query_context.request_context());
         self.execute_compiled_stream_with_scope(
             physical_plan,
@@ -356,7 +264,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             _ => {}
         }
 
-        let (physical_plan, _) = self.compile(query_context.clone(), &validated)?;
+        let physical_plan =
+            self.compile_or_get_cached(query_text, query_context.clone(), &validated)?;
         let scope = if let Some(transaction_id) = transaction_id {
             if query_context.request_context().auto_commit {
                 TransactionScope::auto_commit(transaction_id)
@@ -373,12 +282,16 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         } else {
             TransactionScope::None
         };
-        self.execute_compiled_with_scope(
+        let result = self.execute_compiled_with_scope(
             physical_plan,
-            query_context,
+            query_context.clone(),
             ResultSink::Materialize,
             scope,
-        )
+        )?;
+        if Self::statement_is_ddl(&stmt) {
+            self.invalidate_after_ddl(query_context.space_name().as_deref());
+        }
+        Ok(result)
     }
 
     fn scope_for_request(
@@ -449,6 +362,21 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             crate::query::parser::ast::Stmt::BeginTransaction(..)
                 | crate::query::parser::ast::Stmt::CommitTransaction(..)
                 | crate::query::parser::ast::Stmt::RollbackTransaction(..)
+        )
+    }
+
+    fn statement_is_ddl(stmt: &crate::query::parser::ast::Stmt) -> bool {
+        matches!(
+            stmt,
+            crate::query::parser::ast::Stmt::Create(_)
+                | crate::query::parser::ast::Stmt::Drop(_)
+                | crate::query::parser::ast::Stmt::Alter(_)
+                | crate::query::parser::ast::Stmt::ClearSpace(_)
+                | crate::query::parser::ast::Stmt::CreateFulltextIndex(_)
+                | crate::query::parser::ast::Stmt::DropFulltextIndex(_)
+                | crate::query::parser::ast::Stmt::AlterFulltextIndex(_)
+                | crate::query::parser::ast::Stmt::CreateVectorIndex(_)
+                | crate::query::parser::ast::Stmt::DropVectorIndex(_)
         )
     }
 

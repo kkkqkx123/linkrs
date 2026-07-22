@@ -215,15 +215,76 @@ fn test_session_execute() {
 fn test_session_execute_with_params() {
     let test_db = create_test_database();
     let db = &test_db.db;
-    let session = db.session().expect("创建会话失败");
+    let mut session = db.session().expect("create session failed");
 
-    let space_config = SpaceConfig::default();
     session
-        .create_space("test_space", space_config)
-        .expect("创建空间失败");
+        .create_space("param_space", SpaceConfig::default())
+        .expect("create space failed");
+    session
+        .use_space("param_space")
+        .expect("use space failed");
 
-    let spaces = session.list_spaces().expect("列出空间失败");
-    assert!(spaces.contains(&"test_space".to_string()));
+    session
+        .execute("CREATE TAG IF NOT EXISTS person(name STRING NOT NULL, age INT)")
+        .expect("CREATE TAG failed");
+    session
+        .execute("INSERT VERTEX person(name, age) VALUES 'p1':('Alice', 30)")
+        .expect("INSERT failed");
+    session
+        .execute("INSERT VERTEX person(name, age) VALUES 'p2':('Bob', 25)")
+        .expect("INSERT failed");
+
+    let mut params = HashMap::new();
+    params.insert("name".to_string(), Value::String("Alice".to_string()));
+
+    let result = session
+        .execute_with_params(
+            "MATCH (p:person) WHERE p.name == $name RETURN p.age",
+            params,
+        )
+        .expect("parameterized query should succeed");
+
+    assert_eq!(result.len(), 1, "should return exactly one row");
+    let row = result.first().expect("row should exist");
+    assert_eq!(row.get_by_index(0), Some(&Value::Int(30)));
+
+    let mut params2 = HashMap::new();
+    params2.insert("name".to_string(), Value::String("Bob".to_string()));
+
+    let result2 = session
+        .execute_with_params(
+            "MATCH (p:person) WHERE p.name == $name RETURN p.age",
+            params2,
+        )
+        .expect("parameterized query should succeed with different param value");
+
+    assert_eq!(result2.len(), 1, "should return exactly one row");
+    let row2 = result2.first().expect("row should exist");
+    assert_eq!(row2.get_by_index(0), Some(&Value::Int(25)));
+}
+
+#[test]
+fn test_session_execute_with_params_unknown_param() {
+    let test_db = create_test_database();
+    let db = &test_db.db;
+    let mut session = db.session().expect("create session failed");
+
+    session
+        .create_space("param_space_up", SpaceConfig::default())
+        .expect("create space failed");
+    session
+        .use_space("param_space_up")
+        .expect("use space failed");
+
+    let mut params = HashMap::new();
+    params.insert("unknown".to_string(), Value::String("value".to_string()));
+
+    let result =
+        session.execute_with_params("SHOW SPACES", params);
+    assert!(
+        result.is_err(),
+        "unknown parameter for non-parameterized query should fail"
+    );
 }
 
 #[test]

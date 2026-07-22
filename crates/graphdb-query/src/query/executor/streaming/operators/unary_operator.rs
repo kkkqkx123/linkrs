@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::core::error::QueryError;
@@ -12,13 +13,20 @@ use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::slot::SlotLayout;
 
 #[derive(Debug)]
+pub struct UnaryOperatorState {
+    pub parameters: Option<Arc<HashMap<String, Value>>>,
+}
+
+#[derive(Debug)]
 pub enum UnaryOperator {
     Filter {
         predicate: Expression,
+        state: UnaryOperatorState,
     },
     Project {
         output_expressions: Vec<Expression>,
         output_col_names: Vec<String>,
+        state: UnaryOperatorState,
     },
     Limit {
         offset: u32,
@@ -31,6 +39,7 @@ pub enum UnaryOperator {
     },
     Assign {
         assignments: Vec<(String, Expression)>,
+        state: UnaryOperatorState,
     },
     Remove {
         columns_to_remove: Vec<String>,
@@ -45,6 +54,7 @@ pub enum UnaryOperator {
     },
     AppendVertices {
         vertex_properties: Vec<(String, Expression)>,
+        state: UnaryOperatorState,
     },
     Sample {
         count: u64,
@@ -52,12 +62,14 @@ pub enum UnaryOperator {
     },
 }
 
-impl UnaryOperator {
+    impl UnaryOperator {
     /// Create a UnaryOperator with fresh mutable state from an immutable spec.
     pub fn from_spec(spec: &super::spec::UnarySpec) -> Self {
+        let state = UnaryOperatorState { parameters: None };
         match spec {
             super::spec::UnarySpec::Filter { predicate } => Self::Filter {
                 predicate: predicate.clone(),
+                state,
             },
             super::spec::UnarySpec::Project {
                 output_expressions,
@@ -65,6 +77,7 @@ impl UnaryOperator {
             } => Self::Project {
                 output_expressions: output_expressions.clone(),
                 output_col_names: output_col_names.clone(),
+                state,
             },
             super::spec::UnarySpec::Limit { offset, limit } => Self::Limit {
                 offset: *offset,
@@ -74,6 +87,7 @@ impl UnaryOperator {
             },
             super::spec::UnarySpec::Assign { assignments } => Self::Assign {
                 assignments: assignments.clone(),
+                state,
             },
             super::spec::UnarySpec::Remove { columns_to_remove } => Self::Remove {
                 columns_to_remove: columns_to_remove.clone(),
@@ -88,6 +102,7 @@ impl UnaryOperator {
             },
             super::spec::UnarySpec::AppendVertices { vertex_properties } => Self::AppendVertices {
                 vertex_properties: vertex_properties.clone(),
+                state,
             },
             super::spec::UnarySpec::Sample { count } => Self::Sample {
                 count: *count,
@@ -98,9 +113,19 @@ impl UnaryOperator {
 
     pub fn open(
         &mut self,
-        _base: &mut OperatorBase,
+        base: &mut OperatorBase,
         input: &mut StreamingExecutor,
     ) -> Result<(), QueryError> {
+        let params = base.runtime.as_ref().and_then(|rt| rt.parameter_values());
+        match self {
+            Self::Filter { state, .. }
+            | Self::Project { state, .. }
+            | Self::Assign { state, .. }
+            | Self::AppendVertices { state, .. } => {
+                state.parameters = params;
+            }
+            _ => {}
+        }
         match self {
             Self::Filter { .. }
             | Self::Project { .. }
@@ -112,7 +137,7 @@ impl UnaryOperator {
             | Self::AppendVertices { .. }
             | Self::Sample { .. } => {
                 input.open()?;
-                _base.lifecycle.mark_opened();
+                base.lifecycle.mark_opened();
                 Ok(())
             }
         }
@@ -124,14 +149,18 @@ impl UnaryOperator {
         input: &mut StreamingExecutor,
     ) -> Result<Option<DataChunk>, QueryError> {
         match self {
-            Self::Filter { predicate } => loop {
+            Self::Filter { predicate, state } => loop {
                 match input.advance()? {
                     Some(mut chunk) => {
                         let layout = chunk.get_layout();
                         let mut selected = Vec::new();
                         for i in 0..chunk.len() {
                             let row = &chunk.rows[i];
-                            let mut context = BorrowedRowContext::new(row, layout.clone());
+                            let mut context = if let Some(ref params) = state.parameters {
+                                BorrowedRowContext::with_parameters(row, layout.clone(), params.clone())
+                            } else {
+                                BorrowedRowContext::new(row, layout.clone())
+                            };
                             let keep = match ExpressionEvaluator::evaluate(predicate, &mut context)
                             {
                                 Ok(value) => match value {
@@ -169,12 +198,17 @@ impl UnaryOperator {
             Self::Project {
                 output_expressions,
                 output_col_names: _,
+                state,
             } => loop {
                 if let Some(chunk) = input.advance()? {
                     let input_layout = chunk.get_layout();
                     let mut projected_rows = Vec::new();
                     for row in chunk.rows {
-                        let mut context = ValueRowContext::new(row, input_layout.clone());
+                        let mut context = if let Some(ref params) = state.parameters {
+                            ValueRowContext::with_parameters(row, input_layout.clone(), params.clone())
+                        } else {
+                            ValueRowContext::new(row, input_layout.clone())
+                        };
                         let mut projected_row = Vec::new();
                         for expr in output_expressions.iter() {
                             match ExpressionEvaluator::evaluate(expr, &mut context) {
@@ -253,14 +287,18 @@ impl UnaryOperator {
                 }
                 Ok(None)
             }
-            Self::Assign { assignments } => loop {
+            Self::Assign { assignments, state } => loop {
                 if let Some(chunk) = input.advance()? {
                     let layout = chunk.get_layout();
                     let mut result_rows = vec![];
                     for row in chunk.rows {
                         let mut new_row = row.clone();
                         for (_col_name, expr) in assignments.iter() {
-                            let mut context = ValueRowContext::new(row.clone(), layout.clone());
+                            let mut context = if let Some(ref params) = state.parameters {
+                                ValueRowContext::with_parameters(row.clone(), layout.clone(), params.clone())
+                            } else {
+                                ValueRowContext::new(row.clone(), layout.clone())
+                            };
                             match ExpressionEvaluator::evaluate(expr, &mut context) {
                                 Ok(val) => new_row.push(val),
                                 Err(_) => {
@@ -356,13 +394,17 @@ impl UnaryOperator {
                 }
                 Ok(None)
             }
-            Self::AppendVertices { vertex_properties } => loop {
+            Self::AppendVertices { vertex_properties, state } => loop {
                 if let Some(chunk) = input.advance()? {
                     let layout = chunk.get_layout();
                     let mut result_rows = Vec::new();
                     for row in chunk.rows {
                         let mut new_row = row.clone();
-                        let mut ctx = ValueRowContext::new(row.clone(), layout.clone());
+                        let mut ctx = if let Some(ref params) = state.parameters {
+                            ValueRowContext::with_parameters(row.clone(), layout.clone(), params.clone())
+                        } else {
+                            ValueRowContext::new(row.clone(), layout.clone())
+                        };
                         for (_prop_name, expr) in vertex_properties.iter() {
                             match ExpressionEvaluator::evaluate(expr, &mut ctx) {
                                 Ok(val) => new_row.push(val),

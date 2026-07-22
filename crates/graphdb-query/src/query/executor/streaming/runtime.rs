@@ -265,6 +265,10 @@ pub struct ExecutionRuntime {
     /// `Apply` sets this before pulling from its right child; `Argument`
     /// reads the current row and layout to produce output.
     correlation_frame: Mutex<Option<(Arc<SlotLayout>, Vec<Value>)>>,
+
+    /// Runtime parameter name→value map, bound at materialization time.
+    /// Operators read this to resolve `Expression::Parameter` references.
+    pub parameter_values: Option<Arc<HashMap<String, Value>>>,
 }
 
 impl ExecutionRuntime {
@@ -305,6 +309,7 @@ impl ExecutionRuntime {
             vector_coordinator,
             state_arena: Mutex::new(StateArenaSet::new()),
             correlation_frame: Mutex::new(None),
+            parameter_values: None,
         }
     }
 
@@ -387,6 +392,16 @@ impl ExecutionRuntime {
     /// Return the session-level transaction controller, if set.
     pub fn session_controller(&self) -> Option<Arc<SessionTransactionController>> {
         self.session_controller.read().clone()
+    }
+
+    /// Set the parameter name→value map for this execution instance.
+    pub fn set_parameter_values(&mut self, values: Arc<HashMap<String, Value>>) {
+        self.parameter_values = Some(values);
+    }
+
+    /// Return the parameter name→value map, if bound.
+    pub fn parameter_values(&self) -> Option<Arc<HashMap<String, Value>>> {
+        self.parameter_values.clone()
     }
 
     /// Set the transaction scope for this execution.

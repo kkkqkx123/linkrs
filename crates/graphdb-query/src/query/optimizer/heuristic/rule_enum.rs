@@ -154,12 +154,13 @@ define_rewrite_rules! {
         PushFilterDownAllPaths(predicate_pushdown::PushFilterDownAllPathsRule),
 
         // ==================== Projection Pushdown Rules ====================
+        // NOTE: PushProjectDown{GetVertices,GetEdges,GetNeighbors,EdgeIndexScan}
+        // are intentionally excluded. Those rules erase the Project node and
+        // treat output aliases as raw property references, which is unsound
+        // for computed expressions, aliases, and functions. Re-enable only
+        // after implementing typed required-property pruning (Phase 4).
         PushProjectDownScanVertices(projection_pushdown::PushProjectDownScanVerticesRule),
         PushProjectDownScanEdges(projection_pushdown::PushProjectDownScanEdgesRule),
-        PushProjectDownGetVertices(projection_pushdown::PushProjectDownGetVerticesRule),
-        PushProjectDownGetEdges(projection_pushdown::PushProjectDownGetEdgesRule),
-        PushProjectDownGetNeighbors(projection_pushdown::PushProjectDownGetNeighborsRule),
-        PushProjectDownEdgeIndexScan(projection_pushdown::PushProjectDownEdgeIndexScanRule),
 
         // ==================== Rules for Pushing Limits Down ====================
         PushLimitDownGetVertices(limit_pushdown::PushLimitDownGetVerticesRule),
@@ -306,18 +307,6 @@ impl Default for RuleRegistry {
         registry.add(RewriteRule::PushProjectDownScanEdges(
             projection_pushdown::PushProjectDownScanEdgesRule::new(),
         ));
-        registry.add(RewriteRule::PushProjectDownGetVertices(
-            projection_pushdown::PushProjectDownGetVerticesRule::new(),
-        ));
-        registry.add(RewriteRule::PushProjectDownGetEdges(
-            projection_pushdown::PushProjectDownGetEdgesRule::new(),
-        ));
-        registry.add(RewriteRule::PushProjectDownGetNeighbors(
-            projection_pushdown::PushProjectDownGetNeighborsRule::new(),
-        ));
-        registry.add(RewriteRule::PushProjectDownEdgeIndexScan(
-            projection_pushdown::PushProjectDownEdgeIndexScanRule::new(),
-        ));
         registry.add(RewriteRule::PushLimitDownGetVertices(
             limit_pushdown::PushLimitDownGetVerticesRule::new(),
         ));
@@ -380,7 +369,7 @@ mod tests {
     #[test]
     fn test_rule_registry_default() {
         let registry = RuleRegistry::default();
-        assert_eq!(registry.len(), 49);
+        assert_eq!(registry.len(), 45);
     }
 
     #[test]

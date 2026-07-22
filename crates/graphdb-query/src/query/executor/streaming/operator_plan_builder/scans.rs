@@ -2,8 +2,6 @@
 
 use std::sync::Arc;
 
-use std::collections::HashSet;
-
 use crate::query::executor::base::ExecutionContext;
 use crate::query::executor::build_error::PlanBuildError;
 use crate::query::executor::streaming::operators::spec::{
@@ -25,7 +23,7 @@ pub fn build_scan_node(
                 .limit()
                 .and_then(|value| (value >= 0).then_some(value as usize));
             let col_names = scan_node.col_names().to_vec();
-            let projected_properties = extract_projected_properties(&col_names);
+            let projected_properties = scan_node.projected_properties().to_vec();
             Ok(PhysicalNode::Source(
                 node.id(),
                 SourceSpec::StorageScanVertices {
@@ -44,6 +42,7 @@ pub fn build_scan_node(
                 .and_then(|value| (value >= 0).then_some(value as usize));
             let col_names = scan_node.col_names().to_vec();
             let edge_type = scan_node.edge_type().map(|s| s.to_string());
+            let projected_properties = scan_node.projected_properties().to_vec();
             Ok(PhysicalNode::Source(
                 node.id(),
                 SourceSpec::StorageScanEdges {
@@ -51,6 +50,7 @@ pub fn build_scan_node(
                     limit,
                     edge_type,
                     col_names,
+                    projected_properties,
                 },
                 PhysicalProperties::single_streaming(),
             ))
@@ -196,32 +196,4 @@ pub fn build_scan_node(
 
         _ => Err(super::internal_routing_error(node, "scans")),
     }
-}
-
-/// Extract property names from `col_names` for projection pushdown.
-///
-/// When the projection-pushdown optimizer rewrites `col_names` from a
-/// single vertex-variable name (`["p"]`) to a list of property aliases
-/// (`["p.name", "p.age"]`), this function extracts just the property names
-/// (`["name", "age"]`) so the scan can load only those columns.
-///
-/// Heuristic: if any name contains a dot OR there are multiple names, we
-/// treat them as projected property references.  A single undotted name is
-/// assumed to be a vertex variable (no projection).
-fn extract_projected_properties(col_names: &[String]) -> Vec<String> {
-    if col_names.len() == 1 && !col_names[0].contains('.') {
-        return Vec::new();
-    }
-    let mut seen = HashSet::new();
-    col_names
-        .iter()
-        .filter_map(|name| {
-            let prop = name.rsplit_once('.').map(|(_, p)| p).unwrap_or(name);
-            if seen.insert(prop.to_string()) {
-                Some(prop.to_string())
-            } else {
-                None
-            }
-        })
-        .collect()
 }

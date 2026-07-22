@@ -22,6 +22,13 @@ pub trait ExpressionContext {
     /// Obtain the value of the variable
     fn get_variable(&self, name: &str) -> Option<Value>;
 
+    /// Obtain the value of a query parameter (`$name`).
+    /// Default implementation returns `None` — contexts without parameter
+    /// support simply ignore parameter references.
+    fn get_parameter(&self, _name: &str) -> Option<Value> {
+        None
+    }
+
     /// Obtain the value of a variable by slot ID (fast path).
     /// Default implementation falls back to name-based lookup.
     fn get_variable_by_slot(&self, _slot: SlotId) -> Option<Value> {

@@ -116,6 +116,7 @@ pub enum SourceOperator {
         edge_type: Option<String>,
         partition_range: Option<std::ops::Range<i64>>,
         col_names: Vec<String>,
+        projected_properties: Vec<String>,
         /// Cursor kept inline for practical lifetime management.
         cursor: Option<Box<dyn EdgeCursor>>,
     },
@@ -227,6 +228,7 @@ impl SourceOperator {
                 limit,
                 edge_type,
                 col_names,
+                projected_properties,
             } => Self::StorageScanEdges {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
@@ -234,6 +236,7 @@ impl SourceOperator {
                 edge_type: edge_type.clone(),
                 partition_range: None,
                 col_names: col_names.clone(),
+                projected_properties: projected_properties.clone(),
                 cursor: None,
             },
             super::spec::SourceSpec::GetVertices {
@@ -377,6 +380,8 @@ impl SourceOperator {
                         &ScanOptions {
                             limit: *limit,
                             vertex_id_range: partition_range.clone(),
+                            projection: (!projected_properties.is_empty())
+                                .then(|| projected_properties.clone()),
                             ..ScanOptions::default()
                         },
                     )
@@ -401,6 +406,7 @@ impl SourceOperator {
                 edge_type,
                 partition_range,
                 col_names,
+                projected_properties,
                 cursor,
             } => {
                 let storage_ref = storage.as_ref().ok_or_else(|| {
@@ -414,6 +420,8 @@ impl SourceOperator {
                             limit: *limit,
                             edge_type: edge_type.clone(),
                             edge_src_id_range: partition_range.clone(),
+                            projection: (!projected_properties.is_empty())
+                                .then(|| projected_properties.clone()),
                             ..ScanOptions::default()
                         },
                     )
@@ -428,6 +436,7 @@ impl SourceOperator {
                     buffer: Vec::new(),
                     current_index: 0,
                     col_names: col_names.clone(),
+                    projected_properties: projected_properties.clone(),
                 }));
             }
             Self::GetVertices { .. } => {
@@ -595,18 +604,7 @@ impl SourceOperator {
                 if batch.is_empty() {
                     return Ok(None);
                 }
-                let rows = if projected_properties.is_empty() {
-                    batch.into_iter().map(make_vertex_row).collect::<Vec<_>>()
-                } else {
-                    batch
-                        .into_iter()
-                        .map(|mut v| {
-                            v.properties
-                                .retain(|key, _| projected_properties.contains(key));
-                            make_vertex_row(v)
-                        })
-                        .collect::<Vec<_>>()
-                };
+                let rows = batch.into_iter().map(make_vertex_row).collect::<Vec<_>>();
                 if !rows.is_empty() {
                     let reservation = reserve_memory(base, &rows)?;
                     let mut chunk =

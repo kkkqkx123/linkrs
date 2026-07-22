@@ -101,14 +101,28 @@ impl PhysicalPlanBuilder {
                 pipeline_mode: super::types::PipelineMode::Pipelined,
             });
 
+        let mut logical_to_physical: HashMap<LogicalNodeId, Vec<PhysicalOperatorId>> =
+            HashMap::new();
+        for operator in &operators {
+            if let Some(logical_id) = operator.logical_node_id {
+                logical_to_physical
+                    .entry(logical_id)
+                    .or_default()
+                    .push(operator.operator_id);
+            }
+        }
+        let mut fingerprint_hasher = std::collections::hash_map::DefaultHasher::new();
+        use std::hash::{Hash, Hasher};
+        format!("{:?}", operators).hash(&mut fingerprint_hasher);
+
         let plan = PhysicalPlan {
             operators,
-            logical_to_physical: HashMap::new(),
+            logical_to_physical,
             fragments: FragmentGraph::new(fragments, root_fid),
             root_fragment: root_fid,
             output,
             compatibility: PlanCompatibility {
-                query_fingerprint: 0,
+                query_fingerprint: fingerprint_hasher.finish(),
                 layout_version: ctx.schema.as_ref().map(|s| s.layout_version),
                 required_capabilities: CapabilitySet::EMPTY,
                 planning_config_hash: ctx.config.config_hash,

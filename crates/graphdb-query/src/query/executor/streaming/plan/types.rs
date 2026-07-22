@@ -398,16 +398,16 @@ impl PhysicalPlan {
     }
 
     /// Look up all physical operators derived from a logical node.
-    pub fn operators_from_logical(&self, logical_id: LogicalNodeId) -> &[PhysicalOperatorSpec] {
+    pub fn operators_from_logical(
+        &self,
+        logical_id: LogicalNodeId,
+    ) -> Vec<&PhysicalOperatorSpec> {
         self.logical_to_physical
             .get(&logical_id)
-            .map(|ids| {
-                // Safe: IDs are guaranteed valid at construction time.
-                let ptr = self.operators.as_ptr();
-                let ids_slice = ids.as_slice();
-                unsafe { std::slice::from_raw_parts(ptr.add(ids_slice[0].0), ids_slice.len()) }
-            })
-            .unwrap_or(&[])
+            .into_iter()
+            .flatten()
+            .filter_map(|id| self.operator(*id))
+            .collect()
     }
 
     /// Return the total number of physical operators.

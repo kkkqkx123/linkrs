@@ -431,6 +431,7 @@ define_plan_node! {
         tag: Option<String>,
         expression: Option<ContextualExpression>,
         limit: Option<i64>,
+        projected_properties: Vec<String>,
     }
     enum: ScanVertices
     input: ZeroInputNode
@@ -445,6 +446,7 @@ impl ScanVerticesNode {
             tag: None,
             expression: None,
             limit: None,
+            projected_properties: Vec::new(),
             output_var: None,
             col_names: Vec::new(),
             column_types: vec![],
@@ -486,6 +488,14 @@ impl ScanVerticesNode {
     pub fn limit(&self) -> Option<i64> {
         self.limit
     }
+
+    pub fn projected_properties(&self) -> &[String] {
+        &self.projected_properties
+    }
+
+    pub fn set_projected_properties(&mut self, properties: Vec<String>) {
+        self.projected_properties = properties;
+    }
 }
 
 define_plan_node! {
@@ -494,6 +504,7 @@ define_plan_node! {
         edge_type: Option<String>,
         expression: Option<ContextualExpression>,
         limit: Option<i64>,
+        projected_properties: Vec<String>,
     }
     enum: ScanEdges
     input: ZeroInputNode
@@ -507,6 +518,7 @@ impl ScanEdgesNode {
             edge_type: Some(edge_type.to_string()),
             expression: None,
             limit: None,
+            projected_properties: Vec::new(),
             output_var: None,
             col_names: Vec::new(),
             column_types: vec![],
@@ -535,5 +547,13 @@ impl ScanEdgesNode {
 
     pub fn limit(&self) -> Option<i64> {
         self.limit
+    }
+
+    pub fn projected_properties(&self) -> &[String] {
+        &self.projected_properties
+    }
+
+    pub fn set_projected_properties(&mut self, properties: Vec<String>) {
+        self.projected_properties = properties;
     }
 }
