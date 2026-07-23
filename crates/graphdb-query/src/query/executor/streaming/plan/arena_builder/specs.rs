@@ -1003,13 +1003,15 @@ pub(super) fn build_delete_vertices_spec(
 }
 
 pub(super) fn build_delete_edges_spec(
-    _node: &crate::query::planning::plan::core::nodes::data_modification::delete_nodes::DeleteEdgesNode,
+    node: &crate::query::planning::plan::core::nodes::data_modification::delete_nodes::DeleteEdgesNode,
     exec_ctx: &ExecutionContext,
 ) -> Result<SinkSpec, PlanBuildError> {
+    let edge_type = node.edge_type().unwrap_or("").to_string();
     Ok(SinkSpec::DeleteEdges {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
         src_col: "src".to_string(),
         dst_col: "dst".to_string(),
+        edge_type,
     })
 }
 
@@ -1035,13 +1037,15 @@ pub(super) fn build_pipe_delete_vertices_spec(
 }
 
 pub(super) fn build_pipe_delete_edges_spec(
-    _node: &crate::query::planning::plan::core::nodes::data_modification::delete_nodes::PipeDeleteEdgesNode,
+    node: &crate::query::planning::plan::core::nodes::data_modification::delete_nodes::PipeDeleteEdgesNode,
     exec_ctx: &ExecutionContext,
 ) -> Result<SinkSpec, PlanBuildError> {
+    let edge_type = node.edge_type().unwrap_or("").to_string();
     Ok(SinkSpec::PipeDeleteEdges {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
         src_col: "src".to_string(),
         dst_col: "dst".to_string(),
+        edge_type,
     })
 }
 
@@ -1053,6 +1057,7 @@ pub(super) fn build_update_spec(
     match node.info() {
         UpdateTargetType::Vertex(info) => Ok(SinkSpec::UpdateVertices {
             space_name: exec_ctx.space_name.clone().unwrap_or_default(),
+            tag_name: info.tag_name.clone().unwrap_or_default(),
             updates: info
                 .properties
                 .iter()
@@ -1077,8 +1082,14 @@ pub(super) fn build_update_vertices_spec(
     node: &crate::query::planning::plan::core::nodes::data_modification::update_nodes::UpdateVerticesNode,
     exec_ctx: &ExecutionContext,
 ) -> Result<SinkSpec, PlanBuildError> {
+    let tag_name = node
+        .updates()
+        .first()
+        .and_then(|update| update.tag_name.clone())
+        .unwrap_or_default();
     Ok(SinkSpec::UpdateVertices {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
+        tag_name,
         updates: node
             .updates()
             .iter()

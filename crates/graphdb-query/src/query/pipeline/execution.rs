@@ -25,137 +25,24 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         self.execute_query_with_space(query_text, None)
     }
 
+    /// Convenience entry: parse, bind auto-commit storage for DML, compile,
+    /// execute, and finalize in one call.  Used by tests and the embedded API.
     pub fn execute_query_with_space(
         &mut self,
         query_text: &str,
         space_info: Option<SpaceInfo>,
     ) -> DBResult<ExecutionResult> {
-        // Parse before constructing the request context so direct DML can
-        // acquire a real auto-commit storage binding. The query layer must
-        // never invent a transaction identity for an unbound write.
-        let parser_result = self.parse_into_context(query_text)?;
-        let parsed_is_dml = Self::statement_requires_auto_commit(parser_result.ast.stmt());
-        let operation_storage = if parsed_is_dml {
-            Some(self.bind_auto_commit_storage()?)
-        } else {
-            None
-        };
-
-        let mut rctx = QueryRequestContext::new(query_text.to_string());
-
-        let space_name = space_info.as_ref().map(|s| s.space_name.clone());
-        if let Some(ref name) = space_name {
-            rctx.space_name = Some(name.clone());
-        }
-        if let Some(ref storage) = operation_storage {
-            rctx.transaction_id = storage
-                .read()
-                .operation_context()
-                .and_then(|context| context.transaction_id);
-            rctx.operation_context = storage.read().operation_context().as_deref().cloned();
-            rctx.operation_storage = Some(storage.clone());
-        }
-
-        let rctx = Arc::new(rctx);
-        let mut query_context = QueryContext::new(rctx);
-
-        if let Some(ref space) = space_info {
-            query_context.set_space_info(space.clone());
-        }
-
-        let query_context = Arc::new(query_context);
-
-        let validation_info =
-            self.validate_query_with_context(parser_result.ast.clone(), query_context.clone())?;
-
-        let validated = ValidatedStatement::new(parser_result.ast.clone(), validation_info);
-
-        match validated.ast.stmt() {
-            crate::query::parser::ast::Stmt::Explain(explain_stmt) => {
-                return self.execute_explain(explain_stmt, query_context);
-            }
-            crate::query::parser::ast::Stmt::Profile(profile_stmt) => {
-                return self.execute_profile(profile_stmt, query_context);
-            }
-            _ => {}
-        }
-
-        let is_dml = Self::statement_requires_auto_commit(validated.ast.stmt());
-        let is_transaction = Self::statement_is_transaction(validated.ast.stmt());
-        let is_ddl = Self::statement_is_ddl(validated.ast.stmt());
-        let physical_plan =
-            self.compile_or_get_cached(query_text, query_context.clone(), &validated)?;
-        let txn_scope = if is_dml {
-            Self::scope_for_request(validated.ast.stmt(), query_context.request_context())
-        } else if is_transaction {
-            TransactionScope::CommandScope
-        } else {
-            TransactionScope::None
-        };
-        let result = self.execute_compiled_with_scope(
-            physical_plan.clone(),
-            query_context.clone(),
-            ResultSink::Materialize,
-            txn_scope,
-        );
-        let result = match result {
+        let request = self.prepare_request_with_auto_commit(query_text, space_info)?;
+        match self.execute_prepared_materialized(&request) {
             Ok(result) => {
-                self.finalize_operation_storage(operation_storage.as_ref(), true)?;
-                if is_ddl {
-                    self.invalidate_after_ddl(space_name.as_deref());
-                }
-                result
+                self.finalize_operation_storage(request.operation_storage.as_ref(), true)?;
+                Ok(result)
             }
             Err(error) => {
-                self.finalize_operation_storage(operation_storage.as_ref(), false)?;
-                return Err(error);
+                self.finalize_operation_storage(request.operation_storage.as_ref(), false)?;
+                Err(error)
             }
-        };
-        Ok(result)
-    }
-
-    fn invalidate_after_ddl(&self, space_name: Option<&str>) {
-        self.schema_generation
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if let Some(space_name) = space_name {
-            let removed = self.plan_cache.invalidate_space(space_name);
-            if removed > 0 {
-                log::info!(
-                    "Invalidated {} cached plans for space '{}' after committed DDL",
-                    removed,
-                    space_name
-                );
-            }
-        } else {
-            self.plan_cache.clear();
         }
-    }
-
-    fn bind_auto_commit_storage(&self) -> DBResult<Arc<RwLock<dyn QueryStorage>>> {
-        let storage = self.storage.as_ref().ok_or_else(|| {
-            DBError::from(QueryError::execution(
-                "DML requires a storage binding".to_string(),
-            ))
-        })?;
-        let bound = storage
-            .read()
-            .bind_auto_commit_context()
-            .map_err(|error| DBError::from(QueryError::execution(error.to_string())))?;
-        Ok(Arc::new(RwLock::new(bound)))
-    }
-
-    fn finalize_operation_storage(
-        &self,
-        storage: Option<&Arc<RwLock<dyn QueryStorage>>>,
-        committed: bool,
-    ) -> DBResult<()> {
-        if let Some(storage) = storage {
-            storage
-                .write()
-                .finalize_operation(committed)
-                .map_err(|error| DBError::from(QueryError::execution(error.to_string())))?;
-        }
-        Ok(())
     }
 
     pub fn execute_query_with_streaming(
@@ -169,7 +56,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     pub fn execute_query_stream_with_request(
         &mut self,
         query_text: &str,
-        rctx: Arc<crate::query::QueryRequestContext>,
+        rctx: Arc<QueryRequestContext>,
         space_info: Option<SpaceInfo>,
     ) -> DBResult<StreamingQueryResult> {
         self.execute_query_stream_with_request_scope(query_text, rctx, space_info, None)
@@ -178,58 +65,18 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     pub fn execute_query_stream_with_request_scope(
         &mut self,
         query_text: &str,
-        rctx: Arc<crate::query::QueryRequestContext>,
+        rctx: Arc<QueryRequestContext>,
         space_info: Option<SpaceInfo>,
         transaction_id: Option<TransactionId>,
     ) -> DBResult<StreamingQueryResult> {
-        let mut query_context = QueryContext::new(rctx);
-        if let Some(ref space) = space_info {
-            query_context.set_space_info(space.clone());
-        }
-        let query_context = Arc::new(query_context);
-
-        let parser_result = self.parse_into_context(query_text)?;
-        let validation_info =
-            self.validate_query_with_context(parser_result.ast.clone(), query_context.clone())?;
-        let validated = ValidatedStatement::new(parser_result.ast.clone(), validation_info);
-
-        match validated.ast.stmt() {
-            crate::query::parser::ast::Stmt::Explain(explain_stmt) => {
-                let result = self.execute_explain(explain_stmt, query_context)?;
-                return Ok(StreamingQueryResult::from_execution_result(result));
-            }
-            crate::query::parser::ast::Stmt::Profile(profile_stmt) => {
-                let result = self.execute_profile(profile_stmt, query_context)?;
-                return Ok(StreamingQueryResult::from_execution_result(result));
-            }
-            _ => {}
-        }
-
-        if Self::statement_is_ddl(validated.ast.stmt()) {
-            let result = self.execute_query_with_request_scope(
-                query_text,
-                query_context.request_context_arc(),
-                space_info,
-                transaction_id,
-            )?;
-            return Ok(StreamingQueryResult::from_execution_result(result));
-        }
-        let physical_plan =
-            self.compile_or_get_cached(query_text, query_context.clone(), &validated)?;
-        let scope = Self::scope_for_request(validated.ast.stmt(), query_context.request_context());
-        self.execute_compiled_stream_with_scope(
-            physical_plan,
-            query_context,
-            transaction_id
-                .map(|id| TransactionScope::explicit(id, true))
-                .unwrap_or(scope),
-        )
+        let request = self.prepare_request(query_text, rctx, space_info)?;
+        self.execute_prepared_streaming(&request, transaction_id)
     }
 
     pub fn execute_query_with_request(
         &mut self,
         query_text: &str,
-        rctx: Arc<crate::query::QueryRequestContext>,
+        rctx: Arc<QueryRequestContext>,
         space_info: Option<SpaceInfo>,
     ) -> DBResult<ExecutionResult> {
         self.execute_query_with_request_scope(query_text, rctx, space_info, None)
@@ -238,146 +85,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     pub fn execute_query_with_request_scope(
         &mut self,
         query_text: &str,
-        rctx: Arc<crate::query::QueryRequestContext>,
+        rctx: Arc<QueryRequestContext>,
         space_info: Option<SpaceInfo>,
         transaction_id: Option<TransactionId>,
     ) -> DBResult<ExecutionResult> {
-        let mut query_context = QueryContext::new(rctx);
-        if let Some(ref space) = space_info {
-            query_context.set_space_info(space.clone());
-        }
-        let query_context = Arc::new(query_context);
-
-        let parser_result = self.parse_into_context(query_text)?;
-        let validation_info =
-            self.validate_query_with_context(parser_result.ast.clone(), query_context.clone())?;
-        let validated = ValidatedStatement::new(parser_result.ast.clone(), validation_info);
-
-        let stmt = validated.ast.stmt().clone();
-        match &stmt {
-            crate::query::parser::ast::Stmt::Explain(explain_stmt) => {
-                return self.execute_explain(explain_stmt, query_context);
-            }
-            crate::query::parser::ast::Stmt::Profile(profile_stmt) => {
-                return self.execute_profile(profile_stmt, query_context);
-            }
-            _ => {}
-        }
-
-        let physical_plan =
-            self.compile_or_get_cached(query_text, query_context.clone(), &validated)?;
-        let scope = if let Some(transaction_id) = transaction_id {
-            if query_context.request_context().auto_commit {
-                TransactionScope::auto_commit(transaction_id)
-            } else {
-                TransactionScope::explicit(
-                    transaction_id,
-                    !query_context.request_context().read_only,
-                )
-            }
-        } else if Self::statement_requires_auto_commit(&stmt) {
-            Self::scope_for_request(&stmt, query_context.request_context())
-        } else if Self::statement_is_transaction(&stmt) {
-            TransactionScope::CommandScope
-        } else {
-            TransactionScope::None
-        };
-        let result = self.execute_compiled_with_scope(
-            physical_plan,
-            query_context.clone(),
-            ResultSink::Materialize,
-            scope,
-        )?;
-        if Self::statement_is_ddl(&stmt) {
-            self.invalidate_after_ddl(query_context.space_name().as_deref());
-        }
-        Ok(result)
-    }
-
-    fn scope_for_request(
-        stmt: &crate::query::parser::ast::Stmt,
-        request: &crate::query::QueryRequestContext,
-    ) -> TransactionScope {
-        if let Some(scope) = Self::scope_for_bound_request(request).transaction_id() {
-            return if request.auto_commit {
-                TransactionScope::auto_commit(scope)
-            } else {
-                TransactionScope::explicit(scope, !request.read_only)
-            };
-        }
-        let transaction_id = request.transaction_id;
-        if let Some(transaction_id) = transaction_id {
-            if request.auto_commit {
-                TransactionScope::auto_commit(transaction_id)
-            } else {
-                TransactionScope::explicit(transaction_id, !request.read_only)
-            }
-        } else if Self::statement_requires_auto_commit(stmt) {
-            // The query layer never invents transaction identities. API and
-            // storage bindings must provide one for DML execution.
-            TransactionScope::None
-        } else if Self::statement_is_transaction(stmt) {
-            TransactionScope::CommandScope
-        } else {
-            TransactionScope::None
-        }
-    }
-
-    fn scope_for_bound_request(request: &crate::query::QueryRequestContext) -> TransactionScope {
-        request
-            .transaction_id
-            .or_else(|| {
-                request
-                    .operation_context
-                    .as_ref()
-                    .and_then(|context| context.transaction_id)
-            })
-            .map(|transaction_id| {
-                if request.auto_commit {
-                    TransactionScope::auto_commit(transaction_id)
-                } else {
-                    TransactionScope::explicit(transaction_id, !request.read_only)
-                }
-            })
-            .unwrap_or(TransactionScope::None)
-    }
-
-    /// Check if a statement needs an auto-commit transaction scope.
-    fn statement_requires_auto_commit(stmt: &crate::query::parser::ast::Stmt) -> bool {
-        matches!(
-            stmt,
-            crate::query::parser::ast::Stmt::Insert(..)
-                | crate::query::parser::ast::Stmt::Update(..)
-                | crate::query::parser::ast::Stmt::Delete(..)
-                | crate::query::parser::ast::Stmt::Set(..)
-                | crate::query::parser::ast::Stmt::Remove(..)
-                | crate::query::parser::ast::Stmt::Merge(..)
-        )
-    }
-
-    /// Check if a statement is a transaction control statement (BEGIN/COMMIT/ROLLBACK).
-    fn statement_is_transaction(stmt: &crate::query::parser::ast::Stmt) -> bool {
-        matches!(
-            stmt,
-            crate::query::parser::ast::Stmt::BeginTransaction(..)
-                | crate::query::parser::ast::Stmt::CommitTransaction(..)
-                | crate::query::parser::ast::Stmt::RollbackTransaction(..)
-        )
-    }
-
-    fn statement_is_ddl(stmt: &crate::query::parser::ast::Stmt) -> bool {
-        matches!(
-            stmt,
-            crate::query::parser::ast::Stmt::Create(_)
-                | crate::query::parser::ast::Stmt::Drop(_)
-                | crate::query::parser::ast::Stmt::Alter(_)
-                | crate::query::parser::ast::Stmt::ClearSpace(_)
-                | crate::query::parser::ast::Stmt::CreateFulltextIndex(_)
-                | crate::query::parser::ast::Stmt::DropFulltextIndex(_)
-                | crate::query::parser::ast::Stmt::AlterFulltextIndex(_)
-                | crate::query::parser::ast::Stmt::CreateVectorIndex(_)
-                | crate::query::parser::ast::Stmt::DropVectorIndex(_)
-        )
+        let request = self.prepare_request(query_text, rctx, space_info)?;
+        self.execute_prepared(&request, transaction_id)
     }
 
     pub fn execute_query_with_metrics(
@@ -588,6 +301,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let is_command_scope = matches!(transaction_scope, TransactionScope::CommandScope);
         let mut bindings = QueryBindings::from_context(&exec_ctx, transaction_scope);
         bindings.query_id = exec_ctx.query_id;
+        bindings.query_text = Some(query_context.request_context().query.clone());
+        bindings.session_id = query_context
+            .request_context()
+            .session_id
+            .map(|id| id.to_string());
+        bindings.user_name = query_context.request_context().user_name.clone();
 
         let mut instance = QueryExecutionInstance::instantiate_plan(
             physical_plan,
@@ -597,9 +316,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         )
         .map_err(|e| DBError::from(QueryError::execution(e.to_string())))?;
 
-        // Set up SessionTransactionController for transaction control statements.
-        // For BEGIN, we create/reset the controller and begin tracking.
-        // For COMMIT/ROLLBACK, we reuse the controller from BEGIN.
         if is_command_scope {
             let mut ctrl_guard = self.session_controller.write();
             let controller = if ctrl_guard.as_ref().is_some_and(|c| c.is_active()) {
@@ -654,6 +370,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let exec_ctx = self.build_execution_context(&query_context);
         let mut bindings = QueryBindings::from_context(&exec_ctx, transaction_scope);
         bindings.query_id = exec_ctx.query_id;
+        bindings.query_text = Some(query_context.request_context().query.clone());
+        bindings.session_id = query_context
+            .request_context()
+            .session_id
+            .map(|id| id.to_string());
+        bindings.user_name = query_context.request_context().user_name.clone();
 
         let instance = QueryExecutionInstance::instantiate_plan(
             physical_plan,

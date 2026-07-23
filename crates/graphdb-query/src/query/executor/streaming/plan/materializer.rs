@@ -436,7 +436,9 @@ impl PhysicalPlanMaterializer {
     /// can drive real state transitions.
     fn create_runtime(
         bindings: &QueryBindings,
-        parameter_values: Option<std::sync::Arc<std::collections::HashMap<String, crate::core::Value>>>,
+        parameter_values: Option<
+            std::sync::Arc<std::collections::HashMap<String, crate::core::Value>>,
+        >,
     ) -> Arc<ExecutionRuntime> {
         let mut runtime = ExecutionRuntime::new(
             crate::query::executor::streaming::runtime::QueryIdentity {

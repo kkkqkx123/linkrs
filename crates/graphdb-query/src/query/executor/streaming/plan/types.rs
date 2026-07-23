@@ -403,10 +403,7 @@ impl PhysicalPlan {
     }
 
     /// Look up all physical operators derived from a logical node.
-    pub fn operators_from_logical(
-        &self,
-        logical_id: LogicalNodeId,
-    ) -> Vec<&PhysicalOperatorSpec> {
+    pub fn operators_from_logical(&self, logical_id: LogicalNodeId) -> Vec<&PhysicalOperatorSpec> {
         self.logical_to_physical
             .get(&logical_id)
             .into_iter()

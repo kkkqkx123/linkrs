@@ -5,6 +5,7 @@ mod diagnostics;
 mod execution;
 mod frontend;
 mod metadata;
+mod prepared;
 
 use crate::core::metadata::index_manager::IndexMetadataManager;
 use crate::core::metadata::SchemaManager;

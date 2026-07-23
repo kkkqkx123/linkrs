@@ -68,7 +68,7 @@ pub enum UnaryOperator {
     },
 }
 
-    impl UnaryOperator {
+impl UnaryOperator {
     /// Create a UnaryOperator with fresh mutable state from an immutable spec.
     pub fn from_spec(spec: &super::spec::UnarySpec) -> Self {
         let state = UnaryOperatorState { parameters: None };
@@ -163,7 +163,11 @@ pub enum UnaryOperator {
                         for i in 0..chunk.len() {
                             let row = &chunk.rows[i];
                             let mut context = if let Some(ref params) = state.parameters {
-                                BorrowedRowContext::with_parameters(row, layout.clone(), params.clone())
+                                BorrowedRowContext::with_parameters(
+                                    row,
+                                    layout.clone(),
+                                    params.clone(),
+                                )
                             } else {
                                 BorrowedRowContext::new(row, layout.clone())
                             };
@@ -211,7 +215,11 @@ pub enum UnaryOperator {
                     let mut projected_rows = Vec::new();
                     for row in chunk.rows {
                         let mut context = if let Some(ref params) = state.parameters {
-                            ValueRowContext::with_parameters(row, input_layout.clone(), params.clone())
+                            ValueRowContext::with_parameters(
+                                row,
+                                input_layout.clone(),
+                                params.clone(),
+                            )
                         } else {
                             ValueRowContext::new(row, input_layout.clone())
                         };
@@ -301,7 +309,11 @@ pub enum UnaryOperator {
                         let mut new_row = row.clone();
                         for (_col_name, expr) in assignments.iter() {
                             let mut context = if let Some(ref params) = state.parameters {
-                                ValueRowContext::with_parameters(row.clone(), layout.clone(), params.clone())
+                                ValueRowContext::with_parameters(
+                                    row.clone(),
+                                    layout.clone(),
+                                    params.clone(),
+                                )
                             } else {
                                 ValueRowContext::new(row.clone(), layout.clone())
                             };
@@ -400,14 +412,21 @@ pub enum UnaryOperator {
                 }
                 Ok(None)
             }
-            Self::AppendVertices { vertex_properties, state } => loop {
+            Self::AppendVertices {
+                vertex_properties,
+                state,
+            } => loop {
                 if let Some(chunk) = input.advance()? {
                     let layout = chunk.get_layout();
                     let mut result_rows = Vec::new();
                     for row in chunk.rows {
                         let mut new_row = row.clone();
                         let mut ctx = if let Some(ref params) = state.parameters {
-                            ValueRowContext::with_parameters(row.clone(), layout.clone(), params.clone())
+                            ValueRowContext::with_parameters(
+                                row.clone(),
+                                layout.clone(),
+                                params.clone(),
+                            )
                         } else {
                             ValueRowContext::new(row.clone(), layout.clone())
                         };

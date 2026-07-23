@@ -3,17 +3,16 @@
 //! This builder walks the [`PlanNodeEnum`] tree directly, creating arena operators
 //! and a fragment DAG without the intermediate [`PhysicalNode`] representation.
 
-use std::collections::HashMap;
 use super::context::PhysicalPlanBuildContext;
+use std::collections::HashMap;
 
 use super::types::{
-    CapabilitySet, FragmentGraph, FragmentSpec, LogicalNodeId, OutputContract,
-    PhysicalOperatorId, PhysicalOperatorIdAllocator, PhysicalOperatorSpec, PhysicalPlan,
-    PlanCompatibility,
+    CapabilitySet, FragmentGraph, FragmentSpec, LogicalNodeId, OutputContract, PhysicalOperatorId,
+    PhysicalOperatorIdAllocator, PhysicalOperatorSpec, PhysicalPlan, PlanCompatibility,
 };
-use crate::query::executor::streaming::SourceSpec;
 use crate::query::executor::base::ExecutionContext;
 use crate::query::executor::build_error::PlanBuildError;
+use crate::query::executor::streaming::SourceSpec;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 
 mod assembler;
@@ -110,8 +109,8 @@ impl PhysicalPlanBuilder {
 mod tests {
     use super::*;
     use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
-    use crate::query::executor::streaming::plan::types::{InputContract, OperatorKindSpec};
     use crate::query::executor::base::ExecutionContext;
+    use crate::query::executor::streaming::plan::types::{InputContract, OperatorKindSpec};
     use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use std::sync::Arc;
 

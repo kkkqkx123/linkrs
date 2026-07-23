@@ -117,7 +117,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         }
 
         let (plan, _) = self.compile(query_context, validated)?;
-        if Self::is_read_only_cacheable(validated.ast.stmt()) {
+        if super::prepared::is_read_only_cacheable(validated.ast.stmt()) {
             let dependent_tables = validated
                 .validation_info
                 .semantic_info
@@ -147,33 +147,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             );
         }
         Ok(plan)
-    }
-
-    fn is_read_only_cacheable(stmt: &crate::query::parser::ast::Stmt) -> bool {
-        use crate::query::parser::ast::Stmt;
-        !matches!(
-            stmt,
-            Stmt::Insert(_)
-                | Stmt::Update(_)
-                | Stmt::Delete(_)
-                | Stmt::Set(_)
-                | Stmt::Remove(_)
-                | Stmt::Merge(_)
-                | Stmt::Create(_)
-                | Stmt::Drop(_)
-                | Stmt::Alter(_)
-                | Stmt::ClearSpace(_)
-                | Stmt::CreateFulltextIndex(_)
-                | Stmt::DropFulltextIndex(_)
-                | Stmt::AlterFulltextIndex(_)
-                | Stmt::CreateVectorIndex(_)
-                | Stmt::DropVectorIndex(_)
-                | Stmt::BeginTransaction(_)
-                | Stmt::CommitTransaction(_)
-                | Stmt::RollbackTransaction(_)
-                | Stmt::Explain(_)
-                | Stmt::Profile(_)
-        )
     }
 
     pub(crate) fn build_physical_plan(
@@ -210,9 +183,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             .extract_params(&request.query)
             .into_iter()
             .filter_map(|position| {
-                let name = position
-                    .name
-                    .unwrap_or_else(|| position.index.to_string());
+                let name = position.name.unwrap_or_else(|| position.index.to_string());
                 if !seen.insert(name.clone()) {
                     return None;
                 }

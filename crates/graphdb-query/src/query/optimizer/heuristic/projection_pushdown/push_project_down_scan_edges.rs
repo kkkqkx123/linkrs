@@ -195,8 +195,14 @@ mod tests {
         let scan = PlanNodeEnum::ScanEdges(scan_node);
 
         let columns = vec![
-            create_yield_column(Expression::property(Expression::variable("e"), "src"), "src"),
-            create_yield_column(Expression::property(Expression::variable("e"), "dst"), "dst"),
+            create_yield_column(
+                Expression::property(Expression::variable("e"), "src"),
+                "src",
+            ),
+            create_yield_column(
+                Expression::property(Expression::variable("e"), "dst"),
+                "dst",
+            ),
         ];
         let project =
             ProjectNode::new(scan.clone(), columns).expect("Failed to create ProjectNode");

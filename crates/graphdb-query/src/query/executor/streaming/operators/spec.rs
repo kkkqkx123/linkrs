@@ -376,6 +376,7 @@ pub enum SinkSpec {
     },
     UpdateVertices {
         space_name: String,
+        tag_name: String,
         updates: Vec<(String, Expression)>,
     },
     UpdateEdges {
@@ -393,6 +394,7 @@ pub enum SinkSpec {
         space_name: String,
         src_col: String,
         dst_col: String,
+        edge_type: String,
     },
     PipeDeleteVertices {
         space_name: String,
@@ -402,6 +404,7 @@ pub enum SinkSpec {
         space_name: String,
         src_col: String,
         dst_col: String,
+        edge_type: String,
     },
     DeleteTags {
         space_name: String,

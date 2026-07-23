@@ -188,12 +188,16 @@ impl QueryExecutionInstance {
 
         // Phase 3: register with query registry (M2.8).
         let registry_guard = registry.as_ref().map(|reg| {
+            let session_id = bindings
+                .session_id
+                .as_ref()
+                .and_then(|s| s.parse::<i64>().ok());
             let meta = QueryMetadata {
-                query_id: QueryId(0), // will be overwritten by registry
-                session_id: None,
-                user_name: None,
+                query_id: QueryId(bindings.query_id.max(1)),
+                session_id,
+                user_name: bindings.user_name.clone(),
                 space_name: bindings.space_name.clone(),
-                query_text: None,
+                query_text: bindings.query_text.clone(),
                 start_time: std::time::Instant::now(),
             };
             let (qid, _token) = reg.register(meta);

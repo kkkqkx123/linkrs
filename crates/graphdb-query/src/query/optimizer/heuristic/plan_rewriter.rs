@@ -10,10 +10,10 @@
 //! Better cache locality
 //! Compilers can perform in-line optimizations.
 
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 use crate::query::optimizer::heuristic::context::RewriteContext;
 use crate::query::optimizer::heuristic::result::RewriteResult;

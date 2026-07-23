@@ -10,9 +10,9 @@ use super::super::super::operators::spec::{
 use super::super::super::slot::{combine_layouts, SlotLayout};
 use super::super::properties::{PhysicalProperties, PipelineKind};
 use super::super::types::{
-    CapabilitySet, FragmentInput, FragmentKind, FragmentSpec, InputContract,
-    OperatorKindSpec, OutputContract, PartitionInput, PartitionSide, PhysicalOperatorId,
-    PhysicalOperatorSpec, StateOwnership,
+    CapabilitySet, FragmentInput, FragmentKind, FragmentSpec, InputContract, OperatorKindSpec,
+    OutputContract, PartitionInput, PartitionSide, PhysicalOperatorId, PhysicalOperatorSpec,
+    StateOwnership,
 };
 use crate::query::executor::build_error::PlanBuildError;
 

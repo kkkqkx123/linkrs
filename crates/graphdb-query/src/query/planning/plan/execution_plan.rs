@@ -342,7 +342,6 @@ pub struct ExecutionPlan {
 
     /// Per-partition output channel capacity for P8 backpressure.
     pub max_buffered_chunks: usize,
-
 }
 
 impl ExecutionPlan {

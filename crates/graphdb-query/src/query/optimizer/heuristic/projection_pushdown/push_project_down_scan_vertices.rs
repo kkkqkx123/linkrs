@@ -196,7 +196,10 @@ mod tests {
 
         let columns = vec![
             create_yield_column(Expression::property(Expression::variable("p"), "id"), "id"),
-            create_yield_column(Expression::property(Expression::variable("p"), "name"), "name"),
+            create_yield_column(
+                Expression::property(Expression::variable("p"), "name"),
+                "name",
+            ),
         ];
         let project =
             ProjectNode::new(scan.clone(), columns).expect("Failed to create ProjectNode");

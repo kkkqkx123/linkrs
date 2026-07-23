@@ -185,6 +185,7 @@ pub fn build_write_node(
                 Box::new(source),
                 SinkSpec::UpdateVertices {
                     space_name: require_space_name(context)?,
+                    tag_name: String::new(),
                     updates,
                 },
                 PhysicalProperties::single_streaming(),
@@ -200,6 +201,7 @@ pub fn build_write_node(
                         .iter()
                         .filter_map(|(k, v)| v.get_expression().map(|e| (k.clone(), e)))
                         .collect();
+                    let tag_name = vinfo.tag_name.clone().unwrap_or_default();
                     let row = vec![vinfo
                         .vertex_id
                         .constant_value()
@@ -217,6 +219,7 @@ pub fn build_write_node(
                         Box::new(source),
                         SinkSpec::UpdateVertices {
                             space_name: require_space_name(context)?,
+                            tag_name,
                             updates,
                         },
                         PhysicalProperties::single_streaming(),
@@ -335,6 +338,7 @@ pub fn build_write_node(
                     Ok(vec![contextual_to_value(src)?, contextual_to_value(dst)?])
                 })
                 .collect::<Result<Vec<_>, PlanBuildError>>()?;
+            let edge_type = delete_node.edge_type().unwrap_or("").to_string();
             let source = PhysicalNode::Source(
                 super::SYNTHETIC_START_NODE_ID,
                 SourceSpec::ScanVertices {
@@ -350,6 +354,7 @@ pub fn build_write_node(
                     space_name: require_space_name(context)?,
                     src_col: "src".to_string(),
                     dst_col: "dst".to_string(),
+                    edge_type,
                 },
                 PhysicalProperties::single_streaming(),
             ))
@@ -372,6 +377,7 @@ pub fn build_write_node(
         PlanNodeEnum::PipeDeleteEdges(delete_node) => {
             let input_plan = delete_node.input();
             let input_phys = super::build_plan_node(input_plan, context)?;
+            let edge_type = delete_node.edge_type().unwrap_or("").to_string();
             Ok(PhysicalNode::Sink(
                 node.id(),
                 Box::new(input_phys),
@@ -379,6 +385,7 @@ pub fn build_write_node(
                     space_name: require_space_name(context)?,
                     src_col: "src".to_string(),
                     dst_col: "dst".to_string(),
+                    edge_type,
                 },
                 PhysicalProperties::single_streaming(),
             ))

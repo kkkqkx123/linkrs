@@ -31,9 +31,11 @@ pub(super) fn execute_space_manage(
     }
     let space_name = extract_space_manage_name(command);
     let result = match command {
-        SpaceManageNode::Create(_) => super::exec_ddl(storage, |s| {
-            let mut info = SpaceInfo::new(space_name.clone().unwrap_or_default());
-            StorageSchemaOps::create_space(s, &mut info)
+        SpaceManageNode::Create(node) => super::exec_ddl(storage, |s| {
+            let info = node.info();
+            let vid_type = parse_vid_type_str(&info.vid_type);
+            let mut space_info = SpaceInfo::new(info.space_name.clone()).with_vid_type(vid_type);
+            StorageSchemaOps::create_space(s, &mut space_info)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
@@ -229,9 +231,11 @@ pub(super) fn execute_tag_manage(
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        TagManageNode::Alter(_) => super::exec_ddl(storage, |s| {
+        TagManageNode::Alter(node) => super::exec_ddl(storage, |s| {
             let name = tag_name.as_deref().unwrap_or("");
-            StorageSchemaOps::alter_tag(s, space_name, name, vec![], vec![])
+            let additions = node.info().additions.clone();
+            let deletions = node.info().deletions.clone();
+            StorageSchemaOps::alter_tag(s, space_name, name, additions, deletions)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
@@ -908,5 +912,33 @@ fn extract_index_manage_name(node: &IndexManageNode) -> Option<String> {
         RebuildEdgeIndex(node) => Some(node.index_name().to_string()),
         ShowCreateIndex(node) => Some(node.index_name().to_string()),
         ShowTagIndexes(_) | ShowEdgeIndexes(_) | ShowIndexes(_) => None,
+    }
+}
+
+/// Parse vid_type string (from CREATE SPACE statement) into `DataType`.
+fn parse_vid_type_str(s: &str) -> crate::core::types::DataType {
+    let upper = s.trim().to_uppercase();
+    if upper == "INT64" {
+        crate::core::types::DataType::BigInt
+    } else if upper == "INT32" {
+        crate::core::types::DataType::Int
+    } else if upper == "INT16" || upper == "INT8" {
+        crate::core::types::DataType::SmallInt
+    } else if upper == "STRING" {
+        crate::core::types::DataType::String
+    } else if upper == "VID" {
+        crate::core::types::DataType::VID
+    } else if upper.starts_with("FIXED_STRING(") || upper.starts_with("FIXEDSTRING(") {
+        let inner = upper
+            .trim_start_matches("FIXED_STRING(")
+            .trim_start_matches("FIXEDSTRING(")
+            .trim_end_matches(')');
+        if let Ok(n) = inner.parse::<usize>() {
+            crate::core::types::DataType::FixedString(n)
+        } else {
+            crate::core::types::DataType::FixedString(32)
+        }
+    } else {
+        crate::core::types::DataType::String
     }
 }
