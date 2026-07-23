@@ -19,8 +19,8 @@ pub use streaming::{
     StreamingExecutionEngine, StreamingExecutor, StreamingQueryResult,
 };
 
-// Re-export explain/profile executors
-pub use explain::{ExecutionStatsContext, NodeExecutionStats, ProfileExecutor};
+// Re-export explain types
+pub use explain::{ExecutionStatsContext, NodeExecutionStats};
 
 // Re-export core execution states
 pub use crate::query::core::{ExecutorState, LoopExecutionState, QueryExecutionState, RowStatus};

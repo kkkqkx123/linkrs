@@ -31,7 +31,9 @@ use super::super::operators::txn_operator::TxnOperator;
 use super::super::operators::unary_operator::UnaryOperator;
 use super::super::operators::vector_operator::VectorOperator;
 use super::super::runtime::ExecutionRuntime;
-use super::types::{FragmentGraph, FragmentId, FragmentSpec, OperatorKindSpec, PhysicalPlan};
+use super::types::{
+    FragmentGraph, FragmentId, FragmentSpec, InputContract, OperatorKindSpec, PhysicalPlan,
+};
 use crate::core::error::QueryError;
 
 use super::super::instance::QueryBindings;
@@ -119,16 +121,9 @@ impl PhysicalPlanMaterializer {
 
     /// Build the operator tree for a single fragment.
     ///
-    /// Within a fragment, operators form a linear pipeline.  The `operators`
-    /// list is processed with a stack:
-    ///
-    /// - Source: push
-    /// - Unary/Blocking/Graph/Sink/Ddl/Fulltext/Vector/Txn: pop 1, wrap, push
-    /// - Join/Set/Apply: pop 2, wrap, push
-    /// - Exchange: takes all remaining stack items
-    ///
-    /// Fragment inputs (producer fragment roots) are placed on the stack
-    /// before any operators are processed, serving as initial leaf values.
+    /// Within a fragment, operators form a strict leaf-to-root pipeline. The
+    /// first operator consumes the fragment's external input contract; every
+    /// later operator consumes only the preceding operator.
     fn build_fragment_pipeline(
         fragment: &FragmentSpec,
         plan: &PhysicalPlan,
@@ -136,20 +131,9 @@ impl PhysicalPlanMaterializer {
         runtime: &Arc<ExecutionRuntime>,
         bindings: &QueryBindings,
     ) -> Result<StreamingExecutor, QueryError> {
-        // ── Initial stack: input fragment roots ──
-        // Producers are removed from the map (ownership transfer).
-        let mut stack: Vec<StreamingExecutor> = {
-            let mut v = Vec::new();
-            for input_id in &fragment.inputs {
-                if let Some(root) = fragment_roots.remove(input_id) {
-                    v.push(root);
-                }
-            }
-            v
-        };
+        let mut previous = None;
 
-        // ── Process operators leaf → root ──
-        for &op_id in &fragment.operators {
+        for (operator_index, &op_id) in fragment.operators.iter().enumerate() {
             let op_spec = plan.operator(op_id).ok_or_else(|| {
                 QueryError::execution(format!("Operator {:?} not found in plan arena", op_id))
             })?;
@@ -162,73 +146,88 @@ impl PhysicalPlanMaterializer {
                 .with_physical_operator_id(op_spec.operator_id)
                 .with_output_layout(Arc::new(op_spec.output_layout.clone()));
 
+            let mut inputs = if operator_index == 0 {
+                take_external_inputs(&op_spec.input_contract, fragment_roots)?
+            } else {
+                vec![previous.take().ok_or_else(|| {
+                    QueryError::execution(format!(
+                        "Fragment {:?} lost its linear pipeline before operator {:?}",
+                        fragment.id, op_id
+                    ))
+                })?]
+            };
+
             let exec = match &op_spec.spec {
                 OperatorKindSpec::Source(src_spec) => {
+                    require_input_count(fragment.id, op_id, &inputs, 0)?;
                     let storage = bindings.storage.clone();
                     let op = SourceOperator::from_spec(src_spec, storage);
                     StreamingExecutor::Source(base, op)
                 }
                 OperatorKindSpec::Unary(unary_spec) => {
-                    let child = pop_stack_or_err(&mut stack)?;
+                    let child = take_unary_input(fragment.id, op_id, &mut inputs)?;
                     let op = UnaryOperator::from_spec(unary_spec);
                     StreamingExecutor::Unary(base, Box::new(child), op)
                 }
                 OperatorKindSpec::Blocking(blocking_spec) => {
-                    let child = pop_stack_or_err(&mut stack)?;
+                    let child = take_unary_input(fragment.id, op_id, &mut inputs)?;
                     let op = BlockingOperator::from_spec(blocking_spec, &bindings.memory_budget);
                     StreamingExecutor::Blocking(base, Box::new(child), op)
                 }
                 OperatorKindSpec::Join(join_spec) => {
-                    let right = pop_stack_or_err(&mut stack)?;
-                    let left = pop_stack_or_err(&mut stack)?;
+                    let (left, right) = take_binary_inputs(fragment.id, op_id, inputs)?;
                     let op = JoinOperator::from_spec(join_spec, &bindings.memory_budget);
                     StreamingExecutor::Join(base, Box::new(left), Box::new(right), op)
                 }
                 OperatorKindSpec::Graph(graph_spec) => {
-                    let child = pop_stack_or_err(&mut stack)?;
+                    let child = take_unary_input(fragment.id, op_id, &mut inputs)?;
                     let storage = runtime.storage.clone();
                     let space_name = runtime.query_id().space_name.clone().unwrap_or_default();
                     let op = GraphOperator::from_spec(graph_spec, storage, space_name);
                     StreamingExecutor::Graph(base, Box::new(child), op)
                 }
                 OperatorKindSpec::RecursiveFragment(rf_spec) => {
-                    let child = pop_stack_or_err(&mut stack)?;
+                    let child = take_unary_input(fragment.id, op_id, &mut inputs)?;
                     let storage = runtime.storage.clone();
                     let space_name = runtime.query_id().space_name.clone().unwrap_or_default();
                     let op = RecursiveFragmentOperator::from_spec(rf_spec, storage, space_name);
                     StreamingExecutor::RecursiveFragment(base, Box::new(child), op)
                 }
                 OperatorKindSpec::Sink(sink_spec) => {
-                    let child = pop_stack_or_err(&mut stack)?;
+                    let child = take_unary_input(fragment.id, op_id, &mut inputs)?;
                     let storage = runtime.storage.clone();
                     let op = SinkOperator::from_spec(sink_spec, storage);
                     StreamingExecutor::Sink(base, Box::new(child), op)
                 }
                 OperatorKindSpec::Set(set_spec) => {
-                    let right = pop_stack_or_err(&mut stack)?;
-                    let left = pop_stack_or_err(&mut stack)?;
+                    let (left, right) = take_binary_inputs(fragment.id, op_id, inputs)?;
                     let op = SetOperator::from_spec(set_spec, &bindings.memory_budget);
                     StreamingExecutor::Set(base, Box::new(left), Box::new(right), op)
                 }
                 OperatorKindSpec::Apply(apply_spec) => {
-                    let right = pop_stack_or_err(&mut stack)?;
-                    let left = pop_stack_or_err(&mut stack)?;
+                    let (left, right) = take_binary_inputs(fragment.id, op_id, inputs)?;
                     let op = ApplyOperator::from_spec(apply_spec, &bindings.memory_budget);
                     StreamingExecutor::Apply(base, Box::new(left), Box::new(right), op)
                 }
                 OperatorKindSpec::Exchange(exchange_spec) => {
-                    let children = std::mem::take(&mut stack);
+                    if inputs.is_empty() {
+                        return Err(QueryError::execution(format!(
+                            "Exchange operator {:?} in fragment {:?} has no inputs",
+                            op_id, fragment.id
+                        )));
+                    }
+                    let children = inputs;
                     let op = ExchangeOperator::from_spec(exchange_spec);
                     StreamingExecutor::Exchange(base, children, op)
                 }
                 OperatorKindSpec::Ddl(ddl_spec) => {
-                    let child = pop_stack_or_err(&mut stack)?;
+                    let child = take_unary_input(fragment.id, op_id, &mut inputs)?;
                     let storage = runtime.storage.clone();
                     let op = DdlOperator::from_spec(ddl_spec, storage);
                     StreamingExecutor::Ddl(base, Box::new(child), op)
                 }
                 OperatorKindSpec::Fulltext(ft_spec) => {
-                    let child = pop_stack_or_err(&mut stack)?;
+                    let child = take_unary_input(fragment.id, op_id, &mut inputs)?;
                     let storage = runtime.storage.clone();
                     #[cfg(feature = "fulltext-search")]
                     let ft_mgr = runtime.fulltext_manager.clone();
@@ -241,7 +240,7 @@ impl PhysicalPlanMaterializer {
                     StreamingExecutor::Fulltext(base, Box::new(child), op)
                 }
                 OperatorKindSpec::Vector(vector_spec) => {
-                    let child = pop_stack_or_err(&mut stack)?;
+                    let child = take_unary_input(fragment.id, op_id, &mut inputs)?;
                     let storage = runtime.storage.clone();
                     #[cfg(feature = "qdrant")]
                     let coord = runtime.vector_coordinator.clone();
@@ -254,77 +253,18 @@ impl PhysicalPlanMaterializer {
                     StreamingExecutor::Vector(base, Box::new(child), op)
                 }
                 OperatorKindSpec::Txn(txn_spec) => {
-                    let child = pop_stack_or_err(&mut stack)?;
+                    let child = take_unary_input(fragment.id, op_id, &mut inputs)?;
                     let op = TxnOperator::from_spec(txn_spec);
                     StreamingExecutor::Txn(base, Box::new(child), op)
                 }
             };
 
-            stack.push(exec);
+            previous = Some(exec);
         }
 
-        if stack.is_empty() {
-            return Err(QueryError::execution(format!(
-                "Fragment {:?} produced no operators",
-                fragment.id
-            )));
-        }
-
-        // Top of stack is the fragment root.
-        let mut root_executor = stack.remove(stack.len() - 1);
-
-        // Flatten remaining stack: if the pipeline produced multiple roots
-        // (e.g. from multi-operator chains), chain them linearly.
-        while let Some(remaining) = stack.pop() {
-            match &mut root_executor {
-                StreamingExecutor::Unary(_, child, _)
-                | StreamingExecutor::Blocking(_, child, _)
-                | StreamingExecutor::Graph(_, child, _)
-                | StreamingExecutor::RecursiveFragment(_, child, _)
-                | StreamingExecutor::Sink(_, child, _)
-                | StreamingExecutor::Ddl(_, child, _)
-                | StreamingExecutor::Fulltext(_, child, _)
-                | StreamingExecutor::Vector(_, child, _)
-                | StreamingExecutor::Txn(_, child, _) => {
-                    // root_executor is unary → wrap remaining as its child chain.
-                    let mut inner = remaining;
-                    match &mut inner {
-                        StreamingExecutor::Unary(_, c, _)
-                        | StreamingExecutor::Blocking(_, c, _)
-                        | StreamingExecutor::Graph(_, c, _)
-                        | StreamingExecutor::RecursiveFragment(_, c, _)
-                        | StreamingExecutor::Sink(_, c, _)
-                        | StreamingExecutor::Ddl(_, c, _)
-                        | StreamingExecutor::Fulltext(_, c, _)
-                        | StreamingExecutor::Vector(_, c, _)
-                        | StreamingExecutor::Txn(_, c, _) => {
-                            std::mem::swap(child, c);
-                        }
-                        _ => {
-                            **child = inner;
-                        }
-                    }
-                }
-                _ => {
-                    // Binary or source root — cannot absorb extra items.
-                    // Prepend remaining before root.
-                    let mut prepend = remaining;
-                    match &mut prepend {
-                        StreamingExecutor::Unary(_, c, _)
-                        | StreamingExecutor::Blocking(_, c, _) => {
-                            **c = root_executor;
-                            root_executor = prepend;
-                        }
-                        _ => {
-                            return Err(QueryError::execution(format!(
-                                "Cannot flatten pipeline in fragment {:?}",
-                                fragment.id
-                            )));
-                        }
-                    }
-                }
-            }
-        }
+        let mut root_executor = previous.ok_or_else(|| {
+            QueryError::execution(format!("Fragment {:?} produced no operators", fragment.id))
+        })?;
 
         root_executor.set_chunk_size(bindings.chunk_size);
         root_executor.set_runtime(Some(runtime.clone()));
@@ -484,8 +424,76 @@ impl PhysicalPlanMaterializer {
     }
 }
 
-fn pop_stack_or_err(stack: &mut Vec<StreamingExecutor>) -> Result<StreamingExecutor, QueryError> {
-    stack.pop().ok_or_else(|| {
-        QueryError::execution("Operator requires child but stack is empty".to_string())
+fn take_external_inputs(
+    contract: &InputContract,
+    fragment_roots: &mut HashMap<FragmentId, StreamingExecutor>,
+) -> Result<Vec<StreamingExecutor>, QueryError> {
+    let ids: Vec<FragmentId> = match contract {
+        InputContract::NoInput => Vec::new(),
+        InputContract::UnaryInput(input) => vec![input.fragment],
+        InputContract::BinaryInputs { left, right } => vec![left.fragment, right.fragment],
+        InputContract::PartitionedInputs { members, .. } => {
+            let mut ordered = members.iter().collect::<Vec<_>>();
+            ordered.sort_by_key(|member| member.partition_id);
+            ordered.into_iter().map(|member| member.fragment).collect()
+        }
+    };
+
+    ids.into_iter()
+        .map(|fragment_id| {
+            fragment_roots.remove(&fragment_id).ok_or_else(|| {
+                QueryError::execution(format!(
+                    "Input contract references unavailable producer fragment {:?}",
+                    fragment_id
+                ))
+            })
+        })
+        .collect()
+}
+
+fn require_input_count(
+    fragment_id: FragmentId,
+    operator_id: super::types::PhysicalOperatorId,
+    inputs: &[StreamingExecutor],
+    expected: usize,
+) -> Result<(), QueryError> {
+    if inputs.len() == expected {
+        Ok(())
+    } else {
+        Err(QueryError::execution(format!(
+            "Operator {:?} in fragment {:?} received {} inputs, expected {}",
+            operator_id,
+            fragment_id,
+            inputs.len(),
+            expected
+        )))
+    }
+}
+
+fn take_unary_input(
+    fragment_id: FragmentId,
+    operator_id: super::types::PhysicalOperatorId,
+    inputs: &mut Vec<StreamingExecutor>,
+) -> Result<StreamingExecutor, QueryError> {
+    require_input_count(fragment_id, operator_id, inputs, 1)?;
+    inputs.pop().ok_or_else(|| {
+        QueryError::execution(format!("Operator {:?} has no unary input", operator_id))
     })
 }
+
+fn take_binary_inputs(
+    fragment_id: FragmentId,
+    operator_id: super::types::PhysicalOperatorId,
+    mut inputs: Vec<StreamingExecutor>,
+) -> Result<(StreamingExecutor, StreamingExecutor), QueryError> {
+    require_input_count(fragment_id, operator_id, &inputs, 2)?;
+    let right = inputs.pop().ok_or_else(|| {
+        QueryError::execution(format!("Operator {:?} has no right input", operator_id))
+    })?;
+    let left = inputs.pop().ok_or_else(|| {
+        QueryError::execution(format!("Operator {:?} has no left input", operator_id))
+    })?;
+    Ok((left, right))
+}
+
+

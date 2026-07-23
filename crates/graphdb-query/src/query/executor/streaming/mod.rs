@@ -20,7 +20,6 @@ pub mod helpers;
 pub mod instance;
 pub mod join_helpers;
 pub mod memory_pool;
-pub mod operator_plan_builder;
 pub mod operators;
 pub mod parameters;
 pub mod partition;
@@ -61,7 +60,7 @@ pub use plan::context::PhysicalPlanBuildContext;
 pub use plan::types::{
     CapabilitySet, FragmentGraph, FragmentId, FragmentKind, FragmentSpec, LogicalNodeId,
     OperatorKindSpec, OutputContract, PhysicalOperatorId, PhysicalOperatorIdAllocator,
-    PhysicalOperatorSpec, PhysicalPlan, PlanCompatibility, SortOrder,
+    PhysicalOperatorSpec, PhysicalPlan, PlanCompatibility, PlanFingerprint, SortOrder,
 };
 pub use plan::validator::{PhysicalPlanValidator, ValidationResult, ValidationTier};
 

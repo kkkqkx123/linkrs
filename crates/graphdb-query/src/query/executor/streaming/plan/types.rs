@@ -1,8 +1,7 @@
 //! PhysicalPlan: immutable, verifiable, cacheable physical plan.
 //!
 //! The top-level plan object uses an arena of [`PhysicalOperatorSpec`] nodes
-//! connected through a [`FragmentGraph`] DAG, replacing the ad-hoc
-//! [`PhysicalNode`](super::PhysicalNode) tree as the build target.
+//! connected through a [`FragmentGraph`] DAG.
 //!
 //! Construction flow (once unified):
 //!
@@ -116,6 +115,49 @@ pub struct OutputContract {
     pub pipeline_mode: PipelineMode,
 }
 
+// ── Plan fingerprint (versioned, stable identity) ──────────────────────────
+
+/// Versioned, stable fingerprint for a [`PhysicalPlan`].
+///
+/// Replaces the earlier approach of hashing the Debug string of operators,
+/// which changes with any struct change (rename, reorder, etc.) and silently
+/// invalidates the cache. The fingerprint is computed from operator kinds and
+/// names in a versioned way so that equivalent plans always produce the same
+/// hash across code changes within the same version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanFingerprint {
+    /// Fingerprint format version.  Bump this when the hashing method changes
+    /// (all cached plans from older versions are automatically invalidated).
+    pub version: u64,
+    /// Stable hash computed from operator kinds and explain names.
+    pub hash: u64,
+}
+
+impl PlanFingerprint {
+    /// Current fingerprint version.  Increment when the hashing scheme
+    /// changes in a way that would make old and new fingerprints incomparable.
+    pub const CURRENT_VERSION: u64 = 1;
+
+    /// Compute a stable fingerprint from an arena of operator specs.
+    ///
+    /// Only operator kind discriminants and explain names are hashed, not
+    /// the full Debug representation.  This ensures that adding fields to a
+    /// spec variant does not change the fingerprint of semantically same plans.
+    pub fn compute(operators: &[PhysicalOperatorSpec]) -> Self {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        Self::CURRENT_VERSION.hash(&mut hasher);
+        for op in operators {
+            std::mem::discriminant(&op.spec).hash(&mut hasher);
+            op.explain_name.hash(&mut hasher);
+        }
+        Self {
+            version: Self::CURRENT_VERSION,
+            hash: hasher.finish(),
+        }
+    }
+}
+
 // ── Plan compatibility (cache validation) ───────────────────────────────────
 
 /// Correctness-relevant metadata used to validate a cached plan.
@@ -124,8 +166,10 @@ pub struct OutputContract {
 /// [`PhysicalPlan`] so it can be compared without loading the full plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanCompatibility {
-    /// Hash of the normalised query text (fingerprint).
-    pub query_fingerprint: u64,
+    /// Versioned, stable fingerprint of the physical operator tree.
+    /// Replaces the older `query_fingerprint: u64` which was computed from
+    /// Debug-string hashing and had no version guard.
+    pub fingerprint: PlanFingerprint,
     /// Schema / layout version at planning time.
     pub layout_version: Option<u64>,
     /// Feature / capability set that the plan requires.
@@ -326,10 +370,6 @@ pub enum StateOwnership {
 // ── Operator spec (arena-stored) ────────────────────────────────────────────
 
 /// Immutable configuration of a single physical operator in the arena.
-///
-/// This is the arena-stored equivalent of the tree-based [`PhysicalNode`],
-/// carrying full metadata for validation, EXPLAIN, PROFILE, and execution
-/// instantiation.
 #[derive(Debug, Clone)]
 pub struct PhysicalOperatorSpec {
     pub operator_id: PhysicalOperatorId,
@@ -348,9 +388,8 @@ pub struct PhysicalOperatorSpec {
     pub explain_name: &'static str,
 }
 
-/// Domain-specific operator configuration (mirrors the PhysicalNode variant
-/// structure but without child references — children are implicit via
-/// the fragment graph).
+/// Domain-specific operator configuration.
+/// Children are implicit via the fragment graph.
 #[derive(Debug, Clone)]
 pub enum OperatorKindSpec {
     Source(SourceSpec),
@@ -513,5 +552,92 @@ impl SyntheticNodeIdAllocator {
 impl Default for SyntheticNodeIdAllocator {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fingerprint_is_stable_within_version() {
+        let mut ops = Vec::new();
+        ops.push(PhysicalOperatorSpec {
+            operator_id: PhysicalOperatorId(0),
+            logical_node_id: None,
+            spec: OperatorKindSpec::Source(
+                crate::query::executor::streaming::operators::spec::SourceSpec::Start,
+            ),
+            input_contract: InputContract::NoInput,
+            input_layout: None,
+            output_layout: crate::query::executor::streaming::slot::SlotLayout::new(vec![]),
+            properties: PhysicalProperties::single_streaming(),
+            state_ownership: StateOwnership::TreeLocal,
+            estimated_cardinality: None,
+            explain_name: "Start",
+        });
+        let fp1 = PlanFingerprint::compute(&ops);
+        let fp2 = PlanFingerprint::compute(&ops);
+        assert_eq!(fp1, fp2, "same plan must produce same fingerprint");
+
+        let ops2 = vec![
+            ops[0].clone(),
+            PhysicalOperatorSpec {
+                operator_id: PhysicalOperatorId(1),
+                logical_node_id: None,
+                spec: OperatorKindSpec::Blocking(
+                    crate::query::executor::streaming::operators::spec::BlockingSpec::Distinct,
+                ),
+                input_contract: InputContract::NoInput,
+                input_layout: None,
+                output_layout: crate::query::executor::streaming::slot::SlotLayout::new(vec![]),
+                properties: PhysicalProperties::single_blocking(),
+                state_ownership: StateOwnership::TaskLocal,
+                estimated_cardinality: None,
+                explain_name: "Distinct",
+            },
+        ];
+        assert_ne!(
+            PlanFingerprint::compute(&ops),
+            PlanFingerprint::compute(&ops2),
+            "different operators must produce different fingerprints"
+        );
+    }
+
+    #[test]
+    fn fingerprint_ignores_irrelevant_fields() {
+        let ops_a = vec![PhysicalOperatorSpec {
+            operator_id: PhysicalOperatorId(0),
+            logical_node_id: Some(LogicalNodeId(42)),
+            spec: OperatorKindSpec::Source(
+                crate::query::executor::streaming::operators::spec::SourceSpec::Start,
+            ),
+            input_contract: InputContract::NoInput,
+            input_layout: None,
+            output_layout: crate::query::executor::streaming::slot::SlotLayout::new(vec![]),
+            properties: PhysicalProperties::single_streaming(),
+            state_ownership: StateOwnership::TreeLocal,
+            estimated_cardinality: None,
+            explain_name: "Start",
+        }];
+        let ops_b = vec![PhysicalOperatorSpec {
+            operator_id: PhysicalOperatorId(99),
+            logical_node_id: Some(LogicalNodeId(7)),
+            spec: OperatorKindSpec::Source(
+                crate::query::executor::streaming::operators::spec::SourceSpec::Start,
+            ),
+            input_contract: InputContract::NoInput,
+            input_layout: None,
+            output_layout: crate::query::executor::streaming::slot::SlotLayout::new(vec![]),
+            properties: PhysicalProperties::single_streaming(),
+            state_ownership: StateOwnership::TreeLocal,
+            estimated_cardinality: None,
+            explain_name: "Start",
+        }];
+        assert_eq!(
+            PlanFingerprint::compute(&ops_a),
+            PlanFingerprint::compute(&ops_b),
+            "fingerprint should not depend on operator_id or logical_node_id"
+        );
     }
 }

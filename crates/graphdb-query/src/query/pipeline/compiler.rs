@@ -84,8 +84,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let space_name = query_context
             .space_name()
             .or_else(|| request.space_name.clone());
-        let version = Some(
+        let schema_version = Some(
             self.schema_generation
+                .load(std::sync::atomic::Ordering::Relaxed),
+        );
+        let index_version = Some(
+            self.index_generation
                 .load(std::sync::atomic::Ordering::Relaxed),
         );
         let mut param_positions = self.param_handler.extract_params(query_text);
@@ -101,16 +105,19 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 &param_positions,
             );
 
-        if let Some(cached) = self.plan_cache.get_with_full_context(
-            query_text,
-            space_name.clone(),
-            version,
-            param_signature,
-            version,
-        ) {
+        let cache_context = crate::query::cache::PlanCacheContext {
+            space_name: space_name.clone(),
+            schema_version,
+            index_version,
+            param_type_signature: param_signature,
+            optimizer_version: 1,
+            planning_config_hash: 0,
+            capability_set: 0,
+        };
+        if let Some(cached) = self.plan_cache.get_with_context(query_text, cache_context) {
             crate::query::executor::streaming::plan::PhysicalPlanValidator::check_compatibility(
                 &cached.plan,
-                version,
+                schema_version,
             )
             .map_err(DBError::from)?;
             return Ok(cached.plan.clone());
@@ -139,10 +146,13 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 crate::query::cache::plan_cache::PlanCachePutContext {
                     dependent_tables,
                     space_name,
-                    schema_version: version,
-                    index_version: version,
+                    schema_version,
+                    index_version,
                     is_dml: false,
                     is_transaction: false,
+                    optimizer_version: 1,
+                    planning_config_hash: 0,
+                    capability_set: 0,
                 },
             );
         }

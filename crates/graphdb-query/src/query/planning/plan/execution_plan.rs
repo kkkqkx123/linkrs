@@ -128,9 +128,17 @@ impl PartitionSpec {
     }
 }
 
-/// A physical decomposition of a logical plan at partition exchange
-/// boundaries. Logical nodes are retained verbatim; this type only describes
-/// where they run (local partition trees or one global tree).
+/// Planner-side partition decomposition of a logical plan.
+///
+/// This is the planner's partition-aware representation, NOT a duplicate
+/// execution physical plan.  The arena [`PhysicalPlan`] (in
+/// `executor::streaming::plan::PhysicalPlan`) is the sole execution
+/// representation — built from this planning decomposition via
+/// `PhysicalPlanBuilder::build` and used by the materializer, cache,
+/// EXPLAIN, and PROFILE.
+///
+/// Logical nodes are retained verbatim; this type only describes where
+/// they run (local partition trees or one global tree).
 #[derive(Debug, Clone)]
 pub struct PartitionedPhysicalPlan {
     partition_spec: PartitionSpec,

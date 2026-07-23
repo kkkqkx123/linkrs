@@ -8,7 +8,7 @@ use super::super::super::operators::spec::{
     RecursiveFragmentSpec, SetSpec, SinkSpec, SourceSpec, TxnSpec, UnarySpec, VectorSpec,
 };
 use super::super::super::slot::{combine_layouts, SlotLayout};
-use super::super::properties::{PhysicalProperties, PipelineKind};
+use super::super::properties::{PhysicalProperties, PipelineKind, SPILL_DEFAULT_THRESHOLD};
 use super::super::types::{
     CapabilitySet, FragmentInput, FragmentKind, FragmentSpec, InputContract, OperatorKindSpec,
     OutputContract, PartitionInput, PartitionSide, PhysicalOperatorId, PhysicalOperatorSpec,
@@ -179,6 +179,53 @@ pub(super) fn populate_runtime_metadata(operators: &mut [PhysicalOperatorSpec]) 
             }
             _ => StateOwnership::TreeLocal,
         };
+        operator.properties = derive_physical_properties(&operator.spec);
+    }
+}
+
+/// Derive [`PhysicalProperties`] from the operator spec directly instead of
+/// relying on each builder call site to pass a consistent default.
+///
+/// This is the single source of truth for per-operator physical properties.
+/// Every call site that pushes an operator should leave its properties at
+/// a reasonable default; this pass corrects them after full assembly.
+///
+/// This makes Phase D requirement #7 observable: properties are derived from
+/// the node / spec, not hardcoded at each call site.
+pub(super) fn derive_physical_properties(spec: &OperatorKindSpec) -> PhysicalProperties {
+    match spec {
+        OperatorKindSpec::Source(_) => PhysicalProperties::single_streaming(),
+        OperatorKindSpec::Unary(_) => PhysicalProperties::single_streaming(),
+        OperatorKindSpec::Blocking(spec) => {
+            match spec {
+                BlockingSpec::Sort { .. } => PhysicalProperties::single_blocking_spillable(
+                    SPILL_DEFAULT_THRESHOLD,
+                ),
+                BlockingSpec::PartialAggregate { .. }
+                | BlockingSpec::FinalAggregate { .. } => {
+                    // Partial / final aggregate requires budget tracking but
+                    // does not spill at the operator level.
+                    PhysicalProperties::single_blocking_with_budget()
+                }
+                // All other blocking operators (Aggregate, GroupBy, Distinct,
+                // TopN, Window, Materialize, DataCollect, RollUpApply) need
+                // a memory budget.
+                _ => PhysicalProperties::single_blocking_with_budget(),
+            }
+        }
+        OperatorKindSpec::Join(_) | OperatorKindSpec::Set(_) | OperatorKindSpec::Apply(_) => {
+            PhysicalProperties::single_blocking_with_budget()
+        }
+        OperatorKindSpec::Exchange(_) => PhysicalProperties::single_blocking(),
+        OperatorKindSpec::Graph(_) | OperatorKindSpec::RecursiveFragment(_) => {
+            PhysicalProperties::single_streaming()
+        }
+        OperatorKindSpec::Sink(_) => PhysicalProperties::single_blocking(),
+        OperatorKindSpec::Ddl(_) => PhysicalProperties::single_blocking(),
+        OperatorKindSpec::Fulltext(_) | OperatorKindSpec::Vector(_) => {
+            PhysicalProperties::single_streaming()
+        }
+        OperatorKindSpec::Txn(_) => PhysicalProperties::single_blocking(),
     }
 }
 pub(super) fn capability_for_operator(spec: &OperatorKindSpec) -> CapabilitySet {

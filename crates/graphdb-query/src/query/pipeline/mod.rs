@@ -38,6 +38,7 @@ pub struct QueryPipelineManager<S: QueryStorage + 'static> {
     pub(crate) storage: Option<Arc<RwLock<S>>>,
     pub(crate) sync_manager: Option<Arc<SyncManager>>,
     pub(crate) schema_generation: Arc<AtomicU64>,
+    pub(crate) index_generation: Arc<AtomicU64>,
     pub(crate) query_registry: Option<Arc<QueryRegistry>>,
     pub(crate) session_controller: parking_lot::RwLock<Option<Arc<SessionTransactionController>>>,
 }
@@ -70,6 +71,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             storage: Some(storage),
             sync_manager: None,
             schema_generation: Arc::new(AtomicU64::new(0)),
+            index_generation: Arc::new(AtomicU64::new(0)),
             query_registry: None,
             session_controller: parking_lot::RwLock::new(None),
         }
@@ -111,6 +113,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             storage: Some(storage),
             sync_manager: None,
             schema_generation: Arc::new(AtomicU64::new(0)),
+            index_generation: Arc::new(AtomicU64::new(0)),
             query_registry: None,
             session_controller: parking_lot::RwLock::new(None),
         }

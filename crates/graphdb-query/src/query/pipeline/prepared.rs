@@ -431,6 +431,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     pub(crate) fn invalidate_after_ddl(&self, space_name: Option<&str>) {
         self.schema_generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.index_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if let Some(space_name) = space_name {
             let removed = self.plan_cache.invalidate_space(space_name);
             if removed > 0 {

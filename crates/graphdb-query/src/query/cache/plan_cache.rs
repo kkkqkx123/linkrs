@@ -48,6 +48,21 @@ pub struct PlanCachePutContext {
     pub index_version: Option<u64>,
     pub is_dml: bool,
     pub is_transaction: bool,
+    pub optimizer_version: u64,
+    pub planning_config_hash: u64,
+    pub capability_set: u64,
+}
+
+/// Complete request/catalog/runtime context used for every plan-cache operation.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PlanCacheContext {
+    pub space_name: Option<String>,
+    pub schema_version: Option<u64>,
+    pub index_version: Option<u64>,
+    pub param_type_signature: Option<u64>,
+    pub optimizer_version: u64,
+    pub planning_config_hash: u64,
+    pub capability_set: u64,
 }
 
 use crate::query::planning::plan::execution_plan::PartitionSpec;
@@ -91,6 +106,9 @@ pub struct PlanCacheKey {
     param_type_signature: Option<u64>,
     /// Index version at planning time — forces replan after index DDL (P2).
     index_version: Option<u64>,
+    optimizer_version: u64,
+    planning_config_hash: u64,
+    capability_set: u64,
 }
 
 impl PlanCacheKey {
@@ -105,6 +123,9 @@ impl PlanCacheKey {
             schema_version: None,
             param_type_signature: None,
             index_version: None,
+            optimizer_version: 0,
+            planning_config_hash: 0,
+            capability_set: 0,
         }
     }
 
@@ -129,26 +150,45 @@ impl PlanCacheKey {
         param_type_signature: Option<u64>,
         index_version: Option<u64>,
     ) -> Self {
+        Self::from_query_with_context(
+            query,
+            PlanCacheContext {
+                space_name,
+                schema_version,
+                index_version,
+                param_type_signature,
+                ..Default::default()
+            },
+        )
+    }
+
+    pub fn from_query_with_context(query: &str, context: PlanCacheContext) -> Self {
         use std::hash::Hash;
 
         let mut hasher = Self::hasher();
-        query.hash(&mut hasher);
-        if let Some(ref name) = space_name {
+        Self::normalize_query(query).hash(&mut hasher);
+        if let Some(ref name) = context.space_name {
             name.hash(&mut hasher);
         }
-        schema_version.hash(&mut hasher);
-        param_type_signature.hash(&mut hasher);
-        index_version.hash(&mut hasher);
+        context.schema_version.hash(&mut hasher);
+        context.param_type_signature.hash(&mut hasher);
+        context.index_version.hash(&mut hasher);
+        context.optimizer_version.hash(&mut hasher);
+        context.planning_config_hash.hash(&mut hasher);
+        context.capability_set.hash(&mut hasher);
         let hash = hasher.finish();
 
         Self {
             hash,
             query_text: query.to_string(),
             partition_fingerprint: None,
-            space_name,
-            schema_version,
-            param_type_signature,
-            index_version,
+            space_name: context.space_name,
+            schema_version: context.schema_version,
+            param_type_signature: context.param_type_signature,
+            index_version: context.index_version,
+            optimizer_version: context.optimizer_version,
+            planning_config_hash: context.planning_config_hash,
+            capability_set: context.capability_set,
         }
     }
 
@@ -160,7 +200,7 @@ impl PlanCacheKey {
         let fp = Self::compute_fingerprint(spec);
 
         let mut hasher = Self::hasher();
-        query.hash(&mut hasher);
+        Self::normalize_query(query).hash(&mut hasher);
         fp.hash(&mut hasher);
         let hash = hasher.finish();
 
@@ -172,14 +212,23 @@ impl PlanCacheKey {
             schema_version: None,
             param_type_signature: None,
             index_version: None,
+            optimizer_version: 0,
+            planning_config_hash: 0,
+            capability_set: 0,
         }
     }
 
     fn hash_query(query: &str) -> u64 {
         use std::hash::Hash;
         let mut hasher = Self::hasher();
-        query.hash(&mut hasher);
+        Self::normalize_query(query).hash(&mut hasher);
         hasher.finish()
+    }
+
+    /// Canonicalize insignificant whitespace for cache identity while retaining
+    /// the original query text for collision diagnostics.
+    fn normalize_query(query: &str) -> String {
+        query.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
     fn hasher() -> std::collections::hash_map::DefaultHasher {
@@ -434,13 +483,24 @@ impl QueryPlanCache {
         param_type_signature: Option<u64>,
         index_version: Option<u64>,
     ) -> Option<Arc<CachedPlan>> {
-        let key = PlanCacheKey::from_query_with_full_context(
+        self.get_with_context(
             query,
-            space_name,
-            schema_version,
-            param_type_signature,
-            index_version,
-        );
+            PlanCacheContext {
+                space_name,
+                schema_version,
+                index_version,
+                param_type_signature,
+                ..Default::default()
+            },
+        )
+    }
+
+    pub fn get_with_context(
+        &self,
+        query: &str,
+        context: PlanCacheContext,
+    ) -> Option<Arc<CachedPlan>> {
+        let key = PlanCacheKey::from_query_with_context(query, context);
 
         if let Some(plan) = self.cache.get(&key) {
             if plan.query_template != query {
@@ -534,15 +594,23 @@ impl QueryPlanCache {
             index_version,
             is_dml,
             is_transaction,
+            optimizer_version,
+            planning_config_hash,
+            capability_set,
         } = context;
         let query_bytes = query.len();
         let param_type_sig = Self::compute_param_type_signature(&param_positions);
-        let key = PlanCacheKey::from_query_with_full_context(
+        let key = PlanCacheKey::from_query_with_context(
             query,
-            space_name,
-            schema_version,
-            param_type_sig,
-            index_version,
+            PlanCacheContext {
+                space_name,
+                schema_version,
+                index_version,
+                param_type_signature: param_type_sig,
+                optimizer_version,
+                planning_config_hash,
+                capability_set,
+            },
         );
 
         let priority = if self.config.priority_config.enable_priority {
@@ -735,6 +803,9 @@ impl QueryPlanCache {
                 schema_version: k.schema_version,
                 param_type_signature: k.param_type_signature,
                 index_version: k.index_version,
+                optimizer_version: k.optimizer_version,
+                planning_config_hash: k.planning_config_hash,
+                capability_set: k.capability_set,
             })
             .collect();
         let removed = keys_to_remove.len();
@@ -905,6 +976,47 @@ mod tests {
         let key = PlanCacheKey::from_query("SELECT * FROM users");
         assert!(key.verify_query("SELECT * FROM users"));
         assert!(!key.verify_query("SELECT * FROM posts"));
+    }
+
+    #[test]
+    fn cache_key_covers_all_compatibility_dimensions() {
+        let base = PlanCacheContext {
+            space_name: Some("space".to_string()),
+            schema_version: Some(1),
+            index_version: Some(2),
+            param_type_signature: Some(3),
+            optimizer_version: 4,
+            planning_config_hash: 5,
+            capability_set: 6,
+        };
+        let key = PlanCacheKey::from_query_with_context("MATCH (n) RETURN n", base.clone());
+        for changed in [
+            PlanCacheContext {
+                optimizer_version: 7,
+                ..base.clone()
+            },
+            PlanCacheContext {
+                planning_config_hash: 7,
+                ..base.clone()
+            },
+            PlanCacheContext {
+                capability_set: 7,
+                ..base.clone()
+            },
+            PlanCacheContext {
+                schema_version: Some(7),
+                ..base.clone()
+            },
+            PlanCacheContext {
+                index_version: Some(7),
+                ..base.clone()
+            },
+        ] {
+            assert_ne!(
+                key,
+                PlanCacheKey::from_query_with_context("MATCH (n) RETURN n", changed)
+            );
+        }
     }
 
     #[test]

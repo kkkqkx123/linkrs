@@ -89,6 +89,7 @@ impl PhysicalPlanValidator {
         Self::check_output_layout_width(plan, &mut result);
         Self::check_fragment_exchange_layout(plan, &mut result);
         Self::check_input_contract_consistency(plan, &mut result);
+        Self::check_linear_fragment_contracts(plan, &mut result);
         Self::check_state_ownership(plan, &mut result);
         Self::check_fragment_parallelism(plan, &mut result);
         Self::check_partition_parallelism(plan, &mut result);
@@ -544,6 +545,98 @@ impl PhysicalPlanValidator {
                         result.warnings.push(format!(
                             "Operator {:?} ({}) has NoInput contract but its fragment {:?} has {} inputs",
                             op.operator_id, op.explain_name, fragment.id, fragment.inputs.len()
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    /// The arena contract is the authoritative edge description. External
+    /// ports on the first operator must match the fragment's producer list;
+    /// subsequent operators may only consume the immediately preceding
+    /// operator in the same fragment. This deliberately rejects ambiguous
+    /// stack-shaped plans instead of trying to repair them at materialization.
+    fn check_linear_fragment_contracts(plan: &PhysicalPlan, result: &mut ValidationResult) {
+        for fragment in plan.fragments.fragments() {
+            if fragment.operators.is_empty() {
+                result.errors.push(format!(
+                    "Fragment {:?} has no operator and therefore no root",
+                    fragment.id
+                ));
+                continue;
+            }
+            if fragment.root_operator
+                != *fragment.operators.last().unwrap_or(&fragment.root_operator)
+            {
+                result.errors.push(format!(
+                    "Fragment {:?} root {:?} is not the final pipeline operator",
+                    fragment.id, fragment.root_operator
+                ));
+            }
+
+            let external = fragment.inputs.clone();
+            for (index, operator_id) in fragment.operators.iter().enumerate() {
+                let Some(operator) = plan.operator(*operator_id) else {
+                    continue;
+                };
+                let references: Vec<FragmentId> = match &operator.input_contract {
+                    InputContract::NoInput => Vec::new(),
+                    InputContract::UnaryInput(input) => vec![input.fragment],
+                    InputContract::BinaryInputs { left, right } => {
+                        vec![left.fragment, right.fragment]
+                    }
+                    InputContract::PartitionedInputs { members, .. } => {
+                        members.iter().map(|member| member.fragment).collect()
+                    }
+                };
+
+                let expected: Vec<FragmentId> = if index == 0 {
+                    external.clone()
+                } else {
+                    vec![fragment.id]
+                };
+                if references != expected {
+                    result.errors.push(format!(
+                        "Operator {:?} in fragment {:?} has input ports {:?}, expected {:?}",
+                        operator_id, fragment.id, references, expected
+                    ));
+                }
+
+                let arity = match &operator.input_contract {
+                    InputContract::NoInput => 0,
+                    InputContract::UnaryInput(_) => 1,
+                    InputContract::BinaryInputs { .. } => 2,
+                    InputContract::PartitionedInputs { members, .. } => members.len(),
+                };
+                let expected_arity = match &operator.spec {
+                    OperatorKindSpec::Source(_) => 0,
+                    OperatorKindSpec::Join(_)
+                    | OperatorKindSpec::Set(_)
+                    | OperatorKindSpec::Apply(_) => 2,
+                    OperatorKindSpec::Exchange(_) => arity,
+                    _ => 1,
+                };
+                if !matches!(operator.spec, OperatorKindSpec::Source(_)) && arity != expected_arity
+                {
+                    result.errors.push(format!(
+                        "Operator {:?} ({}) declares arity {}, expected {}",
+                        operator_id, operator.explain_name, arity, expected_arity
+                    ));
+                }
+
+                for input_fragment in &references {
+                    if *input_fragment == fragment.id {
+                        if index == 0 {
+                            result.errors.push(format!(
+                                "First operator {:?} in fragment {:?} self-references its input",
+                                operator_id, fragment.id
+                            ));
+                        }
+                    } else if plan.fragments.get(*input_fragment).is_none() {
+                        result.errors.push(format!(
+                            "Operator {:?} references missing producer fragment {:?}",
+                            operator_id, input_fragment
                         ));
                     }
                 }

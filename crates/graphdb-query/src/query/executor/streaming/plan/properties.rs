@@ -1,6 +1,6 @@
 //! Physical properties for physical plan nodes.
 //!
-//! Describes the output characteristics of each [`PhysicalNode`](super::PhysicalNode):
+//! Describes the output characteristics of each physical operator:
 //! distribution, ordering, pipeline kind, parallelism, and memory policy.
 //! Used in the cost model, optimizer, and parallel execution planning.
 

@@ -1,7 +1,7 @@
 //! PhysicalPlanBuilder: builds an arena [`PhysicalPlan`] directly from planner nodes.
 //!
 //! This builder walks the [`PlanNodeEnum`] tree directly, creating arena operators
-//! and a fragment DAG without the intermediate [`PhysicalNode`] representation.
+//! and a fragment DAG.
 
 use super::context::PhysicalPlanBuildContext;
 use std::collections::HashMap;
@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use super::types::{
     CapabilitySet, FragmentGraph, FragmentSpec, LogicalNodeId, OutputContract, PhysicalOperatorId,
     PhysicalOperatorIdAllocator, PhysicalOperatorSpec, PhysicalPlan, PlanCompatibility,
+    PlanFingerprint,
 };
 use crate::query::executor::base::ExecutionContext;
 use crate::query::executor::build_error::PlanBuildError;
@@ -28,7 +29,7 @@ impl PhysicalPlanBuilder {
     /// Build a complete [`PhysicalPlan`] from a plan node.
     ///
     /// Walks the [`PlanNodeEnum`] tree directly, creating arena operators
-    /// and a fragment DAG without the intermediate [`PhysicalNode`] representation.
+    /// and a fragment DAG.
     pub fn build(
         node: &PlanNodeEnum,
         ctx: &mut PhysicalPlanBuildContext,
@@ -75,9 +76,7 @@ impl PhysicalPlanBuilder {
                     .push(operator.operator_id);
             }
         }
-        let mut fingerprint_hasher = std::collections::hash_map::DefaultHasher::new();
-        use std::hash::{Hash, Hasher};
-        format!("{:?}", operators).hash(&mut fingerprint_hasher);
+        let fingerprint = PlanFingerprint::compute(&operators);
 
         let mut required_capabilities = CapabilitySet::EMPTY;
         for operator in &operators {
@@ -91,7 +90,7 @@ impl PhysicalPlanBuilder {
             root_fragment: root_fid,
             output,
             compatibility: PlanCompatibility {
-                query_fingerprint: fingerprint_hasher.finish(),
+                fingerprint,
                 layout_version: ctx.schema.as_ref().map(|s| s.layout_version),
                 required_capabilities: required_capabilities.clone(),
                 planning_config_hash: ctx.config.config_hash,

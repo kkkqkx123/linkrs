@@ -52,7 +52,8 @@ pub use invalidation::{
 
 // Re-export the plan cache types
 pub use plan_cache::{
-    CachedPlan, ParamPosition, ParameterizedQueryHandler, PlanCacheKey, QueryPlanCache,
+    CachedPlan, ParamPosition, ParameterizedQueryHandler, PlanCacheContext, PlanCacheKey,
+    QueryPlanCache,
 };
 
 // Re-export the CTE cache types

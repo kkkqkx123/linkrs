@@ -3,8 +3,8 @@
 //! Each variant holds only the immutable fields of a corresponding operator
 //! — expressions, configuration values, column names — but never cursors,
 //! hash tables, buffers, or lifecycle state.  This makes an `OperatorSpec`
-//! tree (== [`PhysicalNode`]) suitable for caching, EXPLAIN, and repeated
-//! instantiation without shared mutable state.
+//! suitable for caching, EXPLAIN, and repeated instantiation without shared
+//! mutable state.
 //!
 //! Phase 2 pilot: Source, Filter, Project, Limit, Sort, HashJoin.
 //! Remaining operators will be migrated in follow-up phases.
