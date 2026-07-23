@@ -220,9 +220,7 @@ fn test_session_execute_with_params() {
     session
         .create_space("param_space", SpaceConfig::default())
         .expect("create space failed");
-    session
-        .use_space("param_space")
-        .expect("use space failed");
+    session.use_space("param_space").expect("use space failed");
 
     session
         .execute("CREATE TAG IF NOT EXISTS person(name STRING NOT NULL, age INT)")
@@ -279,8 +277,7 @@ fn test_session_execute_with_params_unknown_param() {
     let mut params = HashMap::new();
     params.insert("unknown".to_string(), Value::String("value".to_string()));
 
-    let result =
-        session.execute_with_params("SHOW SPACES", params);
+    let result = session.execute_with_params("SHOW SPACES", params);
     assert!(
         result.is_err(),
         "unknown parameter for non-parameterized query should fail"

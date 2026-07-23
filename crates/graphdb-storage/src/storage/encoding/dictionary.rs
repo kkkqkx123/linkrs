@@ -160,7 +160,6 @@ impl DictionaryEncoder {
             + self.indices.len() * std::mem::size_of::<u32>()
             + self.null_bitmap.memory_usage()
     }
-
 }
 
 impl Default for DictionaryEncoder {

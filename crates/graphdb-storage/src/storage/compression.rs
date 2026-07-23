@@ -419,7 +419,6 @@ impl PageReader {
         }
         self.read_page(reader)
     }
-
 }
 
 pub fn write_shadow_file<P: AsRef<std::path::Path>>(path: P, data: &[u8]) -> StorageResult<()> {
@@ -467,10 +466,13 @@ pub fn cleanup_shadow_files<P: AsRef<std::path::Path>>(dir: P) -> StorageResult<
 /// Compress data with zstd and write in spill file format:
 /// [1-byte marker][4-byte CRC32][4-byte compressed_len][zstd data]
 /// Falls back to uncompressed if compression doesn't reduce size.
-pub fn compress_to_writer(writer: &mut impl std::io::Write, data: &[u8], level: i32) -> StorageResult<usize> {
-    let compressed = zstd::encode_all(data, level).map_err(|e| {
-        StorageError::io_error(format!("zstd compression failed: {}", e))
-    })?;
+pub fn compress_to_writer(
+    writer: &mut impl std::io::Write,
+    data: &[u8],
+    level: i32,
+) -> StorageResult<usize> {
+    let compressed = zstd::encode_all(data, level)
+        .map_err(|e| StorageError::io_error(format!("zstd compression failed: {}", e)))?;
 
     if compressed.len() < data.len() {
         let crc = crc32fast::hash(&compressed);
@@ -511,9 +513,8 @@ pub fn decompress_from_reader(reader: &mut impl std::io::Read) -> StorageResult<
                     "spill file CRC mismatch: expected {expected_crc:#x}, got {actual_crc:#x}"
                 )));
             }
-            zstd::decode_all(&compressed[..]).map_err(|e| {
-                StorageError::io_error(format!("zstd decompression failed: {}", e))
-            })
+            zstd::decode_all(&compressed[..])
+                .map_err(|e| StorageError::io_error(format!("zstd decompression failed: {}", e)))
         }
         other => Err(StorageError::deserialize_error(format!(
             "unknown spill compression marker: {other:#x}"
@@ -621,7 +622,7 @@ impl SafeSerializable for ColumnFileHeader {
 #[cfg(test)]
 mod tests {
     use super::*;
-use crate::storage::safe_read::BoundedReader;
+    use crate::storage::safe_read::BoundedReader;
 
     #[test]
     fn test_page_write_read_roundtrip() {

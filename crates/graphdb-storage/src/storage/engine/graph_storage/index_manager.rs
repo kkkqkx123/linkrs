@@ -977,8 +977,6 @@ pub(crate) fn list_edge_indexes(
     ctx.index_metadata_manager().list_edge_indexes(space_id)
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use crate::core::types::{

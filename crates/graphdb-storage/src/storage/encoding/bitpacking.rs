@@ -384,5 +384,4 @@ mod tests {
         let large_range: Vec<i64> = (0..10_000_000_000i64).step_by(1_000_000_000).collect();
         assert!(!select_bitpacking(&large_range));
     }
-
 }

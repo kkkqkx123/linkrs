@@ -182,6 +182,11 @@ impl CapabilitySet {
     pub fn has_parallel(&self) -> bool {
         self.bits & Self::PARALLEL_ALL.bits != 0
     }
+
+    /// Add a capability bit to this set.
+    pub fn insert(&mut self, other: Self) {
+        self.bits |= other.bits;
+    }
 }
 
 // ── Fragment types ──────────────────────────────────────────────────────────

@@ -13,6 +13,7 @@ use graphdb_query::query::executor::streaming::operators::join_operator::JoinOpe
 use graphdb_query::query::executor::streaming::operators::set_operator::SetOperator;
 use graphdb_query::query::executor::streaming::operators::source_operator::SourceOperator;
 use graphdb_query::query::executor::streaming::operators::unary_operator::UnaryOperator;
+use graphdb_query::query::executor::streaming::operators::unary_operator::UnaryOperatorState;
 
 // ====== Test Helpers ======
 
@@ -53,6 +54,7 @@ fn test_filter_then_limit_pipeline() {
         Box::new(scan),
         UnaryOperator::Filter {
             predicate: Expression::Literal(Value::Bool(true)),
+            state: UnaryOperatorState::default(),
         },
     );
 
@@ -90,6 +92,7 @@ fn test_project_then_distinct_pipeline() {
         UnaryOperator::Project {
             output_expressions: vec![Expression::Literal(Value::Int(0))],
             output_col_names: vec![],
+            state: UnaryOperatorState::default(),
         },
     );
 
@@ -203,6 +206,7 @@ fn test_except_then_filter_pipeline() {
         Box::new(except),
         UnaryOperator::Filter {
             predicate: Expression::Literal(Value::Bool(true)),
+            state: UnaryOperatorState::default(),
         },
     );
 

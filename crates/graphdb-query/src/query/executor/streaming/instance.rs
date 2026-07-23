@@ -64,6 +64,12 @@ pub struct QueryBindings {
     pub max_buffered_chunks: usize,
     /// Server-assigned query ID (for KILL QUERY / metrics).
     pub query_id: u64,
+    /// Query text for diagnostics and logging.
+    pub query_text: Option<String>,
+    /// Session ID for the executing session.
+    pub session_id: Option<String>,
+    /// User name for the executing session.
+    pub user_name: Option<String>,
     /// Transaction scope for this execution.
     pub transaction: TransactionScope,
     /// M6: Engine-level shared scheduler.  When set, all queries share the
@@ -91,6 +97,9 @@ impl QueryBindings {
             chunk_size: context.chunk_size,
             max_buffered_chunks: context.max_buffered_chunks,
             query_id: context.query_id,
+            query_text: None,
+            session_id: None,
+            user_name: None,
             transaction,
             shared_scheduler: context.shared_scheduler.clone(),
             #[cfg(feature = "fulltext-search")]

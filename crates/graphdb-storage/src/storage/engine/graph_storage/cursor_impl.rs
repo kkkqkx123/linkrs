@@ -156,11 +156,9 @@ impl VertexCursor for GraphVertexCursor {
 
                 let label_id = tags.labels[self.current_table_idx];
                 if let Some(table) = tables.get(&label_id) {
-                    if let Some(record) = table.get_projected_by_internal_id(
-                        internal_id,
-                        ts,
-                        projection.as_deref(),
-                    ) {
+                    if let Some(record) =
+                        table.get_projected_by_internal_id(internal_id, ts, projection.as_deref())
+                    {
                         let vid = record.vid;
                         let tag_name = tags
                             .names

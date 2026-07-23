@@ -467,14 +467,13 @@ mod tests {
 
     #[test]
     fn test_multi_single_csr_variant() {
-        let mut csr =
-            CsrVariant::from_strategy_with_overflow(
-                EdgeStrategy::MultiSingle { max_edges: 4 },
-                10,
-                100,
-                4096,
-            )
-            .unwrap();
+        let mut csr = CsrVariant::from_strategy_with_overflow(
+            EdgeStrategy::MultiSingle { max_edges: 4 },
+            10,
+            100,
+            4096,
+        )
+        .unwrap();
 
         assert!(csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1));
         assert_eq!(csr.edge_count(), 1);
@@ -519,7 +518,8 @@ mod tests {
 
     #[test]
     fn test_none_csr_iter() {
-        let csr = CsrVariant::from_strategy_with_overflow(EdgeStrategy::None, 10, 100, 4096).unwrap();
+        let csr =
+            CsrVariant::from_strategy_with_overflow(EdgeStrategy::None, 10, 100, 4096).unwrap();
         let mut iter = csr.iter(1);
 
         // Iterator should produce no items
@@ -528,7 +528,8 @@ mod tests {
 
     #[test]
     fn test_none_csr_dump_load() {
-        let csr1 = CsrVariant::from_strategy_with_overflow(EdgeStrategy::None, 10, 100, 4096).unwrap();
+        let csr1 =
+            CsrVariant::from_strategy_with_overflow(EdgeStrategy::None, 10, 100, 4096).unwrap();
         let data = csr1.dump();
 
         // Data should start with variant tag (0 for None)
@@ -556,7 +557,8 @@ mod tests {
 
     #[test]
     fn test_clone_none() {
-        let csr1 = CsrVariant::from_strategy_with_overflow(EdgeStrategy::None, 10, 100, 4096).unwrap();
+        let csr1 =
+            CsrVariant::from_strategy_with_overflow(EdgeStrategy::None, 10, 100, 4096).unwrap();
         let mut csr2 = csr1.clone();
 
         assert_eq!(csr2.edge_count(), 0);

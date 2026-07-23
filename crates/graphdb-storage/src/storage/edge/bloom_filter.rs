@@ -135,5 +135,4 @@ mod tests {
         // Should be around 1.2KB for 1000 elements
         assert!(mem > 1000 && mem < 2000, "Memory usage: {} bytes", mem);
     }
-
 }

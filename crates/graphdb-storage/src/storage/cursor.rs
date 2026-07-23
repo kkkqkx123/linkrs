@@ -16,11 +16,8 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::core::types::storage_ids::VertexId;
 use crate::core::types::Timestamp;
-use crate::core::value::NullType;
 use crate::core::StorageError;
-use crate::storage::StorageClient;
 
 // ---------------------------------------------------------------------------
 // Scan target (type-safe scan intent)
@@ -243,38 +240,6 @@ pub trait IndexCursor: Send + std::fmt::Debug {
 }
 
 // ---------------------------------------------------------------------------
-// Property batch reader
-// ---------------------------------------------------------------------------
-
-/// A batch reader that reads properties for multiple entities at once.
-///
-/// Unlike row-at-a-time `get_vertex` / `get_edge`, this allows the storage
-/// layer to amortise lookup overhead across many entities.
-pub trait PropertyBatchReader: Send + std::fmt::Debug {
-    /// Read a set of named properties for a batch of vertices.
-    ///
-    /// Returns one `Vec<Value>` per vertex in input order.
-    /// Missing entities produce an all-null row (or error, depending on the
-    /// `missing_policy` configuration at spec level).  Missing properties
-    /// produce `Value::Null` for that slot.
-    fn read_vertex_props(
-        &self,
-        ids: &[VertexId],
-        prop_names: &[String],
-    ) -> Result<Vec<Vec<crate::core::Value>>, StorageError>;
-
-    /// Read a set of named properties for a batch of edges.
-    ///
-    /// Edges are identified by (src, dst, edge_type, rank).
-    /// Returns one `Vec<Value>` per edge in input order.
-    fn read_edge_props(
-        &self,
-        edges: &[(VertexId, VertexId, String, i64)],
-        prop_names: &[String],
-    ) -> Result<Vec<Vec<crate::core::Value>>, StorageError>;
-}
-
-// ---------------------------------------------------------------------------
 // Default (Vec-backed) implementations
 // ---------------------------------------------------------------------------
 
@@ -359,21 +324,6 @@ pub fn open_edge_scan<S: crate::storage::StorageReader + ?Sized>(
     reader.create_edge_cursor(space, options)
 }
 
-/// Open a property batch reader through a storage client.
-///
-/// Returns a reader bound to the current transaction snapshot.
-pub fn open_property_batch_reader(
-    storage: &Arc<RwLock<dyn StorageClient>>,
-    space: impl Into<String>,
-    read_timestamp: Timestamp,
-) -> Box<dyn PropertyBatchReader> {
-    Box::new(DefaultPropertyBatchReader::new(
-        storage.clone(),
-        space.into(),
-        read_timestamp,
-    ))
-}
-
 /// Open an index scan cursor through a storage client.
 ///
 /// Returns a cursor that yields row IDs for the given index and predicate.
@@ -389,118 +339,4 @@ pub fn open_index_cursor<S: crate::storage::StorageReader + ?Sized>(
 ) -> Result<Box<dyn IndexCursor<Row = IndexRow>>, StorageError> {
     let reader = storage.read();
     reader.create_index_cursor(plan)
-}
-
-// ---------------------------------------------------------------------------
-// Default (Vec-backed) PropertyBatchReader implementation
-// ---------------------------------------------------------------------------
-
-/// Default property batch reader that performs sequential `get_vertex` /
-/// `get_edge` calls through the storage client.
-#[derive(Debug)]
-pub struct DefaultPropertyBatchReader {
-    storage: Arc<RwLock<dyn StorageClient>>,
-    space: String,
-    read_timestamp: Timestamp,
-}
-
-impl DefaultPropertyBatchReader {
-    pub fn new(
-        storage: Arc<RwLock<dyn StorageClient>>,
-        space: impl Into<String>,
-        read_timestamp: Timestamp,
-    ) -> Self {
-        Self {
-            storage,
-            space: space.into(),
-            read_timestamp,
-        }
-    }
-}
-
-impl PropertyBatchReader for DefaultPropertyBatchReader {
-    fn read_vertex_props(
-        &self,
-        ids: &[VertexId],
-        prop_names: &[String],
-    ) -> Result<Vec<Vec<crate::core::Value>>, StorageError> {
-        let guard = self.storage.read();
-        validate_property_reader_context(&*guard, self.read_timestamp)?;
-        let mut results = Vec::with_capacity(ids.len());
-        for id in ids {
-            match guard.get_vertex(&self.space, id) {
-                Ok(Some(vertex)) => {
-                    let props = prop_names
-                        .iter()
-                        .map(|name| {
-                            vertex
-                                .get_property_any(name)
-                                .cloned()
-                                .unwrap_or(crate::core::Value::Null(NullType::Null))
-                        })
-                        .collect();
-                    results.push(props);
-                }
-                Ok(None) => {
-                    results.push(vec![
-                        crate::core::Value::Null(NullType::Null);
-                        prop_names.len()
-                    ]);
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(results)
-    }
-
-    fn read_edge_props(
-        &self,
-        edges: &[(VertexId, VertexId, String, i64)],
-        prop_names: &[String],
-    ) -> Result<Vec<Vec<crate::core::Value>>, StorageError> {
-        let guard = self.storage.read();
-        validate_property_reader_context(&*guard, self.read_timestamp)?;
-        let mut results = Vec::with_capacity(edges.len());
-        for (src, dst, edge_type, rank) in edges {
-            match guard.get_edge(&self.space, src, dst, edge_type, *rank) {
-                Ok(Some(edge)) => {
-                    let props = prop_names
-                        .iter()
-                        .map(|name| {
-                            edge.get_property(name)
-                                .cloned()
-                                .unwrap_or(crate::core::Value::Null(NullType::Null))
-                        })
-                        .collect();
-                    results.push(props);
-                }
-                Ok(None) => {
-                    results.push(vec![
-                        crate::core::Value::Null(NullType::Null);
-                        prop_names.len()
-                    ]);
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(results)
-    }
-}
-
-fn validate_property_reader_context(
-    storage: &dyn StorageClient,
-    read_timestamp: Timestamp,
-) -> Result<(), StorageError> {
-    let context = storage.operation_context().ok_or_else(|| {
-        StorageError::invalid_operation(
-            "property batch reader requires a storage operation context".to_string(),
-        )
-    })?;
-    if context.read_timestamp != read_timestamp {
-        return Err(StorageError::invalid_operation(format!(
-            "property batch reader timestamp {} does not match storage snapshot {}",
-            read_timestamp, context.read_timestamp
-        )));
-    }
-    Ok(())
 }

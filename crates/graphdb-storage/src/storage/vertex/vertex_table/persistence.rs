@@ -63,7 +63,9 @@ impl VertexTable {
             .columns()
             .iter()
             .map(|col| {
-                let values = (0..col.len()).map(|row_idx| col.get(row_idx)).collect::<Vec<_>>();
+                let values = (0..col.len())
+                    .map(|row_idx| col.get(row_idx))
+                    .collect::<Vec<_>>();
                 (
                     col.name.clone(),
                     selector.select_for_column(&col.data_type, &values),
@@ -92,10 +94,8 @@ impl VertexTable {
                             stats.raw_size,
                             stats.compressed_size,
                         );
-                        selector.record_compression_result(
-                            *encoding_type,
-                            stats.compression_ratio(),
-                        );
+                        selector
+                            .record_compression_result(*encoding_type, stats.compression_ratio());
                     }
                 }
             }
@@ -175,7 +175,11 @@ impl VertexTable {
         Self::write_pages_to_file(path, &payload, page_size, 3, total_rows)
     }
 
-    fn flush_columns(&self, path: &Path, columns: &crate::storage::vertex::ColumnStore) -> StorageResult<()> {
+    fn flush_columns(
+        &self,
+        path: &Path,
+        columns: &crate::storage::vertex::ColumnStore,
+    ) -> StorageResult<()> {
         let mut payload = Vec::new();
         write_header_to(&mut payload, section::VERTEX_COLUMNS).map_err(|e| {
             StorageError::io_error(format!("Failed to write columns header: {}", e))

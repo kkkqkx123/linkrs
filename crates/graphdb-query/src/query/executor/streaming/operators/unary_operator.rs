@@ -17,6 +17,12 @@ pub struct UnaryOperatorState {
     pub parameters: Option<Arc<HashMap<String, Value>>>,
 }
 
+impl Default for UnaryOperatorState {
+    fn default() -> Self {
+        Self { parameters: None }
+    }
+}
+
 #[derive(Debug)]
 pub enum UnaryOperator {
     Filter {

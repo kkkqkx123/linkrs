@@ -355,7 +355,11 @@ impl AlpColumn {
 
     pub fn serialize_meta(&self, writer: &mut impl Write) -> StorageResult<usize> {
         let mut written = 0usize;
-        writer.write_all(&[if self.data_type == DataType::Float { 1 } else { 2 }])?;
+        writer.write_all(&[if self.data_type == DataType::Float {
+            1
+        } else {
+            2
+        }])?;
         written += 1;
         writer.write_all(&(self.row_count as u32).to_le_bytes())?;
         written += 4;
@@ -432,5 +436,4 @@ mod tests {
         let decimals: Vec<f64> = (0..1000).map(|i| i as f64 * 0.01).collect();
         assert!(select_alp(&decimals));
     }
-
 }

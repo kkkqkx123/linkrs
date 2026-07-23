@@ -325,7 +325,8 @@ impl RleBoolColumn {
         if bitmap_len != encoder.len() {
             return Err(StorageError::deserialize_error(format!(
                 "RLE boolean row count mismatch: runs={}, bitmap={}",
-                encoder.len(), bitmap_len
+                encoder.len(),
+                bitmap_len
             )));
         }
         Ok(Self {
@@ -391,8 +392,8 @@ mod tests {
 
         let mut bytes = Vec::new();
         col.serialize_meta(&mut bytes).expect("serialize bool RLE");
-        let restored = RleBoolColumn::deserialize_meta(&mut &bytes[..])
-            .expect("deserialize bool RLE");
+        let restored =
+            RleBoolColumn::deserialize_meta(&mut &bytes[..]).expect("deserialize bool RLE");
         assert_eq!(restored.get(0), Some(Value::Bool(true)));
         assert_eq!(restored.get(2), Some(Value::Bool(false)));
         assert_eq!(restored.get(3), None);

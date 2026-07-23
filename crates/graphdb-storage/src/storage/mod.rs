@@ -36,9 +36,9 @@ pub use client::{
     StorageSyncContextOps, StorageWriter,
 };
 pub use cursor::{
-    open_edge_scan, open_index_cursor, open_property_batch_reader, open_vertex_scan, EdgeCursor,
-    IndexCursor, IndexPredicate, IndexRow, IndexScanPlan, PartitionSelector, PropertyBatchReader,
-    ScanOptions, ScanTarget, VecEdgeCursor, VecVertexCursor, VertexCursor,
+    open_edge_scan, open_index_cursor, open_vertex_scan, EdgeCursor, IndexCursor, IndexPredicate,
+    IndexRow, IndexScanPlan, PartitionSelector, ScanOptions, ScanTarget, VecEdgeCursor,
+    VecVertexCursor, VertexCursor,
 };
 pub use engine::config::{PropertyGraphConfig, ResourceConfig};
 pub use engine::graph_storage::GraphStorage;

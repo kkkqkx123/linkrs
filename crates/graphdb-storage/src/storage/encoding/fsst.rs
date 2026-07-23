@@ -367,10 +367,7 @@ impl FsstColumn {
         self.rebuild_bytes(&new_bytes)
     }
 
-    pub fn rebuild_bytes(
-        &mut self,
-        new_bytes: &[&[u8]],
-    ) -> crate::core::StorageResult<()> {
+    pub fn rebuild_bytes(&mut self, new_bytes: &[&[u8]]) -> crate::core::StorageResult<()> {
         let mut existing: Vec<(usize, Vec<u8>)> = Vec::with_capacity(self.encoded_data.len());
         for (idx, encoded) in self.encoded_data.iter().enumerate() {
             if self.null_bitmap.is_null(idx) {
@@ -399,19 +396,14 @@ impl FsstColumn {
         Ok(())
     }
 
-    pub fn rebuild_if_needed(
-        &mut self,
-        threshold: f64,
-    ) -> crate::core::StorageResult<()> {
+    pub fn rebuild_if_needed(&mut self, threshold: f64) -> crate::core::StorageResult<()> {
         let threshold = threshold.clamp(0.0, 1.0);
         let existing_rows = self
             .encoded_data
             .len()
             .saturating_sub(self.updates_since_rebuild);
         let required_updates = ((existing_rows as f64) * threshold).ceil() as usize;
-        if self.updates_since_rebuild > 0
-            && self.updates_since_rebuild >= required_updates.max(1)
-        {
+        if self.updates_since_rebuild > 0 && self.updates_since_rebuild >= required_updates.max(1) {
             self.rebuild(&[])?;
         }
         Ok(())
@@ -751,5 +743,4 @@ mod tests {
         let encoder = FsstEncoder::train(&refs, 100);
         assert!(encoder.symbol_count() > 0);
     }
-
 }

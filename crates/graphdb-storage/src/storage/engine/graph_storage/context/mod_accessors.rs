@@ -67,7 +67,7 @@ impl GraphStorageContext {
                 .next_auto_transaction_id
                 .fetch_add(1, Ordering::SeqCst),
         );
-        
+
         let mut bound = self.clone();
         let mut context = StorageOperationContext {
             transaction_id: Some(transaction_id),
@@ -79,25 +79,31 @@ impl GraphStorageContext {
             mvcc_vertex_snapshot_handles: Vec::new(),
             mvcc_edge_snapshot_registered: false,
         };
-        
-        // Register MVCC snapshots to prevent GC from cleaning data during the transaction
-        self.persistent.data_store.with_vertex_tables_mut(|vertex_tables| {
-            for (label_id, vertex_table) in vertex_tables.iter_mut() {
-                if let Ok(handle) = vertex_table.register_snapshot(timestamp) {
-                    context.mvcc_vertex_snapshot_handles.push((*label_id, handle));
-                }
-            }
-            Ok(())
-        })?;
 
-        self.persistent.data_store.with_edge_tables_mut(|edge_tables| {
-            for edge_store in edge_tables.values_mut() {
-                edge_store.register_snapshot(timestamp);
-            }
-            Ok(())
-        })?;
+        // Register MVCC snapshots to prevent GC from cleaning data during the transaction
+        self.persistent
+            .data_store
+            .with_vertex_tables_mut(|vertex_tables| {
+                for (label_id, vertex_table) in vertex_tables.iter_mut() {
+                    if let Ok(handle) = vertex_table.register_snapshot(timestamp) {
+                        context
+                            .mvcc_vertex_snapshot_handles
+                            .push((*label_id, handle));
+                    }
+                }
+                Ok(())
+            })?;
+
+        self.persistent
+            .data_store
+            .with_edge_tables_mut(|edge_tables| {
+                for edge_store in edge_tables.values_mut() {
+                    edge_store.register_snapshot(timestamp);
+                }
+                Ok(())
+            })?;
         context.mvcc_edge_snapshot_registered = true;
-        
+
         bound.operation_context = Some(Arc::new(context));
         bound.write_timestamp_lease = Some(Arc::new(WriteTimestampLease {
             version_manager: self.persistent.version_manager.clone(),
@@ -150,24 +156,28 @@ impl GraphStorageContext {
 
         // Unregister MVCC vertex snapshots
         if !vertex_snapshot_handles.is_empty() {
-            self.persistent.data_store.with_vertex_tables_mut(|vertex_tables| {
-                for (label_id, handle) in &vertex_snapshot_handles {
-                    if let Some(vertex_table) = vertex_tables.get_mut(label_id) {
-                        let _ = vertex_table.unregister_snapshot(*handle);
+            self.persistent
+                .data_store
+                .with_vertex_tables_mut(|vertex_tables| {
+                    for (label_id, handle) in &vertex_snapshot_handles {
+                        if let Some(vertex_table) = vertex_tables.get_mut(label_id) {
+                            let _ = vertex_table.unregister_snapshot(*handle);
+                        }
                     }
-                }
-                Ok(())
-            })?;
+                    Ok(())
+                })?;
         }
 
         // Unregister MVCC edge snapshots
         if operation.mvcc_edge_snapshot_registered {
-            self.persistent.data_store.with_edge_tables_mut(|edge_tables| {
-                for edge_store in edge_tables.values_mut() {
-                    edge_store.unregister_snapshot(timestamp);
-                }
-                Ok(())
-            })?;
+            self.persistent
+                .data_store
+                .with_edge_tables_mut(|edge_tables| {
+                    for edge_store in edge_tables.values_mut() {
+                        edge_store.unregister_snapshot(timestamp);
+                    }
+                    Ok(())
+                })?;
         }
 
         if committed {

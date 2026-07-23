@@ -335,5 +335,3 @@ fn test_property_table_offset_reuse() {
 }
 
 // ==================== MVCC Tests ====================
-
-

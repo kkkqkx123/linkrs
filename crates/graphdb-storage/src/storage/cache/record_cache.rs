@@ -252,7 +252,8 @@ impl RecordCache {
         ts: Timestamp,
     ) {
         let key = (IdIndexCacheKey::new(label_id, external_id.to_string()), ts);
-        self.id_index_cache.insert(key, IdIndexCacheValue { internal_id });
+        self.id_index_cache
+            .insert(key, IdIndexCacheValue { internal_id });
         self.id_index_stats.record_insertion();
     }
 

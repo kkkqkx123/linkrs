@@ -563,9 +563,7 @@ impl TransactionManager {
         let context = Arc::new(TransactionContext::new(txn_id, timestamp, config));
 
         if context.get_concurrency_mode() == ConcurrencyMode::Pessimistic {
-            let prev = self
-                .write_exclusion_owner
-                .swap(txn_id.0, Ordering::SeqCst);
+            let prev = self.write_exclusion_owner.swap(txn_id.0, Ordering::SeqCst);
             if prev != 0 {
                 self.checkpoint_gate.release_write();
                 self.active_transactions.remove(&txn_id);
@@ -660,7 +658,10 @@ impl TransactionManager {
         vertex_idx.retain(|_, entries| !entries.is_empty());
         for vid in txn_write_set.vertices.iter() {
             if let Some(entries) = vertex_idx.get(vid) {
-                if entries.iter().any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp) {
+                if entries
+                    .iter()
+                    .any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp)
+                {
                     drop(vertex_idx);
                     drop(committed);
                     self.stats.record_txn_conflict();

@@ -271,7 +271,11 @@ fn test_schema_version_history_recovery() {
             .expect("get_vertex_version_history failed")
             .expect("history should exist");
 
-        assert_eq!(history.latest_version(), 1, "version should be v1 after tag creation");
+        assert_eq!(
+            history.latest_version(),
+            1,
+            "version should be v1 after tag creation"
+        );
     }
 
     // Reopen and verify version_history is still there

@@ -897,7 +897,9 @@ impl Column {
     /// columns persist the raw buffers. Keeping the size calculation here
     /// makes flush-time statistics reflect the actual column format.
     pub fn compute_stats(&self) -> StorageResult<ColumnStats> {
-        let values = (0..self.len()).map(|row_idx| self.get(row_idx)).collect::<Vec<_>>();
+        let values = (0..self.len())
+            .map(|row_idx| self.get(row_idx))
+            .collect::<Vec<_>>();
         let (data, offsets, bitmap) = self.get_flush_data();
         let raw_size = data
             .len()
