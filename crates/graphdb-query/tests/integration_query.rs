@@ -2,7 +2,7 @@
 //!
 //! Test Range.
 //! - query::parser - SQL/NGQL parsing, AST generation
-//! - query::validator - semantic validation, type derivation
+//! - query::binder - semantic validation + binding (replaces validator)
 //! - query::planner - execution plan generation
 //! - query::optimizer - plan optimization, rule application
 //! - query::executor - executor scheduling, result return
@@ -20,8 +20,6 @@ use graphdb_query::query::optimizer::OptimizerEngine;
 use graphdb_query::query::parser::Parser;
 use graphdb_query::query::pipeline::QueryPipelineManager;
 use graphdb_query::query::planning::PlannerConfig;
-use graphdb_query::query::validator::validator_trait::StatementType;
-use graphdb_query::query::validator::Validator;
 use graphdb_query::query::QueryContext;
 use graphdb_query::query::QueryRequestContext;
 use graphdb_query::storage::StorageSchemaOps;
@@ -119,74 +117,6 @@ fn test_parser_invalid_syntax() {
     assert!(result.is_err(), "Invalid syntax should return an error");
 }
 
-// ==================== Validator 集成测试 ====================
-
-#[test]
-fn test_validator_creation() {
-    let validator = Validator::create(StatementType::Match);
-    // Validator created successfully
-    let _ = validator;
-}
-
-#[test]
-fn test_validator_match_basic() {
-    let test_storage = TestStorage::new().expect("创建测试存储失败");
-    let storage = test_storage.storage();
-
-    // Creating a Graph Space and Schema
-    let mut space_info = common::storage_helpers::create_test_space("validator_test_space");
-    {
-        let mut storage_guard = storage.write();
-        assert_ok(storage_guard.create_space(&mut space_info));
-    }
-
-    // parse query
-    let query = "USE validator_test_space; MATCH (n:Person) RETURN n";
-    let mut parser = Parser::new(query);
-    let stmt = assert_ok(parser.parse());
-
-    // Create validator and validate (using new API)
-    let mut validator = Validator::create_from_stmt(&stmt.ast.stmt).expect("创建验证器失败");
-    let query_context = create_test_query_context();
-
-    // validation queries
-    let result = validator.validate(stmt.ast, query_context);
-    // The result of the validation depends on the specific implementation and may succeed or return a specific error
-    assert!(result.success, "Validation should succeed");
-}
-
-#[test]
-fn test_validator_go_statement() {
-    let query = "GO FROM 1 OVER KNOWS";
-    let mut parser = Parser::new(query);
-    let stmt = assert_ok(parser.parse());
-
-    // Create validator and validate (using new API)
-    let mut validator = Validator::create_from_stmt(&stmt.ast.stmt).expect("创建验证器失败");
-    let query_context = create_test_query_context();
-
-    // GO statement validation
-    let result = validator.validate(stmt.ast, query_context);
-    assert!(result.success, "GO statement validation should succeed");
-}
-
-#[test]
-fn test_validator_use_statement() {
-    let query = "USE test_space";
-    let mut parser = Parser::new(query);
-    let stmt = assert_ok(parser.parse());
-
-    // Create validator and validate (using new API)
-    let mut validator = Validator::create_from_stmt(&stmt.ast.stmt).expect("创建验证器失败");
-    let query_context = create_test_query_context();
-
-    // USE statement validation
-    let result = validator.validate(stmt.ast, query_context);
-    assert!(
-        result.success,
-        "The USE statement should validate successfully"
-    );
-}
 
 // ==================== Planner Integration Testing ====================
 

@@ -19,7 +19,6 @@ pub mod parser;
 pub mod pipeline;
 pub mod planning;
 pub mod query_manager;
-pub mod validator;
 
 // Re-export DataSet for convenience
 pub use data_set::DataSet;

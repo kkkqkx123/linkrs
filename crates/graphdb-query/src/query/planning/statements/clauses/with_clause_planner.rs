@@ -339,9 +339,6 @@ impl WithClausePlanner {
             need_gen_project: has_agg,
             agg_output_column_names: vec![],
             proj_output_column_names: vec![],
-            paths: vec![],
-            query_parts: vec![],
-            errors: vec![],
             filter_condition: with_stmt.where_clause.clone(),
             skip: with_stmt.skip,
             limit: with_stmt.limit,
@@ -352,20 +349,15 @@ impl WithClausePlanner {
             aliases_available: HashMap::new(), // The aliases obtained from the input plan are filled in during the planning phase.
             aliases_generated,
             where_clause: with_stmt.where_clause.clone().map(|condition| {
-                crate::query::validator::structs::WhereClauseContext {
+                crate::query::binder::validation::WhereClauseContext {
                     filter: Some(condition),
                     aliases_available: HashMap::new(),
                     aliases_generated: HashMap::new(),
-                    paths: vec![],
-                    query_parts: vec![],
-                    errors: vec![],
                 }
             }),
             pagination,
             order_by,
             distinct: with_stmt.distinct,
-            query_parts: vec![],
-            errors: vec![],
         })
     }
 

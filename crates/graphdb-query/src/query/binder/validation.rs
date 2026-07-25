@@ -230,3 +230,54 @@ impl CypherClauseKind {
         }
     }
 }
+
+// ── Clause contexts (used by planners) ───────────────────────────────────────
+
+use crate::core::types::OrderDirection;
+use crate::core::YieldColumn;
+
+#[derive(Debug, Clone)]
+pub struct WhereClauseContext {
+    pub filter: Option<ContextualExpression>,
+    pub aliases_available: HashMap<String, AliasType>,
+    pub aliases_generated: HashMap<String, AliasType>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OrderByClauseContext {
+    pub indexed_order_factors: Vec<(usize, OrderDirection)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PaginationContext {
+    pub skip: i64,
+    pub limit: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct YieldClauseContext {
+    pub yield_columns: Vec<YieldColumn>,
+    pub aliases_available: HashMap<String, AliasType>,
+    pub aliases_generated: HashMap<String, AliasType>,
+    pub distinct: bool,
+    pub has_agg: bool,
+    pub group_keys: Vec<ContextualExpression>,
+    pub group_items: Vec<ContextualExpression>,
+    pub need_gen_project: bool,
+    pub agg_output_column_names: Vec<String>,
+    pub proj_output_column_names: Vec<String>,
+    pub filter_condition: Option<ContextualExpression>,
+    pub skip: Option<usize>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct WithClauseContext {
+    pub yield_clause: YieldClauseContext,
+    pub aliases_available: HashMap<String, AliasType>,
+    pub aliases_generated: HashMap<String, AliasType>,
+    pub where_clause: Option<WhereClauseContext>,
+    pub pagination: Option<PaginationContext>,
+    pub order_by: Option<OrderByClauseContext>,
+    pub distinct: bool,
+}
