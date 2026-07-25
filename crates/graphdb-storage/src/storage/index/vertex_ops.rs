@@ -3,6 +3,7 @@ use crate::core::{StorageError, Value};
 use crate::storage::index::helpers::{
     effective_index_values, merged_included_columns, vertex_entity_ref,
 };
+use crate::storage::index::key_codec::key_builder::normalize_int_value;
 use crate::storage::index::key_codec::{KeyBuilder, KeyParser};
 use crate::storage::index::traits::VertexIndexOps;
 use crate::storage::index::types::{IndexIdentity, IndexRecord};
@@ -63,8 +64,9 @@ impl VertexIndexOps for IndexDataManagerImpl {
                     continue;
                 }
                 if let Ok(value) = KeyParser::parse_prop_value_from_key(key) {
-                    if !existing_values.contains(&value) {
-                        existing_values.push(value);
+                    let nv = normalize_int_value(&value);
+                    if !existing_values.contains(&nv) {
+                        existing_values.push(nv);
                     }
                 }
                 if record.created_ts >= existing_columns_ts {
@@ -182,7 +184,7 @@ impl VertexIndexOps for IndexDataManagerImpl {
                 if !entry.is_visible_at(read_ts) {
                     continue;
                 }
-                if !KeyParser::parse_prop_value_from_key(key).is_ok_and(|stored| stored == *value) {
+                if !KeyParser::parse_prop_value_from_key(key).is_ok_and(|stored| normalize_int_value(&stored) == normalize_int_value(value)) {
                     continue;
                 }
                 if let Ok(vertex_id) = KeyParser::parse_vertex_id_from_key(key) {

@@ -145,7 +145,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         );
 
         let query_text = qctx.request_context().query.clone();
-        let physical_plan = self.compile_or_get_cached(&query_text, qctx.clone(), &inner_validated)?;
+        let physical_plan =
+            self.compile_or_get_cached(&query_text, qctx.clone(), &inner_validated)?;
 
         let exec_ctx = self.build_execution_context(&qctx);
         let mut bindings = QueryBindings::from_context(&exec_ctx, TransactionScope::None);
@@ -174,10 +175,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                         rows: op_profile.output_rows as i64,
                         exec_duration_in_us: (op_profile.open_time_us
                             + op_profile.next_time_us
-                            + op_profile.close_time_us) as i64,
+                            + op_profile.close_time_us)
+                            as i64,
                         total_duration_in_us: (op_profile.open_time_us
                             + op_profile.next_time_us
-                            + op_profile.close_time_us) as i64,
+                            + op_profile.close_time_us)
+                            as i64,
                         other_stats: {
                             let mut map = std::collections::HashMap::new();
                             map.insert(

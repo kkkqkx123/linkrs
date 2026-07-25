@@ -5,6 +5,7 @@ use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::cursor::{IndexCursor, IndexPredicate, IndexRow, IndexScanPlan};
 use crate::storage::index::generic_index_manager::GenericIndexManager;
 use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
+use crate::storage::index::key_codec::key_builder::normalize_int_value;
 use crate::storage::index::key_codec::{EdgeIndexKeyGen, KeyBuilder, KeyParser};
 use crate::storage::index::manifest::{ManifestCatalog, ManifestHandle};
 use crate::storage::index::types::{EdgeIdentity, IndexRecord, StaleChecker};
@@ -292,7 +293,7 @@ impl EdgeIndexManager {
 
             let key_bytes = compressed_key.as_slice();
             if let Ok(stored_value) = KeyParser::parse_prop_value_from_edge_key(key_bytes) {
-                if &stored_value == value {
+                if normalize_int_value(&stored_value) == normalize_int_value(value) {
                     if let Ok((src, dst, edge_type, ranking)) =
                         KeyParser::parse_edge_identity_from_key(key_bytes)
                     {

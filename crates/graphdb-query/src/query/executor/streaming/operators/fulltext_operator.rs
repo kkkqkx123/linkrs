@@ -7,7 +7,7 @@ use crate::core::types::expr::Expression;
 use crate::core::Value;
 #[cfg(not(feature = "fulltext-search"))]
 use crate::query::core::NodeType;
-use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
+use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::operators::base::OperatorBase;
 #[cfg(feature = "fulltext-search")]

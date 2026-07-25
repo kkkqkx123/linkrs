@@ -10,9 +10,9 @@ use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::context::ValueRowContext;
 use crate::query::executor::streaming::slot::SlotLayout;
-use crate::query::executor::traversal::config::TraversalConfig;
-use crate::query::executor::traversal::graph_reader::TraversalGraphReader;
-use crate::query::executor::traversal::runtime::TraversalRuntime;
+    use crate::query::executor::traversal::config::TraversalConfig;
+    use crate::query::executor::traversal::graph_reader::TraversalGraphReader;
+    use crate::query::executor::traversal::runtime::TraversalRuntime;
 use crate::storage::QueryStorage;
 
 use super::super::visited_set::VisitedSet;
@@ -45,6 +45,7 @@ pub(super) fn expand_on_chunk(
     col_names_template: Vec<String>,
     src_vids: Vec<Value>,
     cancel_token: Option<Arc<AtomicBool>>,
+    step_limit: u32,
 ) -> Result<Option<DataChunk>, QueryError> {
     let _chunk_col_names = chunk.col_names();
 
@@ -54,9 +55,11 @@ pub(super) fn expand_on_chunk(
 
     for row in &chunk.rows {
         let context = ValueRowContext::new(row.clone(), chunk.get_layout());
+        let src_name = col_names_template.first().map(|s| s.as_str());
         let vid_val = context
             .get_variable("vid")
             .or_else(|| context.get_variable("src"))
+            .or_else(|| src_name.and_then(|name| context.get_variable(name)))
             .or_else(|| row.first().cloned())
             .unwrap_or(Value::Null(crate::core::NullType::Null));
 
@@ -78,8 +81,15 @@ pub(super) fn expand_on_chunk(
 
     let mut out_rows = Vec::new();
     for (vid, row) in seed_vids.iter().zip(seed_rows.iter()) {
-        let config =
-            TraversalConfig::expand(space_name.to_string(), direction, edge_types.to_vec());
+        let config = if step_limit > 1 {
+            TraversalConfig {
+                min_depth: step_limit,
+                max_depth: step_limit,
+                ..TraversalConfig::expand(space_name.to_string(), direction, edge_types.to_vec())
+            }
+        } else {
+            TraversalConfig::expand(space_name.to_string(), direction, edge_types.to_vec())
+        };
         let runtime_reader = TraversalGraphReader::new(reader);
         let mut runtime = TraversalRuntime::new(runtime_reader, config);
         if let Some(token) = cancel_token.clone() {

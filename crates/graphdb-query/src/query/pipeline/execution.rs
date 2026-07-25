@@ -12,7 +12,6 @@ use crate::query::executor::streaming::instance::{
 use crate::query::executor::streaming::plan::PhysicalPlan;
 use crate::query::executor::streaming::transaction_scope::TransactionScope;
 use crate::query::executor::streaming::StreamingQueryResult;
-use crate::query::validator::ValidatedStatement;
 use crate::query::QueryContext;
 use crate::query::QueryRequestContext;
 use crate::storage::QueryStorage;
@@ -133,18 +132,17 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let mut metrics = QueryMetrics::new();
         let mut profile = QueryProfile::new(session_id, query_text.to_string());
 
-        let rctx = Arc::new(QueryRequestContext::new(query_text.to_string()));
-        let query_context = Arc::new(QueryContext::new(rctx));
-
-        let parse_start = Instant::now();
-        let parser_result = match self.parse_into_context(query_text) {
-            Ok(result) => {
-                profile.stages.parse_us = parse_start.elapsed().as_micros() as u64;
-                metrics.record_parse_time(parse_start.elapsed());
-                result
+        // Use prepared lifecycle for parse + validate
+        let prepare_start = Instant::now();
+        let request = match self.prepare_request_with_auto_commit(query_text, None) {
+            Ok(req) => {
+                profile.stages.parse_us = prepare_start.elapsed().as_micros() as u64;
+                profile.stages.validate_us = 0;
+                metrics.record_parse_time(prepare_start.elapsed());
+                req
             }
             Err(e) => {
-                profile.stages.parse_us = parse_start.elapsed().as_micros() as u64;
+                profile.stages.parse_us = prepare_start.elapsed().as_micros() as u64;
                 let error_info =
                     ErrorInfo::new(ErrorType::ParseError, QueryPhase::Parse, e.to_string());
                 profile.mark_failed_with_info(error_info.clone());
@@ -155,68 +153,40 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             }
         };
 
-        self.record_query_type_counter(parser_result.ast.stmt());
+        self.record_query_type_counter(request.validated.ast.stmt());
 
-        let validate_start = Instant::now();
-        let validation_info = match self
-            .validate_query_with_context(parser_result.ast.clone(), query_context.clone())
-        {
-            Ok(info) => info,
-            Err(e) => {
-                profile.stages.validate_us = validate_start.elapsed().as_micros() as u64;
-                let error_info = ErrorInfo::new(
-                    ErrorType::ValidationError,
-                    QueryPhase::Validate,
-                    e.to_string(),
-                );
-                profile.mark_failed_with_info(error_info.clone());
-                profile.total_duration_us = total_start.elapsed().as_micros() as u64;
-                self.stats_manager
-                    .record_failed_query(profile.clone(), error_info);
-                return Err(e);
-            }
-        };
-
-        profile.stages.validate_us = validate_start.elapsed().as_micros() as u64;
-        metrics.record_validate_time(validate_start.elapsed());
-
-        let validated = ValidatedStatement::new(parser_result.ast.clone(), validation_info);
-
-        match validated.ast.stmt() {
-            crate::query::parser::ast::Stmt::Explain(explain_stmt) => {
-                let result = self.execute_explain(explain_stmt, query_context)?;
-                profile.total_duration_us = total_start.elapsed().as_micros() as u64;
-                metrics.record_total_time(total_start.elapsed());
-                return Ok((result, metrics, profile));
-            }
-            crate::query::parser::ast::Stmt::Profile(profile_stmt) => {
-                let result = self.execute_profile(profile_stmt, query_context)?;
-                profile.total_duration_us = total_start.elapsed().as_micros() as u64;
-                metrics.record_total_time(total_start.elapsed());
-                return Ok((result, metrics, profile));
-            }
-            _ => {}
+        // Diagnostic short-circuit via execute_diagnostic (already uses prepared request)
+        if matches!(
+            request.statement_class,
+            super::prepared::StatementClass::Diagnostic
+        ) {
+            let result = self.execute_diagnostic(&request)?;
+            profile.total_duration_us = total_start.elapsed().as_micros() as u64;
+            metrics.record_total_time(total_start.elapsed());
+            return Ok((result, metrics, profile));
         }
 
+        // Compile with per-phase timing (not from cache, to measure each phase)
         let plan_start = Instant::now();
-        let execution_plan = match self.generate_execution_plan(query_context.clone(), &validated) {
-            Ok(plan) => {
-                profile.stages.plan_us = plan_start.elapsed().as_micros() as u64;
-                metrics.set_plan_node_count(plan.node_count());
-                metrics.record_plan_time(plan_start.elapsed());
-                plan
-            }
-            Err(e) => {
-                profile.stages.plan_us = plan_start.elapsed().as_micros() as u64;
-                let error_info =
-                    ErrorInfo::new(ErrorType::PlanningError, QueryPhase::Plan, e.to_string());
-                profile.mark_failed_with_info(error_info.clone());
-                profile.total_duration_us = total_start.elapsed().as_micros() as u64;
-                self.stats_manager
-                    .record_failed_query(profile.clone(), error_info);
-                return Err(e);
-            }
-        };
+        let execution_plan =
+            match self.generate_execution_plan(request.query_context.clone(), &request.validated) {
+                Ok(plan) => {
+                    profile.stages.plan_us = plan_start.elapsed().as_micros() as u64;
+                    metrics.set_plan_node_count(plan.node_count());
+                    metrics.record_plan_time(plan_start.elapsed());
+                    plan
+                }
+                Err(e) => {
+                    profile.stages.plan_us = plan_start.elapsed().as_micros() as u64;
+                    let error_info =
+                        ErrorInfo::new(ErrorType::PlanningError, QueryPhase::Plan, e.to_string());
+                    profile.mark_failed_with_info(error_info.clone());
+                    profile.total_duration_us = total_start.elapsed().as_micros() as u64;
+                    self.stats_manager
+                        .record_failed_query(profile.clone(), error_info);
+                    return Err(e);
+                }
+            };
 
         let optimize_start = Instant::now();
         let optimized_plan = match self.optimize_execution_plan(execution_plan) {
@@ -240,26 +210,37 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             }
         };
 
-        let physical_plan = self.build_physical_plan(&optimized_plan, &query_context)?;
+        let physical_plan = self.build_physical_plan(&optimized_plan, &request.query_context)?;
 
         let execute_start = Instant::now();
-        let result =
-            match self.execute_compiled(physical_plan, query_context, ResultSink::Materialize) {
-                Ok(result) => result,
-                Err(e) => {
-                    profile.stages.execute_us = execute_start.elapsed().as_micros() as u64;
-                    let error_info = ErrorInfo::new(
-                        ErrorType::ExecutionError,
-                        QueryPhase::Execute,
-                        e.to_string(),
-                    );
-                    profile.mark_failed_with_info(error_info.clone());
-                    profile.total_duration_us = total_start.elapsed().as_micros() as u64;
-                    self.stats_manager
-                        .record_failed_query(profile.clone(), error_info);
-                    return Err(e);
-                }
-            };
+        let result = match self.execute_compiled_with_scope(
+            physical_plan,
+            request.query_context.clone(),
+            ResultSink::Materialize,
+            request.transaction_scope.clone(),
+        ) {
+            Ok(result) => result,
+            Err(e) => {
+                profile.stages.execute_us = execute_start.elapsed().as_micros() as u64;
+                let error_info = ErrorInfo::new(
+                    ErrorType::ExecutionError,
+                    QueryPhase::Execute,
+                    e.to_string(),
+                );
+                profile.mark_failed_with_info(error_info.clone());
+                profile.total_duration_us = total_start.elapsed().as_micros() as u64;
+                self.stats_manager
+                    .record_failed_query(profile.clone(), error_info);
+                return Err(e);
+            }
+        };
+
+        self.record_cache_execution(
+            &request.query_text,
+            &request.query_context,
+            request.validated.ast.stmt(),
+            execute_start.elapsed().as_secs_f64() * 1000.0,
+        );
 
         profile.stages.execute_us = execute_start.elapsed().as_micros() as u64;
         profile.result_count = result.count();
@@ -275,15 +256,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         Ok((result, metrics, profile))
     }
 
-    pub(crate) fn execute_compiled(
-        &self,
-        physical_plan: Arc<PhysicalPlan>,
-        query_context: Arc<QueryContext>,
-        sink: ResultSink,
-    ) -> DBResult<ExecutionResult> {
-        self.execute_compiled_with_scope(physical_plan, query_context, sink, TransactionScope::None)
-    }
-
     pub(crate) fn execute_compiled_with_scope(
         &self,
         physical_plan: Arc<PhysicalPlan>,
@@ -293,7 +265,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     ) -> DBResult<ExecutionResult> {
         if matches!(sink, ResultSink::Stream) {
             return Err(DBError::from(QueryError::execution(
-                "Use execute_compiled_stream for streaming sink".to_string(),
+                "Use execute_compiled_stream_with_scope for streaming sink".to_string(),
             )));
         }
 
@@ -347,18 +319,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             }
             ResultSink::Stream => unreachable!("stream sink is rejected before instantiation"),
         }
-    }
-
-    pub(crate) fn execute_compiled_stream(
-        &self,
-        physical_plan: Arc<PhysicalPlan>,
-        query_context: Arc<QueryContext>,
-    ) -> DBResult<StreamingQueryResult> {
-        self.execute_compiled_stream_with_scope(
-            physical_plan,
-            query_context,
-            TransactionScope::None,
-        )
     }
 
     pub(crate) fn execute_compiled_stream_with_scope(

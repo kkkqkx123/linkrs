@@ -38,6 +38,7 @@ pub enum GraphOperator {
         filter_expr: Option<Expression>,
         col_names: Vec<String>,
         src_vids: Vec<Value>,
+        step_limit: u32,
     },
     Traverse {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
@@ -224,6 +225,7 @@ impl GraphOperator {
                 filter_expr,
                 col_names,
                 src_vids,
+                step_limit,
             } => Self::ExpandAll {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
@@ -232,6 +234,7 @@ impl GraphOperator {
                 filter_expr: filter_expr.clone(),
                 col_names: col_names.clone(),
                 src_vids: src_vids.clone(),
+                step_limit: *step_limit,
             },
             GraphSpec::Traverse {
                 edge_types,
@@ -413,6 +416,7 @@ impl GraphOperator {
                 filter_expr,
                 col_names,
                 src_vids,
+                step_limit,
             } => expand::handle_all(
                 &*storage,
                 &*space_name,
@@ -421,6 +425,7 @@ impl GraphOperator {
                 &*filter_expr,
                 col_names.clone(),
                 src_vids.clone(),
+                *step_limit,
                 base,
                 input,
             ),

@@ -150,6 +150,19 @@ impl IndexDataManagerImpl {
         if self.restored_generations.read().get(&identity) == Some(&generation) {
             return Ok(());
         }
+        // If the existing runtime already has this generation installed
+        // (e.g. via publish_native_index during rebuild), don't overwrite
+        // it by loading from the manifest's checkpoint file, which may be
+        // empty in in-memory mode.
+        if let Some(runtime) = self.runtimes.read().get(&identity) {
+            let has_gen = runtime.generation(generation).is_some();
+            if has_gen {
+                self.restored_generations
+                    .write()
+                    .insert(identity, generation);
+                return Ok(());
+            }
+        }
         let runtime = match index.index_type {
             IndexType::TagIndex => IndexRuntime::load::<
                 crate::storage::index::key_codec::VertexIndexKeyGen,

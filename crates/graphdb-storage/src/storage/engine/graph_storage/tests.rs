@@ -233,7 +233,7 @@ mod tests {
         let mut cursor = storage
             .create_vertex_cursor(
                 "test_space",
-                &ScanOptions::default().with_projection(vec!["name".to_string()]),
+                &ScanOptions::default().with_projection_named(vec!["name".to_string()]),
             )
             .expect("cursor should open");
         let rows = cursor.next_batch(8).expect("cursor batch");

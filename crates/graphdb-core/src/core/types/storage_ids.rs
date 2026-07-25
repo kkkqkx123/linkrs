@@ -371,7 +371,11 @@ impl TryFrom<&Value> for VertexId {
             Value::Int(i) => Ok(Self::from_int64(*i as i64)),
             Value::BigInt(i) => Ok(Self::from_int64(*i)),
             Value::String(s) => {
-                Self::try_from_string(s).map_err(crate::core::StorageError::invalid_input)
+                if let Ok(i) = s.parse::<i64>() {
+                    Ok(Self::from_int64(i))
+                } else {
+                    Self::try_from_string(s).map_err(crate::core::StorageError::invalid_input)
+                }
             }
             Value::Vertex(v) => Ok(v.vid),
             _ => Err(crate::core::StorageError::invalid_input(

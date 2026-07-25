@@ -47,7 +47,8 @@ impl IndexDataManagerImpl {
         let temporary = VertexIndexManager::new();
         let mut forward = BTreeMap::new();
         for shard in generation.shards() {
-            forward.extend(shard.forward().read().clone());
+            let fwd = shard.forward().read().clone();
+            forward.extend(fwd);
         }
         temporary.base().replace_data(forward, BTreeMap::new());
         let mut cursor = temporary.open_tag_index_cursor_full(

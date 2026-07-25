@@ -198,11 +198,10 @@ pub(super) fn derive_physical_properties(spec: &OperatorKindSpec) -> PhysicalPro
         OperatorKindSpec::Unary(_) => PhysicalProperties::single_streaming(),
         OperatorKindSpec::Blocking(spec) => {
             match spec {
-                BlockingSpec::Sort { .. } => PhysicalProperties::single_blocking_spillable(
-                    SPILL_DEFAULT_THRESHOLD,
-                ),
-                BlockingSpec::PartialAggregate { .. }
-                | BlockingSpec::FinalAggregate { .. } => {
+                BlockingSpec::Sort { .. } => {
+                    PhysicalProperties::single_blocking_spillable(SPILL_DEFAULT_THRESHOLD)
+                }
+                BlockingSpec::PartialAggregate { .. } | BlockingSpec::FinalAggregate { .. } => {
                     // Partial / final aggregate requires budget tracking but
                     // does not spill at the operator level.
                     PhysicalProperties::single_blocking_with_budget()
@@ -359,34 +358,45 @@ pub(super) fn infer_output_layout(spec: &OperatorKindSpec, inputs: &[SlotLayout]
         OperatorKindSpec::Graph(
             GraphSpec::Expand { col_names, .. } | GraphSpec::ExpandAll { col_names, .. },
         ) => {
-            if col_names.len() == 3 {
-                SlotLayout::from_names(col_names)
-            } else {
-                let base = layout_with_added_names(
-                    &input,
-                    ["_expand_edge".to_string(), "_expand_dst".to_string()],
-                );
-                // Add extra col_names (e.g., edge type alias "friend") as aliases
-                // on the edge slot so YIELD friend.name can resolve.
-                if col_names.len() > 3 {
-                    let edge_slot_id = base.resolve("_expand_edge").unwrap_or(0);
-                    let mut slots = base.slots;
-                    let mut name_to_slot = base.name_to_slot;
-                    for extra_name in col_names.iter().skip(3) {
-                        if let Some(slot) = slots.get_mut(edge_slot_id) {
-                            if slot.alias.is_none() {
-                                slot.alias = Some(extra_name.clone());
-                            }
-                        }
-                        name_to_slot.insert(extra_name.clone(), edge_slot_id);
-                    }
-                    SlotLayout {
-                        slots,
-                        name_to_slot,
-                    }
-                } else {
-                    base
+            let base = layout_with_added_names(
+                &input,
+                ["_expand_edge".to_string(), "_expand_dst".to_string()],
+            );
+            if col_names.len() >= 3 {
+                let edge_slot_id = base
+                    .resolve("_expand_edge")
+                    .unwrap_or(base.slots.len().saturating_sub(2));
+                let dst_slot_id = base
+                    .resolve("_expand_dst")
+                    .unwrap_or(edge_slot_id.saturating_add(1));
+                let mut slots = base.slots;
+                let mut name_to_slot = base.name_to_slot;
+                let src_slot_id = input.resolve(&col_names[0]).unwrap_or(0);
+                name_to_slot.insert(col_names[0].clone(), src_slot_id);
+                if let Some(slot) = slots.get_mut(edge_slot_id) {
+                    slot.name = col_names[1].clone();
                 }
+                name_to_slot.insert(col_names[1].clone(), edge_slot_id);
+                if let Some(slot) = slots.get_mut(dst_slot_id) {
+                    slot.name = col_names[2].clone();
+                }
+                name_to_slot.insert(col_names[2].clone(), dst_slot_id);
+                name_to_slot.insert("$$".to_string(), dst_slot_id);
+                name_to_slot.insert("$^".to_string(), src_slot_id);
+                for extra_name in col_names.iter().skip(3) {
+                    if let Some(slot) = slots.get_mut(edge_slot_id) {
+                        if slot.alias.is_none() {
+                            slot.alias = Some(extra_name.clone());
+                        }
+                    }
+                    name_to_slot.insert(extra_name.clone(), edge_slot_id);
+                }
+                SlotLayout {
+                    slots,
+                    name_to_slot,
+                }
+            } else {
+                base
             }
         }
         OperatorKindSpec::Graph(GraphSpec::Traverse { .. }) => layout_with_added_names(
@@ -461,6 +471,7 @@ pub(super) fn source_output_layout(spec: &SourceSpec) -> SlotLayout {
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn source_explain_name(spec: &SourceSpec) -> &'static str {
     match spec {
         SourceSpec::Start => "Start",
@@ -479,6 +490,7 @@ pub(super) fn source_explain_name(spec: &SourceSpec) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn unary_explain_name(spec: &UnarySpec) -> &'static str {
     match spec {
         UnarySpec::Filter { .. } => "Filter",
@@ -492,6 +504,7 @@ pub(super) fn unary_explain_name(spec: &UnarySpec) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn blocking_explain_name(spec: &BlockingSpec) -> &'static str {
     match spec {
         BlockingSpec::Sort { .. } => "Sort",
@@ -509,6 +522,7 @@ pub(super) fn blocking_explain_name(spec: &BlockingSpec) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn join_explain_name(spec: &JoinSpec) -> &'static str {
     match spec {
         JoinSpec::InnerJoin { .. } => "InnerJoin",
@@ -523,6 +537,7 @@ pub(super) fn join_explain_name(spec: &JoinSpec) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn graph_explain_name(spec: &GraphSpec) -> &'static str {
     match spec {
         GraphSpec::Expand { .. } => "Expand",
@@ -537,6 +552,7 @@ pub(super) fn graph_explain_name(spec: &GraphSpec) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn recursive_fragment_explain_name(spec: &RecursiveFragmentSpec) -> &'static str {
     match spec {
         RecursiveFragmentSpec::ShortestPath { .. } => "RecursiveShortestPath",
@@ -546,6 +562,7 @@ pub(super) fn recursive_fragment_explain_name(spec: &RecursiveFragmentSpec) -> &
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn sink_explain_name(spec: &SinkSpec) -> &'static str {
     match spec {
         SinkSpec::InsertVertices { .. } => "InsertVertices",
@@ -560,6 +577,7 @@ pub(super) fn sink_explain_name(spec: &SinkSpec) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn set_explain_name(spec: &SetSpec) -> &'static str {
     match spec {
         SetSpec::Union => "Union",
@@ -570,6 +588,7 @@ pub(super) fn set_explain_name(spec: &SetSpec) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn apply_explain_name(spec: &ApplySpec) -> &'static str {
     match spec {
         ApplySpec::Apply { .. } => "Apply",
@@ -578,6 +597,7 @@ pub(super) fn apply_explain_name(spec: &ApplySpec) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn exchange_explain_name(spec: &ExchangeSpec) -> &'static str {
     match spec {
         ExchangeSpec::Concatenate { .. } => "Concatenate",
@@ -589,6 +609,7 @@ pub(super) fn exchange_explain_name(spec: &ExchangeSpec) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn ddl_explain_name(spec: &DdlSpec) -> &'static str {
     match spec {
         DdlSpec::SpaceManage { .. } => "SpaceManage",
@@ -603,6 +624,7 @@ pub(super) fn ddl_explain_name(spec: &DdlSpec) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn fulltext_explain_name(spec: &FulltextSpec) -> &'static str {
     match spec {
         FulltextSpec::FulltextManage { .. } => "FulltextManage",
@@ -612,6 +634,7 @@ pub(super) fn fulltext_explain_name(spec: &FulltextSpec) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn vector_explain_name(spec: &VectorSpec) -> &'static str {
     match spec {
         VectorSpec::VectorManage { .. } => "VectorManage",
@@ -621,6 +644,7 @@ pub(super) fn vector_explain_name(spec: &VectorSpec) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn txn_explain_name(spec: &TxnSpec) -> &'static str {
     match spec {
         TxnSpec::BeginTransaction => "BeginTransaction",
@@ -629,6 +653,7 @@ pub(super) fn txn_explain_name(spec: &TxnSpec) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn fragment_kind_for_spec(
     _spec: &SourceSpec,
     props: &PhysicalProperties,

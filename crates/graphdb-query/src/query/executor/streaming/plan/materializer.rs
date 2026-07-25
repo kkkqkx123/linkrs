@@ -495,5 +495,3 @@ fn take_binary_inputs(
     })?;
     Ok((left, right))
 }
-
-

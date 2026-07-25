@@ -394,9 +394,11 @@ pub(super) fn execute_edge_manage(
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),
-        EdgeManageNode::Alter(_) => super::exec_ddl(storage, |s| {
+        EdgeManageNode::Alter(node) => super::exec_ddl(storage, |s| {
             let name = edge_type.as_deref().unwrap_or("");
-            StorageSchemaOps::alter_edge_type(s, space_name, name, vec![], vec![])
+            let additions = node.info().additions.clone();
+            let deletions = node.info().deletions.clone();
+            StorageSchemaOps::alter_edge_type(s, space_name, name, additions, deletions)
                 .map_err(|e| QueryError::execution(e.to_string()))?;
             Ok(())
         }),

@@ -1,0 +1,33 @@
+//! Logical join nodes: InnerJoin, LeftJoin, RightJoin, CrossJoin, FullOuterJoin, SemiJoin.
+
+use crate::define_logical_join_node;
+
+define_logical_join_node! {
+    pub struct LogicalInnerJoinNode {}
+    enum: InnerJoin
+}
+
+define_logical_join_node! {
+    pub struct LogicalLeftJoinNode {}
+    enum: LeftJoin
+}
+
+define_logical_join_node! {
+    pub struct LogicalRightJoinNode {}
+    enum: RightJoin
+}
+
+define_logical_join_node! {
+    pub struct LogicalCrossJoinNode {}
+    enum: CrossJoin
+}
+
+define_logical_join_node! {
+    pub struct LogicalFullOuterJoinNode {}
+    enum: FullOuterJoin
+}
+
+define_logical_join_node! {
+    pub struct LogicalSemiJoinNode {}
+    enum: SemiJoin
+}

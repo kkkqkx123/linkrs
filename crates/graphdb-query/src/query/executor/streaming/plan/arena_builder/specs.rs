@@ -590,6 +590,7 @@ pub(super) fn build_expand_all_spec(
         filter_expr: node.filter().map(contextual_to_expression).transpose()?,
         col_names: node.col_names().to_vec(),
         src_vids: node.src_vids().to_vec(),
+        step_limit: node.step_limit().unwrap_or(1),
     })
 }
 

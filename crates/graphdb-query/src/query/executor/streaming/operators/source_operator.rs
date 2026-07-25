@@ -19,7 +19,7 @@ use crate::query::executor::streaming::slot::SlotLayout;
 use crate::storage::QueryStorage;
 use crate::storage::{
     open_edge_scan, open_index_cursor, open_vertex_scan, EdgeCursor, IndexCursor, IndexPredicate,
-    IndexRow, IndexScanPlan, ScanOptions, VecEdgeCursor, VertexCursor,
+    IndexRow, IndexScanPlan, RequiredProperty, ScanOptions, VecEdgeCursor, VertexCursor,
 };
 
 #[derive(Debug, Default)]
@@ -380,8 +380,12 @@ impl SourceOperator {
                         &ScanOptions {
                             limit: *limit,
                             vertex_id_range: partition_range.clone(),
-                            projection: (!projected_properties.is_empty())
-                                .then(|| projected_properties.clone()),
+                            projection: (!projected_properties.is_empty()).then(|| {
+                                projected_properties
+                                    .iter()
+                                    .map(|n| RequiredProperty::new(n.clone()))
+                                    .collect()
+                            }),
                             ..ScanOptions::default()
                         },
                     )
@@ -420,8 +424,12 @@ impl SourceOperator {
                             limit: *limit,
                             edge_type: edge_type.clone(),
                             edge_src_id_range: partition_range.clone(),
-                            projection: (!projected_properties.is_empty())
-                                .then(|| projected_properties.clone()),
+                            projection: (!projected_properties.is_empty()).then(|| {
+                                projected_properties
+                                    .iter()
+                                    .map(|n| RequiredProperty::new(n.clone()))
+                                    .collect()
+                            }),
                             ..ScanOptions::default()
                         },
                     )
@@ -590,7 +598,7 @@ impl SourceOperator {
                 space_name,
                 cursor,
                 col_names: _,
-                projected_properties,
+                projected_properties: _,
                 ..
             } => loop {
                 base.ensure_not_cancelled()?;

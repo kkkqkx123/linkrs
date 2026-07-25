@@ -331,19 +331,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         Arc::new(query_context)
     }
 
-    /// Parse and validate a statement in one call.
-    pub(crate) fn parse_and_validate_request(
-        &mut self,
-        query_text: &str,
-        rctx: Arc<QueryRequestContext>,
-        space_info: Option<&SpaceInfo>,
-    ) -> DBResult<(Arc<QueryContext>, ValidatedStatement)> {
-        let query_context = self.query_context_for_request(rctx, space_info);
-        let parser_result = self.parse_into_context(query_text)?;
-        let validated = self.validate_parsed_statement(parser_result.ast, query_context.clone())?;
-        Ok((query_context, validated))
-    }
-
     /// Validate a previously-parsed AST.
     pub(crate) fn validate_parsed_statement(
         &mut self,
@@ -460,16 +447,20 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let space_name = query_context
             .space_name()
             .or_else(|| query_context.request_context().space_name.clone());
-        let version = Some(
+        let schema_version = Some(
             self.schema_generation
+                .load(std::sync::atomic::Ordering::Relaxed),
+        );
+        let index_version = Some(
+            self.index_generation
                 .load(std::sync::atomic::Ordering::Relaxed),
         );
         self.plan_cache.record_execution_with_space(
             query_text,
             execution_time_ms,
             space_name,
-            version,
-            version,
+            schema_version,
+            index_version,
         );
     }
 
@@ -485,8 +476,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             .query_context
             .space_name()
             .or_else(|| request.query_context.request_context().space_name.clone());
-        let version = Some(
+        let schema_version = Some(
             self.schema_generation
+                .load(std::sync::atomic::Ordering::Relaxed),
+        );
+        let index_version = Some(
+            self.index_generation
                 .load(std::sync::atomic::Ordering::Relaxed),
         );
 
@@ -499,8 +494,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 &query_text,
                 execution_start.elapsed().as_secs_f64() * 1000.0,
                 space_name2,
-                version,
-                version,
+                schema_version,
+                index_version,
             );
         }));
     }

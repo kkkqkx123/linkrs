@@ -18,6 +18,31 @@ pub fn codec() -> OrderedCodec {
     OrderedCodec::new()
 }
 
+/// Normalize integer values to the smallest type that fits, so that
+/// `Value::BigInt(25)` and `Value::Int(25)` produce identical index key prefixes.
+/// This ensures index keys built during INSERT/REBUILD and predicate prefixes
+/// built during LOOKUP all use the same encoding for numerically equal values.
+pub fn normalize_int_value(v: &Value) -> Value {
+    match v {
+        Value::BigInt(n) => {
+            if *n >= i16::MIN as i64 && *n <= i16::MAX as i64 {
+                return Value::SmallInt(*n as i16);
+            }
+            if *n >= i32::MIN as i64 && *n <= i32::MAX as i64 {
+                return Value::Int(*n as i32);
+            }
+            v.clone()
+        }
+        Value::Int(n) => {
+            if *n >= i16::MIN as i32 && *n <= i16::MAX as i32 {
+                return Value::SmallInt(*n as i16);
+            }
+            v.clone()
+        }
+        _ => v.clone(),
+    }
+}
+
 impl KeyBuilder {
     // ========================================================================
     // Vertex Forward Index Keys
@@ -34,8 +59,7 @@ impl KeyBuilder {
         key.push(KEY_TYPE_VERTEX_FORWARD);
         key.extend_from_slice(&(index_name.len() as u32).to_le_bytes());
         key.extend_from_slice(index_name.as_bytes());
-        // Use OrderedCodec for the value and entity tie-breaker
-        let encoded_value = codec().encode(prop_value)?;
+        let encoded_value = codec().encode(&normalize_int_value(prop_value))?;
         key.extend_from_slice(&encoded_value);
         let encoded_entity = codec().encode(vertex_id)?;
         key.extend_from_slice(&encoded_entity);
@@ -58,7 +82,7 @@ impl KeyBuilder {
         prop_value: &Value,
     ) -> Result<ByteKey, StorageError> {
         let mut key = Self::build_vertex_index_prefix(space_id, index_name).0;
-        let encoded_value = codec().encode(prop_value)?;
+        let encoded_value = codec().encode(&normalize_int_value(prop_value))?;
         key.extend_from_slice(&encoded_value);
         Ok(ByteKey(key))
     }
@@ -116,7 +140,7 @@ impl KeyBuilder {
         key.push(KEY_TYPE_EDGE_FORWARD);
         key.extend_from_slice(&(index_name.len() as u32).to_le_bytes());
         key.extend_from_slice(index_name.as_bytes());
-        let encoded_value = codec().encode(prop_value)?;
+        let encoded_value = codec().encode(&normalize_int_value(prop_value))?;
         key.extend_from_slice(&encoded_value);
         let encoded_src = codec().encode(edge_src)?;
         key.extend_from_slice(&encoded_src);
@@ -144,7 +168,7 @@ impl KeyBuilder {
         prop_value: &Value,
     ) -> Result<ByteKey, StorageError> {
         let mut key = Self::build_edge_index_prefix(space_id, index_name).0;
-        let encoded_value = codec().encode(prop_value)?;
+        let encoded_value = codec().encode(&normalize_int_value(prop_value))?;
         key.extend_from_slice(&encoded_value);
         Ok(ByteKey(key))
     }

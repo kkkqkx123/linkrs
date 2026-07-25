@@ -105,13 +105,23 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                 &param_positions,
             );
 
+        // Use the same planning config source as PhysicalPlanBuildContext
+        // to ensure cache key dimensions match what the builder embeds in plan metadata.
+        let planning_config = crate::query::executor::streaming::plan::context::PlanningConfig {
+            max_partitions: self
+                .optimizer_engine
+                .partitioning_config()
+                .max_workers
+                .max(1),
+            ..Default::default()
+        };
         let cache_context = crate::query::cache::PlanCacheContext {
             space_name: space_name.clone(),
             schema_version,
             index_version,
             param_type_signature: param_signature,
-            optimizer_version: 1,
-            planning_config_hash: 0,
+            optimizer_version: planning_config.optimizer_version,
+            planning_config_hash: planning_config.config_hash,
             capability_set: 0,
         };
         if let Some(cached) = self.plan_cache.get_with_context(query_text, cache_context) {
@@ -150,8 +160,8 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                     index_version,
                     is_dml: false,
                     is_transaction: false,
-                    optimizer_version: 1,
-                    planning_config_hash: 0,
+                    optimizer_version: planning_config.optimizer_version,
+                    planning_config_hash: planning_config.config_hash,
                     capability_set: 0,
                 },
             );

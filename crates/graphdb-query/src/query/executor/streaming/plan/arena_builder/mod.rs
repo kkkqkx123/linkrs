@@ -13,7 +13,6 @@ use super::types::{
 };
 use crate::query::executor::base::ExecutionContext;
 use crate::query::executor::build_error::PlanBuildError;
-use crate::query::executor::streaming::SourceSpec;
 use crate::query::planning::plan::core::nodes::base::plan_node_enum::PlanNodeEnum;
 
 mod assembler;
@@ -110,6 +109,7 @@ mod tests {
     use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
     use crate::query::executor::base::ExecutionContext;
     use crate::query::executor::streaming::plan::types::{InputContract, OperatorKindSpec};
+    use crate::query::executor::streaming::SourceSpec;
     use crate::query::planning::plan::core::nodes::control_flow::start_node::StartNode;
     use std::sync::Arc;
 

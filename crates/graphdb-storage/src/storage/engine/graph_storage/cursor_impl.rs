@@ -108,7 +108,10 @@ impl GraphVertexCursor {
             offset_remaining: options.offset,
             emitted: 0,
             id_range: options.vertex_id_range.clone(),
-            projection: options.projection.clone(),
+            projection: options
+                .projection
+                .as_ref()
+                .map(|p| p.iter().map(|rp| rp.name.clone()).collect()),
             exhausted,
             ts,
             table_max_ids,
@@ -297,7 +300,10 @@ impl GraphEdgeCursor {
             offset_remaining: options.offset,
             emitted: 0,
             src_id_range: options.edge_src_id_range.clone(),
-            projection: options.projection.clone(),
+            projection: options
+                .projection
+                .as_ref()
+                .map(|p| p.iter().map(|rp| rp.name.clone()).collect()),
             exhausted: targets.is_empty(),
             ts,
             targets,

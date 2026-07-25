@@ -300,6 +300,7 @@ pub enum GraphSpec {
         filter_expr: Option<Expression>,
         col_names: Vec<String>,
         src_vids: Vec<Value>,
+        step_limit: u32,
     },
     Traverse {
         edge_types: Vec<String>,

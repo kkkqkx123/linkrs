@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::core::types::Timestamp;
+use crate::core::types::{DataType, Timestamp};
 use crate::core::StorageError;
 
 // ---------------------------------------------------------------------------
@@ -31,6 +31,67 @@ use crate::core::StorageError;
 pub enum ScanTarget {
     Vertex,
     Edge { edge_type: Option<String> },
+}
+
+// ---------------------------------------------------------------------------
+// Required property (typed projection)
+// ---------------------------------------------------------------------------
+
+/// Carries resolved metadata so that scan operators and storage cursors
+/// no longer rely on alias/name heuristics.  The `schema_version` binds
+/// the identity to a specific catalog generation, preventing stale reuse
+/// after schema changes.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RequiredProperty {
+    /// Property name (column name in storage).
+    pub name: String,
+    /// Resolved column index in the target `ColumnStore`, if known.
+    pub column_id: Option<i32>,
+    /// Data type from schema binding.
+    pub data_type: Option<DataType>,
+    /// Schema version at binding time.
+    pub schema_version: u64,
+}
+
+impl RequiredProperty {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            column_id: None,
+            data_type: None,
+            schema_version: 0,
+        }
+    }
+
+    pub fn with_metadata(
+        name: String,
+        column_id: Option<i32>,
+        data_type: Option<DataType>,
+        schema_version: u64,
+    ) -> Self {
+        Self {
+            name,
+            column_id,
+            data_type,
+            schema_version,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn column_id(&self) -> Option<i32> {
+        self.column_id
+    }
+
+    pub fn data_type(&self) -> Option<&DataType> {
+        self.data_type.as_ref()
+    }
+
+    pub fn schema_version(&self) -> u64 {
+        self.schema_version
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -60,7 +121,7 @@ pub struct ScanOptions {
     /// Edge type filter (for edge scans only).
     pub edge_type: Option<String>,
     /// Optional property projection pushed into the physical scan.
-    pub projection: Option<Vec<String>>,
+    pub projection: Option<Vec<RequiredProperty>>,
     /// Read timestamp captured by the caller.
     pub read_timestamp: Option<Timestamp>,
 }
@@ -102,7 +163,12 @@ impl ScanOptions {
         self
     }
 
-    pub fn with_projection(mut self, projection: Vec<String>) -> Self {
+    pub fn with_projection_named(mut self, projection: Vec<String>) -> Self {
+        self.projection = Some(projection.into_iter().map(RequiredProperty::new).collect());
+        self
+    }
+
+    pub fn with_projection(mut self, projection: Vec<RequiredProperty>) -> Self {
         self.projection = Some(projection);
         self
     }

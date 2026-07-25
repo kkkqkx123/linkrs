@@ -40,6 +40,7 @@ pub(super) fn handle(
                 Vec::new(),
                 Vec::new(),
                 cancel_token.clone(),
+                1,
             )? {
                 return Ok(Some(output));
             }
@@ -92,6 +93,7 @@ pub(super) fn handle_all(
     filter_expr: &Option<Expression>,
     col_names: Vec<String>,
     src_vids: Vec<Value>,
+    step_limit: u32,
     base: &mut OperatorBase,
     input: &mut StreamingExecutor,
 ) -> Result<Option<DataChunk>, QueryError> {
@@ -114,6 +116,7 @@ pub(super) fn handle_all(
                 col_names.clone(),
                 src_vids.clone(),
                 cancel_token.clone(),
+                step_limit,
             )? {
                 return Ok(Some(output));
             }

@@ -1,8 +1,9 @@
 use crate::core::types::{Index, IndexType, Timestamp, MAX_TIMESTAMP};
 use crate::core::{StorageError, Value};
 use crate::storage::index::helpers::{
-    edge_entity_ref, effective_index_values, merged_included_columns,
+    effective_index_values, edge_entity_ref, merged_included_columns,
 };
+use crate::storage::index::key_codec::key_builder::normalize_int_value;
 use crate::storage::index::key_codec::{KeyBuilder, KeyParser};
 use crate::storage::index::traits::EdgeIndexOps;
 use crate::storage::index::types::{EdgeIdentity, IndexIdentity, IndexRecord};
@@ -75,8 +76,9 @@ impl EdgeIndexOps for IndexDataManagerImpl {
                     continue;
                 }
                 if let Ok(value) = KeyParser::parse_prop_value_from_edge_key(key) {
-                    if !existing_values.contains(&value) {
-                        existing_values.push(value);
+                    let nv = normalize_int_value(&value);
+                    if !existing_values.contains(&nv) {
+                        existing_values.push(nv);
                     }
                 }
                 if record.created_ts >= existing_columns_ts {
@@ -197,9 +199,9 @@ impl EdgeIndexOps for IndexDataManagerImpl {
                 if !entry.is_visible_at(read_ts) {
                     continue;
                 }
-                if !KeyParser::parse_prop_value_from_edge_key(key)
-                    .is_ok_and(|stored| stored == *value)
-                {
+                if !KeyParser::parse_prop_value_from_edge_key(key).is_ok_and(
+                    |stored| normalize_int_value(&stored) == normalize_int_value(value),
+                ) {
                     continue;
                 }
                 if let Ok((src, dst, edge_type, ranking)) =

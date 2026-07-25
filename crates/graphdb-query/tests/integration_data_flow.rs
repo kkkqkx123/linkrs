@@ -334,6 +334,7 @@ fn test_index_query_flow() {
         .assert_success()
         // Query with index
         .query("LOOKUP ON User WHERE User.age == 25")
+        .debug_print_result()
         .assert_result_count(2)
         // Insert more data
         .exec_dml("INSERT VERTEX User(username, age) VALUES 5:('user5', 25)")
@@ -383,6 +384,8 @@ fn test_batch_operations_flow() {
         .exec_dml("UPDATE 5 SET price = price * 1.1")
         .assert_success()
         // Verify updates
+        .query("FETCH PROP ON Item 1")
+        .debug_print_result()
         .assert_vertex_props(1, "Item", {
             let mut map = HashMap::new();
             map.insert("price", Value::Double(11.0));
