@@ -34,11 +34,78 @@ use crate::core::Value;
 use crate::query::executor::base::MemoryReservation;
 use std::sync::Arc;
 
+const ROW_POOL_MAX_SIZE: usize = 8;
+
+/// Pool of recycled `Vec<Vec<Value>>` allocations for DataChunk construction.
+///
+/// Reduces allocation overhead by reusing Vec buffers across chunk boundaries.
+/// Each acquired Vec is guaranteed to have `chunk_size` capacity (not length).
+pub struct RowPool {
+    pool: parking_lot::Mutex<Vec<Vec<Vec<Value>>>>,
+    chunk_size: usize,
+    num_columns: usize,
+}
+
+impl RowPool {
+    pub fn new(chunk_size: usize, num_columns: usize) -> Self {
+        Self {
+            pool: parking_lot::Mutex::new(Vec::with_capacity(ROW_POOL_MAX_SIZE)),
+            chunk_size,
+            num_columns,
+        }
+    }
+
+    /// Acquire a pre-allocated rows buffer from the pool, or create a new one.
+    pub fn acquire(&self) -> Vec<Vec<Value>> {
+        let mut pool = self.pool.lock();
+        if let Some(mut rows) = pool.pop() {
+            rows.clear();
+            rows
+        } else {
+            Vec::with_capacity(self.chunk_size)
+        }
+    }
+
+    /// Return a rows buffer to the pool for reuse.
+    /// The buffer is cleared and made available for future `acquire()` calls.
+    pub fn release(&self, mut rows: Vec<Vec<Value>>) {
+        let mut pool = self.pool.lock();
+        if pool.len() < ROW_POOL_MAX_SIZE {
+            for row in &mut rows {
+                row.clear();
+            }
+            rows.clear();
+            pool.push(rows);
+        }
+    }
+
+    pub fn chunk_size(&self) -> usize {
+        self.chunk_size
+    }
+
+    pub fn num_columns(&self) -> usize {
+        self.num_columns
+    }
+}
+
+impl std::fmt::Debug for RowPool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RowPool")
+            .field("chunk_size", &self.chunk_size)
+            .field("num_columns", &self.num_columns)
+            .finish()
+    }
+}
+
 /// A chunk of rows processed in streaming execution
 #[derive(Debug)]
 pub struct DataChunk {
     /// Row data with Value types
     pub rows: Vec<Vec<Value>>,
+    /// Optional column-major representation for efficient columnar access.
+    /// When populated, each inner Vec holds all values for one column.
+    /// This enables O(1) column extraction without per-row cloning.
+    pub columns: Option<Vec<Vec<Value>>>,
     /// Schema information (column names and types)
     pub schema: Arc<Schema>,
     /// Slot layout for slot-based value access.
@@ -56,6 +123,7 @@ impl Clone for DataChunk {
     fn clone(&self) -> Self {
         Self {
             rows: self.rows.clone(),
+            columns: self.columns.as_ref().map(|cols| cols.clone()),
             schema: self.schema.clone(),
             layout: Arc::clone(&self.layout),
             memory_reservation: None,
@@ -103,6 +171,7 @@ impl DataChunk {
         ));
         Self {
             rows,
+            columns: None,
             schema,
             layout,
             memory_reservation: None,
@@ -165,6 +234,7 @@ impl DataChunk {
         let schema = Arc::new(Schema::new(columns));
         Ok(Self {
             rows,
+            columns: None,
             schema,
             layout,
             memory_reservation: None,
@@ -242,10 +312,37 @@ impl DataChunk {
         ));
         Self {
             rows,
+            columns: None,
             schema,
             layout,
             memory_reservation: None,
         }
+    }
+
+    /// Attach columnar data to this chunk.
+    ///
+    /// The columns Vec must have one inner Vec per column, each with length
+    /// equal to the number of rows. When columns are set, `get_column()` uses
+    /// them directly without cloning from rows.
+    ///
+    /// Panics if the column count or row counts don't match.
+    pub fn with_columns(mut self, columns: Vec<Vec<Value>>) -> Self {
+        assert_eq!(
+            columns.len(),
+            self.num_columns(),
+            "column count mismatch"
+        );
+        if !self.rows.is_empty() {
+            for col in &columns {
+                assert_eq!(
+                    col.len(),
+                    self.len(),
+                    "column length mismatch"
+                );
+            }
+        }
+        self.columns = Some(columns);
+        self
     }
 
     /// Number of rows in this chunk
@@ -308,6 +405,9 @@ impl DataChunk {
         if slot >= self.layout.len() {
             return None;
         }
+        if let Some(ref columns) = self.columns {
+            return columns.get(slot).cloned();
+        }
         Some(self.rows.iter().map(|row| row[slot].clone()).collect())
     }
 
@@ -337,8 +437,14 @@ impl DataChunk {
         for &i in indices {
             selected.push(std::mem::take(&mut self.rows[i]));
         }
+        let columns = self.columns.as_ref().map(|cols| {
+            cols.iter()
+                .map(|col| indices.iter().map(|&i| col[i].clone()).collect())
+                .collect()
+        });
         Self {
             rows: selected,
+            columns,
             schema,
             layout,
             memory_reservation: self.memory_reservation.take(),
@@ -381,12 +487,49 @@ impl DataChunk {
         for i in start..end {
             selected.push(std::mem::take(&mut self.rows[i]));
         }
+        let columns = self.columns.as_ref().map(|cols| {
+            cols.iter()
+                .map(|col| col[start..end].to_vec())
+                .collect()
+        });
         Self {
             rows: selected,
+            columns,
             schema,
             layout,
             memory_reservation: self.memory_reservation.take(),
         }
+    }
+
+    /// Convert row-major data to column-major in place.
+    ///
+    /// After calling this, `self.columns` is populated and can be accessed
+    /// without per-row cloning via `get_column()`.
+    pub fn materialize_columns(&mut self) {
+        if self.columns.is_some() {
+            return;
+        }
+        let num_cols = self.num_columns();
+        if self.rows.is_empty() || num_cols == 0 {
+            self.columns = Some(Vec::new());
+            return;
+        }
+        let num_rows = self.rows.len();
+        let mut columns = Vec::with_capacity(num_cols);
+        for col_idx in 0..num_cols {
+            let mut col = Vec::with_capacity(num_rows);
+            for row in &self.rows {
+                col.push(row[col_idx].clone());
+            }
+            columns.push(col);
+        }
+        self.columns = Some(columns);
+    }
+
+    /// Get the columnar representation, materializing it if needed.
+    pub fn get_or_materialize_columns(&mut self) -> &[Vec<Value>] {
+        self.materialize_columns();
+        self.columns.as_ref().unwrap()
     }
 }
 

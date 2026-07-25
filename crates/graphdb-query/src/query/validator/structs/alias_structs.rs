@@ -2,24 +2,11 @@
 
 use crate::core::types::expr::contextual::ContextualExpression;
 use crate::core::types::expr::Expression;
+use crate::core::types::semantic::AliasType;
 use crate::core::types::OrderDirection;
 use crate::core::YieldColumn;
 use crate::query::validator::{MatchClauseContext, Path};
 use std::collections::HashMap;
-
-/// Alias types in Cypher queries
-#[derive(Debug, Clone, PartialEq)]
-pub enum AliasType {
-    Node,
-    Edge,
-    NodeList,
-    EdgeList,
-    Path,
-    Variable,
-    Runtime,
-    CTE,
-    Expression,
-}
 
 /// Boundary clause context (With or Unwind)
 #[derive(Debug, Clone)]

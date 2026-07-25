@@ -34,6 +34,7 @@ pub use window::{WindowFunctionState, WindowState};
 
 use aggregate::{extract_field_value, value_to_partial_accumulator};
 use sort::{compare_rows_for_topn, find_min_run, refill_run_buffer, sort_rows, spill_sorted_run};
+use crate::query::executor::streaming::slot::SlotLayout;
 use window::compute_window_function;
 
 /// Reject spill for operators that do not support disk-based overflow.
@@ -1253,6 +1254,7 @@ impl BlockingOperator {
                             state.col_names = chunk.col_names();
                             state.input_layout = Some(chunk.get_layout());
                         }
+                        let layout = Arc::new(SlotLayout::from_names(&state.col_names));
                         for row in chunk.rows {
                             memory_tracker.try_reserve_row(&row)?;
                             if state.all_rows.len() < limit {
@@ -1263,7 +1265,7 @@ impl BlockingOperator {
                                         compare_rows_for_topn(
                                             a,
                                             b,
-                                            &state.col_names,
+                                            &layout,
                                             sort_expressions,
                                             sort_directions,
                                         )
@@ -1272,7 +1274,7 @@ impl BlockingOperator {
                                 let cmp_last = compare_rows_for_topn(
                                     &row,
                                     state.all_rows.last().unwrap(),
-                                    &state.col_names,
+                                    &layout,
                                     sort_expressions,
                                     sort_directions,
                                 );
@@ -1282,7 +1284,7 @@ impl BlockingOperator {
                                         compare_rows_for_topn(
                                             existing,
                                             &row,
-                                            &state.col_names,
+                                            &layout,
                                             sort_expressions,
                                             sort_directions,
                                         )
@@ -1297,11 +1299,12 @@ impl BlockingOperator {
                     }
 
                     if state.all_rows.len() > 1 {
+                        let layout = Arc::new(SlotLayout::from_names(&state.col_names));
                         state.all_rows.sort_by(|a, b| {
                             compare_rows_for_topn(
                                 a,
                                 b,
-                                &state.col_names,
+                                &layout,
                                 sort_expressions,
                                 sort_directions,
                             )

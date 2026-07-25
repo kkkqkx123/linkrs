@@ -12,9 +12,8 @@ use crate::core::Expression;
 use crate::query::parser::ast::stmt::{Ast, GroupByStmt};
 use crate::query::validator::error::{ValidationError, ValidationErrorType};
 use crate::query::validator::structs::validation_info::ValidationInfo;
-use crate::query::validator::validator_trait::{
-    ColumnDef, ExpressionProps, StatementType, StatementValidator, ValidationResult, ValueType,
-};
+use crate::query::validator::{ColumnDef, ValueType};
+use crate::query::validator::validator_trait::{ExpressionProps, StatementType, StatementValidator, ValidationResult};
 use crate::query::QueryContext;
 use std::sync::Arc;
 

@@ -1,12 +1,10 @@
 //! Query Validator Module
-//! Corresponds to the functionality of NebulaGraph's src/graph/validator.
-//! Used to verify the legitimacy of the AST (Abstract Syntax Tree).
 //!
-//! Design Description:
-//! Using the trait + enum pattern to manage validators
-//! The "trait" defines a unified interface.
-//! Implementation of static distribution using enumeration
-//! The Factory Pattern is used to create validators.
+//! **DEPRECATED**: The validation logic has been migrated to the Binder.
+//! This module retains type definitions for backward compatibility.
+//! All validation now happens during binding (binding = validation).
+//!
+//! See `crate::query::binder::validation` for the canonical type definitions.
 
 // Error types
 pub mod error;
@@ -55,7 +53,7 @@ pub mod expression_analyzer;
 
 // Export data structure
 pub use structs::{
-    AggregateCallInfo, AliasType, ClauseKind, HintSeverity, IndexHint, MatchClauseContext,
+    AggregateCallInfo, ClauseKind, HintSeverity, IndexHint, MatchClauseContext,
     MatchStepRange, OptimizationHint, PaginationContext, Path, PathAnalysis, QueryPart,
     ReturnClauseContext, SemanticInfo, UnwindClauseContext, ValidatedStatement, ValidationInfo,
     WhereClauseContext, WithClauseContext, YieldClauseContext,
@@ -64,11 +62,14 @@ pub use structs::{
 // Re-export the YieldColumn from the core.
 pub use crate::core::YieldColumn;
 
+// Re-export semantic types from core (canonical definition).
+pub use crate::core::types::semantic::{AliasType, ColumnDef, ValueType};
+
 // Exporting a new verifier system (trait + enumeration)
 pub use validator_enum::{Validator, ValidatorCollection};
 pub use validator_trait::{
-    is_global_statement_type, ColumnDef, EdgeProperty, ExpressionProps, InputProperty,
-    StatementType, StatementValidator, TagProperty, ValidationResult, ValueType, VarProperty,
+    is_global_statement_type, EdgeProperty, ExpressionProps, InputProperty,
+    StatementType, StatementValidator, TagProperty, ValidationResult, VarProperty,
 };
 
 // Export a statement-level verifier

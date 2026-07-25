@@ -3,7 +3,7 @@
 
 use crate::core::types::expr::contextual::ContextualExpression;
 use crate::query::validator::error::{ValidationError, ValidationErrorType};
-use crate::query::validator::structs::AliasType;
+use crate::core::types::semantic::AliasType;
 use std::collections::HashMap;
 
 pub struct VariableChecker;
@@ -349,11 +349,11 @@ mod tests {
         let mut available_aliases = std::collections::HashMap::new();
         available_aliases.insert(
             "var1".to_string(),
-            crate::query::validator::structs::AliasType::Node,
+            crate::core::types::semantic::AliasType::Node,
         );
         available_aliases.insert(
             "var2".to_string(),
-            crate::query::validator::structs::AliasType::Edge,
+            crate::core::types::semantic::AliasType::Edge,
         );
 
         let expression = create_contextual_expression(Expression::Binary {

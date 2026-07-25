@@ -1,6 +1,6 @@
 //! Data structures related to clauses
 
-use super::alias_structs::AliasType;
+use crate::core::types::semantic::AliasType;
 use super::path_structs::Path;
 use crate::core::types::expr::contextual::ContextualExpression;
 use crate::core::types::OrderDirection;

@@ -1,6 +1,7 @@
 pub mod core;
 pub mod execution_plan;
 pub mod explain;
+pub mod logical;
 pub mod logical_plan;
 pub mod validation;
 

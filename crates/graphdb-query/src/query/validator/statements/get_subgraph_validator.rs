@@ -22,10 +22,9 @@ use crate::query::parser::ast::stmt::{
 };
 use crate::query::validator::error::{ValidationError, ValidationErrorType};
 use crate::query::validator::structs::validation_info::ValidationInfo;
-use crate::query::validator::structs::AliasType;
-use crate::query::validator::validator_trait::{
-    ColumnDef, ExpressionProps, StatementType, StatementValidator, ValidationResult, ValueType,
-};
+use crate::core::types::semantic::AliasType;
+use crate::query::validator::{ColumnDef, ValueType};
+use crate::query::validator::validator_trait::{ExpressionProps, StatementType, StatementValidator, ValidationResult};
 use crate::query::QueryContext;
 
 /// Information obtained from the verified sub-image

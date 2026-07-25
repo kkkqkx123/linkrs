@@ -4,7 +4,7 @@ use crate::core::types::operators::UnaryOperator;
 use crate::core::types::{DataType, PropertyDef};
 use crate::core::Value;
 use crate::query::validator::error::{ValidationError as CoreValidationError, ValidationErrorType};
-use crate::query::validator::validator_trait::ValueType;
+use crate::query::validator::ValueType;
 
 use super::schema_lookup::SchemaValidator;
 

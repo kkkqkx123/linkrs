@@ -81,6 +81,47 @@ pub fn convert_plan(node: &PlanNodeEnum) -> Result<LogicalNodeEnum, ConversionEr
             },
         )),
 
+        PlanNodeEnum::GetVertices(n) => {
+            let logical = crate::query::planning::plan::logical::logical_nodes::access::LogicalGetVerticesNode {
+                id: n.id(),
+                space_id: n.space_id(),
+                space_name: n.space_name().to_string(),
+                src_ref: n.src_ref().clone(),
+                src_vids: n.src_vids().to_string(),
+                tag_props: n.tag_props().to_vec(),
+                expression: n.expression().cloned(),
+                dedup: n.dedup(),
+                limit: n.limit(),
+                projected_properties: n.projected_properties().to_vec(),
+                output_var: n.output_var().map(|s| s.to_string()),
+                col_names: n.col_names().to_vec(),
+                column_types: n.column_types().to_vec(),
+                deps: Vec::new(),
+            };
+            Ok(LogicalNodeEnum::GetVertices(logical))
+        }
+
+        PlanNodeEnum::GetNeighbors(n) => {
+            let logical = crate::query::planning::plan::logical::logical_nodes::access::LogicalGetNeighborsNode {
+                id: n.id(),
+                space_id: n.space_id(),
+                src_vids: n.src_vids().to_string(),
+                edge_types: n.edge_types().to_vec(),
+                direction: n.direction().to_string(),
+                edge_props: n.edge_props().to_vec(),
+                tag_props: n.tag_props().to_vec(),
+                expression: n.expression().cloned(),
+                dedup: n.dedup(),
+                limit: n.limit(),
+                projected_properties: n.projected_properties().to_vec(),
+                output_var: n.output_var().map(|s| s.to_string()),
+                col_names: n.col_names().to_vec(),
+                column_types: n.column_types().to_vec(),
+                deps: Vec::new(),
+            };
+            Ok(LogicalNodeEnum::GetNeighbors(logical))
+        }
+
         // Physical access nodes → logical equivalents
         PlanNodeEnum::IndexScan(n) => Ok(LogicalNodeEnum::ScanVertices(
             crate::query::planning::plan::logical::logical_nodes::access::LogicalScanVerticesNode {

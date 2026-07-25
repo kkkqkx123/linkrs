@@ -3,8 +3,9 @@
 use crate::core::DataType;
 use crate::query::validator::error::ValidationError;
 use crate::query::validator::strategies::helpers::ExpressionValidationContext;
-use crate::query::validator::structs::{AliasType, QueryPart};
-use crate::query::validator::validator_trait::ColumnDef;
+use crate::core::types::semantic::AliasType;
+use crate::query::validator::structs::QueryPart;
+use crate::query::validator::ColumnDef;
 use std::collections::HashMap;
 
 /// Verify the implementation of the context.

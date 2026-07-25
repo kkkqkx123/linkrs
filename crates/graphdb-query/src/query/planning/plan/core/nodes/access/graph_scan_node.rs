@@ -20,6 +20,7 @@ define_plan_node! {
         expression: Option<ContextualExpression>,
         dedup: bool,
         limit: Option<i64>,
+        projected_properties: Vec<String>,
     }
     enum: GetVertices
     input: MultipleInputNode
@@ -49,10 +50,19 @@ impl GetVerticesNode {
             expression: None,
             dedup: false,
             limit: None,
+            projected_properties: Vec::new(),
             output_var: None,
             col_names: Vec::new(),
             column_types: vec![],
         }
+    }
+
+    pub fn projected_properties(&self) -> &[String] {
+        &self.projected_properties
+    }
+
+    pub fn set_projected_properties(&mut self, properties: Vec<String>) {
+        self.projected_properties = properties;
     }
 
     pub fn set_limit(&mut self, limit: i64) {
@@ -73,6 +83,10 @@ impl GetVerticesNode {
 
     pub fn src_vids(&self) -> &str {
         &self.src_vids
+    }
+
+    pub fn tag_props(&self) -> &[TagProp] {
+        &self.tag_props
     }
 
     pub fn set_tag_props(&mut self, tag_props: Vec<TagProp>) {
@@ -326,6 +340,7 @@ define_plan_node! {
         expression: Option<ContextualExpression>,
         dedup: bool,
         limit: Option<i64>,
+        projected_properties: Vec<String>,
     }
     enum: GetNeighbors
     input: MultipleInputNode
@@ -345,10 +360,19 @@ impl GetNeighborsNode {
             expression: None,
             dedup: false,
             limit: None,
+            projected_properties: Vec::new(),
             output_var: None,
             col_names: Vec::new(),
             column_types: vec![],
         }
+    }
+
+    pub fn projected_properties(&self) -> &[String] {
+        &self.projected_properties
+    }
+
+    pub fn set_projected_properties(&mut self, properties: Vec<String>) {
+        self.projected_properties = properties;
     }
 
     pub fn set_edge_types(&mut self, edge_types: Vec<String>) {

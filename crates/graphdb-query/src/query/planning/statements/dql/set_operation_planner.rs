@@ -68,7 +68,7 @@ impl SetOperationPlanner {
                 };
 
                 let expr_context = Arc::new(ExpressionAnalysisContext::new());
-                let validation_info = crate::query::validator::ValidationInfo::new();
+                let validation_info = crate::query::binder::validation::ValidationInfo::new();
                 let ast = Arc::new(crate::query::parser::ast::Ast::new(
                     stmt.clone(),
                     expr_context,

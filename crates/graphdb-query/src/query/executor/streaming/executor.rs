@@ -382,26 +382,33 @@ impl StreamingExecutor {
     }
 
     /// Record profile timing for this operator, using the correct operator name.
+    ///
+    /// Fast path: looks up the pre-registered [`ProfileEntry`] via read-lock,
+    /// then updates the atomic counter without holding any lock.
     pub fn record_profile_timing(&self, phase: &str, elapsed_us: u64) {
-        if let Some(rt) = &self.base().runtime {
+        let Some(rt) = &self.base().runtime else {
+            return;
+        };
+        let entry = rt.profile().get_entry(&self.profile_key());
+        let entry = entry.unwrap_or_else(|| {
+            // First access — register on demand (rare: tests that bypass open())
             let name = self.operator_name();
-            let mut profile = rt.profile().lock();
-            let entry = profile
-                .operators
-                .entry(self.profile_key())
-                .or_insert_with(|| OperatorProfile {
-                    physical_operator_id: self.base().physical_operator_id,
-                    node_id: self.plan_node_id(),
-                    partition_id: self.base().partition_id,
-                    name: name.to_string(),
-                    ..OperatorProfile::default()
-                });
-            match phase {
-                "open" => entry.open_time_us += elapsed_us,
-                "next" => entry.next_time_us += elapsed_us,
-                "close" => entry.close_time_us += elapsed_us,
-                _ => {}
-            }
+            let op = OperatorProfile {
+                physical_operator_id: self.base().physical_operator_id,
+                node_id: self.plan_node_id(),
+                partition_id: self.base().partition_id,
+                name: name.to_string(),
+                ..OperatorProfile::default()
+            };
+            rt.register_operator(&op)
+        });
+        let ordering = std::sync::atomic::Ordering::Relaxed;
+        if phase == "open" {
+            entry.open_time_us.fetch_add(elapsed_us, ordering);
+        } else if phase == "next" {
+            entry.next_time_us.fetch_add(elapsed_us, ordering);
+        } else if phase == "close" {
+            entry.close_time_us.fetch_add(elapsed_us, ordering);
         }
     }
 
@@ -450,27 +457,32 @@ impl StreamingExecutor {
 
     /// Record peak memory usage in profile for this operator.
     pub fn record_profile_peak_memory(&self, bytes: u64) {
-        if let Some(rt) = &self.base().runtime {
-            let key = self.profile_key();
-            let mut profile = rt.profile().lock();
-            if let Some(entry) = profile.operators.get_mut(&key) {
-                if bytes > entry.peak_memory_bytes {
-                    entry.peak_memory_bytes = bytes;
-                }
-            }
+        let Some(rt) = &self.base().runtime else {
+            return;
+        };
+        let Some(entry) = rt.profile().get_entry(&self.profile_key()) else {
+            return;
+        };
+        let prev = entry
+            .peak_memory_bytes
+            .fetch_max(bytes, std::sync::atomic::Ordering::Relaxed);
+        if bytes > prev {
+            entry
+                .peak_memory_bytes
+                .store(bytes, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
     /// Record spilled bytes and spill count in profile for this operator.
     pub fn record_profile_spill(&self, spilled_bytes: u64, spill_count: u64) {
-        if let Some(rt) = &self.base().runtime {
-            let key = self.profile_key();
-            let mut profile = rt.profile().lock();
-            if let Some(entry) = profile.operators.get_mut(&key) {
-                entry.spilled_bytes += spilled_bytes;
-                entry.spill_count += spill_count;
-            }
-        }
+        let Some(rt) = &self.base().runtime else {
+            return;
+        };
+        let Some(entry) = rt.profile().get_entry(&self.profile_key()) else {
+            return;
+        };
+        entry.spilled_bytes.fetch_add(spilled_bytes, std::sync::atomic::Ordering::Relaxed);
+        entry.spill_count.fetch_add(spill_count, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Register a resource cleanup callback with the attached runtime.
@@ -577,6 +589,19 @@ impl StreamingExecutor {
     /// Open the executor.
     pub fn open(&mut self) -> Result<(), QueryError> {
         self.ensure_not_cancelled()?;
+        // Pre-register profile entry so the hot path in advance()
+        // can find it without write-locking.
+        if let Some(rt) = &self.base().runtime {
+            let name = self.operator_name();
+            let op = OperatorProfile {
+                physical_operator_id: self.base().physical_operator_id,
+                node_id: self.plan_node_id(),
+                partition_id: self.base().partition_id,
+                name: name.to_string(),
+                ..OperatorProfile::default()
+            };
+            rt.register_operator(&op);
+        }
         let start = Instant::now();
         let result = dispatch!(self, open);
         let elapsed = start.elapsed().as_micros() as u64;
@@ -991,7 +1016,7 @@ mod tests {
         executor.close().unwrap();
 
         // Verify profile has spill metrics recorded.
-        let prof = rt.profile().lock();
+        let prof = rt.profile().flush_to_collector();
         let key = OperatorProfileKey::new(PhysicalOperatorId(42), None);
         let entry = prof.operators.get(&key).expect("profile entry exists");
         assert!(

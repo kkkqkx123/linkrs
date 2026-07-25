@@ -18,6 +18,7 @@ pub mod executor;
 
 pub mod helpers;
 pub mod instance;
+pub mod interner;
 pub mod join_helpers;
 pub mod memory_pool;
 pub mod operators;
@@ -35,7 +36,7 @@ pub mod stream;
 pub mod stream_result;
 pub mod transaction_scope;
 
-pub use chunk::{ChunkView, DataChunk};
+pub use chunk::{ChunkView, DataChunk, RowPool};
 pub use context::BorrowedRowContext;
 pub use engine::StreamingExecutionEngine;
 pub use executor::StreamingExecutor;
@@ -47,8 +48,8 @@ pub use partition::PartitionView;
 
 pub use result_utils::{chunks_to_execution_result, convert_chunks_to_dataset};
 pub use runtime::{
-    ExecutionRuntime, OperatorProfile, OperatorProfileKey, ProfileCollector, QueryFinishGuard,
-    QueryIdentity, ResourceOwner,
+    ExecutionRuntime, OperatorProfile, OperatorProfileKey, ProfileBoard, ProfileCollector,
+    ProfileEntry, QueryFinishGuard, QueryIdentity, ResourceOwner,
 };
 pub use slot::{
     combine_layouts, combine_layouts_with_dedup, SlotId, SlotInfo, SlotLayout, SlotOrigin,

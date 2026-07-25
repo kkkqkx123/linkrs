@@ -34,6 +34,7 @@ pub mod bidirectional_traversal;
 pub mod expression_precomputation;
 pub mod index;
 pub mod join_order;
+pub mod join_order_rewriter;
 pub mod memory_budget;
 pub mod subquery_unnesting;
 pub mod topn_optimization;

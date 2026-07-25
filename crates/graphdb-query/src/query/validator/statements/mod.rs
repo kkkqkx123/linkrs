@@ -36,12 +36,11 @@ pub use update_validator::UpdateValidator;
 
 pub use crate::query::validator::strategies::ExpressionValidationStrategy;
 pub use crate::query::validator::structs::validation_info::{PathAnalysis, ValidationInfo};
-pub use crate::query::validator::structs::{
-    AliasType, MatchStepRange, PaginationContext, Path, QueryPart, ReturnClauseContext,
+pub use crate::query::binder::validation::{
+    MatchStepRange, PaginationContext, Path, QueryPart, ReturnClauseContext,
     UnwindClauseContext, WhereClauseContext, WithClauseContext, YieldClauseContext,
 };
-pub use crate::query::validator::validator_trait::{
-    ColumnDef, ExpressionProps, StatementType, StatementValidator, ValidationResult, ValueType,
-};
+pub use crate::query::validator::{ColumnDef, ValueType};
+use crate::query::validator::validator_trait::{ExpressionProps, StatementType, StatementValidator, ValidationResult};
 
 pub use crate::core::Expression;

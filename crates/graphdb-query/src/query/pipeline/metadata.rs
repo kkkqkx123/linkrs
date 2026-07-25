@@ -2,7 +2,7 @@ use super::QueryPipelineManager;
 use crate::core::error::{DBError, DBResult, QueryError};
 use crate::core::metadata::SchemaManager;
 use crate::query::metadata::MetadataContext;
-use crate::query::validator::ValidatedStatement;
+use crate::query::binder::validation::ValidatedStatement;
 use crate::query::QueryContext;
 #[cfg(feature = "fulltext-search")]
 use crate::search::manager::FulltextIndexManager;

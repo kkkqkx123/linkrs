@@ -7,8 +7,9 @@ use crate::core::types::expr::{ContextualExpression, ExpressionMeta};
 use crate::core::Expression;
 use crate::core::YieldColumn;
 use crate::query::validator::error::{ValidationError, ValidationErrorType};
-use crate::query::validator::structs::alias_structs::{AliasType, BoundaryClauseContext};
-use crate::query::validator::structs::{
+use crate::core::types::semantic::AliasType;
+use crate::query::validator::structs::alias_structs::BoundaryClauseContext;
+use crate::query::binder::validation::{
     MatchClauseContext, ReturnClauseContext, YieldClauseContext,
 };
 use crate::query::validator::{Path, QueryPart};

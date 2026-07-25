@@ -12,10 +12,9 @@ use crate::query::parser::ast::stmt::Ast;
 use crate::query::parser::ast::Stmt;
 use crate::query::validator::error::{ValidationError, ValidationErrorType};
 use crate::query::validator::structs::validation_info::{OptimizationHint, ValidationInfo};
-use crate::query::validator::structs::AliasType;
-use crate::query::validator::validator_trait::{
-    ColumnDef, ExpressionProps, StatementType, StatementValidator, ValidationResult, ValueType,
-};
+use crate::core::types::semantic::AliasType;
+use crate::query::validator::{ColumnDef, ValueType};
+use crate::query::validator::validator_trait::{ExpressionProps, StatementType, StatementValidator, ValidationResult};
 use crate::query::QueryContext;
 
 /// Verified information about the GO statement

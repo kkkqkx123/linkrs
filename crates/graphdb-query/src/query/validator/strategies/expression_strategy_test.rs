@@ -10,6 +10,7 @@ mod expression_strategy_tests {
     use crate::core::types::YieldColumn;
     use crate::core::value::Value;
     use crate::query::validator::strategies::expression_strategy::ExpressionValidationStrategy;
+    use crate::core::types::semantic::AliasType;
     use crate::query::validator::structs::*;
     use std::collections::HashMap;
     use std::sync::Arc;

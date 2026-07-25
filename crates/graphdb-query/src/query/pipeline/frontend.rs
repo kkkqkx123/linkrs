@@ -1,8 +1,9 @@
 use super::QueryPipelineManager;
 use crate::core::error::{DBError, DBResult, QueryError};
 use crate::core::MetricType;
+use crate::query::binder::Binder;
+use crate::query::binder::BoundStatement;
 use crate::query::parser::Parser;
-use crate::query::validator::ValidationInfo;
 use crate::query::QueryContext;
 use crate::storage::QueryStorage;
 use std::sync::Arc;
@@ -37,43 +38,26 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         }
     }
 
-    pub(crate) fn validate_query_with_context(
+    /// Bind a parsed AST into a [`BoundStatement`].
+    ///
+    /// The Binder performs both semantic validation and name resolution
+    /// in a single pass, so a separate validation phase is unnecessary.
+    pub(crate) fn bind_parsed_statement(
         &mut self,
         ast: Arc<crate::query::parser::ast::stmt::Ast>,
         qctx: Arc<QueryContext>,
-    ) -> DBResult<ValidationInfo> {
-        let mut validator =
-            crate::query::validator::Validator::create_from_ast(&ast).ok_or_else(|| {
-                DBError::from(QueryError::invalid_query(format!(
-                    "Unsupported statement type: {:?}",
-                    ast.stmt
-                )))
-            })?;
+    ) -> DBResult<Option<BoundStatement>> {
+        let space_id = qctx.space_id().unwrap_or(0);
+        let space_name = qctx.space_name().or_else(|| {
+            qctx.request_context().space_name.clone()
+        });
+
+        let mut binder = Binder::new().with_space(space_name.clone(), space_id);
 
         if let Some(ref schema_manager) = self.schema_manager {
-            validator.set_schema_manager(schema_manager.clone());
+            binder = binder.with_schema_manager(schema_manager.clone());
         }
 
-        if let Some(ref index_manager) = self.index_manager {
-            validator.set_index_metadata_manager(index_manager.clone());
-        } else if let Some(ref storage) = self.storage {
-            if let Some(index_manager) = storage.read().get_index_metadata_manager() {
-                validator.set_index_metadata_manager(index_manager);
-            }
-        }
-
-        let validation_result = validator.validate(ast.clone(), qctx);
-
-        if validation_result.success {
-            Ok(validation_result.info.unwrap_or_default())
-        } else {
-            let error_msg = validation_result
-                .errors
-                .iter()
-                .map(|e| e.to_string())
-                .collect::<Vec<_>>()
-                .join(", ");
-            Err(DBError::from(QueryError::invalid_query(error_msg)))
-        }
+        binder.bind(ast, qctx).map(Some)
     }
 }

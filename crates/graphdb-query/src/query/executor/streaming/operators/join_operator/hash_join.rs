@@ -7,18 +7,19 @@ use crate::core::Value;
 use crate::query::executor::base::MemoryTracker;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
+use crate::query::executor::streaming::context::SplitRowContext;
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::query::executor::streaming::executor::ValueRowContext;
 use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::operators::base::OperatorLifecycle;
+use crate::query::executor::streaming::slot::SlotLayout;
 
-use super::{build_combined_names, close_common, evaluate_join_key};
+use super::{build_combined_names, close_common, evaluate_join_key, JoinKeyValue};
 
 pub(super) fn next_hash_join(
     join_condition: &mut Option<Expression>,
     hash_keys: &mut [Expression],
     probe_keys: &mut [Expression],
-    build_side_hash: &mut HashMap<Vec<Value>, Vec<Vec<Value>>>,
+    build_side_hash: &mut HashMap<JoinKeyValue, Vec<Vec<Value>>>,
     all_right_rows: &mut Vec<Vec<Value>>,
     left_consumed: &mut bool,
     memory_tracker: &mut MemoryTracker,
@@ -51,27 +52,37 @@ pub(super) fn next_hash_join(
         let left_col_names = left_chunk.col_names();
         let mut result_rows = Vec::new();
 
+        let combined_layout = if join_condition.is_some() {
+            let fallback_width = right_col_names.len();
+            let names = build_combined_names(&left_col_names, right_col_names, fallback_width);
+            Some(Arc::new(SlotLayout::from_names(&names)))
+        } else {
+            None
+        };
+
         for left_row in &left_chunk.rows {
             let probe_key = evaluate_join_key(left_row, &left_col_names, probe_keys)?;
             let matching_right_rows = build_side_hash.get(&probe_key);
 
             if let Some(right_rows) = matching_right_rows {
-                for right_row in right_rows {
-                    let condition_satisfied = if let Some(condition) = join_condition {
-                        let mut combined_row = left_row.clone();
-                        combined_row.extend(right_row.clone());
-                        let combined_names =
-                            build_combined_names(&left_col_names, right_col_names, right_row.len());
-                        let mut context = ValueRowContext::from_names(combined_row, combined_names);
-                        match ExpressionEvaluator::evaluate(condition, &mut context) {
-                            Ok(Value::Bool(b)) => b,
-                            _ => false,
+                if let Some((condition, layout)) =
+                    join_condition.as_ref().zip(combined_layout.as_ref())
+                {
+                    for right_row in right_rows {
+                        let mut ctx = SplitRowContext::new(left_row, right_row, Arc::clone(layout));
+                        if matches!(
+                            ExpressionEvaluator::evaluate(condition, &mut ctx),
+                            Ok(Value::Bool(b)) if b
+                        ) {
+                            let mut combined =
+                                Vec::with_capacity(left_row.len() + right_row.len());
+                            combined.extend_from_slice(left_row);
+                            combined.extend_from_slice(right_row);
+                            result_rows.push(combined);
                         }
-                    } else {
-                        true
-                    };
-
-                    if condition_satisfied {
+                    }
+                } else {
+                    for right_row in right_rows {
                         let mut joined_row = left_row.clone();
                         joined_row.extend(right_row.clone());
                         result_rows.push(joined_row);
@@ -95,7 +106,7 @@ pub(super) fn next_hash_left_join(
     join_condition: &mut Option<Expression>,
     hash_keys: &mut [Expression],
     probe_keys: &mut [Expression],
-    build_side_hash: &mut HashMap<Vec<Value>, Vec<Vec<Value>>>,
+    build_side_hash: &mut HashMap<JoinKeyValue, Vec<Vec<Value>>>,
     all_right_rows: &mut Vec<Vec<Value>>,
     left_consumed: &mut bool,
     memory_tracker: &mut MemoryTracker,
@@ -128,36 +139,46 @@ pub(super) fn next_hash_left_join(
         let left_col_names = left_chunk.col_names();
         let mut result_rows = Vec::new();
 
+        let combined_layout = if join_condition.is_some() {
+            let fallback_width = right_col_names.len();
+            let names = build_combined_names(&left_col_names, right_col_names, fallback_width);
+            Some(Arc::new(SlotLayout::from_names(&names)))
+        } else {
+            None
+        };
+
         for left_row in &left_chunk.rows {
             let probe_key = evaluate_join_key(left_row, &left_col_names, probe_keys)?;
             let matching_right_rows = build_side_hash.get(&probe_key);
 
             if let Some(right_rows) = matching_right_rows {
-                for right_row in right_rows {
-                    let condition_satisfied = if let Some(condition) = join_condition {
-                        let mut combined_row = left_row.clone();
-                        combined_row.extend(right_row.clone());
-                        let combined_names =
-                            build_combined_names(&left_col_names, right_col_names, right_row.len());
-                        let mut context = ValueRowContext::from_names(combined_row, combined_names);
-                        match ExpressionEvaluator::evaluate(condition, &mut context) {
-                            Ok(value) => match value {
-                                Value::Bool(b) => b,
-                                Value::Null(_) => false,
-                                _ => true,
-                            },
+                if let Some((condition, layout)) =
+                    join_condition.as_ref().zip(combined_layout.as_ref())
+                {
+                    for right_row in right_rows {
+                        let mut ctx = SplitRowContext::new(left_row, right_row, Arc::clone(layout));
+                        let satisfied = match ExpressionEvaluator::evaluate(condition, &mut ctx)
+                        {
+                            Ok(Value::Bool(b)) => b,
+                            Ok(Value::Null(_)) => false,
+                            Ok(_) => true,
                             Err(e) => {
                                 return Err(QueryError::execution(format!(
                                     "HashLeftJoin condition evaluation failed: {}",
                                     e
                                 )));
                             }
+                        };
+                        if satisfied {
+                            let mut combined =
+                                Vec::with_capacity(left_row.len() + right_row.len());
+                            combined.extend_from_slice(left_row);
+                            combined.extend_from_slice(right_row);
+                            result_rows.push(combined);
                         }
-                    } else {
-                        true
-                    };
-
-                    if condition_satisfied {
+                    }
+                } else {
+                    for right_row in right_rows {
                         let mut joined_row = left_row.clone();
                         joined_row.extend(right_row.clone());
                         result_rows.push(joined_row);
@@ -196,7 +217,7 @@ pub(super) fn next_hash_left_join(
 pub(super) fn close(
     lifecycle: &mut OperatorLifecycle,
     memory_tracker: &mut MemoryTracker,
-    build_side_hash: &mut HashMap<Vec<Value>, Vec<Vec<Value>>>,
+    build_side_hash: &mut HashMap<JoinKeyValue, Vec<Vec<Value>>>,
     all_right_rows: &mut Vec<Vec<Value>>,
 ) -> Result<(), QueryError> {
     close_common(lifecycle, memory_tracker, || {

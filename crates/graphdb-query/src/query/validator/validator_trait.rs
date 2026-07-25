@@ -14,86 +14,11 @@
 
 use std::sync::Arc;
 
+use crate::core::types::semantic::{AliasType, ColumnDef, ValueType};
 use crate::query::parser::ast::stmt::Ast;
 use crate::query::validator::error::ValidationError;
 use crate::query::validator::structs::validation_info::ValidationInfo;
-use crate::query::validator::structs::AliasType;
 use crate::query::QueryContext;
-
-/// Column definition
-#[derive(Debug, Clone)]
-pub struct ColumnDef {
-    pub name: String,
-    pub type_: ValueType,
-}
-
-/// Value type enumeration
-#[derive(Debug, Clone, PartialEq)]
-pub enum ValueType {
-    Empty,
-    Unknown,
-    Bool,
-    Int,
-    Float,
-    String,
-    Date,
-    Time,
-    DateTime,
-    Vertex,
-    Edge,
-    Path,
-    List,
-    Map,
-    Set,
-    Null,
-}
-
-impl ValueType {
-    /// Convert from DataType to ValueType
-    pub fn from_data_type(data_type: &crate::core::DataType) -> Self {
-        use crate::core::DataType;
-        match data_type {
-            DataType::Bool => ValueType::Bool,
-            DataType::SmallInt | DataType::Int | DataType::BigInt => ValueType::Int,
-            DataType::Float | DataType::Double => ValueType::Float,
-            DataType::String | DataType::FixedString(_) => ValueType::String,
-            DataType::Date => ValueType::Date,
-            DataType::Time => ValueType::Time,
-            DataType::DateTime => ValueType::DateTime,
-            DataType::Null => ValueType::Null,
-            DataType::Vertex => ValueType::Vertex,
-            DataType::Edge => ValueType::Edge,
-            DataType::Path => ValueType::Path,
-            DataType::List => ValueType::List,
-            DataType::Map => ValueType::Map,
-            DataType::Set => ValueType::Set,
-            _ => ValueType::Unknown,
-        }
-    }
-
-    /// Convert to DataType
-    pub fn to_data_type(&self) -> crate::core::DataType {
-        use crate::core::DataType;
-        match self {
-            ValueType::Empty => DataType::Empty,
-            ValueType::Unknown => DataType::Empty,
-            ValueType::Bool => DataType::Bool,
-            ValueType::Int => DataType::Int,
-            ValueType::Float => DataType::Float,
-            ValueType::String => DataType::String,
-            ValueType::Date => DataType::Date,
-            ValueType::Time => DataType::Time,
-            ValueType::DateTime => DataType::DateTime,
-            ValueType::Vertex => DataType::Vertex,
-            ValueType::Edge => DataType::Edge,
-            ValueType::Path => DataType::Path,
-            ValueType::List => DataType::List,
-            ValueType::Map => DataType::Map,
-            ValueType::Set => DataType::Set,
-            ValueType::Null => DataType::Null,
-        }
-    }
-}
 
 /// Expression properties
 #[derive(Debug, Clone, Default)]

@@ -1,5 +1,7 @@
 //! Data Structures Module
-//! Contains the definitions of all data structures used by the validator.
+//!
+//! **DEPRECATED**: Types have been moved to `crate::query::binder::validation`.
+//! This module re-exports them for backward compatibility.
 
 pub mod alias_structs;
 pub mod clause_structs;

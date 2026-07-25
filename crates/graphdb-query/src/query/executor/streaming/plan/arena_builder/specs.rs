@@ -121,6 +121,7 @@ pub(super) fn build_source_spec(
             Ok(SourceSpec::GetVertices {
                 space_name: get_node.space_name().to_string(),
                 vertex_ids,
+                projected_properties: get_node.projected_properties().to_vec(),
             })
         }
         PlanNodeEnum::GetEdges(get_node) => Ok(SourceSpec::GetEdges {
@@ -133,6 +134,7 @@ pub(super) fn build_source_spec(
         PlanNodeEnum::GetNeighbors(get_node) => Ok(SourceSpec::GetNeighbors {
             space_name: exec_ctx.space_name.clone().unwrap_or_default(),
             direction: get_node.direction().to_string(),
+            projected_properties: get_node.projected_properties().to_vec(),
         }),
         PlanNodeEnum::EdgeIndexScan(scan_node) => Ok(SourceSpec::EdgeIndexScan {
             space_name: exec_ctx.space_name.clone().unwrap_or_default(),

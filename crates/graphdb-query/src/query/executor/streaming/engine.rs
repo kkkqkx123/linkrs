@@ -1023,7 +1023,7 @@ mod tests {
         let chunks = engine.execute().expect("gather execution should succeed");
         assert_eq!(chunks.iter().map(DataChunk::len).sum::<usize>(), 5);
 
-        let profile = runtime.profile().lock();
+        let profile = runtime.profile().flush_to_collector();
         assert!(profile
             .operators
             .contains_key(&super::super::runtime::OperatorProfileKey::new(
@@ -1083,12 +1083,12 @@ mod tests {
             (0..3_000).map(|value| value as i64).collect::<Vec<_>>()
         );
 
-        let profile = runtime.profile().lock();
-        assert_eq!(profile.parallel_workers, 2);
-        assert!(profile.parallel_wall_time_us > 0);
-        assert!(profile.parallel_work_time_us > 0);
+        let board = runtime.profile();
+        assert_eq!(board.parallel_workers.load(std::sync::atomic::Ordering::Relaxed), 2);
+        assert!(board.parallel_wall_time_us.load(std::sync::atomic::Ordering::Relaxed) > 0);
+        assert!(board.parallel_work_time_us.load(std::sync::atomic::Ordering::Relaxed) > 0);
         assert!(
-            profile.parallel_buffered_chunks_peak <= 2,
+            board.parallel_buffered_chunks_peak.load(std::sync::atomic::Ordering::Relaxed) <= 2,
             "one bounded channel per partition must cap queued chunks"
         );
     }
@@ -1124,7 +1124,7 @@ mod tests {
         runtime.cancel();
         assert!(stream.next_chunk().is_err());
         assert!(stream.close().is_ok());
-        assert!(runtime.profile().lock().parallel_workers > 0);
+        assert!(runtime.profile().parallel_workers.load(std::sync::atomic::Ordering::Relaxed) > 0);
     }
 
     #[test]
@@ -1161,7 +1161,7 @@ mod tests {
 
         let chunks = engine.execute().expect("parallel merge gather execute");
         assert_eq!(extract_ids(&chunks), vec![1, 2, 3, 4]);
-        assert_eq!(runtime.profile().lock().parallel_workers, 2);
+        assert_eq!(runtime.profile().parallel_workers.load(std::sync::atomic::Ordering::Relaxed), 2);
     }
 
     #[test]

@@ -6,6 +6,7 @@ use std::{error::Error, fmt};
 
 use crate::core::types::operators::AggregateFunction;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
+use crate::query::planning::plan::logical_plan::LogicalPlan;
 use crate::query::planning::plan::PlanNodeEnum;
 
 /// Identifies the data domain that a partition layout maps ranges over.
@@ -350,6 +351,10 @@ pub struct ExecutionPlan {
 
     /// Per-partition output channel capacity for P8 backpressure.
     pub max_buffered_chunks: usize,
+
+    /// The pure logical plan (if conversion succeeded).
+    /// Used by cost-based optimization to make physical decisions.
+    pub logical_plan: Option<LogicalPlan>,
 }
 
 impl ExecutionPlan {
@@ -363,6 +368,7 @@ impl ExecutionPlan {
             partition_spec: None,
             max_workers: 1,
             max_buffered_chunks: 10,
+            logical_plan: None,
         }
     }
 
@@ -416,6 +422,16 @@ impl ExecutionPlan {
 
     pub fn set_max_buffered_chunks(&mut self, max_buffered_chunks: usize) {
         self.max_buffered_chunks = max_buffered_chunks;
+    }
+
+    /// Attach a pure logical plan for cost-based optimization.
+    pub fn set_logical_plan(&mut self, logical_plan: LogicalPlan) {
+        self.logical_plan = Some(logical_plan);
+    }
+
+    /// Access the logical plan, if available.
+    pub fn logical_plan(&self) -> Option<&LogicalPlan> {
+        self.logical_plan.as_ref()
     }
 
     /// Calculate the number of nodes in the plan.

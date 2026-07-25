@@ -1,9 +1,10 @@
 use super::QueryPipelineManager;
 use crate::core::error::{DBError, DBResult, QueryError};
+use crate::query::binder::BoundStatement;
 use crate::query::executor::streaming::plan::{
     PhysicalPlan, PhysicalPlanBuildContext, PhysicalPlanBuilder, PhysicalPlanValidator,
 };
-use crate::query::validator::ValidatedStatement;
+use crate::query::parser::ast::Stmt;
 use crate::query::QueryContext;
 use crate::storage::QueryStorage;
 use std::sync::Arc;
@@ -13,39 +14,6 @@ use crate::query::executor::streaming::parameters::{
 };
 
 impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
-    pub(crate) fn generate_execution_plan(
-        &mut self,
-        query_context: Arc<QueryContext>,
-        validated: &ValidatedStatement,
-    ) -> DBResult<crate::query::planning::plan::ExecutionPlan> {
-        let plan = if let Some(mut planner_enum) =
-            crate::query::planning::planner::PlannerEnum::from_ast(&validated.ast)
-        {
-            let metadata_context = self.build_metadata_context(validated, query_context.clone())?;
-
-            let sub_plan = if let Some(ref ctx) = metadata_context {
-                planner_enum
-                    .transform_with_metadata(validated, query_context, ctx)
-                    .map_err(|e| DBError::from(QueryError::pipeline_planning_error(e)))?
-            } else {
-                planner_enum
-                    .transform(validated, query_context)
-                    .map_err(|e| DBError::from(QueryError::pipeline_planning_error(e)))?
-            };
-
-            let root = sub_plan.root().clone();
-            crate::query::planning::plan::ExecutionPlan::new(root)
-        } else {
-            return Err(DBError::from(QueryError::pipeline_planning_error(
-                crate::query::planning::planner::PlannerError::NoSuitablePlanner(
-                    "No suitable planner found".to_string(),
-                ),
-            )));
-        };
-
-        Ok(plan)
-    }
-
     pub(crate) fn optimize_execution_plan(
         &mut self,
         plan: crate::query::planning::plan::ExecutionPlan,
@@ -60,25 +28,71 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         Ok(optimized)
     }
 
-    pub(crate) fn compile(
+    /// Compile a BoundStatement directly into a physical plan.
+    ///
+    /// Uses `plan_bound()` on the selected planner to produce a SubPlan,
+    /// then proceeds through optimization and physical plan building.
+    pub(crate) fn compile_from_bound(
         &mut self,
         query_context: Arc<QueryContext>,
-        validated: &ValidatedStatement,
+        bound: &BoundStatement,
+        ast: &Arc<crate::query::parser::ast::stmt::Ast>,
     ) -> DBResult<(
         Arc<PhysicalPlan>,
         crate::query::planning::plan::ExecutionPlan,
     )> {
-        let execution_plan = self.generate_execution_plan(query_context.clone(), validated)?;
+        let execution_plan = self.generate_execution_plan_from_bound(query_context.clone(), bound, ast)?;
         let optimized_plan = self.optimize_execution_plan(execution_plan)?;
         let physical_plan = self.build_physical_plan(&optimized_plan, &query_context)?;
         Ok((physical_plan, optimized_plan))
+    }
+
+    pub(crate) fn generate_execution_plan_from_bound(
+        &mut self,
+        query_context: Arc<QueryContext>,
+        bound: &BoundStatement,
+        ast: &Arc<crate::query::parser::ast::stmt::Ast>,
+    ) -> DBResult<crate::query::planning::plan::ExecutionPlan> {
+        use crate::query::planning::planner::PlannerError;
+
+        let mut planner_enum = crate::query::planning::planner::PlannerEnum::from_bound_statement(bound)
+            .ok_or_else(|| DBError::from(QueryError::pipeline_planning_error(
+                PlannerError::NoSuitablePlanner(
+                    format!("No planner for bound statement: {}", bound.kind())
+                )
+            )))?;
+
+        let sub_plan = match planner_enum.plan_bound(bound, query_context.clone()) {
+            Ok(plan) => plan,
+            Err(PlannerError::UnsupportedOperation(_)) => {
+                let validated = super::prepared::build_validated_fallback(ast);
+                planner_enum.transform(&validated, query_context.clone())
+                    .map_err(|e| DBError::from(QueryError::pipeline_planning_error(e)))?
+            }
+            Err(e) => return Err(DBError::from(QueryError::pipeline_planning_error(e))),
+        };
+
+        let root = sub_plan.root().clone();
+        let mut execution_plan = crate::query::planning::plan::ExecutionPlan::new(root);
+
+        if let Some(ref root_node) = execution_plan.root {
+            if let Ok(logical_plan) =
+                crate::query::planning::plan::logical_plan::LogicalPlan::from_plan_node(root_node)
+            {
+                execution_plan.set_logical_plan(logical_plan);
+            }
+        }
+
+        Ok(execution_plan)
     }
 
     pub(crate) fn compile_or_get_cached(
         &mut self,
         query_text: &str,
         query_context: Arc<QueryContext>,
-        validated: &ValidatedStatement,
+        bound: &BoundStatement,
+        stmt: &Stmt,
+        ast: &Arc<crate::query::parser::ast::stmt::Ast>,
     ) -> DBResult<Arc<PhysicalPlan>> {
         let request = query_context.request_context();
         let space_name = query_context
@@ -133,22 +147,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             return Ok(cached.plan.clone());
         }
 
-        let (plan, _) = self.compile(query_context, validated)?;
-        if super::prepared::is_read_only_cacheable(validated.ast.stmt()) {
-            let dependent_tables = validated
-                .validation_info
-                .semantic_info
-                .referenced_tags
-                .iter()
-                .chain(
-                    validated
-                        .validation_info
-                        .semantic_info
-                        .referenced_edges
-                        .iter(),
-                )
-                .cloned()
-                .collect();
+        let (plan, _) = self.compile_from_bound(query_context, bound, ast)?;
+        if super::prepared::is_read_only_cacheable(stmt) {
+            let dependent_tables = collect_dependent_tables(bound);
             self.plan_cache.put_with_context(
                 query_text,
                 plan.clone(),
@@ -219,4 +220,22 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             .collect();
         ParameterSchema::new(params)
     }
+}
+
+/// Collect dependent table names from a BoundStatement for cache invalidation.
+fn collect_dependent_tables(bound: &crate::query::binder::BoundStatement) -> Vec<String> {
+    let mut tables = Vec::new();
+    if let crate::query::binder::BoundStatement::Match(match_stmt) = bound {
+        for node in &match_stmt.query_graph.nodes {
+            for tag in &node.tags {
+                tables.push(tag.tag_name.clone());
+            }
+        }
+        for edge in &match_stmt.query_graph.edges {
+            for edge_type in &edge.edge_types {
+                tables.push(edge_type.edge_type_name.clone());
+            }
+        }
+    }
+    tables
 }

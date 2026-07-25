@@ -475,7 +475,7 @@ mod tests {
     use super::*;
     use crate::query::parser::parsing::Parser;
     use crate::query::planning::planner::{Planner, ValidatedStatement};
-    use crate::query::validator::ValidationInfo;
+    use crate::query::binder::validation::ValidationInfo;
     use crate::query::QueryContext;
     use std::sync::Arc;
 

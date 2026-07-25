@@ -5,7 +5,7 @@ use crate::core::DataType;
 use crate::core::Expression;
 use crate::core::TypeUtils;
 use crate::query::validator::error::{ValidationError, ValidationErrorType};
-use crate::query::validator::structs::AliasType;
+use crate::core::types::semantic::AliasType;
 use crate::query::validator::ValueType;
 use std::collections::HashMap;
 

@@ -36,6 +36,7 @@
 use std::sync::Arc;
 
 use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+use crate::query::optimizer::cost_based::subquery_unnesting::UnnestDecision;
 use crate::query::optimizer::heuristic::PlanRewriter;
 use crate::query::optimizer::partitioning::{PartitioningConfig, PartitioningPlanner};
 use crate::query::optimizer::{
@@ -43,7 +44,9 @@ use crate::query::optimizer::{
     SelectivityEstimator, SelectivityFeedbackManager, SortEliminationOptimizer, StatisticsManager,
     SubqueryUnnestingOptimizer,
 };
+
 use crate::query::planning::plan::ExecutionPlan;
+use crate::query::planning::plan::PlanNodeEnum;
 
 /// Optimizer engine
 ///
@@ -79,8 +82,6 @@ pub struct OptimizerEngine {
     partitioning_planner: PartitioningPlanner,
     /// Enable heuristic optimization phase
     enable_heuristic: bool,
-    /// Enable cost-based optimization phase
-    enable_cost_based: bool,
     /// Maximum iterations for heuristic rules
     max_heuristic_iterations: usize,
 }
@@ -170,7 +171,6 @@ impl OptimizerEngine {
             heuristic_rewriter,
             partitioning_planner: PartitioningPlanner::new(PartitioningConfig::default()),
             enable_heuristic: true,
-            enable_cost_based: false,
             max_heuristic_iterations: 100,
         }
     }
@@ -286,19 +286,6 @@ impl OptimizerEngine {
         );
     }
 
-    /// Set whether to enable cost-based optimization
-    pub fn set_enable_cost_based(&mut self, enable: bool) {
-        self.enable_cost_based = enable;
-        log::info!(
-            "Cost-based optimization has {}",
-            if enable {
-                "(computing) enable (a feature)"
-            } else {
-                "prohibit the use of sth."
-            }
-        );
-    }
-
     /// Set the maximum number of heuristic iterations
     pub fn set_max_heuristic_iterations(&mut self, max: usize) {
         self.max_heuristic_iterations = max;
@@ -306,11 +293,6 @@ impl OptimizerEngine {
             "The maximum number of heuristic iterations has been set to {}",
             max
         );
-    }
-
-    /// Check if full optimization is enabled (both heuristic and cost-based)
-    pub fn is_full_optimization(&self) -> bool {
-        self.enable_heuristic && self.enable_cost_based
     }
 
     /// Optimize an execution plan through all enabled phases
@@ -334,12 +316,10 @@ impl OptimizerEngine {
             log::debug!("Phase 1 completed successfully");
         }
 
-        // Phase 2: Cost-Based Optimization (Optional)
-        if self.enable_cost_based {
-            log::debug!("Starting Phase 2: Cost-Based Optimization");
-            current_plan = self.apply_cost_based(current_plan)?;
-            log::debug!("Phase 2 completed successfully");
-        }
+        // Phase 2: Cost-Based Optimization (always active — conservative rules)
+        log::debug!("Starting Phase 2: Cost-Based Optimization");
+        current_plan = self.apply_cost_based(current_plan)?;
+        log::debug!("Phase 2 completed successfully");
 
         current_plan = self.apply_partitioning_selection(current_plan);
 
@@ -384,13 +364,110 @@ impl OptimizerEngine {
             .map_err(|e| OptimizeError::HeuristicFailed(e.to_string()))
     }
 
-    /// Apply cost-based optimization strategies
+    /// Apply cost-based optimization strategies.
+    ///
+    /// Currently performs:
+    /// - Subquery unnesting: PatternApply → HashInnerJoin when cost-beneficial
+    /// - Join order optimization: reorder joins based on estimated costs
     fn apply_cost_based(&self, plan: ExecutionPlan) -> OptimizeResult<ExecutionPlan> {
-        // Cost-based selection remains disabled until versioned catalog
-        // statistics are connected to the production pipeline. Returning the
-        // plan unchanged is preferable to presenting a root-only strategy as
-        // a cost-based optimizer.
+        let mut plan = plan;
+
+        // Phase 1: Subquery unnesting (PatternApply → HashInnerJoin)
+        let root_clone = plan.root.clone();
+        if let Some(ref root) = root_clone {
+            let rewritten = self.unnest_subqueries(root);
+            plan.set_root(rewritten);
+        }
+
+        // Phase 2: Join order optimization (extract tables/conditions, reorder)
+        if let Some(ref root) = plan.root.clone() {
+            let rewritten = crate::query::optimizer::cost_based::join_order_rewriter::walk_and_optimize_joins(
+                root,
+                &self.stats_manager,
+                &self.cost_calculator,
+            );
+            plan.set_root(rewritten);
+        }
+
         Ok(plan)
+    }
+
+    /// Recursively walk the plan tree and rewrite PatternApply → HashInnerJoin
+    /// when the subquery unnesting optimizer determines it is beneficial.
+    fn unnest_subqueries(&self, node: &PlanNodeEnum) -> PlanNodeEnum {
+        use PlanNodeEnum::*;
+
+        // Try PatternApply unnesting at this level first.
+        if let PatternApply(apply) = node {
+            let analysis = self.batch_plan_analyzer.analyze(node);
+            match self.subquery_unnesting_optimizer.should_unnest(apply, &analysis) {
+                UnnestDecision::ShouldUnnest { ref reason, .. } => {
+                    log::debug!(
+                        "CBO: unnesting PatternApply -> HashInnerJoin ({:?})",
+                        reason
+                    );
+                    if let Ok(join) = self.subquery_unnesting_optimizer.unnest(apply.clone()) {
+                        return self.unnest_subqueries(&join);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Recursively rewrite children for the most common node types.
+        // Unsupported variants fall through to the catch-all and are returned
+        // unchanged (their subtrees are not traversed for unnesting).
+        use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
+        macro_rules! rewrite_single {
+            ($n:expr) => {{
+                let mut cloned = $n.clone();
+                let new_input = self.unnest_subqueries(cloned.input());
+                cloned.set_input(new_input);
+                cloned
+            }};
+        }
+        macro_rules! rewrite_binary {
+            ($n:expr) => {{
+                let mut cloned = $n.clone();
+                let new_left = self.unnest_subqueries(cloned.left_input());
+                let new_right = self.unnest_subqueries(cloned.right_input());
+                cloned.set_left_input(new_left);
+                cloned.set_right_input(new_right);
+                cloned
+            }};
+        }
+
+        match node {
+            // Single-input operation nodes
+            Project(n) => Project(rewrite_single!(n)),
+            Filter(n) => Filter(rewrite_single!(n)),
+            Sort(n) => Sort(rewrite_single!(n)),
+            Limit(n) => Limit(rewrite_single!(n)),
+            TopN(n) => TopN(rewrite_single!(n)),
+            Sample(n) => Sample(rewrite_single!(n)),
+            Dedup(n) => Dedup(rewrite_single!(n)),
+            Aggregate(n) => Aggregate(rewrite_single!(n)),
+            Window(n) => Window(rewrite_single!(n)),
+
+            // Binary join nodes
+            InnerJoin(n) => InnerJoin(rewrite_binary!(n)),
+            LeftJoin(n) => LeftJoin(rewrite_binary!(n)),
+            RightJoin(n) => RightJoin(rewrite_binary!(n)),
+            CrossJoin(n) => CrossJoin(rewrite_binary!(n)),
+            FullOuterJoin(n) => FullOuterJoin(rewrite_binary!(n)),
+            SemiJoin(n) => SemiJoin(rewrite_binary!(n)),
+            HashInnerJoin(n) => HashInnerJoin(rewrite_binary!(n)),
+            HashLeftJoin(n) => HashLeftJoin(rewrite_binary!(n)),
+
+            // PatternApply: unnesting was attempted above; if we reach here
+            // the decision was to keep it, so rewrite the left child (the
+            // main data pipeline). The right child (subquery pattern) is
+            // typically a leaf scan and is left unchanged.
+            PatternApply(n) => PatternApply(rewrite_single!(n)),
+
+            // Leaf / unsupported nodes: return unchanged.
+            _ => node.clone(),
+        }
     }
 
     /// Get the heuristic rewriter
@@ -430,16 +507,8 @@ mod tests {
         engine.set_enable_heuristic(false);
         assert!(!engine.enable_heuristic);
 
-        // Test enable/disable cost-based
-        engine.set_enable_cost_based(false);
-        assert!(!engine.enable_cost_based);
-
-        // Test full optimization check
-        assert!(!engine.is_full_optimization());
-
         engine.set_enable_heuristic(true);
-        engine.set_enable_cost_based(true);
-        assert!(engine.is_full_optimization());
+        assert!(engine.enable_heuristic);
     }
 
     #[test]

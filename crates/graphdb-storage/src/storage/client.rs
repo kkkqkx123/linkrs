@@ -21,6 +21,28 @@ use graphdb_transaction::transaction::TransactionMutationRecorder;
 /// Read-only data and schema operations.
 pub trait StorageReader: Send + Sync + std::fmt::Debug {
     fn get_vertex(&self, space: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError>;
+
+    /// Fetch a vertex with only the requested properties.
+    ///
+    /// The default implementation calls [`get_vertex`] and filters the
+    /// property map.  Storage engines that natively support column projection
+    /// should override this to avoid reading unneeded columns.
+    fn get_vertex_projected(
+        &self,
+        space: &str,
+        id: &VertexId,
+        projection: &[String],
+    ) -> Result<Option<Vertex>, StorageError> {
+        let vertex = self.get_vertex(space, id)?;
+        if projection.is_empty() {
+            return Ok(vertex);
+        }
+        Ok(vertex.map(|mut v| {
+            v.properties.retain(|k, _| projection.contains(k));
+            v
+        }))
+    }
+
     fn scan_vertices(&self, space: &str) -> Result<Vec<Vertex>, StorageError>;
     fn scan_vertices_by_tag(&self, space: &str, tag: &str) -> Result<Vec<Vertex>, StorageError>;
     fn scan_vertices_by_prop(

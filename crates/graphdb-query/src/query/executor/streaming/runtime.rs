@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -68,7 +68,158 @@ impl OperatorProfileKey {
     }
 }
 
-/// Collects execution profile data across all operators
+/// Per-operator atomic profile counters for lock-free hot-path updates.
+///
+/// Each operator registers a [`ProfileEntry`] during `open()`.  Subsequent
+/// timing and row-count updates use atomic operations with no lock held,
+/// eliminating mutex contention on the per-advance hot path.
+#[derive(Debug)]
+pub struct ProfileEntry {
+    pub physical_operator_id: PhysicalOperatorId,
+    pub node_id: AtomicI64,
+    pub partition_id: Option<usize>,
+    pub name: parking_lot::Mutex<String>,
+    pub open_time_us: AtomicU64,
+    pub next_time_us: AtomicU64,
+    pub close_time_us: AtomicU64,
+    pub output_rows: AtomicU64,
+    pub peak_memory_bytes: AtomicU64,
+    pub spilled_bytes: AtomicU64,
+    pub spill_count: AtomicU64,
+}
+
+impl ProfileEntry {
+    pub fn new(profile: &OperatorProfile) -> Self {
+        Self {
+            physical_operator_id: profile.physical_operator_id,
+            node_id: AtomicI64::new(profile.node_id),
+            partition_id: profile.partition_id,
+            name: parking_lot::Mutex::new(profile.name.clone()),
+            open_time_us: AtomicU64::new(profile.open_time_us),
+            next_time_us: AtomicU64::new(profile.next_time_us),
+            close_time_us: AtomicU64::new(profile.close_time_us),
+            output_rows: AtomicU64::new(profile.output_rows),
+            peak_memory_bytes: AtomicU64::new(profile.peak_memory_bytes),
+            spilled_bytes: AtomicU64::new(profile.spilled_bytes),
+            spill_count: AtomicU64::new(profile.spill_count),
+        }
+    }
+
+    /// Snapshot current atomics into an [`OperatorProfile`] for reporting.
+    pub fn snapshot(&self) -> OperatorProfile {
+        OperatorProfile {
+            physical_operator_id: self.physical_operator_id,
+            node_id: self.node_id.load(Ordering::Relaxed),
+            partition_id: self.partition_id,
+            name: self.name.lock().clone(),
+            open_time_us: self.open_time_us.load(Ordering::Relaxed),
+            next_time_us: self.next_time_us.load(Ordering::Relaxed),
+            close_time_us: self.close_time_us.load(Ordering::Relaxed),
+            output_rows: self.output_rows.load(Ordering::Relaxed),
+            peak_memory: self.peak_memory_bytes.load(Ordering::Relaxed),
+            peak_memory_bytes: self.peak_memory_bytes.load(Ordering::Relaxed),
+            spilled_bytes: self.spilled_bytes.load(Ordering::Relaxed),
+            spill_count: self.spill_count.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// Lock-free profile store for hot-path operator timing and row-count updates.
+///
+/// Uses `RwLock` for structural operations (first-access entry creation) and
+/// `AtomicU64` counters so that per-advance increments never block.
+///
+/// Design:
+/// - `register_operator()` — called during `open()`, pre-creates entries
+/// - `record_timing()` / `record_rows()` — lock-free fast path
+/// - `flush_to_collector()` — aggregate into a [`ProfileCollector`] at end
+#[derive(Debug)]
+pub struct ProfileBoard {
+    entries: RwLock<HashMap<OperatorProfileKey, Arc<ProfileEntry>>>,
+    pub total_rows: AtomicU64,
+    pub total_time_us: AtomicU64,
+    start_time: Mutex<Option<Instant>>,
+    end_time: Mutex<Option<Instant>>,
+    pub parallel_wall_time_us: AtomicU64,
+    pub parallel_work_time_us: AtomicU64,
+    pub parallel_workers: AtomicUsize,
+    pub parallel_buffered_chunks_peak: AtomicUsize,
+    pub parallel_buffered_bytes_peak: AtomicUsize,
+}
+
+impl ProfileBoard {
+    pub fn new() -> Self {
+        Self {
+            entries: RwLock::new(HashMap::new()),
+            total_rows: AtomicU64::new(0),
+            total_time_us: AtomicU64::new(0),
+            start_time: Mutex::new(None),
+            end_time: Mutex::new(None),
+            parallel_wall_time_us: AtomicU64::new(0),
+            parallel_work_time_us: AtomicU64::new(0),
+            parallel_workers: AtomicUsize::new(0),
+            parallel_buffered_chunks_peak: AtomicUsize::new(0),
+            parallel_buffered_bytes_peak: AtomicUsize::new(0),
+        }
+    }
+
+    pub fn record_start(&self) {
+        *self.start_time.lock() = Some(Instant::now());
+    }
+
+    pub fn record_end(&self) {
+        let elapsed = self
+            .start_time
+            .lock()
+            .map(|t| t.elapsed().as_micros() as u64)
+            .unwrap_or(0);
+        self.total_time_us.store(elapsed, Ordering::Relaxed);
+        *self.end_time.lock() = Some(Instant::now());
+    }
+
+    /// Register (or update) a per-operator profile entry from a snapshot.
+    ///
+    /// Called during `open()` to pre-populate entries so the hot-path
+    /// access in `advance()` never needs to write-lock.
+    pub fn register_operator(&self, profile: &OperatorProfile) -> Arc<ProfileEntry> {
+        let key = OperatorProfileKey::new(profile.physical_operator_id, profile.partition_id);
+        let entry = Arc::new(ProfileEntry::new(profile));
+        self.entries.write().insert(key, entry.clone());
+        entry
+    }
+
+    /// Find an entry by key (read-lock, hot-path friendly).
+    pub fn get_entry(&self, key: &OperatorProfileKey) -> Option<Arc<ProfileEntry>> {
+        self.entries.read().get(key).cloned()
+    }
+
+    /// Aggregate all entries into a [`ProfileCollector`] for EXPLAIN output.
+    pub fn flush_to_collector(&self) -> ProfileCollector {
+        let mut collector = ProfileCollector::new();
+        let guard = self.entries.read();
+        for (_key, entry) in guard.iter() {
+            collector.operators.insert(
+                OperatorProfileKey::new(entry.physical_operator_id, entry.partition_id),
+                entry.snapshot(),
+            );
+        }
+        drop(guard);
+        collector.total_rows = self.total_rows.load(Ordering::Relaxed);
+        collector.total_time_us = self.total_time_us.load(Ordering::Relaxed);
+        collector.start_time = *self.start_time.lock();
+        collector.end_time = *self.end_time.lock();
+        collector.parallel_wall_time_us = self.parallel_wall_time_us.load(Ordering::Relaxed);
+        collector.parallel_work_time_us = self.parallel_work_time_us.load(Ordering::Relaxed);
+        collector.parallel_workers = self.parallel_workers.load(Ordering::Relaxed);
+        collector.parallel_buffered_chunks_peak =
+            self.parallel_buffered_chunks_peak.load(Ordering::Relaxed);
+        collector.parallel_buffered_bytes_peak =
+            self.parallel_buffered_bytes_peak.load(Ordering::Relaxed);
+        collector
+    }
+}
+
+/// Collects execution profile data across all operators (for EXPLAIN output).
 #[derive(Debug, Default)]
 pub struct ProfileCollector {
     pub operators: HashMap<OperatorProfileKey, OperatorProfile>,
@@ -212,8 +363,8 @@ pub struct ExecutionRuntime {
     deadline: Option<Instant>,
     /// Per-query memory budget for blocking operators.
     pub memory_budget: MemoryBudget,
-    /// Profile collector (behind a mutex so operators can record stats).
-    profile: Arc<Mutex<ProfileCollector>>,
+    /// Profile board with atomic counters for lock-free hot-path recording.
+    profile: Arc<ProfileBoard>,
     /// Resource owner for cleanup of cursors, temp files, etc.
     resource_owner: Arc<Mutex<ResourceOwner>>,
     /// Optional reference to the global QueryManager for KILL QUERY.
@@ -252,12 +403,16 @@ pub struct ExecutionRuntime {
     pub fulltext_manager: Option<Arc<crate::search::manager::FulltextIndexManager>>,
     #[cfg(feature = "qdrant")]
     pub vector_coordinator: Option<Arc<crate::sync::VectorSyncCoordinator>>,
-    /// Per-execution operator state arena (global + local).
+    /// Per-partition operator state arenas.
     ///
-    /// Operators create/read/update their typed state here during
+    /// Indexed by `partition_id` so parallel workers do not contend on a
+    /// single lock.  `state_arenas[0]` serves global / non-partitioned
+    /// operators.
+    ///
+    /// Operators create/read/update their typed state during
     /// `open()` / `next()` / `close()`, indexed by [`PhysicalOperatorId`]
     /// stored in [`OperatorBase::physical_operator_id`](super::operators::base::OperatorBase).
-    pub state_arena: Mutex<StateArenaSet>,
+    pub state_arenas: Vec<Mutex<StateArenaSet>>,
 
     /// Correlation frame for [`Argument`](super::operators::source_operator::SourceOperator::Argument)
     /// sources inside Apply right subtrees.
@@ -291,7 +446,7 @@ impl ExecutionRuntime {
             cancel_token_v2: CancelToken::new(),
             deadline: None,
             memory_budget,
-            profile: Arc::new(Mutex::new(ProfileCollector::new())),
+            profile: Arc::new(ProfileBoard::new()),
             resource_owner: Arc::new(Mutex::new(ResourceOwner::new())),
             query_manager: None,
             session_controller: parking_lot::RwLock::new(None),
@@ -307,7 +462,7 @@ impl ExecutionRuntime {
             fulltext_manager,
             #[cfg(feature = "qdrant")]
             vector_coordinator,
-            state_arena: Mutex::new(StateArenaSet::new()),
+            state_arenas: vec![Mutex::new(StateArenaSet::new())],
             correlation_frame: Mutex::new(None),
             parameter_values: None,
         }
@@ -486,23 +641,45 @@ impl ExecutionRuntime {
 
     // ── Profile ──
 
-    pub fn profile(&self) -> &Arc<Mutex<ProfileCollector>> {
+    pub fn profile(&self) -> &Arc<ProfileBoard> {
         &self.profile
+    }
+
+    /// Register an operator profile entry (called during `open()`).
+    pub fn register_operator(&self, op_profile: &OperatorProfile) -> Arc<ProfileEntry> {
+        self.profile.register_operator(op_profile)
+    }
+
+    /// Return a [`StateArenaSet`] mutex for the given partition.
+    ///
+    /// Non-partitioned operators (`partition_id == None`) always map to
+    /// arena 0.  Partitioned operators map to `(partition_id + 1)`, with
+    /// fallback to the last arena when the partition count was under-estimated.
+    pub fn state_arena_for(&self, partition_id: Option<usize>) -> &Mutex<StateArenaSet> {
+        let idx = partition_id.map(|p| p + 1).unwrap_or(0);
+        let capped = idx.min(self.state_arenas.len().saturating_sub(1));
+        &self.state_arenas[capped]
+    }
+
+    /// Set the number of partition arenas (must be ≥ 1).
+    pub fn set_partition_count(&mut self, count: usize) {
+        let count = count.max(1);
+        self.state_arenas.resize_with(count, || Mutex::new(StateArenaSet::new()));
     }
 
     /// Record that execution has started (profile timing).
     pub fn profile_start(&self) {
-        self.profile.lock().record_start();
+        self.profile.record_start();
     }
 
     /// Record that execution has ended.
     pub fn profile_end(&self) {
-        self.profile.lock().record_end();
+        self.profile.record_end();
     }
 
     /// Add rows to the profile counter.
     pub fn profile_add_rows(&self, count: u64) {
-        self.profile.lock().add_rows(count);
+        self.profile.total_rows.fetch_add(count, Ordering::Relaxed);
     }
 
     // ── Resource ownership ──
@@ -689,7 +866,7 @@ mod tests {
         let rt = ExecutionRuntime::default_budget();
         rt.profile_add_rows(10);
         rt.profile_add_rows(20);
-        assert_eq!(rt.profile().lock().total_rows, 30);
+        assert_eq!(rt.profile().total_rows.load(std::sync::atomic::Ordering::Relaxed), 30);
     }
 
     #[test]

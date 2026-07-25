@@ -10,7 +10,6 @@ use crate::query::executor::streaming::instance::{
 use crate::query::executor::streaming::transaction_scope::TransactionScope;
 use crate::query::parser::ast::stmt::{ExplainStmt, ProfileStmt};
 use crate::query::planning::plan::explain::ProfilingStats;
-use crate::query::validator::ValidatedStatement;
 use crate::query::QueryContext;
 use crate::storage::QueryStorage;
 use std::sync::Arc;
@@ -23,22 +22,19 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     ) -> DBResult<ExecutionResult> {
         let inner_ast = &explain_stmt.statement;
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
-        let validation_info = self.validate_query_with_context(
-            Arc::new(crate::query::parser::ast::stmt::Ast::new(
-                (**inner_ast).clone(),
-                expr_ctx.clone(),
-            )),
-            qctx.clone(),
-        )?;
-        let inner_validated = ValidatedStatement::new(
-            Arc::new(crate::query::parser::ast::stmt::Ast::new(
-                (**inner_ast).clone(),
-                expr_ctx,
-            )),
-            validation_info,
-        );
+        let ast = Arc::new(crate::query::parser::ast::stmt::Ast::new(
+            (**inner_ast).clone(),
+            expr_ctx,
+        ));
+        let bound = self.bind_parsed_statement(ast.clone(), qctx.clone())?;
 
-        let (physical_plan, _optimized_plan) = self.compile(qctx.clone(), &inner_validated)?;
+        let (physical_plan, _optimized_plan) = if let Some(b) = bound {
+            self.compile_from_bound(qctx.clone(), &b, &ast)?
+        } else {
+            return Err(DBError::from(QueryError::execution(
+                "EXPLAIN target statement could not be bound".to_string(),
+            )));
+        };
 
         let plan_desc =
             crate::query::executor::explain::physical_plan_explain::physical_plan_to_plan_description(
@@ -68,22 +64,19 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     ) -> DBResult<ExecutionResult> {
         let inner_ast = &explain_stmt.statement;
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
-        let validation_info = self.validate_query_with_context(
-            Arc::new(crate::query::parser::ast::stmt::Ast::new(
-                (**inner_ast).clone(),
-                expr_ctx.clone(),
-            )),
-            qctx.clone(),
-        )?;
-        let inner_validated = ValidatedStatement::new(
-            Arc::new(crate::query::parser::ast::stmt::Ast::new(
-                (**inner_ast).clone(),
-                expr_ctx,
-            )),
-            validation_info,
-        );
+        let ast = Arc::new(crate::query::parser::ast::stmt::Ast::new(
+            (**inner_ast).clone(),
+            expr_ctx,
+        ));
+        let bound = self.bind_parsed_statement(ast.clone(), qctx.clone())?;
 
-        let (physical_plan, _optimized_plan) = self.compile(qctx.clone(), &inner_validated)?;
+        let (physical_plan, _optimized_plan) = if let Some(b) = bound {
+            self.compile_from_bound(qctx.clone(), &b, &ast)?
+        } else {
+            return Err(DBError::from(QueryError::execution(
+                "EXPLAIN target statement could not be bound".to_string(),
+            )));
+        };
 
         let exec_ctx = self.build_execution_context(&qctx);
         let mut bindings = QueryBindings::from_context(&exec_ctx, TransactionScope::None);
@@ -129,24 +122,20 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     ) -> DBResult<ExecutionResult> {
         let inner_ast = &profile_stmt.statement;
         let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
-        let validation_info = self.validate_query_with_context(
-            Arc::new(crate::query::parser::ast::stmt::Ast::new(
-                (**inner_ast).clone(),
-                expr_ctx.clone(),
-            )),
-            qctx.clone(),
-        )?;
-        let inner_validated = ValidatedStatement::new(
-            Arc::new(crate::query::parser::ast::stmt::Ast::new(
-                (**inner_ast).clone(),
-                expr_ctx,
-            )),
-            validation_info,
-        );
+        let ast = Arc::new(crate::query::parser::ast::stmt::Ast::new(
+            (**inner_ast).clone(),
+            expr_ctx,
+        ));
+        let bound = self.bind_parsed_statement(ast.clone(), qctx.clone())?;
 
-        let query_text = qctx.request_context().query.clone();
-        let physical_plan =
-            self.compile_or_get_cached(&query_text, qctx.clone(), &inner_validated)?;
+        let physical_plan = if let Some(b) = bound {
+            let (plan, _) = self.compile_from_bound(qctx.clone(), &b, &ast)?;
+            plan
+        } else {
+            return Err(DBError::from(QueryError::execution(
+                "PROFILE target statement could not be bound".to_string(),
+            )));
+        };
 
         let exec_ctx = self.build_execution_context(&qctx);
         let mut bindings = QueryBindings::from_context(&exec_ctx, TransactionScope::None);
@@ -167,7 +156,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let mut plan_desc = physical_plan_to_plan_description(&physical_plan);
 
         let (wall_us, work_us, workers, chunks_peak, bytes_peak) = {
-            let profile = instance.runtime().profile().lock();
+            let profile = instance.runtime().profile().flush_to_collector();
             for (key, op_profile) in &profile.operators {
                 let node_id = key.physical_operator_id.0 as i64;
                 if let Some(node_desc) = plan_desc.get_node_desc_mut(node_id) {

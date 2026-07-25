@@ -98,6 +98,7 @@ pub enum SourceSpec {
     GetVertices {
         space_name: String,
         vertex_ids: Option<Vec<Value>>,
+        projected_properties: Vec<String>,
     },
     GetEdges {
         space_name: String,
@@ -109,6 +110,7 @@ pub enum SourceSpec {
     GetNeighbors {
         space_name: String,
         direction: String,
+        projected_properties: Vec<String>,
     },
     EdgeIndexScan {
         space_name: String,

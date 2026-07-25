@@ -20,7 +20,7 @@ use crate::query::planning::plan::core::nodes::{
 };
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::PlannerError;
-use crate::query::validator::ValidationInfo;
+use crate::query::binder::validation::ValidationInfo;
 use crate::query::QueryContext;
 
 use super::expression_helpers;

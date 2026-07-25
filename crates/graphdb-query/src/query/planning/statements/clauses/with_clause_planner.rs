@@ -16,8 +16,9 @@ use crate::query::planning::plan::core::nodes::{FilterNode, LimitNode, PlanNodeE
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::PlannerError;
 use crate::query::planning::statements::statement_planner::ClausePlanner;
-use crate::query::validator::structs::{
-    AliasType, CypherClauseKind, OrderByClauseContext, PaginationContext, WithClauseContext,
+use crate::core::types::semantic::AliasType;
+use crate::query::binder::validation::{
+    CypherClauseKind, OrderByClauseContext, PaginationContext, WithClauseContext,
 };
 use crate::query::QueryContext;
 use std::collections::HashMap;
@@ -242,7 +243,7 @@ impl WithClausePlanner {
     fn extract_with_context(stmt: &Stmt) -> Result<WithClauseContext, PlannerError> {
         use crate::core::YieldColumn;
         use crate::query::parser::ast::Stmt;
-        use crate::query::validator::structs::{
+        use crate::query::binder::validation::{
             OrderByClauseContext, PaginationContext, YieldClauseContext,
         };
 

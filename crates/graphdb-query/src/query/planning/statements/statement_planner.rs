@@ -12,7 +12,7 @@
 use crate::query::parser::ast::Stmt;
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::Planner;
-use crate::query::validator::structs::CypherClauseKind;
+use crate::query::binder::validation::CypherClauseKind;
 use crate::query::QueryContext;
 use std::sync::Arc;
 
@@ -52,7 +52,7 @@ mod tests {
     use crate::query::parser::ast::{Ast, Span};
     use crate::query::planning::plan::core::nodes::StartNode;
     use crate::query::planning::plan::core::PlanNodeEnum;
-    use crate::query::validator::ValidatedStatement;
+    use crate::query::binder::validation::ValidatedStatement;
     use crate::query::QueryRequestContext;
     use std::collections::HashMap;
 
@@ -172,7 +172,7 @@ mod tests {
 
     #[test]
     fn test_statement_planner_transform() {
-        use crate::query::validator::ValidationInfo;
+        use crate::query::binder::validation::ValidationInfo;
 
         let mut planner = MockStatementPlanner::new("MATCH", vec![CypherClauseKind::Match]);
         let ast = create_test_match_stmt();

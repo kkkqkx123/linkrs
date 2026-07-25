@@ -74,7 +74,6 @@ fn test_optimizer_result_equivalence_with_content() {
     let stats2 = Arc::new(StatsManager::new());
     let mut opt_off_engine = OptimizerEngine::default();
     opt_off_engine.set_enable_heuristic(false);
-    opt_off_engine.set_enable_cost_based(false);
     let opt_off = Arc::new(opt_off_engine);
     let mut pipeline_off = QueryPipelineManager::with_optimizer(storage.clone(), stats2, opt_off)
         .with_schema_manager(schema_manager);

@@ -33,7 +33,6 @@ pub enum SourceState {
         buffer: Vec<Vec<Value>>,
         current_index: usize,
         col_names: Vec<String>,
-        projected_properties: Vec<String>,
     },
     ScanEdges {
         current_index: usize,
@@ -46,7 +45,6 @@ pub enum SourceState {
         buffer: Vec<Vec<Value>>,
         current_index: usize,
         col_names: Vec<String>,
-        projected_properties: Vec<String>,
     },
     GetVertices {
         position: usize,
@@ -86,7 +84,6 @@ impl SourceState {
             },
             SourceSpec::StorageScanVertices {
                 col_names,
-                projected_properties,
                 ..
             } => SourceState::StorageScanVertices {
                 partition_id: 0,
@@ -95,7 +92,6 @@ impl SourceState {
                 buffer: Vec::new(),
                 current_index: 0,
                 col_names: col_names.clone(),
-                projected_properties: projected_properties.clone(),
             },
             SourceSpec::ScanEdges { rows: _, col_names } => SourceState::ScanEdges {
                 current_index: 0,
@@ -103,7 +99,6 @@ impl SourceState {
             },
             SourceSpec::StorageScanEdges {
                 col_names,
-                projected_properties,
                 ..
             } => SourceState::StorageScanEdges {
                 partition_id: 0,
@@ -112,7 +107,6 @@ impl SourceState {
                 buffer: Vec::new(),
                 current_index: 0,
                 col_names: col_names.clone(),
-                projected_properties: projected_properties.clone(),
             },
             SourceSpec::GetVertices { .. } => SourceState::GetVertices { position: 0 },
             SourceSpec::GetEdges { .. } => SourceState::GetEdges { cursor: None },

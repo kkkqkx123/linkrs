@@ -20,8 +20,8 @@ use crate::query::planning::statements::clauses::{
 use crate::query::planning::statements::pattern_planner;
 use crate::query::planning::statements::plan_combiner;
 use crate::query::planning::statements::statement_planner::{ClausePlanner, StatementPlanner};
-use crate::query::validator::structs::CypherClauseKind;
-use crate::query::validator::ValidationInfo;
+use crate::query::binder::validation::CypherClauseKind;
+use crate::query::binder::validation::ValidationInfo;
 use crate::query::QueryContext;
 use std::sync::Arc;
 

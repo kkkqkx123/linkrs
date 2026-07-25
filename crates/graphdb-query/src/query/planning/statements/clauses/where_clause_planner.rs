@@ -10,7 +10,7 @@ use crate::query::planning::plan::core::nodes::operation::filter_node::FilterNod
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::PlannerError;
 use crate::query::planning::statements::statement_planner::ClausePlanner;
-use crate::query::validator::structs::CypherClauseKind;
+use crate::query::binder::validation::CypherClauseKind;
 use crate::query::QueryContext;
 use std::sync::Arc;
 

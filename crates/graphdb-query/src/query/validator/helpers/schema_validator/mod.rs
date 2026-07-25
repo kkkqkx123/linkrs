@@ -15,7 +15,7 @@ mod tests {
     use crate::core::types::PropertyDef;
     use crate::core::NullType;
     use crate::core::Value;
-    use crate::query::validator::validator_trait::ValueType;
+    use crate::query::validator::ValueType;
     use std::sync::Arc;
 
     fn create_test_validator() -> SchemaValidator {

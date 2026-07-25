@@ -31,6 +31,7 @@ define_logical_plan_node! {
         expression: Option<ContextualExpression>,
         dedup: bool,
         limit: Option<i64>,
+        projected_properties: Vec<String>,
     }
     enum: GetVertices
     input: MultipleInputNode
@@ -64,6 +65,7 @@ define_logical_plan_node! {
         expression: Option<ContextualExpression>,
         dedup: bool,
         limit: Option<i64>,
+        projected_properties: Vec<String>,
     }
     enum: GetNeighbors
     input: MultipleInputNode

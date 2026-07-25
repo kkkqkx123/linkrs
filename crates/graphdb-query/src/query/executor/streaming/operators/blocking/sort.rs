@@ -8,8 +8,8 @@ use crate::core::value::NullType;
 use crate::core::Value;
 use crate::query::executor::base::MemoryTracker;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
+use crate::query::executor::streaming::context::BorrowedRowContext;
 use crate::query::executor::streaming::executor::SortDirection;
-use crate::query::executor::streaming::executor::ValueRowContext;
 use crate::query::executor::streaming::helpers::compare_values;
 use crate::query::executor::streaming::slot::SlotLayout;
 use crate::query::executor::streaming::spill::{RunReader, SpillManager, SpilledFile, SpilledRun};
@@ -84,26 +84,39 @@ pub(crate) fn sort_rows(
     sort_expressions: &[Expression],
     sort_directions: &[SortDirection],
 ) {
-    if sort_expressions.is_empty() {
+    if sort_expressions.is_empty() || buffer.len() <= 1 {
         return;
     }
-    buffer.sort_by(|a, b| {
-        for (idx, expr) in sort_expressions.iter().enumerate() {
+
+    let layout = Arc::new(SlotLayout::from_names(col_names));
+
+    let mut ctx = BorrowedRowContext::new(&buffer[0], Arc::clone(&layout));
+    let sort_keys: Vec<Vec<Value>> = buffer
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            if i > 0 {
+                ctx.set_row(row);
+            }
+            sort_expressions
+                .iter()
+                .map(|expr| {
+                    ExpressionEvaluator::evaluate(expr, &mut ctx)
+                        .unwrap_or(Value::Null(NullType::Null))
+                })
+                .collect()
+        })
+        .collect();
+
+    let mut indices: Vec<usize> = (0..buffer.len()).collect();
+    indices.sort_by(|&i, &j| {
+        for (idx, _) in sort_expressions.iter().enumerate() {
             let direction = sort_directions
                 .get(idx)
                 .copied()
                 .unwrap_or(SortDirection::Ascending);
 
-            let mut ctx_a = ValueRowContext::from_names(a.clone(), col_names.to_vec());
-            let mut ctx_b = ValueRowContext::from_names(b.clone(), col_names.to_vec());
-
-            let val_a = ExpressionEvaluator::evaluate(expr, &mut ctx_a)
-                .unwrap_or(Value::Null(NullType::Null));
-            let val_b = ExpressionEvaluator::evaluate(expr, &mut ctx_b)
-                .unwrap_or(Value::Null(NullType::Null));
-
-            let cmp = compare_values(&val_a, &val_b);
-
+            let cmp = compare_values(&sort_keys[i][idx], &sort_keys[j][idx]);
             let final_cmp = match direction {
                 SortDirection::Ascending => cmp,
                 SortDirection::Descending => cmp.reverse(),
@@ -115,6 +128,12 @@ pub(crate) fn sort_rows(
         }
         std::cmp::Ordering::Equal
     });
+
+    let mut sorted = Vec::with_capacity(buffer.len());
+    for &i in &indices {
+        sorted.push(std::mem::take(&mut buffer[i]));
+    }
+    buffer.clone_from_slice(&sorted);
 }
 
 fn compute_schema_fingerprint(col_names: &[String]) -> u64 {
@@ -144,6 +163,12 @@ pub(crate) fn find_min_run(
     let mut best_idx: Option<usize> = None;
     let mut best_row: Option<&[Value]> = None;
 
+    if sort_expressions.is_empty() {
+        return None;
+    }
+
+    let layout = Arc::new(SlotLayout::from_names(col_names));
+
     for (i, buf) in run_buffers.iter().enumerate() {
         if buf.index < buf.rows.len() {
             let row = &buf.rows[buf.index];
@@ -154,7 +179,7 @@ pub(crate) fn find_min_run(
                 let cmp = compare_two_rows_for_merge(
                     row,
                     best,
-                    col_names,
+                    &layout,
                     sort_expressions,
                     sort_directions,
                 );
@@ -171,7 +196,7 @@ pub(crate) fn find_min_run(
 pub(crate) fn compare_two_rows_for_merge(
     a: &[Value],
     b: &[Value],
-    col_names: &[String],
+    layout: &Arc<SlotLayout>,
     sort_expressions: &[Expression],
     sort_directions: &[SortDirection],
 ) -> std::cmp::Ordering {
@@ -181,8 +206,8 @@ pub(crate) fn compare_two_rows_for_merge(
             .copied()
             .unwrap_or(SortDirection::Ascending);
 
-        let mut ctx_a = ValueRowContext::from_names(a.to_vec(), col_names.to_vec());
-        let mut ctx_b = ValueRowContext::from_names(b.to_vec(), col_names.to_vec());
+        let mut ctx_a = BorrowedRowContext::new(a, Arc::clone(layout));
+        let mut ctx_b = BorrowedRowContext::new(b, Arc::clone(layout));
 
         let val_a =
             ExpressionEvaluator::evaluate(expr, &mut ctx_a).unwrap_or(Value::Null(NullType::Null));
@@ -218,7 +243,7 @@ pub(crate) fn refill_run_buffer(buf: &mut RunBuffer, batch_size: usize) -> Resul
 pub(crate) fn compare_rows_for_topn(
     a: &[Value],
     b: &[Value],
-    col_names: &[String],
+    layout: &Arc<SlotLayout>,
     sort_expressions: &[Expression],
     sort_directions: &[SortDirection],
 ) -> std::cmp::Ordering {
@@ -228,8 +253,8 @@ pub(crate) fn compare_rows_for_topn(
             .copied()
             .unwrap_or(SortDirection::Ascending);
 
-        let mut ctx_a = ValueRowContext::from_names(a.to_vec(), col_names.to_vec());
-        let mut ctx_b = ValueRowContext::from_names(b.to_vec(), col_names.to_vec());
+        let mut ctx_a = BorrowedRowContext::new(a, Arc::clone(layout));
+        let mut ctx_b = BorrowedRowContext::new(b, Arc::clone(layout));
 
         let val_a =
             ExpressionEvaluator::evaluate(expr, &mut ctx_a).unwrap_or(Value::Null(NullType::Null));

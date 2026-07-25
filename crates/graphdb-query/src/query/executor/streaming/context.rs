@@ -140,6 +140,15 @@ impl<'a> BorrowedRowContext<'a> {
             parameters: Some(parameters),
         }
     }
+
+    /// Update the row reference and clear per-row variables.
+    ///
+    /// Call this in a hot loop to reuse the same context across many rows,
+    /// avoiding repeated `Arc::clone` on the slot layout.
+    pub fn set_row(&mut self, row: &'a [Value]) {
+        self.row = row;
+        self.variables.clear();
+    }
 }
 
 impl ExpressionContext for BorrowedRowContext<'_> {
@@ -154,6 +163,66 @@ impl ExpressionContext for BorrowedRowContext<'_> {
 
     fn get_variable_by_slot(&self, slot: SlotId) -> Option<Value> {
         self.row.get(slot).cloned()
+    }
+
+    fn set_variable(&mut self, name: String, value: Value) {
+        self.variables.insert(name, value);
+    }
+
+    fn get_parameter(&self, name: &str) -> Option<Value> {
+        self.parameters.as_ref().and_then(|p| p.get(name).cloned())
+    }
+}
+
+/// A context that presents two disjoint row halves as a single combined row
+/// without allocating a combined `Vec<Value>`.
+///
+/// Slots `0..split` map to the left slice; slots `split..` map to the right
+/// slice.  Use this in hash join condition evaluation to avoid cloning
+/// every column before the condition is checked.
+pub struct SplitRowContext<'a> {
+    left: &'a [Value],
+    right: &'a [Value],
+    split: usize,
+    variables: HashMap<String, Value>,
+    layout: Arc<SlotLayout>,
+    parameters: Option<Arc<HashMap<String, Value>>>,
+}
+
+impl<'a> SplitRowContext<'a> {
+    pub fn new(
+        left: &'a [Value],
+        right: &'a [Value],
+        layout: Arc<SlotLayout>,
+    ) -> Self {
+        let split = left.len();
+        Self {
+            left,
+            right,
+            split,
+            variables: HashMap::new(),
+            layout,
+            parameters: None,
+        }
+    }
+}
+
+impl ExpressionContext for SplitRowContext<'_> {
+    fn get_variable(&self, name: &str) -> Option<Value> {
+        if let Some(value) = self.variables.get(name) {
+            return Some(value.clone());
+        }
+        self.layout
+            .slot_id(name)
+            .and_then(|slot_id| self.get_variable_by_slot(slot_id))
+    }
+
+    fn get_variable_by_slot(&self, slot: SlotId) -> Option<Value> {
+        if slot < self.split {
+            self.left.get(slot).cloned()
+        } else {
+            self.right.get(slot - self.split).cloned()
+        }
     }
 
     fn set_variable(&mut self, name: String, value: Value) {

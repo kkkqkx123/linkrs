@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::sort::*;
 use super::*;
 use crate::core::value::NullType;
@@ -263,6 +265,7 @@ fn test_sort_rows_multi_column() {
 #[test]
 fn test_compare_rows_ascending() {
     let col_names = vec!["val".to_string()];
+    let layout = Arc::new(crate::query::executor::streaming::slot::SlotLayout::from_names(&col_names));
     let exprs = vec![make_sort_expr("val")];
     let dirs = vec![SortDirection::Ascending];
 
@@ -270,15 +273,15 @@ fn test_compare_rows_ascending() {
     let b = vec![Value::BigInt(2)];
 
     assert_eq!(
-        compare_two_rows_for_merge(&a, &b, &col_names, &exprs, &dirs),
+        compare_two_rows_for_merge(&a, &b, &layout, &exprs, &dirs),
         std::cmp::Ordering::Less
     );
     assert_eq!(
-        compare_two_rows_for_merge(&b, &a, &col_names, &exprs, &dirs),
+        compare_two_rows_for_merge(&b, &a, &layout, &exprs, &dirs),
         std::cmp::Ordering::Greater
     );
     assert_eq!(
-        compare_two_rows_for_merge(&a, &a, &col_names, &exprs, &dirs),
+        compare_two_rows_for_merge(&a, &a, &layout, &exprs, &dirs),
         std::cmp::Ordering::Equal
     );
 }
@@ -286,6 +289,7 @@ fn test_compare_rows_ascending() {
 #[test]
 fn test_compare_rows_descending() {
     let col_names = vec!["val".to_string()];
+    let layout = Arc::new(crate::query::executor::streaming::slot::SlotLayout::from_names(&col_names));
     let exprs = vec![make_sort_expr("val")];
     let dirs = vec![SortDirection::Descending];
 
@@ -293,11 +297,11 @@ fn test_compare_rows_descending() {
     let b = vec![Value::BigInt(2)];
 
     assert_eq!(
-        compare_two_rows_for_merge(&a, &b, &col_names, &exprs, &dirs),
+        compare_two_rows_for_merge(&a, &b, &layout, &exprs, &dirs),
         std::cmp::Ordering::Greater
     );
     assert_eq!(
-        compare_two_rows_for_merge(&b, &a, &col_names, &exprs, &dirs),
+        compare_two_rows_for_merge(&b, &a, &layout, &exprs, &dirs),
         std::cmp::Ordering::Less
     );
 }

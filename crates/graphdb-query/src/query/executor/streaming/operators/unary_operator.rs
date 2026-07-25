@@ -160,17 +160,18 @@ impl UnaryOperator {
                     Some(mut chunk) => {
                         let layout = chunk.get_layout();
                         let mut selected = Vec::new();
+                        let mut context = match state.parameters {
+                            Some(ref params) => BorrowedRowContext::with_parameters(
+                                &chunk.rows[0],
+                                layout.clone(),
+                                params.clone(),
+                            ),
+                            None => BorrowedRowContext::new(&chunk.rows[0], layout.clone()),
+                        };
                         for i in 0..chunk.len() {
-                            let row = &chunk.rows[i];
-                            let mut context = if let Some(ref params) = state.parameters {
-                                BorrowedRowContext::with_parameters(
-                                    row,
-                                    layout.clone(),
-                                    params.clone(),
-                                )
-                            } else {
-                                BorrowedRowContext::new(row, layout.clone())
-                            };
+                            if i > 0 {
+                                context.set_row(&chunk.rows[i]);
+                            }
                             let keep = match ExpressionEvaluator::evaluate(predicate, &mut context)
                             {
                                 Ok(value) => match value {

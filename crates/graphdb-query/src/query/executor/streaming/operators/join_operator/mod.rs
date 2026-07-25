@@ -8,9 +8,9 @@ use crate::core::Value;
 use crate::query::executor::base::MemoryTracker;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
+use crate::query::executor::streaming::context::BorrowedRowContext;
 use crate::query::executor::streaming::executor::FullOuterJoinPhase;
 use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::query::executor::streaming::executor::ValueRowContext;
 use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::operators::base::OperatorLifecycle;
 use crate::query::executor::streaming::slot::SlotLayout;
@@ -36,24 +36,52 @@ fn build_combined_names(
     names
 }
 
+/// Specialized hash join key that avoids `Vec<Value>` allocation for
+/// single-column i64/string keys.
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub enum JoinKeyValue {
+    I32(i32),
+    I64(i64),
+    String(String),
+    Multi(Vec<Value>),
+}
+
+impl From<Value> for JoinKeyValue {
+    fn from(value: Value) -> Self {
+        match value {
+            Value::Int(i) => JoinKeyValue::I32(i),
+            Value::BigInt(i) => JoinKeyValue::I64(i),
+            Value::String(s) => JoinKeyValue::String(s),
+            other => JoinKeyValue::Multi(vec![other]),
+        }
+    }
+}
+
 fn evaluate_join_key(
     row: &[Value],
     col_names: &[String],
     key_expressions: &[Expression],
-) -> Result<Vec<Value>, QueryError> {
+) -> Result<JoinKeyValue, QueryError> {
     if key_expressions.is_empty() {
-        return Ok(Vec::new());
+        return Ok(JoinKeyValue::Multi(Vec::new()));
     }
 
     let layout = Arc::new(SlotLayout::from_names(col_names));
+    let mut context = BorrowedRowContext::new(row, layout);
+
+    if key_expressions.len() == 1 {
+        let value = ExpressionEvaluator::evaluate(&key_expressions[0], &mut context)
+            .map_err(|e| QueryError::execution(format!("HashJoin key evaluation failed: {}", e)))?;
+        return Ok(JoinKeyValue::from(value));
+    }
+
     let mut key = Vec::with_capacity(key_expressions.len());
     for expr in key_expressions {
-        let mut context = ValueRowContext::new(row.to_vec(), layout.clone());
         let value = ExpressionEvaluator::evaluate(expr, &mut context)
             .map_err(|e| QueryError::execution(format!("HashJoin key evaluation failed: {}", e)))?;
         key.push(value);
     }
-    Ok(key)
+    Ok(JoinKeyValue::Multi(key))
 }
 
 fn close_common(
@@ -77,7 +105,7 @@ pub enum JoinOperator {
         join_condition: Option<Expression>,
         hash_keys: Vec<Expression>,
         probe_keys: Vec<Expression>,
-        build_side_hash: HashMap<Vec<Value>, Vec<Vec<Value>>>,
+        build_side_hash: HashMap<JoinKeyValue, Vec<Vec<Value>>>,
         all_right_rows: Vec<Vec<Value>>,
         left_consumed: bool,
         memory_tracker: MemoryTracker,
@@ -87,7 +115,7 @@ pub enum JoinOperator {
         join_condition: Option<Expression>,
         hash_keys: Vec<Expression>,
         probe_keys: Vec<Expression>,
-        build_side_hash: HashMap<Vec<Value>, Vec<Vec<Value>>>,
+        build_side_hash: HashMap<JoinKeyValue, Vec<Vec<Value>>>,
         all_right_rows: Vec<Vec<Value>>,
         left_consumed: bool,
         memory_tracker: MemoryTracker,

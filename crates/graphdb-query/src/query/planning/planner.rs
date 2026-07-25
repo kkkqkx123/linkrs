@@ -8,13 +8,15 @@
 
 use std::sync::Arc;
 
+use crate::query::binder::BoundStatement;
+use crate::query::parser::ast::stmt::Ast;
 use crate::query::parser::ast::Stmt;
 use crate::query::planning::plan::ExecutionPlan;
 use crate::query::planning::plan::SubPlan;
 use crate::query::QueryContext;
 
-// The ValidatedStatement is publicly exported for use by the planner implementation.
-pub use crate::query::validator::ValidatedStatement;
+// Re-exported for planner implementations that still reference it.
+pub use crate::query::binder::validation::ValidatedStatement;
 
 use crate::query::planning::fulltext_planner::FulltextSearchPlanner;
 use crate::query::planning::statements::ddl::maintain_planner::MaintainPlanner;
@@ -73,10 +75,10 @@ pub type MatchFunc = fn(&Stmt) -> bool;
 /// The `transform` method accepts an `Arc<QueryContext>` and a `&ValidatedStatement`.
 /// The `match_planner` method receives an `&Stmt` object, which is used for matching and making judgments.
 pub trait Planner: std::fmt::Debug {
-    /// Translate the verified sentence into English: “Execute the sub-plan.”
+    /// Translate the verified statement into a sub-plan.
     ///
     /// # Parameters
-    /// Validated: A verified statement that contains ValidationInfo and Ast.
+    /// `validated`: A verified statement that contains ValidationInfo and Ast.
     /// `qctx`: Query context
     fn transform(
         &mut self,
@@ -114,6 +116,22 @@ pub trait Planner: std::fmt::Debug {
         // Default implementation ignores metadata context
         // Specific planners (like VectorSearchPlanner) can override this
         self.transform(validated, qctx)
+    }
+
+    /// Translate a bound statement directly into a plan sub-tree,
+    /// bypassing ValidatedStatement entirely.
+    ///
+    /// The default implementation returns UnsupportedOperation so that
+    /// planners which have not yet been migrated to the bound pipeline
+    /// continue to work unchanged.
+    fn plan_bound(
+        &mut self,
+        _bound: &BoundStatement,
+        _qctx: Arc<QueryContext>,
+    ) -> Result<SubPlan, PlannerError> {
+        Err(PlannerError::UnsupportedOperation(
+            "plan_bound not yet implemented for this planner".to_string(),
+        ))
     }
 
     fn name(&self) -> &'static str {
@@ -293,6 +311,26 @@ impl PlannerEnum {
         }
     }
 
+    /// Create a planner from a BoundStatement.
+    pub fn from_bound_statement(bound: &BoundStatement) -> Option<Self> {
+        match bound {
+            BoundStatement::Match(_) => Some(PlannerEnum::Match(MatchStatementPlanner::new())),
+            BoundStatement::Go(_) => Some(PlannerEnum::Go(GoPlanner::new())),
+            BoundStatement::Lookup(_) => Some(PlannerEnum::Lookup(LookupPlanner::new())),
+            BoundStatement::FetchVertices(_) => Some(PlannerEnum::FetchVertices(FetchVerticesPlanner::new())),
+            BoundStatement::FetchEdges(_) => Some(PlannerEnum::FetchEdges(FetchEdgesPlanner::new())),
+            BoundStatement::FindPath(_) => Some(PlannerEnum::Path(PathPlanner::new())),
+            BoundStatement::Subgraph(_) => Some(PlannerEnum::Subgraph(SubgraphPlanner::new())),
+            BoundStatement::Return(_) => Some(PlannerEnum::Return(ReturnPlanner::new())),
+            BoundStatement::With(_) => Some(PlannerEnum::With(WithPlanner::new())),
+            BoundStatement::Unwind(_) => Some(PlannerEnum::Unwind(UnwindPlanner::new())),
+            BoundStatement::Pipe(_) => Some(PlannerEnum::Pipe(PipePlanner::new())),
+            BoundStatement::SetOperation(_) => Some(PlannerEnum::SetOperation(SetOperationPlanner::new())),
+            BoundStatement::GroupBy(_) => Some(PlannerEnum::GroupBy(GroupByPlanner::new())),
+            BoundStatement::Other(stmt) => Self::from_stmt(&Arc::new(*stmt.clone())),
+        }
+    }
+
     /// Obtain the name of the planner.
     pub fn name(&self) -> &'static str {
         match self {
@@ -360,6 +398,45 @@ impl PlannerEnum {
             PlannerEnum::FulltextSearch(planner) => planner.match_planner(stmt),
             #[cfg(feature = "qdrant")]
             PlannerEnum::VectorSearch(planner) => planner.match_planner(stmt),
+        }
+    }
+
+    /// Plan from a BoundStatement, producing a SubPlan (PlanNodeEnum tree).
+    pub fn plan_bound(
+        &mut self,
+        bound: &BoundStatement,
+        qctx: Arc<QueryContext>,
+    ) -> Result<SubPlan, PlannerError> {
+        match self {
+            PlannerEnum::Match(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::Go(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::Lookup(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::Path(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::Subgraph(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::FetchVertices(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::FetchEdges(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::Maintain(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::UserManagement(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::CreateData(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::Assignment(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::Insert(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::Delete(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::Update(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::Remove(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::Set(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::Merge(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::GroupBy(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::SetOperation(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::Use(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::Unwind(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::With(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::Return(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::Yield(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::Pipe(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::Explain(planner) => planner.plan_bound(bound, qctx),
+            PlannerEnum::FulltextSearch(planner) => planner.plan_bound(bound, qctx),
+            #[cfg(feature = "qdrant")]
+            PlannerEnum::VectorSearch(planner) => planner.plan_bound(bound, qctx),
         }
     }
 

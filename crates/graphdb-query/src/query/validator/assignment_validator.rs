@@ -13,9 +13,8 @@ use crate::query::parser::ast::stmt::{AssignmentStmt, Ast};
 use crate::query::validator::error::{ValidationError, ValidationErrorType};
 use crate::query::validator::structs::validation_info::ValidationInfo;
 use crate::query::validator::validator_enum::Validator;
-use crate::query::validator::validator_trait::{
-    ColumnDef, ExpressionProps, StatementType, StatementValidator, ValidationResult,
-};
+use crate::query::validator::{ColumnDef};
+use crate::query::validator::validator_trait::{ExpressionProps, StatementType, StatementValidator, ValidationResult};
 use crate::query::QueryContext;
 
 /// Verified assignment information
@@ -184,7 +183,7 @@ impl StatementValidator for AssignmentValidator {
 
         info.add_alias(
             self.variable.clone(),
-            crate::query::validator::structs::AliasType::Variable,
+            crate::core::types::semantic::AliasType::Variable,
         );
 
         Ok(ValidationResult::success_with_info(info))

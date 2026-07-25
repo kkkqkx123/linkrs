@@ -1,7 +1,7 @@
 use crate::core::types::expr::ContextualExpression;
 use crate::core::types::expr::Expression;
 use crate::core::Value;
-use crate::query::validator::validator_trait::ValueType;
+use crate::query::validator::ValueType;
 
 use super::schema_lookup::SchemaValidator;
 

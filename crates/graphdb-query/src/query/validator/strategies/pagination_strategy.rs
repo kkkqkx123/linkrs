@@ -5,7 +5,7 @@ use crate::core::types::expr::analysis_utils::is_evaluable;
 use crate::core::types::expr::contextual::ContextualExpression;
 use crate::core::YieldColumn;
 use crate::query::validator::error::{ValidationError, ValidationErrorType};
-use crate::query::validator::structs::{MatchStepRange, OrderByClauseContext, PaginationContext};
+use crate::query::binder::validation::{MatchStepRange, OrderByClauseContext, PaginationContext};
 
 /// Pagination validation strategy
 pub struct PaginationValidationStrategy;

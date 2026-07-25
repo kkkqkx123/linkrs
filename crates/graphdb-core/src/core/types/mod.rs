@@ -15,6 +15,7 @@ pub mod property_value;
 pub mod query;
 pub mod schema_change;
 pub mod schema_trait;
+pub mod semantic;
 pub mod space;
 pub mod space_name_validation;
 pub mod span;
@@ -242,6 +243,7 @@ pub use self::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
 pub use self::query::{
     ExecutionMode, PlanType, QueryHint, QueryOptions, QueryStats, QueryStatus, QueryType,
 };
+pub use self::semantic::{AliasType, ColumnDef, ValueType};
 pub use self::span::{Position, Span, ToSpan};
 
 // Export storage identifier types for cross-module usage

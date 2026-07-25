@@ -125,6 +125,9 @@ pub enum SourceOperator {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         vertex_ids: Option<Vec<Value>>,
+        /// Pre-parsed VertexId values for fast lookup (avoids re-parsing per batch).
+        cached_ids: Vec<VertexId>,
+        projected_properties: Vec<String>,
     },
     /// Fetch edges by src/dst/type/rank.
     GetEdges {
@@ -142,6 +145,7 @@ pub enum SourceOperator {
         storage: Option<Arc<RwLock<dyn QueryStorage>>>,
         space_name: String,
         direction: String,
+        projected_properties: Vec<String>,
         /// State kept inline (complex state machine with owned data).
         state: NeighborScanState,
     },
@@ -242,10 +246,13 @@ impl SourceOperator {
             super::spec::SourceSpec::GetVertices {
                 space_name,
                 vertex_ids,
+                projected_properties,
             } => Self::GetVertices {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 vertex_ids: vertex_ids.clone(),
+                cached_ids: Vec::new(),
+                projected_properties: projected_properties.clone(),
             },
             super::spec::SourceSpec::GetEdges {
                 space_name,
@@ -265,10 +272,12 @@ impl SourceOperator {
             super::spec::SourceSpec::GetNeighbors {
                 space_name,
                 direction,
+                projected_properties,
             } => Self::GetNeighbors {
                 storage: storage.clone(),
                 space_name: space_name.clone(),
                 direction: direction.clone(),
+                projected_properties: projected_properties.clone(),
                 state: NeighborScanState::Init,
             },
             super::spec::SourceSpec::EdgeIndexScan {
@@ -400,7 +409,6 @@ impl SourceOperator {
                     buffer: Vec::new(),
                     current_index: 0,
                     col_names: col_names.clone(),
-                    projected_properties: projected_properties.clone(),
                 }));
             }
             Self::StorageScanEdges {
@@ -444,10 +452,22 @@ impl SourceOperator {
                     buffer: Vec::new(),
                     current_index: 0,
                     col_names: col_names.clone(),
-                    projected_properties: projected_properties.clone(),
                 }));
             }
-            Self::GetVertices { .. } => {
+            Self::GetVertices {
+                vertex_ids,
+                cached_ids,
+                ..
+            } => {
+                if let Some(ids) = vertex_ids.as_ref() {
+                    cached_ids.clear();
+                    cached_ids.reserve(ids.len());
+                    for id_val in ids {
+                        if let Ok(vid) = VertexId::try_from(id_val) {
+                            cached_ids.push(vid);
+                        }
+                    }
+                }
                 base.insert_state(GlobalState::Source(SourceState::GetVertices {
                     position: 0,
                 }));
@@ -659,55 +679,100 @@ impl SourceOperator {
                 storage,
                 space_name,
                 vertex_ids,
-            } => loop {
-                let storage_ref = storage.as_ref().ok_or_else(|| {
-                    QueryError::execution("GetVertices requires storage".to_string())
-                })?;
-                let guard = storage_ref.read();
-                let ids = vertex_ids.as_ref().ok_or_else(|| {
-                    QueryError::execution("GetVertices requires vertex IDs".to_string())
-                })?;
-                let (position, done) = {
-                    let mut arena = base.state_arena();
-                    let s = arena.global.get_mut(&base.state_key()).unwrap();
-                    let GlobalState::Source(SourceState::GetVertices { position }) = s else {
-                        return Ok(None);
-                    };
-                    if *position >= ids.len() {
-                        (0, true)
-                    } else {
-                        let end = (*position + base.chunk_size).min(ids.len());
-                        *position = end;
-                        (end, false)
-                    }
-                };
-                if done {
-                    return Ok(None);
-                }
-                let start = position.saturating_sub(base.chunk_size);
-                let batch = &ids[start..position];
-                let mut rows = Vec::new();
-                for id_val in batch {
-                    if let Ok(vid) = VertexId::try_from(id_val) {
-                        if let Some(vertex) =
+                cached_ids,
+                projected_properties,
+            } => {
+                // Fast path: single-ID lookup without batch/position machinery.
+                if let Some(ids) = vertex_ids.as_ref() {
+                    if ids.len() == 1 {
+                        let storage_ref = storage.as_ref().ok_or_else(|| {
+                            QueryError::execution("GetVertices requires storage".to_string())
+                        })?;
+                        let guard = storage_ref.read();
+                        let vid = match cached_ids.first() {
+                            Some(vid) => *vid,
+                            None => VertexId::try_from(&ids[0]).unwrap_or_default(),
+                        };
+                        let vertex_opt = if projected_properties.is_empty() {
                             guard.get_vertex(space_name, &vid).map_err(|error| {
                                 storage_error("GetVertices", "get vertex", space_name, error)
                             })?
-                        {
-                            rows.push(make_vertex_row(vertex));
+                        } else {
+                            guard.get_vertex_projected(space_name, &vid, projected_properties).map_err(|error| {
+                                storage_error("GetVertices", "get vertex", space_name, error)
+                            })?
+                        };
+                        if let Some(vertex) = vertex_opt {
+                            let rows = vec![make_vertex_row(vertex)];
+                            let reservation = reserve_memory(base, &rows)?;
+                            let mut chunk = DataChunk::new_with_layout(rows, base.output_layout.clone());
+                            if let Some(r) = reservation {
+                                chunk = chunk.with_memory_reservation(r);
+                            }
+                            base.state_arena().global.remove(&base.state_key());
+                            return Ok(Some(chunk));
+                        }
+                        base.state_arena().global.remove(&base.state_key());
+                        return Ok(None);
+                    }
+                }
+                loop {
+                    let storage_ref = storage.as_ref().ok_or_else(|| {
+                        QueryError::execution("GetVertices requires storage".to_string())
+                    })?;
+                    let guard = storage_ref.read();
+                    let ids = vertex_ids.as_ref().ok_or_else(|| {
+                        QueryError::execution("GetVertices requires vertex IDs".to_string())
+                    })?;
+                    let (position, done) = {
+                        let mut arena = base.state_arena();
+                        let s = arena.global.get_mut(&base.state_key()).unwrap();
+                        let GlobalState::Source(SourceState::GetVertices { position }) = s else {
+                            return Ok(None);
+                        };
+                        if *position >= ids.len() {
+                            (0, true)
+                        } else {
+                            let end = (*position + base.chunk_size).min(ids.len());
+                            *position = end;
+                            (end, false)
+                        }
+                    };
+                    if done {
+                        return Ok(None);
+                    }
+                    let start = position.saturating_sub(base.chunk_size);
+                    let mut rows = Vec::with_capacity(position - start);
+                    if projected_properties.is_empty() {
+                        for vid in &cached_ids[start..position] {
+                            if let Some(vertex) =
+                                guard.get_vertex(space_name, vid).map_err(|error| {
+                                    storage_error("GetVertices", "get vertex", space_name, error)
+                                })?
+                            {
+                                rows.push(make_vertex_row(vertex));
+                            }
+                        }
+                    } else {
+                        for vid in &cached_ids[start..position] {
+                            if let Some(vertex) =
+                                guard.get_vertex_projected(space_name, vid, projected_properties).map_err(|error| {
+                                    storage_error("GetVertices", "get vertex", space_name, error)
+                                })?
+                            {
+                                rows.push(make_vertex_row(vertex));
+                            }
                         }
                     }
-                }
-                if !rows.is_empty() {
-                    let reservation = reserve_memory(base, &rows)?;
-                    let mut chunk = DataChunk::new_with_layout(rows, base.output_layout.clone());
-                    if let Some(r) = reservation {
-                        chunk = chunk.with_memory_reservation(r);
+                    if !rows.is_empty() {
+                        let reservation = reserve_memory(base, &rows)?;
+                        let mut chunk = DataChunk::new_with_layout(rows, base.output_layout.clone());
+                        if let Some(r) = reservation {
+                            chunk = chunk.with_memory_reservation(r);
+                        }
+                        return Ok(Some(chunk));
                     }
-                    return Ok(Some(chunk));
                 }
-                // No vertices resolved in this batch — consume later ranges
-                // before reporting the source as exhausted.
             },
             Self::GetEdges {
                 space_name, cursor, ..
@@ -739,6 +804,7 @@ impl SourceOperator {
                 storage,
                 space_name,
                 direction,
+                projected_properties,
                 state,
             } => {
                 let storage_ref = storage.as_ref().ok_or_else(|| {
@@ -827,19 +893,37 @@ impl SourceOperator {
                             }
                             let end = (*position + base.chunk_size).min(neighbor_ids.len());
                             let guard = storage_ref.read();
-                            let mut rows = Vec::new();
-                            for neighbor_id in &neighbor_ids[*position..end] {
-                                if let Some(vertex) =
-                                    guard.get_vertex(space_name, neighbor_id).map_err(|error| {
-                                        storage_error(
-                                            "GetNeighbors",
-                                            "get neighbor vertex",
-                                            space_name,
-                                            error,
-                                        )
-                                    })?
-                                {
-                                    rows.push(make_vertex_row(vertex));
+                            let batch_size = end - *position;
+                            let mut rows = Vec::with_capacity(batch_size);
+                            if projected_properties.is_empty() {
+                                for neighbor_id in &neighbor_ids[*position..end] {
+                                    if let Some(vertex) =
+                                        guard.get_vertex(space_name, neighbor_id).map_err(|error| {
+                                            storage_error(
+                                                "GetNeighbors",
+                                                "get neighbor vertex",
+                                                space_name,
+                                                error,
+                                            )
+                                        })?
+                                    {
+                                        rows.push(make_vertex_row(vertex));
+                                    }
+                                }
+                            } else {
+                                for neighbor_id in &neighbor_ids[*position..end] {
+                                    if let Some(vertex) =
+                                        guard.get_vertex_projected(space_name, neighbor_id, projected_properties).map_err(|error| {
+                                            storage_error(
+                                                "GetNeighbors",
+                                                "get neighbor vertex",
+                                                space_name,
+                                                error,
+                                            )
+                                        })?
+                                    {
+                                        rows.push(make_vertex_row(vertex));
+                                    }
                                 }
                             }
                             drop(guard);
@@ -874,18 +958,26 @@ impl SourceOperator {
                 storage,
                 space_name,
                 output_layout,
+                projection,
                 cursor,
                 ..
-            } => next_index_chunk(
-                storage.as_ref().ok_or_else(|| {
-                    QueryError::execution("LookupIndex requires storage".to_string())
-                })?,
-                space_name,
-                cursor,
-                output_layout,
-                base,
-                "LookupIndex",
-            ),
+            } => {
+                let vertex_projection = match projection {
+                    IndexProjection::Columns(cols) => cols.clone(),
+                    _ => Vec::new(),
+                };
+                next_index_chunk(
+                    storage.as_ref().ok_or_else(|| {
+                        QueryError::execution("LookupIndex requires storage".to_string())
+                    })?,
+                    space_name,
+                    cursor,
+                    output_layout,
+                    base,
+                    "LookupIndex",
+                    &vertex_projection,
+                )
+            }
             Self::EdgeIndexScan { space_name, .. } => Err(QueryError::execution(format!(
                 "EdgeIndexScan is not supported by storage for space '{}'",
                 space_name
@@ -894,18 +986,26 @@ impl SourceOperator {
                 storage,
                 space_name,
                 output_layout,
+                projection,
                 cursor,
                 ..
-            } => next_index_chunk(
-                storage.as_ref().ok_or_else(|| {
-                    QueryError::execution("IndexScan requires storage".to_string())
-                })?,
-                space_name,
-                cursor,
-                output_layout,
-                base,
-                "IndexScan",
-            ),
+            } => {
+                let vertex_projection = match projection {
+                    IndexProjection::Columns(cols) => cols.clone(),
+                    _ => Vec::new(),
+                };
+                next_index_chunk(
+                    storage.as_ref().ok_or_else(|| {
+                        QueryError::execution("IndexScan requires storage".to_string())
+                    })?,
+                    space_name,
+                    cursor,
+                    output_layout,
+                    base,
+                    "IndexScan",
+                    &vertex_projection,
+                )
+            }
             Self::Start => {
                 let mut arena = base.state_arena();
                 let s = arena.global.get_mut(&base.state_key());
@@ -1015,6 +1115,7 @@ fn next_index_chunk(
     output_layout: &Arc<SlotLayout>,
     base: &mut OperatorBase,
     source: &str,
+    vertex_projection: &[String],
 ) -> Result<Option<DataChunk>, QueryError> {
     loop {
         base.ensure_not_cancelled()?;
@@ -1036,10 +1137,6 @@ fn next_index_chunk(
                         entity_ref,
                         columns,
                     } => {
-                        // The storage cursor only emits Covering when every
-                        // requested column is present in the immutable index
-                        // record. Keep the result detached from the mutable
-                        // table so the query remains a true covering scan.
                         if let Some(row) = make_covering_vertex_row(&entity_ref, columns) {
                             output_rows.push(row);
                         }
@@ -1047,7 +1144,12 @@ fn next_index_chunk(
                     IndexRow::RowId(entity_ref) => {
                         let vertex_id = entity_ref_to_vertex_id(&entity_ref);
                         if let Some(vid) = vertex_id {
-                            match guard.get_vertex(space_name, &vid) {
+                            let result = if vertex_projection.is_empty() {
+                                guard.get_vertex(space_name, &vid)
+                            } else {
+                                guard.get_vertex_projected(space_name, &vid, vertex_projection)
+                            };
+                            match result {
                                 Ok(Some(vertex)) => output_rows.push(make_vertex_row(vertex)),
                                 Ok(None) => {
                                     debug_assert!(
@@ -1267,6 +1369,8 @@ mod tests {
             storage: None,
             space_name: "test".to_string(),
             vertex_ids: None,
+            cached_ids: Vec::new(),
+            projected_properties: Vec::new(),
         };
         let mut base = OperatorBase::new(0);
 

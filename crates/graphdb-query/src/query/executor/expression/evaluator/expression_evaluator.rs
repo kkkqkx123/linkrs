@@ -239,8 +239,16 @@ impl ExpressionEvaluator {
                 element_values.map(|vals| Value::list(List::from(vals)))
             }
 
-            // Attribute access
+            // Attribute access — fast path: when the object is a simple
+            // Variable, try `var.prop` as a direct column lookup before
+            // falling back to Vertex/Map extraction.
             Expression::Property { object, property } => {
+                if let Expression::Variable(var_name) = object.as_ref() {
+                    let compound = format!("{}.{}", var_name, property);
+                    if let Some(val) = context.get_variable(&compound) {
+                        return Ok(val);
+                    }
+                }
                 let object_value = Self::evaluate_recursive(object, context)?;
                 CollectionOperationEvaluator::eval_property_access(&object_value, property)
             }
@@ -259,11 +267,13 @@ impl ExpressionEvaluator {
                 edge_name,
                 property,
             } => {
-                // First try to get the edge value from context using edge_name
+                let compound = format!("{}.{}", edge_name, property);
+                if let Some(val) = context.get_variable(&compound) {
+                    return Ok(val);
+                }
                 let edge_value = context
                     .get_variable(edge_name)
                     .ok_or_else(|| ExpressionError::undefined_variable(edge_name))?;
-                // Then access the property on the edge
                 CollectionOperationEvaluator::eval_property_access(&edge_value, property)
             }
 
@@ -278,11 +288,13 @@ impl ExpressionEvaluator {
                 "Tagged attribute expressions require runtime context",
             )),
             Expression::TagProperty { tag_name, property } => {
-                // Try to get the tag/vertex value from context using tag_name
+                let compound = format!("{}.{}", tag_name, property);
+                if let Some(val) = context.get_variable(&compound) {
+                    return Ok(val);
+                }
                 let tag_value = context
                     .get_variable(tag_name)
                     .ok_or_else(|| ExpressionError::undefined_variable(tag_name))?;
-                // Then access the property on the tag/vertex
                 CollectionOperationEvaluator::eval_property_access(&tag_value, property)
             }
             Expression::Predicate { .. } => Err(ExpressionError::type_error(

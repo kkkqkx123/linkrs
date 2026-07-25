@@ -411,20 +411,26 @@ impl PartitionHandle {
             return;
         }
         self.profile_recorded = true;
-        let mut profile = self.runtime.profile().lock();
-        profile.parallel_wall_time_us = profile
-            .parallel_wall_time_us
-            .saturating_add(self.started_at.elapsed().as_micros() as u64);
-        profile.parallel_work_time_us = profile
-            .parallel_work_time_us
-            .saturating_add(self.worker_time_us.load(Ordering::Relaxed));
-        profile.parallel_workers = profile.parallel_workers.max(self.worker_count);
-        profile.parallel_buffered_chunks_peak = profile
-            .parallel_buffered_chunks_peak
-            .max(self.buffered_chunks_peak.load(Ordering::Relaxed));
-        profile.parallel_buffered_bytes_peak = profile
-            .parallel_buffered_bytes_peak
-            .max(self.buffered_bytes_peak.load(Ordering::Relaxed));
+        let board = self.runtime.profile();
+        board.parallel_wall_time_us.fetch_add(
+            self.started_at.elapsed().as_micros() as u64,
+            Ordering::Relaxed,
+        );
+        board.parallel_work_time_us.fetch_add(
+            self.worker_time_us.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+        board
+            .parallel_workers
+            .fetch_max(self.worker_count, Ordering::Relaxed);
+        board.parallel_buffered_chunks_peak.fetch_max(
+            self.buffered_chunks_peak.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+        board.parallel_buffered_bytes_peak.fetch_max(
+            self.buffered_bytes_peak.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
     }
 }
 

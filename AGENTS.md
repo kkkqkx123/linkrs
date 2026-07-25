@@ -44,25 +44,13 @@ Prerequisites: rustc 1.88.0, cargo 1.88.0
 
 ```shell
 cargo clippy --all-targets --all-features            # full compile check
-cargo check --workspace --features server,fulltext-search,c-api,grpc,qdrant  # check with all features
+cargo check -p graphdb --features server,fulltext-search,c_api,grpc,qdrant  # check with all features
 ```
 
 ## Development Conventions
 
 - Rust standard formatting (`cargo fmt`)
 - Modular design following Rust conventions
-
-## Completed Storage Refactoring
-
-The following cleanups are done (see `docs/storage/remaining_work.md` for remaining):
-
-| Phase | Description |
-|-------|-------------|
-| 1 | Deleted `TransactionWriter`, `QueryOps`, `EdgeTraversalParams` |
-| 2 | Deleted `IndexUpdater`, `IndexDataManager` trait, unused index types |
-| 3 | Column encoding integrated into compact/freeze and flush/load |
-| 4 | Physical zstd compression wired into table flush/load pipeline |
-| 7 | Deleted `InsertEdgeUndoParams`, `LoadFromPartsParams`, index method cleanup |
 
 ## Testing
 

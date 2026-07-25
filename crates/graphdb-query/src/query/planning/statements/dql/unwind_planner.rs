@@ -3,18 +3,25 @@
 //! Query planning for standalone UNWIND statements.
 //! UNWIND expands a list expression into multiple rows.
 
+use std::sync::Arc;
+
 use crate::core::types::expr::contextual::ContextualExpression;
+use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::core::YieldColumn;
+use crate::query::binder::BoundStatement;
 use crate::query::parser::ast::stmt::Stmt;
+use crate::query::planning::physical_planner::convert_logical_to_physical;
 use crate::query::planning::plan::core::node_id_generator::next_node_id;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::PlanNode;
 use crate::query::planning::plan::core::nodes::graph_operations::graph_operations_node::UnwindNode;
 use crate::query::planning::plan::core::nodes::{ArgumentNode, ProjectNode};
+use crate::query::planning::plan::logical::logical_node_enum::LogicalNodeEnum;
+use crate::query::planning::plan::logical::logical_nodes::control_flow::LogicalArgumentNode;
+use crate::query::planning::plan::logical::logical_nodes::graph_ops::LogicalUnwindNode;
 use crate::query::planning::plan::PlanNodeEnum;
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::{Planner, PlannerError, ValidatedStatement};
 use crate::query::QueryContext;
-use std::sync::Arc;
 
 /// UNWIND statement planner
 /// Responsible for converting the UNWIND statement into an execution plan.
@@ -67,6 +74,55 @@ impl UnwindPlanner {
 }
 
 impl Planner for UnwindPlanner {
+    fn plan_bound(
+        &mut self,
+        bound: &BoundStatement,
+        _qctx: Arc<QueryContext>,
+    ) -> Result<SubPlan, PlannerError> {
+        let unwind_stmt = match bound {
+            BoundStatement::Unwind(stmt) => stmt,
+            _ => {
+                return Err(PlannerError::UnsupportedOperation(
+                    "Expected Unwind statement".to_string(),
+                ))
+            }
+        };
+
+        let expr_ctx = Arc::new(ExpressionAnalysisContext::new());
+        let list_expr = crate::query::binder::expr_converter::bound_expr_to_contextual(
+            &unwind_stmt.expression,
+            &expr_ctx,
+        )
+        .map_err(|e| {
+            PlannerError::PlanGenerationFailed(format!(
+                "Failed to convert UNWIND expression: {}",
+                e
+            ))
+        })?;
+
+        let arg_node = LogicalArgumentNode {
+            id: next_node_id(),
+            var: "unwind_input".to_string(),
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        };
+
+        let unwind_node = LogicalUnwindNode {
+            id: next_node_id(),
+            input: Some(Box::new(LogicalNodeEnum::Argument(arg_node))),
+            deps: vec![],
+            alias: unwind_stmt.alias.clone(),
+            list_expression: list_expr,
+            output_var: None,
+            col_names: vec![],
+            column_types: vec![],
+        };
+
+        let physical_root = convert_logical_to_physical(LogicalNodeEnum::Unwind(unwind_node));
+        Ok(SubPlan::new(Some(physical_root), None))
+    }
+
     fn transform(
         &mut self,
         validated: &ValidatedStatement,

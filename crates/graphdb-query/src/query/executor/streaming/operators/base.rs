@@ -117,14 +117,15 @@ impl OperatorBase {
         }
     }
 
-    /// Lock and return the operator state arena from the runtime.
+    /// Lock and return the partition-local operator state arena from the runtime.
     ///
+    /// Each partition gets its own arena so parallel workers don't contend.
     /// Panics if no runtime is attached.
     pub fn state_arena(&self) -> parking_lot::MutexGuard<'_, StateArenaSet> {
         self.runtime
             .as_ref()
             .expect("runtime required")
-            .state_arena
+            .state_arena_for(self.partition_id)
             .lock()
     }
 
@@ -150,7 +151,7 @@ impl OperatorBase {
     pub fn take_state(&mut self) -> Option<GlobalState> {
         let rt = self.runtime.as_ref()?;
         let key = self.state_key();
-        rt.state_arena.lock().global.remove(&key)
+        rt.state_arena_for(self.partition_id).lock().global.remove(&key)
     }
 
     /// Insert a [`GlobalState`] into this operator's slot in the runtime arena.
@@ -162,7 +163,7 @@ impl OperatorBase {
             return;
         };
         let key = self.state_key();
-        rt.state_arena.lock().global.insert(key, state);
+        rt.state_arena_for(self.partition_id).lock().global.insert(key, state);
     }
 
     // ── Local state access (per-task) ──
@@ -178,14 +179,14 @@ impl OperatorBase {
             return;
         };
         let key = self.local_state_key(task_id);
-        rt.state_arena.lock().local.insert(key, state);
+        rt.state_arena_for(self.partition_id).lock().local.insert(key, state);
     }
 
     /// Take a [`LocalState`] out of the arena (for cleanup).
     pub fn take_local_state(&mut self, task_id: TaskId) -> Option<LocalState> {
         let rt = self.runtime.as_ref()?;
         let key = self.local_state_key(task_id);
-        rt.state_arena.lock().local.remove(&key)
+        rt.state_arena_for(self.partition_id).lock().local.remove(&key)
     }
 
     /// Access local state for a given task via a closure.
@@ -198,7 +199,7 @@ impl OperatorBase {
     {
         let rt = self.runtime.as_ref()?;
         let key = self.local_state_key(task_id);
-        let mut arena = rt.state_arena.lock();
+        let mut arena = rt.state_arena_for(self.partition_id).lock();
         arena.local.get_mut(&key).map(f)
     }
 
@@ -236,9 +237,8 @@ impl OperatorBase {
 
     pub fn record_profile_rows(&self, count: u64) {
         if let Some(rt) = &self.runtime {
-            let mut profile = rt.profile().lock();
-            if let Some(entry) = profile.operators.get_mut(&self.profile_key()) {
-                entry.output_rows += count;
+            if let Some(entry) = rt.profile().get_entry(&self.profile_key()) {
+                entry.output_rows.fetch_add(count, std::sync::atomic::Ordering::Relaxed);
             }
         }
     }

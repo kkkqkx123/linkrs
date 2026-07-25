@@ -153,7 +153,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             }
         };
 
-        self.record_query_type_counter(request.validated.ast.stmt());
+        self.record_query_type_counter(&request.stmt);
 
         // Diagnostic short-circuit via execute_diagnostic (already uses prepared request)
         if matches!(
@@ -168,8 +168,13 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
 
         // Compile with per-phase timing (not from cache, to measure each phase)
         let plan_start = Instant::now();
+        let bound_for_profile = request.bound_statement.as_ref().expect("bound statement must exist");
         let execution_plan =
-            match self.generate_execution_plan(request.query_context.clone(), &request.validated) {
+            match self.generate_execution_plan_from_bound(
+                request.query_context.clone(),
+                bound_for_profile,
+                &request.ast,
+            ) {
                 Ok(plan) => {
                     profile.stages.plan_us = plan_start.elapsed().as_micros() as u64;
                     metrics.set_plan_node_count(plan.node_count());
@@ -238,7 +243,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         self.record_cache_execution(
             &request.query_text,
             &request.query_context,
-            request.validated.ast.stmt(),
+            &request.stmt,
             execute_start.elapsed().as_secs_f64() * 1000.0,
         );
 

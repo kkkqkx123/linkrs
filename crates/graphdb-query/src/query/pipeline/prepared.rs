@@ -7,7 +7,7 @@ use crate::query::executor::streaming::instance::ResultSink;
 use crate::query::executor::streaming::transaction_scope::TransactionScope;
 use crate::query::executor::streaming::StreamingQueryResult;
 use crate::query::parser::ast::Stmt;
-use crate::query::validator::ValidatedStatement;
+use crate::query::binder::BoundStatement;
 use crate::query::QueryContext;
 use crate::query::QueryRequestContext;
 use crate::storage::QueryStorage;
@@ -39,14 +39,19 @@ pub fn requires_write_storage(stmt: &Stmt) -> bool {
 /// A fully prepared request ready for execution.
 ///
 /// Contains everything needed to compile, execute, and finalize a query:
-/// the parsed+validated AST, query context, identity, and lifecycle metadata.
+/// the bound statement IR, query context, identity, and lifecycle metadata.
 pub struct PreparedRequest {
     pub query_text: String,
-    pub validated: ValidatedStatement,
     pub query_context: Arc<QueryContext>,
     pub statement_class: StatementClass,
     pub transaction_scope: TransactionScope,
     pub operation_storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+    /// Fully resolved bound IR, produced by the Binder.
+    pub bound_statement: Option<BoundStatement>,
+    /// Cloned AST statement for classification and diagnostic matching.
+    pub stmt: Stmt,
+    /// The parsed AST, retained for the legacy `transform()` planning path.
+    pub ast: Arc<crate::query::parser::ast::stmt::Ast>,
 }
 
 // ── Statement classification ───────────────────────────────────────────────
@@ -129,10 +134,25 @@ pub fn is_read_only_cacheable(stmt: &Stmt) -> bool {
     )
 }
 
+/// Build a minimal `ValidatedStatement` for the `plan_bound` → `transform` fallback path.
+///
+/// When a planner does not yet implement `plan_bound`, we fall back to the legacy
+/// `transform` interface.  This helper constructs a lightweight `ValidatedStatement`
+/// with an empty `ValidationInfo` — sufficient because `transform` primarily reads
+/// from the AST, not from `ValidationInfo`.
+pub(crate) fn build_validated_fallback(
+    ast: &Arc<crate::query::parser::ast::stmt::Ast>,
+) -> crate::query::binder::validation::ValidatedStatement {
+    crate::query::binder::validation::ValidatedStatement::new(
+        ast.clone(),
+        crate::query::binder::validation::ValidationInfo::new(),
+    )
+}
+
 // ── Prepared lifecycle ─────────────────────────────────────────────────────
 
 impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
-    /// Parse and validate once, producing a [`PreparedRequest`].
+    /// Parse and bind once, producing a [`PreparedRequest`].
     pub(crate) fn prepare_request(
         &mut self,
         query_text: &str,
@@ -141,14 +161,12 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
     ) -> DBResult<PreparedRequest> {
         let query_context = self.query_context_for_request(rctx, space_info.as_ref());
         let parser_result = self.parse_into_context(query_text)?;
-        let validated = self.validate_parsed_statement(parser_result.ast, query_context.clone())?;
-        Self::finalize_prepare(query_text, query_context, validated, None)
+        let ast = parser_result.ast.clone();
+        let bound = self.bind_parsed_statement(parser_result.ast, query_context.clone())?;
+        Self::finalize_prepare(query_text, query_context, ast, None, bound)
     }
 
-    /// Parse and validate, binding auto-commit storage for DML before constructing the context.
-    ///
-    /// The storage is acquired before parsing so that the request context
-    /// carries the real transaction identity from the storage binding.
+    /// Parse and bind, with auto-commit storage for DML.
     pub(crate) fn prepare_request_with_auto_commit(
         &mut self,
         query_text: &str,
@@ -178,27 +196,31 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
 
         let rctx = Arc::new(rctx);
         let query_context = self.query_context_for_request(rctx, space_info.as_ref());
-        let validated = self.validate_parsed_statement(parser_result.ast, query_context.clone())?;
-        Self::finalize_prepare(query_text, query_context, validated, operation_storage)
+        let ast = parser_result.ast.clone();
+        let bound = self.bind_parsed_statement(parser_result.ast, query_context.clone())?;
+        Self::finalize_prepare(query_text, query_context, ast, operation_storage, bound)
     }
 
     fn finalize_prepare(
         query_text: &str,
         query_context: Arc<QueryContext>,
-        validated: ValidatedStatement,
+        ast: Arc<crate::query::parser::ast::stmt::Ast>,
         operation_storage: Option<Arc<RwLock<dyn QueryStorage>>>,
+        bound_statement: Option<BoundStatement>,
     ) -> DBResult<PreparedRequest> {
-        let stmt = validated.ast.stmt();
-        let statement_class = classify_statement(stmt);
+        let stmt = ast.stmt().clone();
+        let statement_class = classify_statement(&stmt);
         let transaction_scope =
-            Self::resolve_transaction_scope(stmt, query_context.request_context());
+            Self::resolve_transaction_scope(&stmt, query_context.request_context());
         Ok(PreparedRequest {
             query_text: query_text.to_string(),
-            validated,
             query_context,
             statement_class,
             transaction_scope,
             operation_storage,
+            bound_statement,
+            stmt,
+            ast,
         })
     }
 
@@ -214,7 +236,11 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         let physical_plan = self.compile_or_get_cached(
             &request.query_text,
             request.query_context.clone(),
-            &request.validated,
+            request.bound_statement.as_ref().ok_or_else(|| {
+                DBError::from(QueryError::execution("No bound statement".to_string()))
+            })?,
+            &request.stmt,
+            &request.ast,
         )?;
         let start = Instant::now();
         let scope = transaction_id
@@ -229,7 +255,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         self.record_cache_execution(
             &request.query_text,
             &request.query_context,
-            request.validated.ast.stmt(),
+            &request.stmt,
             start.elapsed().as_secs_f64() * 1000.0,
         );
         if request.statement_class == StatementClass::Ddl {
@@ -245,11 +271,22 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         if request.statement_class == StatementClass::Diagnostic {
             return self.execute_diagnostic(request);
         }
-        let physical_plan = self.compile_or_get_cached(
-            &request.query_text,
-            request.query_context.clone(),
-            &request.validated,
-        )?;
+        let physical_plan = if let Some(ref bound) = request.bound_statement {
+            let (plan, _) = self.compile_from_bound(
+                request.query_context.clone(),
+                bound,
+                &request.ast,
+            )?;
+            plan
+        } else {
+            self.compile_or_get_cached(
+                &request.query_text,
+                request.query_context.clone(),
+                request.bound_statement.as_ref().unwrap(),
+                &request.stmt,
+                &request.ast,
+            )?
+        };
         let execution_start = Instant::now();
         let result = self.execute_compiled_with_scope(
             physical_plan,
@@ -260,7 +297,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         self.record_cache_execution(
             &request.query_text,
             &request.query_context,
-            request.validated.ast.stmt(),
+            &request.stmt,
             execution_start.elapsed().as_secs_f64() * 1000.0,
         );
         if request.statement_class == StatementClass::Ddl {
@@ -282,11 +319,22 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             let result = self.execute_prepared_materialized(request)?;
             return Ok(StreamingQueryResult::from_execution_result(result));
         }
-        let physical_plan = self.compile_or_get_cached(
-            &request.query_text,
-            request.query_context.clone(),
-            &request.validated,
-        )?;
+        let physical_plan = if let Some(ref bound) = request.bound_statement {
+            let (plan, _) = self.compile_from_bound(
+                request.query_context.clone(),
+                bound,
+                &request.ast,
+            )?;
+            plan
+        } else {
+            self.compile_or_get_cached(
+                &request.query_text,
+                request.query_context.clone(),
+                request.bound_statement.as_ref().unwrap(),
+                &request.stmt,
+                &request.ast,
+            )?
+        };
         let scope = transaction_id
             .map(|id| TransactionScope::explicit(id, true))
             .unwrap_or_else(|| request.transaction_scope.clone());
@@ -303,7 +351,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         &mut self,
         request: &PreparedRequest,
     ) -> DBResult<ExecutionResult> {
-        match request.validated.ast.stmt() {
+        match &request.stmt {
             Stmt::Explain(ref explain_stmt) => {
                 self.execute_explain(explain_stmt, request.query_context.clone())
             }
@@ -329,16 +377,6 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             query_context.set_space_info(space.clone());
         }
         Arc::new(query_context)
-    }
-
-    /// Validate a previously-parsed AST.
-    pub(crate) fn validate_parsed_statement(
-        &mut self,
-        ast: Arc<crate::query::parser::ast::stmt::Ast>,
-        query_context: Arc<QueryContext>,
-    ) -> DBResult<ValidatedStatement> {
-        let validation_info = self.validate_query_with_context(ast.clone(), query_context)?;
-        Ok(ValidatedStatement::new(ast, validation_info))
     }
 
     // ── Transaction scope resolution ──────────────────────────────────────
@@ -469,7 +507,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         stream: &StreamingQueryResult,
         request: &PreparedRequest,
     ) {
-        if !is_read_only_cacheable(request.validated.ast.stmt()) {
+        if !is_read_only_cacheable(&request.stmt) {
             return;
         }
         let space_name = request

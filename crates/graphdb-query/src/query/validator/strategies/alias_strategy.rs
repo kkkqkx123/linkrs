@@ -3,7 +3,7 @@
 
 use crate::core::types::expr::contextual::ContextualExpression;
 use crate::query::validator::error::{ValidationError, ValidationErrorType};
-use crate::query::validator::structs::AliasType;
+use crate::core::types::semantic::AliasType;
 use std::collections::HashMap;
 
 /// Alias validation policy

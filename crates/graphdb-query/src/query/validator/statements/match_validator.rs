@@ -15,13 +15,13 @@ use crate::query::QueryContext;
 
 use crate::query::validator::strategies::ExpressionValidationStrategy;
 use crate::query::validator::structs::validation_info::{PathAnalysis, ValidationInfo};
-use crate::query::validator::structs::{
-    AliasType, MatchStepRange, PaginationContext, Path, QueryPart, ReturnClauseContext,
+use crate::core::types::semantic::AliasType;
+use crate::query::binder::validation::{
+    MatchStepRange, PaginationContext, Path, QueryPart, ReturnClauseContext,
     UnwindClauseContext, WhereClauseContext, WithClauseContext, YieldClauseContext,
 };
-use crate::query::validator::validator_trait::{
-    ColumnDef, ExpressionProps, StatementType, StatementValidator, ValidationResult, ValueType,
-};
+use crate::query::validator::{ColumnDef, ValueType};
+use crate::query::validator::validator_trait::{ExpressionProps, StatementType, StatementValidator, ValidationResult};
 
 /// Verified MATCH information
 #[derive(Debug, Clone)]

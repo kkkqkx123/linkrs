@@ -12,6 +12,7 @@
 
 // Core modules
 pub mod connector;
+pub mod physical_planner;
 pub mod plan;
 pub mod planner;
 pub mod template_extractor;
