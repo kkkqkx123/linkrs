@@ -191,7 +191,7 @@ pub unsafe fn convert_c_value_to_rust(c_value: &graphdb_value_t) -> Value {
                     c_value.data.string.len,
                 );
                 let s = String::from_utf8_unchecked(slice.to_vec());
-                Value::String(s)
+                Value::string(s)
             }
         }
         _ => Value::Null(crate::core::value::NullType::Null),

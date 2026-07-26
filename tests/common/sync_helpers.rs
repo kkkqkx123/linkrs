@@ -499,7 +499,7 @@ pub fn create_test_vertex_with_vector(
     let mut properties = HashMap::new();
     properties.insert(
         string_prop.0.to_string(),
-        Value::String(string_prop.1.to_string()),
+        Value::string(string_prop.1.to_string()),
     );
 
     // Convert Vec<f32> to VectorValue

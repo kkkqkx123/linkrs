@@ -163,7 +163,7 @@ fn test_complete_crud_flow() {
         .assert_result_count(1)
         .assert_vertex_or_edge_has_property(
             "name",
-            graphdb_query::core::Value::String("Laptop".into()),
+            graphdb_query::core::Value::string("Laptop"),
         )
         .exec_dml("UPDATE 101 SET stock = 9")
         .assert_success()

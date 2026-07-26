@@ -130,7 +130,7 @@ fn barrier_fence_multiple_rebuilds_remain_consistent() {
     for i in 1..=5 {
         let name = format!("Person{}", i);
         let indexed = storage
-            .lookup_index("test_space", "person_name_idx", &Value::String(name))
+            .lookup_index("test_space", "person_name_idx", &Value::string(name))
             .expect("lookup after multiple rebuilds");
         assert_eq!(
             indexed,

@@ -186,7 +186,7 @@ fn test_fetch_execution_vertex_properties() {
         .assert_result_count(1)
         .assert_vertex_or_edge_has_property(
             "name",
-            graphdb_query::core::Value::String("Alice".into()),
+            graphdb_query::core::Value::string("Alice"),
         )
         .assert_vertex_or_edge_has_property("age", graphdb_query::core::Value::Int(30));
 }

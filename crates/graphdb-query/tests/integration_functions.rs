@@ -1058,7 +1058,7 @@ fn test_reverse_list_function() {
 #[test]
 fn test_json_extract_function() {
     let registry = FunctionRegistry::new();
-    let json = Value::String(r#"{"name": "Alice", "age": 30}"#.to_string());
+    let json = Value::string(r#"{"name": "Alice", "age": 30}"#);
 
     let result = registry.execute("json_extract", &[json, Value::string("name")]);
     assert!(result.is_ok());

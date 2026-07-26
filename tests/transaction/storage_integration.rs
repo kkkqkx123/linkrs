@@ -37,7 +37,7 @@ fn test_storage_vertex_insert_persistence() {
             1,
             "Person",
             HashMap::from([
-                ("name", Value::String("Alice".into())),
+                ("name", Value::string("Alice")),
                 ("age", Value::Int(30)),
             ]),
         );
@@ -57,7 +57,7 @@ fn test_storage_vertex_update_persistence() {
             1,
             "Person",
             HashMap::from([
-                ("name", Value::String("Alice".into())),
+                ("name", Value::string("Alice")),
                 ("age", Value::Int(30)),
             ]),
         )
@@ -67,7 +67,7 @@ fn test_storage_vertex_update_persistence() {
             1,
             "Person",
             HashMap::from([
-                ("name", Value::String("AliceUpdated".into())),
+                ("name", Value::string("AliceUpdated")),
                 ("age", Value::Int(31)),
             ]),
         );
@@ -150,9 +150,9 @@ fn test_storage_schema_changes_persistence() {
             1,
             "Person",
             HashMap::from([
-                ("name", Value::String("Alice".into())),
+                ("name", Value::string("Alice")),
                 ("age", Value::Int(30)),
-                ("email", Value::String("alice@example.com".into())),
+                ("email", Value::string("alice@example.com")),
             ]),
         );
 }
@@ -239,7 +239,7 @@ fn test_storage_property_types() {
             "AllTypes",
             HashMap::from([
                 ("int_val", Value::Int(42)),
-                ("string_val", Value::String("test_string".into())),
+                ("string_val", Value::string("test_string")),
                 ("bool_val", Value::Bool(true)),
                 ("float_val", Value::Float(3.14)),
             ]),

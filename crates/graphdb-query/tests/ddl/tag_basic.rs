@@ -134,7 +134,7 @@ fn test_create_tag_execution_with_data() {
             1,
             "Person",
             HashMap::from([
-                ("name", Value::String("Alice".into())),
+                ("name", Value::string("Alice")),
                 ("age", Value::Int(30)),
             ]),
         );
@@ -280,12 +280,12 @@ fn test_desc_execution_tag() {
         .assert_success()
         .assert_result_count(2)
         .assert_result_contains(vec![
-            Value::String("name".into()),
-            Value::String("STRING".into()),
+            Value::string("name"),
+            Value::string("STRING"),
         ])
         .assert_result_contains(vec![
-            Value::String("age".into()),
-            Value::String("INT".into()),
+            Value::string("age"),
+            Value::string("INT"),
         ]);
 }
 

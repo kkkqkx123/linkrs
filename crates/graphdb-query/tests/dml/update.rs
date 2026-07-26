@@ -134,7 +134,7 @@ fn test_update_vertex_and_verify() {
         .assert_vertex_props(1, "Person", {
             let mut map = std::collections::HashMap::new();
             map.insert("age", graphdb_query::core::Value::Int(30));
-            map.insert("city", graphdb_query::core::Value::String("NYC".into()));
+            map.insert("city", graphdb_query::core::Value::string("NYC"));
             map
         })
         .exec_dml("UPDATE 1 SET age = 31")
@@ -149,7 +149,7 @@ fn test_update_vertex_and_verify() {
         .assert_vertex_props(1, "Person", {
             let mut map = std::collections::HashMap::new();
             map.insert("age", graphdb_query::core::Value::Int(32));
-            map.insert("city", graphdb_query::core::Value::String("LA".into()));
+            map.insert("city", graphdb_query::core::Value::string("LA"));
             map
         });
 }
@@ -167,11 +167,11 @@ fn test_update_vertex_with_condition() {
         .assert_success()
         .assert_vertex_props(1, "Person", {
             let mut map = std::collections::HashMap::new();
-            map.insert("state", graphdb_query::core::Value::String("premium".into()));
+            map.insert("state", graphdb_query::core::Value::string("premium"));
             map
         })
         .query("FETCH PROP ON Person 2")
-        .assert_vertex_or_edge_has_property("state", graphdb_query::core::Value::String("inactive".into()));
+        .assert_vertex_or_edge_has_property("state", graphdb_query::core::Value::string("inactive"));
 }
 
 #[test]

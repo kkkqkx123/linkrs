@@ -206,7 +206,7 @@ impl TransactionTestData {
     /// Create a simple person vertex value map
     pub fn person(name: &str, age: i64) -> HashMap<&'static str, Value> {
         HashMap::from([
-            ("name", Value::String(name.into())),
+            ("name", Value::string(name)),
             ("age", Value::Int(age as i32)),
         ])
     }
@@ -222,7 +222,7 @@ impl TransactionTestData {
     /// Create a product vertex value map
     pub fn product(name: &str, price: i64) -> HashMap<&'static str, Value> {
         HashMap::from([
-            ("name", Value::String(name.into())),
+            ("name", Value::string(name)),
             ("price", Value::Int(price as i32)),
         ])
     }

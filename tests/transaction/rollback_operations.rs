@@ -49,7 +49,7 @@ fn test_rollback_update_vertex() {
             1,
             "Person",
             HashMap::from([
-                ("name", Value::String("Alice".into())),
+                ("name", Value::string("Alice")),
                 ("age", Value::Int(25)),
             ]),
         )
@@ -60,7 +60,7 @@ fn test_rollback_update_vertex() {
             1,
             "Person",
             HashMap::from([
-                ("name", Value::String("Alice".into())),
+                ("name", Value::string("Alice")),
                 ("age", Value::Int(30)),
             ]),
         );
@@ -227,7 +227,7 @@ fn test_operation_sequence_with_modifications() {
             1,
             "Person",
             HashMap::from([
-                ("name", Value::String("Alice".into())),
+                ("name", Value::string("Alice")),
                 ("age", Value::Int(31)),
             ]),
         )

@@ -73,7 +73,7 @@ fn test_insert_execution_vertex() {
             1,
             "Person",
             HashMap::from([
-                ("name", Value::String("Alice".into())),
+                ("name", Value::string("Alice")),
                 ("age", Value::Int(30)),
             ]),
         );
@@ -123,7 +123,7 @@ fn test_insert_if_not_exists_execution() {
             1,
             "Person",
             HashMap::from([
-                ("name", Value::String("Alice".into())),
+                ("name", Value::string("Alice")),
                 ("age", Value::Int(30)),
             ]),
         )
@@ -133,7 +133,7 @@ fn test_insert_if_not_exists_execution() {
             1,
             "Person",
             HashMap::from([
-                ("name", Value::String("Alice".into())),
+                ("name", Value::string("Alice")),
                 ("age", Value::Int(30)),
             ]),
         );
@@ -197,7 +197,7 @@ fn test_insert_vertex_with_all_types() {
         .assert_success()
         .assert_vertex_props(1, "TestTypes", {
             let mut map = HashMap::new();
-            map.insert("str_field", Value::String("test".into()));
+            map.insert("str_field", Value::string("test"));
             map.insert("int_field", Value::Int(42));
             map.insert("double_field", Value::Double(std::f64::consts::E));
             map.insert("bool_field", Value::Bool(true));
@@ -386,7 +386,7 @@ fn test_insert_vertex_with_partial_properties() {
         .assert_vertex_props(
             1,
             "PartialFields",
-            HashMap::from([("name", Value::String("Bob".into()))]),
+            HashMap::from([("name", Value::string("Bob"))]),
         );
 }
 
@@ -431,7 +431,7 @@ fn test_insert_vertex_with_geography_and_other_fields() {
         .assert_vertex_props(
             1,
             "Place",
-            HashMap::from([("name", Value::String("Beijing".into()))]),
+            HashMap::from([("name", Value::string("Beijing"))]),
         );
 }
 
@@ -514,6 +514,6 @@ fn test_insert_vertex_empty_string() {
         .assert_vertex_props(
             1,
             "Person",
-            HashMap::from([("name", Value::String("".into()))]),
+            HashMap::from([("name", Value::string(""))]),
         );
 }

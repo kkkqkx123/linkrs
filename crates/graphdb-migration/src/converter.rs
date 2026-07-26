@@ -200,8 +200,8 @@ mod tests {
             Value::Int(42)
         );
         assert_eq!(
-            convert_value(&Value::String("hello".into()), &DataType::String).unwrap(),
-            Value::String("hello".into())
+            convert_value(&Value::string("hello"), &DataType::String).unwrap(),
+            Value::string("hello")
         );
     }
 
@@ -261,7 +261,7 @@ mod tests {
     #[test]
     fn test_string_to_int() {
         assert_eq!(
-            convert_value(&Value::String("42".into()), &DataType::Int).unwrap(),
+            convert_value(&Value::string("42"), &DataType::Int).unwrap(),
             Value::Int(42)
         );
     }
@@ -269,18 +269,18 @@ mod tests {
     #[test]
     fn test_string_to_bool() {
         assert_eq!(
-            convert_value(&Value::String("true".into()), &DataType::Bool).unwrap(),
+            convert_value(&Value::string("true"), &DataType::Bool).unwrap(),
             Value::Bool(true)
         );
         assert_eq!(
-            convert_value(&Value::String("false".into()), &DataType::Bool).unwrap(),
+            convert_value(&Value::string("false"), &DataType::Bool).unwrap(),
             Value::Bool(false)
         );
     }
 
     #[test]
     fn test_string_to_bool_invalid() {
-        let result = convert_value(&Value::String("maybe".into()), &DataType::Bool);
+        let result = convert_value(&Value::string("maybe"), &DataType::Bool);
         assert!(result.is_err());
     }
 
@@ -294,11 +294,11 @@ mod tests {
     fn test_value_to_string() {
         assert_eq!(
             convert_value(&Value::Int(42), &DataType::String).unwrap(),
-            Value::String("42".into())
+            Value::string("42")
         );
         assert_eq!(
             convert_value(&Value::Bool(true), &DataType::String).unwrap(),
-            Value::String("true".into())
+            Value::string("true")
         );
     }
 

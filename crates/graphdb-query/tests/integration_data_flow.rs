@@ -31,20 +31,20 @@ fn test_basic_crud_flow() {
         .query("MATCH (u:User) RETURN u.username, u.email")
         .assert_result_count(1)
         .assert_result_contains(vec![
-            Value::String("alice".into()),
-            Value::String("alice@example.com".into()),
+            Value::string("alice"),
+            Value::string("alice@example.com"),
         ])
         // Update
         .exec_dml("UPDATE 1 SET email = 'newalice@example.com'")
         .assert_success()
         .assert_vertex_props(1, "User", {
             let mut map = HashMap::new();
-            map.insert("email", Value::String("newalice@example.com".into()));
+            map.insert("email", Value::string("newalice@example.com"));
             map
         })
         // Read updated
         .query("MATCH (u:User) RETURN u.email")
-        .assert_result_contains(vec![Value::String("newalice@example.com".into())])
+        .assert_result_contains(vec![Value::string("newalice@example.com")])
         // Delete
         .exec_dml("DELETE VERTEX 1")
         .assert_success()
@@ -80,7 +80,7 @@ fn test_schema_evolution_flow() {
         .query("MATCH (p:Product) RETURN p.name, p.price, p.stock")
         .assert_result_count(1)
         .assert_result_contains(vec![
-            Value::String("Laptop".into()),
+            Value::string("Laptop"),
             Value::Double(999.99),
             Value::BigInt(10),
         ])
@@ -93,8 +93,8 @@ fn test_schema_evolution_flow() {
         // Query all fields
         .query("MATCH (p:Product) RETURN p.name, p.category")
         .assert_result_contains(vec![
-            Value::String("Laptop".into()),
-            Value::String("Electronics".into()),
+            Value::string("Laptop"),
+            Value::string("Electronics"),
         ]);
 }
 
@@ -288,7 +288,7 @@ fn test_social_network_complete_flow() {
         // Query: Find friends of friends of Alice
         .query("GO 2 FROM 1 OVER KNOWS YIELD $$.Person.name AS fof_name")
         .assert_result_count(1)
-        .assert_result_contains(vec![Value::String("David".into())])
+        .assert_result_contains(vec![Value::string("David")])
         // Query: Find shortest path from Alice to David
         .query("FIND SHORTEST PATH FROM 1 TO 4 OVER KNOWS")
         .assert_success()
@@ -297,7 +297,7 @@ fn test_social_network_complete_flow() {
         .assert_success()
         // Query: Verify update
         .query("MATCH (p:Person) WHERE p.name == 'Alice' RETURN p.city")
-        .assert_result_contains(vec![Value::String("LA".into())])
+        .assert_result_contains(vec![Value::string("LA")])
         // Delete: Remove a friendship
         .exec_dml("DELETE EDGE KNOWS 1 -> 2")
         .assert_success()

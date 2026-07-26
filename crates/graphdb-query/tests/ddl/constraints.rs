@@ -227,7 +227,7 @@ fn test_default_value_execution_insert() {
             1,
             "Person",
             HashMap::from([
-                ("name", Value::String("Alice".into())),
+                ("name", Value::string("Alice")),
                 ("age", Value::Int(18)),
             ]),
         );
@@ -246,7 +246,7 @@ fn test_default_value_execution_override() {
             1,
             "Person",
             HashMap::from([
-                ("name", Value::String("Alice".into())),
+                ("name", Value::string("Alice")),
                 ("age", Value::Int(25)),
             ]),
         );
@@ -265,7 +265,7 @@ fn test_default_value_string_execution() {
         .assert_vertex_props(
             1,
             "Person",
-            HashMap::from([("name", Value::String("Bob".into()))]),
+            HashMap::from([("name", Value::string("Bob"))]),
         );
 }
 
@@ -307,7 +307,7 @@ fn test_default_with_not_null_constraint() {
             1,
             "Person",
             HashMap::from([
-                ("name", Value::String("unknown".into())),
+                ("name", Value::string("unknown")),
                 ("age", Value::Int(30)),
             ]),
         );

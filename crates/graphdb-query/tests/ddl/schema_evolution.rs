@@ -38,9 +38,9 @@ fn test_schema_evolution_complete_flow() {
         .assert_result_count(1)
         .assert_vertex_props(1, "UserProfile", {
             let mut map = HashMap::new();
-            map.insert("username", Value::String("alice".into()));
-            map.insert("email", Value::String("alice@example.com".into()));
-            map.insert("bio", Value::String("Hello world".into()));
+            map.insert("username", Value::string("alice"));
+            map.insert("email", Value::string("alice@example.com"));
+            map.insert("bio", Value::string("Hello world"));
             map
         });
 }
@@ -128,11 +128,11 @@ fn test_alter_tag_change_field() {
         .query("DESC TAG Person")
         .assert_result_count(1)
         .assert_result_contains(vec![
-            Value::String("name".into()),
-            Value::String("STRING".into()),
+            Value::string("name"),
+            Value::string("STRING"),
             Value::Bool(true),
-            Value::String("".into()),
-            Value::String("".into()),
+            Value::string(""),
+            Value::string(""),
         ]);
 }
 

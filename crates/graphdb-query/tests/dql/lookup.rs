@@ -160,7 +160,7 @@ fn test_lookup_execution_with_yield() {
         .query("LOOKUP ON Person WHERE Person.age == 30 YIELD Person.name")
         .assert_success()
         .assert_result_count(1)
-        .assert_result_contains(vec![graphdb_query::core::Value::String("Alice".into())]);
+        .assert_result_contains(vec![graphdb_query::core::Value::string("Alice")]);
 }
 
 // ==================== LOOKUP Error Handling Tests ====================

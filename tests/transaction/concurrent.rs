@@ -47,7 +47,7 @@ fn test_transaction_read_committed_only() {
         .assert_vertex_props(
             1,
             "Person",
-            HashMap::from([("name", Value::String("Alice".into()))]),
+            HashMap::from([("name", Value::string("Alice"))]),
         );
 }
 

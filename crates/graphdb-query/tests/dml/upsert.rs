@@ -77,7 +77,7 @@ fn test_upsert_execution_vertex_insert() {
             1,
             "Person",
             HashMap::from([
-                ("name", Value::String("Alice".into())),
+                ("name", Value::string("Alice")),
                 ("age", Value::Int(30)),
             ]),
         );
@@ -97,7 +97,7 @@ fn test_upsert_execution_vertex_update() {
             1,
             "Person",
             HashMap::from([
-                ("name", Value::String("Bob".into())),
+                ("name", Value::string("Bob")),
                 ("age", Value::Int(35)),
             ]),
         );
@@ -117,9 +117,9 @@ fn test_upsert_vertex_update_partial() {
             1,
             "Person",
             HashMap::from([
-                ("name", Value::String("Alice".into())),
+                ("name", Value::string("Alice")),
                 ("age", Value::Int(31)),
-                ("city", Value::String("NYC".into())),
+                ("city", Value::string("NYC")),
             ]),
         );
 }
@@ -265,7 +265,7 @@ fn test_upsert_when_condition_update() {
             1,
             "Person",
             HashMap::from([
-                ("name", Value::String("Alice".into())),
+                ("name", Value::string("Alice")),
                 ("age", Value::Int(31)),
             ]),
         );
@@ -285,7 +285,7 @@ fn test_upsert_when_condition_skipped() {
             1,
             "Person",
             HashMap::from([
-                ("name", Value::String("Alice".into())),
+                ("name", Value::string("Alice")),
                 ("age", Value::Int(51)),
             ]),
         );
@@ -484,7 +484,7 @@ fn test_upsert_where_no_match() {
             999,
             "Person",
             HashMap::from([
-                ("name", Value::String("Bob".into())),
+                ("name", Value::string("Bob")),
                 ("age", Value::Int(25)),
             ]),
         );

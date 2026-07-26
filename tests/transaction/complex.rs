@@ -81,7 +81,7 @@ fn test_transaction_tag_modification() {
             1,
             "Person",
             HashMap::from([
-                ("name", Value::String("Alice".into())),
+                ("name", Value::string("Alice")),
                 ("age", Value::Int(30)),
             ]),
         );
@@ -145,9 +145,9 @@ fn test_transaction_multiple_schema_changes() {
             1,
             "Person",
             HashMap::from([
-                ("name", Value::String("Alice".into())),
+                ("name", Value::string("Alice")),
                 ("age", Value::Int(30)),
-                ("email", Value::String("alice@example.com".into())),
+                ("email", Value::string("alice@example.com")),
             ]),
         );
 }

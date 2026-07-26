@@ -182,14 +182,14 @@ fn test_alter_tag_change_with_data() {
         .query("DESC TAG Person")
         .assert_success()
         .assert_result_contains(vec![
-            Value::String("name".into()),
-            Value::String("STRING".into()),
+            Value::string("name"),
+            Value::string("STRING"),
         ])
         .exec_dml("UPDATE 1 SET name = 'Updated Alice'")
         .assert_success()
         .assert_vertex_props(
             1,
             "Person",
-            HashMap::from([("name", Value::String("Updated Alice".into()))]),
+            HashMap::from([("name", Value::string("Updated Alice"))]),
         );
 }

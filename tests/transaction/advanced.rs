@@ -249,7 +249,7 @@ fn test_transaction_string_operations() {
         .assert_success()
         .query("MATCH (v:Person) WHERE v.name STARTS WITH 'A' RETURN v.name")
         .assert_result_count(1)
-        .assert_result_contains(vec![Value::String("Alice".into())]);
+        .assert_result_contains(vec![Value::string("Alice")]);
 }
 
 /// Test savepoint create and rollback

@@ -1181,10 +1181,10 @@ mod tests {
         // Verify that ordering is preserved for pairs that the length-prefixed
         // encoding got wrong.
         let pairs: [(Value, Value); 4] = [
-            (Value::String("aa".into()), Value::String("b".into())),
-            (Value::String("a".into()), Value::String("aa".into())),
-            (Value::String("".into()), Value::String("a".into())),
-            (Value::String("a".into()), Value::String("ab".into())),
+            (Value::string("aa"), Value::string("b")),
+            (Value::string("a"), Value::string("aa")),
+            (Value::string(""), Value::string("a")),
+            (Value::string("a"), Value::string("ab")),
         ];
         for (a, b) in &pairs {
             let enc_a = codec().encode(a).unwrap();

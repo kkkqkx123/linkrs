@@ -283,7 +283,7 @@ fn test_return_literal_values() {
         .query("RETURN 'Hello World'")
         .assert_success()
         .assert_result_count(1)
-        .assert_result_contains(vec![Value::String("Hello World".into())]);
+        .assert_result_contains(vec![Value::string("Hello World")]);
 }
 
 #[test]
@@ -325,7 +325,7 @@ fn test_return_with_data() {
         .query("MATCH (n:Person) RETURN n.name, n.age")
         .assert_success()
         .assert_result_count(1)
-        .assert_result_contains(vec![Value::String("Alice".into()), Value::Int(30)]);
+        .assert_result_contains(vec![Value::string("Alice"), Value::Int(30)]);
 }
 
 #[test]

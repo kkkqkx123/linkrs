@@ -49,7 +49,7 @@ fn test_transaction_vertex_update() {
             1,
             "Person",
             HashMap::from([
-                ("name", Value::String("Alice".into())),
+                ("name", Value::string("Alice")),
                 ("age", Value::Int(30)),
             ]),
         )
@@ -59,7 +59,7 @@ fn test_transaction_vertex_update() {
             1,
             "Person",
             HashMap::from([
-                ("name", Value::String("AliceUpdated".into())),
+                ("name", Value::string("AliceUpdated")),
                 ("age", Value::Int(31)),
             ]),
         );
@@ -133,7 +133,7 @@ fn test_transaction_property_types() {
             "TestTypes",
             HashMap::from([
                 ("int_val", Value::Int(42)),
-                ("string_val", Value::String("test".into())),
+                ("string_val", Value::string("test")),
                 ("bool_val", Value::Bool(true)),
                 ("float_val", Value::Float(2.71)),
             ]),
