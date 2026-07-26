@@ -8,7 +8,7 @@ use crate::query::parser::ast::types::OrderDirection;
 use crate::query::parser::core::error::{ParseError, ParseErrorKind};
 use crate::query::parser::parsing::clause_parser::ClauseParser;
 use crate::query::parser::parsing::parse_context::ParseContext;
-use crate::query::parser::parsing::ExprParser;
+use crate::query::parser::parsing::expr_parser::parse_expression_with_context;
 use crate::query::parser::TokenKind;
 
 /// Tool Syntax Parser
@@ -466,8 +466,8 @@ impl UtilStmtParser {
         &mut self,
         ctx: &mut ParseContext,
     ) -> Result<ContextualExpression, ParseError> {
-        let mut expr_parser = ExprParser::new(ctx);
-        expr_parser.parse_expression_with_context(ctx, ctx.expression_context_clone())
+        
+        parse_expression_with_context(ctx, ctx.expression_context_clone())
     }
 
     /// Analysis of the ORDER BY clause

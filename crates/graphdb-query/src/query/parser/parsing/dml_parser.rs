@@ -11,7 +11,7 @@ use crate::query::parser::core::token::TokenKindExt;
 use crate::query::parser::parsing::clause_parser::ClauseParser;
 use crate::query::parser::parsing::parse_context::ParseContext;
 use crate::query::parser::parsing::traversal_parser::TraversalParser;
-use crate::query::parser::parsing::ExprParser;
+use crate::query::parser::parsing::expr_parser::parse_expression_with_context;
 use crate::query::parser::TokenKind;
 
 /// Data Modification Parser
@@ -774,8 +774,8 @@ impl DmlParser {
         &mut self,
         ctx: &mut ParseContext,
     ) -> Result<ContextualExpression, ParseError> {
-        let mut expr_parser = ExprParser::new(ctx);
-        expr_parser.parse_expression_with_context(ctx, ctx.expression_context_clone())
+        
+        parse_expression_with_context(ctx, ctx.expression_context_clone())
     }
 
     /// Parse the Cypher-style CREATE data statement (the CREATE token has already been consumed)

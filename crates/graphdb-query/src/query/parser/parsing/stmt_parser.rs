@@ -13,22 +13,18 @@ use crate::query::parser::parsing::{
 };
 use crate::query::parser::TokenKind;
 
-/// Statement parser
+/// Statement parser - namespace for statement parsing functions.
 pub struct StmtParser;
 
 impl StmtParser {
-    pub fn new() -> Self {
-        Self
-    }
-
-    /// Parse statements (pipeline operators are supported)
-    pub fn parse_statement(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
-        let stmt = self.parse_single_statement(ctx)?;
-        self.parse_pipe_suffix(ctx, stmt)
+    /// Parse statements (pipeline operators are supported).
+    pub fn parse_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+        let stmt = Self::parse_single_statement(ctx)?;
+        Self::parse_pipe_suffix(ctx, stmt)
     }
 
     /// Analyzing a single statement (without distributing it through any pipelines)
-    fn parse_single_statement(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+    fn parse_single_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         let token = ctx.current_token().clone();
         match token.kind {
             // Graph traversal statement
@@ -42,12 +38,12 @@ impl StmtParser {
             // Data modification statements
             TokenKind::Insert => DmlParser::new().parse_insert_statement(ctx),
             TokenKind::Delete => DmlParser::new().parse_delete_statement(ctx),
-            TokenKind::Update => self.parse_update_statement_extended(ctx),
+            TokenKind::Update => Self::parse_update_statement_extended(ctx),
             TokenKind::Upsert => DmlParser::new().parse_upsert_statement(ctx),
             TokenKind::Merge => DmlParser::new().parse_merge_statement(ctx),
 
             // DDL statements or Cypher CREATE data statements
-            TokenKind::Create => self.parse_create_statement_extended(ctx),
+            TokenKind::Create => Self::parse_create_statement_extended(ctx),
             TokenKind::Drop => DdlParser::new().parse_drop_statement(ctx),
             TokenKind::Desc => DdlParser::new().parse_desc_statement(ctx),
             TokenKind::Alter => DdlParser::new().parse_alter_statement(ctx),
@@ -63,11 +59,11 @@ impl StmtParser {
 
             // Tool statements
             TokenKind::Use => UtilStmtParser::new().parse_use_statement(ctx),
-            TokenKind::Show => self.parse_show_statement_extended(ctx),
-            TokenKind::Explain => self.parse_explain_statement(ctx),
-            TokenKind::Profile => self.parse_profile_statement(ctx),
-            TokenKind::Group => self.parse_group_by_statement(ctx),
-            TokenKind::Kill => self.parse_kill_statement(ctx),
+            TokenKind::Show => Self::parse_show_statement_extended(ctx),
+            TokenKind::Explain => Self::parse_explain_statement(ctx),
+            TokenKind::Profile => Self::parse_profile_statement(ctx),
+            TokenKind::Group => Self::parse_group_by_statement(ctx),
+            TokenKind::Kill => Self::parse_kill_statement(ctx),
             TokenKind::Fetch => UtilStmtParser::new().parse_fetch_statement(ctx),
             TokenKind::Lookup => UtilStmtParser::new().parse_lookup_statement(ctx),
             TokenKind::Unwind => UtilStmtParser::new().parse_unwind_statement(ctx),
@@ -78,9 +74,9 @@ impl StmtParser {
             TokenKind::Remove => UtilStmtParser::new().parse_remove_statement(ctx),
 
             // Transaction statements
-            TokenKind::Begin => self.parse_begin_transaction(ctx),
-            TokenKind::Commit => self.parse_commit_transaction(ctx),
-            TokenKind::Rollback => self.parse_rollback_transaction(ctx),
+            TokenKind::Begin => Self::parse_begin_transaction(ctx),
+            TokenKind::Commit => Self::parse_commit_transaction(ctx),
+            TokenKind::Rollback => Self::parse_rollback_transaction(ctx),
 
             // Full-text search statements
             // Check if it's SEARCH VECTOR or SEARCH INDEX
@@ -91,11 +87,11 @@ impl StmtParser {
                     return crate::query::parser::parsing::vector_parser::parse_vector(ctx);
                 }
                 // Otherwise, it's a fulltext search
-                self.parse_fulltext_statement(ctx)
+                Self::parse_fulltext_statement(ctx)
             }
 
             // Variable assignment statement ($var = statement)
-            TokenKind::Dollar => self.parse_assignment_statement(ctx),
+            TokenKind::Dollar => Self::parse_assignment_statement(ctx),
 
             _ => Err(ParseError::new(
                 ParseErrorKind::UnexpectedToken,
@@ -108,13 +104,12 @@ impl StmtParser {
     /// Analyzing the pipe suffix (the | operator)
     /// Also handles sequential clauses like MATCH ... WITH ... RETURN
     fn parse_pipe_suffix(
-        &mut self,
         ctx: &mut ParseContext,
         left: Stmt,
     ) -> Result<Stmt, ParseError> {
         if ctx.match_token(TokenKind::Pipe) {
             let start_span = left.span();
-            let right = self.parse_single_statement(ctx)?;
+            let right = Self::parse_single_statement(ctx)?;
             let end_span = right.span();
             let span = ctx.merge_span(start_span.start, end_span.end);
 
@@ -124,7 +119,7 @@ impl StmtParser {
                 right: Box::new(right),
             });
 
-            self.parse_pipe_suffix(ctx, pipe_stmt)
+            Self::parse_pipe_suffix(ctx, pipe_stmt)
         } else if ctx.current_token().kind == TokenKind::With {
             let start_span = left.span();
             let right = UtilStmtParser::new().parse_with_statement(ctx)?;
@@ -137,7 +132,7 @@ impl StmtParser {
                 right: Box::new(right),
             });
 
-            self.parse_pipe_suffix(ctx, pipe_stmt)
+            Self::parse_pipe_suffix(ctx, pipe_stmt)
         } else if ctx.current_token().kind == TokenKind::Return {
             let start_span = left.span();
             let right = UtilStmtParser::new().parse_return_statement(ctx)?;
@@ -150,7 +145,7 @@ impl StmtParser {
                 right: Box::new(right),
             });
 
-            self.parse_pipe_suffix(ctx, pipe_stmt)
+            Self::parse_pipe_suffix(ctx, pipe_stmt)
         } else if ctx.current_token().kind == TokenKind::Unwind {
             let start_span = left.span();
             let right = UtilStmtParser::new().parse_unwind_statement(ctx)?;
@@ -163,15 +158,15 @@ impl StmtParser {
                 right: Box::new(right),
             });
 
-            self.parse_pipe_suffix(ctx, pipe_stmt)
+            Self::parse_pipe_suffix(ctx, pipe_stmt)
         } else {
             // Check whether it is a set operation.
-            self.parse_set_operation_suffix(ctx, left)
+            Self::parse_set_operation_suffix(ctx, left)
         }
     }
 
     /// Analyzing the EXPLAIN statement (special handling is required, as it contains sub-statements)
-    fn parse_explain_statement(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+    fn parse_explain_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         let start_span = ctx.current_span();
         ctx.expect_token(TokenKind::Explain)?;
 
@@ -197,7 +192,7 @@ impl StmtParser {
             ExplainFormat::default()
         };
 
-        let statement = Box::new(self.parse_statement(ctx)?);
+        let statement = Box::new(Self::parse_statement(ctx)?);
 
         Ok(Stmt::Explain(ExplainStmt {
             span: start_span,
@@ -207,7 +202,7 @@ impl StmtParser {
     }
 
     /// Analyzing the PROFILE statement
-    fn parse_profile_statement(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+    fn parse_profile_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         let start_span = ctx.current_span();
         ctx.expect_token(TokenKind::Profile)?;
 
@@ -233,7 +228,7 @@ impl StmtParser {
             ExplainFormat::default()
         };
 
-        let statement = Box::new(self.parse_statement(ctx)?);
+        let statement = Box::new(Self::parse_statement(ctx)?);
 
         Ok(Stmt::Profile(ProfileStmt {
             span: start_span,
@@ -243,7 +238,7 @@ impl StmtParser {
     }
 
     /// Analysis of the GROUP BY statement
-    fn parse_group_by_statement(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+    fn parse_group_by_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         use crate::core::types::expr::Expression;
         use crate::query::parser::ast::stmt::{GroupByStmt, GroupingType, YieldItem};
         use crate::query::parser::parsing::clause_parser::ClauseParser;
@@ -254,12 +249,12 @@ impl StmtParser {
 
         let (group_items, grouping_type) = if ctx.match_token(TokenKind::Rollup) {
             ctx.expect_token(TokenKind::LParen)?;
-            let items = self.parse_grouping_set_items(ctx)?;
+            let items = Self::parse_grouping_set_items(ctx)?;
             ctx.expect_token(TokenKind::RParen)?;
             (items.clone(), GroupingType::Rollup(items))
         } else if ctx.match_token(TokenKind::Cube) {
             ctx.expect_token(TokenKind::LParen)?;
-            let items = self.parse_grouping_set_items(ctx)?;
+            let items = Self::parse_grouping_set_items(ctx)?;
             ctx.expect_token(TokenKind::RParen)?;
             (items.clone(), GroupingType::Cube(items))
         } else if ctx.match_token(TokenKind::Grouping) {
@@ -268,7 +263,7 @@ impl StmtParser {
             let mut sets = Vec::new();
             loop {
                 ctx.expect_token(TokenKind::LParen)?;
-                let items = self.parse_grouping_set_items(ctx)?;
+                let items = Self::parse_grouping_set_items(ctx)?;
                 ctx.expect_token(TokenKind::RParen)?;
                 sets.push(items);
                 if !ctx.match_token(TokenKind::Comma) {
@@ -324,7 +319,7 @@ impl StmtParser {
 
         // Analyzing the optional HAVING clause
         let having_clause = if ctx.match_token(TokenKind::Having) {
-            Some(self.parse_expression(ctx)?)
+            Some(Self::parse_expression(ctx)?)
         } else {
             None
         };
@@ -343,7 +338,6 @@ impl StmtParser {
 
     /// Parse grouping set items for ROLLUP, CUBE, GROUPING SETS
     fn parse_grouping_set_items(
-        &mut self,
         ctx: &mut ParseContext,
     ) -> Result<Vec<crate::core::types::expr::ContextualExpression>, ParseError> {
         use crate::core::types::expr::Expression;
@@ -367,16 +361,16 @@ impl StmtParser {
 
     /// Analyzing expressions (auxiliary method)
     fn parse_expression(
-        &mut self,
         ctx: &mut ParseContext,
     ) -> Result<ContextualExpression, ParseError> {
-        let mut expr_parser = crate::query::parser::parsing::ExprParser::new(ctx);
-        expr_parser.parse_expression_with_context(ctx, ctx.expression_context_clone())
+        crate::query::parser::parsing::expr_parser::parse_expression_with_context(
+            ctx,
+            ctx.expression_context_clone(),
+        )
     }
 
     /// Analysis of extended SHOW statements (including SESSIONS, QUERIES, and CONFIGS)
     fn parse_show_statement_extended(
-        &mut self,
         ctx: &mut ParseContext,
     ) -> Result<Stmt, ParseError> {
         use crate::query::parser::ast::stmt::{ShowConfigsStmt, ShowQueriesStmt, ShowSessionsStmt};
@@ -479,7 +473,7 @@ impl StmtParser {
     }
 
     /// Analyzing the KILL statement
-    fn parse_kill_statement(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+    fn parse_kill_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         use crate::query::parser::ast::stmt::KillQueryStmt;
 
         let start_span = ctx.current_span();
@@ -507,7 +501,6 @@ impl StmtParser {
 
     /// Analysis of the extended UPDATE statement (including UPDATE CONFIGS)
     fn parse_update_statement_extended(
-        &mut self,
         ctx: &mut ParseContext,
     ) -> Result<Stmt, ParseError> {
         use crate::query::parser::ast::stmt::UpdateConfigsStmt;
@@ -535,7 +528,7 @@ impl StmtParser {
 
             // Analyzing the equal sign and the value
             ctx.expect_token(TokenKind::Assign)?;
-            let config_value = self.parse_expression(ctx)?;
+            let config_value = Self::parse_expression(ctx)?;
 
             let end_span = ctx.current_span();
             let span = ctx.merge_span(start_span.start, end_span.end);
@@ -556,7 +549,7 @@ impl StmtParser {
     }
 
     /// Analysis of the variable assignment statement ($var = statement)
-    fn parse_assignment_statement(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+    fn parse_assignment_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         use crate::query::parser::ast::stmt::AssignmentStmt;
 
         let start_span = ctx.current_span();
@@ -569,7 +562,7 @@ impl StmtParser {
         ctx.expect_token(TokenKind::Assign)?;
 
         // Analyze the sentence on the right side.
-        let statement = Box::new(self.parse_statement(ctx)?);
+        let statement = Box::new(Self::parse_statement(ctx)?);
 
         let end_span = ctx.current_span();
         let span = ctx.merge_span(start_span.start, end_span.end);
@@ -584,7 +577,6 @@ impl StmtParser {
     /// Analyzing the extended CREATE statement
     /// Distinguish between DDL CREATE statements (for creating tags, edges, spaces, or indexes) and Cypher CREATE statements for creating data.
     fn parse_create_statement_extended(
-        &mut self,
         ctx: &mut ParseContext,
     ) -> Result<Stmt, ParseError> {
         use crate::query::parser::parsing::ddl_parser::DdlParser;
@@ -638,13 +630,12 @@ impl StmtParser {
     }
 
     /// Parse full-text search statements
-    fn parse_fulltext_statement(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+    fn parse_fulltext_statement(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         crate::query::parser::parsing::fulltext_parser::parse_fulltext(ctx)
     }
 
     /// Pipeline after parsing set operation statements, or end of the process.
     fn parse_set_operation_suffix(
-        &mut self,
         ctx: &mut ParseContext,
         left: Stmt,
     ) -> Result<Stmt, ParseError> {
@@ -667,7 +658,7 @@ impl StmtParser {
         };
 
         let start_span = left.span();
-        let right = self.parse_single_statement(ctx)?;
+        let right = Self::parse_single_statement(ctx)?;
         let end_span = right.span();
         let span = ctx.merge_span(start_span.start, end_span.end);
 
@@ -679,11 +670,11 @@ impl StmtParser {
         });
 
         // Continue to check whether there are any more set operations.
-        self.parse_set_operation_suffix(ctx, set_op_stmt)
+        Self::parse_set_operation_suffix(ctx, set_op_stmt)
     }
 
     /// Parse BEGIN TRANSACTION statement
-    fn parse_begin_transaction(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+    fn parse_begin_transaction(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         let start_span = ctx.current_span();
         ctx.expect_token(TokenKind::Begin)?;
 
@@ -699,7 +690,7 @@ impl StmtParser {
     }
 
     /// Parse COMMIT TRANSACTION statement
-    fn parse_commit_transaction(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+    fn parse_commit_transaction(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         let start_span = ctx.current_span();
         ctx.expect_token(TokenKind::Commit)?;
 
@@ -715,7 +706,7 @@ impl StmtParser {
     }
 
     /// Parse ROLLBACK TRANSACTION statement
-    fn parse_rollback_transaction(&mut self, ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
+    fn parse_rollback_transaction(ctx: &mut ParseContext) -> Result<Stmt, ParseError> {
         let start_span = ctx.current_span();
         ctx.expect_token(TokenKind::Rollback)?;
 
@@ -731,12 +722,6 @@ impl StmtParser {
     }
 }
 
-impl Default for StmtParser {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -748,26 +733,26 @@ mod tests {
 
     #[test]
     fn test_parse_match_statement() {
-        let mut parser = StmtParser::new();
+        
         let mut ctx = create_parser_context("MATCH (n:Person) RETURN n");
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
         assert!(result.is_ok(), "MATCH parse failure: {:?}", result.err());
     }
 
     #[test]
     fn test_parse_go_statement() {
-        let mut parser = StmtParser::new();
+        
         let mut ctx = create_parser_context("GO 1 STEP FROM \"player100\" OVER follow");
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
         assert!(result.is_ok(), "GO parse failure: {:?}", result.err());
     }
 
     #[test]
     fn test_parse_create_tag_statement() {
-        let mut parser = StmtParser::new();
+        
         let mut ctx =
             create_parser_context("CREATE TAG IF NOT EXISTS Person(name: STRING, age: INT)");
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
         assert!(
             result.is_ok(),
             "CREATE TAG Parse failure: {:?}",
@@ -777,11 +762,11 @@ mod tests {
 
     #[test]
     fn test_parse_insert_vertex_statement() {
-        let mut parser = StmtParser::new();
+        
         let mut ctx = create_parser_context(
             "INSERT VERTEX Person(name, age) VALUES \"player100\":(\"Tom\", 18)",
         );
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
         assert!(
             result.is_ok(),
             "INSERT VERTEX parse failure: {:?}",
@@ -791,9 +776,9 @@ mod tests {
 
     #[test]
     fn test_parse_delete_vertex_statement() {
-        let mut parser = StmtParser::new();
+        
         let mut ctx = create_parser_context("DELETE VERTEX \"player100\"");
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
         assert!(
             result.is_ok(),
             "DELETE VERTEX parse failure: {:?}",
@@ -803,9 +788,9 @@ mod tests {
 
     #[test]
     fn test_parse_use_statement() {
-        let mut parser = StmtParser::new();
+        
         let mut ctx = create_parser_context("USE test_space");
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
         assert!(result.is_ok(), "USE Parse failure: {:?}", result.err());
 
         if let Ok(Stmt::Use(stmt)) = result {
@@ -817,9 +802,9 @@ mod tests {
 
     #[test]
     fn test_parse_show_spaces_statement() {
-        let mut parser = StmtParser::new();
+        
         let mut ctx = create_parser_context("SHOW SPACES");
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
         assert!(
             result.is_ok(),
             "SHOW SPACES parse failure: {:?}",
@@ -829,11 +814,11 @@ mod tests {
 
     #[test]
     fn test_create_space_statement_parses() {
-        let mut parser = StmtParser::new();
+        
 
         // It has been tested that the CREATE SPACE statement can be parsed successfully.
         let mut ctx = create_parser_context("CREATE SPACE IF NOT EXISTS test_space");
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
 
         // Verification and parsing were successful.
         assert!(
@@ -863,11 +848,11 @@ mod tests {
 
     #[test]
     fn test_create_space_with_params_parses() {
-        let mut parser = StmtParser::new();
+        
 
         // The test shows that the CREATE SPACE statement with parameters can be parsed successfully.
         let mut ctx = create_parser_context("CREATE SPACE test_space(vid_type=FIXEDSTRING32)");
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
 
         // Verification and parsing were successful.
         assert!(
@@ -896,9 +881,9 @@ mod tests {
 
     #[test]
     fn test_parse_explain_statement() {
-        let mut parser = StmtParser::new();
+        
         let mut ctx = create_parser_context("EXPLAIN MATCH (n) RETURN n");
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
         assert!(result.is_ok(), "EXPLAIN Parse failure: {:?}", result.err());
 
         if let Ok(Stmt::Explain(stmt)) = result {
@@ -910,9 +895,9 @@ mod tests {
 
     #[test]
     fn test_parse_explain_with_format() {
-        let mut parser = StmtParser::new();
+        
         let mut ctx = create_parser_context("EXPLAIN FORMAT = DOT MATCH (n) RETURN n");
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
         assert!(
             result.is_ok(),
             "EXPLAIN FORMAT failed to parse: {:?}",
@@ -928,9 +913,9 @@ mod tests {
 
     #[test]
     fn test_parse_profile_statement() {
-        let mut parser = StmtParser::new();
+        
         let mut ctx = create_parser_context("PROFILE GO FROM \"player100\" OVER follow");
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
         assert!(result.is_ok(), "PROFILE parse failure: {:?}", result.err());
 
         if let Ok(Stmt::Profile(stmt)) = result {
@@ -942,9 +927,9 @@ mod tests {
 
     #[test]
     fn test_parse_profile_with_format() {
-        let mut parser = StmtParser::new();
+        
         let mut ctx = create_parser_context("PROFILE FORMAT = TABLE MATCH (n) RETURN n");
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
         assert!(
             result.is_ok(),
             "PROFILE FORMAT failed to parse: {:?}",
@@ -960,9 +945,9 @@ mod tests {
 
     #[test]
     fn test_parse_group_by_statement() {
-        let mut parser = StmtParser::new();
+        
         let mut ctx = create_parser_context("GROUP BY category YIELD category");
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
         assert!(result.is_ok(), "GROUP BY Parse failure: {:?}", result.err());
 
         if let Ok(Stmt::GroupBy(stmt)) = result {
@@ -976,9 +961,9 @@ mod tests {
 
     #[test]
     fn test_parse_group_by_multiple_items() {
-        let mut parser = StmtParser::new();
+        
         let mut ctx = create_parser_context("GROUP BY category, type YIELD category, type");
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
         assert!(
             result.is_ok(),
             "GROUP BY multiple field parsing failure: {:?}",
@@ -995,9 +980,9 @@ mod tests {
 
     #[test]
     fn test_parse_show_sessions() {
-        let mut parser = StmtParser::new();
+        
         let mut ctx = create_parser_context("SHOW SESSIONS");
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
         assert!(
             result.is_ok(),
             "SHOW SESSIONS Parse failure: {:?}",
@@ -1013,9 +998,9 @@ mod tests {
 
     #[test]
     fn test_parse_show_queries() {
-        let mut parser = StmtParser::new();
+        
         let mut ctx = create_parser_context("SHOW QUERIES");
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
         assert!(
             result.is_ok(),
             "SHOW QUERIES Parse failure: {:?}",
@@ -1031,9 +1016,9 @@ mod tests {
 
     #[test]
     fn test_parse_kill_query() {
-        let mut parser = StmtParser::new();
+        
         let mut ctx = create_parser_context("KILL QUERY 123, 456");
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
         assert!(
             result.is_ok(),
             "KILL QUERY Parsing failure: {:?}",
@@ -1050,9 +1035,9 @@ mod tests {
 
     #[test]
     fn test_parse_show_configs() {
-        let mut parser = StmtParser::new();
+        
         let mut ctx = create_parser_context("SHOW CONFIGS");
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
         assert!(
             result.is_ok(),
             "SHOW CONFIGS Parse failure: {:?}",
@@ -1068,9 +1053,9 @@ mod tests {
 
     #[test]
     fn test_parse_show_configs_with_module() {
-        let mut parser = StmtParser::new();
+        
         let mut ctx = create_parser_context("SHOW CONFIGS storage");
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
         assert!(
             result.is_ok(),
             "SHOW CONFIGS storage Parse failed: {:?}",
@@ -1086,9 +1071,9 @@ mod tests {
 
     #[test]
     fn test_parse_update_configs() {
-        let mut parser = StmtParser::new();
+        
         let mut ctx = create_parser_context("UPDATE CONFIGS max_connections = 100");
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
         assert!(
             result.is_ok(),
             "UPDATE CONFIGS parse failure: {:?}",
@@ -1105,9 +1090,9 @@ mod tests {
 
     #[test]
     fn test_parse_update_configs_with_module() {
-        let mut parser = StmtParser::new();
+        
         let mut ctx = create_parser_context("UPDATE CONFIGS storage cache_size = 1024");
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
         assert!(
             result.is_ok(),
             "UPDATE CONFIGS storage Parse failed: {:?}",
@@ -1124,9 +1109,9 @@ mod tests {
 
     #[test]
     fn test_parse_assignment_statement() {
-        let mut parser = StmtParser::new();
+        
         let mut ctx = create_parser_context("$result = GO FROM \"player100\" OVER follow");
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
         assert!(
             result.is_ok(),
             "Variable assignment parsing failure: {:?}",
@@ -1145,11 +1130,11 @@ mod tests {
 
     #[test]
     fn test_parse_union_statement() {
-        let mut parser = StmtParser::new();
+        
         let mut ctx = create_parser_context(
             "GO FROM \"player100\" OVER follow UNION GO FROM \"player101\" OVER follow",
         );
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
         assert!(result.is_ok(), "UNION Parse failure: {:?}", result.err());
 
         if let Ok(Stmt::SetOperation(stmt)) = result {
@@ -1167,11 +1152,11 @@ mod tests {
 
     #[test]
     fn test_parse_intersect_statement() {
-        let mut parser = StmtParser::new();
+        
         let mut ctx = create_parser_context(
             "GO FROM \"player100\" OVER follow INTERSECT GO FROM \"player101\" OVER follow",
         );
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
         assert!(
             result.is_ok(),
             "INTERSECT parse failure: {:?}",
@@ -1193,11 +1178,11 @@ mod tests {
 
     #[test]
     fn test_parse_minus_statement() {
-        let mut parser = StmtParser::new();
+        
         let mut ctx = create_parser_context(
             "GO FROM \"player100\" OVER follow MINUS GO FROM \"player101\" OVER follow",
         );
-        let result = parser.parse_statement(&mut ctx);
+        let result = StmtParser::parse_statement(&mut ctx);
         assert!(result.is_ok(), "MINUS parse failure: {:?}", result.err());
 
         if let Ok(Stmt::SetOperation(stmt)) = result {

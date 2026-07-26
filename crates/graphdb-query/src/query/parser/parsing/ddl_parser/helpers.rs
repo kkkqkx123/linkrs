@@ -2,7 +2,7 @@ use crate::core::types::PropertyDef;
 use crate::core::{NullType, Value};
 use crate::query::parser::ast::types::DataType;
 use crate::query::parser::core::error::{ParseError, ParseErrorKind};
-use crate::query::parser::parsing::expr_parser::ExprParser;
+use crate::query::parser::parsing::expr_parser::parse_expression;
 use crate::query::parser::parsing::parse_context::ParseContext;
 use crate::query::parser::TokenKind;
 
@@ -116,8 +116,8 @@ impl DdlParser {
         &mut self,
         ctx: &mut ParseContext,
     ) -> Result<Value, ParseError> {
-        let mut expr_parser = ExprParser::new(ctx);
-        let parse_result = expr_parser.parse_expression(ctx)?;
+        
+        let parse_result = parse_expression(ctx)?;
 
         use crate::query::executor::expression::evaluation_context::DefaultExpressionContext;
         use crate::query::executor::expression::evaluator::ExpressionEvaluator;

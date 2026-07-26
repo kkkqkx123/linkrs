@@ -20,8 +20,11 @@ pub use crate::core::types::OrderDirection;
 pub use ast::stmt::OrderByItem;
 
 // Re-export the parser
-pub use parsing::ExprParser;
+pub use parsing::ExtensionParseResult;
+pub use parsing::ExtensionRegistry;
 pub use parsing::ParseContext;
 pub use parsing::Parser;
+pub use parsing::ParserExtension;
 pub use parsing::ParserResult;
-pub use parsing::StmtParser;
+pub use parsing::RecoveryScope;
+

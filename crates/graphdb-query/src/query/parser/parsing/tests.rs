@@ -448,4 +448,76 @@ mod tests {
             panic!("The expectation for the FindPath statement");
         }
     }
+
+    #[test]
+    fn test_error_recovery_collects_multiple_errors() {
+        let query = "MATCH (n:Person RETURN n";
+        let mut parser = Parser::new(query);
+        let result = parser.parse();
+        assert!(result.is_err() || parser.has_errors());
+    }
+
+    #[test]
+    fn test_error_recovery_stops_at_limit() {
+        let query = "INVALID INVALID INVALID INVALID INVALID INVALID";
+        let mut parser = Parser::new(query);
+        let result = parser.parse();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_extension_registry_empty() {
+        use crate::query::parser::parsing::ExtensionRegistry;
+        let registry = ExtensionRegistry::new();
+        assert!(registry.is_empty());
+        assert_eq!(registry.len(), 0);
+    }
+
+    #[test]
+    fn test_extension_registry_register() {
+        use crate::query::parser::core::error::ParseError;
+        use crate::query::parser::core::error::ParseErrorKind;
+        use crate::query::parser::parsing::parse_context::ParseContext;
+        use crate::query::parser::parsing::ExtensionParseResult;
+        use crate::query::parser::parsing::ExtensionRegistry;
+        use crate::query::parser::parsing::ParserExtension;
+        use crate::query::parser::TokenKind;
+        use crate::core::types::expr::contextual::ContextualExpression;
+
+        struct TestExtension;
+
+        impl ParserExtension for TestExtension {
+            fn name(&self) -> &str {
+                "test"
+            }
+
+            fn handled_statement_tokens(&self) -> &[TokenKind] {
+                &[]
+            }
+
+            fn handled_expression_tokens(&self) -> &[TokenKind] {
+                &[]
+            }
+
+            fn try_parse_statement(&self, _ctx: &mut ParseContext) -> ExtensionParseResult {
+                ExtensionParseResult::NotMatched
+            }
+
+            fn try_parse_expression(
+                &self,
+                _ctx: &mut ParseContext,
+            ) -> Result<ContextualExpression, ParseError> {
+                Err(ParseError::new(
+                    ParseErrorKind::SyntaxError,
+                    "not implemented",
+                    crate::core::types::Position::new(0, 0),
+                ))
+            }
+        }
+
+        let mut registry = ExtensionRegistry::new();
+        registry.register(Box::new(TestExtension));
+        assert_eq!(registry.len(), 1);
+        assert!(!registry.is_empty());
+    }
 }

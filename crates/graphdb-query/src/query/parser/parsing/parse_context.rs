@@ -9,6 +9,73 @@ use crate::query::parser::ParseErrors;
 use crate::query::parser::Token;
 use crate::query::parser::TokenKind;
 
+const RECOVERY_LIMIT: usize = 5;
+
+const STATEMENT_SYNC_TOKENS: &[TokenKind] = &[
+    TokenKind::Semicolon,
+    TokenKind::Match,
+    TokenKind::Go,
+    TokenKind::Fetch,
+    TokenKind::Insert,
+    TokenKind::Delete,
+    TokenKind::Update,
+    TokenKind::Upsert,
+    TokenKind::Create,
+    TokenKind::Drop,
+    TokenKind::Show,
+    TokenKind::Explain,
+    TokenKind::Profile,
+    TokenKind::Group,
+    TokenKind::Lookup,
+    TokenKind::Find,
+    TokenKind::Return,
+    TokenKind::With,
+    TokenKind::Unwind,
+    TokenKind::Set,
+    TokenKind::Use,
+    TokenKind::Begin,
+    TokenKind::Commit,
+    TokenKind::Rollback,
+    TokenKind::Search,
+    TokenKind::Dollar,
+    TokenKind::Eof,
+];
+
+const CLAUSE_SYNC_TOKENS: &[TokenKind] = &[
+    TokenKind::Semicolon,
+    TokenKind::Where,
+    TokenKind::Return,
+    TokenKind::With,
+    TokenKind::Yield,
+    TokenKind::Order,
+    TokenKind::Limit,
+    TokenKind::Skip,
+    TokenKind::Having,
+    TokenKind::Group,
+    TokenKind::Union,
+    TokenKind::Intersect,
+    TokenKind::SetMinus,
+    TokenKind::Pipe,
+    TokenKind::Eof,
+];
+
+const EXPR_SYNC_TOKENS: &[TokenKind] = &[
+    TokenKind::Comma,
+    TokenKind::RParen,
+    TokenKind::RBracket,
+    TokenKind::RBrace,
+    TokenKind::Then,
+    TokenKind::Else,
+    TokenKind::End,
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryScope {
+    Statement,
+    Clause,
+    Expression,
+}
+
 pub struct ParseContext<'a> {
     lexer: Lexer<'a>,
     current_token: Token,
@@ -18,6 +85,7 @@ pub struct ParseContext<'a> {
     recursion_depth: usize,
     max_recursion_depth: usize,
     expr_context: Arc<ExpressionAnalysisContext>,
+    recovery_count: usize,
 }
 
 impl<'a> ParseContext<'a> {
@@ -35,6 +103,7 @@ impl<'a> ParseContext<'a> {
             recursion_depth: 0,
             max_recursion_depth: 100,
             expr_context,
+            recovery_count: 0,
         }
     }
 
@@ -52,6 +121,7 @@ impl<'a> ParseContext<'a> {
             recursion_depth: 0,
             max_recursion_depth: 100,
             expr_context,
+            recovery_count: 0,
         }
     }
 
@@ -579,6 +649,52 @@ impl<'a> ParseContext<'a> {
 
     pub fn try_consume_quoted_string(&mut self) -> Option<String> {
         self.try_consume_string()
+    }
+
+    pub fn is_recovery_exhausted(&self) -> bool {
+        self.recovery_count >= RECOVERY_LIMIT
+    }
+
+    pub fn record_recovery(&mut self) {
+        self.recovery_count += 1;
+    }
+
+    pub fn reset_recovery_count(&mut self) {
+        self.recovery_count = 0;
+    }
+
+    pub fn synchronize(&mut self, scope: RecoveryScope) {
+        if self.is_recovery_exhausted() {
+            return;
+        }
+
+        let sync_tokens: &[TokenKind] = match scope {
+            RecoveryScope::Statement => STATEMENT_SYNC_TOKENS,
+            RecoveryScope::Clause => CLAUSE_SYNC_TOKENS,
+            RecoveryScope::Expression => EXPR_SYNC_TOKENS,
+        };
+
+        while self.current_token.kind != TokenKind::Eof {
+            if sync_tokens.contains(&self.current_token.kind) {
+                return;
+            }
+            self.next_token();
+        }
+    }
+
+    pub fn try_recover(
+        &mut self,
+        error: ParseError,
+        scope: RecoveryScope,
+    ) -> Result<(), ParseError> {
+        if self.is_recovery_exhausted() {
+            return Err(error);
+        }
+
+        self.add_error(error);
+        self.record_recovery();
+        self.synchronize(scope);
+        Ok(())
     }
 
     pub fn consume_value(&mut self) -> Result<crate::core::Value, ParseError> {

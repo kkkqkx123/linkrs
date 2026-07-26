@@ -20,10 +20,9 @@ mod util_stmt_parser;
 #[cfg(test)]
 mod tests;
 
-pub use expr_parser::ExprParser;
 pub use fulltext_parser::parse_fulltext;
-pub use parse_context::ParseContext;
-pub use parser::{Parser, ParserResult};
+pub use parse_context::{ParseContext, RecoveryScope};
+pub use parser::{ExtensionParseResult, ExtensionRegistry, Parser, ParserExtension, ParserResult};
 pub use stmt_parser::StmtParser;
 pub use vector_parser::parse_vector;
 

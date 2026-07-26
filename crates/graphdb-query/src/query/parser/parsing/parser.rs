@@ -3,26 +3,92 @@ use std::sync::Arc;
 use crate::core::types::expr::contextual::ContextualExpression;
 use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
 use crate::query::parser::ast::stmt::{Ast, Stmt};
-use crate::query::parser::parsing::expr_parser::ExprParser;
-use crate::query::parser::parsing::parse_context::ParseContext;
+use crate::query::parser::core::error::ParseError;
+use crate::query::parser::parsing::expr_parser::parse_expression_with_context;
+use crate::query::parser::parsing::parse_context::{ParseContext, RecoveryScope};
 use crate::query::parser::parsing::stmt_parser::StmtParser;
+use crate::query::parser::TokenKind;
 
 /// Parser analysis results, including the AST (Statement + Expression Context).
-///
-/// # Refactoring changes
-/// Replace the separate `stmt` and `expr_context` with `Arc<Ast>`.
-/// The `Ast` class contains both `Stmt` and `ExpressionAnalysisContext` objects.
 #[derive(Debug, Clone)]
 pub struct ParserResult {
     /// Parsed AST (using Arc for shared ownership)
     pub ast: Arc<Ast>,
 }
 
+/// Result of attempting to parse via an extension.
+#[derive(Debug)]
+pub enum ExtensionParseResult {
+    Matched(Box<Stmt>),
+    NotMatched,
+    Error(ParseError),
+}
+
+/// Trait for parser extensions that add custom syntax.
+pub trait ParserExtension: Send + Sync {
+    fn name(&self) -> &str;
+
+    fn handled_statement_tokens(&self) -> &[TokenKind];
+
+    fn handled_expression_tokens(&self) -> &[TokenKind];
+
+    fn try_parse_statement(&self, ctx: &mut ParseContext) -> ExtensionParseResult;
+
+    fn try_parse_expression(
+        &self,
+        ctx: &mut ParseContext,
+    ) -> Result<ContextualExpression, ParseError>;
+}
+
+/// Registry for parser extensions.
+pub struct ExtensionRegistry {
+    extensions: Vec<Box<dyn ParserExtension>>,
+}
+
+impl ExtensionRegistry {
+    pub fn new() -> Self {
+        Self {
+            extensions: Vec::new(),
+        }
+    }
+
+    pub fn register(&mut self, extension: Box<dyn ParserExtension>) {
+        self.extensions.push(extension);
+    }
+
+    pub fn find_statement_extension(&self, token: &TokenKind) -> Option<&dyn ParserExtension> {
+        self.extensions
+            .iter()
+            .find(|ext| ext.handled_statement_tokens().contains(token))
+            .map(|ext| ext.as_ref())
+    }
+
+    pub fn find_expression_extension(&self, token: &TokenKind) -> Option<&dyn ParserExtension> {
+        self.extensions
+            .iter()
+            .find(|ext| ext.handled_expression_tokens().contains(token))
+            .map(|ext| ext.as_ref())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.extensions.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.extensions.len()
+    }
+}
+
+impl Default for ExtensionRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct Parser<'a> {
     ctx: ParseContext<'a>,
     expr_context: Arc<ExpressionAnalysisContext>,
-    _expr_parser: std::marker::PhantomData<ExprParser<'a>>,
-    _stmt_parser: std::marker::PhantomData<StmtParser>,
+    extensions: Option<Arc<ExtensionRegistry>>,
 }
 
 impl<'a> Parser<'a> {
@@ -34,8 +100,7 @@ impl<'a> Parser<'a> {
         Self {
             ctx,
             expr_context,
-            _expr_parser: std::marker::PhantomData,
-            _stmt_parser: std::marker::PhantomData,
+            extensions: None,
         }
     }
 
@@ -47,52 +112,110 @@ impl<'a> Parser<'a> {
         Self {
             ctx,
             expr_context,
-            _expr_parser: std::marker::PhantomData,
-            _stmt_parser: std::marker::PhantomData,
+            extensions: None,
         }
+    }
+
+    pub fn set_extension_registry(&mut self, registry: Arc<ExtensionRegistry>) {
+        self.extensions = Some(registry);
     }
 
     pub fn set_compat_mode(&mut self, enabled: bool) {
         self.ctx.set_compat_mode(enabled);
     }
 
-    /// Parse a complete statement and return the AST with expression context.
-    ///
-    /// Each call to `parse()` resets the expression context to ensure isolated parsing sessions.
-    /// This prevents semantic information from previous parses from polluting subsequent ones.
-    /// For parsing multiple independent queries, either create a new Parser instance for each,
-    /// or call parse() multiple times on the same instance (each call gets a fresh context).
-    pub fn parse(&mut self) -> Result<ParserResult, crate::query::parser::core::error::ParseError> {
+    pub fn parse(&mut self) -> Result<ParserResult, ParseError> {
         let expr_context = Arc::new(ExpressionAnalysisContext::new());
         self.ctx.set_expression_context(expr_context.clone());
         self.expr_context = expr_context;
+        self.ctx.reset_recovery_count();
 
         let stmt = self.parse_statement()?;
         let ast = Ast::new(stmt, self.expr_context.clone());
         Ok(ParserResult { ast: Arc::new(ast) })
     }
 
-    pub fn parse_statement(
-        &mut self,
-    ) -> Result<Stmt, crate::query::parser::core::error::ParseError> {
-        let mut stmt_parser = StmtParser::new();
-        stmt_parser.parse_statement(&mut self.ctx)
+    pub fn parse_statement(&mut self) -> Result<Stmt, ParseError> {
+        if self.ctx.is_recovery_exhausted() {
+            return Err(ParseError::new(
+                crate::query::parser::core::error::ParseErrorKind::SyntaxError,
+                "Too many parse errors, aborting".to_string(),
+                self.ctx.current_position(),
+            ));
+        }
+
+        let token = self.ctx.current_token().kind.clone();
+
+        if let Some(registry) = &self.extensions {
+            if let Some(ext) = registry.find_statement_extension(&token) {
+                match ext.try_parse_statement(&mut self.ctx) {
+                    ExtensionParseResult::Matched(stmt) => return Ok(*stmt),
+                    ExtensionParseResult::NotMatched => {}
+                    ExtensionParseResult::Error(e) => {
+                        if self.ctx.try_recover(e, RecoveryScope::Statement).is_err() {
+                            return Err(self.ctx.take_errors().into_iter().next().unwrap_or(
+                                ParseError::new(
+                                    crate::query::parser::core::error::ParseErrorKind::SyntaxError,
+                                    "Too many parse errors".to_string(),
+                                    self.ctx.current_position(),
+                                ),
+                            ));
+                        }
+                        return self.parse_statement();
+                    }
+                }
+            }
+        }
+
+        match StmtParser::parse_statement(&mut self.ctx) {
+            Ok(stmt) => Ok(stmt),
+            Err(e) => {
+                if self.ctx.is_recovery_exhausted() {
+                    Err(e)
+                } else {
+                    self.ctx.try_recover(e, RecoveryScope::Statement)?;
+                    self.parse_statement()
+                }
+            }
+        }
     }
 
-    /// Parse the expression and return the ContextualExpression.
-    pub fn parse_expression_contextual(
-        &mut self,
-    ) -> Result<ContextualExpression, crate::query::parser::core::error::ParseError> {
-        let mut expr_parser = ExprParser::new(&self.ctx);
-        expr_parser.parse_expression_with_context(&mut self.ctx, self.expr_context.clone())
+    pub fn parse_expression_contextual(&mut self) -> Result<ContextualExpression, ParseError> {
+        let token = self.ctx.current_token().kind.clone();
+
+        if let Some(registry) = &self.extensions {
+            if let Some(ext) = registry.find_expression_extension(&token) {
+                match ext.try_parse_expression(&mut self.ctx) {
+                    Ok(expr) => return Ok(expr),
+                    Err(e) => {
+                        if self.ctx.is_recovery_exhausted() {
+                            return Err(e);
+                        }
+                        self.ctx.try_recover(e, RecoveryScope::Expression)?;
+                        return self.parse_expression_contextual();
+                    }
+                }
+            }
+        }
+
+        
+        match parse_expression_with_context(&mut self.ctx, self.expr_context.clone()) {
+            Ok(expr) => Ok(expr),
+            Err(e) => {
+                if self.ctx.is_recovery_exhausted() {
+                    Err(e)
+                } else {
+                    self.ctx.try_recover(e, RecoveryScope::Expression)?;
+                    self.parse_expression_contextual()
+                }
+            }
+        }
     }
 
-    /// Obtain the context of the expression.
     pub fn expression_context(&self) -> &Arc<ExpressionAnalysisContext> {
         &self.expr_context
     }
 
-    /// Obtain a clone of the context in which the expression is used.
     pub fn expression_context_clone(&self) -> Arc<ExpressionAnalysisContext> {
         self.expr_context.clone()
     }
