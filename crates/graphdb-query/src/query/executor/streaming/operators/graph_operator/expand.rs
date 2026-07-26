@@ -11,6 +11,7 @@ use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::storage::QueryStorage;
 
 use super::common;
+use super::{ExpandCtx, GraphCtx};
 
 pub(super) fn handle(
     storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
@@ -33,14 +34,16 @@ pub(super) fn handle(
                 chunk,
                 Arc::clone(&base.output_layout),
                 &*reader,
-                space_name,
-                edge_types,
-                direction,
-                filter_expr,
                 Vec::new(),
-                Vec::new(),
-                cancel_token.clone(),
                 1,
+                &mut ExpandCtx {
+                    space_name,
+                    edge_types,
+                    direction,
+                    filter_expr,
+                    col_names_template: Vec::new(),
+                    cancel_token: cancel_token.clone(),
+                },
             )? {
                 return Ok(Some(output));
             }
@@ -86,17 +89,18 @@ pub(super) fn handle(
 }
 
 pub(super) fn handle_all(
-    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
-    space_name: &str,
-    edge_types: &[String],
-    direction: EdgeDirection,
     filter_expr: &Option<Expression>,
     col_names: Vec<String>,
     src_vids: Vec<Value>,
     step_limit: u32,
-    base: &mut OperatorBase,
-    input: &mut StreamingExecutor,
+    ctx: &mut GraphCtx,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let storage = ctx.storage;
+    let space_name = ctx.space_name;
+    let edge_types = ctx.edge_types;
+    let direction = ctx.direction;
+    let base = &mut *ctx.base;
+    let input = &mut *ctx.input;
     if !base.lifecycle.is_opened() {
         return Err(QueryError::execution("ExpandAll not opened".to_string()));
     }
@@ -109,14 +113,16 @@ pub(super) fn handle_all(
                 chunk,
                 Arc::clone(&base.output_layout),
                 &*reader,
-                space_name,
-                edge_types,
-                direction,
-                filter_expr,
-                col_names.clone(),
                 src_vids.clone(),
-                cancel_token.clone(),
                 step_limit,
+                &mut ExpandCtx {
+                    space_name,
+                    edge_types,
+                    direction,
+                    filter_expr,
+                    col_names_template: col_names.clone(),
+                    cancel_token: cancel_token.clone(),
+                },
             )? {
                 return Ok(Some(output));
             }

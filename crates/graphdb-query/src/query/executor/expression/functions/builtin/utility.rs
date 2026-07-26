@@ -492,7 +492,7 @@ fn execute_json_typeof(args: &[Value]) -> Result<Value, ExpressionError> {
         JsonValue::Array(_) => "array",
         JsonValue::Object(_) => "object",
     };
-    Ok(Value::string(type_str.to_string()))
+    Ok(Value::string(type_str))
 }
 
 fn execute_json_strip_nulls(args: &[Value]) -> Result<Value, ExpressionError> {
@@ -565,19 +565,19 @@ fn execute_typeof(args: &[Value]) -> Result<Value, ExpressionError> {
         Value::Geography(_) => "geography",
         _ => "unknown",
     };
-    Ok(Value::string(type_name.to_string()))
+    Ok(Value::string(type_name))
 }
 
 fn execute_version(_args: &[Value]) -> Result<Value, ExpressionError> {
-    Ok(Value::string("GraphDB 0.1.0".to_string()))
+    Ok(Value::string("GraphDB 0.1.0"))
 }
 
 fn execute_current_user(_args: &[Value]) -> Result<Value, ExpressionError> {
-    Ok(Value::string("root".to_string()))
+    Ok(Value::string("root"))
 }
 
 fn execute_current_database(_args: &[Value]) -> Result<Value, ExpressionError> {
-    Ok(Value::string("default".to_string()))
+    Ok(Value::string("default"))
 }
 
 fn extract_numeric_pairs(args: &[Value]) -> Result<(Vec<f64>, Vec<f64>), ExpressionError> {

@@ -18,6 +18,7 @@ use crate::query::planning::statements::clauses::{
     OrderByClausePlanner, PaginationPlanner, ReturnClausePlanner, WhereClausePlanner,
 };
 use crate::query::planning::statements::pattern_planner;
+use crate::query::planning::statements::pattern_planner::PlanningContext;
 use crate::query::planning::statements::plan_combiner;
 use crate::query::planning::statements::statement_planner::{ClausePlanner, StatementPlanner};
 use crate::query::binder::validation::CypherClauseKind;
@@ -197,33 +198,25 @@ impl MatchStatementPlanner {
                     log::debug!("Quoted tags: {:?}", referenced_tags);
                 }
 
+                let planning_ctx = PlanningContext {
+                    space_id,
+                    space_name,
+                    validation_info,
+                    qctx,
+                    enable_index_optimization: self.config.enable_index_optimization,
+                    metadata_context: &self.metadata_context,
+                    expr_context: &self.expr_context,
+                };
+
                 let mut plan = if match_stmt.patterns.is_empty() {
                     pattern_planner::plan_node_pattern(space_id, space_name)?
                 } else {
                     let first_pattern = &match_stmt.patterns[0];
-                    pattern_planner::plan_path_pattern(
-                        first_pattern,
-                        space_id,
-                        space_name,
-                        validation_info,
-                        qctx,
-                        self.config.enable_index_optimization,
-                        &self.metadata_context,
-                        &self.expr_context,
-                    )?
+                    pattern_planner::plan_path_pattern(first_pattern, &planning_ctx)?
                 };
 
                 for pattern in match_stmt.patterns.iter().skip(1) {
-                    let path_plan = pattern_planner::plan_path_pattern(
-                        pattern,
-                        space_id,
-                        space_name,
-                        validation_info,
-                        qctx,
-                        self.config.enable_index_optimization,
-                        &self.metadata_context,
-                        &self.expr_context,
-                    )?;
+                    let path_plan = pattern_planner::plan_path_pattern(pattern, &planning_ctx)?;
                     plan = plan_combiner::cross_join_plans(plan, path_plan)?;
                 }
 

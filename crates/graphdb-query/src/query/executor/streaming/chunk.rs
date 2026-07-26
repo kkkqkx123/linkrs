@@ -123,7 +123,7 @@ impl Clone for DataChunk {
     fn clone(&self) -> Self {
         Self {
             rows: self.rows.clone(),
-            columns: self.columns.as_ref().map(|cols| cols.clone()),
+            columns: self.columns.clone(),
             schema: self.schema.clone(),
             layout: Arc::clone(&self.layout),
             memory_reservation: None,
@@ -344,13 +344,11 @@ impl DataChunk {
             "DataChunk::from_columns: column length mismatch"
         );
 
-        let mut rows = Vec::with_capacity(num_rows);
-        for row_idx in 0..num_rows {
-            let mut row = Vec::with_capacity(num_cols);
-            for col_idx in 0..num_cols {
-                row.push(columns[col_idx][row_idx].clone());
+        let mut rows = vec![Vec::with_capacity(num_cols); num_rows];
+        for col in columns.iter().take(num_cols) {
+            for (row_idx, val) in col.iter().enumerate().take(num_rows) {
+                rows[row_idx].push(val.clone());
             }
-            rows.push(row);
         }
 
         let schema = Arc::new(Schema::new(

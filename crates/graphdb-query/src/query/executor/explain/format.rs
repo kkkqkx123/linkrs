@@ -300,7 +300,7 @@ fn format_tree_node(
     }
 
     if !node.output_var.is_empty() {
-        info_parts.push(format!("-> {}", &node.output_var));
+        info_parts.push(format!("-> {}", node.output_var));
     }
 
     output.push_str(&format!("{}\n", info_parts.join(" | ")));

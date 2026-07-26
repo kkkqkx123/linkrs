@@ -948,6 +948,7 @@ pub async fn run_server_with_grpc_service<
     Ok(())
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_transaction_id(value: &str) -> Result<TransactionId, Status> {
     value
         .parse::<u64>()

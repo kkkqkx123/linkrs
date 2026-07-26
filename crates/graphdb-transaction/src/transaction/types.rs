@@ -259,7 +259,7 @@ pub enum TransactionEvent {
     Committed {
         txn_id: TransactionId,
         write_timestamp: u32,
-        write_set: WriteSet,
+        write_set: Box<WriteSet>,
         schema_catalog_version: u64,
     },
     Aborted {
@@ -653,13 +653,7 @@ impl TransactionStats {
 
     pub fn record_resource_metrics(
         &self,
-        _active_snapshots: u64,
-        _pending_writes: i32,
-        _frontier_lag: u32,
-        _staged_wal_bytes: u64,
-        _undo_bytes: u64,
-        _prepared_transactions: u64,
-        _checkpoint_drain_time: Duration,
+        _metrics: TransactionResourceMetrics,
     ) {
     }
 
@@ -964,6 +958,19 @@ impl TransactionExecution {
     pub fn requires_finalization(&self) -> bool {
         self.auto_commit
     }
+}
+
+/// Parameters for creating a savepoint.
+#[derive(Debug, Clone)]
+pub(crate) struct SavepointParams {
+    pub name: Option<String>,
+    pub operation_log_index: usize,
+    pub undo_log_index: usize,
+    pub sync_sequence: u64,
+    pub write_set: WriteSet,
+    pub read_set: WriteSet,
+    pub redo_log_index: usize,
+    pub modified_tables: Vec<String>,
 }
 
 /// Resource gauges collected from the transaction manager.

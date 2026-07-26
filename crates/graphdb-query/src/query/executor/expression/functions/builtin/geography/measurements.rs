@@ -163,7 +163,7 @@ pub fn execute_st_isvalid(args: &[Value]) -> Result<Value, ExpressionError> {
 
 pub fn execute_st_geometrytype(args: &[Value]) -> Result<Value, ExpressionError> {
     match &args[0] {
-        Value::Geography(geo) => Ok(Value::string(geo.geometry_type().to_string())),
+        Value::Geography(geo) => Ok(Value::string(geo.geometry_type())),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
             "The st_geometrytype function requires geography type",

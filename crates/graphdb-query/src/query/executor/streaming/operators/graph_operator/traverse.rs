@@ -15,18 +15,20 @@ use crate::storage::QueryStorage;
 
 use super::super::visited_set::VisitedSet;
 use super::common;
+use super::GraphCtx;
 
 pub(super) fn handle_traverse(
-    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
-    space_name: &str,
-    edge_types: &[String],
-    direction: EdgeDirection,
     min_depth: u32,
     max_depth: u32,
     visited: &mut VisitedSet,
-    base: &mut OperatorBase,
-    input: &mut StreamingExecutor,
+    ctx: &mut GraphCtx,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let storage = ctx.storage;
+    let space_name = ctx.space_name;
+    let edge_types = ctx.edge_types;
+    let direction = ctx.direction;
+    let base = &mut *ctx.base;
+    let input = &mut *ctx.input;
     if !base.lifecycle.is_opened() {
         return Err(QueryError::execution("Traverse not opened".to_string()));
     }
@@ -140,7 +142,7 @@ pub(super) fn handle_bi_expand(
                                 let mut out_row = row.clone();
                                 out_row.push(Value::Vertex(Box::new(vertex)));
                                 out_row.push(Value::string(e.edge_type.clone()));
-                                out_row.push(Value::string("both".to_string()));
+                                out_row.push(Value::string("both"));
                                 out_rows.push(out_row);
                             }
                         }
@@ -185,15 +187,16 @@ pub(super) fn handle_bi_expand(
 }
 
 pub(super) fn handle_bi_traverse(
-    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
-    space_name: &str,
-    edge_types: &[String],
     min_depth: u32,
     max_depth: u32,
     visited: &mut VisitedSet,
-    base: &mut OperatorBase,
-    input: &mut StreamingExecutor,
+    ctx: &mut GraphCtx,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let storage = ctx.storage;
+    let space_name = ctx.space_name;
+    let edge_types = ctx.edge_types;
+    let base = &mut *ctx.base;
+    let input = &mut *ctx.input;
     if !base.lifecycle.is_opened() {
         return Err(QueryError::execution("BiTraverse not opened".to_string()));
     }

@@ -792,11 +792,11 @@ impl Binder {
     fn bind_lookup(&mut self, stmt: &crate::query::parser::ast::LookupStmt) -> DBResult<BoundStatement> {
         let target = match &stmt.target {
             crate::query::parser::ast::LookupTarget::Tag(t) => {
-                self.resolve_tags(&[t.clone()])?;
+                self.resolve_tags(std::slice::from_ref(t))?;
                 BoundLookupTarget::Tag(t.clone())
             }
             crate::query::parser::ast::LookupTarget::Edge(e) => {
-                self.resolve_edge_types(&[e.clone()])?;
+                self.resolve_edge_types(std::slice::from_ref(e))?;
                 BoundLookupTarget::Edge(e.clone())
             }
             crate::query::parser::ast::LookupTarget::Unspecified(s) => {
@@ -1027,9 +1027,10 @@ impl Binder {
         &mut self,
         stmt: &crate::query::parser::ast::PipeStmt,
     ) -> DBResult<BoundStatement> {
-        let mut statements = Vec::new();
-        statements.push(self.bind_stmt(&stmt.left)?);
-        statements.push(self.bind_stmt(&stmt.right)?);
+        let statements = vec![
+            self.bind_stmt(&stmt.left)?,
+            self.bind_stmt(&stmt.right)?,
+        ];
 
         Ok(BoundStatement::Pipe(BoundPipeStatement {
             span: stmt.span,

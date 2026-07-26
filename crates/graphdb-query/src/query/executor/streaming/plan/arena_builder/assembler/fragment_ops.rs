@@ -14,6 +14,12 @@ use crate::query::executor::build_error::PlanBuildError;
 
 use super::{ArenaFragmentAllocator, ArenaPlanAssembler};
 
+pub(super) struct FragmentCtx<'a> {
+    pub(super) operators: &'a mut Vec<PhysicalOperatorSpec>,
+    pub(super) fragments: &'a mut Vec<FragmentSpec>,
+    pub(super) op_alloc: &'a mut PhysicalOperatorIdAllocator,
+}
+
 impl ArenaPlanAssembler {
     pub(super) fn push_source_op(
         operators: &mut Vec<PhysicalOperatorSpec>,
@@ -83,17 +89,15 @@ impl ArenaPlanAssembler {
     }
 
     pub(super) fn push_blocking_op(
-        operators: &mut Vec<PhysicalOperatorSpec>,
-        fragments: &mut [FragmentSpec],
-        op_alloc: &mut PhysicalOperatorIdAllocator,
+        ctx: &mut FragmentCtx,
         child_fid: FragmentId,
         node_id: i64,
         spec: BlockingSpec,
         explain_name: &'static str,
         properties: PhysicalProperties,
     ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
-        let op_id = op_alloc.allocate();
-        operators.push(PhysicalOperatorSpec {
+        let op_id = ctx.op_alloc.allocate();
+        ctx.operators.push(PhysicalOperatorSpec {
             operator_id: op_id,
             logical_node_id: Some(LogicalNodeId(node_id)),
             spec: OperatorKindSpec::Blocking(spec),
@@ -105,7 +109,8 @@ impl ArenaPlanAssembler {
             estimated_cardinality: None,
             explain_name,
         });
-        let fragment = fragments
+        let fragment = ctx
+            .fragments
             .get_mut(child_fid.0)
             .ok_or_else(|| PlanBuildError::unsupported("PhysicalPlan", 0, "fragment not found"))?;
         fragment.operators.push(op_id);
@@ -184,9 +189,7 @@ impl ArenaPlanAssembler {
     }
 
     pub(super) fn push_binary_op(
-        operators: &mut Vec<PhysicalOperatorSpec>,
-        fragments: &mut Vec<FragmentSpec>,
-        op_alloc: &mut PhysicalOperatorIdAllocator,
+        ctx: &mut FragmentCtx,
         frag_alloc: &mut ArenaFragmentAllocator,
         left_fid: FragmentId,
         right_fid: FragmentId,
@@ -194,10 +197,10 @@ impl ArenaPlanAssembler {
         spec: impl Into<BinaryOperatorSpec>,
         explain_name: &'static str,
     ) -> Result<(FragmentId, PhysicalOperatorId), PlanBuildError> {
-        let op_id = op_alloc.allocate();
+        let op_id = ctx.op_alloc.allocate();
         let fid = frag_alloc.allocate();
         let (op_spec, fragment_kind) = spec.into().into_parts();
-        operators.push(PhysicalOperatorSpec {
+        ctx.operators.push(PhysicalOperatorSpec {
             operator_id: op_id,
             logical_node_id: Some(LogicalNodeId(node_id)),
             spec: op_spec,
@@ -209,7 +212,7 @@ impl ArenaPlanAssembler {
             estimated_cardinality: None,
             explain_name,
         });
-        fragments.push(FragmentSpec {
+        ctx.fragments.push(FragmentSpec {
             id: fid,
             kind: fragment_kind,
             operators: vec![op_id],

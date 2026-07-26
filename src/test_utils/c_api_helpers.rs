@@ -21,6 +21,12 @@ pub struct CApiTestDatabase {
     temp_dir: TempDir,
 }
 
+impl Default for CApiTestDatabase {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CApiTestDatabase {
     /// Create a new test database.
     ///

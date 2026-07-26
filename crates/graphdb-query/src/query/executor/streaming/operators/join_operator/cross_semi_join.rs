@@ -6,24 +6,24 @@ use crate::core::Value;
 use crate::query::executor::base::MemoryTracker;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
-use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::executor::ValueRowContext;
-use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::operators::base::OperatorLifecycle;
 
 use super::close_common;
+use super::JoinCtx;
 
 pub(super) fn next_cross_join(
     all_left_rows: &mut Vec<Vec<Value>>,
     all_right_rows: &mut Vec<Vec<Value>>,
     left_consumed: &mut bool,
     right_consumed: &mut bool,
-    memory_tracker: &mut MemoryTracker,
-    right_col_names: &mut Vec<String>,
-    base: &mut OperatorBase,
-    left: &mut StreamingExecutor,
-    right: &mut StreamingExecutor,
+    ctx: &mut JoinCtx,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let memory_tracker = &mut *ctx.memory_tracker;
+    let right_col_names = &mut *ctx.right_col_names;
+    let base = &mut *ctx.base;
+    let left = &mut *ctx.left;
+    let right = &mut *ctx.right;
     if !*left_consumed {
         while let Some(chunk) = left.advance()? {
             base.ensure_not_cancelled()?;
@@ -79,11 +79,12 @@ pub(super) fn next_semi_join(
     join_condition: &mut Option<Expression>,
     right_rows: &mut Vec<Vec<Value>>,
     right_consumed: &mut bool,
-    memory_tracker: &mut MemoryTracker,
-    base: &mut OperatorBase,
-    left: &mut StreamingExecutor,
-    right: &mut StreamingExecutor,
+    ctx: &mut JoinCtx,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let memory_tracker = &mut *ctx.memory_tracker;
+    let base = &mut *ctx.base;
+    let left = &mut *ctx.left;
+    let right = &mut *ctx.right;
     if !*right_consumed {
         while let Some(chunk) = right.advance()? {
             base.ensure_not_cancelled()?;

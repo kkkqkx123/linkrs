@@ -416,6 +416,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
         self.db.storage.write()
     }
 
+    #[allow(dead_code)]
     pub(crate) fn storage(&self) -> S {
         self.db.storage.read().clone()
     }

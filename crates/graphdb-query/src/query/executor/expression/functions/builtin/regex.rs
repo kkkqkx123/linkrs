@@ -67,7 +67,7 @@ impl RegexFunction {
                         )
                     })?;
                     Ok(Value::string(
-                        regex.replace_all(s, replacement.as_str()).to_string(),
+                        regex.replace_all(s, replacement.as_str()),
                     ))
                 }
                 (Value::Null(_), _, _) | (_, Value::Null(_), _) | (_, _, Value::Null(_)) => {
@@ -86,7 +86,7 @@ impl RegexFunction {
                         )
                     })?;
                     if let Some(matched) = regex.find(s) {
-                        Ok(Value::string(matched.as_str().to_string()))
+                        Ok(Value::string(matched.as_str()))
                     } else {
                         Ok(Value::Null(NullType::Null))
                     }

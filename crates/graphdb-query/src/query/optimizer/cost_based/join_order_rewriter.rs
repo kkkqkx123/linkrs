@@ -10,6 +10,8 @@ use crate::query::optimizer::stats::StatisticsManager;
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::SingleInputNode;
 use crate::query::planning::plan::PlanNodeEnum;
 
+type PredMap = HashMap<(String, String), Vec<(Vec<ContextualExpression>, Vec<ContextualExpression>)>>;
+
 /// A leaf input to a join chain — a subtree whose root is not a reorderable join.
 #[derive(Debug, Clone)]
 pub struct LeafInfo {
@@ -371,8 +373,7 @@ pub fn reconstruct_join_tree(
         .map(|l| (l.id.as_str(), &l.physical_node))
         .collect();
 
-    let mut pred_map: HashMap<(String, String), Vec<(Vec<ContextualExpression>, Vec<ContextualExpression>)>> =
-        HashMap::new();
+    let mut pred_map: PredMap = HashMap::new();
     for p in &chain.predicates {
         let (a, b) = if p.left_table <= p.right_table {
             (p.left_table.clone(), p.right_table.clone())
@@ -422,7 +423,7 @@ pub fn reconstruct_join_tree(
 
 fn resolve_keys_for_pair(
     pair_key: &(String, String),
-    pred_map: &HashMap<(String, String), Vec<(Vec<ContextualExpression>, Vec<ContextualExpression>)>>,
+    pred_map: &PredMap,
     left_physical: &PlanNodeEnum,
     right_physical: &PlanNodeEnum,
 ) -> (Vec<ContextualExpression>, Vec<ContextualExpression>) {
@@ -468,7 +469,7 @@ fn build_hash_inner_join(
 }
 
 enum OptResult {
-    Changed(PlanNodeEnum),
+    Changed(Box<PlanNodeEnum>),
     Unchanged,
 }
 
@@ -500,7 +501,7 @@ fn try_optimize_join_tree(
         result.order,
     );
 
-    OptResult::Changed(reconstruct_join_tree(root, &chain, &result))
+    OptResult::Changed(Box::new(reconstruct_join_tree(root, &chain, &result)))
 }
 
 pub fn walk_and_optimize_joins(
@@ -509,7 +510,7 @@ pub fn walk_and_optimize_joins(
     cost_calculator: &CostCalculator,
 ) -> PlanNodeEnum {
     if let OptResult::Changed(optimized) = try_optimize_join_tree(root, stats, cost_calculator) {
-        return optimized;
+        return *optimized;
     }
 
     match root {

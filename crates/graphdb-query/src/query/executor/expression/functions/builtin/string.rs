@@ -216,7 +216,7 @@ fn execute_substring(args: &[Value]) -> Result<Value, ExpressionError> {
                 Ok(Value::string(String::new()))
             } else {
                 let end = (start + len).min(s.len());
-                Ok(Value::string(s[start..end].to_string()))
+                Ok(Value::string(&s[start..end]))
             }
         }
         (Value::Null(_), _, _) | (_, Value::Null(_), _) | (_, _, Value::Null(_)) => {
@@ -302,7 +302,7 @@ fn execute_split(args: &[Value]) -> Result<Value, ExpressionError> {
         (Value::String(s), Value::String(delimiter)) => {
             let parts: Vec<Value> = s
                 .split(delimiter.as_str())
-                .map(|p| Value::string(p.to_string()))
+                .map(Value::string)
                 .collect();
             Ok(Value::list(List { values: parts }))
         }
@@ -321,7 +321,7 @@ fn execute_lpad(args: &[Value]) -> Result<Value, ExpressionError> {
         (Value::String(s), Value::Int(len), Value::String(pad)) => {
             let len = *len as usize;
             if s.len() >= len {
-                Ok(Value::string(s[..len].to_string()))
+                Ok(Value::string(&s[..len]))
             } else {
                 let pad_len = len - s.len();
                 let mut result = String::new();
@@ -337,7 +337,7 @@ fn execute_lpad(args: &[Value]) -> Result<Value, ExpressionError> {
             Ok(Value::Null(NullType::Null))
         }
         _ => Err(ExpressionError::type_error(
-            "The lpad function takes string, integer, and string arguments",
+            "The lpad function takes 3 arguments",
         )),
     }
 }
@@ -352,7 +352,7 @@ fn execute_rpad(args: &[Value]) -> Result<Value, ExpressionError> {
         (Value::String(s), Value::Int(len), Value::String(pad)) => {
             let len = *len as usize;
             if s.len() >= len {
-                Ok(Value::string(s[..len].to_string()))
+                Ok(Value::string(&s[..len]))
             } else {
                 let pad_len = len - s.len();
                 let mut result = s.clone();
@@ -465,7 +465,7 @@ fn execute_split_part(args: &[Value]) -> Result<Value, ExpressionError> {
             let parts: Vec<&str> = s.split(delimiter.as_str()).collect();
             let idx = (*n - 1) as usize;
             if idx < parts.len() {
-                Ok(Value::string(parts[idx].to_string()))
+                Ok(Value::string(parts[idx]))
             } else {
                 Ok(Value::string(String::new()))
             }
@@ -679,7 +679,7 @@ fn execute_string_split(args: &[Value]) -> Result<Value, ExpressionError> {
         (Value::String(s), Value::String(delimiter)) => {
             let parts: Vec<Value> = s
                 .split(delimiter.as_str())
-                .map(|p| Value::string(p.to_string()))
+                .map(Value::string)
                 .collect();
             Ok(Value::list(List { values: parts }))
         }

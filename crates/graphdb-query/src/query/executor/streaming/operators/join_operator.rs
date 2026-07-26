@@ -20,6 +20,14 @@ mod hash_join;
 mod merge_join;
 mod nested_loop_join;
 
+pub(super) struct JoinCtx<'a> {
+    pub(super) base: &'a mut OperatorBase,
+    pub(super) left: &'a mut StreamingExecutor,
+    pub(super) right: &'a mut StreamingExecutor,
+    pub(super) memory_tracker: &'a mut MemoryTracker,
+    pub(super) right_col_names: &'a mut Vec<String>,
+}
+
 fn build_combined_names(
     left_col_names: &[String],
     right_col_names: &[String],
@@ -373,11 +381,7 @@ impl JoinOperator {
                 build_side_hash,
                 all_right_rows,
                 left_consumed,
-                memory_tracker,
-                right_col_names,
-                base,
-                left,
-                right,
+                &mut JoinCtx { base, left, right, memory_tracker, right_col_names },
             ),
             Self::HashLeftJoin {
                 join_condition,
@@ -395,11 +399,7 @@ impl JoinOperator {
                 build_side_hash,
                 all_right_rows,
                 left_consumed,
-                memory_tracker,
-                right_col_names,
-                base,
-                left,
-                right,
+                &mut JoinCtx { base, left, right, memory_tracker, right_col_names },
             ),
             Self::NestedLoopJoin {
                 join_condition,
@@ -411,11 +411,7 @@ impl JoinOperator {
                 join_condition,
                 build_side_tuples,
                 left_consumed,
-                memory_tracker,
-                right_col_names,
-                base,
-                left,
-                right,
+                &mut JoinCtx { base, left, right, memory_tracker, right_col_names },
             ),
             Self::InnerJoin {
                 join_condition,
@@ -427,11 +423,7 @@ impl JoinOperator {
                 join_condition,
                 build_side_tuples,
                 left_consumed,
-                memory_tracker,
-                right_col_names,
-                base,
-                left,
-                right,
+                &mut JoinCtx { base, left, right, memory_tracker, right_col_names },
             ),
             Self::LeftJoin {
                 join_condition,
@@ -443,11 +435,7 @@ impl JoinOperator {
                 join_condition,
                 build_side_tuples,
                 left_consumed,
-                memory_tracker,
-                right_col_names,
-                base,
-                left,
-                right,
+                &mut JoinCtx { base, left, right, memory_tracker, right_col_names },
             ),
             Self::RightJoin {
                 join_condition,
@@ -459,11 +447,7 @@ impl JoinOperator {
                 join_condition,
                 build_side_tuples,
                 right_consumed,
-                memory_tracker,
-                right_col_names,
-                base,
-                left,
-                right,
+                &mut JoinCtx { base, left, right, memory_tracker, right_col_names },
             ),
             Self::FullOuterJoin {
                 join_condition,
@@ -481,11 +465,7 @@ impl JoinOperator {
                 matched_right_indices,
                 result_iter,
                 phase,
-                memory_tracker,
-                right_col_names,
-                base,
-                left,
-                right,
+                &mut JoinCtx { base, left, right, memory_tracker, right_col_names },
             ),
             Self::CrossJoin {
                 all_left_rows,
@@ -499,26 +479,19 @@ impl JoinOperator {
                 all_right_rows,
                 left_consumed,
                 right_consumed,
-                memory_tracker,
-                right_col_names,
-                base,
-                left,
-                right,
+                &mut JoinCtx { base, left, right, memory_tracker, right_col_names },
             ),
             Self::SemiJoin {
                 join_condition,
                 right_rows,
                 right_consumed,
                 memory_tracker,
-                ..
+                right_col_names,
             } => cross_semi_join::next_semi_join(
                 join_condition,
                 right_rows,
                 right_consumed,
-                memory_tracker,
-                base,
-                left,
-                right,
+                &mut JoinCtx { base, left, right, memory_tracker, right_col_names },
             ),
         }
     }

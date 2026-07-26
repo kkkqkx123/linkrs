@@ -19,6 +19,7 @@ use super::super::metadata::{
     estimate_source_cardinality, source_explain_name, source_output_layout,
 };
 use super::super::specs::*;
+use super::fragment_ops::FragmentCtx;
 use super::{ArenaFragmentAllocator, ArenaPlanAssembler};
 
 impl ArenaPlanAssembler {
@@ -226,9 +227,7 @@ impl ArenaPlanAssembler {
                 )?;
                 let spec = build_sort_spec(sort_node)?;
                 Self::push_blocking_op(
-                    operators,
-                    fragments,
-                    op_alloc,
+                    &mut FragmentCtx { operators, fragments, op_alloc },
                     child_fid,
                     node.id(),
                     spec,
@@ -247,9 +246,7 @@ impl ArenaPlanAssembler {
                 )?;
                 let spec = build_aggregate_spec(agg_node)?;
                 Self::push_blocking_op(
-                    operators,
-                    fragments,
-                    op_alloc,
+                    &mut FragmentCtx { operators, fragments, op_alloc },
                     child_fid,
                     node.id(),
                     spec,
@@ -267,9 +264,7 @@ impl ArenaPlanAssembler {
                     exec_ctx,
                 )?;
                 Self::push_blocking_op(
-                    operators,
-                    fragments,
-                    op_alloc,
+                    &mut FragmentCtx { operators, fragments, op_alloc },
                     child_fid,
                     node.id(),
                     BlockingSpec::Distinct,
@@ -288,9 +283,7 @@ impl ArenaPlanAssembler {
                 )?;
                 let spec = build_topn_spec(topn_node)?;
                 Self::push_blocking_op(
-                    operators,
-                    fragments,
-                    op_alloc,
+                    &mut FragmentCtx { operators, fragments, op_alloc },
                     child_fid,
                     node.id(),
                     spec,
@@ -309,9 +302,7 @@ impl ArenaPlanAssembler {
                 )?;
                 let spec = build_window_spec(window_node)?;
                 Self::push_blocking_op(
-                    operators,
-                    fragments,
-                    op_alloc,
+                    &mut FragmentCtx { operators, fragments, op_alloc },
                     child_fid,
                     node.id(),
                     spec,
@@ -329,9 +320,7 @@ impl ArenaPlanAssembler {
                     exec_ctx,
                 )?;
                 Self::push_blocking_op(
-                    operators,
-                    fragments,
-                    op_alloc,
+                    &mut FragmentCtx { operators, fragments, op_alloc },
                     child_fid,
                     node.id(),
                     BlockingSpec::DataCollect,
@@ -349,9 +338,7 @@ impl ArenaPlanAssembler {
                     exec_ctx,
                 )?;
                 Self::push_blocking_op(
-                    operators,
-                    fragments,
-                    op_alloc,
+                    &mut FragmentCtx { operators, fragments, op_alloc },
                     child_fid,
                     node.id(),
                     BlockingSpec::Materialize,
@@ -578,9 +565,7 @@ impl ArenaPlanAssembler {
                 )?;
                 let spec = build_inner_join_spec(join_node)?;
                 Self::push_binary_op(
-                    operators,
-                    fragments,
-                    op_alloc,
+                    &mut FragmentCtx { operators, fragments, op_alloc },
                     frag_alloc,
                     left_fid,
                     right_fid,
@@ -608,9 +593,7 @@ impl ArenaPlanAssembler {
                 )?;
                 let spec = build_hash_inner_join_spec(join_node)?;
                 Self::push_binary_op(
-                    operators,
-                    fragments,
-                    op_alloc,
+                    &mut FragmentCtx { operators, fragments, op_alloc },
                     frag_alloc,
                     left_fid,
                     right_fid,
@@ -638,9 +621,7 @@ impl ArenaPlanAssembler {
                 )?;
                 let spec = build_left_join_spec(join_node)?;
                 Self::push_binary_op(
-                    operators,
-                    fragments,
-                    op_alloc,
+                    &mut FragmentCtx { operators, fragments, op_alloc },
                     frag_alloc,
                     left_fid,
                     right_fid,
@@ -668,9 +649,7 @@ impl ArenaPlanAssembler {
                 )?;
                 let spec = build_hash_left_join_spec(join_node)?;
                 Self::push_binary_op(
-                    operators,
-                    fragments,
-                    op_alloc,
+                    &mut FragmentCtx { operators, fragments, op_alloc },
                     frag_alloc,
                     left_fid,
                     right_fid,
@@ -697,9 +676,7 @@ impl ArenaPlanAssembler {
                     exec_ctx,
                 )?;
                 Self::push_binary_op(
-                    operators,
-                    fragments,
-                    op_alloc,
+                    &mut FragmentCtx { operators, fragments, op_alloc },
                     frag_alloc,
                     left_fid,
                     right_fid,
@@ -727,9 +704,7 @@ impl ArenaPlanAssembler {
                 )?;
                 let spec = build_right_join_spec(join_node)?;
                 Self::push_binary_op(
-                    operators,
-                    fragments,
-                    op_alloc,
+                    &mut FragmentCtx { operators, fragments, op_alloc },
                     frag_alloc,
                     left_fid,
                     right_fid,
@@ -757,9 +732,7 @@ impl ArenaPlanAssembler {
                 )?;
                 let spec = build_full_outer_join_spec(join_node)?;
                 Self::push_binary_op(
-                    operators,
-                    fragments,
-                    op_alloc,
+                    &mut FragmentCtx { operators, fragments, op_alloc },
                     frag_alloc,
                     left_fid,
                     right_fid,
@@ -787,9 +760,7 @@ impl ArenaPlanAssembler {
                 )?;
                 let spec = build_semi_join_spec(join_node)?;
                 Self::push_binary_op(
-                    operators,
-                    fragments,
-                    op_alloc,
+                    &mut FragmentCtx { operators, fragments, op_alloc },
                     frag_alloc,
                     left_fid,
                     right_fid,
@@ -818,9 +789,7 @@ impl ArenaPlanAssembler {
                     exec_ctx,
                 )?;
                 Self::push_binary_op(
-                    operators,
-                    fragments,
-                    op_alloc,
+                    &mut FragmentCtx { operators, fragments, op_alloc },
                     frag_alloc,
                     left_fid,
                     right_fid,
@@ -847,9 +816,7 @@ impl ArenaPlanAssembler {
                     exec_ctx,
                 )?;
                 Self::push_binary_op(
-                    operators,
-                    fragments,
-                    op_alloc,
+                    &mut FragmentCtx { operators, fragments, op_alloc },
                     frag_alloc,
                     left_fid,
                     right_fid,
@@ -876,9 +843,7 @@ impl ArenaPlanAssembler {
                     exec_ctx,
                 )?;
                 Self::push_binary_op(
-                    operators,
-                    fragments,
-                    op_alloc,
+                    &mut FragmentCtx { operators, fragments, op_alloc },
                     frag_alloc,
                     left_fid,
                     right_fid,
@@ -906,9 +871,7 @@ impl ArenaPlanAssembler {
                 )?;
                 let spec = build_pattern_apply_spec(pa_node)?;
                 Self::push_binary_op(
-                    operators,
-                    fragments,
-                    op_alloc,
+                    &mut FragmentCtx { operators, fragments, op_alloc },
                     frag_alloc,
                     left_fid,
                     right_fid,
@@ -936,9 +899,7 @@ impl ArenaPlanAssembler {
                 )?;
                 let spec = build_rollup_apply_spec(rua_node)?;
                 Self::push_binary_op(
-                    operators,
-                    fragments,
-                    op_alloc,
+                    &mut FragmentCtx { operators, fragments, op_alloc },
                     frag_alloc,
                     left_fid,
                     right_fid,
@@ -966,9 +927,7 @@ impl ArenaPlanAssembler {
                 )?;
                 let spec = build_apply_spec(apply_node)?;
                 Self::push_binary_op(
-                    operators,
-                    fragments,
-                    op_alloc,
+                    &mut FragmentCtx { operators, fragments, op_alloc },
                     frag_alloc,
                     left_fid,
                     right_fid,

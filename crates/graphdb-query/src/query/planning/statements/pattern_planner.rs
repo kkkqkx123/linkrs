@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::core::types::expr::expression_context::ExpressionAnalysisContext;
+use crate::query::binder::validation::ValidationInfo;
 use crate::query::metadata::MetadataContext;
 use crate::query::parser::ast::pattern::{
     EdgePattern, NodePattern, PathElement, Pattern, RepetitionType, VariablePattern,
@@ -20,8 +21,17 @@ use crate::query::planning::plan::core::nodes::{
 };
 use crate::query::planning::plan::SubPlan;
 use crate::query::planning::planner::PlannerError;
-use crate::query::binder::validation::ValidationInfo;
 use crate::query::QueryContext;
+
+pub struct PlanningContext<'a> {
+    pub space_id: u64,
+    pub space_name: &'a str,
+    pub validation_info: &'a ValidationInfo,
+    pub qctx: &'a Arc<QueryContext>,
+    pub enable_index_optimization: bool,
+    pub metadata_context: &'a Option<MetadataContext>,
+    pub expr_context: &'a Option<Arc<ExpressionAnalysisContext>>,
+}
 
 use super::expression_helpers;
 use super::index_scan_planner;
@@ -29,13 +39,7 @@ use super::plan_combiner;
 
 pub fn plan_path_pattern(
     pattern: &Pattern,
-    space_id: u64,
-    space_name: &str,
-    validation_info: &ValidationInfo,
-    qctx: &Arc<QueryContext>,
-    enable_index_optimization: bool,
-    metadata_context: &Option<MetadataContext>,
-    expr_context: &Option<Arc<ExpressionAnalysisContext>>,
+    ctx: &PlanningContext,
 ) -> Result<SubPlan, PlannerError> {
     match pattern {
         Pattern::Path(path) => {
@@ -59,11 +63,11 @@ pub fn plan_path_pattern(
                         if is_first_node {
                             let node_plan = plan_pattern_node(
                                 node,
-                                space_id,
-                                space_name,
-                                enable_index_optimization,
-                                metadata_context,
-                                expr_context,
+                                ctx.space_id,
+                                ctx.space_name,
+                                ctx.enable_index_optimization,
+                                ctx.metadata_context,
+                                ctx.expr_context,
                             )?;
                             plan = if let Some(existing_root) = plan.root.take() {
                                 plan_combiner::cross_join_plans(
@@ -105,10 +109,10 @@ pub fn plan_path_pattern(
 
                         let edge_plan = plan_pattern_edge_with_input(
                             edge,
-                            space_id,
+                            ctx.space_id,
                             input_alias,
                             dst_var,
-                            expr_context,
+                            ctx.expr_context,
                         )?;
 
                         plan = if let Some(existing_root) = plan.root.take() {
@@ -137,14 +141,7 @@ pub fn plan_path_pattern(
                     PathElement::Alternative(patterns) => {
                         let alt_plan = plan_alternative_patterns(
                             patterns,
-                            space_id,
-                            space_name,
-                            prev_node_alias.as_deref(),
-                            validation_info,
-                            qctx,
-                            enable_index_optimization,
-                            metadata_context,
-                            expr_context,
+                            ctx,
                         )?;
                         plan = if let Some(existing_root) = plan.root.take() {
                             plan_combiner::cross_join_plans(
@@ -158,14 +155,7 @@ pub fn plan_path_pattern(
                     PathElement::Optional(elem) => {
                         let opt_plan = plan_optional_element(
                             elem,
-                            space_id,
-                            space_name,
-                            prev_node_alias.as_deref(),
-                            validation_info,
-                            qctx,
-                            enable_index_optimization,
-                            metadata_context,
-                            expr_context,
+                            ctx,
                         )?;
                         plan = if let Some(existing_root) = plan.root.take() {
                             plan_combiner::left_join_plans(
@@ -180,11 +170,11 @@ pub fn plan_path_pattern(
                         let rep_plan = plan_repeated_element(
                             elem,
                             *rep_type,
-                            space_id,
-                            space_name,
-                            expr_context,
-                            enable_index_optimization,
-                            metadata_context,
+                            ctx.space_id,
+                            ctx.space_name,
+                            ctx.expr_context,
+                            ctx.enable_index_optimization,
+                            ctx.metadata_context,
                         )?;
                         plan = if let Some(existing_root) = plan.root.take() {
                             plan_combiner::cross_join_plans(
@@ -200,16 +190,7 @@ pub fn plan_path_pattern(
 
             Ok(plan)
         }
-        _ => plan_pattern(
-            pattern,
-            space_id,
-            space_name,
-            validation_info,
-            qctx,
-            enable_index_optimization,
-            metadata_context,
-            expr_context,
-        ),
+        _ => plan_pattern(pattern, ctx),
     }
 }
 
@@ -500,35 +481,20 @@ pub fn plan_match_delete(
 
 pub fn plan_pattern(
     pattern: &Pattern,
-    space_id: u64,
-    space_name: &str,
-    validation_info: &ValidationInfo,
-    _qctx: &Arc<QueryContext>,
-    enable_index_optimization: bool,
-    metadata_context: &Option<MetadataContext>,
-    expr_context: &Option<Arc<ExpressionAnalysisContext>>,
+    ctx: &PlanningContext,
 ) -> Result<SubPlan, PlannerError> {
     match pattern {
         Pattern::Node(node) => plan_pattern_node(
             node,
-            space_id,
-            space_name,
-            enable_index_optimization,
-            metadata_context,
-            expr_context,
+            ctx.space_id,
+            ctx.space_name,
+            ctx.enable_index_optimization,
+            ctx.metadata_context,
+            ctx.expr_context,
         ),
-        Pattern::Edge(edge) => plan_pattern_edge(edge, space_id, space_name, expr_context),
-        Pattern::Path(_) => plan_path_pattern(
-            pattern,
-            space_id,
-            space_name,
-            validation_info,
-            _qctx,
-            enable_index_optimization,
-            metadata_context,
-            expr_context,
-        ),
-        Pattern::Variable(var) => plan_variable_pattern(var, space_id, validation_info),
+        Pattern::Edge(edge) => plan_pattern_edge(edge, ctx.space_id, ctx.space_name, ctx.expr_context),
+        Pattern::Path(_) => plan_path_pattern(pattern, ctx),
+        Pattern::Variable(var) => plan_variable_pattern(var, ctx.space_id, ctx.validation_info),
     }
 }
 
@@ -551,14 +517,7 @@ pub fn plan_variable_pattern(
 
 pub fn plan_alternative_patterns(
     patterns: &[Pattern],
-    space_id: u64,
-    space_name: &str,
-    _prev_alias: Option<&str>,
-    validation_info: &ValidationInfo,
-    qctx: &Arc<QueryContext>,
-    enable_index_optimization: bool,
-    metadata_context: &Option<MetadataContext>,
-    expr_context: &Option<Arc<ExpressionAnalysisContext>>,
+    ctx: &PlanningContext,
 ) -> Result<SubPlan, PlannerError> {
     if patterns.is_empty() {
         return Err(PlannerError::PlanGenerationFailed(
@@ -566,28 +525,10 @@ pub fn plan_alternative_patterns(
         ));
     }
 
-    let mut plan = plan_pattern(
-        &patterns[0],
-        space_id,
-        space_name,
-        validation_info,
-        qctx,
-        enable_index_optimization,
-        metadata_context,
-        expr_context,
-    )?;
+    let mut plan = plan_pattern(&patterns[0], ctx)?;
 
     for pattern in patterns.iter().skip(1) {
-        let pattern_plan = plan_pattern(
-            pattern,
-            space_id,
-            space_name,
-            validation_info,
-            qctx,
-            enable_index_optimization,
-            metadata_context,
-            expr_context,
-        )?;
+        let pattern_plan = plan_pattern(pattern, ctx)?;
         plan = plan_combiner::union_plans(plan, pattern_plan)?;
     }
 
@@ -596,25 +537,18 @@ pub fn plan_alternative_patterns(
 
 pub fn plan_optional_element(
     element: &PathElement,
-    space_id: u64,
-    space_name: &str,
-    _prev_alias: Option<&str>,
-    _validation_info: &ValidationInfo,
-    _qctx: &Arc<QueryContext>,
-    enable_index_optimization: bool,
-    metadata_context: &Option<MetadataContext>,
-    expr_context: &Option<Arc<ExpressionAnalysisContext>>,
+    ctx: &PlanningContext,
 ) -> Result<SubPlan, PlannerError> {
     let opt_plan = match element {
         PathElement::Node(node) => plan_pattern_node(
             node,
-            space_id,
-            space_name,
-            enable_index_optimization,
-            metadata_context,
-            expr_context,
+            ctx.space_id,
+            ctx.space_name,
+            ctx.enable_index_optimization,
+            ctx.metadata_context,
+            ctx.expr_context,
         )?,
-        PathElement::Edge(edge) => plan_pattern_edge(edge, space_id, space_name, expr_context)?,
+        PathElement::Edge(edge) => plan_pattern_edge(edge, ctx.space_id, ctx.space_name, ctx.expr_context)?,
         _ => {
             return Err(PlannerError::PlanGenerationFailed(
                 "Optional paths do not support nested complex patterns".to_string(),

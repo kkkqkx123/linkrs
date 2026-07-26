@@ -1037,7 +1037,7 @@ impl TransactionManager {
         self.emit_commit_event(TransactionEvent::Committed {
             txn_id,
             write_timestamp: context.timestamp(),
-            write_set: descriptor.write_set,
+            write_set: Box::new(descriptor.write_set),
             schema_catalog_version: context.schema_catalog_version(),
         });
 
@@ -1410,15 +1410,7 @@ impl TransactionManager {
             prepared_transactions: 0,
             checkpoint_drain_time: Duration::ZERO,
         };
-        self.stats.record_resource_metrics(
-            metrics.active_snapshots,
-            metrics.pending_writes,
-            metrics.committed_frontier_lag,
-            metrics.staged_wal_bytes,
-            metrics.undo_bytes,
-            metrics.prepared_transactions,
-            metrics.checkpoint_drain_time,
-        );
+        self.stats.record_resource_metrics(metrics);
         metrics
     }
 

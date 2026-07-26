@@ -142,14 +142,7 @@ impl SavepointManager {
 
     fn create_savepoint(
         &mut self,
-        name: Option<String>,
-        operation_log_index: usize,
-        undo_log_index: usize,
-        sync_sequence: u64,
-        write_set: WriteSet,
-        read_set: WriteSet,
-        redo_log_index: usize,
-        modified_tables: Vec<String>,
+        params: SavepointParams,
     ) -> SavepointId {
         let id = self.next_id;
         self.next_id += 1;
@@ -157,16 +150,16 @@ impl SavepointManager {
         self.next_sequence += 1;
         let info = SavepointInfo {
             id,
-            name,
+            name: params.name,
             created_at: Instant::now(),
             sequence,
-            operation_log_index,
-            undo_log_index,
-            sync_sequence,
-            write_set,
-            read_set,
-            redo_log_index,
-            modified_tables,
+            operation_log_index: params.operation_log_index,
+            undo_log_index: params.undo_log_index,
+            sync_sequence: params.sync_sequence,
+            write_set: params.write_set,
+            read_set: params.read_set,
+            redo_log_index: params.redo_log_index,
+            modified_tables: params.modified_tables,
         };
         self.savepoints.insert(id, info);
         id
@@ -839,23 +832,18 @@ impl TransactionContext {
 
     /// Create savepoint
     pub fn create_savepoint(&self, name: Option<String>, sync_sequence: u64) -> SavepointId {
-        let operation_log_index = self.operation_log_len();
-        let undo_log_index = self.undo_log_len();
-        let write_set = self.get_write_set();
-        let read_set = self.get_read_set();
-        let redo_log_index = self.redo_log_len();
-        let modified_tables = self.get_modified_tables();
-        let mut manager = self.savepoint_manager.write();
-        manager.create_savepoint(
+        let params = SavepointParams {
             name,
-            operation_log_index,
-            undo_log_index,
+            operation_log_index: self.operation_log_len(),
+            undo_log_index: self.undo_log_len(),
             sync_sequence,
-            write_set,
-            read_set,
-            redo_log_index,
-            modified_tables,
-        )
+            write_set: self.get_write_set(),
+            read_set: self.get_read_set(),
+            redo_log_index: self.redo_log_len(),
+            modified_tables: self.get_modified_tables(),
+        };
+        let mut manager = self.savepoint_manager.write();
+        manager.create_savepoint(params)
     }
 
     /// Get savepoint info

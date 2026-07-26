@@ -16,6 +16,7 @@ use crate::query::executor::streaming::slot::SlotLayout;
 use crate::storage::QueryStorage;
 
 use super::super::visited_set::VisitedSet;
+use super::ExpandCtx;
 
 pub(super) fn row_passes_filter(
     row: &[Value],
@@ -38,15 +39,14 @@ pub(super) fn expand_on_chunk(
     chunk: DataChunk,
     output_layout: Arc<SlotLayout>,
     reader: &dyn QueryStorage,
-    space_name: &str,
-    edge_types: &[String],
-    direction: EdgeDirection,
-    filter_expr: &Option<Expression>,
-    col_names_template: Vec<String>,
     src_vids: Vec<Value>,
-    cancel_token: Option<Arc<AtomicBool>>,
     step_limit: u32,
+    ctx: &mut ExpandCtx,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let space_name = ctx.space_name;
+    let edge_types = ctx.edge_types;
+    let direction = ctx.direction;
+    let filter_expr = ctx.filter_expr;
     let _chunk_col_names = chunk.col_names();
 
     // Build the list of seed vertex IDs: from the chunk rows, or from explicit src_vids.
@@ -55,7 +55,7 @@ pub(super) fn expand_on_chunk(
 
     for row in &chunk.rows {
         let context = ValueRowContext::new(row.clone(), chunk.get_layout());
-        let src_name = col_names_template.first().map(|s| s.as_str());
+        let src_name = ctx.col_names_template.first().map(|s| s.as_str());
         let vid_val = context
             .get_variable("vid")
             .or_else(|| context.get_variable("src"))
@@ -92,7 +92,7 @@ pub(super) fn expand_on_chunk(
         };
         let runtime_reader = TraversalGraphReader::new(reader);
         let mut runtime = TraversalRuntime::new(runtime_reader, config);
-        if let Some(token) = cancel_token.clone() {
+        if let Some(token) = ctx.cancel_token.clone() {
             runtime.set_cancel_token(token);
         }
 
@@ -110,7 +110,7 @@ pub(super) fn expand_on_chunk(
                 out_row.push(Value::Null(crate::core::NullType::Null));
             }
             out_row.push(Value::Vertex(Box::new(event.vertex)));
-            let mut out_col_names = col_names_template.clone();
+            let mut out_col_names = ctx.col_names_template.clone();
             out_col_names.push("_expand_edge".to_string());
             out_col_names.push("_expand_dst".to_string());
             if row_passes_filter(&out_row, &out_col_names, filter_expr) {

@@ -1,42 +1,48 @@
 use std::sync::Arc;
 
-use parking_lot::RwLock;
 
 use crate::core::error::QueryError;
 use crate::core::types::expr::Expression;
 use crate::core::types::storage_ids::VertexId;
-use crate::core::{EdgeDirection, Value};
+use crate::core::Value;
 use crate::query::executor::expression::evaluator::traits::ExpressionContext;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::context::ValueRowContext;
-use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::query::executor::streaming::operators::base::OperatorBase;
-use crate::storage::QueryStorage;
 
 use super::super::algorithms::{
     bidir_bfs_shortest_path, enumerate_all_paths, path_endpoint_pairs, AllPathsConfig,
     BidirBfsConfig,
 };
 use super::common;
+use super::{AllPathsParams, GraphCtx};
 
 pub(super) fn handle_all_paths(
-    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
-    space_name: &str,
-    target_vertex: &Option<Expression>,
-    edge_types: &[String],
-    direction: EdgeDirection,
-    min_depth: usize,
-    max_depth: usize,
-    acyclic: bool,
-    limit: &Option<usize>,
-    offset: usize,
-    filter: &Option<Expression>,
-    start_vertices: &[Value],
-    target_vertices: &[Value],
-    base: &mut OperatorBase,
-    input: &mut StreamingExecutor,
+    params: &mut AllPathsParams,
+    ctx: &mut GraphCtx,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let storage = ctx.storage;
+    let space_name = ctx.space_name;
+    let edge_types = ctx.edge_types;
+    let direction = ctx.direction;
+    let base = &mut *ctx.base;
+    let input = &mut *ctx.input;
+    let AllPathsParams {
+        target_vertex,
+        min_depth,
+        max_depth,
+        acyclic,
+        limit,
+        offset,
+        filter,
+        start_vertices,
+        target_vertices,
+    } = &*params;
+    let min_depth = *min_depth;
+    let max_depth = *max_depth;
+    let acyclic = *acyclic;
+    let limit = *limit;
+    let offset = *offset;
     if !base.lifecycle.is_opened() {
         return Err(QueryError::execution("AllPaths not opened".to_string()));
     }
@@ -122,18 +128,19 @@ pub(super) fn handle_all_paths(
 }
 
 pub(super) fn handle_multi_shortest_path(
-    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
-    space_name: &str,
     target_vertices: &[Expression],
-    edge_types: &[String],
-    direction: EdgeDirection,
     max_depth: usize,
     left_vertex_column: &str,
     right_vertex_column: &str,
     single_shortest: bool,
-    base: &mut OperatorBase,
-    input: &mut StreamingExecutor,
+    ctx: &mut GraphCtx,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let storage = ctx.storage;
+    let space_name = ctx.space_name;
+    let edge_types = ctx.edge_types;
+    let direction = ctx.direction;
+    let base = &mut *ctx.base;
+    let input = &mut *ctx.input;
     if !base.lifecycle.is_opened() {
         return Err(QueryError::execution(
             "MultiShortestPath not opened".to_string(),

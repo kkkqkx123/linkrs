@@ -1,3 +1,4 @@
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -20,6 +21,36 @@ mod expand;
 mod shortest_path;
 mod subgraph;
 mod traverse;
+
+pub(super) struct GraphCtx<'a> {
+    pub(super) storage: &'a Option<Arc<RwLock<dyn QueryStorage>>>,
+    pub(super) space_name: &'a str,
+    pub(super) edge_types: &'a [String],
+    pub(super) direction: EdgeDirection,
+    pub(super) base: &'a mut OperatorBase,
+    pub(super) input: &'a mut StreamingExecutor,
+}
+
+pub(super) struct AllPathsParams<'a> {
+    pub(super) target_vertex: &'a Option<Expression>,
+    pub(super) min_depth: usize,
+    pub(super) max_depth: usize,
+    pub(super) acyclic: bool,
+    pub(super) limit: &'a Option<usize>,
+    pub(super) offset: usize,
+    pub(super) filter: &'a Option<Expression>,
+    pub(super) start_vertices: &'a [Value],
+    pub(super) target_vertices: &'a [Value],
+}
+
+pub(super) struct ExpandCtx<'a> {
+    pub(super) space_name: &'a str,
+    pub(super) edge_types: &'a [String],
+    pub(super) direction: EdgeDirection,
+    pub(super) filter_expr: &'a Option<Expression>,
+    pub(super) col_names_template: Vec<String>,
+    pub(super) cancel_token: Option<Arc<AtomicBool>>,
+}
 
 #[derive(Debug)]
 pub enum GraphOperator {
@@ -418,16 +449,18 @@ impl GraphOperator {
                 src_vids,
                 step_limit,
             } => expand::handle_all(
-                &*storage,
-                &*space_name,
-                &*edge_types,
-                *direction,
                 &*filter_expr,
                 col_names.clone(),
                 src_vids.clone(),
                 *step_limit,
-                base,
-                input,
+                &mut GraphCtx {
+                    storage,
+                    space_name,
+                    edge_types,
+                    direction: *direction,
+                    base,
+                    input,
+                },
             ),
 
             Self::Traverse {
@@ -440,15 +473,17 @@ impl GraphOperator {
                 visited,
                 ..
             } => traverse::handle_traverse(
-                &*storage,
-                &*space_name,
-                &*edge_types,
-                *direction,
                 *min_depth,
                 *max_depth,
                 visited,
-                base,
-                input,
+                &mut GraphCtx {
+                    storage,
+                    space_name,
+                    edge_types,
+                    direction: *direction,
+                    base,
+                    input,
+                },
             ),
 
             Self::TraverseAll { .. } => traverse::handle_traverse_all(base, input),
@@ -469,14 +504,17 @@ impl GraphOperator {
                 visited,
                 ..
             } => traverse::handle_bi_traverse(
-                &*storage,
-                &*space_name,
-                &*edge_types,
                 *min_depth,
                 *max_depth,
                 visited,
-                base,
-                input,
+                &mut GraphCtx {
+                    storage,
+                    space_name,
+                    edge_types,
+                    direction: EdgeDirection::Both,
+                    base,
+                    input,
+                },
             ),
 
             Self::ShortestPath {
@@ -490,16 +528,18 @@ impl GraphOperator {
                 target_vertices,
                 ..
             } => shortest_path::handle_shortest_path(
-                &*storage,
-                &*space_name,
                 &*target_vertex,
-                &*edge_types,
-                *direction,
                 *max_depth,
                 &*start_vertices,
                 &*target_vertices,
-                base,
-                input,
+                &mut GraphCtx {
+                    storage,
+                    space_name,
+                    edge_types,
+                    direction: *direction,
+                    base,
+                    input,
+                },
             ),
 
             Self::BFSShortest {
@@ -535,21 +575,25 @@ impl GraphOperator {
                 target_vertices,
                 ..
             } => all_paths::handle_all_paths(
-                &*storage,
-                &*space_name,
-                &*target_vertex,
-                &*edge_types,
-                *direction,
-                *min_depth,
-                *max_depth,
-                *acyclic,
-                &*limit,
-                *offset,
-                &*filter,
-                &*start_vertices,
-                &*target_vertices,
-                base,
-                input,
+                &mut AllPathsParams {
+                    target_vertex,
+                    min_depth: *min_depth,
+                    max_depth: *max_depth,
+                    acyclic: *acyclic,
+                    limit,
+                    offset: *offset,
+                    filter,
+                    start_vertices,
+                    target_vertices,
+                },
+                &mut GraphCtx {
+                    storage,
+                    space_name,
+                    edge_types,
+                    direction: *direction,
+                    base,
+                    input,
+                },
             ),
 
             Self::MultiShortestPath {
@@ -564,17 +608,19 @@ impl GraphOperator {
                 single_shortest,
                 ..
             } => all_paths::handle_multi_shortest_path(
-                &*storage,
-                &*space_name,
                 &*target_vertices,
-                &*edge_types,
-                *direction,
                 *max_depth,
                 &*left_vertex_column,
                 &*right_vertex_column,
                 *single_shortest,
-                base,
-                input,
+                &mut GraphCtx {
+                    storage,
+                    space_name,
+                    edge_types,
+                    direction: *direction,
+                    base,
+                    input,
+                },
             ),
 
             Self::Subgraph {

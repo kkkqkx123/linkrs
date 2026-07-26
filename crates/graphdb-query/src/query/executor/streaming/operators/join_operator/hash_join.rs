@@ -8,12 +8,10 @@ use crate::query::executor::base::MemoryTracker;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
 use crate::query::executor::streaming::context::SplitRowContext;
-use crate::query::executor::streaming::executor::StreamingExecutor;
-use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::operators::base::OperatorLifecycle;
 use crate::query::executor::streaming::slot::SlotLayout;
 
-use super::{build_combined_names, close_common, evaluate_join_key, JoinKeyValue};
+use super::{build_combined_names, close_common, evaluate_join_key, JoinCtx, JoinKeyValue};
 
 pub(super) fn next_hash_join(
     join_condition: &mut Option<Expression>,
@@ -22,12 +20,13 @@ pub(super) fn next_hash_join(
     build_side_hash: &mut HashMap<JoinKeyValue, Vec<Vec<Value>>>,
     all_right_rows: &mut Vec<Vec<Value>>,
     left_consumed: &mut bool,
-    memory_tracker: &mut MemoryTracker,
-    right_col_names: &mut Vec<String>,
-    base: &mut OperatorBase,
-    left: &mut StreamingExecutor,
-    right: &mut StreamingExecutor,
+    ctx: &mut JoinCtx,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let memory_tracker = &mut *ctx.memory_tracker;
+    let right_col_names = &mut *ctx.right_col_names;
+    let base = &mut *ctx.base;
+    let left = &mut *ctx.left;
+    let right = &mut *ctx.right;
     if !*left_consumed {
         while let Some(mut chunk) = right.advance()? {
             base.ensure_not_cancelled()?;
@@ -122,12 +121,13 @@ pub(super) fn next_hash_left_join(
     build_side_hash: &mut HashMap<JoinKeyValue, Vec<Vec<Value>>>,
     all_right_rows: &mut Vec<Vec<Value>>,
     left_consumed: &mut bool,
-    memory_tracker: &mut MemoryTracker,
-    right_col_names: &mut Vec<String>,
-    base: &mut OperatorBase,
-    left: &mut StreamingExecutor,
-    right: &mut StreamingExecutor,
+    ctx: &mut JoinCtx,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let memory_tracker = &mut *ctx.memory_tracker;
+    let right_col_names = &mut *ctx.right_col_names;
+    let base = &mut *ctx.base;
+    let left = &mut *ctx.left;
+    let right = &mut *ctx.right;
     if !*left_consumed {
         while let Some(mut chunk) = right.advance()? {
             base.ensure_not_cancelled()?;

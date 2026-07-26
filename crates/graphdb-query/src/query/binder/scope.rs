@@ -57,7 +57,7 @@ impl BinderScope {
             || self
                 .parent
                 .as_ref()
-                .map_or(false, |p| p.contains(name))
+                .is_some_and(|p| p.contains(name))
     }
 
     pub fn all_variables(&self) -> Vec<&BinderVariable> {

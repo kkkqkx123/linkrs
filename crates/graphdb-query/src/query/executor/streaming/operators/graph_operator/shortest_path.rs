@@ -9,24 +9,27 @@ use crate::core::{EdgeDirection, Value};
 use crate::query::executor::expression::evaluator::traits::ExpressionContext;
 use crate::query::executor::streaming::chunk::{ColumnInfo, DataChunk, Schema};
 use crate::query::executor::streaming::context::ValueRowContext;
+
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::storage::QueryStorage;
 
 use super::super::algorithms::{bidir_bfs_shortest_path, path_endpoint_pairs, BidirBfsConfig};
+use super::GraphCtx;
 
 pub(super) fn handle_shortest_path(
-    storage: &Option<Arc<RwLock<dyn QueryStorage>>>,
-    space_name: &str,
     target_vertex: &Option<Expression>,
-    edge_types: &[String],
-    direction: EdgeDirection,
     max_depth: usize,
     start_vertices: &[Value],
     target_vertices: &[Value],
-    base: &mut OperatorBase,
-    input: &mut StreamingExecutor,
+    ctx: &mut GraphCtx,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let storage = ctx.storage;
+    let space_name = ctx.space_name;
+    let edge_types = ctx.edge_types;
+    let direction = ctx.direction;
+    let base = &mut *ctx.base;
+    let input = &mut *ctx.input;
     if !base.lifecycle.is_opened() {
         return Err(QueryError::execution("ShortestPath not opened".to_string()));
     }

@@ -3,7 +3,7 @@
 //! The Binder is the replacement for the old Validator.  It produces a
 //! fully-resolved [`BoundStatement`] IR that the planner consumes directly.
 
-pub mod binder;
+pub mod binder_impl;
 pub mod bound;
 pub mod expr_binder;
 pub mod expr_converter;
@@ -12,7 +12,7 @@ pub mod scope;
 pub mod semantic_checker;
 pub mod validation;
 
-pub use binder::Binder;
+pub use binder_impl::Binder;
 pub use bound::{
     BoundColumnRef, BoundExpression, BoundMatchStatement, BoundStatement,
 };

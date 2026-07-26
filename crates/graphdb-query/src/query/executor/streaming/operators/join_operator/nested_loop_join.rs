@@ -6,23 +6,22 @@ use crate::core::Value;
 use crate::query::executor::base::MemoryTracker;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
-use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::executor::ValueRowContext;
-use crate::query::executor::streaming::operators::base::OperatorBase;
 use crate::query::executor::streaming::operators::base::OperatorLifecycle;
 
-use super::{build_combined_names, close_common};
+use super::{build_combined_names, close_common, JoinCtx};
 
 pub(super) fn next_nested_loop_join(
     join_condition: &mut Option<Expression>,
     build_side_tuples: &mut Vec<Vec<Value>>,
     left_consumed: &mut bool,
-    memory_tracker: &mut MemoryTracker,
-    right_col_names: &mut Vec<String>,
-    base: &mut OperatorBase,
-    left: &mut StreamingExecutor,
-    right: &mut StreamingExecutor,
+    ctx: &mut JoinCtx,
 ) -> Result<Option<DataChunk>, QueryError> {
+    let memory_tracker = &mut *ctx.memory_tracker;
+    let right_col_names = &mut *ctx.right_col_names;
+    let base = &mut *ctx.base;
+    let left = &mut *ctx.left;
+    let right = &mut *ctx.right;
     if !*left_consumed {
         let mut captured_right_names = Vec::new();
         while let Some(chunk) = right.advance()? {
