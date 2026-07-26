@@ -51,7 +51,7 @@ fn test_create_tag_index_metadata() {
         schema_name: "Person".to_string(),
         fields: vec![IndexField::new(
             "name".to_string(),
-            Value::String("".to_string()),
+            Value::string(""),
             false,
         )],
         properties: vec!["name".to_string()],
@@ -92,7 +92,7 @@ fn test_create_tag_index_duplicate() {
         schema_name: "Person".to_string(),
         fields: vec![IndexField::new(
             "name".to_string(),
-            Value::String("".to_string()),
+            Value::string(""),
             false,
         )],
         properties: vec!["name".to_string()],
@@ -126,7 +126,7 @@ fn test_drop_tag_index_metadata() {
         schema_name: "Person".to_string(),
         fields: vec![IndexField::new(
             "name".to_string(),
-            Value::String("".to_string()),
+            Value::string(""),
             false,
         )],
         properties: vec!["name".to_string()],
@@ -164,7 +164,7 @@ fn test_list_tag_indexes() {
         schema_name: "Person".to_string(),
         fields: vec![IndexField::new(
             "name".to_string(),
-            Value::String("".to_string()),
+            Value::string(""),
             false,
         )],
         properties: vec!["name".to_string()],
@@ -221,7 +221,7 @@ fn test_drop_tag_indexes_by_tag() {
         schema_name: "Person".to_string(),
         fields: vec![IndexField::new(
             "name".to_string(),
-            Value::String("".to_string()),
+            Value::string(""),
             false,
         )],
         properties: vec!["name".to_string()],
@@ -279,7 +279,7 @@ fn test_create_edge_index_metadata() {
         schema_name: "KNOWS".to_string(),
         fields: vec![IndexField::new(
             "since".to_string(),
-            Value::String("".to_string()),
+            Value::string(""),
             false,
         )],
         properties: vec!["since".to_string()],
@@ -321,7 +321,7 @@ fn test_drop_edge_index_metadata() {
         schema_name: "KNOWS".to_string(),
         fields: vec![IndexField::new(
             "since".to_string(),
-            Value::String("".to_string()),
+            Value::string(""),
             false,
         )],
         properties: vec!["since".to_string()],
@@ -360,7 +360,7 @@ fn test_list_edge_indexes() {
         schema_name: "KNOWS".to_string(),
         fields: vec![IndexField::new(
             "since".to_string(),
-            Value::String("".to_string()),
+            Value::string(""),
             false,
         )],
         properties: vec!["since".to_string()],
@@ -423,7 +423,7 @@ fn test_update_vertex_indexes() {
         schema_name: "Person".to_string(),
         fields: vec![IndexField::new(
             "name".to_string(),
-            Value::String("".to_string()),
+            Value::string(""),
             false,
         )],
         properties: vec!["name".to_string()],
@@ -436,7 +436,7 @@ fn test_update_vertex_indexes() {
 
     let vertex_id = VertexId::from_int64(1);
     let mut props = std::collections::HashMap::new();
-    props.insert("name".to_string(), Value::String("Alice".to_string()));
+    props.insert("name".to_string(), Value::string("Alice"));
     let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
     let vertex = Vertex::new(vertex_id, vec![tag]);
 
@@ -447,7 +447,7 @@ fn test_update_vertex_indexes() {
     let retrieved = get_storage(&storage).lookup_index(
         "test_space",
         "person_name_idx",
-        &Value::String("Alice".to_string()),
+        &Value::string("Alice"),
     );
     let src_ids = retrieved.expect("索引精确查询应该成功");
     assert!(
@@ -461,7 +461,7 @@ fn test_update_vertex_indexes() {
     let retrieved = get_storage(&storage).lookup_index(
         "test_space",
         "person_name_idx",
-        &Value::String("Alice".to_string()),
+        &Value::string("Alice"),
     );
     let vertex_ids = retrieved.expect("索引查询应该成功");
     assert!(
@@ -489,7 +489,7 @@ fn test_delete_edge_indexes() {
         schema_name: "KNOWS".to_string(),
         fields: vec![IndexField::new(
             "since".to_string(),
-            Value::String("".to_string()),
+            Value::string(""),
             false,
         )],
         properties: vec!["since".to_string()],
@@ -517,7 +517,7 @@ fn test_delete_edge_indexes() {
 
     let edge_type = "KNOWS";
     let mut props = std::collections::HashMap::new();
-    props.insert("since".to_string(), Value::String("2024-01-01".to_string()));
+    props.insert("since".to_string(), Value::string("2024-01-01"));
     let edge = Edge::new(src, dst, edge_type.to_string(), 0, props);
 
     assert_ok(get_storage(&storage).insert_edge("test_space", edge));
@@ -527,7 +527,7 @@ fn test_delete_edge_indexes() {
     let retrieved = get_storage(&storage).lookup_index(
         "test_space",
         "knows_since_idx",
-        &Value::String("2024-01-01".to_string()),
+        &Value::string("2024-01-01"),
     );
     let src_ids = retrieved.expect("索引查询应该成功");
     assert!(
@@ -556,7 +556,7 @@ fn test_index_exact_query() {
         schema_name: "Person".to_string(),
         fields: vec![IndexField::new(
             "name".to_string(),
-            Value::String("".to_string()),
+            Value::string(""),
             false,
         )],
         properties: vec!["name".to_string()],
@@ -568,11 +568,11 @@ fn test_index_exact_query() {
     assert_ok(get_storage(&storage).create_tag_index("test_space", &index));
 
     let vertices = vec![
-        (VertexId::from_int64(1), Value::String("Alice".to_string())),
-        (VertexId::from_int64(2), Value::String("Bob".to_string())),
+        (VertexId::from_int64(1), Value::string("Alice")),
+        (VertexId::from_int64(2), Value::string("Bob")),
         (
             VertexId::from_int64(3),
-            Value::String("Charlie".to_string()),
+            Value::string("Charlie"),
         ),
     ];
 
@@ -587,7 +587,7 @@ fn test_index_exact_query() {
     let retrieved = get_storage(&storage).lookup_index(
         "test_space",
         "person_name_idx",
-        &Value::String("Alice".to_string()),
+        &Value::string("Alice"),
     );
     let vertex_ids = retrieved.expect("索引精确查询应该成功");
     assert_count(&vertex_ids, 1, "匹配的顶点");
@@ -669,7 +669,7 @@ fn test_index_query_no_match() {
         schema_name: "Person".to_string(),
         fields: vec![IndexField::new(
             "name".to_string(),
-            Value::String("".to_string()),
+            Value::string(""),
             false,
         )],
         properties: vec!["name".to_string()],
@@ -682,7 +682,7 @@ fn test_index_query_no_match() {
 
     let vertex_id = VertexId::from_int64(1);
     let mut props = std::collections::HashMap::new();
-    props.insert("name".to_string(), Value::String("Alice".to_string()));
+    props.insert("name".to_string(), Value::string("Alice"));
     let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
     let vertex = Vertex::new(vertex_id, vec![tag]);
 
@@ -691,7 +691,7 @@ fn test_index_query_no_match() {
     let retrieved = get_storage(&storage).lookup_index(
         "test_space",
         "person_name_idx",
-        &Value::String("Bob".to_string()),
+        &Value::string("Bob"),
     );
     let vertex_ids = retrieved.expect("索引查询应该成功");
     assert_count(&vertex_ids, 0, "匹配的顶点");
@@ -717,7 +717,7 @@ fn test_index_status_active() {
         schema_name: "Person".to_string(),
         fields: vec![IndexField::new(
             "name".to_string(),
-            Value::String("".to_string()),
+            Value::string(""),
             false,
         )],
         properties: vec!["name".to_string()],
@@ -758,7 +758,7 @@ fn test_unique_index() {
         schema_name: "Person".to_string(),
         fields: vec![IndexField::new(
             "name".to_string(),
-            Value::String("".to_string()),
+            Value::string(""),
             false,
         )],
         properties: vec!["name".to_string()],
@@ -797,7 +797,7 @@ fn test_composite_index() {
         space_id: 0,
         schema_name: "Person".to_string(),
         fields: vec![
-            IndexField::new("name".to_string(), Value::String("".to_string()), false),
+            IndexField::new("name".to_string(), Value::string(""), false),
             IndexField::new("age".to_string(), Value::Int(0), false),
         ],
         properties: vec!["name".to_string(), "age".to_string()],
@@ -811,17 +811,17 @@ fn test_composite_index() {
     let vertices = vec![
         (
             VertexId::from_int64(1),
-            Value::String("Alice".to_string()),
+            Value::string("Alice"),
             Value::Int(30),
         ),
         (
             VertexId::from_int64(2),
-            Value::String("Alice".to_string()),
+            Value::string("Alice"),
             Value::Int(25),
         ),
         (
             VertexId::from_int64(3),
-            Value::String("Bob".to_string()),
+            Value::string("Bob"),
             Value::Int(30),
         ),
     ];
@@ -838,7 +838,7 @@ fn test_composite_index() {
     let retrieved = get_storage(&storage).lookup_index(
         "test_space",
         "person_name_age_idx",
-        &Value::String("Alice".to_string()),
+        &Value::string("Alice"),
     );
     let vertex_ids = retrieved.expect("复合索引查询应该成功");
     assert_count(&vertex_ids, 2, "匹配的顶点（两个 Alice）");
@@ -877,7 +877,7 @@ fn test_composite_index() {
 //         "Person".to_string(),
 //         vec![IndexField::new(
 //             "name".to_string(),
-//             Value::String("".to_string()),
+//             Value::string(""),
 //             false,
 //         )],
 //         vec!["name".to_string()],
@@ -903,7 +903,7 @@ fn test_composite_index() {
 //     let filter = Some(Expression::Binary {
 //         left: Box::new(Expression::Variable("name".to_string())),
 //         op: BinaryOperator::Equal,
-//         right: Box::new(Expression::Literal(Value::String("Alice".to_string()))),
+//         right: Box::new(Expression::Literal(Value::string("Alice"))),
 //     });
 //
 //     let available_indexes = vec![name_index.clone(), age_index.clone()];
@@ -973,7 +973,7 @@ fn test_index_range_query_with_boundaries() {
     // Test >= (with boundaries): age >= 25, should return 25, 30, 35, 40
     let _limit = IndexLimit {
         column: "age".to_string(),
-        begin_value: Some(graphdb::core::Value::String("25".to_string())),
+        begin_value: Some(graphdb::core::Value::string("25")),
         end_value: None,
         include_begin: true,
         include_end: false,
@@ -1016,7 +1016,7 @@ fn test_scan_type_unique() {
         schema_name: "Person".to_string(),
         fields: vec![IndexField::new(
             "name".to_string(),
-            Value::String("".to_string()),
+            Value::string(""),
             false,
         )],
         properties: vec!["name".to_string()],
@@ -1029,9 +1029,9 @@ fn test_scan_type_unique() {
 
     // insert data
     let vertices = vec![
-        (VertexId::from_int64(1), Value::String("Alice".to_string())),
-        (VertexId::from_int64(2), Value::String("Bob".to_string())),
-        (VertexId::from_int64(3), Value::String("Alice".to_string())), // Repeated Alice
+        (VertexId::from_int64(1), Value::string("Alice")),
+        (VertexId::from_int64(2), Value::string("Bob")),
+        (VertexId::from_int64(3), Value::string("Alice")), // Repeated Alice
     ];
 
     for (vid, name) in &vertices {
@@ -1046,7 +1046,7 @@ fn test_scan_type_unique() {
     let retrieved = get_storage(&storage).lookup_index(
         "test_space",
         "person_name_idx",
-        &Value::String("Alice".to_string()),
+        &Value::string("Alice"),
     );
     let vertex_ids = retrieved.expect("索引查询应该成功");
     assert_count(&vertex_ids, 2, "匹配的 Alice");
@@ -1122,7 +1122,7 @@ fn test_scan_type_full() {
         schema_name: "Person".to_string(),
         fields: vec![IndexField::new(
             "name".to_string(),
-            Value::String("".to_string()),
+            Value::string(""),
             false,
         )],
         properties: vec!["name".to_string()],
@@ -1136,7 +1136,7 @@ fn test_scan_type_full() {
     // Insert multiple pieces of data
     for i in 1..=5 {
         let mut props = std::collections::HashMap::new();
-        props.insert("name".to_string(), Value::String(format!("Person{}", i)));
+        props.insert("name".to_string(), Value::string(format!("Person{}", i)));
         let tag = graphdb::core::vertex_edge_path::Tag::new("Person".to_string(), props);
         let vertex = Vertex::new(VertexId::from_int64(i as i64), vec![tag]);
         assert_ok(get_storage(&storage).insert_vertex("test_space", vertex));

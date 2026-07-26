@@ -35,7 +35,7 @@ fn split_uses_persisted_manifest_and_survives_restart() {
             .split_native_index_at_value(
                 "test_space",
                 "person_name_idx",
-                &Value::String("M".to_string()),
+                &Value::string("M"),
             )
             .expect("index split should succeed");
         storage.flush().expect("split state should be durable");
@@ -45,7 +45,7 @@ fn split_uses_persisted_manifest_and_survives_restart() {
                 .lookup_index(
                     "test_space",
                     "person_name_idx",
-                    &Value::String(name.to_string()),
+                    &Value::string(name),
                 )
                 .expect("lookup should succeed");
             assert_eq!(rows.len(), 1, "lookup should find {name}");
@@ -65,7 +65,7 @@ fn split_uses_persisted_manifest_and_survives_restart() {
             .lookup_index(
                 "test_space",
                 "person_name_idx",
-                &Value::String(name.to_string()),
+                &Value::string(name),
             )
             .expect("lookup after restart should succeed");
         assert_eq!(rows.len(), 1, "restarted lookup should find {name}");
@@ -106,7 +106,7 @@ fn split_and_concurrent_write_preserve_index_entries() {
         .split_native_index_at_value(
             "test_space",
             "person_name_idx",
-            &Value::String("Person050".to_string()),
+            &Value::string("Person050"),
         )
         .expect("concurrent split should succeed");
     writer.join().expect("writer should finish");
@@ -115,7 +115,7 @@ fn split_and_concurrent_write_preserve_index_entries() {
         .lookup_index(
             "test_space",
             "person_name_idx",
-            &Value::String("Concurrent".to_string()),
+            &Value::string("Concurrent"),
         )
         .expect("concurrent lookup should succeed");
     assert_eq!(rows.len(), 1);
@@ -146,7 +146,7 @@ fn split_startup_reconciles_publishing_state() {
             .split_native_index_at_value(
                 "test_space",
                 "person_name_idx",
-                &Value::String("M".to_string()),
+                &Value::string("M"),
             )
             .expect("index split should succeed");
         storage.flush().expect("split state should be durable");
@@ -183,7 +183,7 @@ fn split_startup_reconciles_publishing_state() {
             .lookup_index(
                 "test_space",
                 "person_name_idx",
-                &Value::String(name.to_string()),
+                &Value::string(name),
             )
             .expect("lookup after split recovery should succeed");
         assert_eq!(rows.len(), 1, "lookup should find {name}");

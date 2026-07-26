@@ -221,7 +221,7 @@ fn execute_json_build_object(args: &[Value]) -> Result<Value, ExpressionError> {
     let mut map = Map::new();
     for chunk in args.chunks(2) {
         let key = match &chunk[0] {
-            Value::String(s) => s.clone(),
+            Value::String(s) => s.to_string(),
             Value::Null(_) => continue,
             _ => {
                 return Err(ExpressionError::type_error(
@@ -233,7 +233,7 @@ fn execute_json_build_object(args: &[Value]) -> Result<Value, ExpressionError> {
         map.insert(key, value);
     }
 
-    Ok(Value::String(
+    Ok(Value::string(
         serde_json::to_string(&JsonValue::Object(map))
             .map_err(|e| ExpressionError::type_error(format!("JSON serialization error: {}", e)))?,
     ))
@@ -241,7 +241,7 @@ fn execute_json_build_object(args: &[Value]) -> Result<Value, ExpressionError> {
 
 fn execute_json_build_array(args: &[Value]) -> Result<Value, ExpressionError> {
     let arr: Vec<JsonValue> = args.iter().map(value_to_json_value).collect();
-    Ok(Value::String(
+    Ok(Value::string(
         serde_json::to_string(&JsonValue::Array(arr))
             .map_err(|e| ExpressionError::type_error(format!("JSON serialization error: {}", e)))?,
     ))
@@ -257,7 +257,7 @@ fn execute_json_object_keys(args: &[Value]) -> Result<Value, ExpressionError> {
 
     match &json_value {
         JsonValue::Object(map) => {
-            let keys: Vec<Value> = map.keys().map(|k| Value::String(k.clone())).collect();
+            let keys: Vec<Value> = map.keys().map(|k| Value::string(k.clone())).collect();
             Ok(Value::list(List { values: keys }))
         }
         _ => Err(ExpressionError::type_error(
@@ -279,7 +279,7 @@ fn value_to_json_value(value: &Value) -> JsonValue {
         Value::Double(f) => JsonValue::Number(
             serde_json::Number::from_f64(*f).unwrap_or(serde_json::Number::from(0)),
         ),
-        Value::String(s) => JsonValue::String(s.clone()),
+        Value::String(s) => JsonValue::String(s.to_string()),
         Value::List(list) => {
             JsonValue::Array(list.values.iter().map(value_to_json_value).collect())
         }
@@ -351,7 +351,7 @@ fn json_to_value(json: &JsonValue) -> Value {
                 Value::Null(NullType::Null)
             }
         }
-        JsonValue::String(s) => Value::String(s.clone()),
+        JsonValue::String(s) => Value::string(s.clone()),
         JsonValue::Array(arr) => {
             let values: Vec<Value> = arr.iter().map(json_to_value).collect();
             Value::list(List { values })
@@ -454,7 +454,7 @@ fn execute_json_each(args: &[Value]) -> Result<Value, ExpressionError> {
                 .into_iter()
                 .map(|(k, v)| {
                     Value::list(List {
-                        values: vec![Value::String(k), json_to_value(&v)],
+                        values: vec![Value::string(k), json_to_value(&v)],
                     })
                 })
                 .collect();
@@ -492,7 +492,7 @@ fn execute_json_typeof(args: &[Value]) -> Result<Value, ExpressionError> {
         JsonValue::Array(_) => "array",
         JsonValue::Object(_) => "object",
     };
-    Ok(Value::String(type_str.to_string()))
+    Ok(Value::string(type_str.to_string()))
 }
 
 fn execute_json_strip_nulls(args: &[Value]) -> Result<Value, ExpressionError> {
@@ -503,7 +503,7 @@ fn execute_json_strip_nulls(args: &[Value]) -> Result<Value, ExpressionError> {
     let stripped = strip_nulls_from_json(json_value);
     let output = serde_json::to_string(&stripped)
         .map_err(|e| ExpressionError::type_error(format!("JSON serialization error: {}", e)))?;
-    Ok(Value::String(output))
+    Ok(Value::string(output))
 }
 
 fn strip_nulls_from_json(value: JsonValue) -> JsonValue {
@@ -565,19 +565,19 @@ fn execute_typeof(args: &[Value]) -> Result<Value, ExpressionError> {
         Value::Geography(_) => "geography",
         _ => "unknown",
     };
-    Ok(Value::String(type_name.to_string()))
+    Ok(Value::string(type_name.to_string()))
 }
 
 fn execute_version(_args: &[Value]) -> Result<Value, ExpressionError> {
-    Ok(Value::String("GraphDB 0.1.0".to_string()))
+    Ok(Value::string("GraphDB 0.1.0".to_string()))
 }
 
 fn execute_current_user(_args: &[Value]) -> Result<Value, ExpressionError> {
-    Ok(Value::String("root".to_string()))
+    Ok(Value::string("root".to_string()))
 }
 
 fn execute_current_database(_args: &[Value]) -> Result<Value, ExpressionError> {
-    Ok(Value::String("default".to_string()))
+    Ok(Value::string("default".to_string()))
 }
 
 fn extract_numeric_pairs(args: &[Value]) -> Result<(Vec<f64>, Vec<f64>), ExpressionError> {
@@ -706,7 +706,7 @@ mod tests {
     fn test_hash() {
         let func = UtilityFunction::Hash;
         let result = func
-            .execute(&[Value::String("test".to_string())])
+            .execute(&[Value::string("test".to_string())])
             .expect("Execution should succeed");
         assert!(matches!(result, Value::BigInt(_)));
     }
@@ -731,25 +731,25 @@ mod tests {
     fn test_typeof() {
         assert_eq!(
             UtilityFunction::TypeOf.execute(&[Value::Int(1)]).unwrap(),
-            Value::String("int".to_string())
+            Value::string("int".to_string())
         );
         assert_eq!(
             UtilityFunction::TypeOf
-                .execute(&[Value::String("hello".to_string())])
+                .execute(&[Value::string("hello".to_string())])
                 .unwrap(),
-            Value::String("string".to_string())
+            Value::string("string".to_string())
         );
         assert_eq!(
             UtilityFunction::TypeOf
                 .execute(&[Value::Bool(true)])
                 .unwrap(),
-            Value::String("bool".to_string())
+            Value::string("bool".to_string())
         );
         assert_eq!(
             UtilityFunction::TypeOf
                 .execute(&[Value::Null(NullType::Null)])
                 .unwrap(),
-            Value::String("null".to_string())
+            Value::string("null".to_string())
         );
     }
 

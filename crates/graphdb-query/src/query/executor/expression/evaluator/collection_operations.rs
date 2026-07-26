@@ -21,7 +21,7 @@ fn json_to_value_inline(json: &JsonValue) -> Value {
                 Value::Null(crate::core::value::NullType::Null)
             }
         }
-        JsonValue::String(s) => Value::String(s.clone()),
+        JsonValue::String(s) => Value::string(s.clone()),
         JsonValue::Array(arr) => {
             let values: Vec<Value> = arr.iter().map(json_to_value_inline).collect();
             Value::list(List::from(values))
@@ -40,7 +40,7 @@ fn json_to_value_inline(json: &JsonValue) -> Value {
 fn json_subscript_access(json: &JsonValue, index: &Value) -> Result<Value, ExpressionError> {
     match (json, index) {
         (JsonValue::Object(map), Value::String(key)) => map
-            .get(key)
+            .get(key.as_str())
             .map(json_to_value_inline)
             .ok_or_else(|| ExpressionError::runtime_error(format!("JSON key not found: {}", key))),
         (JsonValue::Array(arr), Value::Int(i)) => {
@@ -142,7 +142,7 @@ impl CollectionOperationEvaluator {
                     let adjusted_index = if i < 0 { chars.len() as i64 + i } else { i };
 
                     if adjusted_index >= 0 && (adjusted_index as usize) < chars.len() {
-                        Ok(Value::String(chars[adjusted_index as usize].to_string()))
+                        Ok(Value::string(chars[adjusted_index as usize].to_string()))
                     } else {
                         Err(ExpressionError::index_out_of_bounds(
                             adjusted_index as isize,
@@ -157,7 +157,7 @@ impl CollectionOperationEvaluator {
             }
             Value::Map(map) => {
                 if let Value::String(key) = index {
-                    map.get(key).cloned().ok_or_else(|| {
+                    map.get(key.as_str()).cloned().ok_or_else(|| {
                         ExpressionError::runtime_error(format!(
                             "Mapping key does not exist: {}",
                             key
@@ -265,7 +265,7 @@ impl CollectionOperationEvaluator {
 
                 if start_idx <= end_idx && end_idx <= chars.len() {
                     let result: String = chars[start_idx..end_idx].iter().collect();
-                    Ok(Value::String(result))
+                    Ok(Value::string(result))
                 } else {
                     Err(ExpressionError::index_out_of_bounds(
                         start_idx as isize,

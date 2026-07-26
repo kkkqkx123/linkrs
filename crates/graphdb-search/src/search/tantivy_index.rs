@@ -215,7 +215,7 @@ impl TantivySearchEngine {
                 .map(|text| vec![snippet_generator.snippet(text).to_html()]);
 
             results.push(SearchResult {
-                doc_id: Value::String(doc_id),
+                doc_id: Value::string(doc_id),
                 score,
                 highlights,
                 matched_fields: vec![],

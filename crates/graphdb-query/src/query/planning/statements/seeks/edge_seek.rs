@@ -119,7 +119,7 @@ impl SeekStrategy for EdgeSeek {
 
                 for edge in edges {
                     let edge_id = format!("{}->{}@{}", edge.src, edge.dst, edge.edge_type);
-                    edge_ids.push(Value::String(edge_id));
+                    edge_ids.push(Value::string(edge_id));
                 }
             }
         } else {
@@ -130,7 +130,7 @@ impl SeekStrategy for EdgeSeek {
             for edge in edges {
                 if self.edge_matches_pattern(&edge) {
                     let edge_id = format!("{}->{}@{}", edge.src, edge.dst, edge.edge_type);
-                    edge_ids.push(Value::String(edge_id));
+                    edge_ids.push(Value::string(edge_id));
                 }
             }
         }

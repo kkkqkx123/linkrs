@@ -113,7 +113,7 @@ pub(super) fn build_source_spec(
                         Some(
                             src_vids
                                 .split(',')
-                                .map(|s| crate::core::Value::String(s.trim().to_string()))
+                                .map(|s| crate::core::Value::string(s.trim().to_string()))
                                 .collect::<Vec<_>>(),
                         )
                     }
@@ -1230,7 +1230,7 @@ pub(super) fn build_match_fulltext_spec(
 ) -> Result<FulltextSpec, PlanBuildError> {
     Ok(FulltextSpec::MatchFulltext {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
-        match_expr: Expression::Literal(crate::core::Value::String(format!(
+        match_expr: Expression::Literal(crate::core::Value::string(format!(
             "{}:{}",
             node.fulltext_condition.field, node.fulltext_condition.query
         ))),
@@ -1276,7 +1276,7 @@ pub(super) fn build_vector_lookup_spec(
     Ok(VectorSpec::VectorLookup {
         space_name: exec_ctx.space_name.clone().unwrap_or_default(),
         index_name: node.index_name.clone(),
-        lookup_key: Expression::Literal(crate::core::Value::String(node.query.query_data.clone())),
+        lookup_key: Expression::Literal(crate::core::Value::string(node.query.query_data.clone())),
     })
 }
 

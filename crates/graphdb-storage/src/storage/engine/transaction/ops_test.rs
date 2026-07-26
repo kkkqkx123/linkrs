@@ -59,7 +59,7 @@ mod tests {
 
         let vid = VertexId::from_int64(100);
         let properties = vec![
-            ("name".to_string(), Value::String("Alice".to_string())),
+            ("name".to_string(), Value::string("Alice")),
             ("age".to_string(), Value::BigInt(30)),
         ];
 
@@ -81,7 +81,7 @@ mod tests {
         // Use a string ID that is NOT 8 bytes (avoids as_int64() collision)
         let vid = VertexId::from_string("user-alice");
         let properties = vec![
-            ("name".to_string(), Value::String("Alice".to_string())),
+            ("name".to_string(), Value::string("Alice")),
             ("age".to_string(), Value::BigInt(30)),
         ];
 
@@ -174,14 +174,14 @@ mod tests {
         table
             .insert_by_i64(
                 100,
-                &[("name".to_string(), Value::String("Alice".to_string()))],
+                &[("name".to_string(), Value::string("Alice"))],
                 1,
             )
             .unwrap();
         table
             .insert(
                 "user-bob-ext",
-                &[("name".to_string(), Value::String("Bob".to_string()))],
+                &[("name".to_string(), Value::string("Bob"))],
                 1,
             )
             .unwrap();
@@ -225,7 +225,7 @@ mod tests {
             &mut vertex_tables,
             0,
             vid,
-            &[("name".to_string(), Value::String("Alice".to_string()))],
+            &[("name".to_string(), Value::string("Alice"))],
             1,
         )
         .unwrap();
@@ -236,7 +236,7 @@ mod tests {
             0,
             VertexId::from_int64(1),
             "name",
-            &Value::String("AliceUpdated".to_string()),
+            &Value::string("AliceUpdated"),
             2,
         );
         assert!(result.is_ok());
@@ -248,7 +248,7 @@ mod tests {
             .iter()
             .find(|(k, _)| k == "name")
             .map(|(_, v)| v);
-        assert_eq!(name_val, Some(&Value::String("AliceUpdated".to_string())));
+        assert_eq!(name_val, Some(&Value::string("AliceUpdated")));
     }
 
     #[test]
@@ -328,7 +328,7 @@ mod tests {
             &mut vertex_tables,
             0,
             VertexId::from_int64(1),
-            &[("name".to_string(), Value::String("Alice".to_string()))],
+            &[("name".to_string(), Value::string("Alice"))],
             1,
         )
         .unwrap();

@@ -100,16 +100,16 @@ pub(super) fn execute_space_manage(
                     Ok(Some(super::make_single_row(
                         schema,
                         vec![
-                            Value::String(info.space_name),
+                            Value::string(info.space_name),
                             Value::BigInt(info.space_id as i64),
-                            Value::String(format!("{:?}", info.vid_type)),
+                            Value::string(format!("{:?}", info.vid_type)),
                             Value::Int(info.partition_num),
                             Value::Int(info.replica_factor),
                             info.comment
                                 .clone()
-                                .map(Value::String)
+                                .map(Value::string)
                                 .unwrap_or(Value::Null(NullType::Null)),
-                            Value::String(format!("{:?}", info.status)),
+                            Value::string(format!("{:?}", info.status)),
                         ],
                     )))
                 }
@@ -145,9 +145,9 @@ pub(super) fn execute_space_manage(
                     Ok(Some(super::make_single_row(
                         schema,
                         vec![
-                            Value::String(info.space_name),
+                            Value::string(info.space_name),
                             Value::BigInt(info.space_id as i64),
-                            Value::String(format!("{:?}", info.vid_type)),
+                            Value::string(format!("{:?}", info.vid_type)),
                         ],
                     )))
                 }
@@ -185,9 +185,9 @@ pub(super) fn execute_space_manage(
                 .into_iter()
                 .map(|info| {
                     vec![
-                        Value::String(info.space_name),
+                        Value::string(info.space_name),
                         Value::BigInt(info.space_id as i64),
-                        Value::String(format!("{:?}", info.vid_type)),
+                        Value::string(format!("{:?}", info.vid_type)),
                         Value::Int(info.partition_num),
                         Value::Int(info.replica_factor),
                     ]
@@ -274,12 +274,12 @@ pub(super) fn execute_tag_manage(
                     Ok(Some(super::make_single_row(
                         schema,
                         vec![
-                            Value::String(tag.tag_name),
+                            Value::string(tag.tag_name),
                             Value::BigInt(tag.tag_id as i64),
-                            Value::String(props_str),
+                            Value::string(props_str),
                             tag.comment
                                 .clone()
-                                .map(Value::String)
+                                .map(Value::string)
                                 .unwrap_or(Value::Null(NullType::Null)),
                         ],
                     )))
@@ -320,9 +320,9 @@ pub(super) fn execute_tag_manage(
                         .collect::<Vec<_>>()
                         .join(", ");
                     vec![
-                        Value::String(t.tag_name),
+                        Value::string(t.tag_name),
                         Value::BigInt(t.tag_id as i64),
-                        Value::String(props_str),
+                        Value::string(props_str),
                     ]
                 })
                 .collect();
@@ -348,7 +348,7 @@ pub(super) fn execute_tag_manage(
                     let schema = super::make_single_col_schema("create_tag", "string");
                     Ok(Some(super::make_single_row(
                         schema,
-                        vec![Value::String(ddl)],
+                        vec![Value::string(ddl)],
                     )))
                 }
                 None => Ok(Some(super::make_manage_result(
@@ -445,14 +445,14 @@ pub(super) fn execute_edge_manage(
                     Ok(Some(super::make_single_row(
                         schema,
                         vec![
-                            Value::String(et.edge_type_name),
+                            Value::string(et.edge_type_name),
                             Value::BigInt(et.edge_type_id as i64),
-                            Value::String(et.src_tag_name),
-                            Value::String(et.dst_tag_name),
-                            Value::String(props_str),
+                            Value::string(et.src_tag_name),
+                            Value::string(et.dst_tag_name),
+                            Value::string(props_str),
                             et.comment
                                 .clone()
-                                .map(Value::String)
+                                .map(Value::string)
                                 .unwrap_or(Value::Null(NullType::Null)),
                         ],
                     )))
@@ -491,10 +491,10 @@ pub(super) fn execute_edge_manage(
                 .into_iter()
                 .map(|e| {
                     vec![
-                        Value::String(e.edge_type_name),
+                        Value::string(e.edge_type_name),
                         Value::BigInt(e.edge_type_id as i64),
-                        Value::String(e.src_tag_name),
-                        Value::String(e.dst_tag_name),
+                        Value::string(e.src_tag_name),
+                        Value::string(e.dst_tag_name),
                     ]
                 })
                 .collect();
@@ -637,10 +637,10 @@ pub(super) fn execute_index_manage(
                     Ok(Some(super::make_single_row(
                         schema,
                         vec![
-                            Value::String(idx.name),
-                            Value::String(format!("{:?}", idx.index_type)),
-                            Value::String(fields_str),
-                            Value::String(format!("{:?}", idx.status)),
+                            Value::string(idx.name),
+                            Value::string(format!("{:?}", idx.index_type)),
+                            Value::string(fields_str),
+                            Value::string(format!("{:?}", idx.status)),
                             Value::Bool(idx.is_unique),
                         ],
                     )))
@@ -685,10 +685,10 @@ pub(super) fn execute_index_manage(
                         .collect::<Vec<_>>()
                         .join(", ");
                     vec![
-                        Value::String(idx.name),
-                        Value::String(format!("{:?}", idx.index_type)),
-                        Value::String(fields_str),
-                        Value::String(format!("{:?}", idx.status)),
+                        Value::string(idx.name),
+                        Value::string(format!("{:?}", idx.index_type)),
+                        Value::string(fields_str),
+                        Value::string(format!("{:?}", idx.status)),
                     ]
                 })
                 .collect();
@@ -739,10 +739,10 @@ pub(super) fn execute_index_manage(
                     Ok(Some(super::make_single_row(
                         schema,
                         vec![
-                            Value::String(idx.name),
-                            Value::String(format!("{:?}", idx.index_type)),
-                            Value::String(fields_str),
-                            Value::String(format!("{:?}", idx.status)),
+                            Value::string(idx.name),
+                            Value::string(format!("{:?}", idx.index_type)),
+                            Value::string(fields_str),
+                            Value::string(format!("{:?}", idx.status)),
                             Value::Bool(idx.is_unique),
                         ],
                     )))
@@ -787,10 +787,10 @@ pub(super) fn execute_index_manage(
                         .collect::<Vec<_>>()
                         .join(", ");
                     vec![
-                        Value::String(idx.name),
-                        Value::String(format!("{:?}", idx.index_type)),
-                        Value::String(fields_str),
-                        Value::String(format!("{:?}", idx.status)),
+                        Value::string(idx.name),
+                        Value::string(format!("{:?}", idx.index_type)),
+                        Value::string(fields_str),
+                        Value::string(format!("{:?}", idx.status)),
                     ]
                 })
                 .collect();

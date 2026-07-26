@@ -503,6 +503,9 @@ impl StreamingExecutionEngine {
     /// On any failure the partially-opened executor tree is closed,
     /// profile is ended and runtime resources are released before the
     /// error is returned.
+    ///
+    /// Cancellation is checked between chunks when a runtime is attached,
+    /// allowing long-running queries to be interrupted.
     pub fn execute(&mut self) -> Result<Vec<DataChunk>, QueryError> {
         let profile_started = self.runtime.is_some();
         if profile_started {
@@ -613,6 +616,27 @@ impl StreamingExecutionEngine {
         Ok(output_chunks)
     }
 
+    /// Execute and return a streaming result handle for chunk-at-a-time consumption.
+    ///
+    /// This is the preferred path for large result sets — it avoids full
+    /// materialization and delivers chunks as they become available.
+    /// Requires a runtime to have been set (via [`set_runtime`]).
+    ///
+    /// When partition executors are registered, falls back to materializing
+    /// all chunks (the streaming path currently only supports single-root).
+    pub fn execute_streaming(mut self) -> Result<ResultStream, QueryError> {
+        if !self.partition_executors.is_empty() {
+            let chunks = self.execute_partitions()?;
+            let runtime = self
+                .runtime
+                .take()
+                .ok_or_else(|| QueryError::execution("No ExecutionRuntime attached".to_string()))?;
+            runtime.profile_start();
+            return Ok(ResultStream::from_collected(chunks, self, runtime));
+        }
+        self.into_stream()
+    }
+
     /// Convert this engine into a [`ResultStream`] for chunk-at-a-time consumption.
     ///
     /// Requires a runtime to have been set (via [`set_runtime`]).
@@ -658,7 +682,7 @@ mod tests {
             .map(|i| {
                 vec![
                     Value::BigInt(i as i64),
-                    Value::String(format!("item_{}", i)),
+                    Value::string(format!("item_{}", i)),
                 ]
             })
             .collect()
@@ -1064,7 +1088,7 @@ mod tests {
                             .map(|value| {
                                 vec![
                                     Value::BigInt(value as i64),
-                                    Value::String(format!("item_{value}")),
+                                    Value::string(format!("item_{value}")),
                                 ]
                             })
                             .collect(),
@@ -1374,24 +1398,24 @@ mod tests {
             .build_partitioned_join_executor(
                 vec![
                     partitioned_scan_executor(
-                        vec![vec![Value::BigInt(1), Value::String("left-1".to_string())]],
+                        vec![vec![Value::BigInt(1), Value::string("left-1")]],
                         0,
                         vec!["id".to_string(), "left".to_string()],
                     ),
                     partitioned_scan_executor(
-                        vec![vec![Value::BigInt(2), Value::String("left-2".to_string())]],
+                        vec![vec![Value::BigInt(2), Value::string("left-2")]],
                         1,
                         vec!["id".to_string(), "left".to_string()],
                     ),
                 ],
                 vec![
                     partitioned_scan_executor(
-                        vec![vec![Value::BigInt(2), Value::String("right-2".to_string())]],
+                        vec![vec![Value::BigInt(2), Value::string("right-2")]],
                         0,
                         vec!["id".to_string(), "right".to_string()],
                     ),
                     partitioned_scan_executor(
-                        vec![vec![Value::BigInt(1), Value::String("right-1".to_string())]],
+                        vec![vec![Value::BigInt(1), Value::string("right-1")]],
                         1,
                         vec!["id".to_string(), "right".to_string()],
                     ),
@@ -1411,15 +1435,15 @@ mod tests {
             vec![
                 vec![
                     Value::BigInt(1),
-                    Value::String("left-1".to_string()),
+                    Value::string("left-1"),
                     Value::BigInt(1),
-                    Value::String("right-1".to_string()),
+                    Value::string("right-1"),
                 ],
                 vec![
                     Value::BigInt(2),
-                    Value::String("left-2".to_string()),
+                    Value::string("left-2"),
                     Value::BigInt(2),
-                    Value::String("right-2".to_string()),
+                    Value::string("right-2"),
                 ],
             ]
         );

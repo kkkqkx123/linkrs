@@ -188,7 +188,7 @@ fn test_property_table_update_single_property() {
     let offset = table
         .insert(
             &[
-                ("name".to_string(), Value::String("Alice".to_string())),
+                ("name".to_string(), Value::string("Alice")),
                 ("age".to_string(), Value::Int(30)),
             ],
             100,
@@ -213,7 +213,7 @@ fn test_property_table_update_single_property() {
             .iter()
             .find(|(n, _)| n == "name")
             .and_then(|(_, v)| v.clone()),
-        Some(Value::String("Alice".to_string()))
+        Some(Value::string("Alice"))
     );
 }
 
@@ -230,7 +230,7 @@ fn test_property_table_overflow_boundary_values() {
     for size in &sizes {
         let value = format!("x-{}", "a".repeat(*size));
         let offset = table
-            .insert(&[("data".to_string(), Value::String(value.clone()))], 100)
+            .insert(&[("data".to_string(), Value::string(value.clone()))], 100)
             .unwrap_or_else(|_| panic!("insert at size {} should succeed", size));
         offsets.push((offset, value));
     }
@@ -243,7 +243,7 @@ fn test_property_table_overflow_boundary_values() {
                 .iter()
                 .find(|(n, _)| n == "data")
                 .and_then(|(_, v)| v.clone()),
-            Some(Value::String(expected_value))
+            Some(Value::string(expected_value))
         );
     }
 }
@@ -256,7 +256,7 @@ fn test_property_table_update_to_null() {
 
     let offset = table
         .insert(
-            &[("optional".to_string(), Value::String("value".to_string()))],
+            &[("optional".to_string(), Value::string("value"))],
             100,
         )
         .unwrap();

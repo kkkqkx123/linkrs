@@ -121,7 +121,7 @@ mod tests {
                     VertexId::from_int64(1),
                     vec![Tag::new(
                         "Person".to_string(),
-                        [("name".to_string(), Value::String("Alice".to_string()))]
+                        [("name".to_string(), Value::string("Alice"))]
                             .into_iter()
                             .collect(),
                     )],
@@ -220,7 +220,7 @@ mod tests {
                     vec![Tag::new(
                         "Person".to_string(),
                         [
-                            ("name".to_string(), Value::String("Alice".to_string())),
+                            ("name".to_string(), Value::string("Alice")),
                             ("age".to_string(), Value::BigInt(30)),
                         ]
                         .into_iter()
@@ -345,7 +345,7 @@ mod tests {
                     VertexId::from_int64(1),
                     vec![Tag::new(
                         "Person".to_string(),
-                        vec![("name".to_string(), Value::String("Alice".to_string()))]
+                        vec![("name".to_string(), Value::string("Alice"))]
                             .into_iter()
                             .collect(),
                     )],
@@ -359,7 +359,7 @@ mod tests {
                     VertexId::from_int64(1),
                     vec![Tag::new(
                         "Person".to_string(),
-                        vec![("name".to_string(), Value::String("Bob".to_string()))]
+                        vec![("name".to_string(), Value::string("Bob"))]
                             .into_iter()
                             .collect(),
                     )],
@@ -373,7 +373,7 @@ mod tests {
                     VertexId::from_int64(2),
                     vec![Tag::new(
                         "Person".to_string(),
-                        vec![("name".to_string(), Value::String("Carol".to_string()))]
+                        vec![("name".to_string(), Value::string("Carol"))]
                             .into_iter()
                             .collect(),
                     )],
@@ -387,7 +387,7 @@ mod tests {
                     VertexId::from_int64(2),
                     vec![Tag::new(
                         "Person".to_string(),
-                        vec![("name".to_string(), Value::String("Dave".to_string()))]
+                        vec![("name".to_string(), Value::string("Dave"))]
                             .into_iter()
                             .collect(),
                     )],
@@ -430,11 +430,11 @@ mod tests {
             .unwrap();
         assert_eq!(
             alpha_vertex.properties.get("name"),
-            Some(&Value::String("Alice".to_string()))
+            Some(&Value::string("Alice"))
         );
         assert_eq!(
             beta_vertex.properties.get("name"),
-            Some(&Value::String("Bob".to_string()))
+            Some(&Value::string("Bob"))
         );
 
         assert_eq!(
@@ -712,7 +712,7 @@ mod tests {
             schema_name: "Person".to_string(),
             fields: vec![IndexField::new(
                 "name".to_string(),
-                Value::String(String::new()),
+                Value::string(""),
                 false,
             )],
             properties: vec![],
@@ -745,7 +745,7 @@ mod tests {
             vec![crate::core::vertex_edge_path::Tag::new(
                 "Person".to_string(),
                 vec![
-                    ("name".to_string(), Value::String("Alice".to_string())),
+                    ("name".to_string(), Value::string("Alice")),
                     ("age".to_string(), Value::BigInt(30)),
                 ]
                 .into_iter()
@@ -762,7 +762,7 @@ mod tests {
         let v = retrieved.unwrap();
         assert_eq!(
             v.properties.get("name"),
-            Some(&Value::String("Alice".to_string()))
+            Some(&Value::string("Alice"))
         );
     }
 
@@ -779,7 +779,7 @@ mod tests {
             schema_name: "Person".to_string(),
             fields: vec![IndexField::new(
                 "name".to_string(),
-                Value::String(String::new()),
+                Value::string(""),
                 false,
             )],
             properties: vec![],
@@ -794,7 +794,7 @@ mod tests {
             vec![crate::core::vertex_edge_path::Tag::new(
                 "Person".to_string(),
                 vec![
-                    ("name".to_string(), Value::String("Alice".to_string())),
+                    ("name".to_string(), Value::string("Alice")),
                     ("age".to_string(), Value::BigInt(30)),
                 ]
                 .into_iter()
@@ -807,7 +807,7 @@ mod tests {
             .lookup_index(
                 "test_space",
                 "person_name_idx",
-                &Value::String("Alice".to_string()),
+                &Value::string("Alice"),
             )
             .unwrap();
         assert_eq!(before_update, vec![Value::from(VertexId::from_int64(101))]);
@@ -819,7 +819,7 @@ mod tests {
                 vec![
                     (
                         "name".to_string(),
-                        Value::String("AliceUpdated".to_string()),
+                        Value::string("AliceUpdated"),
                     ),
                     ("age".to_string(), Value::BigInt(31)),
                 ]
@@ -835,7 +835,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             v.properties.get("name"),
-            Some(&Value::String("AliceUpdated".to_string()))
+            Some(&Value::string("AliceUpdated"))
         );
         assert_eq!(v.properties.get("age"), Some(&Value::BigInt(31)));
 
@@ -843,7 +843,7 @@ mod tests {
             .lookup_index(
                 "test_space",
                 "person_name_idx",
-                &Value::String("Alice".to_string()),
+                &Value::string("Alice"),
             )
             .unwrap();
         assert!(old_lookup.is_empty());
@@ -852,7 +852,7 @@ mod tests {
             .lookup_index(
                 "test_space",
                 "person_name_idx",
-                &Value::String("AliceUpdated".to_string()),
+                &Value::string("AliceUpdated"),
             )
             .unwrap();
         assert_eq!(new_lookup, vec![Value::from(VertexId::from_int64(101))]);
@@ -868,7 +868,7 @@ mod tests {
             VertexId::from_int64(101),
             vec![crate::core::vertex_edge_path::Tag::new(
                 "Person".to_string(),
-                vec![("name".to_string(), Value::String("Alice".to_string()))]
+                vec![("name".to_string(), Value::string("Alice"))]
                     .into_iter()
                     .collect(),
             )],
@@ -896,7 +896,7 @@ mod tests {
                 vec![crate::core::vertex_edge_path::Tag::new(
                     "Person".to_string(),
                     vec![
-                        ("name".to_string(), Value::String(format!("Person{}", i))),
+                        ("name".to_string(), Value::string(format!("Person{}", i))),
                         ("age".to_string(), Value::BigInt(20 + i)),
                     ]
                     .into_iter()
@@ -926,7 +926,7 @@ mod tests {
             vec![crate::core::vertex_edge_path::Tag::new(
                 "Person".to_string(),
                 vec![
-                    ("name".to_string(), Value::String("Alice".to_string())),
+                    ("name".to_string(), Value::string("Alice")),
                     ("age".to_string(), Value::BigInt(30)),
                 ]
                 .into_iter()
@@ -940,7 +940,7 @@ mod tests {
                 "test_space",
                 "Person",
                 "name",
-                &Value::String("Alice".to_string()),
+                &Value::string("Alice"),
             )
             .unwrap();
         assert_eq!(results.len(), 1);
@@ -958,7 +958,7 @@ mod tests {
                     VertexId::from_int64(i),
                     vec![crate::core::vertex_edge_path::Tag::new(
                         "Person".to_string(),
-                        vec![("name".to_string(), Value::String(format!("Person{}", i)))]
+                        vec![("name".to_string(), Value::string(format!("Person{}", i)))]
                             .into_iter()
                             .collect(),
                     )],
@@ -983,7 +983,7 @@ mod tests {
                 VertexId::from_int64(1),
                 vec![crate::core::vertex_edge_path::Tag::new(
                     "Person".to_string(),
-                    vec![("name".to_string(), Value::String("Alice".to_string()))]
+                    vec![("name".to_string(), Value::string("Alice"))]
                         .into_iter()
                         .collect(),
                 )],
@@ -992,7 +992,7 @@ mod tests {
                 VertexId::from_int64(1),
                 vec![crate::core::vertex_edge_path::Tag::new(
                     "Person".to_string(),
-                    vec![("name".to_string(), Value::String("Duplicate".to_string()))]
+                    vec![("name".to_string(), Value::string("Duplicate"))]
                         .into_iter()
                         .collect(),
                 )],
@@ -1015,7 +1015,7 @@ mod tests {
             VertexId::from_int64(id),
             vec![crate::core::vertex_edge_path::Tag::new(
                 "Person".to_string(),
-                vec![("name".to_string(), Value::String(name.to_string()))]
+                vec![("name".to_string(), Value::string(name))]
                     .into_iter()
                     .collect(),
             )],
@@ -1337,7 +1337,7 @@ mod tests {
             VertexId::from_string("a"),
             vec![Tag::new(
                 "Node".to_string(),
-                vec![("name".to_string(), Value::String("A".to_string()))]
+                vec![("name".to_string(), Value::string("A"))]
                     .into_iter()
                     .collect(),
             )],
@@ -1346,7 +1346,7 @@ mod tests {
             VertexId::from_string("b"),
             vec![Tag::new(
                 "Node".to_string(),
-                vec![("name".to_string(), Value::String("B".to_string()))]
+                vec![("name".to_string(), Value::string("B"))]
                     .into_iter()
                     .collect(),
             )],
@@ -1355,7 +1355,7 @@ mod tests {
             VertexId::from_string("c"),
             vec![Tag::new(
                 "Node".to_string(),
-                vec![("name".to_string(), Value::String("C".to_string()))]
+                vec![("name".to_string(), Value::string("C"))]
                     .into_iter()
                     .collect(),
             )],
@@ -1405,7 +1405,7 @@ mod tests {
             VertexId::from_string("a"),
             vec![Tag::new(
                 "Node".to_string(),
-                vec![("name".to_string(), Value::String("A".to_string()))]
+                vec![("name".to_string(), Value::string("A"))]
                     .into_iter()
                     .collect(),
             )],
@@ -1414,7 +1414,7 @@ mod tests {
             VertexId::from_string("b"),
             vec![Tag::new(
                 "Node".to_string(),
-                vec![("name".to_string(), Value::String("B".to_string()))]
+                vec![("name".to_string(), Value::string("B"))]
                     .into_iter()
                     .collect(),
             )],
@@ -1448,7 +1448,7 @@ mod tests {
             VertexId::from_string("x"),
             vec![Tag::new(
                 "Node".to_string(),
-                vec![("name".to_string(), Value::String("X".to_string()))]
+                vec![("name".to_string(), Value::string("X"))]
                     .into_iter()
                     .collect(),
             )],
@@ -1457,7 +1457,7 @@ mod tests {
             VertexId::from_string("y"),
             vec![Tag::new(
                 "Node".to_string(),
-                vec![("name".to_string(), Value::String("Y".to_string()))]
+                vec![("name".to_string(), Value::string("Y"))]
                     .into_iter()
                     .collect(),
             )],
@@ -1491,7 +1491,7 @@ mod tests {
             VertexId::from_int64(1),
             vec![Tag::new(
                 "Person".to_string(),
-                vec![("name".to_string(), Value::String("Alice".to_string()))]
+                vec![("name".to_string(), Value::string("Alice"))]
                     .into_iter()
                     .collect(),
             )],
@@ -1519,7 +1519,7 @@ mod tests {
 
         // Create vertex with boundary values
         let mut props = std::collections::HashMap::new();
-        props.insert("name".to_string(), Value::String("".to_string())); // Empty string
+        props.insert("name".to_string(), Value::string("")); // Empty string
         props.insert("age".to_string(), Value::BigInt(i64::MAX)); // Max int
 
         let vertex = Vertex {
@@ -1538,7 +1538,7 @@ mod tests {
 
         assert_eq!(
             retrieved.properties.get("name"),
-            Some(&Value::String("".to_string()))
+            Some(&Value::string(""))
         );
         assert_eq!(
             retrieved.properties.get("age"),
@@ -1628,12 +1628,12 @@ mod tests {
             id: 0,
             tags: vec![Tag::new(
                 "Person".to_string(),
-                [("name".to_string(), Value::String("Alice".to_string()))]
+                [("name".to_string(), Value::string("Alice"))]
                     .iter()
                     .cloned()
                     .collect(),
             )],
-            properties: [("name".to_string(), Value::String("Alice".to_string()))]
+            properties: [("name".to_string(), Value::string("Alice"))]
                 .iter()
                 .cloned()
                 .collect(),
@@ -1644,12 +1644,12 @@ mod tests {
             id: 0,
             tags: vec![Tag::new(
                 "Person".to_string(),
-                [("name".to_string(), Value::String("Bob".to_string()))]
+                [("name".to_string(), Value::string("Bob"))]
                     .iter()
                     .cloned()
                     .collect(),
             )],
-            properties: [("name".to_string(), Value::String("Bob".to_string()))]
+            properties: [("name".to_string(), Value::string("Bob"))]
                 .iter()
                 .cloned()
                 .collect(),
@@ -1695,12 +1695,12 @@ mod tests {
             id: 0,
             tags: vec![Tag::new(
                 "Person".to_string(),
-                [("name".to_string(), Value::String("Alice".to_string()))]
+                [("name".to_string(), Value::string("Alice"))]
                     .iter()
                     .cloned()
                     .collect(),
             )],
-            properties: [("name".to_string(), Value::String("Alice".to_string()))]
+            properties: [("name".to_string(), Value::string("Alice"))]
                 .iter()
                 .cloned()
                 .collect(),

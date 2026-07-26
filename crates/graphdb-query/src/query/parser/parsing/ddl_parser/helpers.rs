@@ -64,7 +64,7 @@ impl DdlParser {
         match token_kind {
             TokenKind::StringLiteral(s) => {
                 ctx.next_token();
-                Ok(Value::String(s))
+                Ok(Value::string(s))
             }
             TokenKind::IntegerLiteral(n) => {
                 ctx.next_token();

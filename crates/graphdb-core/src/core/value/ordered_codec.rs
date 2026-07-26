@@ -25,6 +25,7 @@ use crate::core::value::date_time::{DateTimeValue, DateValue, TimeValue};
 use crate::core::value::UuidValue;
 use crate::core::wal::EntityRef;
 use crate::core::{NullType, StorageError, Value};
+use compact_str::CompactString;
 
 /// Current wire format version.
 pub const ORDERED_CODEC_VERSION: u8 = 0x02;
@@ -173,7 +174,7 @@ impl OrderedCodec {
                     let s = String::from_utf8(data).map_err(|e| {
                         StorageError::deserialize_error(format!("invalid UTF-8: {}", e))
                     })?;
-                    Ok((Value::String(s), end))
+                    Ok((Value::String(CompactString::from(s)), end))
                 } else if tag == TAG_BLOB {
                     Ok((Value::Blob(data), end))
                 } else {
@@ -285,7 +286,7 @@ impl OrderedCodec {
             TAG_EDGE_REF => {
                 let (_entity, consumed) = self.decode_entity_bytes(bytes)?;
                 // Edge refs are rare as index key values; encode as debug string
-                Ok((Value::String("(edge)".to_string()), consumed))
+                Ok((Value::String(CompactString::new("(edge)")), consumed))
             }
             _ => Err(StorageError::deserialize_error(format!(
                 "unknown type tag 0x{:02x}",
@@ -1056,9 +1057,9 @@ mod tests {
     #[test]
     fn test_string_roundtrip() {
         let cases = [
-            Value::String("".to_string()),
-            Value::String("hello".to_string()),
-            Value::String("世界".to_string()),
+            Value::string(""),
+            Value::string("hello"),
+            Value::string("世界"),
             Value::FixedString {
                 len: 5,
                 data: "fixed".to_string(),
@@ -1073,8 +1074,8 @@ mod tests {
 
     #[test]
     fn test_string_order_aa_less_than_b() {
-        let aa = codec().encode(&Value::String("aa".to_string())).unwrap();
-        let b = codec().encode(&Value::String("b".to_string())).unwrap();
+        let aa = codec().encode(&Value::string("aa")).unwrap();
+        let b = codec().encode(&Value::string("b")).unwrap();
         assert!(
             aa < b,
             "encoded('aa') < encoded('b') must hold for semantic ordering"
@@ -1083,8 +1084,8 @@ mod tests {
 
     #[test]
     fn test_string_order() {
-        let a = codec().encode(&Value::String("a".to_string())).unwrap();
-        let b = codec().encode(&Value::String("b".to_string())).unwrap();
+        let a = codec().encode(&Value::string("a")).unwrap();
+        let b = codec().encode(&Value::string("b")).unwrap();
         assert!(a < b);
     }
 
@@ -1110,14 +1111,14 @@ mod tests {
 
     #[test]
     fn test_string_roundtrips_zero_byte() {
-        let v = Value::String("a\x00b".to_string());
+        let v = Value::string("a\x00b");
         assert_eq!(codec().decode(&codec().encode(&v).unwrap()).unwrap(), v);
     }
 
     #[test]
     fn test_prefix_bounds_string() {
         let (lower, upper) = codec()
-            .prefix_bounds(&Value::String("a".to_string()))
+            .prefix_bounds(&Value::string("a"))
             .unwrap();
         // lower = [TAG_STRING, 0x61, 0x00]
         assert_eq!(lower[0], TAG_STRING);
@@ -1130,28 +1131,28 @@ mod tests {
         // Verify all "a*" strings fall within bounds
         for suffix in &["", "a", "aa", "az"] {
             let s_val = format!("a{}", suffix);
-            let enc = codec().encode(&Value::String(s_val.clone())).unwrap();
-            assert!(enc.as_slice() >= lower.as_slice(), "{:?} >= lower", s_val);
-            assert!(enc.as_slice() < upper.as_slice(), "{:?} < upper", s_val);
+            let enc = codec().encode(&Value::string(s_val)).unwrap();
+            assert!(enc.as_slice() >= lower.as_slice(), "{:?} >= lower", suffix);
+            assert!(enc.as_slice() < upper.as_slice(), "{:?} < upper", suffix);
         }
 
         // "b" is excluded
-        let b_enc = codec().encode(&Value::String("b".to_string())).unwrap();
+        let b_enc = codec().encode(&Value::string("b")).unwrap();
         assert!(b_enc.as_slice() >= upper.as_slice());
     }
 
     #[test]
     fn test_prefix_bounds_multi_byte() {
         let (lower, upper) = codec()
-            .prefix_bounds(&Value::String("ab".to_string()))
+            .prefix_bounds(&Value::string("ab"))
             .unwrap();
         assert_eq!(&lower[1..lower.len() - 2], b"ab");
         assert_eq!(upper, vec![TAG_STRING, 0x61, 0x63]);
 
-        let aba = codec().encode(&Value::String("aba".to_string())).unwrap();
+        let aba = codec().encode(&Value::string("aba")).unwrap();
         assert!(aba.as_slice() < upper.as_slice());
 
-        let ac = codec().encode(&Value::String("ac".to_string())).unwrap();
+        let ac = codec().encode(&Value::string("ac")).unwrap();
         assert!(ac.as_slice() >= upper.as_slice());
     }
 
@@ -1273,7 +1274,7 @@ mod tests {
 
     #[test]
     fn test_composite_key() {
-        let v1 = Value::String("name".to_string());
+        let v1 = Value::string("name");
         let v2 = Value::Int(42);
         let vid = VertexId::from_int64(123);
         let entity = EntityRef::Vertex(vid);
@@ -1291,7 +1292,7 @@ mod tests {
 
     #[test]
     fn test_composite_order() {
-        let pre = Value::String("a".to_string());
+        let pre = Value::string("a");
         let k1 = codec()
             .encode_composite(&[&pre, &Value::Int(1)], None, false)
             .unwrap();
@@ -1302,7 +1303,7 @@ mod tests {
 
         let k3 = codec()
             .encode_composite(
-                &[&Value::String("b".to_string()), &Value::Int(0)],
+                &[&Value::string("b"), &Value::Int(0)],
                 None,
                 false,
             )
@@ -1323,7 +1324,7 @@ mod tests {
     #[test]
     fn test_vertex_id_tie_breaker() {
         let vid = VertexId::from_int64(42);
-        let v = Value::String("hello".to_string());
+        let v = Value::string("hello");
         let key = codec()
             .encode_composite(&[&v], Some(&EntityRef::Vertex(vid)), false)
             .unwrap();
@@ -1385,8 +1386,8 @@ mod tests {
     fn ordered_codec_string_and_blob_property() {
         let strings = ["", "a", "aa", "b", "世界", "z\0a"];
         for pair in strings.windows(2) {
-            let left = Value::String(pair[0].to_string());
-            let right = Value::String(pair[1].to_string());
+            let left = Value::string(pair[0]);
+            let right = Value::string(pair[1]);
             assert_eq!(
                 codec()
                     .encode(&left)
@@ -1441,7 +1442,7 @@ mod tests {
 
     #[test]
     fn ordered_codec_composite_prefix_property() {
-        let first = Value::String("user".to_string());
+        let first = Value::string("user");
         let second = Value::Int(1);
         let third = Value::Int(2);
         let first_key = codec()
@@ -1451,7 +1452,7 @@ mod tests {
             .encode_composite(&[&first, &third], None, false)
             .unwrap();
         let other_key = codec()
-            .encode_composite(&[&Value::String("user2".to_string()), &second], None, false)
+            .encode_composite(&[&Value::string("user2"), &second], None, false)
             .unwrap();
         assert!(first_key < second_key);
         assert!(second_key < other_key);
@@ -1493,7 +1494,7 @@ mod tests {
                 sec: 0,
                 microsec: 0,
             }),
-            Value::String("".to_string()),
+            Value::string(""),
             Value::FixedString {
                 len: 0,
                 data: "".to_string(),

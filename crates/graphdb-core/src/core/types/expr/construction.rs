@@ -269,8 +269,8 @@ impl Expression {
     }
 
     /// Creating a string literal
-    pub fn string(value: impl Into<String>) -> Self {
-        Expression::Literal(Value::String(value.into()))
+    pub fn string(value: impl AsRef<str>) -> Self {
+        Expression::Literal(Value::string(value))
     }
 
     /// Create an empty literal value.

@@ -1083,7 +1083,7 @@ mod tests {
             .map(|i| {
                 vec![
                     Value::BigInt(i as i64),
-                    Value::String(format!("val_{}", i)),
+                    Value::string(format!("val_{}", i)),
                     Value::Null(NullType::Null),
                     Value::Bool(i % 2 == 0),
                 ]

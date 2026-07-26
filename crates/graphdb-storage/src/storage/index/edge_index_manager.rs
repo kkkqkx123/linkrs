@@ -733,7 +733,7 @@ mod tests {
             schema_name: schema_name.to_string(),
             fields: vec![IndexField::new(
                 "weight".to_string(),
-                Value::String("".to_string()),
+                Value::string(""),
                 false,
             )],
             properties: vec![],

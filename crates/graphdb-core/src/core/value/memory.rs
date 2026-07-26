@@ -96,7 +96,7 @@ mod tests {
 
     #[test]
     fn test_string_value() {
-        let s = String::with_capacity(100);
+        let s = compact_str::CompactString::with_capacity(100);
         let v = Value::String(s);
         assert_eq!(v.estimate_memory(), std::mem::size_of::<Value>() + 100);
     }
@@ -107,7 +107,7 @@ mod tests {
         let list = vec![
             Value::Int(1),
             Value::Int(2),
-            Value::String(String::with_capacity(10)),
+            Value::String(compact_str::CompactString::with_capacity(10)),
         ];
         let v = Value::List(Box::new(List::from(list)));
         let expected = std::mem::size_of::<Value>()

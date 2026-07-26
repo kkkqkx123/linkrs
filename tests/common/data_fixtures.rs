@@ -12,7 +12,7 @@ use std::collections::HashMap;
 /// Create simple vertices (with only one label)
 pub fn create_simple_vertex(vid: i64, _tag_name: &str, name: &str, age: i64) -> Vertex {
     let mut props = HashMap::new();
-    props.insert("name".to_string(), Value::String(name.to_string()));
+    props.insert("name".to_string(), Value::string(name));
     props.insert("age".to_string(), Value::Int(age as i32));
     let tag = Tag::new("Person".to_string(), props);
     create_vertex(VertexId::from_int64(vid), vec![tag])

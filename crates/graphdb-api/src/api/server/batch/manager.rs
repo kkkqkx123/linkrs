@@ -248,7 +248,7 @@ fn value_to_vertex_id(value: &Value) -> Option<VertexId> {
     match value {
         Value::Int(i) => Some(VertexId::from_int64(*i as i64)),
         Value::BigInt(i) => Some(VertexId::from_int64(*i)),
-        Value::String(s) => Some(VertexId::from_string(s)),
+        Value::String(s) => Some(VertexId::from_string(s.as_str())),
         _ => None,
     }
 }
@@ -264,7 +264,7 @@ fn json_to_value(json: serde_json::Value) -> Option<Value> {
                 n.as_f64().map(Value::Double)
             }
         }
-        serde_json::Value::String(s) => Some(Value::String(s)),
+        serde_json::Value::String(s) => Some(Value::string(s)),
         serde_json::Value::Array(arr) => {
             let values: Vec<Value> = arr.into_iter().filter_map(json_to_value).collect();
             Some(Value::list(crate::core::value::List::from(values)))
@@ -305,7 +305,7 @@ mod tests {
         // Test string
         assert_eq!(
             json_to_value(serde_json::json!("hello")),
-            Some(Value::String("hello".to_string()))
+            Some(Value::string("hello"))
         );
     }
 }

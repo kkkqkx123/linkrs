@@ -136,8 +136,8 @@ impl TransactionCommandResult {
         self,
         output_layout: Arc<crate::query::executor::streaming::slot::SlotLayout>,
     ) -> DataChunk {
-        let message = Value::String(self.message);
-        let command = Value::String(self.command.to_string());
+        let message = Value::string(self.message);
+        let command = Value::string(self.command.to_string());
         DataChunk::new_with_layout(vec![vec![command, message]], output_layout)
     }
 }

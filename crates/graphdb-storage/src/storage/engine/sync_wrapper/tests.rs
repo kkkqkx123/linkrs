@@ -125,7 +125,7 @@ fn checkpoint_reopens_storage_and_rebuilds_outbox_from_remaining_wal() {
                     "Person".to_string(),
                     [(
                         "name".to_string(),
-                        crate::core::Value::String("one".to_string()),
+                        crate::core::Value::string("one"),
                     )]
                     .into_iter()
                     .collect(),
@@ -162,7 +162,7 @@ fn checkpoint_reopens_storage_and_rebuilds_outbox_from_remaining_wal() {
                     "Person".to_string(),
                     [(
                         "name".to_string(),
-                        crate::core::Value::String("two".to_string()),
+                        crate::core::Value::string("two"),
                     )]
                     .into_iter()
                     .collect(),

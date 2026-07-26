@@ -54,7 +54,7 @@ mod tests {
 
     #[test]
     fn test_serialize_deserialize_value() {
-        let value = Value::String("test".to_string());
+        let value = Value::string("test");
         let bytes = serialize_value(&value).expect("serialize_value should succeed");
         let decoded = deserialize_value(&bytes).expect("deserialize_value should succeed");
         assert_eq!(value, decoded);

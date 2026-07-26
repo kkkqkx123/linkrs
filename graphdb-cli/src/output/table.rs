@@ -5,7 +5,7 @@ fn value_to_string(val: &serde_json::Value, null_string: &str) -> String {
         serde_json::Value::Null => null_string.to_string(),
         serde_json::Value::Bool(b) => b.to_string(),
         serde_json::Value::Number(n) => n.to_string(),
-        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::String(s) => s.to_string(),
         serde_json::Value::Array(arr) => {
             let items: Vec<String> = arr
                 .iter()

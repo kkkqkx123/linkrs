@@ -188,7 +188,7 @@ fn execute_tags(args: &[Value]) -> Result<Value, ExpressionError> {
             let tags: Vec<Value> = v
                 .tags
                 .iter()
-                .map(|tag| Value::String(tag.name.clone()))
+                .map(|tag| Value::string(tag.name.clone()))
                 .collect();
             Ok(Value::list(List { values: tags }))
         }
@@ -232,7 +232,7 @@ fn execute_edge_type(args: &[Value]) -> Result<Value, ExpressionError> {
         ));
     }
     match &args[0] {
-        Value::Edge(e) => Ok(Value::String(e.edge_type.clone())),
+        Value::Edge(e) => Ok(Value::string(e.edge_type.clone())),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
             "The type function requires an edge type",
@@ -957,13 +957,13 @@ mod tests {
         let tag1 = Tag::new(
             "person".to_string(),
             HashMap::from([
-                ("name".to_string(), Value::String("Alice".to_string())),
+                ("name".to_string(), Value::string("Alice".to_string())),
                 ("age".to_string(), Value::Int(30)),
             ]),
         );
         let tag2 = Tag::new(
             "employee".to_string(),
-            HashMap::from([("dept".to_string(), Value::String("Engineering".to_string()))]),
+            HashMap::from([("dept".to_string(), Value::string("Engineering".to_string()))]),
         );
         Vertex::new(VertexId::from_int64(1), vec![tag1, tag2])
     }
@@ -1021,7 +1021,7 @@ mod tests {
         let result = GraphFunction::EdgeType
             .execute(&[Value::Edge(Box::new(edge))])
             .expect("The type function execution should succeed");
-        assert_eq!(result, Value::String("knows".to_string()));
+        assert_eq!(result, Value::string("knows".to_string()));
     }
 
     #[test]

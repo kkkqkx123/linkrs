@@ -526,7 +526,7 @@ impl SyncManager {
                             .get_space_indexes(*space_id)
                             .into_iter()
                             .filter(|metadata| metadata.tag_name == *tag_name)
-                            .map(|metadata| (metadata.field_name, Value::String(String::new())))
+                            .map(|metadata| (metadata.field_name, Value::string("")))
                             .collect()
                     } else {
                         properties.clone()
@@ -572,7 +572,7 @@ impl SyncManager {
                     .get_space_indexes(*space_id)
                     .into_iter()
                     .filter(|metadata| metadata.tag_name == *edge_type)
-                    .map(|metadata| (metadata.field_name, Value::String(String::new())))
+                    .map(|metadata| (metadata.field_name, Value::string("")))
                     .collect::<Vec<_>>();
                 Self::apply_fulltext_fields(FulltextFieldApply {
                     manager,
@@ -1634,7 +1634,7 @@ mod tests {
                 txn_id,
                 1,
                 "Node",
-                &Value::String("v1".to_string()),
+                &Value::string("v1"),
                 &[],
                 ChangeType::Insert,
             )
@@ -1655,7 +1655,7 @@ mod tests {
                 txn_id,
                 1,
                 "Node",
-                &Value::String("v1".to_string()),
+                &Value::string("v1"),
                 &[],
                 ChangeType::Insert,
             )
@@ -1672,8 +1672,8 @@ mod tests {
     fn edge_delete_intent_preserves_parallel_edge_ranking() {
         let payload = OutboxPayload::EdgeDelete {
             space_id: 1,
-            src: Value::String("src".to_string()),
-            dst: Value::String("dst".to_string()),
+            src: Value::string("src"),
+            dst: Value::string("dst"),
             edge_type: "KNOWS".to_string(),
             ranking: 7,
         };
@@ -1715,8 +1715,8 @@ mod tests {
                 txn_id,
                 1,
                 "Node",
-                &Value::String("v1".to_string()),
-                &[("text".to_string(), Value::String("hello".to_string()))],
+                &Value::string("v1"),
+                &[("text".to_string(), Value::string("hello"))],
                 ChangeType::Insert,
             )
             .expect("change should stage");
@@ -1758,10 +1758,10 @@ mod tests {
                 transaction_id,
                 1,
                 "Node",
-                &Value::String("node-1".to_string()),
+                &Value::string("node-1"),
                 &[(
                     "text".to_string(),
-                    Value::String("durable graph event".to_string()),
+                    Value::string("durable graph event"),
                 )],
                 ChangeType::Insert,
             )

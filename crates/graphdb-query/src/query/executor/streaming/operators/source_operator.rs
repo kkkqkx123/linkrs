@@ -1247,7 +1247,7 @@ mod tests {
     fn covering_index_rows_do_not_require_a_table_fetch() {
         let row = make_covering_vertex_row(
             &EntityRef::Vertex(VertexId::from_int64(7)),
-            vec![("name".to_string(), Value::String("Alice".to_string()))],
+            vec![("name".to_string(), Value::string("Alice".to_string()))],
         )
         .expect("vertex entity should produce a covering row");
         let Value::Vertex(vertex) = &row[0] else {
@@ -1256,7 +1256,7 @@ mod tests {
         assert_eq!(vertex.vid.as_int64(), Some(7));
         assert_eq!(
             vertex.get_property_any("name"),
-            Some(&Value::String("Alice".to_string()))
+            Some(&Value::string("Alice".to_string()))
         );
     }
 
@@ -1351,7 +1351,7 @@ mod tests {
         );
         let mut base = OperatorBase::new(0).with_runtime(Some(runtime));
         let mut source = SourceOperator::ScanVertices {
-            buffer: vec![vec![Value::String("row".to_string())]],
+            buffer: vec![vec![Value::string("row".to_string())]],
             current_index: 0,
             col_names: Vec::new(),
         };

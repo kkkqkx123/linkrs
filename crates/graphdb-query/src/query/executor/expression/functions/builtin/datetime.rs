@@ -597,7 +597,7 @@ fn execute_to_char(args: &[Value]) -> Result<Value, ExpressionError> {
         return Err(ExpressionError::type_error("to_char requires 2 arguments"));
     }
     let format_str = match &args[1] {
-        Value::String(s) => s.clone(),
+        Value::String(s) => s.to_string(),
         Value::Null(_) => return Ok(Value::Null(NullType::Null)),
         _ => {
             return Err(ExpressionError::type_error(
@@ -610,7 +610,7 @@ fn execute_to_char(args: &[Value]) -> Result<Value, ExpressionError> {
             let naive = chrono::NaiveDate::from_ymd_opt(d.year, d.month, d.day)
                 .ok_or_else(|| ExpressionError::type_error("Invalid date"))?;
             let formatted = naive.format(&format_str).to_string();
-            Ok(Value::String(formatted))
+            Ok(Value::string(formatted))
         }
         Value::DateTime(dt) => {
             let naive = chrono::NaiveDateTime::new(
@@ -620,7 +620,7 @@ fn execute_to_char(args: &[Value]) -> Result<Value, ExpressionError> {
                     .ok_or_else(|| ExpressionError::type_error("Invalid time"))?,
             );
             let formatted = naive.format(&format_str).to_string();
-            Ok(Value::String(formatted))
+            Ok(Value::string(formatted))
         }
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(

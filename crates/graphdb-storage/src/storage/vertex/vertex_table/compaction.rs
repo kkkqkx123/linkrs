@@ -287,7 +287,7 @@ mod tests {
         table
             .insert(
                 "v1",
-                &[("name".to_string(), Value::String("Alice".to_string()))],
+                &[("name".to_string(), Value::string("Alice"))],
                 100,
             )
             .unwrap();
@@ -310,7 +310,7 @@ mod tests {
             table
                 .insert(
                     &format!("v{}", i),
-                    &[("name".to_string(), Value::String(format!("P{}", i)))],
+                    &[("name".to_string(), Value::string(format!("P{}", i)))],
                     100,
                 )
                 .unwrap();

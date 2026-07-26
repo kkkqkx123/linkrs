@@ -202,7 +202,7 @@ impl PipeVariableResolver {
             Value::SmallInt(i) => Ok(vec![Value::SmallInt(*i)]),
             Value::Int(i) => Ok(vec![Value::Int(*i)]),
             Value::BigInt(i) => Ok(vec![Value::BigInt(*i)]),
-            Value::String(s) => Ok(vec![Value::String(s.clone())]),
+            Value::String(s) => Ok(vec![Value::string(s.clone())]),
             _ => Err(format!(
                 "Invalid pipe variable type for {}: expected List, Map, or numeric type",
                 var_name
@@ -216,7 +216,7 @@ impl PipeVariableResolver {
             Value::SmallInt(i) => Some(Value::SmallInt(*i)),
             Value::Int(i) => Some(Value::Int(*i)),
             Value::BigInt(i) => Some(Value::BigInt(*i)),
-            Value::String(s) => Some(Value::String(s.clone())),
+            Value::String(s) => Some(Value::string(s.clone())),
             _ => None,
         }
     }
@@ -441,11 +441,11 @@ mod tests {
         let value = make_list(vec![
             make_map(vec![
                 ("vid", Value::Int(1)),
-                ("name", Value::String("Alice".to_string())),
+                ("name", Value::string("Alice")),
             ]),
             make_map(vec![
                 ("vid", Value::Int(2)),
-                ("name", Value::String("Bob".to_string())),
+                ("name", Value::string("Bob")),
             ]),
         ]);
 
@@ -484,11 +484,11 @@ mod tests {
         let value = make_list(vec![
             make_map(vec![
                 ("vid", Value::Int(1)),
-                ("name", Value::String("Alice".to_string())),
+                ("name", Value::string("Alice")),
             ]),
             make_map(vec![
                 ("vid", Value::Int(2)),
-                ("name", Value::String("Bob".to_string())),
+                ("name", Value::string("Bob")),
             ]),
         ]);
 
@@ -499,8 +499,8 @@ mod tests {
 
         let names = resolver.resolve_column("result", "name").unwrap();
         assert_eq!(names.len(), 2);
-        assert_eq!(names[0], Value::String("Alice".to_string()));
-        assert_eq!(names[1], Value::String("Bob".to_string()));
+        assert_eq!(names[0], Value::string("Alice"));
+        assert_eq!(names[1], Value::string("Bob"));
     }
 
     #[test]
@@ -547,7 +547,7 @@ mod tests {
 
         let value = make_list(vec![make_map(vec![
             ("vid", Value::Int(1)),
-            ("name", Value::String("Alice".to_string())),
+            ("name", Value::string("Alice")),
         ])]);
 
         resolver.set_variable(

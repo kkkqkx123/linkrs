@@ -366,7 +366,7 @@ impl FunctionEvaluator {
                         } else if mode_str == "false" {
                             Ok(Value::Bool(false))
                         } else {
-                            Ok(Value::String(mode_str))
+                            Ok(Value::string(mode_str))
                         }
                     }
                     None => Ok(Value::Null(crate::core::NullType::NaN)),
@@ -441,11 +441,11 @@ impl FunctionEvaluator {
                 };
 
                 if values.is_empty() {
-                    return Ok(Value::String(String::new()));
+                    return Ok(Value::string(String::new()));
                 }
 
                 let result: Vec<String> = values.iter().map(|v| format!("{}", v)).collect();
-                Ok(Value::String(result.join(separator)))
+                Ok(Value::string(result.join(separator)))
             }
             AggregateFunction::GroupConcatWithOrder(_, separator, order_by_fields) => {
                 if args.is_empty() {
@@ -458,7 +458,7 @@ impl FunctionEvaluator {
                 };
 
                 if values.is_empty() {
-                    return Ok(Value::String(String::new()));
+                    return Ok(Value::string(String::new()));
                 }
 
                 let mut indexed_values: Vec<(usize, &Value)> = values.iter().enumerate().collect();
@@ -475,7 +475,7 @@ impl FunctionEvaluator {
                     .iter()
                     .map(|(_, v)| format!("{}", v))
                     .collect();
-                Ok(Value::String(result.join(separator)))
+                Ok(Value::string(result.join(separator)))
             }
             AggregateFunction::VecSum(_) => {
                 if args.is_empty() {

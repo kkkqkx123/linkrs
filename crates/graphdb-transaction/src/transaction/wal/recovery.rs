@@ -867,7 +867,7 @@ mod tests {
         let redo = InsertVertexRedo {
             label,
             vid: VertexId::from_int64(vid),
-            properties: vec![("name".to_string(), Value::String(name.to_string()))],
+            properties: vec![("name".to_string(), Value::string(name))],
         };
 
         let payload =
@@ -904,7 +904,7 @@ mod tests {
         let first_redo = InsertVertexRedo {
             label: 1,
             vid: VertexId::from_int64(1001),
-            properties: vec![("name".to_string(), Value::String("Alice".to_string()))],
+            properties: vec![("name".to_string(), Value::string("Alice"))],
         };
         let first_payload = to_allocvec(&first_redo).expect("Failed to serialize first redo");
         let first_lsn = writer
@@ -922,7 +922,7 @@ mod tests {
         let second_redo = InsertVertexRedo {
             label: 1,
             vid: VertexId::from_int64(1002),
-            properties: vec![("name".to_string(), Value::String("Bob".to_string()))],
+            properties: vec![("name".to_string(), Value::string("Bob"))],
         };
         let second_payload = to_allocvec(&second_redo).expect("Failed to serialize second redo");
         let second_lsn = writer
@@ -1007,7 +1007,7 @@ mod tests {
         let redo = InsertVertexRedo {
             label: 1,
             vid: VertexId::from_int64(1002),
-            properties: vec![("name".to_string(), Value::String("uncommitted".to_string()))],
+            properties: vec![("name".to_string(), Value::string("uncommitted"))],
         };
         writer
             .append_entry(

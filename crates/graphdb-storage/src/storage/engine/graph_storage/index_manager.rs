@@ -1098,7 +1098,7 @@ mod tests {
             schema_name: "Person".to_string(),
             fields: vec![IndexField::new(
                 "name".to_string(),
-                Value::String(String::new()),
+                Value::string(""),
                 false,
             )],
             properties: Vec::new(),
@@ -1140,7 +1140,7 @@ mod tests {
             schema_name: "Person".to_string(),
             fields: vec![IndexField::new(
                 "name".to_string(),
-                Value::String(String::new()),
+                Value::string(""),
                 false,
             )],
             properties: Vec::new(),
@@ -1156,7 +1156,7 @@ mod tests {
             let mut properties = HashMap::new();
             properties.insert(
                 "name".to_string(),
-                Value::String(format!("initial-{vertex_id}")),
+                Value::string(format!("initial-{vertex_id}")),
             );
             storage
                 .insert_vertex(
@@ -1186,7 +1186,7 @@ mod tests {
                 let mut properties = HashMap::new();
                 properties.insert(
                     "name".to_string(),
-                    Value::String(format!("concurrent-{vertex_id}")),
+                    Value::string(format!("concurrent-{vertex_id}")),
                 );
                 writer_storage
                     .insert_vertex(
@@ -1211,7 +1211,7 @@ mod tests {
                 .lookup_index(
                     "test_space",
                     "person_name_idx",
-                    &Value::String(format!("concurrent-{vertex_id}")),
+                    &Value::string(format!("concurrent-{vertex_id}")),
                 )
                 .expect("index lookup should succeed");
             assert_eq!(indexed, vec![Value::from(VertexId::from_int64(vertex_id))]);
@@ -1228,7 +1228,7 @@ mod tests {
             schema_name: "Person".to_string(),
             fields: vec![IndexField::new(
                 "name".to_string(),
-                Value::String(String::new()),
+                Value::string(""),
                 false,
             )],
             properties: Vec::new(),
@@ -1261,7 +1261,7 @@ mod tests {
                 VertexId::from_int64(1),
                 vec![crate::core::vertex_edge_path::Tag::new(
                     "Person".to_string(),
-                    vec![("name".to_string(), Value::String("Alice".to_string()))]
+                    vec![("name".to_string(), Value::string("Alice"))]
                         .into_iter()
                         .collect(),
                 )],
@@ -1298,7 +1298,7 @@ mod tests {
             .lookup_index(
                 "test_space",
                 "person_name_idx",
-                &Value::String("Alice".to_string()),
+                &Value::string("Alice"),
             )
             .expect("rebuilt index should be readable");
         assert_eq!(indexed, vec![Value::from(VertexId::from_int64(1))]);
@@ -1315,7 +1315,7 @@ mod tests {
             schema_name: "Person".to_string(),
             fields: vec![IndexField::new(
                 "name".to_string(),
-                Value::String(String::new()),
+                Value::string(""),
                 false,
             )],
             properties: vec![],
@@ -1353,7 +1353,7 @@ mod tests {
             &ctx,
             "no_space",
             "some_index",
-            &Value::String("test".to_string()),
+            &Value::string("test"),
         );
         assert!(result.is_err());
     }
@@ -1568,7 +1568,7 @@ mod tests {
             schema_name: "Person".to_string(),
             fields: vec![IndexField::new(
                 "name".to_string(),
-                Value::String(String::new()),
+                Value::string(""),
                 false,
             )],
             properties: vec![],

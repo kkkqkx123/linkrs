@@ -477,9 +477,9 @@ mod tests {
         let mut pruner = PathPruner::new(PruningStrategy::NoCycles);
 
         let path = vec![
-            Value::String("a".to_string()),
-            Value::String("b".to_string()),
-            Value::String("a".to_string()),
+            Value::string("a".to_string()),
+            Value::string("b".to_string()),
+            Value::string("a".to_string()),
         ];
 
         assert!(pruner.should_prune(&path));
@@ -492,16 +492,16 @@ mod tests {
         pruner.update_best(3);
 
         let short_path = vec![
-            Value::String("a".to_string()),
-            Value::String("b".to_string()),
+            Value::string("a".to_string()),
+            Value::string("b".to_string()),
         ];
         assert!(!pruner.should_prune(&short_path));
 
         let long_path = vec![
-            Value::String("a".to_string()),
-            Value::String("b".to_string()),
-            Value::String("c".to_string()),
-            Value::String("d".to_string()),
+            Value::string("a".to_string()),
+            Value::string("b".to_string()),
+            Value::string("c".to_string()),
+            Value::string("d".to_string()),
         ];
         assert!(pruner.should_prune(&long_path));
     }
@@ -510,9 +510,9 @@ mod tests {
     fn test_path_pruner_vertex_tracking() {
         let mut pruner = PathPruner::new(PruningStrategy::NoCycles);
 
-        assert!(!pruner.should_prune_vertex(&Value::String("a".to_string())));
-        assert!(pruner.should_prune_vertex(&Value::String("a".to_string())));
-        assert!(!pruner.should_prune_vertex(&Value::String("b".to_string())));
+        assert!(!pruner.should_prune_vertex(&Value::string("a".to_string())));
+        assert!(pruner.should_prune_vertex(&Value::string("a".to_string())));
+        assert!(!pruner.should_prune_vertex(&Value::string("b".to_string())));
 
         assert_eq!(pruner.visited_count(), 2);
     }

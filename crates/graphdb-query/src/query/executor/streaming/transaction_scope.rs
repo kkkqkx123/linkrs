@@ -440,8 +440,8 @@ impl TransactionCommandResult {
     /// Convert to an [`ExecutionResult`].
     pub fn into_execution_result(self) -> ExecutionResult {
         let row = vec![
-            crate::core::Value::String(self.command.to_string()),
-            crate::core::Value::String(self.message),
+            crate::core::Value::string(self.command.to_string()),
+            crate::core::Value::string(self.message),
         ];
         let col_names = vec!["command".to_string(), "result".to_string()];
         let dataset = crate::query::data_set::DataSet::from_rows(vec![row], col_names);

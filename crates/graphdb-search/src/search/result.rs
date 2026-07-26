@@ -169,14 +169,14 @@ mod tests {
 
     #[test]
     fn test_search_result_creation() {
-        let result = SearchResult::new(Value::String("doc1".to_string()), 0.95);
+        let result = SearchResult::new(Value::string("doc1"), 0.95);
         assert_eq!(result.score, 0.95);
         assert!(result.highlights.is_none());
     }
 
     #[test]
     fn test_search_result_with_highlights() {
-        let result = SearchResult::new(Value::String("doc1".to_string()), 0.95)
+        let result = SearchResult::new(Value::string("doc1"), 0.95)
             .with_highlights(vec!["<em>highlight</em>".to_string()]);
         assert!(result.highlights.is_some());
         assert_eq!(result.highlights.unwrap().len(), 1);
@@ -184,7 +184,7 @@ mod tests {
 
     #[test]
     fn test_fulltext_search_entry() {
-        let entry = FulltextSearchEntry::new(Value::String("doc1".to_string()), 0.85);
+        let entry = FulltextSearchEntry::new(Value::string("doc1"), 0.85);
         assert_eq!(entry.score, 0.85);
         assert!(entry.highlights.is_none());
     }

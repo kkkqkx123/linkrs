@@ -276,14 +276,14 @@ mod tests {
 
     #[test]
     fn vertex_entity_ref_string_numeric() {
-        let v = Value::String("42".to_string());
+        let v = Value::string("42");
         let entity = vertex_entity_ref(&v).expect("should resolve");
         assert_eq!(entity, EntityRef::Vertex(VertexId::from_int64(42)));
     }
 
     #[test]
     fn vertex_entity_ref_string_non_numeric() {
-        let v = Value::String("uuid-abc".to_string());
+        let v = Value::string("uuid-abc");
         let entity = vertex_entity_ref(&v).expect("should resolve");
         assert_eq!(
             entity,
@@ -327,7 +327,7 @@ mod tests {
     #[test]
     fn effective_index_values_without_definition_uses_all_props() {
         let props = vec![
-            ("name".to_string(), Value::String("Alice".to_string())),
+            ("name".to_string(), Value::string("Alice")),
             ("age".to_string(), Value::Int(30)),
         ];
         let values = effective_index_values(None, &props, vec![]);
@@ -343,7 +343,7 @@ mod tests {
             schema_name: "person".to_string(),
             fields: vec![IndexField::new(
                 "name".to_string(),
-                Value::String("".to_string()),
+                Value::string(""),
                 false,
             )],
             properties: vec![],
@@ -352,11 +352,11 @@ mod tests {
             partial_condition: None,
         });
         let props = vec![
-            ("name".to_string(), Value::String("Alice".to_string())),
+            ("name".to_string(), Value::string("Alice")),
             ("age".to_string(), Value::Int(30)),
         ];
         let values = effective_index_values(Some(&index), &props, vec![]);
-        assert_eq!(values, vec![Value::String("Alice".to_string())]);
+        assert_eq!(values, vec![Value::string("Alice")]);
     }
 
     #[test]
@@ -368,7 +368,7 @@ mod tests {
             schema_name: "person".to_string(),
             fields: vec![IndexField::new(
                 "name".to_string(),
-                Value::String("".to_string()),
+                Value::string(""),
                 false,
             )],
             properties: vec![],
@@ -377,7 +377,7 @@ mod tests {
             partial_condition: None,
         });
         let props = vec![("age".to_string(), Value::Int(30))];
-        let existing = vec![Value::String("Bob".to_string())];
+        let existing = vec![Value::string("Bob")];
         let values = effective_index_values(Some(&index), &props, existing.clone());
         assert_eq!(values, existing);
     }

@@ -381,7 +381,7 @@ impl TypeUtils {
             DataType::BigInt => Some(Value::BigInt(0)),
             DataType::Float => Some(Value::Float(0.0)),
             DataType::Double => Some(Value::Double(0.0)),
-            DataType::String => Some(Value::String(String::new())),
+            DataType::String => Some(Value::string("")),
             DataType::List => Some(Value::list(List::from(Vec::new()))),
             DataType::Map => Some(Value::map(std::collections::HashMap::new())),
             _ => None,
@@ -500,7 +500,7 @@ mod tests {
             DataType::Double
         );
         assert_eq!(
-            TypeUtils::literal_type(&Value::String("test".to_string())),
+            TypeUtils::literal_type(&Value::string("test")),
             DataType::String
         );
     }
@@ -620,7 +620,7 @@ mod tests {
         );
         assert_eq!(
             TypeUtils::get_default_value(&DataType::String),
-            Some(Value::String(String::new()))
+            Some(Value::string(""))
         );
         assert!(TypeUtils::get_default_value(&DataType::Date).is_none());
     }

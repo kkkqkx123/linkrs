@@ -586,7 +586,7 @@ impl<'a> ParseContext<'a> {
             TokenKind::StringLiteral(s) => {
                 let s = s.clone();
                 self.next_token();
-                Ok(crate::core::Value::String(s))
+                Ok(crate::core::Value::string(s))
             }
             TokenKind::IntegerLiteral(n) => {
                 let n = *n;

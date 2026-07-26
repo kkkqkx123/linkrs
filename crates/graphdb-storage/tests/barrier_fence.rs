@@ -31,7 +31,7 @@ fn barrier_fence_single_rebuild_preserves_data() {
         .lookup_index(
             "test_space",
             "person_name_idx",
-            &Value::String("Alice".to_string()),
+            &Value::string("Alice"),
         )
         .expect("lookup after rebuild");
     assert_eq!(
@@ -49,7 +49,7 @@ fn barrier_fence_single_rebuild_preserves_data() {
         .lookup_index(
             "test_space",
             "person_name_idx",
-            &Value::String("Bob".to_string()),
+            &Value::string("Bob"),
         )
         .expect("lookup Bob");
     assert_eq!(
@@ -93,7 +93,7 @@ fn barrier_fence_survives_restart_after_rebuild() {
         .lookup_index(
             "test_space",
             "person_name_idx",
-            &Value::String("Alice".to_string()),
+            &Value::string("Alice"),
         )
         .expect("lookup after reopen");
     assert_eq!(

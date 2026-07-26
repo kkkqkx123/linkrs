@@ -97,7 +97,7 @@ impl SyncTestContext {
 
 fn create_test_vertex(vid: i64, tag_name: &str, content: &str) -> Vertex {
     let mut props = HashMap::new();
-    props.insert("content".to_string(), Value::String(content.to_string()));
+    props.insert("content".to_string(), Value::string(content));
     let tag = Tag::new(tag_name.to_string(), props);
     Vertex::new(VertexId::from_int64(vid), vec![tag])
 }

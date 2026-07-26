@@ -29,7 +29,7 @@ fn unary_state() -> UnaryOperatorState {
 
 fn create_scan_executor(rows: usize) -> StreamingExecutor {
     let buffer: Vec<Vec<Value>> = (0..rows)
-        .map(|i| vec![Value::Int(i as i32), Value::String(format!("item_{}", i))])
+        .map(|i| vec![Value::Int(i as i32), Value::string(format!("item_{}", i))])
         .collect();
 
     StreamingExecutor::Source(
@@ -74,12 +74,12 @@ fn test_scan_edges_lifecycle() {
         vec![
             Value::Int(1),
             Value::Int(2),
-            Value::String("edge".to_string()),
+            Value::string("edge"),
         ],
         vec![
             Value::Int(2),
             Value::Int(3),
-            Value::String("edge".to_string()),
+            Value::string("edge"),
         ],
     ];
     let mut executor = StreamingExecutor::Source(
@@ -160,9 +160,9 @@ fn test_limit_in_chain() {
 #[test]
 fn test_distinct_in_chain() {
     let buffer = vec![
-        vec![Value::Int(1), Value::String("a".to_string())],
-        vec![Value::Int(1), Value::String("a".to_string())],
-        vec![Value::Int(2), Value::String("b".to_string())],
+        vec![Value::Int(1), Value::string("a")],
+        vec![Value::Int(1), Value::string("a")],
+        vec![Value::Int(2), Value::string("b")],
     ];
     let scan = Box::new(scan_vertices(buffer));
 
@@ -208,7 +208,7 @@ fn test_pipeline_scan_project() {
         UnaryOperator::Project {
             output_expressions: vec![
                 Expression::Literal(Value::Int(0)),
-                Expression::Literal(Value::String("const".to_string())),
+                Expression::Literal(Value::string("const")),
             ],
             output_col_names: vec![],
             state: unary_state(),
@@ -360,11 +360,11 @@ fn test_aggregate_in_chain() {
 fn test_hash_join_in_chain() {
     let left = Box::new(scan_vertices(vec![vec![
         Value::Int(1),
-        Value::String("a".to_string()),
+        Value::string("a"),
     ]]));
     let right = Box::new(scan_vertices(vec![vec![
         Value::Int(1),
-        Value::String("x".to_string()),
+        Value::string("x"),
     ]]));
 
     let mut join = StreamingExecutor::Join(
@@ -495,7 +495,7 @@ fn test_complex_pipeline_4step() {
         OperatorBase::new(0),
         filter,
         UnaryOperator::Project {
-            output_expressions: vec![Expression::Literal(Value::String("col".to_string()))],
+            output_expressions: vec![Expression::Literal(Value::string("col"))],
             output_col_names: vec![],
             state: unary_state(),
         },
@@ -594,9 +594,9 @@ fn test_limit_zero() {
 #[test]
 fn test_distinct_all_same() {
     let buffer = vec![
-        vec![Value::Int(1), Value::String("a".to_string())],
-        vec![Value::Int(1), Value::String("a".to_string())],
-        vec![Value::Int(1), Value::String("a".to_string())],
+        vec![Value::Int(1), Value::string("a")],
+        vec![Value::Int(1), Value::string("a")],
+        vec![Value::Int(1), Value::string("a")],
     ];
     let scan = Box::new(scan_vertices(buffer));
 
@@ -659,7 +659,7 @@ mod storage_backed {
         {
             let vid = VertexId::from_int64(i as i64 + 1);
             let mut props = HashMap::new();
-            props.insert("name".to_string(), Value::String(name.to_string()));
+            props.insert("name".to_string(), Value::string(name));
             props.insert("age".to_string(), Value::BigInt(*age));
             let vertex = Vertex::new(vid, vec![Tag::new("Person".to_string(), props)]);
             store.insert_vertex("test", vertex).unwrap();
@@ -709,7 +709,7 @@ mod storage_backed {
                 if let (Some(Value::String(name)), Some(Value::BigInt(_age))) =
                     (row.first(), row.get(1))
                 {
-                    names.push(name.clone());
+                    names.push(name.to_string());
                 }
             }
             total_rows += chunk.len();

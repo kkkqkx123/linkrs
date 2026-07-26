@@ -57,7 +57,7 @@ fn test_failed_sync_to_dead_letter_queue() {
     let vertex = create_test_vertex(
         1,
         "Person",
-        vec![("name", Value::String("Alice".to_string()))],
+        vec![("name", Value::string("Alice"))],
     );
     harness
         .insert_vertex_with_txn("test_space", vertex)
@@ -138,7 +138,7 @@ fn test_crash_recovery_uncommitted_transaction() {
     let vertex = create_test_vertex(
         1,
         "Person",
-        vec![("name", Value::String("Alice".to_string()))],
+        vec![("name", Value::string("Alice"))],
     );
     harness
         .insert_vertex_with_txn("test_space", vertex)
@@ -187,7 +187,7 @@ fn test_crash_recovery_committed_transaction() {
     let vertex = create_test_vertex(
         1,
         "Person",
-        vec![("name", Value::String("Alice".to_string()))],
+        vec![("name", Value::string("Alice"))],
     );
     harness
         .insert_vertex_with_txn("test_space", vertex)
@@ -235,7 +235,7 @@ fn test_batch_size_trigger() {
         let vertex = create_test_vertex(
             i + 1,
             "Person",
-            vec![("name", Value::String(format!("Person{}", i + 1)))],
+            vec![("name", Value::string(format!("Person{}", i + 1)))],
         );
         harness
             .insert_vertex("test_space", vertex)
@@ -297,7 +297,7 @@ fn test_batch_timeout_trigger() {
         let vertex = create_test_vertex(
             i + 1,
             "Person",
-            vec![("name", Value::String(format!("SmallBatch{}", i + 1)))],
+            vec![("name", Value::string(format!("SmallBatch{}", i + 1)))],
         );
         harness
             .insert_vertex("test_space", vertex)
@@ -365,7 +365,7 @@ fn test_batch_aggregation_optimization() {
         let vertex = create_test_vertex(
             i + 1,
             "Person",
-            vec![("name", Value::String(format!("BatchUpdate{}", i)))],
+            vec![("name", Value::string(format!("BatchUpdate{}", i)))],
         );
         harness
             .insert_vertex_with_txn("test_space", vertex)

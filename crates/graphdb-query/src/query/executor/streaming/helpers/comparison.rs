@@ -50,7 +50,7 @@ mod tests {
     fn test_null_ordering() {
         let null_val = Value::Null(NullType::Null);
         let int_val = Value::Int(1);
-        let string_val = Value::String("a".to_string());
+        let string_val = Value::string("a".to_string());
 
         // NULL should be Greater (sorted last)
         assert_eq!(compare_values(&null_val, &int_val), Ordering::Greater);
@@ -75,9 +75,9 @@ mod tests {
 
     #[test]
     fn test_string_ordering() {
-        let va = Value::String("a".to_string());
-        let vb = Value::String("b".to_string());
-        let vc = Value::String("c".to_string());
+        let va = Value::string("a".to_string());
+        let vb = Value::string("b".to_string());
+        let vc = Value::string("c".to_string());
 
         assert_eq!(compare_values(&va, &vb), Ordering::Less);
         assert_eq!(compare_values(&vb, &va), Ordering::Greater);

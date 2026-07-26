@@ -207,7 +207,7 @@ fn test_concurrent_index_lookup_during_insert() {
                 let result = st.lookup_index(
                     "test_space",
                     "person_name_idx",
-                    &Value::String(format!("Person{}", i)),
+                    &Value::string(format!("Person{}", i)),
                 );
                 // May or may not find the value depending on timing
                 let _ = result;

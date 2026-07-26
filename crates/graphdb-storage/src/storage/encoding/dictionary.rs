@@ -219,7 +219,7 @@ impl DictionaryColumn {
     pub fn get(&self, row_idx: usize) -> Option<Value> {
         self.encoder
             .decode(row_idx)
-            .map(|s| Value::String(s.to_string()))
+            .map(|s| Value::string(s))
     }
 
     pub fn len(&self) -> usize {
@@ -354,15 +354,15 @@ mod tests {
     fn test_dictionary_column() {
         let mut col = DictionaryColumn::new();
 
-        col.set(0, Some(&Value::String("a".to_string()))).unwrap();
-        col.set(1, Some(&Value::String("b".to_string()))).unwrap();
+        col.set(0, Some(&Value::string("a"))).unwrap();
+        col.set(1, Some(&Value::string("b"))).unwrap();
         col.set(2, None).unwrap();
-        col.set(3, Some(&Value::String("a".to_string()))).unwrap();
+        col.set(3, Some(&Value::string("a"))).unwrap();
 
-        assert_eq!(col.get(0), Some(Value::String("a".to_string())));
-        assert_eq!(col.get(1), Some(Value::String("b".to_string())));
+        assert_eq!(col.get(0), Some(Value::string("a")));
+        assert_eq!(col.get(1), Some(Value::string("b")));
         assert!(col.get(2).is_none());
-        assert_eq!(col.get(3), Some(Value::String("a".to_string())));
+        assert_eq!(col.get(3), Some(Value::string("a")));
     }
 
     #[test]

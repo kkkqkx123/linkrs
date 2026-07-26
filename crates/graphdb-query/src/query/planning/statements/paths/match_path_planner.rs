@@ -284,7 +284,7 @@ mod tests {
     fn test_path_pattern_simple() {
         let _pattern = PathPattern::simple(
             NodePattern {
-                vid: Some(Value::String("start".to_string())),
+                vid: Some(Value::string("start".to_string())),
                 labels: vec![],
                 properties: vec![],
             },
@@ -294,7 +294,7 @@ mod tests {
                 properties: vec![],
             },
             NodePattern {
-                vid: Some(Value::String("end".to_string())),
+                vid: Some(Value::string("end".to_string())),
                 labels: vec![],
                 properties: vec![],
             },

@@ -62,7 +62,7 @@ pub(crate) fn value_to_string(value: &Value) -> String {
         Value::SmallInt(i) => i.to_string(),
         Value::Int(i) => i.to_string(),
         Value::BigInt(i) => i.to_string(),
-        Value::String(s) => s.clone(),
+        Value::String(s) => s.to_string(),
         Value::Float(f) => f.to_string(),
         Value::Double(f) => f.to_string(),
         Value::Bool(b) => b.to_string(),
@@ -341,7 +341,7 @@ mod tests {
         assert_eq!(value_to_string(&Value::Int(100)), "100");
         assert_eq!(value_to_string(&Value::BigInt(9999999999)), "9999999999");
         assert_eq!(
-            value_to_string(&Value::String("hello".to_string())),
+            value_to_string(&Value::string("hello")),
             "hello"
         );
         assert_eq!(value_to_string(&Value::Float(3.14)), "3.14");
@@ -374,7 +374,7 @@ mod tests {
             vid: VertexId::from_int64(42),
             internal_id: 5,
             properties: vec![
-                ("name".to_string(), Value::String("Alice".to_string())),
+                ("name".to_string(), Value::string("Alice")),
                 ("age".to_string(), Value::BigInt(30)),
             ],
         };
@@ -387,7 +387,7 @@ mod tests {
         assert_eq!(vertex.tags[0].name, "Person");
         assert_eq!(
             vertex.properties.get("name"),
-            Some(&Value::String("Alice".to_string()))
+            Some(&Value::string("Alice"))
         );
         assert_eq!(vertex.properties.get("age"), Some(&Value::BigInt(30)));
     }
@@ -429,7 +429,7 @@ mod tests {
 
     #[test]
     fn test_serialize_properties_string() {
-        let props = vec![("name".to_string(), Value::String("Alice".to_string()))];
+        let props = vec![("name".to_string(), Value::string("Alice"))];
         let data = serialize_properties(&props);
         assert!(!data.is_empty());
         assert!(data.contains(&b'n'));
@@ -466,7 +466,7 @@ mod tests {
     #[test]
     fn test_serialize_properties_multiple() {
         let props = vec![
-            ("name".to_string(), Value::String("Bob".to_string())),
+            ("name".to_string(), Value::string("Bob")),
             ("age".to_string(), Value::Int(25)),
             ("active".to_string(), Value::Bool(true)),
         ];

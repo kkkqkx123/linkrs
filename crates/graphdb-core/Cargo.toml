@@ -16,6 +16,7 @@ regex.workspace = true
 rand.workspace = true
 dec.workspace = true
 bumpalo.workspace = true
+compact_str.workspace = true
 crc32fast.workspace = true
 zstd.workspace = true
 bitvec.workspace = true

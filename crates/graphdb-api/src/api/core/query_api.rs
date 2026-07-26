@@ -500,7 +500,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
                 let mut row = crate::api::core::types::Row::new();
                 row.values.insert(
                     "space_name".to_string(),
-                    crate::core::Value::String(summary.name.clone()),
+                    crate::core::Value::string(summary.name.clone()),
                 );
                 row.values.insert(
                     "space_id".to_string(),
@@ -508,7 +508,7 @@ impl<S: StorageClient + Clone + 'static> QueryApi<S> {
                 );
                 row.values.insert(
                     "vid_type".to_string(),
-                    crate::core::Value::String(summary.vid_type.to_string()),
+                    crate::core::Value::string(summary.vid_type.to_string()),
                 );
                 Ok(QueryResult {
                     columns: vec![

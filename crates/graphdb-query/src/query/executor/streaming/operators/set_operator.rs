@@ -410,7 +410,7 @@ impl SetOperator {
                 if !seen_rows.is_empty() {
                     let rows: Vec<Vec<crate::core::Value>> = seen_rows
                         .iter()
-                        .map(|s| vec![crate::core::Value::String(s.clone())])
+                        .map(|s| vec![crate::core::Value::string(s.clone())])
                         .collect();
                     let mut writer = sm.create_writer()?;
                     writer.write_rows(&rows)?;

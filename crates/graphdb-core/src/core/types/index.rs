@@ -317,7 +317,7 @@ mod tests {
     fn test_index_field_creation() {
         let field = IndexField::new(
             "name".to_string(),
-            Value::String("string".to_string()),
+            Value::string("string"),
             false,
         );
 
@@ -330,7 +330,7 @@ mod tests {
     fn test_index_creation() {
         let fields = vec![IndexField::new(
             "name".to_string(),
-            Value::String("string".to_string()),
+            Value::string("string"),
             false,
         )];
 

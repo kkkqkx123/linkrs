@@ -77,8 +77,8 @@ pub(super) fn handle_traverse(
             let _schema = Arc::new(Schema::new(new_cols));
             let mut rows = chunk.rows;
             for row in rows.iter_mut() {
-                row.push(Value::String(edge_types.join("/")));
-                row.push(Value::String(format!("{:?}", direction).to_lowercase()));
+                row.push(Value::string(edge_types.join("/")));
+                row.push(Value::string(format!("{:?}", direction).to_lowercase()));
                 row.push(Value::BigInt(1));
             }
             if !rows.is_empty() {
@@ -139,8 +139,8 @@ pub(super) fn handle_bi_expand(
                             if let Ok(Some(vertex)) = reader.get_vertex(space_name, &neighbor_id) {
                                 let mut out_row = row.clone();
                                 out_row.push(Value::Vertex(Box::new(vertex)));
-                                out_row.push(Value::String(e.edge_type.clone()));
-                                out_row.push(Value::String("both".to_string()));
+                                out_row.push(Value::string(e.edge_type.clone()));
+                                out_row.push(Value::string("both".to_string()));
                                 out_rows.push(out_row);
                             }
                         }
@@ -243,8 +243,8 @@ pub(super) fn handle_bi_traverse(
                                     if let Ok(Some(vertex)) = reader.get_vertex(space_name, &nid) {
                                         let mut out_row = row.clone();
                                         out_row.push(Value::Vertex(Box::new(vertex)));
-                                        out_row.push(Value::String(edge_types.join("/")));
-                                        out_row.push(Value::String("both".to_string()));
+                                        out_row.push(Value::string(edge_types.join("/")));
+                                        out_row.push(Value::string("both".to_string()));
                                         out_row.push(Value::BigInt((depth + 1) as i64));
                                         out_rows.push(out_row);
                                     }

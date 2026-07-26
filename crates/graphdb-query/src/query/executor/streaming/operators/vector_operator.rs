@@ -20,13 +20,13 @@ fn make_manage_result(
     status: &str,
 ) -> DataChunk {
     let name_val = name
-        .map(|n| Value::String(n.to_string()))
+        .map(|n| Value::string(n.to_string()))
         .unwrap_or(Value::Null(crate::core::NullType::Null));
     DataChunk::new_with_layout(
         vec![vec![
-            Value::String(action.to_string()),
+            Value::string(action.to_string()),
             name_val,
-            Value::String(status.to_string()),
+            Value::string(status.to_string()),
         ]],
         output_layout,
     )
@@ -306,7 +306,7 @@ impl VectorOperator {
                         let mut rows = Vec::new();
                         for result in search_results {
                             rows.push(vec![
-                                Value::String(result.id.to_string()),
+                                Value::string(result.id.to_string()),
                                 Value::Double(result.score as f64),
                             ]);
                         }
@@ -376,7 +376,7 @@ impl VectorOperator {
                         let mut rows = Vec::new();
                         for result in search_results {
                             rows.push(vec![
-                                Value::String(result.id.to_string()),
+                                Value::string(result.id.to_string()),
                                 Value::Double(result.score as f64),
                             ]);
                         }

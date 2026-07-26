@@ -72,6 +72,7 @@ bitvec = "1.0"
 # memory
 bumpalo = "3.16"
 memmap2 = "0.9"
+compact_str = { version = "0.8", features = ["serde"] }
 
 # numeric
 dec = "0.4.11"

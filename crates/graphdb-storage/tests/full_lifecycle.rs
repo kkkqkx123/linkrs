@@ -70,7 +70,7 @@ fn test_index_created_after_data_insertion() {
         .lookup_index(
             "test_space",
             "person_name_idx",
-            &Value::String("Alice".to_string()),
+            &Value::string("Alice"),
         )
         .unwrap();
     assert_eq!(alice, vec![Value::from(VertexId::from_int64(1))]);
@@ -79,7 +79,7 @@ fn test_index_created_after_data_insertion() {
         .lookup_index(
             "test_space",
             "person_name_idx",
-            &Value::String("Bob".to_string()),
+            &Value::string("Bob"),
         )
         .unwrap();
     assert_eq!(bob, vec![Value::from(VertexId::from_int64(2))]);
@@ -132,11 +132,11 @@ fn test_space_isolation() {
         .unwrap();
     assert_eq!(
         alpha_vertex.properties.get("name"),
-        Some(&Value::String("Alice".to_string()))
+        Some(&Value::string("Alice"))
     );
     assert_eq!(
         beta_vertex.properties.get("name"),
-        Some(&Value::String("Bob".to_string()))
+        Some(&Value::string("Bob"))
     );
 
     // Edge type exists only in alpha
@@ -200,13 +200,13 @@ fn test_scan_vertices_by_property_match() {
             "test_space",
             "Person",
             "name",
-            &Value::String("Person3".to_string()),
+            &Value::string("Person3"),
         )
         .unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(
         result[0].properties.get("name"),
-        Some(&Value::String("Person3".to_string()))
+        Some(&Value::string("Person3"))
     );
 
     // Scan by matching age
@@ -221,7 +221,7 @@ fn test_scan_vertices_by_property_match() {
             "test_space",
             "Person",
             "name",
-            &Value::String("Nobody".to_string()),
+            &Value::string("Nobody"),
         )
         .unwrap();
     assert!(empty_result.is_empty());

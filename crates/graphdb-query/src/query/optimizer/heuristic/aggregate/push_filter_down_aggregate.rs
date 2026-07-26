@@ -324,7 +324,7 @@ mod tests {
         let condition = Expression::Binary {
             op: crate::core::types::operators::BinaryOperator::Equal,
             left: Box::new(Expression::Variable("name".to_string())),
-            right: Box::new(Expression::Literal(crate::core::Value::String(
+            right: Box::new(Expression::Literal(crate::core::Value::string(
                 "test".to_string(),
             ))),
         };
@@ -361,7 +361,7 @@ mod tests {
         let condition = Expression::Binary {
             op: crate::core::types::operators::BinaryOperator::Equal,
             left: Box::new(Expression::Variable("name".to_string())),
-            right: Box::new(Expression::Literal(crate::core::Value::String(
+            right: Box::new(Expression::Literal(crate::core::Value::string(
                 "test".to_string(),
             ))),
         };
@@ -391,7 +391,7 @@ mod tests {
         let condition = Expression::Binary {
             op: crate::core::types::operators::BinaryOperator::Equal,
             left: Box::new(Expression::Variable("category".to_string())),
-            right: Box::new(Expression::Literal(crate::core::Value::String(
+            right: Box::new(Expression::Literal(crate::core::Value::string(
                 "A".to_string(),
             ))),
         };
@@ -465,7 +465,7 @@ mod tests {
         let condition = Expression::Binary {
             op: crate::core::types::operators::BinaryOperator::Equal,
             left: Box::new(Expression::Variable("name".to_string())),
-            right: Box::new(Expression::Literal(crate::core::Value::String(
+            right: Box::new(Expression::Literal(crate::core::Value::string(
                 "test".to_string(),
             ))),
         };

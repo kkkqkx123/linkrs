@@ -146,7 +146,7 @@ impl KeyBuilder {
         key.extend_from_slice(&encoded_src);
         let encoded_dst = codec().encode(edge_dst)?;
         key.extend_from_slice(&encoded_dst);
-        let encoded_type = codec().encode(&Value::String(edge_type.to_string()))?;
+        let encoded_type = codec().encode(&Value::string(edge_type))?;
         key.extend_from_slice(&encoded_type);
         let encoded_rank = codec().encode(&Value::BigInt(ranking))?;
         key.extend_from_slice(&encoded_rank);
@@ -187,7 +187,7 @@ impl KeyBuilder {
     ) -> Result<ByteKey, StorageError> {
         let encoded_src = codec().encode(edge_src)?;
         let encoded_dst = codec().encode(edge_dst)?;
-        let encoded_type = codec().encode(&Value::String(edge_type.to_string()))?;
+        let encoded_type = codec().encode(&Value::string(edge_type))?;
         let encoded_rank = codec().encode(&Value::BigInt(ranking))?;
 
         let mut key = Vec::new();
@@ -211,7 +211,7 @@ impl KeyBuilder {
     ) -> Result<ByteKey, StorageError> {
         let encoded_src = codec().encode(edge_src)?;
         let encoded_dst = codec().encode(edge_dst)?;
-        let encoded_type = codec().encode(&Value::String(edge_type.to_string()))?;
+        let encoded_type = codec().encode(&Value::string(edge_type))?;
         let encoded_rank = codec().encode(&Value::BigInt(ranking))?;
 
         let mut key = Vec::new();
@@ -244,7 +244,7 @@ mod tests {
     fn test_build_vertex_index_key() {
         let space_id = 1u64;
         let index_name = "idx_test";
-        let prop_value = Value::String("test_value".to_string());
+        let prop_value = Value::string("test_value");
         let vertex_id = Value::Int(123);
 
         let key = KeyBuilder::build_vertex_index_key(space_id, index_name, &prop_value, &vertex_id)

@@ -230,7 +230,7 @@ fn deserialize_value(reader: &mut impl Read) -> StorageResult<Value> {
             reader.read_exact(&mut bytes)?;
             let s = String::from_utf8(bytes)
                 .map_err(|e| crate::core::StorageError::deserialize_error(e.to_string()))?;
-            Ok(Value::String(s))
+            Ok(Value::string(s))
         }
         _ => Err(crate::core::StorageError::deserialize_error(format!(
             "Unknown value tag {} in stats",
@@ -330,8 +330,8 @@ mod tests {
     #[test]
     fn test_stats_with_strings() {
         let mut stats = ColumnStats::new(EncodingType::Dictionary, 512, 2048);
-        stats.min_value = Some(Value::String("apple".to_string()));
-        stats.max_value = Some(Value::String("zebra".to_string()));
+        stats.min_value = Some(Value::string("apple"));
+        stats.max_value = Some(Value::string("zebra"));
 
         let mut buf = Vec::new();
         stats.serialize_meta(&mut buf).unwrap();

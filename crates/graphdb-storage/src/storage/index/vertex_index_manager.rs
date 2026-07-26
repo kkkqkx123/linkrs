@@ -725,7 +725,7 @@ mod tests {
             schema_name: schema_name.to_string(),
             fields: vec![IndexField::new(
                 "name".to_string(),
-                Value::String("".to_string()),
+                Value::string(""),
                 false,
             )],
             properties: vec![],
@@ -742,7 +742,7 @@ mod tests {
         let space_id = 1u64;
         let vertex_id = Value::Int(123);
         let index_name = "idx_name";
-        let props = vec![("name".to_string(), Value::String("Alice".to_string()))];
+        let props = vec![("name".to_string(), Value::string("Alice"))];
 
         manager
             .update_vertex_indexes(space_id, &vertex_id, index_name, &props)
@@ -751,13 +751,13 @@ mod tests {
         let index = create_test_index(index_name, "person");
 
         let results = manager
-            .lookup_tag_index(space_id, &index, &Value::String("Alice".to_string()))
+            .lookup_tag_index(space_id, &index, &Value::string("Alice"))
             .expect("Failed to lookup tag index");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0], vertex_id);
 
         let empty_results = manager
-            .lookup_tag_index(space_id, &index, &Value::String("Bob".to_string()))
+            .lookup_tag_index(space_id, &index, &Value::string("Bob"))
             .expect("Failed to lookup tag index");
         assert!(empty_results.is_empty());
     }
@@ -769,7 +769,7 @@ mod tests {
         let space_id = 1u64;
         let vertex_id = Value::Int(123);
         let index_name = "idx_name";
-        let props = vec![("name".to_string(), Value::String("Alice".to_string()))];
+        let props = vec![("name".to_string(), Value::string("Alice"))];
 
         manager
             .update_vertex_indexes(space_id, &vertex_id, index_name, &props)
@@ -778,7 +778,7 @@ mod tests {
         let index = create_test_index(index_name, "person");
 
         let results = manager
-            .lookup_tag_index(space_id, &index, &Value::String("Alice".to_string()))
+            .lookup_tag_index(space_id, &index, &Value::string("Alice"))
             .expect("Failed to lookup tag index");
         assert_eq!(results.len(), 1);
 
@@ -787,7 +787,7 @@ mod tests {
             .expect("Failed to delete vertex indexes");
 
         let results_after = manager
-            .lookup_tag_index(space_id, &index, &Value::String("Alice".to_string()))
+            .lookup_tag_index(space_id, &index, &Value::string("Alice"))
             .expect("Failed to lookup tag index");
         assert!(results_after.is_empty());
     }
@@ -799,7 +799,7 @@ mod tests {
         let space_id = 1u64;
         let vertex_id = Value::Int(123);
         let index_name = "idx_name";
-        let props = vec![("name".to_string(), Value::String("Alice".to_string()))];
+        let props = vec![("name".to_string(), Value::string("Alice"))];
 
         manager
             .update_vertex_indexes(space_id, &vertex_id, index_name, &props)
@@ -807,7 +807,7 @@ mod tests {
 
         let index = create_test_index(index_name, "person");
         let results = manager
-            .lookup_tag_index(space_id, &index, &Value::String("Alice".to_string()))
+            .lookup_tag_index(space_id, &index, &Value::string("Alice"))
             .expect("Failed to lookup tag index");
         assert_eq!(results.len(), 1);
 
@@ -816,7 +816,7 @@ mod tests {
             .expect("Failed to clear tag index");
 
         let results_after = manager
-            .lookup_tag_index(space_id, &index, &Value::String("Alice".to_string()))
+            .lookup_tag_index(space_id, &index, &Value::string("Alice"))
             .expect("Failed to lookup tag index");
         assert!(results_after.is_empty());
 
@@ -832,7 +832,7 @@ mod tests {
         let space_id = 1u64;
         let vertex_id = Value::Int(123);
         let index_name = "idx_name";
-        let props = vec![("name".to_string(), Value::String("Alice".to_string()))];
+        let props = vec![("name".to_string(), Value::string("Alice"))];
 
         manager
             .update_vertex_indexes_mvcc(space_id, &vertex_id, index_name, &props, 10)
@@ -845,7 +845,7 @@ mod tests {
 
         let index = create_test_index(index_name, "person");
         let results = manager
-            .lookup_tag_index_mvcc(space_id, &index, &Value::String("Alice".to_string()), 20)
+            .lookup_tag_index_mvcc(space_id, &index, &Value::string("Alice"), 20)
             .expect("Failed to lookup tag index");
         assert_eq!(results, vec![vertex_id.clone()]);
 
@@ -854,7 +854,7 @@ mod tests {
             .expect("Failed to delete vertex indexes");
 
         let results_after = manager
-            .lookup_tag_index_mvcc(space_id, &index, &Value::String("Alice".to_string()), 30)
+            .lookup_tag_index_mvcc(space_id, &index, &Value::string("Alice"), 30)
             .expect("Failed to lookup tag index");
         assert!(results_after.is_empty());
     }
@@ -874,7 +874,7 @@ mod tests {
                 1,
                 &vertex_id_one,
                 index_name,
-                &[("name".to_string(), Value::String("Alice".to_string()))],
+                &[("name".to_string(), Value::string("Alice"))],
             )
             .expect("Failed to insert space one index");
         manager
@@ -882,7 +882,7 @@ mod tests {
                 2,
                 &vertex_id_two,
                 index_name,
-                &[("name".to_string(), Value::String("Alice".to_string()))],
+                &[("name".to_string(), Value::string("Alice"))],
             )
             .expect("Failed to insert space two index");
 
@@ -891,12 +891,12 @@ mod tests {
             .expect("Failed to clear space one index");
 
         let space_one_results = manager
-            .lookup_tag_index(1, &index_one, &Value::String("Alice".to_string()))
+            .lookup_tag_index(1, &index_one, &Value::string("Alice"))
             .expect("Failed to lookup cleared space");
         assert!(space_one_results.is_empty());
 
         let space_two_results = manager
-            .lookup_tag_index(2, &index_two, &Value::String("Alice".to_string()))
+            .lookup_tag_index(2, &index_two, &Value::string("Alice"))
             .expect("Failed to lookup retained space");
         assert_eq!(space_two_results, vec![vertex_id_two]);
     }
@@ -910,7 +910,7 @@ mod tests {
                 1,
                 &Value::Int(1),
                 "idx_name",
-                &[("name".to_string(), Value::String("Alice".to_string()))],
+                &[("name".to_string(), Value::string("Alice"))],
                 10,
             )
             .expect("first index entry should be written");
@@ -919,7 +919,7 @@ mod tests {
                 1,
                 &Value::Int(2),
                 "idx_name",
-                &[("name".to_string(), Value::String("Bob".to_string()))],
+                &[("name".to_string(), Value::string("Bob"))],
                 20,
             )
             .expect("second index entry should be written");
@@ -927,7 +927,7 @@ mod tests {
         let plan = IndexScanPlan {
             space: "space".to_string(),
             index_id: 1,
-            predicate: IndexPredicate::Prefix(Value::String("A".to_string())),
+            predicate: IndexPredicate::Prefix(Value::string("A")),
             partition: crate::storage::cursor::PartitionSelector::All,
             partition_id_range: None,
             projection: None,
@@ -962,7 +962,7 @@ mod tests {
                     1,
                     &Value::Int(id),
                     "idx_name",
-                    &[("name".to_string(), Value::String(format!("name-{id}")))],
+                    &[("name".to_string(), Value::string(format!("name-{id}")))],
                     10,
                 )
                 .expect("index entry should be written");
@@ -971,7 +971,7 @@ mod tests {
         let plan = IndexScanPlan {
             space: "space".to_string(),
             index_id: 1,
-            predicate: IndexPredicate::Prefix(Value::String("name-".to_string())),
+            predicate: IndexPredicate::Prefix(Value::string("name-")),
             partition: crate::storage::cursor::PartitionSelector::All,
             partition_id_range: None,
             projection: None,
@@ -1003,22 +1003,22 @@ mod tests {
         let entries = vec![
             (
                 Value::Int(1),
-                Value::String("Alice".to_string()),
+                Value::string("Alice"),
                 Value::Int(25),
             ),
             (
                 Value::Int(2),
-                Value::String("Bob".to_string()),
+                Value::string("Bob"),
                 Value::Int(30),
             ),
             (
                 Value::Int(3),
-                Value::String("Charlie".to_string()),
+                Value::string("Charlie"),
                 Value::Int(35),
             ),
             (
                 Value::Int(4),
-                Value::String("Diana".to_string()),
+                Value::string("Diana"),
                 Value::Int(28),
             ),
         ];
@@ -1135,7 +1135,7 @@ mod tests {
                 1,
                 &Value::Int(5),
                 "idx_name",
-                &[("name".to_string(), Value::String("Eve".to_string()))],
+                &[("name".to_string(), Value::string("Eve"))],
                 20,
             )
             .expect("newer entry");

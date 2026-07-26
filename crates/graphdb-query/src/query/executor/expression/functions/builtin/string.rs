@@ -213,10 +213,10 @@ fn execute_substring(args: &[Value]) -> Result<Value, ExpressionError> {
             let start = *start as usize;
             let len = *len as usize;
             if start >= s.len() {
-                Ok(Value::String(String::new()))
+                Ok(Value::string(String::new()))
             } else {
                 let end = (start + len).min(s.len());
-                Ok(Value::String(s[start..end].to_string()))
+                Ok(Value::string(s[start..end].to_string()))
             }
         }
         (Value::Null(_), _, _) | (_, Value::Null(_), _) | (_, _, Value::Null(_)) => {
@@ -241,12 +241,12 @@ fn execute_concat(args: &[Value]) -> Result<Value, ExpressionError> {
             }
         }
     }
-    Ok(Value::String(result))
+    Ok(Value::string(result))
 }
 
 fn execute_replace(args: &[Value]) -> Result<Value, ExpressionError> {
     match (&args[0], &args[1]) {
-        (Value::String(s), Value::String(from)) => Ok(Value::String(s.replace(from, ""))),
+        (Value::String(s), Value::String(from)) => Ok(Value::string(s.replace(from.as_str(), ""))),
         (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
             "The replace function requires a string type",
@@ -301,8 +301,8 @@ fn execute_split(args: &[Value]) -> Result<Value, ExpressionError> {
     match (&args[0], &args[1]) {
         (Value::String(s), Value::String(delimiter)) => {
             let parts: Vec<Value> = s
-                .split(delimiter)
-                .map(|p| Value::String(p.to_string()))
+                .split(delimiter.as_str())
+                .map(|p| Value::string(p.to_string()))
                 .collect();
             Ok(Value::list(List { values: parts }))
         }
@@ -321,7 +321,7 @@ fn execute_lpad(args: &[Value]) -> Result<Value, ExpressionError> {
         (Value::String(s), Value::Int(len), Value::String(pad)) => {
             let len = *len as usize;
             if s.len() >= len {
-                Ok(Value::String(s[..len].to_string()))
+                Ok(Value::string(s[..len].to_string()))
             } else {
                 let pad_len = len - s.len();
                 let mut result = String::new();
@@ -330,7 +330,7 @@ fn execute_lpad(args: &[Value]) -> Result<Value, ExpressionError> {
                 }
                 result.truncate(pad_len);
                 result.push_str(s);
-                Ok(Value::String(result))
+                Ok(Value::string(result))
             }
         }
         (Value::Null(_), _, _) | (_, Value::Null(_), _) | (_, _, Value::Null(_)) => {
@@ -352,7 +352,7 @@ fn execute_rpad(args: &[Value]) -> Result<Value, ExpressionError> {
         (Value::String(s), Value::Int(len), Value::String(pad)) => {
             let len = *len as usize;
             if s.len() >= len {
-                Ok(Value::String(s[..len].to_string()))
+                Ok(Value::string(s[..len].to_string()))
             } else {
                 let pad_len = len - s.len();
                 let mut result = s.clone();
@@ -362,7 +362,7 @@ fn execute_rpad(args: &[Value]) -> Result<Value, ExpressionError> {
                 }
                 pad_str.truncate(pad_len);
                 result.push_str(&pad_str);
-                Ok(Value::String(result))
+                Ok(Value::string(result))
             }
         }
         (Value::Null(_), _, _) | (_, Value::Null(_), _) | (_, _, Value::Null(_)) => {
@@ -381,7 +381,7 @@ fn execute_concat_ws(args: &[Value]) -> Result<Value, ExpressionError> {
         ));
     }
     let separator = match &args[0] {
-        Value::String(s) => s.clone(),
+        Value::String(s) => s.to_string(),
         Value::Null(_) => return Ok(Value::Null(NullType::Null)),
         _ => {
             return Err(ExpressionError::type_error(
@@ -406,7 +406,7 @@ fn execute_concat_ws(args: &[Value]) -> Result<Value, ExpressionError> {
             }
         }
     }
-    Ok(Value::String(result))
+    Ok(Value::string(result))
 }
 
 fn execute_strcasecmp(args: &[Value]) -> Result<Value, ExpressionError> {
@@ -462,12 +462,12 @@ fn execute_split_part(args: &[Value]) -> Result<Value, ExpressionError> {
                     "split_part index must be positive",
                 ));
             }
-            let parts: Vec<&str> = s.split(delimiter).collect();
+            let parts: Vec<&str> = s.split(delimiter.as_str()).collect();
             let idx = (*n - 1) as usize;
             if idx < parts.len() {
-                Ok(Value::String(parts[idx].to_string()))
+                Ok(Value::string(parts[idx].to_string()))
             } else {
-                Ok(Value::String(String::new()))
+                Ok(Value::string(String::new()))
             }
         }
         (Value::Null(_), _, _) | (_, Value::Null(_), _) | (_, _, Value::Null(_)) => {
@@ -493,7 +493,7 @@ fn execute_initcap(args: &[Value]) -> Result<Value, ExpressionError> {
                 })
                 .collect::<Vec<_>>()
                 .join(" ");
-            Ok(Value::String(result))
+            Ok(Value::string(result))
         }
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
@@ -513,7 +513,7 @@ fn execute_repeat(args: &[Value]) -> Result<Value, ExpressionError> {
                     "repeat count must be non-negative",
                 ));
             }
-            Ok(Value::String(s.repeat(*n as usize)))
+            Ok(Value::string(s.repeat(*n as usize)))
         }
         (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
@@ -528,7 +528,7 @@ fn execute_position(args: &[Value]) -> Result<Value, ExpressionError> {
     }
     match (&args[0], &args[1]) {
         (Value::String(s), Value::String(sub)) => {
-            if let Some(idx) = s.find(sub) {
+            if let Some(idx) = s.find(sub.as_str()) {
                 Ok(Value::Int((idx + 1) as i32))
             } else {
                 Ok(Value::Int(0))
@@ -549,12 +549,12 @@ fn execute_left(args: &[Value]) -> Result<Value, ExpressionError> {
         (Value::String(s), Value::Int(n)) => {
             let n = *n;
             if n >= s.chars().count() as i32 {
-                Ok(Value::String(s.clone()))
+                Ok(Value::string(s.clone()))
             } else if n <= 0 {
-                Ok(Value::String(String::new()))
+                Ok(Value::string(String::new()))
             } else {
                 let result: String = s.chars().take(n as usize).collect();
-                Ok(Value::String(result))
+                Ok(Value::string(result))
             }
         }
         (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
@@ -573,12 +573,12 @@ fn execute_right(args: &[Value]) -> Result<Value, ExpressionError> {
             let n = *n;
             let char_count = s.chars().count();
             if n >= char_count as i32 {
-                Ok(Value::String(s.clone()))
+                Ok(Value::string(s.clone()))
             } else if n <= 0 {
-                Ok(Value::String(String::new()))
+                Ok(Value::string(String::new()))
             } else {
                 let result: String = s.chars().skip(char_count - n as usize).collect();
-                Ok(Value::String(result))
+                Ok(Value::string(result))
             }
         }
         (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
@@ -597,10 +597,10 @@ fn execute_string_insert(args: &[Value]) -> Result<Value, ExpressionError> {
             let pos = *pos as usize;
             let len = *len as usize;
             if pos > s.len() {
-                return Ok(Value::String(s.clone()));
+                return Ok(Value::string(s.clone()));
             }
             let result = format!("{}{}{}", &s[..pos], newsub, &s[(pos + len).min(s.len())..]);
-            Ok(Value::String(result))
+            Ok(Value::string(result))
         }
         (Value::Null(_), _, _, _)
         | (_, Value::Null(_), _, _)
@@ -630,7 +630,7 @@ fn execute_translate(args: &[Value]) -> Result<Value, ExpressionError> {
                     }
                 })
                 .collect();
-            Ok(Value::String(result))
+            Ok(Value::string(result))
         }
         (Value::Null(_), _, _) | (_, Value::Null(_), _) | (_, _, Value::Null(_)) => {
             Ok(Value::Null(NullType::Null))
@@ -648,7 +648,7 @@ fn execute_format(args: &[Value]) -> Result<Value, ExpressionError> {
         ));
     }
     let format_str = match &args[0] {
-        Value::String(s) => s.clone(),
+        Value::String(s) => s.to_string(),
         Value::Null(_) => return Ok(Value::Null(NullType::Null)),
         _ => {
             return Err(ExpressionError::type_error(
@@ -661,12 +661,12 @@ fn execute_format(args: &[Value]) -> Result<Value, ExpressionError> {
         let placeholder = format!("{{{}}}", i);
         let replacement = match arg {
             Value::Null(_) => "NULL".to_string(),
-            Value::String(s) => s.clone(),
+            Value::String(s) => s.to_string(),
             other => format!("{}", other),
         };
         result = result.replace(&placeholder, &replacement);
     }
-    Ok(Value::String(result))
+    Ok(Value::string(result))
 }
 
 fn execute_string_split(args: &[Value]) -> Result<Value, ExpressionError> {
@@ -678,8 +678,8 @@ fn execute_string_split(args: &[Value]) -> Result<Value, ExpressionError> {
     match (&args[0], &args[1]) {
         (Value::String(s), Value::String(delimiter)) => {
             let parts: Vec<Value> = s
-                .split(delimiter)
-                .map(|p| Value::String(p.to_string()))
+                .split(delimiter.as_str())
+                .map(|p| Value::string(p.to_string()))
                 .collect();
             Ok(Value::list(List { values: parts }))
         }
@@ -725,7 +725,7 @@ mod tests {
     fn test_length() {
         let func = StringFunction::Length;
         let result = func
-            .execute(&[Value::String("hello".to_string())])
+            .execute(&[Value::string("hello".to_string())])
             .expect("Execution should succeed");
         assert_eq!(result, Value::Int(5));
     }
@@ -734,27 +734,27 @@ mod tests {
     fn test_upper() {
         let func = StringFunction::Upper;
         let result = func
-            .execute(&[Value::String("hello".to_string())])
+            .execute(&[Value::string("hello".to_string())])
             .expect("Execution should succeed");
-        assert_eq!(result, Value::String("HELLO".to_string()));
+        assert_eq!(result, Value::string("HELLO".to_string()));
     }
 
     #[test]
     fn test_lower() {
         let func = StringFunction::Lower;
         let result = func
-            .execute(&[Value::String("HELLO".to_string())])
+            .execute(&[Value::string("HELLO".to_string())])
             .expect("Execution should succeed");
-        assert_eq!(result, Value::String("hello".to_string()));
+        assert_eq!(result, Value::string("hello".to_string()));
     }
 
     #[test]
     fn test_trim() {
         let func = StringFunction::Trim;
         let result = func
-            .execute(&[Value::String("  hello  ".to_string())])
+            .execute(&[Value::string("  hello  ".to_string())])
             .expect("Execution should succeed");
-        assert_eq!(result, Value::String("hello".to_string()));
+        assert_eq!(result, Value::string("hello".to_string()));
     }
 
     #[test]
@@ -762,12 +762,12 @@ mod tests {
         let func = StringFunction::Substring;
         let result = func
             .execute(&[
-                Value::String("hello".to_string()),
+                Value::string("hello".to_string()),
                 Value::Int(1),
                 Value::Int(3),
             ])
             .expect("Execution should succeed");
-        assert_eq!(result, Value::String("ell".to_string()));
+        assert_eq!(result, Value::string("ell".to_string()));
     }
 
     #[test]
@@ -775,12 +775,12 @@ mod tests {
         let func = StringFunction::Concat;
         let result = func
             .execute(&[
-                Value::String("hello".to_string()),
-                Value::String(" ".to_string()),
-                Value::String("world".to_string()),
+                Value::string("hello".to_string()),
+                Value::string(" ".to_string()),
+                Value::string("world".to_string()),
             ])
             .expect("Execution should succeed");
-        assert_eq!(result, Value::String("hello world".to_string()));
+        assert_eq!(result, Value::string("hello world".to_string()));
     }
 
     #[test]
@@ -788,8 +788,8 @@ mod tests {
         let func = StringFunction::Contains;
         let result = func
             .execute(&[
-                Value::String("hello world".to_string()),
-                Value::String("world".to_string()),
+                Value::string("hello world".to_string()),
+                Value::string("world".to_string()),
             ])
             .expect("Execution should succeed");
         assert_eq!(result, Value::Bool(true));
@@ -800,8 +800,8 @@ mod tests {
         let func = StringFunction::StartsWith;
         let result = func
             .execute(&[
-                Value::String("hello world".to_string()),
-                Value::String("hello".to_string()),
+                Value::string("hello world".to_string()),
+                Value::string("hello".to_string()),
             ])
             .expect("Execution should succeed");
         assert_eq!(result, Value::Bool(true));
@@ -812,8 +812,8 @@ mod tests {
         let func = StringFunction::EndsWith;
         let result = func
             .execute(&[
-                Value::String("hello world".to_string()),
-                Value::String("world".to_string()),
+                Value::string("hello world".to_string()),
+                Value::string("world".to_string()),
             ])
             .expect("Execution should succeed");
         assert_eq!(result, Value::Bool(true));
@@ -833,13 +833,13 @@ mod tests {
         let func = StringFunction::StringInsert;
         let result = func
             .execute(&[
-                Value::String("Hello World".to_string()),
+                Value::string("Hello World".to_string()),
                 Value::Int(5),
                 Value::Int(0),
-                Value::String(",".to_string()),
+                Value::string(",".to_string()),
             ])
             .expect("Execution should succeed");
-        assert_eq!(result, Value::String("Hello, World".to_string()));
+        assert_eq!(result, Value::string("Hello, World".to_string()));
     }
 
     #[test]
@@ -847,12 +847,12 @@ mod tests {
         let func = StringFunction::Translate;
         let result = func
             .execute(&[
-                Value::String("hello".to_string()),
-                Value::String("ae".to_string()),
-                Value::String("xy".to_string()),
+                Value::string("hello".to_string()),
+                Value::string("ae".to_string()),
+                Value::string("xy".to_string()),
             ])
             .expect("Execution should succeed");
-        assert_eq!(result, Value::String("hyllo".to_string()));
+        assert_eq!(result, Value::string("hyllo".to_string()));
     }
 
     #[test]
@@ -860,14 +860,14 @@ mod tests {
         let func = StringFunction::Format;
         let result = func
             .execute(&[
-                Value::String("Hello {0}, your score is {1}".to_string()),
-                Value::String("Alice".to_string()),
+                Value::string("Hello {0}, your score is {1}".to_string()),
+                Value::string("Alice".to_string()),
                 Value::Int(95),
             ])
             .expect("Execution should succeed");
         assert_eq!(
             result,
-            Value::String("Hello Alice, your score is 95".to_string())
+            Value::string("Hello Alice, your score is 95".to_string())
         );
     }
 
@@ -876,17 +876,17 @@ mod tests {
         let func = StringFunction::StringSplit;
         let result = func
             .execute(&[
-                Value::String("a,b,c".to_string()),
-                Value::String(",".to_string()),
+                Value::string("a,b,c".to_string()),
+                Value::string(",".to_string()),
             ])
             .expect("Execution should succeed");
         assert_eq!(
             result,
             Value::list(List {
                 values: vec![
-                    Value::String("a".to_string()),
-                    Value::String("b".to_string()),
-                    Value::String("c".to_string()),
+                    Value::string("a".to_string()),
+                    Value::string("b".to_string()),
+                    Value::string("c".to_string()),
                 ]
             })
         );

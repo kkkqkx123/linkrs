@@ -54,7 +54,7 @@ fn create_test_path() -> Path {
         1,
         vec![("Person", {
             let mut m = HashMap::new();
-            m.insert("name", Value::String("Alice".to_string()));
+            m.insert("name", Value::string("Alice"));
             m.insert("age", Value::Int(30));
             m
         })],
@@ -63,7 +63,7 @@ fn create_test_path() -> Path {
         2,
         vec![("Person", {
             let mut m = HashMap::new();
-            m.insert("name", Value::String("Bob".to_string()));
+            m.insert("name", Value::string("Bob"));
             m.insert("age", Value::Int(25));
             m
         })],
@@ -72,7 +72,7 @@ fn create_test_path() -> Path {
         3,
         vec![("Person", {
             let mut m = HashMap::new();
-            m.insert("name", Value::String("Charlie".to_string()));
+            m.insert("name", Value::string("Charlie"));
             m.insert("age", Value::Int(35));
             m
         })],
@@ -133,7 +133,7 @@ fn test_labels_function() {
 
     if let Value::List(list) = result.expect("labels函数应该成功") {
         assert_eq!(list.values.len(), 1);
-        assert_eq!(list.values[0], Value::String("Person".to_string()));
+        assert_eq!(list.values[0], Value::string("Person"));
     } else {
         panic!("The expected return value is of the list type.");
     }
@@ -146,7 +146,7 @@ fn test_properties_vertex_function() {
         1,
         vec![("Person", {
             let mut m = HashMap::new();
-            m.insert("name", Value::String("Alice".to_string()));
+            m.insert("name", Value::string("Alice"));
             m.insert("age", Value::Int(30));
             m
         })],
@@ -158,7 +158,7 @@ fn test_properties_vertex_function() {
     if let Value::Map(map) = result.expect("properties函数应该成功") {
         assert!(map.contains_key("name"));
         assert!(map.contains_key("age"));
-        assert_eq!(map.get("name"), Some(&Value::String("Alice".to_string())));
+        assert_eq!(map.get("name"), Some(&Value::string("Alice")));
         assert_eq!(map.get("age"), Some(&Value::Int(30)));
     } else {
         panic!("The expected return type is a map.");
@@ -174,7 +174,7 @@ fn test_type_function() {
     assert!(result.is_ok());
     assert_eq!(
         result.expect("type函数应该成功"),
-        Value::String("KNOWS".to_string())
+        Value::string("KNOWS")
     );
 }
 
@@ -268,7 +268,7 @@ fn test_size_list_function() {
 #[test]
 fn test_size_string_function() {
     let registry = FunctionRegistry::new();
-    let string = Value::String("hello".to_string());
+    let string = Value::string("hello");
 
     let result = registry.execute("size", &[string]);
     assert!(result.is_ok());
@@ -312,7 +312,7 @@ fn test_range_with_step_function() {
 fn test_keys_map_function() {
     let registry = FunctionRegistry::new();
     let mut map = HashMap::new();
-    map.insert("name".to_string(), Value::String("Alice".to_string()));
+    map.insert("name".to_string(), Value::string("Alice"));
     map.insert("age".to_string(), Value::Int(30));
     let map_value = Value::Map(Box::new(map));
 
@@ -321,8 +321,8 @@ fn test_keys_map_function() {
 
     if let Value::List(list) = result.expect("keys函数应该成功") {
         assert_eq!(list.values.len(), 2);
-        assert!(list.values.contains(&Value::String("name".to_string())));
-        assert!(list.values.contains(&Value::String("age".to_string())));
+        assert!(list.values.contains(&Value::string("name")));
+        assert!(list.values.contains(&Value::string("age")));
     } else {
         panic!("The expected return type is a list.");
     }
@@ -468,17 +468,17 @@ fn test_split_function() {
     let result = registry.execute(
         "split",
         &[
-            Value::String("hello,world,test".to_string()),
-            Value::String(",".to_string()),
+            Value::string("hello,world,test"),
+            Value::string(","),
         ],
     );
     assert!(result.is_ok());
 
     if let Value::List(list) = result.expect("split函数应该成功") {
         assert_eq!(list.values.len(), 3);
-        assert_eq!(list.values[0], Value::String("hello".to_string()));
-        assert_eq!(list.values[1], Value::String("world".to_string()));
-        assert_eq!(list.values[2], Value::String("test".to_string()));
+        assert_eq!(list.values[0], Value::string("hello"));
+        assert_eq!(list.values[1], Value::string("world"));
+        assert_eq!(list.values[2], Value::string("test"));
     } else {
         panic!("The expected return value is of the list type.");
     }
@@ -495,7 +495,7 @@ fn test_coalesce_function() {
         &[
             Value::Null(NullType::Null),
             Value::Int(42),
-            Value::String("test".to_string()),
+            Value::string("test"),
         ],
     );
     assert!(result.is_ok());
@@ -521,8 +521,8 @@ fn test_coalesce_all_null() {
 fn test_hash_string_function() {
     let registry = FunctionRegistry::new();
 
-    let result1 = registry.execute("hash", &[Value::String("test".to_string())]);
-    let result2 = registry.execute("hash", &[Value::String("test".to_string())]);
+    let result1 = registry.execute("hash", &[Value::string("test")]);
+    let result2 = registry.execute("hash", &[Value::string("test")]);
 
     assert!(result1.is_ok());
     assert!(result2.is_ok());
@@ -702,7 +702,7 @@ fn test_time_function() {
     assert!(matches!(result.expect("time函数应该成功"), Value::Time(_)));
 
     // 测试 time(string)
-    let result = registry.execute("time", &[Value::String("14:30:00".to_string())]);
+    let result = registry.execute("time", &[Value::string("14:30:00")]);
     assert!(result.is_ok());
     assert!(matches!(result.expect("time函数应该成功"), Value::Time(_)));
 }
@@ -722,7 +722,7 @@ fn test_datetime_function() {
     // 测试 datetime(string)
     let result = registry.execute(
         "datetime",
-        &[Value::String("2024-01-15 14:30:00".to_string())],
+        &[Value::string("2024-01-15 14:30:00")],
     );
     assert!(result.is_ok());
     assert!(matches!(
@@ -930,15 +930,15 @@ fn test_lpad_function() {
     let result = registry.execute(
         "lpad",
         &[
-            Value::String("hello".to_string()),
+            Value::string("hello"),
             Value::Int(10),
-            Value::String("*".to_string()),
+            Value::string("*"),
         ],
     );
     assert!(result.is_ok());
     assert_eq!(
         result.expect("lpad函数应该成功"),
-        Value::String("*****hello".to_string())
+        Value::string("*****hello")
     );
 }
 
@@ -949,15 +949,15 @@ fn test_rpad_function() {
     let result = registry.execute(
         "rpad",
         &[
-            Value::String("hello".to_string()),
+            Value::string("hello"),
             Value::Int(10),
-            Value::String("*".to_string()),
+            Value::string("*"),
         ],
     );
     assert!(result.is_ok());
     assert_eq!(
         result.expect("rpad函数应该成功"),
-        Value::String("hello*****".to_string())
+        Value::string("hello*****")
     );
 }
 
@@ -968,16 +968,16 @@ fn test_concat_ws_function() {
     let result = registry.execute(
         "concat_ws",
         &[
-            Value::String(",".to_string()),
-            Value::String("a".to_string()),
-            Value::String("b".to_string()),
-            Value::String("c".to_string()),
+            Value::string(","),
+            Value::string("a"),
+            Value::string("b"),
+            Value::string("c"),
         ],
     );
     assert!(result.is_ok());
     assert_eq!(
         result.expect("concat_ws函数应该成功"),
-        Value::String("a,b,c".to_string())
+        Value::string("a,b,c")
     );
 }
 
@@ -989,8 +989,8 @@ fn test_strcasecmp_function() {
     let result = registry.execute(
         "strcasecmp",
         &[
-            Value::String("Hello".to_string()),
-            Value::String("hello".to_string()),
+            Value::string("Hello"),
+            Value::string("hello"),
         ],
     );
     assert!(result.is_ok());
@@ -1000,8 +1000,8 @@ fn test_strcasecmp_function() {
     let result = registry.execute(
         "strcasecmp",
         &[
-            Value::String("apple".to_string()),
-            Value::String("banana".to_string()),
+            Value::string("apple"),
+            Value::string("banana"),
         ],
     );
     assert!(result.is_ok());
@@ -1011,8 +1011,8 @@ fn test_strcasecmp_function() {
     let result = registry.execute(
         "strcasecmp",
         &[
-            Value::String("banana".to_string()),
-            Value::String("apple".to_string()),
+            Value::string("banana"),
+            Value::string("apple"),
         ],
     );
     assert!(result.is_ok());
@@ -1060,11 +1060,11 @@ fn test_json_extract_function() {
     let registry = FunctionRegistry::new();
     let json = Value::String(r#"{"name": "Alice", "age": 30}"#.to_string());
 
-    let result = registry.execute("json_extract", &[json, Value::String("name".to_string())]);
+    let result = registry.execute("json_extract", &[json, Value::string("name")]);
     assert!(result.is_ok());
     assert_eq!(
         result.expect("json_extract函数应该成功"),
-        Value::String("Alice".to_string())
+        Value::string("Alice")
     );
 }
 
@@ -1154,7 +1154,7 @@ fn test_st_astext_function() {
     assert!(result.is_ok());
     assert_eq!(
         result.expect("st_astext函数应该成功"),
-        Value::String("POINT(116.4074 39.9042)".to_string())
+        Value::string("POINT(116.4074 39.9042)")
     );
 }
 

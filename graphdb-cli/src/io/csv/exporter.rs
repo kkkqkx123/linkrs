@@ -120,7 +120,7 @@ fn value_to_csv_string(value: &serde_json::Value) -> String {
         serde_json::Value::Null => String::new(),
         serde_json::Value::Bool(b) => b.to_string(),
         serde_json::Value::Number(n) => n.to_string(),
-        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::String(s) => s.to_string(),
         serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
             serde_json::to_string(value).unwrap_or_default()
         }

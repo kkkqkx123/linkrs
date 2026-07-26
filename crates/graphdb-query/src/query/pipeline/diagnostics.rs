@@ -51,7 +51,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         };
 
         let data_set = crate::core::DataSet::from_rows(
-            vec![vec![crate::core::Value::String(output)]],
+            vec![vec![crate::core::Value::string(output)]],
             vec!["plan".to_string()],
         );
         Ok(ExecutionResult::DataSet { data: data_set })
@@ -109,7 +109,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         };
 
         let data_set = crate::core::DataSet::from_rows(
-            vec![vec![crate::core::Value::String(output)]],
+            vec![vec![crate::core::Value::string(output)]],
             vec!["plan".to_string()],
         );
         Ok(ExecutionResult::DataSet { data: data_set })
@@ -224,7 +224,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
 
         for node_desc in &plan_desc.plan_node_descs {
             ids.push(Value::BigInt(node_desc.id));
-            names.push(Value::String(node_desc.name.clone()));
+            names.push(Value::string_from_owned(node_desc.name.clone()));
 
             let deps = node_desc
                 .dependencies
@@ -236,7 +236,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                         .join(", ")
                 })
                 .unwrap_or_default();
-            dependencies.push(Value::String(deps));
+            dependencies.push(Value::string(&deps));
 
             let profile_str = if let Some(ref profiles) = node_desc.profiles {
                 profiles
@@ -247,7 +247,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             } else {
                 "N/A".to_string()
             };
-            profiling_data.push(Value::String(profile_str));
+            profiling_data.push(Value::string(&profile_str));
 
             let info = node_desc
                 .description
@@ -260,7 +260,7 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
                         .join(", ")
                 })
                 .unwrap_or_default();
-            operator_info.push(Value::String(info));
+            operator_info.push(Value::string(&info));
         }
 
         let parallel_info = if plan_desc.actual_workers > 0 {
@@ -285,10 +285,10 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
             )
         };
         ids.push(Value::BigInt(-1));
-        names.push(Value::String("Parallel".to_string()));
-        dependencies.push(Value::String(String::new()));
-        profiling_data.push(Value::String(String::new()));
-        operator_info.push(Value::String(parallel_info));
+        names.push(Value::string("Parallel"));
+        dependencies.push(Value::string(""));
+        profiling_data.push(Value::string(""));
+        operator_info.push(Value::string(&parallel_info));
 
         let total_rows = plan_desc.plan_node_descs.len() + 1;
         let result_dataset = crate::core::DataSet {

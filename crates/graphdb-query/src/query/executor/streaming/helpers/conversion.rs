@@ -10,12 +10,12 @@ use crate::core::{Edge, Vertex};
 pub fn vertex_to_row(vertex: &Vertex) -> Vec<Value> {
     let mut row = vec![
         Value::BigInt(vertex.id),
-        Value::String(vertex.vid.to_string()),
+        Value::string(vertex.vid.to_string()),
     ];
 
     // Add tags
     for tag in &vertex.tags {
-        row.push(Value::String(tag.name.clone()));
+        row.push(Value::string(tag.name.clone()));
     }
 
     // Add first 3 properties (simplified)
@@ -34,9 +34,9 @@ pub fn vertex_to_row(vertex: &Vertex) -> Vec<Value> {
 /// Convert an Edge to row representation
 pub fn edge_to_row(edge: &Edge) -> Vec<Value> {
     let mut row = vec![
-        Value::String(edge.src.to_string()),
-        Value::String(edge.dst.to_string()),
-        Value::String(edge.edge_type.clone()),
+        Value::string(edge.src.to_string()),
+        Value::string(edge.dst.to_string()),
+        Value::string(edge.edge_type.clone()),
         Value::BigInt(edge.ranking),
     ];
 
@@ -118,7 +118,7 @@ mod tests {
 
         // Verify row structure: src, dst, edge_type, ranking, + at least 1 property
         assert!(row.len() >= 5);
-        assert_eq!(row[2], Value::String("follows".to_string()));
+        assert_eq!(row[2], Value::string("follows".to_string()));
         assert_eq!(row[3], Value::BigInt(42));
     }
 

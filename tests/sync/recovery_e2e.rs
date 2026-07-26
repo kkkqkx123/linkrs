@@ -31,7 +31,7 @@ fn test_complete_sync_and_verify() {
     let mut properties = std::collections::HashMap::new();
     properties.insert(
         "title".to_string(),
-        Value::String("Complete Test".to_string()),
+        Value::string("Complete Test"),
     );
     let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
     let vertex =
@@ -73,7 +73,7 @@ fn test_transaction_commit_and_verify() {
     let mut properties = std::collections::HashMap::new();
     properties.insert(
         "title".to_string(),
-        Value::String("Transaction Test".to_string()),
+        Value::string("Transaction Test"),
     );
     let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
     let vertex =
@@ -119,7 +119,7 @@ fn test_transaction_rollback_and_verify() {
     let mut properties = std::collections::HashMap::new();
     properties.insert(
         "title".to_string(),
-        Value::String("Rollback Test".to_string()),
+        Value::string("Rollback Test"),
     );
     let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
     let vertex =
@@ -195,7 +195,7 @@ fn test_multiple_sequential_transactions() {
             let mut properties = std::collections::HashMap::new();
             properties.insert(
                 "title".to_string(),
-                Value::String(format!("Seq{}{}", txn_num, i)),
+                Value::string(format!("Seq{}{}", txn_num, i)),
             );
             let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
             let vertex = graphdb::core::Vertex::new(
@@ -244,7 +244,7 @@ fn test_interleaved_txn_non_txn() {
         .expect("Failed to create tag");
 
     let mut properties = std::collections::HashMap::new();
-    properties.insert("title".to_string(), Value::String("NonTxn1".to_string()));
+    properties.insert("title".to_string(), Value::string("NonTxn1"));
     let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
     let vertex =
         graphdb::core::Vertex::new(graphdb::core::types::VertexId::from_int64(1), vec![tag]);
@@ -259,7 +259,7 @@ fn test_interleaved_txn_non_txn() {
         .expect("Failed to begin transaction");
 
     let mut properties = std::collections::HashMap::new();
-    properties.insert("title".to_string(), Value::String("Txn1".to_string()));
+    properties.insert("title".to_string(), Value::string("Txn1"));
     let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
     let vertex =
         graphdb::core::Vertex::new(graphdb::core::types::VertexId::from_int64(2), vec![tag]);
@@ -275,7 +275,7 @@ fn test_interleaved_txn_non_txn() {
     harness.wait_for_async(200);
 
     let mut properties = std::collections::HashMap::new();
-    properties.insert("title".to_string(), Value::String("NonTxn2".to_string()));
+    properties.insert("title".to_string(), Value::string("NonTxn2"));
     let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
     let vertex =
         graphdb::core::Vertex::new(graphdb::core::types::VertexId::from_int64(3), vec![tag]);
@@ -316,7 +316,7 @@ fn test_large_transaction() {
 
     for i in 0..50 {
         let mut properties = std::collections::HashMap::new();
-        properties.insert("title".to_string(), Value::String(format!("Large{}", i)));
+        properties.insert("title".to_string(), Value::string(format!("Large{}", i)));
         let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
         let vertex = graphdb::core::Vertex::new(
             graphdb::core::types::VertexId::from_int64(i + 1),
@@ -371,7 +371,7 @@ fn test_rollback_does_not_corrupt_existing_data() {
         .expect("Failed to create tag");
 
     let mut properties = std::collections::HashMap::new();
-    properties.insert("title".to_string(), Value::String("Initial".to_string()));
+    properties.insert("title".to_string(), Value::string("Initial"));
     let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
     let vertex =
         graphdb::core::Vertex::new(graphdb::core::types::VertexId::from_int64(1), vec![tag]);
@@ -390,7 +390,7 @@ fn test_rollback_does_not_corrupt_existing_data() {
         .expect("Failed to begin transaction");
 
     let mut properties = std::collections::HashMap::new();
-    properties.insert("title".to_string(), Value::String("Failed".to_string()));
+    properties.insert("title".to_string(), Value::string("Failed"));
     let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
     let vertex =
         graphdb::core::Vertex::new(graphdb::core::types::VertexId::from_int64(2), vec![tag]);
@@ -430,7 +430,7 @@ fn test_storage_consistency_after_multi_insert() {
 
     for i in 0..10 {
         let mut properties = std::collections::HashMap::new();
-        properties.insert("title".to_string(), Value::String(format!("Doc{}", i)));
+        properties.insert("title".to_string(), Value::string(format!("Doc{}", i)));
         let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
         let vertex = graphdb::core::Vertex::new(
             graphdb::core::types::VertexId::from_int64(i + 1),
@@ -471,7 +471,7 @@ fn test_delete_and_verify_remaining() {
 
     for i in 0..5 {
         let mut properties = std::collections::HashMap::new();
-        properties.insert("title".to_string(), Value::String(format!("Initial{}", i)));
+        properties.insert("title".to_string(), Value::string(format!("Initial{}", i)));
         let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
         let vertex = graphdb::core::Vertex::new(
             graphdb::core::types::VertexId::from_int64(i + 1),

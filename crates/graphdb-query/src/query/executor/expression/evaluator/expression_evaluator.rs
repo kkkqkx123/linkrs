@@ -360,7 +360,7 @@ impl ExpressionEvaluator {
             DataType::String => {
                 return value
                     .to_string()
-                    .map(Value::String)
+                    .map(Value::string)
                     .map_err(ExpressionError::type_error);
             }
             DataType::List => value.to_list(),

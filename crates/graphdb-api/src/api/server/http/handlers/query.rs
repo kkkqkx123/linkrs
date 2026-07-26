@@ -163,7 +163,7 @@ fn value_to_json(value: crate::core::Value) -> serde_json::Value {
         crate::core::Value::Double(d) => serde_json::Value::Number(
             serde_json::Number::from_f64(d).unwrap_or(serde_json::Number::from(0)),
         ),
-        crate::core::Value::String(s) => serde_json::Value::String(s),
+        crate::core::Value::String(s) => serde_json::Value::String(s.to_string()),
         crate::core::Value::Date(d) => serde_json::Value::String(d.to_string()),
         crate::core::Value::DateTime(dt) => serde_json::Value::String(dt.to_string()),
         crate::core::Value::Time(t) => serde_json::Value::String(t.to_string()),

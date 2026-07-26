@@ -16,6 +16,7 @@ use crate::core::{
     },
     vertex_edge_path::{Edge, Path, Vertex},
 };
+use compact_str::CompactString;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -37,7 +38,7 @@ pub enum Value {
     Float(f32),  // 4 bytes, single precision
     Double(f64), // 8 bytes, double precision
     Decimal128(Decimal128Value),
-    String(String),
+    String(CompactString),
     /// Fixed-length strings for optimized storage of short strings
     FixedString {
         len: usize,
@@ -69,6 +70,19 @@ pub enum Value {
 }
 
 impl Value {
+    /// Create a string value from a string-like type.
+    ///
+    /// `CompactString` stores up to 22 bytes inline without heap allocation,
+    /// falling back to a heap-allocated `String` for longer content.
+    pub fn string(s: impl AsRef<str>) -> Self {
+        Value::String(CompactString::new(s.as_ref()))
+    }
+
+    /// Create a string value from an owned `String`.
+    pub fn string_from_owned(s: String) -> Self {
+        Value::String(CompactString::from(s))
+    }
+
     /// Getting the type of value
     pub fn get_type(&self) -> DataType {
         match self {
@@ -548,8 +562,8 @@ impl Value {
                 if data.len() < 5 + len {
                     return None;
                 }
-                let s = String::from_utf8(data[5..5 + len].to_vec()).ok()?;
-                Some((Value::String(s), 5 + len))
+                let s = std::str::from_utf8(&data[5..5 + len]).ok()?;
+                Some((Value::String(CompactString::new(s)), 5 + len))
             }
             9 => {
                 if data.len() < 5 {

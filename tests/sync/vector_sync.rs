@@ -141,9 +141,9 @@ async fn test_point_data_with_payload() {
     let mut payload: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
     payload.insert(
         "category".to_string(),
-        Value::String("electronics".to_string()),
+        Value::string("electronics"),
     );
-    payload.insert("price".to_string(), Value::String("99.99".to_string()));
+    payload.insert("price".to_string(), Value::string("99.99"));
 
     let point = VectorPointData {
         id: "point_1".to_string(),
@@ -155,11 +155,11 @@ async fn test_point_data_with_payload() {
     assert_eq!(point.vector.len(), 4);
     assert_eq!(
         point.payload.get("category").unwrap(),
-        &Value::String("electronics".to_string())
+        &Value::string("electronics")
     );
     assert_eq!(
         point.payload.get("price").unwrap(),
-        &Value::String("99.99".to_string())
+        &Value::string("99.99")
     );
 }
 

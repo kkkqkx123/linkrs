@@ -108,7 +108,7 @@ fn test_2pc_full_protocol() {
         let vertex = create_test_vertex(
             i + 1,
             "Person",
-            vec![("name", Value::String(format!("Person{}", i + 1)))],
+            vec![("name", Value::string(format!("Person{}", i + 1)))],
         );
         harness
             .insert_vertex_with_txn("test_space", vertex)
@@ -196,7 +196,7 @@ fn test_2pc_prepare_failure() {
     let vertex = create_test_vertex(
         1,
         "Person",
-        vec![("name", Value::String("Alice".to_string()))],
+        vec![("name", Value::string("Alice"))],
     );
     harness
         .insert_vertex_with_txn("test_space", vertex)
@@ -245,7 +245,7 @@ fn test_2pc_storage_commit_failure() {
     let vertex = create_test_vertex(
         1,
         "Person",
-        vec![("name", Value::String("Alice".to_string()))],
+        vec![("name", Value::string("Alice"))],
     );
     harness
         .insert_vertex_with_txn("test_space", vertex)
@@ -297,7 +297,7 @@ fn test_2pc_index_sync_failure() {
     let vertex = create_test_vertex(
         1,
         "Person",
-        vec![("name", Value::String("Alice".to_string()))],
+        vec![("name", Value::string("Alice"))],
     );
     harness
         .insert_vertex_with_txn("test_space", vertex)
@@ -359,7 +359,7 @@ fn test_concurrent_transactions_sync() {
             let vertex = create_test_vertex(
                 i * 10 + 1,
                 "Person",
-                vec![("name", Value::String(format!("Thread{}", i)))],
+                vec![("name", Value::string(format!("Thread{}", i)))],
             );
             harness
                 .insert_vertex_with_txn("test_space", vertex)
@@ -439,7 +439,7 @@ fn test_concurrent_index_updates_same_space() {
             let vertex = create_test_vertex(
                 i + 1,
                 "Person",
-                vec![("name", Value::String(format!("Concurrent{}", i)))],
+                vec![("name", Value::string(format!("Concurrent{}", i)))],
             );
             harness
                 .insert_vertex("test_space", vertex)

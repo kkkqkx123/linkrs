@@ -117,7 +117,7 @@ mod tests {
             schema_name: "person".to_string(),
             fields: vec![IndexField::new(
                 "name".to_string(),
-                Value::String("".to_string()),
+                Value::string(""),
                 false,
             )],
             properties: vec![],
@@ -131,7 +131,7 @@ mod tests {
                 1,
                 &Value::Int(1),
                 "idx",
-                &[("name".to_string(), Value::String("Alice".to_string()))],
+                &[("name".to_string(), Value::string("Alice"))],
                 10,
             )
             .expect("write");

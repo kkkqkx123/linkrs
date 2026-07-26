@@ -253,7 +253,7 @@ mod tests {
         );
         node.set_scan_limits(vec![IndexLimit::equal(
             "Person.name",
-            Value::String("Alice".into()),
+            Value::string("Alice"),
         )]);
         let plan_node = PlanNodeEnum::IndexScan(node);
 
@@ -274,7 +274,7 @@ mod tests {
         let mut node = EdgeIndexScanNode::new(1, "friend", "friend_index");
         node.set_scan_limits(vec![IndexLimit::equal(
             "friend.rank",
-            Value::String("1".into()),
+            Value::string("1"),
         )]);
         let plan_node = PlanNodeEnum::EdgeIndexScan(node);
 
@@ -333,7 +333,7 @@ mod tests {
         );
         node.set_scan_limits(vec![IndexLimit::equal(
             "Person.name",
-            Value::String("Alice".into()),
+            Value::string("Alice"),
         )]);
         let selectivity = estimator.estimate_index_scan_selectivity(&node);
         assert_eq!(selectivity, 0.01);
@@ -354,7 +354,7 @@ mod tests {
         );
         node.set_scan_limits(vec![IndexLimit::prefix(
             "Person.name",
-            Value::String("A".into()),
+            Value::string("A"),
         )]);
         let selectivity = estimator.estimate_index_scan_selectivity(&node);
         assert_eq!(selectivity, 0.05);
@@ -375,8 +375,8 @@ mod tests {
         );
         node.set_scan_limits(vec![IndexLimit::range(
             "Person.age",
-            Some(Value::String("20".into())),
-            Some(Value::String("30".into())),
+            Some(Value::string("20")),
+            Some(Value::string("30")),
             true,
             true,
         )]);
@@ -398,8 +398,8 @@ mod tests {
             ScanType::Unique,
         );
         node.set_scan_limits(vec![
-            IndexLimit::equal("Person.name", Value::String("Alice".into())),
-            IndexLimit::equal("Person.age", Value::String("25".into())),
+            IndexLimit::equal("Person.name", Value::string("Alice")),
+            IndexLimit::equal("Person.age", Value::string("25")),
         ]);
         let selectivity = estimator.estimate_index_scan_selectivity(&node);
         assert_eq!(selectivity, 0.0001);
@@ -423,7 +423,7 @@ mod tests {
         let mut node = EdgeIndexScanNode::new(1, "friend", "friend_index");
         node.set_scan_limits(vec![IndexLimit::equal(
             "friend.rank",
-            Value::String("1".into()),
+            Value::string("1"),
         )]);
         let selectivity = estimator.estimate_edge_index_scan_selectivity(&node);
         assert_eq!(selectivity, 0.01);
@@ -495,7 +495,7 @@ mod tests {
         );
         node.set_scan_limits(vec![IndexLimit::equal(
             "Person.name",
-            Value::String("Alice".into()),
+            Value::string("Alice"),
         )]);
         let property_name = estimator.get_property_name_from_index_scan(&node);
         assert_eq!(property_name, "Person.name");

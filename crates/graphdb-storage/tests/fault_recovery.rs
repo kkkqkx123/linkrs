@@ -132,7 +132,7 @@ fn test_recovery_index_state_after_crash() {
         let result = storage.lookup_index(
             "test_space",
             "person_name_idx",
-            &graphdb_storage::core::Value::String("Alice".to_string()),
+            &graphdb_storage::core::Value::string("Alice"),
         );
 
         // May not find due to WAL recovery behavior, but should not error

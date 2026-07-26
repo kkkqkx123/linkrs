@@ -60,7 +60,7 @@ impl Drop for SyncTestContext {
 fn create_test_properties(content: &str) -> Vec<(String, graphdb_core::core::Value)> {
     vec![(
         "content".to_string(),
-        graphdb_core::core::Value::String(content.to_string()),
+        graphdb_core::core::Value::string(content),
     )]
 }
 
@@ -93,7 +93,7 @@ async fn test_vertex_insert_auto_sync_bm25() {
         .await
         .expect("Search should succeed");
 
-    let expected_doc_id = graphdb_core::core::Value::String("1".to_string());
+    let expected_doc_id = graphdb_core::core::Value::string("1");
     assert!(
         results.iter().any(|r| r.doc_id == expected_doc_id),
         "Should find synced document with doc_id=1"
@@ -149,7 +149,7 @@ async fn test_vertex_update_auto_sync() {
         .search(1, "Article", "content", "Old", 10)
         .await
         .expect("Search should succeed");
-    let old_doc_id = graphdb_core::core::Value::String("1".to_string());
+    let old_doc_id = graphdb_core::core::Value::string("1");
     assert!(
         !old_results.iter().any(|r| r.doc_id == old_doc_id),
         "Should not find old content"
@@ -161,7 +161,7 @@ async fn test_vertex_update_auto_sync() {
         .search(1, "Article", "content", "New", 10)
         .await
         .expect("Search should succeed");
-    let new_doc_id = graphdb_core::core::Value::String("1".to_string());
+    let new_doc_id = graphdb_core::core::Value::string("1");
     assert!(
         new_results.iter().any(|r| r.doc_id == new_doc_id),
         "Should find new content"
@@ -198,7 +198,7 @@ async fn test_vertex_delete_auto_sync() {
         .search(1, "Article", "content", "Hello", 10)
         .await
         .expect("Search should succeed");
-    let doc_id = graphdb_core::core::Value::String("1".to_string());
+    let doc_id = graphdb_core::core::Value::string("1");
     assert!(
         results_before.iter().any(|r| r.doc_id == doc_id),
         "Should find document before deletion"
@@ -207,7 +207,7 @@ async fn test_vertex_delete_auto_sync() {
     // Delete vertex
     let delete_props: Vec<(String, graphdb_core::core::Value)> = vec![(
         "content".to_string(),
-        graphdb_core::core::Value::String("Hello World".to_string()),
+        graphdb_core::core::Value::string("Hello World"),
     )];
     ctx.coordinator
         .on_vertex_change(1, "Article", &vertex_id, &delete_props, ChangeType::Delete)
@@ -225,7 +225,7 @@ async fn test_vertex_delete_auto_sync() {
         .search(1, "Article", "content", "Hello", 10)
         .await
         .expect("Search should succeed");
-    let doc_id_after = graphdb_core::core::Value::String("1".to_string());
+    let doc_id_after = graphdb_core::core::Value::string("1");
     assert!(
         !results_after.iter().any(|r| r.doc_id == doc_id_after),
         "Should not find document after deletion"
@@ -286,7 +286,7 @@ async fn test_sync_multiple_fields() {
     let vertex_id = graphdb_core::core::Value::Int(1);
     let title_props = vec![(
         "title".to_string(),
-        graphdb_core::core::Value::String("Test title".to_string()),
+        graphdb_core::core::Value::string("Test title"),
     )];
     ctx.coordinator
         .on_vertex_change(1, "Article", &vertex_id, &title_props, ChangeType::Insert)
@@ -295,7 +295,7 @@ async fn test_sync_multiple_fields() {
 
     let content_props = vec![(
         "content".to_string(),
-        graphdb_core::core::Value::String("Test content".to_string()),
+        graphdb_core::core::Value::string("Test content"),
     )];
     ctx.coordinator
         .on_vertex_change(1, "Article", &vertex_id, &content_props, ChangeType::Insert)
@@ -333,7 +333,7 @@ async fn test_sync_string_vertex_ids() {
         .expect("Failed to create index");
 
     // Use string vertex ID
-    let vertex_id = graphdb_core::core::Value::String("article_001".to_string());
+    let vertex_id = graphdb_core::core::Value::string("article_001");
     let properties = create_test_properties("String ID content");
 
     ctx.coordinator
@@ -352,7 +352,7 @@ async fn test_sync_string_vertex_ids() {
         .await
         .expect("Search should succeed");
 
-    let expected_doc_id = graphdb_core::core::Value::String("article_001".to_string());
+    let expected_doc_id = graphdb_core::core::Value::string("article_001");
     assert!(
         results.iter().any(|r| r.doc_id == expected_doc_id),
         "Should find document with string ID"

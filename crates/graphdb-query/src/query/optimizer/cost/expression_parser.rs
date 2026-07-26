@@ -252,11 +252,11 @@ impl ExpressionParser {
                 _ => None,
             },
             "upper" | "toupper" if args.len() == 1 => match args[0] {
-                Value::String(s) => Some(Value::String(s.to_uppercase())),
+                Value::String(s) => Some(Value::string(s.to_uppercase())),
                 _ => None,
             },
             "lower" | "tolower" if args.len() == 1 => match args[0] {
-                Value::String(s) => Some(Value::String(s.to_lowercase())),
+                Value::String(s) => Some(Value::string(s.to_lowercase())),
                 _ => None,
             },
             "substring" | "substr" if args.len() >= 2 => match (args[0], args.get(1).copied()) {
@@ -270,17 +270,17 @@ impl ExpressionParser {
                     } else {
                         s.len()
                     };
-                    Some(Value::String(
+                    Some(Value::string(
                         s.chars()
                             .skip(start_idx)
                             .take(end_idx - start_idx)
-                            .collect(),
+                            .collect::<String>(),
                     ))
                 }
                 _ => None,
             },
             "trim" if args.len() == 1 => match args[0] {
-                Value::String(s) => Some(Value::String(s.trim().to_string())),
+                Value::String(s) => Some(Value::string(s.trim().to_string())),
                 _ => None,
             },
             _ => None,
@@ -296,7 +296,7 @@ impl ExpressionParser {
             (Value::BigInt(l), Value::BigInt(r)) => Some(Value::BigInt(l + r)),
             (Value::Float(l), Value::Float(r)) => Some(Value::Float(l + r)),
             (Value::Double(l), Value::Double(r)) => Some(Value::Double(l + r)),
-            (Value::String(l), Value::String(r)) => Some(Value::String(format!("{}{}", l, r))),
+            (Value::String(l), Value::String(r)) => Some(Value::string(format!("{}{}", l, r))),
             _ => None,
         }
     }
@@ -372,7 +372,7 @@ impl ExpressionParser {
 
     fn concat_values(&self, left: &Value, right: &Value) -> Option<Value> {
         match (left, right) {
-            (Value::String(l), Value::String(r)) => Some(Value::String(format!("{}{}", l, r))),
+            (Value::String(l), Value::String(r)) => Some(Value::string(format!("{}{}", l, r))),
             _ => None,
         }
     }

@@ -66,7 +66,7 @@ impl RegexFunction {
                             format!("Invalid regular expression: {}", pattern),
                         )
                     })?;
-                    Ok(Value::String(
+                    Ok(Value::string(
                         regex.replace_all(s, replacement.as_str()).to_string(),
                     ))
                 }
@@ -86,7 +86,7 @@ impl RegexFunction {
                         )
                     })?;
                     if let Some(matched) = regex.find(s) {
-                        Ok(Value::String(matched.as_str().to_string()))
+                        Ok(Value::string(matched.as_str().to_string()))
                     } else {
                         Ok(Value::Null(NullType::Null))
                     }

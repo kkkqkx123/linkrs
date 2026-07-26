@@ -112,7 +112,7 @@ impl FromValue for i64 {
 impl FromValue for String {
     fn from_value(value: &Value) -> TestResult<Self> {
         match value {
-            Value::String(s) => Ok(s.clone()),
+            Value::String(s) => Ok(s.to_string()),
             _ => Err(Box::new(DBError::validation(format!(
                 "Expected String, got {:?}",
                 value

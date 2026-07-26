@@ -682,7 +682,7 @@ impl RecoveryApplier for GraphStorageContext {
                 .map(|(name, _typ)| {
                     crate::core::types::IndexField::new(
                         name.clone(),
-                        crate::core::Value::String(String::new()),
+                        crate::core::Value::string(""),
                         true,
                     )
                 })
@@ -734,7 +734,7 @@ impl RecoveryApplier for GraphStorageContext {
                 .map(|(name, _typ)| {
                     crate::core::types::IndexField::new(
                         name.clone(),
-                        crate::core::Value::String(String::new()),
+                        crate::core::Value::string(""),
                         true,
                     )
                 })
@@ -1238,7 +1238,7 @@ mod tests {
             1001,
             &[
                 ("id".to_string(), Value::BigInt(1001)),
-                ("full_name".to_string(), Value::String("Alice".to_string())),
+                ("full_name".to_string(), Value::string("Alice")),
             ],
             4,
         )
@@ -1249,7 +1249,7 @@ mod tests {
             2001,
             &[
                 ("id".to_string(), Value::BigInt(2001)),
-                ("name".to_string(), Value::String("Shanghai".to_string())),
+                ("name".to_string(), Value::string("Shanghai")),
             ],
             4,
         )
@@ -1264,7 +1264,7 @@ mod tests {
                 .iter()
                 .find(|(name, _)| name == "full_name")
                 .map(|(_, value)| value),
-            Some(&Value::String("Alice".to_string()))
+            Some(&Value::string("Alice"))
         );
         assert!(vertex.properties.iter().all(|(name, _)| name != "age"));
 

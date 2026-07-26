@@ -680,7 +680,7 @@ mod tests {
         let planner = VectorSearchPlanner::new();
 
         assert_eq!(
-            planner.value_to_string(&crate::core::Value::String("test".to_string())),
+            planner.value_to_string(&crate::core::Value::string("test")),
             Some("test".to_string())
         );
         assert_eq!(

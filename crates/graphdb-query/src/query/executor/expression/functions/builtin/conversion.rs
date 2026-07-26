@@ -43,7 +43,7 @@ fn execute_to_string(args: &[Value]) -> Result<Value, ExpressionError> {
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => args[0]
             .to_string()
-            .map(Value::String)
+            .map(Value::string)
             .map_err(ExpressionError::type_error),
     }
 }
@@ -106,14 +106,14 @@ mod tests {
         let result = func
             .execute(&[Value::Int(42)])
             .expect("Implementation should not fail");
-        assert_eq!(result, Value::String("42".to_string()));
+        assert_eq!(result, Value::string("42".to_string()));
     }
 
     #[test]
     fn test_to_int() {
         let func = ConversionFunction::ToInt;
         let result = func
-            .execute(&[Value::String("42".to_string())])
+            .execute(&[Value::string("42".to_string())])
             .expect("Implementation should not fail");
         assert_eq!(result, Value::Int(42));
     }

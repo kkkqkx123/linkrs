@@ -64,14 +64,14 @@ fn test_value_type_checking() {
     assert_eq!(Value::Int(42).get_type(), DataType::Int);
     assert_eq!(Value::Float(1.5_f32).get_type(), DataType::Float);
     assert_eq!(
-        Value::String("test".to_string()).get_type(),
+        Value::string("test").get_type(),
         DataType::String
     );
 
     // Numeric type checking
     assert!(Value::Int(42).is_numeric());
     assert!(Value::Float(1.5_f32).is_numeric());
-    assert!(!Value::String("42".to_string()).is_numeric());
+    assert!(!Value::string("42").is_numeric());
     assert!(!Value::Bool(true).is_numeric());
 
     // BadNull Check
@@ -88,23 +88,23 @@ fn test_value_boolean_conversion() {
 
     // string conversion
     assert_eq!(
-        Value::String("true".to_string()).to_bool(),
+        Value::string("true").to_bool(),
         Value::Bool(true)
     );
     assert_eq!(
-        Value::String("TRUE".to_string()).to_bool(),
+        Value::string("TRUE").to_bool(),
         Value::Bool(true)
     );
     assert_eq!(
-        Value::String("false".to_string()).to_bool(),
+        Value::string("false").to_bool(),
         Value::Bool(false)
     );
     assert_eq!(
-        Value::String("FALSE".to_string()).to_bool(),
+        Value::string("FALSE").to_bool(),
         Value::Bool(false)
     );
     assert_eq!(
-        Value::String("invalid".to_string()).to_bool(),
+        Value::string("invalid").to_bool(),
         Value::Null(NullType::Null)
     );
 
@@ -154,10 +154,10 @@ fn test_value_integer_conversion() {
     );
 
     // string parsing
-    assert_eq!(Value::String("42".to_string()).to_int(), Value::Int(42));
-    assert_eq!(Value::String("-100".to_string()).to_int(), Value::Int(-100));
+    assert_eq!(Value::string("42").to_int(), Value::Int(42));
+    assert_eq!(Value::string("-100").to_int(), Value::Int(-100));
     assert_eq!(
-        Value::String("invalid".to_string()).to_int(),
+        Value::string("invalid").to_int(),
         Value::Null(NullType::Null)
     );
 
@@ -176,15 +176,15 @@ fn test_value_float_conversion() {
 
     // string parsing
     assert_eq!(
-        Value::String("1.5".to_string()).to_float(),
+        Value::string("1.5").to_float(),
         Value::Float(1.5_f32)
     );
     assert_eq!(
-        Value::String("-2.5".to_string()).to_float(),
+        Value::string("-2.5").to_float(),
         Value::Float(-2.5)
     );
     assert_eq!(
-        Value::String("invalid".to_string()).to_float(),
+        Value::string("invalid").to_float(),
         Value::Null(NullType::Null)
     );
 
@@ -215,10 +215,10 @@ fn test_value_arithmetic_operations() {
         Value::Float(12.5)
     );
     assert_eq!(
-        Value::String("Hello, ".to_string())
-            .add(&Value::String("World".to_string()))
+        Value::string("Hello, ")
+            .add(&Value::string("World"))
             .expect("字符串连接应该成功"),
-        Value::String("Hello, World".to_string())
+        Value::string("Hello, World")
     );
 
     // subtractive
@@ -287,17 +287,17 @@ fn test_value_comparison() {
     assert_eq!(Value::Float(f32::NAN), Value::Float(f32::NAN));
 
     // string comparison
-    assert!(Value::String("b".to_string()) > Value::String("a".to_string()));
+    assert!(Value::string("b") > Value::string("a"));
     assert_eq!(
-        Value::String("test".to_string()),
-        Value::String("test".to_string())
+        Value::string("test"),
+        Value::string("test")
     );
 
     // Boolean comparison
     assert!(Value::Bool(true) > Value::Bool(false));
 
     // Comparison of different types (based on type priority)
-    assert!(Value::Int(1) < Value::String("a".to_string()));
+    assert!(Value::Int(1) < Value::string("a"));
 }
 
 #[test]
@@ -311,7 +311,7 @@ fn test_value_unary_operations() {
         Value::Float(2.5_f32).neg().expect("浮点数取反应该成功"),
         Value::Float(-2.5_f32)
     );
-    assert!(Value::String("test".to_string()).neg().is_err());
+    assert!(Value::string("test").neg().is_err());
 
     // absolute value
     assert_eq!(
@@ -322,11 +322,11 @@ fn test_value_unary_operations() {
         Value::Float(-2.5_f32).abs().expect("浮点数绝对值应该成功"),
         Value::Float(2.5_f32)
     );
-    assert!(Value::String("test".to_string()).abs().is_err());
+    assert!(Value::string("test").abs().is_err());
 
     // lengths
     assert_eq!(
-        Value::String("hello".to_string())
+        Value::string("hello")
             .len()
             .expect("字符串长度计算应该成功"),
         Value::Int(5)
@@ -438,7 +438,7 @@ fn test_value_complex_types() {
     dataset.col_names.push("age".to_string());
     dataset
         .rows
-        .push(vec![Value::String("Alice".to_string()), Value::Int(30)]);
+        .push(vec![Value::string("Alice"), Value::Int(30)]);
     assert_eq!(dataset.col_names.len(), 2);
     assert_eq!(dataset.rows.len(), 1);
 }
@@ -522,7 +522,7 @@ fn test_expression_literal_creation() {
     // String literal
     let expr = Expression::literal("hello".to_string());
     match &expr {
-        Expression::Literal(v) => assert_eq!(*v, Value::String("hello".to_string())),
+        Expression::Literal(v) => assert_eq!(*v, Value::string("hello")),
         _ => panic!("Expected Literal Expression"),
     }
 
@@ -591,7 +591,7 @@ fn test_evaluator_literal() {
     // String
     let expr = Expression::literal("test".to_string());
     let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("字符串字面量求值应该成功");
-    assert_eq!(result, Value::String("test".to_string()));
+    assert_eq!(result, Value::string("test"));
 
     // Boolean value
     let expr = Expression::literal(true);
@@ -603,7 +603,7 @@ fn test_evaluator_literal() {
 fn test_evaluator_variable() {
     let mut ctx = DefaultExpressionContext::new();
     ctx.set_variable("x".to_string(), Value::Int(100));
-    ctx.set_variable("name".to_string(), Value::String("Alice".to_string()));
+    ctx.set_variable("name".to_string(), Value::string("Alice"));
 
     // Read the set variables
     let expr = Expression::variable("x");
@@ -612,7 +612,7 @@ fn test_evaluator_variable() {
 
     let expr = Expression::variable("name");
     let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("变量求值应该成功");
-    assert_eq!(result, Value::String("Alice".to_string()));
+    assert_eq!(result, Value::string("Alice"));
 }
 
 #[test]
@@ -846,13 +846,13 @@ fn test_function_registry_builtins() {
 
     // Testing the string function
     let result = registry
-        .execute("length", &[Value::String("hello".to_string())])
+        .execute("length", &[Value::string("hello")])
         .expect("length函数执行应该成功");
     assert_eq!(result, Value::Int(5));
 
     // Test type conversion function
     let result = registry
-        .execute("to_int", &[Value::String("42".to_string())])
+        .execute("to_int", &[Value::string("42")])
         .expect("to_int函数执行应该成功");
     assert_eq!(result, Value::Int(42));
 }
@@ -878,13 +878,13 @@ fn test_basic_context_variables() {
 
     // Setting variables
     ctx.set_variable("x".to_string(), Value::Int(100));
-    ctx.set_variable("y".to_string(), Value::String("test".to_string()));
+    ctx.set_variable("y".to_string(), Value::string("test"));
 
     // Obtain the variable
     assert_eq!(ctx.get_variable("x"), Some(Value::Int(100)));
     assert_eq!(
         ctx.get_variable("y"),
-        Some(Value::String("test".to_string()))
+        Some(Value::string("test"))
     );
     assert_eq!(ctx.get_variable("z"), None);
 }
@@ -905,7 +905,7 @@ fn test_basic_context_functions() {
     );
 
     // Testing the length function
-    let result = registry.execute("length", &[Value::String("hello".to_string())]);
+    let result = registry.execute("length", &[Value::string("hello")]);
     assert!(result.is_ok());
     assert_eq!(
         result.expect("Failed to execute length function"),
@@ -998,7 +998,7 @@ fn test_string_concatenation() {
         right: Box::new(Expression::literal("World!".to_string())),
     };
     let result = ExpressionEvaluator::evaluate(&expr, &mut ctx).expect("字符串连接求值应该成功");
-    assert_eq!(result, Value::String("Hello, World!".to_string()));
+    assert_eq!(result, Value::string("Hello, World!"));
 }
 
 #[test]
@@ -1025,7 +1025,7 @@ fn test_map_operations() {
 
     // Create a Map value
     let mut map = HashMap::new();
-    map.insert("name".to_string(), Value::String("Alice".to_string()));
+    map.insert("name".to_string(), Value::string("Alice"));
     map.insert("age".to_string(), Value::Int(30));
     let map_value = Value::Map(Box::new(map));
 
@@ -1042,7 +1042,7 @@ fn test_value_memory_estimation() {
     let int_val = Value::Int(42);
     assert!(int_val.estimated_size() > 0);
 
-    let string_val = Value::String("hello world".to_string());
+    let string_val = Value::string("hello world");
     assert!(string_val.estimated_size() >= std::mem::size_of::<Value>() + "hello world".len());
 
     let list_val = Value::List(Box::new(graphdb_query::core::List {

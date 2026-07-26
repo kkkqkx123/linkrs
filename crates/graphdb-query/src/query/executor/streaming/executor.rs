@@ -795,9 +795,9 @@ mod tests {
             .map(|i| {
                 vec![
                     Value::BigInt(i as i64),
-                    Value::String(format!("vertex_{}", i)),
-                    Value::String(format!("label_{}", i % 10)),
-                    Value::String(format!("prop_{}", i % 100)),
+                    Value::string(format!("vertex_{}", i)),
+                    Value::string(format!("label_{}", i % 10)),
+                    Value::string(format!("prop_{}", i % 100)),
                     Value::BigInt((i % 1000) as i64),
                 ]
             })
@@ -888,25 +888,25 @@ mod tests {
         let buffer: Vec<Vec<Value>> = vec![
             vec![
                 Value::BigInt(1),
-                Value::String("a".to_string()),
-                Value::String("b".to_string()),
-                Value::String("c".to_string()),
-                Value::String("d".to_string()),
-                Value::String("e".to_string()),
-                Value::String("f".to_string()),
-                Value::String("g".to_string()),
-                Value::String("h".to_string()),
+                Value::string("a".to_string()),
+                Value::string("b".to_string()),
+                Value::string("c".to_string()),
+                Value::string("d".to_string()),
+                Value::string("e".to_string()),
+                Value::string("f".to_string()),
+                Value::string("g".to_string()),
+                Value::string("h".to_string()),
             ],
             vec![
                 Value::BigInt(2),
-                Value::String("i".to_string()),
-                Value::String("j".to_string()),
-                Value::String("k".to_string()),
-                Value::String("l".to_string()),
-                Value::String("m".to_string()),
-                Value::String("n".to_string()),
-                Value::String("o".to_string()),
-                Value::String("p".to_string()),
+                Value::string("i".to_string()),
+                Value::string("j".to_string()),
+                Value::string("k".to_string()),
+                Value::string("l".to_string()),
+                Value::string("m".to_string()),
+                Value::string("n".to_string()),
+                Value::string("o".to_string()),
+                Value::string("p".to_string()),
             ],
         ];
 

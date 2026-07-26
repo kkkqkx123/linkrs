@@ -332,7 +332,7 @@ fn execute_keys(args: &[Value]) -> Result<Value, ExpressionError> {
         }
     }
 
-    let result: Vec<Value> = keys.into_iter().map(Value::String).collect();
+    let result: Vec<Value> = keys.into_iter().map(Value::string).collect();
     Ok(Value::list(List { values: result }))
 }
 
@@ -561,7 +561,7 @@ fn execute_list_to_string(args: &[Value]) -> Result<Value, ExpressionError> {
     match (&args[0], &args[1]) {
         (Value::List(list), Value::String(delimiter)) => {
             let strings: Vec<String> = list.values.iter().map(value_to_string).collect();
-            Ok(Value::String(strings.join(delimiter)))
+            Ok(Value::string(strings.join(delimiter)))
         }
         (Value::Null(_), _) | (_, Value::Null(_)) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
@@ -653,7 +653,7 @@ fn value_to_string(v: &Value) -> String {
         Value::BigInt(i) => i.to_string(),
         Value::Float(f) => f.to_string(),
         Value::Double(f) => f.to_string(),
-        Value::String(s) => s.clone(),
+        Value::String(s) => s.to_string(),
         _ => format!("{:?}", v),
     }
 }
@@ -712,7 +712,7 @@ mod tests {
     #[test]
     fn test_size_string() {
         let result = ContainerFunction::Size
-            .execute(&[Value::String("hello".to_string())])
+            .execute(&[Value::string("hello".to_string())])
             .expect("size function should succeed");
         assert_eq!(result, Value::Int(5));
     }

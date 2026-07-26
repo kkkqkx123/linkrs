@@ -36,8 +36,8 @@ fn test_transaction_vertex_insert_sync() {
         1,
         "Person",
         vec![
-            ("name", Value::String("Alice".to_string())),
-            ("email", Value::String("alice@example.com".to_string())),
+            ("name", Value::string("Alice")),
+            ("email", Value::string("alice@example.com")),
         ],
     );
     harness
@@ -71,7 +71,7 @@ fn test_transaction_vertex_insert_sync() {
     assert!(
         results
             .iter()
-            .any(|r| r.doc_id == Value::String("1".to_string())),
+            .any(|r| r.doc_id == Value::string("1")),
         "Should find vertex with id=1"
     );
 }
@@ -98,7 +98,7 @@ fn test_transaction_vertex_update_sync() {
     let vertex = create_test_vertex(
         1,
         "Person",
-        vec![("name", Value::String("Alice".to_string()))],
+        vec![("name", Value::string("Alice"))],
     );
     harness
         .insert_vertex("test_space", vertex)
@@ -120,7 +120,7 @@ fn test_transaction_vertex_update_sync() {
     let new_vertex = create_test_vertex(
         2,
         "Person",
-        vec![("name", Value::String("Bob".to_string()))],
+        vec![("name", Value::string("Bob"))],
     );
     harness
         .insert_vertex_with_txn("test_space", new_vertex)
@@ -162,7 +162,7 @@ fn test_transaction_vertex_delete_sync() {
     let vertex = create_test_vertex(
         1,
         "Person",
-        vec![("name", Value::String("Alice".to_string()))],
+        vec![("name", Value::string("Alice"))],
     );
     harness
         .insert_vertex("test_space", vertex)
@@ -231,7 +231,7 @@ fn test_transaction_vertex_update_pipeline_sync() {
     let vertex = create_test_vertex(
         1,
         "Person",
-        vec![("name", Value::String("Alice".to_string()))],
+        vec![("name", Value::string("Alice"))],
     );
     harness
         .insert_vertex("test_space", vertex)
@@ -247,7 +247,7 @@ fn test_transaction_vertex_update_pipeline_sync() {
     let updated_vertex = create_test_vertex(
         1,
         "Person",
-        vec![("name", Value::String("AliceUpdated".to_string()))],
+        vec![("name", Value::string("AliceUpdated"))],
     );
     harness
         .insert_vertex_with_txn("test_space", updated_vertex)
@@ -297,7 +297,7 @@ fn test_transaction_batch_vertex_insert_sync() {
         let vertex = create_test_vertex(
             i + 1,
             "Person",
-            vec![("name", Value::String(format!("Person{}", i + 1)))],
+            vec![("name", Value::string(format!("Person{}", i + 1)))],
         );
         harness
             .insert_vertex_with_txn("test_space", vertex)
@@ -376,7 +376,7 @@ fn test_transaction_rollback_clears_index_buffer() {
     let vertex = create_test_vertex(
         1,
         "Person",
-        vec![("name", Value::String("Alice".to_string()))],
+        vec![("name", Value::string("Alice"))],
     );
     harness
         .insert_vertex_with_txn("test_space", vertex)
@@ -430,12 +430,12 @@ fn test_transaction_edge_insert_sync() {
     let vertex1 = create_test_vertex(
         1,
         "Person",
-        vec![("name", Value::String("Alice".to_string()))],
+        vec![("name", Value::string("Alice"))],
     );
     let vertex2 = create_test_vertex(
         2,
         "Person",
-        vec![("name", Value::String("Bob".to_string()))],
+        vec![("name", Value::string("Bob"))],
     );
     harness
         .insert_vertex("test_space", vertex1)
@@ -520,12 +520,12 @@ fn test_transaction_edge_with_properties_sync() {
     let person = create_test_vertex(
         1,
         "Person",
-        vec![("name", Value::String("Alice".to_string()))],
+        vec![("name", Value::string("Alice"))],
     );
     let company = create_test_vertex(
         100,
         "Company",
-        vec![("name", Value::String("TechCorp".to_string()))],
+        vec![("name", Value::string("TechCorp"))],
     );
     harness
         .insert_vertex("test_space", person)
@@ -542,7 +542,7 @@ fn test_transaction_edge_with_properties_sync() {
     let mut edge_props = HashMap::new();
     edge_props.insert(
         "position".to_string(),
-        Value::String("Engineer".to_string()),
+        Value::string("Engineer"),
     );
     edge_props.insert("since".to_string(), Value::Int(2020));
 
@@ -578,6 +578,6 @@ fn test_transaction_edge_with_properties_sync() {
     let edge = edge_opt.unwrap();
     assert_eq!(
         edge.props.get("position"),
-        Some(&Value::String("Engineer".to_string()))
+        Some(&Value::string("Engineer"))
     );
 }

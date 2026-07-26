@@ -322,7 +322,7 @@ impl ColumnStorage for VariableWidthColumn {
                 .ok()
                 .map(|jb| Value::JsonB(Box::new(jb)))
         } else {
-            String::from_utf8(bytes.to_vec()).ok().map(Value::String)
+            String::from_utf8(bytes.to_vec()).ok().map(Value::string)
         }
     }
 
@@ -946,7 +946,7 @@ impl Column {
                 strings.push(None);
             } else {
                 match self.get(i) {
-                    Some(Value::String(s)) => strings.push(Some(s)),
+                    Some(Value::String(s)) => strings.push(Some(s.to_string())),
                     Some(Value::Json(j)) => strings.push(Some(j.as_str().to_string())),
                     _ => strings.push(None),
                 }
@@ -1424,12 +1424,12 @@ mod tests {
     fn test_column_string() {
         let mut col = Column::new("name".to_string(), 0, DataType::String, false);
 
-        col.set(0, Some(&Value::String("Alice".to_string())))
+        col.set(0, Some(&Value::string("Alice")))
             .unwrap();
-        col.set(1, Some(&Value::String("Bob".to_string()))).unwrap();
+        col.set(1, Some(&Value::string("Bob"))).unwrap();
 
-        assert_eq!(col.get(0), Some(Value::String("Alice".to_string())));
-        assert_eq!(col.get(1), Some(Value::String("Bob".to_string())));
+        assert_eq!(col.get(0), Some(Value::string("Alice")));
+        assert_eq!(col.get(1), Some(Value::string("Bob")));
         assert_eq!(col.len(), 2);
     }
 
@@ -1444,7 +1444,7 @@ mod tests {
             .set(
                 0,
                 &[
-                    ("name".to_string(), Value::String("Alice".to_string())),
+                    ("name".to_string(), Value::string("Alice")),
                     ("age".to_string(), Value::Int(30)),
                 ],
             )
@@ -1454,7 +1454,7 @@ mod tests {
             .set(
                 1,
                 &[
-                    ("name".to_string(), Value::String("Bob".to_string())),
+                    ("name".to_string(), Value::string("Bob")),
                     ("age".to_string(), Value::Int(25)),
                 ],
             )
@@ -1466,7 +1466,7 @@ mod tests {
         );
         assert_eq!(
             store.get_column("name").and_then(|col| col.get(1)),
-            Some(Value::String("Bob".to_string()))
+            Some(Value::string("Bob"))
         );
     }
 
@@ -1481,7 +1481,7 @@ mod tests {
             .set(
                 0,
                 &[
-                    ("name".to_string(), Value::String("Alice".to_string())),
+                    ("name".to_string(), Value::string("Alice")),
                     ("age".to_string(), Value::Int(30)),
                 ],
             )
@@ -1545,9 +1545,9 @@ mod tests {
     #[test]
     fn test_flush_and_reload_variable() {
         let mut col = Column::new("name".to_string(), 0, DataType::String, true);
-        col.set(0, Some(&Value::String("Hello".to_string())))
+        col.set(0, Some(&Value::string("Hello")))
             .unwrap();
-        col.set(1, Some(&Value::String("World".to_string())))
+        col.set(1, Some(&Value::string("World")))
             .unwrap();
         col.set(2, None).unwrap();
 
@@ -1557,8 +1557,8 @@ mod tests {
         let mut restored = Column::new("name".to_string(), 0, DataType::String, true);
         restored.load_data_from_raw(data, offsets, bitmap.map(|b| b.into_vec()), 3);
 
-        assert_eq!(restored.get(0), Some(Value::String("Hello".to_string())));
-        assert_eq!(restored.get(1), Some(Value::String("World".to_string())));
+        assert_eq!(restored.get(0), Some(Value::string("Hello")));
+        assert_eq!(restored.get(1), Some(Value::string("World")));
         assert!(restored.is_null(2));
         assert_eq!(restored.len(), 3);
     }
@@ -1572,13 +1572,13 @@ mod tests {
 
         // Create a string larger than typical storage boundaries
         let large_value = "a".repeat(1000);
-        col.set(0, Some(&Value::String(large_value.clone())))
+        col.set(0, Some(&Value::string(large_value.clone())))
             .unwrap();
-        col.set(1, Some(&Value::String("short".to_string())))
+        col.set(1, Some(&Value::string("short")))
             .unwrap();
 
-        assert_eq!(col.get(0), Some(Value::String(large_value)));
-        assert_eq!(col.get(1), Some(Value::String("short".to_string())));
+        assert_eq!(col.get(0), Some(Value::string(large_value.clone())));
+        assert_eq!(col.get(1), Some(Value::string("short")));
         assert_eq!(col.len(), 2);
     }
 
@@ -1595,9 +1595,9 @@ mod tests {
             .set(
                 0,
                 &[
-                    ("name".to_string(), Value::String("Alice".to_string())),
+                    ("name".to_string(), Value::string("Alice")),
                     ("age".to_string(), Value::Int(30)),
-                    ("city".to_string(), Value::String("NYC".to_string())),
+                    ("city".to_string(), Value::string("NYC")),
                 ],
             )
             .unwrap();
@@ -1607,9 +1607,9 @@ mod tests {
             .set(
                 0,
                 &[
-                    ("name".to_string(), Value::String("Alice".to_string())),
+                    ("name".to_string(), Value::string("Alice")),
                     ("age".to_string(), Value::Int(31)),
-                    ("city".to_string(), Value::String("NYC".to_string())),
+                    ("city".to_string(), Value::string("NYC")),
                 ],
             )
             .unwrap();
@@ -1617,7 +1617,7 @@ mod tests {
         // Verify all properties are correct
         assert_eq!(
             store.get_column("name").and_then(|col| col.get(0)),
-            Some(Value::String("Alice".to_string()))
+            Some(Value::string("Alice"))
         );
         assert_eq!(
             store.get_column("age").and_then(|col| col.get(0)),
@@ -1625,7 +1625,7 @@ mod tests {
         );
         assert_eq!(
             store.get_column("city").and_then(|col| col.get(0)),
-            Some(Value::String("NYC".to_string()))
+            Some(Value::string("NYC"))
         );
     }
 
@@ -1638,10 +1638,10 @@ mod tests {
         let sizes = [255, 256, 257, 1000, 10000];
         for (idx, size) in sizes.iter().enumerate() {
             let value = format!("x-{}", "a".repeat(*size));
-            col.set(idx, Some(&Value::String(value.clone()))).unwrap();
+            col.set(idx, Some(&Value::string(value.clone()))).unwrap();
             assert_eq!(
                 col.get(idx),
-                Some(Value::String(value)),
+                Some(Value::string(value)),
                 "Failed at size {}",
                 size
             );
@@ -1653,16 +1653,16 @@ mod tests {
     fn test_column_string_with_nulls() {
         let mut col = Column::new("text".to_string(), 0, DataType::String, true);
 
-        col.set(0, Some(&Value::String("hello".to_string())))
+        col.set(0, Some(&Value::string("hello")))
             .unwrap();
         col.set(1, None).unwrap();
-        col.set(2, Some(&Value::String("world".to_string())))
+        col.set(2, Some(&Value::string("world")))
             .unwrap();
         col.set(3, None).unwrap();
 
-        assert_eq!(col.get(0), Some(Value::String("hello".to_string())));
+        assert_eq!(col.get(0), Some(Value::string("hello")));
         assert!(col.is_null(1));
-        assert_eq!(col.get(2), Some(Value::String("world".to_string())));
+        assert_eq!(col.get(2), Some(Value::string("world")));
         assert!(col.is_null(3));
         assert_eq!(col.null_count(), 2);
     }
@@ -1752,14 +1752,14 @@ mod tests {
 
         // Insert low cardinality strings
         for (i, category) in categories.iter().enumerate() {
-            col.set(i, Some(&Value::String(category.to_string())))
+            col.set(i, Some(&Value::string(category)))
                 .unwrap();
         }
 
         // Verify all values are stored and retrievable
         for (i, expected_category) in categories.iter().enumerate() {
             let value = col.get(i);
-            assert_eq!(value, Some(Value::String(expected_category.to_string())));
+            assert_eq!(value, Some(Value::string(expected_category)));
         }
     }
 
@@ -1796,12 +1796,12 @@ mod tests {
 
         // Insert long strings
         for (i, s) in long_strings.iter().enumerate() {
-            col.set(i, Some(&Value::String(s.to_string()))).unwrap();
+            col.set(i, Some(&Value::string(s))).unwrap();
         }
 
         // Verify retrieval works correctly
         for (i, expected_str) in long_strings.iter().enumerate() {
-            assert_eq!(col.get(i), Some(Value::String(expected_str.to_string())));
+            assert_eq!(col.get(i), Some(Value::string(expected_str)));
         }
     }
 
@@ -1826,12 +1826,12 @@ mod tests {
         let mut col = Column::new("text".to_string(), 0, DataType::String, false);
 
         // Test empty string
-        col.set(0, Some(&Value::String("".to_string()))).unwrap();
-        col.set(1, Some(&Value::String("normal".to_string())))
+        col.set(0, Some(&Value::string(""))).unwrap();
+        col.set(1, Some(&Value::string("normal")))
             .unwrap();
 
-        assert_eq!(col.get(0), Some(Value::String("".to_string())));
-        assert_eq!(col.get(1), Some(Value::String("normal".to_string())));
+        assert_eq!(col.get(0), Some(Value::string("")));
+        assert_eq!(col.get(1), Some(Value::string("normal")));
     }
 
     /// Test: Special characters in strings
@@ -1847,8 +1847,8 @@ mod tests {
         ];
 
         for (idx, s) in special_strings.iter().enumerate() {
-            col.set(idx, Some(&Value::String(s.to_string()))).unwrap();
-            assert_eq!(col.get(idx), Some(Value::String(s.to_string())));
+            col.set(idx, Some(&Value::string(s))).unwrap();
+            assert_eq!(col.get(idx), Some(Value::string(s)));
         }
     }
 

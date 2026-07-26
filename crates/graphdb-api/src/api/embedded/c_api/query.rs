@@ -184,7 +184,7 @@ pub unsafe fn convert_c_value_to_rust(c_value: &graphdb_value_t) -> Value {
         graphdb_value_type_t::GRAPHDB_FLOAT => Value::Float(c_value.data.floating as f32),
         graphdb_value_type_t::GRAPHDB_STRING => {
             if c_value.data.string.data.is_null() || c_value.data.string.len == 0 {
-                Value::String(String::new())
+                Value::string("")
             } else {
                 let slice = std::slice::from_raw_parts(
                     c_value.data.string.data as *const u8,

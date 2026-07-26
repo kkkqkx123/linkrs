@@ -152,7 +152,7 @@ macro_rules! define_unary_string_fn {
 
             let op = $op;
             match &args[0] {
-                Value::String(s) => Ok(Value::String(op(s))),
+                Value::String(s) => Ok(Value::string(op(s))),
                 Value::Null(_) => Ok(Value::Null(NullType::Null)),
                 _ => Err(
                     $crate::query::executor::expression::ExpressionError::type_error(concat!(

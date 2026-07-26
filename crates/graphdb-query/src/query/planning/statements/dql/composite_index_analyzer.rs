@@ -87,7 +87,7 @@ impl PredicateInfo {
 
     fn value_to_string(v: &Value) -> String {
         match v {
-            Value::String(s) => s.clone(),
+            Value::String(s) => s.to_string(),
             Value::Int(i) => i.to_string(),
             Value::BigInt(i) => i.to_string(),
             Value::SmallInt(i) => i.to_string(),
@@ -103,15 +103,15 @@ impl PredicateInfo {
             PredicateOp::Equal => self
                 .value
                 .as_ref()
-                .map(|v| IndexLimit::equal(&self.column, Value::String(Self::value_to_string(v)))),
+                .map(|v| IndexLimit::equal(&self.column, Value::string(Self::value_to_string(v)))),
             PredicateOp::Range => Some(IndexLimit::range(
                 &self.column,
                 self.lower
                     .as_ref()
-                    .map(|s| Value::String(Self::value_to_string(s))),
+                    .map(|s| Value::string(Self::value_to_string(s))),
                 self.upper
                     .as_ref()
-                    .map(|s| Value::String(Self::value_to_string(s))),
+                    .map(|s| Value::string(Self::value_to_string(s))),
                 self.include_lower,
                 self.include_upper,
             )),
@@ -119,7 +119,7 @@ impl PredicateInfo {
                 if self.values.len() == 1 {
                     Some(IndexLimit::equal(
                         &self.column,
-                        Value::String(Self::value_to_string(&self.values[0])),
+                        Value::string(Self::value_to_string(&self.values[0])),
                     ))
                 } else {
                     None
@@ -657,7 +657,7 @@ mod tests {
 
     #[test]
     fn test_predicate_info_equal() {
-        let pred = PredicateInfo::equal("name".to_string(), Value::String("Alice".to_string()));
+        let pred = PredicateInfo::equal("name".to_string(), Value::string("Alice".to_string()));
         assert!(pred.is_equality());
         assert!(!pred.is_range());
 
@@ -683,7 +683,7 @@ mod tests {
         let analyzer = CompositeIndexAnalyzer::new();
         let index = create_composite_index("idx_name_age", vec!["name", "age"]);
         let predicates = vec![
-            PredicateInfo::equal("name".to_string(), Value::String("Alice".to_string())),
+            PredicateInfo::equal("name".to_string(), Value::string("Alice".to_string())),
             PredicateInfo::equal("age".to_string(), Value::Int(30)),
         ];
 
@@ -699,7 +699,7 @@ mod tests {
         let analyzer = CompositeIndexAnalyzer::new();
         let index = create_composite_index("idx_name_age", vec!["name", "age"]);
         let predicates = vec![
-            PredicateInfo::equal("name".to_string(), Value::String("Alice".to_string())),
+            PredicateInfo::equal("name".to_string(), Value::string("Alice".to_string())),
             PredicateInfo::range("age".to_string(), Some(Value::Int(20)), None, true, false),
         ];
 
@@ -718,8 +718,8 @@ mod tests {
         let analyzer = CompositeIndexAnalyzer::new();
         let index = create_composite_index("idx_name_age_city", vec!["name", "age", "city"]);
         let predicates = vec![
-            PredicateInfo::equal("name".to_string(), Value::String("Alice".to_string())),
-            PredicateInfo::equal("city".to_string(), Value::String("NYC".to_string())),
+            PredicateInfo::equal("name".to_string(), Value::string("Alice".to_string())),
+            PredicateInfo::equal("city".to_string(), Value::string("NYC".to_string())),
         ];
 
         let selection = analyzer
@@ -737,7 +737,7 @@ mod tests {
             create_single_index("idx_name", "name"),
         ];
         let predicates = vec![
-            PredicateInfo::equal("name".to_string(), Value::String("Alice".to_string())),
+            PredicateInfo::equal("name".to_string(), Value::string("Alice".to_string())),
             PredicateInfo::equal("age".to_string(), Value::Int(30)),
         ];
 
@@ -751,7 +751,7 @@ mod tests {
         let indexes = vec![create_single_index("idx_name", "name")];
         let predicates = vec![PredicateInfo::equal(
             "name".to_string(),
-            Value::String("Alice".to_string()),
+            Value::string("Alice".to_string()),
         )];
 
         let result = analyzer.select_optimal_index(&predicates, &indexes);
@@ -772,8 +772,8 @@ mod tests {
         analyzer.add_column_stats(stats);
 
         let predicates = vec![
-            PredicateInfo::equal("status".to_string(), Value::String("active".to_string())),
-            PredicateInfo::equal("name".to_string(), Value::String("Alice".to_string())),
+            PredicateInfo::equal("status".to_string(), Value::string("active".to_string())),
+            PredicateInfo::equal("name".to_string(), Value::string("Alice".to_string())),
         ];
 
         let result = analyzer.prune_predicates(&predicates);
@@ -799,7 +799,7 @@ mod tests {
                 true,
                 true,
             ),
-            PredicateInfo::equal("name".to_string(), Value::String("Alice".to_string())),
+            PredicateInfo::equal("name".to_string(), Value::string("Alice".to_string())),
         ];
 
         let result = analyzer.prune_predicates(&predicates);

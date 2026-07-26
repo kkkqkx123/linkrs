@@ -674,7 +674,7 @@ impl AggregateState {
     /// Computing group joins
     pub fn calculate_group_concat(&self) -> Result<Value, ExpressionError> {
         if self.group_concat_values.is_empty() {
-            return Ok(Value::String(String::new()));
+            return Ok(Value::string(String::new()));
         }
 
         let result: Vec<String> = self
@@ -682,7 +682,7 @@ impl AggregateState {
             .iter()
             .map(|v| format!("{}", v))
             .collect();
-        Ok(Value::String(result.join(",")))
+        Ok(Value::string(result.join(",")))
     }
 
     /// Calculate the variance
@@ -751,7 +751,7 @@ impl AggregateState {
                 } else if mode_str == "false" {
                     Ok(Value::Bool(false))
                 } else {
-                    Ok(Value::String(mode_str))
+                    Ok(Value::string(mode_str))
                 }
             }
             None => Ok(Value::Null(crate::core::value::NullType::Null)),

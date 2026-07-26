@@ -220,7 +220,7 @@ async fn test_multi_space_isolation() {
 
     assert_search_result_count(&results_space_1, 1).expect("Space 1 should have 1 result");
     assert!(
-        results_space_1[0].doc_id == graphdb_core::core::Value::String("doc_1".to_string()),
+        results_space_1[0].doc_id == graphdb_core::core::Value::string("doc_1"),
         "Space 1 should return doc_1"
     );
 
@@ -231,7 +231,7 @@ async fn test_multi_space_isolation() {
 
     assert_search_result_count(&results_space_2, 1).expect("Space 2 should have 1 result");
     assert!(
-        results_space_2[0].doc_id == graphdb_core::core::Value::String("doc_2".to_string()),
+        results_space_2[0].doc_id == graphdb_core::core::Value::string("doc_2"),
         "Space 2 should return doc_2"
     );
 

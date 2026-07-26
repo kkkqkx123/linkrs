@@ -40,13 +40,13 @@ fn make_manage_result(
     status: &str,
 ) -> DataChunk {
     let name_val = name
-        .map(|n| Value::String(n.to_string()))
+        .map(|n| Value::string(n.to_string()))
         .unwrap_or(Value::Null(crate::core::NullType::Null));
     DataChunk::new_with_layout(
         vec![vec![
-            Value::String(action.to_string()),
+            Value::string(action.to_string()),
             name_val,
-            Value::String(status.to_string()),
+            Value::string(status.to_string()),
         ]],
         output_layout,
     )
@@ -307,10 +307,10 @@ impl FulltextOperator {
                                     Some(make_single_row(
                                         schema,
                                         vec![
-                                            Value::String(meta.index_name),
-                                            Value::String(meta.tag_name),
-                                            Value::String(meta.field_name),
-                                            Value::String(format!("{:?}", meta.status)),
+                                            Value::string(meta.index_name),
+                                            Value::string(meta.tag_name),
+                                            Value::string(meta.field_name),
+                                            Value::string(format!("{:?}", meta.status)),
                                         ],
                                     ))
                                 } else {
@@ -370,11 +370,11 @@ impl FulltextOperator {
                                     .into_iter()
                                     .map(|m| {
                                         vec![
-                                            Value::String(m.index_name),
+                                            Value::string(m.index_name),
                                             Value::BigInt(m.space_id as i64),
-                                            Value::String(m.tag_name),
-                                            Value::String(m.field_name),
-                                            Value::String(format!("{:?}", m.status)),
+                                            Value::string(m.tag_name),
+                                            Value::string(m.field_name),
+                                            Value::string(format!("{:?}", m.status)),
                                         ]
                                     })
                                     .collect();

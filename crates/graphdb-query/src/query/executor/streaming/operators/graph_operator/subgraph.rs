@@ -93,7 +93,7 @@ pub(super) fn handle(
                             });
                         out_row.push(Value::Vertex(Box::new(src_vertex)));
                         out_row.push(Value::Vertex(Box::new(dst_vertex)));
-                        out_row.push(Value::String(edge.edge_type.clone()));
+                        out_row.push(Value::string(edge.edge_type.clone()));
                         out_rows.push(out_row);
                     }
                 }

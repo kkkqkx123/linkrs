@@ -1228,7 +1228,7 @@ mod tests {
     fn test_property_value_is_null() {
         assert!(PropertyValue::Null.is_null());
         assert!(!PropertyValue::Int(0).is_null());
-        assert!(!PropertyValue::String("".to_string()).is_null());
+        assert!(!PropertyValue::String(String::new()).is_null());
     }
 
     #[test]

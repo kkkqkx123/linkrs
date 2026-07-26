@@ -331,9 +331,7 @@ impl PropertyTable {
                 let len = decode_varint(cursor)? as usize;
                 let mut str_buf = vec![0u8; len];
                 cursor.read_exact(&mut str_buf)?;
-                Ok(Some(Value::String(
-                    String::from_utf8_lossy(&str_buf).to_string(),
-                )))
+                Ok(Some(Value::string(String::from_utf8_lossy(&str_buf))))
             }
             DataType::Date => {
                 let mut buf = [0u8; 10];

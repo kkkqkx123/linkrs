@@ -50,7 +50,7 @@ fn test_batch_flush_on_timeout() {
     let mut properties = std::collections::HashMap::new();
     properties.insert(
         "name".to_string(),
-        Value::String("Timeout Test".to_string()),
+        Value::string("Timeout Test"),
     );
     let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
     let vertex =
@@ -96,7 +96,7 @@ fn test_batch_flush_on_size_trigger() {
 
     for i in 0..100 {
         let mut properties = std::collections::HashMap::new();
-        properties.insert("name".to_string(), Value::String(format!("Doc{}", i)));
+        properties.insert("name".to_string(), Value::string(format!("Doc{}", i)));
         let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
         let vertex = graphdb::core::Vertex::new(
             graphdb::core::types::VertexId::from_int64(i + 1),
@@ -159,7 +159,7 @@ fn test_large_batch_processing() {
         let mut properties = std::collections::HashMap::new();
         properties.insert(
             "name".to_string(),
-            Value::String(format!("LargeBatch{}", i)),
+            Value::string(format!("LargeBatch{}", i)),
         );
         let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
         let vertex = graphdb::core::Vertex::new(
@@ -221,7 +221,7 @@ fn test_mixed_operation_types_in_batch() {
 
     for i in 0..5 {
         let mut properties = std::collections::HashMap::new();
-        properties.insert("name".to_string(), Value::String(format!("Initial{}", i)));
+        properties.insert("name".to_string(), Value::string(format!("Initial{}", i)));
         let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
         let vertex = graphdb::core::Vertex::new(
             graphdb::core::types::VertexId::from_int64(i + 1),
@@ -237,7 +237,7 @@ fn test_mixed_operation_types_in_batch() {
 
     for i in 0..3 {
         let mut properties = std::collections::HashMap::new();
-        properties.insert("name".to_string(), Value::String(format!("Updated{}", i)));
+        properties.insert("name".to_string(), Value::string(format!("Updated{}", i)));
         let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
         let vertex = graphdb::core::Vertex::new(
             graphdb::core::types::VertexId::from_int64(i + 1),
@@ -281,7 +281,7 @@ fn test_rapid_successive_commits() {
 
     for i in 0..10 {
         let mut properties = std::collections::HashMap::new();
-        properties.insert("name".to_string(), Value::String(format!("Rapid{}", i)));
+        properties.insert("name".to_string(), Value::string(format!("Rapid{}", i)));
         let tag = graphdb::core::vertex_edge_path::Tag::new("Document".to_string(), properties);
         let vertex = graphdb::core::Vertex::new(
             graphdb::core::types::VertexId::from_int64(i + 1),

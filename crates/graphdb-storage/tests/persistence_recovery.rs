@@ -39,7 +39,7 @@ fn test_flush_after_vertex_update() {
             vec![Tag::new(
                 "Person".to_string(),
                 vec![
-                    ("name".to_string(), Value::String("Alice".to_string())),
+                    ("name".to_string(), Value::string("Alice")),
                     ("age".to_string(), Value::BigInt(31)),
                 ]
                 .into_iter()
@@ -120,7 +120,7 @@ fn test_flush_with_index_metadata() {
             schema_name: "Person".to_string(),
             fields: vec![IndexField::new(
                 "name".to_string(),
-                Value::String(String::new()),
+                Value::string(""),
                 false,
             )],
             properties: vec![],

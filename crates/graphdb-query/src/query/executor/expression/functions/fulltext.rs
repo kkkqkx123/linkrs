@@ -175,7 +175,7 @@ impl FulltextFunction {
         }
 
         let field_name = match &args[0] {
-            Value::String(s) => s.clone(),
+            Value::String(s) => s.to_string(),
             _ => {
                 return Err(ExpressionError::new(
                     ExpressionErrorType::TypeError,
@@ -188,7 +188,7 @@ impl FulltextFunction {
             .get(1)
             .and_then(|v| {
                 if let Value::String(s) = v {
-                    Some(s.clone())
+                    Some(s.to_string())
                 } else {
                     None
                 }
@@ -199,7 +199,7 @@ impl FulltextFunction {
             .get(2)
             .and_then(|v| {
                 if let Value::String(s) = v {
-                    Some(s.clone())
+                    Some(s.to_string())
                 } else {
                     None
                 }
@@ -219,27 +219,27 @@ impl FulltextFunction {
 
         // Get highlights from context
         if let Some(highlights) = &context.highlights {
-            if let Some(field_highlights) = highlights.get(&field_name) {
+            if let Some(field_highlights) = highlights.get(field_name.as_str()) {
                 if !field_highlights.is_empty() {
                     let highlighted_text = field_highlights.join(" ... ");
-                    return Ok(Value::String(highlighted_text));
+                    return Ok(Value::string(highlighted_text));
                 }
             }
         }
 
         // Return original text if no highlights available
         if let Some(source) = &context.source {
-            if let Some(Value::String(text)) = source.get(&field_name) {
+            if let Some(Value::String(text)) = source.get(field_name.as_str()) {
                 // Truncate if needed
                 if text.len() > fragment_size {
-                    return Ok(Value::String(format!(
+                    return Ok(Value::string(format!(
                         "{}{}{}",
                         pre_tag,
                         &text[..fragment_size.min(text.len())],
                         post_tag
                     )));
                 }
-                return Ok(Value::String(text.clone()));
+                return Ok(Value::string(text.clone()));
             }
         }
 
@@ -262,7 +262,7 @@ impl FulltextFunction {
         let fields: Vec<Value> = context
             .matched_fields
             .iter()
-            .map(|f| Value::String(f.clone()))
+            .map(|f| Value::string(f.clone()))
             .collect();
 
         Ok(Value::list(crate::core::value::list::List {
@@ -284,7 +284,7 @@ impl FulltextFunction {
         }
 
         let field_name = match &args[0] {
-            Value::String(s) => s.clone(),
+            Value::String(s) => s.to_string(),
             _ => {
                 return Err(ExpressionError::new(
                     ExpressionErrorType::TypeError,
@@ -306,15 +306,15 @@ impl FulltextFunction {
 
         // Get text from source
         if let Some(source) = &context.source {
-            if let Some(Value::String(text)) = source.get(&field_name) {
+            if let Some(Value::String(text)) = source.get(field_name.as_str()) {
                 if text.len() <= max_len {
-                    return Ok(Value::String(text.clone()));
+                    return Ok(Value::string(text.clone()));
                 }
 
                 // Try to find a good break point
                 let break_point = text[..max_len].rfind(' ').unwrap_or(max_len);
 
-                return Ok(Value::String(format!("{}...", &text[..break_point])));
+                return Ok(Value::string(format!("{}...", &text[..break_point])));
             }
         }
 
@@ -357,7 +357,7 @@ impl FulltextFunction {
         }
 
         let field_name = match &args[0] {
-            Value::String(s) => s.clone(),
+            Value::String(s) => s.to_string(),
             _ => {
                 return Err(ExpressionError::new(
                     ExpressionErrorType::TypeError,
@@ -377,8 +377,8 @@ impl FulltextFunction {
         };
 
         if let Some(source) = &context.source {
-            if let Some(Value::String(text)) = source.get(&field_name) {
-                return Ok(Value::Bool(text.to_lowercase().contains(&query)));
+            if let Some(Value::String(text)) = source.get(field_name.as_str()) {
+                return Ok(Value::Bool(text.to_lowercase().contains(query.as_str())));
             }
         }
 
@@ -399,7 +399,7 @@ impl FulltextFunction {
         }
 
         let field_name = match &args[0] {
-            Value::String(s) => s.clone(),
+            Value::String(s) => s.to_string(),
             _ => {
                 return Err(ExpressionError::new(
                     ExpressionErrorType::TypeError,
@@ -412,7 +412,7 @@ impl FulltextFunction {
             let field_bonus = if context
                 .highlights
                 .as_ref()
-                .is_some_and(|h| h.contains_key(&field_name))
+                .is_some_and(|h| h.contains_key(field_name.as_str()))
             {
                 1.5
             } else {
@@ -545,11 +545,11 @@ mod tests {
         let mut source = HashMap::new();
         source.insert(
             "title".to_string(),
-            Value::String("Database Optimization".to_string()),
+            Value::string("Database Optimization".to_string()),
         );
         source.insert(
             "content".to_string(),
-            Value::String(
+            Value::string(
                 "This is a test article about database optimization techniques.".to_string(),
             ),
         );
@@ -586,7 +586,7 @@ mod tests {
         let context = create_test_context();
 
         let result = func
-            .execute(&[Value::String("content".to_string())], &context)
+            .execute(&[Value::string("content".to_string())], &context)
             .unwrap();
 
         assert!(matches!(result, Value::String(_)));
@@ -606,8 +606,8 @@ mod tests {
 
         if let Value::List(fields) = result {
             assert_eq!(fields.len(), 2);
-            assert!(fields.contains(&Value::String("title".to_string())));
-            assert!(fields.contains(&Value::String("content".to_string())));
+            assert!(fields.contains(&Value::string("title".to_string())));
+            assert!(fields.contains(&Value::string("content".to_string())));
         }
     }
 
@@ -618,7 +618,7 @@ mod tests {
 
         let result = func
             .execute(
-                &[Value::String("content".to_string()), Value::Int(50)],
+                &[Value::string("content".to_string()), Value::Int(50)],
                 &context,
             )
             .unwrap();

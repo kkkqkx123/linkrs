@@ -39,35 +39,35 @@ pub(super) fn execute_show_stats(
         ]));
         let rows = vec![
             vec![
-                Value::String("total_vertices".to_string()),
+                Value::string("total_vertices".to_string()),
                 Value::BigInt(stats.total_vertices as i64),
             ],
             vec![
-                Value::String("total_edges".to_string()),
+                Value::string("total_edges".to_string()),
                 Value::BigInt(stats.total_edges as i64),
             ],
             vec![
-                Value::String("total_spaces".to_string()),
+                Value::string("total_spaces".to_string()),
                 Value::BigInt(stats.total_spaces as i64),
             ],
             vec![
-                Value::String("total_tags".to_string()),
+                Value::string("total_tags".to_string()),
                 Value::BigInt(stats.total_tags as i64),
             ],
             vec![
-                Value::String("total_edge_types".to_string()),
+                Value::string("total_edge_types".to_string()),
                 Value::BigInt(stats.total_edge_types as i64),
             ],
             vec![
-                Value::String("total_size_bytes".to_string()),
+                Value::string("total_size_bytes".to_string()),
                 Value::BigInt(stats.total_size_bytes as i64),
             ],
             vec![
-                Value::String("data_size_bytes".to_string()),
+                Value::string("data_size_bytes".to_string()),
                 Value::BigInt(stats.data_size_bytes as i64),
             ],
             vec![
-                Value::String("index_size_bytes".to_string()),
+                Value::string("index_size_bytes".to_string()),
                 Value::BigInt(stats.index_size_bytes as i64),
             ],
         ];
@@ -75,7 +75,7 @@ pub(super) fn execute_show_stats(
     } else {
         let schema = super::make_single_col_schema("message", "string");
         Ok(Some(DataChunk::new(
-            vec![vec![Value::String("no storage available".to_string())]],
+            vec![vec![Value::string("no storage available".to_string())]],
             schema,
         )))
     }
@@ -114,8 +114,8 @@ pub(super) fn execute_analyze(
                 Ok(Some(super::make_single_row(
                     schema,
                     vec![
-                        Value::String(format!("space:{}", space_name)),
-                        Value::String(format!("{:?}", stats)),
+                        Value::string(format!("space:{}", space_name)),
+                        Value::string(format!("{:?}", stats)),
                     ],
                 )))
             } else {

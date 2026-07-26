@@ -94,11 +94,11 @@ fn find_suitable_index(
                     let index_limit = match op.as_str() {
                         "=" => Some(IndexLimit::equal(
                             field.clone(),
-                            Value::String(value.clone()),
+                            Value::string(value.clone()),
                         )),
                         ">" => Some(IndexLimit::range(
                             field.clone(),
-                            Some(Value::String(value.clone())),
+                            Some(Value::string(value.clone())),
                             None::<Value>,
                             false,
                             false,
@@ -106,13 +106,13 @@ fn find_suitable_index(
                         "<" => Some(IndexLimit::range(
                             field.clone(),
                             None::<Value>,
-                            Some(Value::String(value.clone())),
+                            Some(Value::string(value.clone())),
                             false,
                             false,
                         )),
                         ">=" => Some(IndexLimit::range(
                             field.clone(),
-                            Some(Value::String(value.clone())),
+                            Some(Value::string(value.clone())),
                             None::<Value>,
                             true,
                             false,
@@ -120,7 +120,7 @@ fn find_suitable_index(
                         "<=" => Some(IndexLimit::range(
                             field.clone(),
                             None::<Value>,
-                            Some(Value::String(value.clone())),
+                            Some(Value::string(value.clone())),
                             false,
                             true,
                         )),
@@ -217,7 +217,7 @@ fn extract_conditions_from_expression(
 
 fn value_to_index_string(value: &Value) -> Option<String> {
     match value {
-        Value::String(s) => Some(s.clone()),
+        Value::String(s) => Some(s.to_string()),
         Value::SmallInt(i) => Some(i.to_string()),
         Value::Int(i) => Some(i.to_string()),
         Value::BigInt(i) => Some(i.to_string()),

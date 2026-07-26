@@ -234,7 +234,7 @@ impl PropIndexSeek {
             }
             PredicateOp::StartsWith => {
                 if let (Value::String(s1), Value::String(s2)) = (value, &pred.value) {
-                    s1.starts_with(s2)
+                    s1.starts_with(s2.as_str())
                 } else {
                     false
                 }

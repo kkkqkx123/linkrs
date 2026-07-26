@@ -331,8 +331,8 @@ mod tests {
     #[test]
     fn test_dataset_add_row() {
         let mut dataset = DataSet::with_columns(vec!["id".to_string(), "name".to_string()]);
-        dataset.add_row(vec![Value::Int(1), Value::String("Alice".to_string())]);
-        dataset.add_row(vec![Value::Int(2), Value::String("Bob".to_string())]);
+        dataset.add_row(vec![Value::Int(1), Value::string("Alice")]);
+        dataset.add_row(vec![Value::Int(2), Value::string("Bob")]);
 
         assert_eq!(dataset.row_count(), 2);
         assert_eq!(dataset.col_count(), 2);

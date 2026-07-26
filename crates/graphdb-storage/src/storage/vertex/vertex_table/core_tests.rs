@@ -29,7 +29,7 @@ fn test_insert_and_get() {
         .insert(
             "v1",
             &[
-                ("name".to_string(), Value::String("Alice".to_string())),
+                ("name".to_string(), Value::string("Alice")),
                 ("age".to_string(), Value::Int(30)),
             ],
             100,
@@ -51,7 +51,7 @@ fn test_delete() {
     table
         .insert(
             "v1",
-            &[("name".to_string(), Value::String("Alice".to_string()))],
+            &[("name".to_string(), Value::string("Alice"))],
             100,
         )
         .unwrap();
@@ -71,21 +71,21 @@ fn test_iterator() {
     table
         .insert(
             "v1",
-            &[("name".to_string(), Value::String("Alice".to_string()))],
+            &[("name".to_string(), Value::string("Alice"))],
             100,
         )
         .unwrap();
     table
         .insert(
             "v2",
-            &[("name".to_string(), Value::String("Bob".to_string()))],
+            &[("name".to_string(), Value::string("Bob"))],
             100,
         )
         .unwrap();
     table
         .insert(
             "v3",
-            &[("name".to_string(), Value::String("Charlie".to_string()))],
+            &[("name".to_string(), Value::string("Charlie"))],
             100,
         )
         .unwrap();
@@ -110,9 +110,9 @@ fn test_rename_and_remove_property() {
         .insert(
             "v1",
             &[
-                ("name".to_string(), Value::String("Alice".to_string())),
+                ("name".to_string(), Value::string("Alice")),
                 ("age".to_string(), Value::Int(30)),
-                ("city".to_string(), Value::String("Shanghai".to_string())),
+                ("city".to_string(), Value::string("Shanghai")),
             ],
             100,
         )
@@ -159,21 +159,21 @@ fn test_batch_insert() {
         (
             "v1".to_string(),
             vec![
-                ("name".to_string(), Value::String("Alice".to_string())),
+                ("name".to_string(), Value::string("Alice")),
                 ("age".to_string(), Value::Int(30)),
             ],
         ),
         (
             "v2".to_string(),
             vec![
-                ("name".to_string(), Value::String("Bob".to_string())),
+                ("name".to_string(), Value::string("Bob")),
                 ("age".to_string(), Value::Int(25)),
             ],
         ),
         (
             "v3".to_string(),
             vec![
-                ("name".to_string(), Value::String("Charlie".to_string())),
+                ("name".to_string(), Value::string("Charlie")),
                 ("age".to_string(), Value::Int(35)),
             ],
         ),
@@ -195,7 +195,7 @@ fn test_batch_insert() {
             .iter()
             .find(|(n, _)| n == "name")
             .map(|(_, v)| v),
-        Some(&Value::String("Alice".to_string()))
+        Some(&Value::string("Alice"))
     );
 }
 
@@ -207,21 +207,21 @@ fn test_batch_delete() {
     table
         .insert(
             "v1",
-            &[("name".to_string(), Value::String("Alice".to_string()))],
+            &[("name".to_string(), Value::string("Alice"))],
             100,
         )
         .unwrap();
     table
         .insert(
             "v2",
-            &[("name".to_string(), Value::String("Bob".to_string()))],
+            &[("name".to_string(), Value::string("Bob"))],
             100,
         )
         .unwrap();
     table
         .insert(
             "v3",
-            &[("name".to_string(), Value::String("Charlie".to_string()))],
+            &[("name".to_string(), Value::string("Charlie"))],
             100,
         )
         .unwrap();
@@ -425,7 +425,7 @@ fn test_compact_delete_all() {
         table
             .insert(
                 &format!("v{}", i),
-                &[("name".to_string(), Value::String(format!("Person{}", i)))],
+                &[("name".to_string(), Value::string(format!("Person{}", i)))],
                 100,
             )
             .unwrap();
@@ -471,7 +471,7 @@ fn test_compact_multiple_cycles() {
             table
                 .insert(
                     &format!("v{}_{}", cycle, i),
-                    &[("name".to_string(), Value::String(format!("P{}", i)))],
+                    &[("name".to_string(), Value::string(format!("P{}", i)))],
                     ts_insert as u32,
                 )
                 .unwrap_or_else(|_| panic!("insert cycle {} should succeed", cycle));
@@ -536,35 +536,35 @@ fn test_compact_id_consistency() {
         table
             .insert(
                 "v0",
-                &[("name".to_string(), Value::String("Alice".to_string()))],
+                &[("name".to_string(), Value::string("Alice"))],
                 100,
             )
             .unwrap(),
         table
             .insert(
                 "v2",
-                &[("name".to_string(), Value::String("Bob".to_string()))],
+                &[("name".to_string(), Value::string("Bob"))],
                 100,
             )
             .unwrap(),
         table
             .insert(
                 "v4",
-                &[("name".to_string(), Value::String("Charlie".to_string()))],
+                &[("name".to_string(), Value::string("Charlie"))],
                 100,
             )
             .unwrap(),
         table
             .insert(
                 "v5",
-                &[("name".to_string(), Value::String("David".to_string()))],
+                &[("name".to_string(), Value::string("David"))],
                 100,
             )
             .unwrap(),
         table
             .insert(
                 "v8",
-                &[("name".to_string(), Value::String("Eve".to_string()))],
+                &[("name".to_string(), Value::string("Eve"))],
                 100,
             )
             .unwrap(),
@@ -601,7 +601,7 @@ fn test_compact_id_consistency() {
 
         assert_eq!(
             name_val,
-            Some(&Value::String(expected_name.to_string())),
+            Some(&Value::string(expected_name)),
             "Name should be preserved for {}",
             key
         );
@@ -627,7 +627,7 @@ fn test_vertex_snapshot_isolation() {
     table
         .insert(
             "v1",
-            &[("name".to_string(), Value::String("Alice".to_string()))],
+            &[("name".to_string(), Value::string("Alice"))],
             100,
         )
         .unwrap();
@@ -637,7 +637,7 @@ fn test_vertex_snapshot_isolation() {
     assert_eq!(table.min_active_snapshot_ts(), 100);
 
     table
-        .update_property(0, "name", &Value::String("Alice Updated".to_string()), 200)
+        .update_property(0, "name", &Value::string("Alice Updated"), 200)
         .unwrap();
 
     table.delete("v1", 300).unwrap();
@@ -658,7 +658,7 @@ fn test_vertex_multiple_snapshots() {
     table
         .insert(
             "v1",
-            &[("name".to_string(), Value::String("Alice".to_string()))],
+            &[("name".to_string(), Value::string("Alice"))],
             100,
         )
         .unwrap();
@@ -669,7 +669,7 @@ fn test_vertex_multiple_snapshots() {
     table
         .insert(
             "v2",
-            &[("name".to_string(), Value::String("Bob".to_string()))],
+            &[("name".to_string(), Value::string("Bob"))],
             150,
         )
         .unwrap();
@@ -705,7 +705,7 @@ fn test_vertex_concurrent_snapshots_same_timestamp() {
     table
         .insert(
             "v1",
-            &[("name".to_string(), Value::String("Alice".to_string()))],
+            &[("name".to_string(), Value::string("Alice"))],
             100,
         )
         .unwrap();
@@ -736,7 +736,7 @@ fn test_vertex_gc_placeholder() {
     table
         .insert(
             "v1",
-            &[("name".to_string(), Value::String("Alice".to_string()))],
+            &[("name".to_string(), Value::string("Alice"))],
             100,
         )
         .unwrap();
@@ -757,7 +757,7 @@ fn test_vertex_mvcc_table_trait() {
     table
         .insert(
             "v1",
-            &[("name".to_string(), Value::String("Alice".to_string()))],
+            &[("name".to_string(), Value::string("Alice"))],
             100,
         )
         .unwrap();

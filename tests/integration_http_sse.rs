@@ -87,7 +87,7 @@ fn setup_test_data(storage: &Arc<RwLock<GraphStorage>>) -> SpaceSummary {
     {
         let vid = VertexId::from_int64(i as i64 + 1);
         let mut props = HashMap::new();
-        props.insert("name".to_string(), Value::String(name.to_string()));
+        props.insert("name".to_string(), Value::string(name));
         props.insert("age".to_string(), Value::BigInt(*age));
         let vertex = Vertex::new(vid, vec![Tag::new("Person".to_string(), props)]);
         store.insert_vertex("test", vertex).unwrap();

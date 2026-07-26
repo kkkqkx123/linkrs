@@ -41,8 +41,8 @@ fn collect_all(mut exec: StreamingExecutor) -> Vec<Vec<Value>> {
 #[test]
 fn contract_single_chunk() {
     let data = vec![
-        vec![Value::Int(1), Value::String("a".to_string())],
-        vec![Value::Int(2), Value::String("b".to_string())],
+        vec![Value::Int(1), Value::string("a")],
+        vec![Value::Int(2), Value::string("b")],
     ];
     let exec = make_scan(data.clone());
     let rows = collect_all(exec);
@@ -54,7 +54,7 @@ fn contract_single_chunk() {
 #[test]
 fn contract_multi_chunk() {
     let data: Vec<Vec<Value>> = (0..50)
-        .map(|i| vec![Value::Int(i), Value::String(format!("n{}", i))])
+        .map(|i| vec![Value::Int(i), Value::string(format!("n{}", i))])
         .collect();
     let scan = make_scan(data.clone());
     let exec = StreamingExecutor::Unary(
@@ -89,9 +89,9 @@ fn contract_first_row_null() {
     let data = vec![
         vec![
             Value::Null(Default::default()),
-            Value::String("null_id".to_string()),
+            Value::string("null_id"),
         ],
-        vec![Value::Int(1), Value::String("a".to_string())],
+        vec![Value::Int(1), Value::string("a")],
     ];
     let exec = make_scan(data.clone());
     let rows = collect_all(exec);
@@ -105,7 +105,7 @@ fn contract_first_row_null() {
 
 #[test]
 fn contract_none_is_permanent_eof() {
-    let data = vec![vec![Value::Int(1), Value::String("a".to_string())]];
+    let data = vec![vec![Value::Int(1), Value::string("a")]];
     let exec = make_scan(data);
     let rows = collect_all(exec);
     assert_eq!(rows.len(), 1);
@@ -118,7 +118,7 @@ fn contract_none_is_permanent_eof() {
 #[test]
 fn contract_cancel_during_execution() {
     let data: Vec<Vec<Value>> = (0..10)
-        .map(|i| vec![Value::Int(i), Value::String(format!("n{}", i))])
+        .map(|i| vec![Value::Int(i), Value::string(format!("n{}", i))])
         .collect();
     let exec = make_scan(data);
     let rows = collect_all(exec);
@@ -131,7 +131,7 @@ fn contract_cancel_during_execution() {
 #[test]
 fn contract_early_stop() {
     let data: Vec<Vec<Value>> = (0..100)
-        .map(|i| vec![Value::Int(i), Value::String(format!("n{}", i))])
+        .map(|i| vec![Value::Int(i), Value::string(format!("n{}", i))])
         .collect();
     let mut exec = make_scan(data);
     exec.open().unwrap();
@@ -148,7 +148,7 @@ fn contract_early_stop() {
 
 #[test]
 fn contract_close_without_open() {
-    let mut exec = make_scan(vec![vec![Value::Int(1), Value::String("a".to_string())]]);
+    let mut exec = make_scan(vec![vec![Value::Int(1), Value::string("a")]]);
     // close_tree should not panic on never-opened tree.
     exec.close_tree().unwrap();
 }
@@ -157,7 +157,7 @@ fn contract_close_without_open() {
 
 #[test]
 fn contract_double_close() {
-    let mut exec = make_scan(vec![vec![Value::Int(1), Value::String("a".to_string())]]);
+    let mut exec = make_scan(vec![vec![Value::Int(1), Value::string("a")]]);
     exec.open().unwrap();
     let _ = exec.advance().unwrap();
     exec.close().unwrap();

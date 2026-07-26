@@ -222,7 +222,7 @@ impl TestDb {
         if result.columns.iter().any(|c| c == "space_name") {
             if let Some(row) = result.rows.first() {
                 if let Some(Value::String(name)) = row.values.get("space_name") {
-                    self.current_space_name = Some(name.clone());
+                    self.current_space_name = Some(name.to_string());
                 }
                 if let Some(Value::BigInt(id)) = row.values.get("space_id") {
                     self.current_space_id = Some(*id as u64);

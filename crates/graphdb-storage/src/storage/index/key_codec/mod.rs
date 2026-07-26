@@ -48,7 +48,7 @@ mod tests {
     fn test_build_and_parse_vertex_key() {
         let space_id = 1u64;
         let index_name = "idx_test";
-        let prop_value = Value::String("test_value".to_string());
+        let prop_value = Value::string("test_value");
         let vertex_id = Value::Int(123);
 
         let key = KeyBuilder::build_vertex_index_key(space_id, index_name, &prop_value, &vertex_id)

@@ -6,7 +6,7 @@ pub fn execute_st_astext(args: &[Value]) -> Result<Value, ExpressionError> {
     match &args[0] {
         Value::Geography(geo) => {
             let wkt = geo.to_wkt();
-            Ok(Value::String(wkt))
+            Ok(Value::string(wkt))
         }
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
@@ -19,7 +19,7 @@ pub fn execute_st_asgeojson(args: &[Value]) -> Result<Value, ExpressionError> {
     match &args[0] {
         Value::Geography(geo) => {
             let json_str = geo.to_geojson_string();
-            Ok(Value::String(json_str))
+            Ok(Value::string(json_str))
         }
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(

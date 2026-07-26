@@ -289,7 +289,7 @@ mod tests {
         let condition = Expression::Binary {
             op: BinaryOperator::Equal,
             left: Box::new(Expression::Variable("a".to_string())),
-            right: Box::new(Expression::Literal(Value::String("1".to_string()))),
+            right: Box::new(Expression::Literal(Value::string("1".to_string()))),
         };
         let count = estimator.count_filter_conditions(&condition);
         assert_eq!(count, 1);
@@ -336,7 +336,7 @@ mod tests {
             left: Box::new(Expression::Binary {
                 op: BinaryOperator::Equal,
                 left: Box::new(Expression::Variable("a".to_string())),
-                right: Box::new(Expression::Literal(Value::String("1".to_string()))),
+                right: Box::new(Expression::Literal(Value::string("1".to_string()))),
             }),
             right: Box::new(Expression::Binary {
                 op: BinaryOperator::Or,

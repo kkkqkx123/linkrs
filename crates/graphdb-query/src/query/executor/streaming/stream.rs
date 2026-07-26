@@ -20,6 +20,9 @@ pub struct ResultStream {
     opened: bool,
     exhausted: bool,
     closed: bool,
+    /// Buffered chunks for the partitioned fallback path.
+    buffered: Vec<DataChunk>,
+    buffered_idx: usize,
 }
 
 impl ResultStream {
@@ -35,6 +38,28 @@ impl ResultStream {
             opened: false,
             exhausted: false,
             closed: false,
+            buffered: Vec::new(),
+            buffered_idx: 0,
+        }
+    }
+
+    /// Create a stream from pre-collected chunks (used for partitioned fallback).
+    ///
+    /// The chunks are served one at a time via `next_chunk()`. The engine
+    /// is retained for proper cleanup via `close_inner()`.
+    pub fn from_collected(
+        chunks: Vec<DataChunk>,
+        engine: StreamingExecutionEngine,
+        runtime: Arc<ExecutionRuntime>,
+    ) -> Self {
+        Self {
+            engine: Some(engine),
+            runtime,
+            opened: true,
+            exhausted: false,
+            closed: false,
+            buffered: chunks,
+            buffered_idx: 0,
         }
     }
 
@@ -62,6 +87,13 @@ impl ResultStream {
 
         if self.exhausted {
             return Ok(None);
+        }
+
+        // Serve from buffered chunks first (partitioned fallback).
+        if self.buffered_idx < self.buffered.len() {
+            let chunk = &self.buffered[self.buffered_idx];
+            self.buffered_idx += 1;
+            return Ok(Some(chunk.clone()));
         }
 
         self.ensure_opened()?;

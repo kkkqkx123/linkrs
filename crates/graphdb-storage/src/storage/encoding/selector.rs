@@ -257,7 +257,7 @@ mod tests {
     fn test_select_dictionary_for_low_cardinality_strings() {
         let selector = EncodingSelector::default();
         let values: Vec<Option<Value>> = (0..100)
-            .map(|i| Some(Value::String(format!("val_{}", i % 5))))
+            .map(|i| Some(Value::string(format!("val_{}", i % 5))))
             .collect();
         assert_eq!(
             selector.select_for_strings(&values),
@@ -270,7 +270,7 @@ mod tests {
         let selector = EncodingSelector::default();
         let values: Vec<Option<Value>> = (0..100)
             .map(|i| {
-                Some(Value::String(format!(
+                Some(Value::string(format!(
                     "https://example.com/very_long_path_parameter_{}",
                     i
                 )))
@@ -283,7 +283,7 @@ mod tests {
     fn test_fallback_dictionary_for_mid_cardinality_short_strings() {
         let selector = EncodingSelector::default();
         let values: Vec<Option<Value>> = (0..100)
-            .map(|i| Some(Value::String(format!("s{}", i % 60))))
+            .map(|i| Some(Value::string(format!("s{}", i % 60))))
             .collect();
         assert_eq!(
             selector.select_for_strings(&values),

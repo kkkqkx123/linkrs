@@ -105,7 +105,7 @@ impl Value {
     /// Convert to string
     pub fn to_string(&self) -> Result<String, String> {
         match self {
-            Value::String(s) => Ok(s.clone()),
+            Value::String(s) => Ok(s.to_string()),
             Value::FixedString { data, .. } => Ok(data.clone()),
             Value::SmallInt(i) => Ok(i.to_string()),
             Value::Int(i) => Ok(i.to_string()),
@@ -401,9 +401,10 @@ impl Value {
             DataType::BigInt => Ok(self.to_int()),
             DataType::Float => Ok(self.to_float32()),
             DataType::Double => Ok(self.to_float()),
-            DataType::String => self.to_string().map(Value::String),
+            DataType::String => self.to_string().map(Value::string),
             DataType::FixedString(len) => match self {
-                Value::String(s) | Value::FixedString { data: s, .. } => {
+                Value::String(s) => Ok(Value::fixed_string(*len, s.to_string())),
+                Value::FixedString { data: s, .. } => {
                     Ok(Value::fixed_string(*len, s.clone()))
                 }
                 _ => self.to_string().map(|s| Value::fixed_string(*len, s)),
@@ -579,7 +580,7 @@ impl From<f64> for Value {
 
 impl From<String> for Value {
     fn from(value: String) -> Self {
-        Value::String(value)
+        Value::string(value)
     }
 }
 
@@ -656,7 +657,7 @@ impl Value {
             },
             DataType::Double => self.to_float(),
             DataType::String => match self.to_string() {
-                Ok(s) => Value::String(s),
+                Ok(s) => Value::string(s),
                 Err(_) => Value::Null(NullType::BadData),
             },
             DataType::Date => self.to_date(),
@@ -738,7 +739,7 @@ impl Value {
 
 impl From<&str> for Value {
     fn from(value: &str) -> Self {
-        Value::String(value.to_string())
+        Value::string(value)
     }
 }
 
@@ -770,7 +771,7 @@ impl From<(i64, &str)> for Value {
     fn from(value: (i64, &str)) -> Self {
         Value::list(List::from(vec![
             Value::BigInt(value.0),
-            Value::String(value.1.to_string()),
+            Value::string(value.1),
         ]))
     }
 }
@@ -779,7 +780,7 @@ impl From<(i64, String)> for Value {
     fn from(value: (i64, String)) -> Self {
         Value::list(List::from(vec![
             Value::BigInt(value.0),
-            Value::String(value.1),
+            Value::string(value.1),
         ]))
     }
 }

@@ -937,7 +937,7 @@ mod tests {
 
         // Variable-length types
         assert_eq!(
-            calculator.get_type_cost_factor(&Value::String("test".to_string())),
+            calculator.get_type_cost_factor(&Value::string("test")),
             calculator.config.variable_type_cost_factor
         );
 

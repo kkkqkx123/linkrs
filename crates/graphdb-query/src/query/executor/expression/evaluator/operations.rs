@@ -250,7 +250,7 @@ impl BinaryOperationEvaluator {
         }
 
         match (&left, &right) {
-            (Value::String(s), Value::String(sub)) => Ok(Value::Bool(s.contains(sub))),
+            (Value::String(s), Value::String(sub)) => Ok(Value::Bool(s.contains(&**sub))),
             (Value::List(items), item) => {
                 if items.iter().any(|i| i.is_null()) {
                     return Ok(Value::Null(crate::core::value::NullType::Null));
@@ -269,7 +269,7 @@ impl BinaryOperationEvaluator {
         }
 
         match (&left, &right) {
-            (Value::String(s), Value::String(prefix)) => Ok(Value::Bool(s.starts_with(prefix))),
+            (Value::String(s), Value::String(prefix)) => Ok(Value::Bool(s.starts_with(&**prefix))),
             _ => Err(ExpressionError::type_error(
                 "The `STARTS WITH` operation requires a string value.",
             )),
@@ -282,7 +282,7 @@ impl BinaryOperationEvaluator {
         }
 
         match (&left, &right) {
-            (Value::String(s), Value::String(suffix)) => Ok(Value::Bool(s.ends_with(suffix))),
+            (Value::String(s), Value::String(suffix)) => Ok(Value::Bool(s.ends_with(&**suffix))),
             _ => Err(ExpressionError::type_error(
                 "The ENDS WITH operation requires a string value.",
             )),
@@ -388,7 +388,7 @@ impl BinaryOperationEvaluator {
         }?;
 
         let key_str = match key_or_path {
-            Value::String(s) => s.clone(),
+            Value::String(s) => s.to_string(),
             _ => {
                 return Err(ExpressionError::type_error(
                     "JSON operator key/path must be a string",
@@ -453,33 +453,33 @@ impl BinaryOperationEvaluator {
             // Return as string
             match result {
                 JsonValue::Null => Value::Null(NullType::Null),
-                JsonValue::String(s) => Value::String(s),
+                JsonValue::String(s) => Value::string(s),
                 JsonValue::Number(n) => {
                     if let Some(i) = n.as_i64() {
                         Value::BigInt(i)
                     } else if let Some(f) = n.as_f64() {
                         Value::Double(f)
                     } else {
-                        Value::String(n.to_string())
+                        Value::string(n.to_string())
                     }
                 }
                 JsonValue::Bool(b) => Value::Bool(b),
                 JsonValue::Array(_) | JsonValue::Object(_) => {
-                    Value::String(serde_json::to_string(&result).unwrap_or_default())
+                    Value::string(serde_json::to_string(&result).unwrap_or_default())
                 }
             }
         } else {
             // Return as JSON value
             match result {
                 JsonValue::Null => Value::Null(NullType::Null),
-                JsonValue::String(s) => Value::String(s),
+                JsonValue::String(s) => Value::string(s),
                 JsonValue::Number(n) => {
                     if let Some(i) = n.as_i64() {
                         Value::BigInt(i)
                     } else if let Some(f) = n.as_f64() {
                         Value::Double(f)
                     } else {
-                        Value::String(n.to_string())
+                        Value::string(n.to_string())
                     }
                 }
                 JsonValue::Bool(b) => Value::Bool(b),
@@ -488,26 +488,26 @@ impl BinaryOperationEvaluator {
                         .into_iter()
                         .map(|v| match v {
                             JsonValue::Null => Value::Null(NullType::Null),
-                            JsonValue::String(s) => Value::String(s),
+                            JsonValue::String(s) => Value::string(s),
                             JsonValue::Number(n) => {
                                 if let Some(i) = n.as_i64() {
                                     Value::BigInt(i)
                                 } else if let Some(f) = n.as_f64() {
                                     Value::Double(f)
                                 } else {
-                                    Value::String(n.to_string())
+                                    Value::string(n.to_string())
                                 }
                             }
                             JsonValue::Bool(b) => Value::Bool(b),
                             JsonValue::Array(_) | JsonValue::Object(_) => {
-                                Value::String(serde_json::to_string(&v).unwrap_or_default())
+                                Value::string(serde_json::to_string(&v).unwrap_or_default())
                             }
                         })
                         .collect();
                     Value::List(Box::new(crate::core::value::list::List::from(items)))
                 }
                 JsonValue::Object(_) => {
-                    Value::String(serde_json::to_string(&result).unwrap_or_default())
+                    Value::string(serde_json::to_string(&result).unwrap_or_default())
                 }
             }
         };

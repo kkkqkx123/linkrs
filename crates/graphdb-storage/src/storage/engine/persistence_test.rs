@@ -34,7 +34,7 @@ mod tests {
             .insert_vertex(
                 person_label,
                 "alice",
-                &[("name".to_string(), Value::String("Alice".to_string()))],
+                &[("name".to_string(), Value::string("Alice"))],
                 100,
             )
             .unwrap();

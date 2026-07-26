@@ -60,7 +60,7 @@ pub fn convert_value(value: &Value, target_type: &DataType) -> Result<Value, Con
         (Value::SmallInt(i), DataType::BigInt) => Ok(Value::BigInt(*i as i64)),
         (Value::SmallInt(i), DataType::Float) => Ok(Value::Float(*i as f32)),
         (Value::SmallInt(i), DataType::Double) => Ok(Value::Double(*i as f64)),
-        (Value::SmallInt(i), DataType::String) => Ok(Value::String(i.to_string())),
+        (Value::SmallInt(i), DataType::String) => Ok(Value::string(i.to_string())),
 
         (Value::Int(i), DataType::BigInt) => Ok(Value::BigInt(*i as i64)),
         (Value::Int(i), DataType::Float) => Ok(Value::Float(*i as f32)),
@@ -72,7 +72,7 @@ pub fn convert_value(value: &Value, target_type: &DataType) -> Result<Value, Con
             }
             Ok(Value::SmallInt(v as i16))
         }
-        (Value::Int(i), DataType::String) => Ok(Value::String(i.to_string())),
+        (Value::Int(i), DataType::String) => Ok(Value::string(i.to_string())),
 
         (Value::BigInt(i), DataType::Int) => {
             let v = *i;
@@ -90,13 +90,13 @@ pub fn convert_value(value: &Value, target_type: &DataType) -> Result<Value, Con
         }
         (Value::BigInt(i), DataType::Float) => Ok(Value::Float(*i as f32)),
         (Value::BigInt(i), DataType::Double) => Ok(Value::Double(*i as f64)),
-        (Value::BigInt(i), DataType::String) => Ok(Value::String(i.to_string())),
+        (Value::BigInt(i), DataType::String) => Ok(Value::string(i.to_string())),
 
         (Value::Float(f), DataType::Double) => Ok(Value::Double(*f as f64)),
-        (Value::Float(f), DataType::String) => Ok(Value::String(f.to_string())),
+        (Value::Float(f), DataType::String) => Ok(Value::string(f.to_string())),
 
         (Value::Double(d), DataType::Float) => Ok(Value::Float(*d as f32)),
-        (Value::Double(d), DataType::String) => Ok(Value::String(d.to_string())),
+        (Value::Double(d), DataType::String) => Ok(Value::string(d.to_string())),
 
         (Value::String(s), DataType::SmallInt) => s
             .parse::<i16>()
@@ -124,7 +124,7 @@ pub fn convert_value(value: &Value, target_type: &DataType) -> Result<Value, Con
             _ => Err(conversion_err!("Cannot parse '{}' as BOOL", s)),
         },
 
-        (_, DataType::String) => Ok(Value::String(format!("{}", value))),
+        (_, DataType::String) => Ok(Value::string(format!("{}", value))),
 
         _ => Err(conversion_err!(
             "Unsupported conversion from {:?} to {}",

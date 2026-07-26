@@ -160,7 +160,7 @@ mod tests {
 
     #[test]
     fn index_record_new_with_columns() {
-        let columns = vec![("name".to_string(), Value::String("test".to_string()))];
+        let columns = vec![("name".to_string(), Value::string("test"))];
         let record = IndexRecord::new_with_columns(10, columns.clone());
         assert_eq!(record.created_ts, 10);
         assert_eq!(record.included_columns, columns);

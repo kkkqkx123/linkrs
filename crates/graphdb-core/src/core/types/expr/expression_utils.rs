@@ -28,7 +28,7 @@ pub fn extract_string_from_expr(expr: &ContextualExpression) -> Result<String, S
 
     if let Some(literal) = expr.as_literal() {
         match literal {
-            Value::String(s) => return Ok(s.clone()),
+            Value::String(s) => return Ok(s.to_string()),
             Value::Int(i) => return Ok(i.to_string()),
             Value::BigInt(i) => return Ok(i.to_string()),
             Value::Float(f) => return Ok(f.to_string()),
@@ -153,7 +153,7 @@ mod tests {
     #[test]
     fn test_extract_string_from_expr_literal_string() {
         let ctx = Arc::new(ExpressionAnalysisContext::new());
-        let expr = Expression::Literal(Value::String("hello".to_string()));
+        let expr = Expression::Literal(Value::string("hello"));
         let meta = ExpressionMeta::new(expr);
         let id = ctx.register_expression(meta);
         let ctx_expr = ContextualExpression::new(id, ctx);

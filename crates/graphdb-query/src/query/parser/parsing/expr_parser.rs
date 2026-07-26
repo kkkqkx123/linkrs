@@ -533,7 +533,7 @@ impl<'a> ExprParser<'a> {
                 ctx.next_token();
                 let span = ctx.merge_span(start_pos, ctx.current_position());
                 Ok(ParseResult {
-                    expr: Expression::literal(Value::String(s)),
+                    expr: Expression::literal(Value::string(s)),
                     span,
                 })
             }
@@ -747,7 +747,7 @@ impl<'a> ExprParser<'a> {
                 return Ok(ParseResult {
                     expr: Expression::Aggregate {
                         func: crate::core::types::operators::AggregateFunction::Count(None),
-                        args: vec![Expression::Literal(crate::core::Value::String(
+                        args: vec![Expression::Literal(crate::core::Value::string(
                             "*".to_string(),
                         ))],
                         distinct: false,

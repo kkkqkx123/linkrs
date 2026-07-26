@@ -31,7 +31,7 @@ fn test_non_transactional_direct_path() {
         let vertex = create_test_vertex(
             i + 1,
             "Person",
-            vec![("name", Value::String(format!("Direct{}", i + 1)))],
+            vec![("name", Value::string(format!("Direct{}", i + 1)))],
         );
         harness
             .insert_vertex("test_space", vertex)
@@ -99,9 +99,9 @@ fn test_multi_field_transaction_atomicity() {
         1,
         "Person",
         vec![
-            ("name", Value::String("Alice".to_string())),
-            ("email", Value::String("alice@example.com".to_string())),
-            ("bio", Value::String("Software engineer".to_string())),
+            ("name", Value::string("Alice")),
+            ("email", Value::string("alice@example.com")),
+            ("bio", Value::string("Software engineer")),
         ],
     );
     harness
@@ -161,7 +161,7 @@ fn test_multi_tag_transaction_atomicity() {
     let person = create_test_vertex(
         1,
         "Person",
-        vec![("name", Value::String("Alice".to_string()))],
+        vec![("name", Value::string("Alice"))],
     );
     harness
         .insert_vertex_with_txn("test_space", person)
@@ -170,7 +170,7 @@ fn test_multi_tag_transaction_atomicity() {
     let company = create_test_vertex(
         2,
         "Company",
-        vec![("name", Value::String("TechCorp".to_string()))],
+        vec![("name", Value::string("TechCorp"))],
     );
     harness
         .insert_vertex_with_txn("test_space", company)
@@ -214,7 +214,7 @@ fn test_rollback_no_side_effects() {
     let vertex1 = create_test_vertex(
         1,
         "Person",
-        vec![("name", Value::String("Committed".to_string()))],
+        vec![("name", Value::string("Committed"))],
     );
     harness
         .insert_vertex_with_txn("test_space", vertex1)
@@ -226,7 +226,7 @@ fn test_rollback_no_side_effects() {
     let vertex2 = create_test_vertex(
         2,
         "Person",
-        vec![("name", Value::String("RolledBack".to_string()))],
+        vec![("name", Value::string("RolledBack"))],
     );
     harness
         .insert_vertex_with_txn("test_space", vertex2)
@@ -277,7 +277,7 @@ fn test_batch_size_exact_boundary() {
         let vertex = create_test_vertex(
             i + 1,
             "Item",
-            vec![("name", Value::String(format!("Item{}", i + 1)))],
+            vec![("name", Value::string(format!("Item{}", i + 1)))],
         );
         harness
             .insert_vertex("test_space", vertex)
@@ -339,7 +339,7 @@ fn test_large_batch_transaction() {
         let vertex = create_test_vertex(
             i + 1,
             "Person",
-            vec![("name", Value::String(format!("Bulk{}", i + 1)))],
+            vec![("name", Value::string(format!("Bulk{}", i + 1)))],
         );
         harness
             .insert_vertex_with_txn("test_space", vertex)
@@ -400,7 +400,7 @@ fn test_sequential_transactions() {
             let vertex = create_test_vertex(
                 vid,
                 "Person",
-                vec![("name", Value::String(format!("Seq{}{}", txn_num, i)))],
+                vec![("name", Value::string(format!("Seq{}{}", txn_num, i)))],
             );
             harness
                 .insert_vertex_with_txn("test_space", vertex)
@@ -450,7 +450,7 @@ fn test_mixed_transactional_non_transactional() {
     let vertex = create_test_vertex(
         1,
         "Person",
-        vec![("name", Value::String("Original".to_string()))],
+        vec![("name", Value::string("Original"))],
     );
     harness
         .insert_vertex("test_space", vertex)
@@ -478,7 +478,7 @@ fn test_mixed_transactional_non_transactional() {
     let updated_vertex = create_test_vertex(
         1,
         "Person",
-        vec![("name", Value::String("Updated".to_string()))],
+        vec![("name", Value::string("Updated"))],
     );
     harness
         .insert_vertex_with_txn("test_space", updated_vertex)
@@ -520,8 +520,8 @@ fn test_interleaved_field_updates() {
         1,
         "Person",
         vec![
-            ("name", Value::String("Alice".to_string())),
-            ("title", Value::String("Engineer".to_string())),
+            ("name", Value::string("Alice")),
+            ("title", Value::string("Engineer")),
         ],
     );
     harness

@@ -207,7 +207,7 @@ pub fn assert_search_result_contains(
     results: &[SearchResult],
     expected_doc_id: &str,
 ) -> Result<(), String> {
-    let expected_value = Value::String(expected_doc_id.to_string());
+    let expected_value = Value::string(expected_doc_id);
     if results.iter().any(|r| r.doc_id == expected_value) {
         Ok(())
     } else {
@@ -223,7 +223,7 @@ pub fn assert_search_result_not_contains(
     results: &[SearchResult],
     unexpected_doc_id: &str,
 ) -> Result<(), String> {
-    let unexpected_value = Value::String(unexpected_doc_id.to_string());
+    let unexpected_value = Value::string(unexpected_doc_id);
     if !results.iter().any(|r| r.doc_id == unexpected_value) {
         Ok(())
     } else {

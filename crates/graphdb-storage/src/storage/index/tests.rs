@@ -23,7 +23,7 @@ fn create_tag_index(name: &str, schema_name: &str) -> Index {
         schema_name: schema_name.to_string(),
         fields: vec![IndexField::new(
             "name".to_string(),
-            Value::String("".to_string()),
+            Value::string(""),
             false,
         )],
         properties: vec![],
@@ -55,7 +55,7 @@ fn test_update_and_lookup_vertex_index() {
     let space_id = 1u64;
     let vertex_id = Value::Int(1);
     let index_name = "idx_person_name";
-    let props = vec![("name".to_string(), Value::String("Alice".to_string()))];
+    let props = vec![("name".to_string(), Value::string("Alice"))];
     let index = create_tag_index(index_name, "person");
 
     manager
@@ -65,7 +65,7 @@ fn test_update_and_lookup_vertex_index() {
         .update_vertex_indexes_mvcc(space_id, &vertex_id, index_name, &props, MAX_TIMESTAMP)
         .expect("Failed to update vertex indexes");
     let results = manager
-        .lookup_tag_index(space_id, &index, &Value::String("Alice".to_string()))
+        .lookup_tag_index(space_id, &index, &Value::string("Alice"))
         .expect("Failed to lookup tag index");
     assert_eq!(results.len(), 1);
     assert_eq!(results[0], vertex_id);
@@ -90,7 +90,7 @@ fn same_index_id_in_different_spaces_uses_isolated_runtimes() {
             1,
             &Value::Int(1),
             "person_name",
-            &[("name".to_string(), Value::String("Alice".to_string()))],
+            &[("name".to_string(), Value::string("Alice"))],
             MAX_TIMESTAMP,
         )
         .expect("write first space index");
@@ -99,20 +99,20 @@ fn same_index_id_in_different_spaces_uses_isolated_runtimes() {
             2,
             &Value::Int(2),
             "person_name",
-            &[("name".to_string(), Value::String("Bob".to_string()))],
+            &[("name".to_string(), Value::string("Bob"))],
             MAX_TIMESTAMP,
         )
         .expect("write second space index");
 
     assert_eq!(
         manager
-            .lookup_tag_index(1, &first, &Value::String("Alice".to_string()))
+            .lookup_tag_index(1, &first, &Value::string("Alice"))
             .expect("lookup first space"),
         vec![Value::Int(1)]
     );
     assert_eq!(
         manager
-            .lookup_tag_index(2, &second, &Value::String("Bob".to_string()))
+            .lookup_tag_index(2, &second, &Value::string("Bob"))
             .expect("lookup second space"),
         vec![Value::Int(2)]
     );
@@ -140,7 +140,7 @@ fn split_writes_only_the_selected_index_to_each_shard() {
             1,
             &Value::Int(1),
             "first",
-            &[("name".to_string(), Value::String("Alice".to_string()))],
+            &[("name".to_string(), Value::string("Alice"))],
             1,
         )
         .expect("write first lower key");
@@ -149,7 +149,7 @@ fn split_writes_only_the_selected_index_to_each_shard() {
             1,
             &Value::Int(2),
             "first",
-            &[("name".to_string(), Value::String("Zoe".to_string()))],
+            &[("name".to_string(), Value::string("Zoe"))],
             1,
         )
         .expect("write first upper key");
@@ -158,13 +158,13 @@ fn split_writes_only_the_selected_index_to_each_shard() {
             1,
             &Value::Int(3),
             "second",
-            &[("name".to_string(), Value::String("Other".to_string()))],
+            &[("name".to_string(), Value::string("Other"))],
             1,
         )
         .expect("write unrelated index key");
 
     let boundary =
-        KeyBuilder::build_vertex_index_value_prefix(1, "first", &Value::String("M".to_string()))
+        KeyBuilder::build_vertex_index_value_prefix(1, "first", &Value::string("M"))
             .expect("build split boundary")
             .0;
     manager
@@ -215,7 +215,7 @@ fn resolve_split_crash_recovery_discards_building_state() {
             1,
             &Value::Int(1),
             "first",
-            &[("name".to_string(), Value::String("Alice".to_string()))],
+            &[("name".to_string(), Value::string("Alice"))],
             1,
         )
         .expect("write");
@@ -245,7 +245,7 @@ fn resolve_split_crash_recovery_discards_building_state() {
     );
 
     let results = manager
-        .lookup_tag_index(1, &index, &Value::String("Alice".to_string()))
+        .lookup_tag_index(1, &index, &Value::string("Alice"))
         .expect("lookup after recovery");
     assert_eq!(results, vec![Value::Int(1)]);
 }
@@ -297,7 +297,7 @@ fn resolve_split_crash_recovery_completes_publishing_state_with_manifest() {
             1,
             &Value::Int(1),
             "first",
-            &[("name".to_string(), Value::String("Alice".to_string()))],
+            &[("name".to_string(), Value::string("Alice"))],
             1,
         )
         .expect("write");
@@ -348,7 +348,7 @@ fn resolve_split_crash_recovery_completes_publishing_state_with_manifest() {
     );
 
     let results = manager
-        .lookup_tag_index(1, &index, &Value::String("Alice".to_string()))
+        .lookup_tag_index(1, &index, &Value::string("Alice"))
         .expect("lookup after publishing recovery");
     assert_eq!(results, vec![Value::Int(1)]);
 }

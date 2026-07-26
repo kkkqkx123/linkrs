@@ -88,7 +88,7 @@ impl ColumnEncoding {
     pub fn get(&self, row_idx: usize) -> Option<Value> {
         match self {
             Self::None => None,
-            Self::Fsst(col) => col.get(row_idx).map(Value::String),
+            Self::Fsst(col) => col.get(row_idx).map(Value::string),
             Self::Dictionary(col) => col.get(row_idx),
             Self::RleInt(col) => col.get(row_idx),
             Self::RleBool(col) => col.get(row_idx),
@@ -255,9 +255,9 @@ mod tests {
     #[test]
     fn test_column_encoding_dictionary() {
         let mut col = DictionaryColumn::new();
-        col.set(0, Some(&Value::String("apple".to_string())))
+        col.set(0, Some(&Value::string("apple")))
             .unwrap();
-        col.set(1, Some(&Value::String("banana".to_string())))
+        col.set(1, Some(&Value::string("banana")))
             .unwrap();
         col.set(2, None).unwrap();
 
@@ -321,9 +321,9 @@ mod tests {
         let mut encoding = ColumnEncoding::Fsst(col);
 
         encoding
-            .set(0, Some(&Value::String("world".to_string())))
+            .set(0, Some(&Value::string("world")))
             .unwrap();
-        assert_eq!(encoding.get(0), Some(Value::String("world".to_string())));
+        assert_eq!(encoding.get(0), Some(Value::string("world")));
 
         encoding.set(0, None).unwrap();
     }

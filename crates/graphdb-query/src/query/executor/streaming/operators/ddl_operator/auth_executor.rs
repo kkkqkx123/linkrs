@@ -54,7 +54,7 @@ pub(super) fn execute_user_manage(
                 let schema = super::make_single_col_schema("user", "string");
                 Ok(Some(super::make_single_row(
                     schema,
-                    vec![Value::String(format!("User '{}' exists", name))],
+                    vec![Value::string(format!("User '{}' exists", name))],
                 )))
             } else {
                 Ok(Some(super::make_manage_result(

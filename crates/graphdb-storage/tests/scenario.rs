@@ -40,14 +40,14 @@ fn test_multi_tag_vertex_get_and_scan() {
     // Person properties
     assert_eq!(
         retrieved.properties.get("name"),
-        Some(&Value::String("Alice".to_string()))
+        Some(&Value::string("Alice"))
     );
     assert_eq!(retrieved.properties.get("age"), Some(&Value::BigInt(30)));
 
     // Employee properties
     assert_eq!(
         retrieved.properties.get("company"),
-        Some(&Value::String("AcmeCorp".to_string()))
+        Some(&Value::string("AcmeCorp"))
     );
     assert_eq!(
         retrieved.properties.get("salary"),
@@ -85,7 +85,7 @@ fn test_multi_tag_vertex_query_by_tag() {
     assert_eq!(persons.len(), 1);
     assert_eq!(
         persons[0].properties.get("name"),
-        Some(&Value::String("Bob".to_string()))
+        Some(&Value::string("Bob"))
     );
 
     // Query by Employee tag
@@ -95,7 +95,7 @@ fn test_multi_tag_vertex_query_by_tag() {
     assert_eq!(employees.len(), 1);
     assert_eq!(
         employees[0].properties.get("company"),
-        Some(&Value::String("BetaInc".to_string()))
+        Some(&Value::string("BetaInc"))
     );
 }
 
@@ -134,7 +134,7 @@ fn test_delete_tag_from_vertex() {
     // Person properties still accessible
     assert_eq!(
         retrieved.properties.get("name"),
-        Some(&Value::String("Charlie".to_string()))
+        Some(&Value::string("Charlie"))
     );
 }
 
@@ -240,7 +240,7 @@ fn test_alter_tag_properties_with_existing_data() {
         .expect("Alice should exist after alter");
     assert_eq!(
         alice.properties.get("name"),
-        Some(&Value::String("Alice".to_string())),
+        Some(&Value::string("Alice")),
         "name property should survive alteration"
     );
 
@@ -250,10 +250,10 @@ fn test_alter_tag_properties_with_existing_data() {
         vec![Tag::new(
             "Person".to_string(),
             vec![
-                ("name".to_string(), Value::String("Diana".to_string())),
+                ("name".to_string(), Value::string("Diana")),
                 (
                     "email".to_string(),
-                    Value::String("diana@test.com".to_string()),
+                    Value::string("diana@test.com"),
                 ),
             ]
             .into_iter()
@@ -268,7 +268,7 @@ fn test_alter_tag_properties_with_existing_data() {
         .expect("Diana should exist");
     assert_eq!(
         diana.properties.get("email"),
-        Some(&Value::String("diana@test.com".to_string()))
+        Some(&Value::string("diana@test.com"))
     );
 }
 
@@ -352,7 +352,7 @@ fn test_multi_edge_type_traversal() {
         vec![Tag::new(
             "Employee".to_string(),
             vec![
-                ("company".to_string(), Value::String("AcmeCorp".to_string())),
+                ("company".to_string(), Value::string("AcmeCorp")),
                 ("salary".to_string(), Value::BigInt(90000)),
             ]
             .into_iter()
@@ -375,7 +375,7 @@ fn test_multi_edge_type_traversal() {
         VertexId::from_int64(3),
         "WORKS_AT".to_string(),
         0,
-        vec![("role".to_string(), Value::String("Engineer".to_string()))]
+        vec![("role".to_string(), Value::string("Engineer"))]
             .into_iter()
             .collect(),
     );
@@ -469,7 +469,7 @@ fn test_batch_insert_failure_rollback_consistency() {
             VertexId::from_int64(2),
             vec![Tag::new(
                 "Person".to_string(),
-                vec![("name".to_string(), Value::String("Bob".to_string()))]
+                vec![("name".to_string(), Value::string("Bob"))]
                     .into_iter()
                     .collect(),
             )],
@@ -479,7 +479,7 @@ fn test_batch_insert_failure_rollback_consistency() {
             VertexId::from_int64(1),
             vec![Tag::new(
                 "Person".to_string(),
-                vec![("name".to_string(), Value::String("Duplicate".to_string()))]
+                vec![("name".to_string(), Value::string("Duplicate"))]
                     .into_iter()
                     .collect(),
             )],
@@ -496,7 +496,7 @@ fn test_batch_insert_failure_rollback_consistency() {
         .expect("Alice should still exist after failed batch");
     assert_eq!(
         alice.properties.get("name"),
-        Some(&Value::String("Alice".to_string()))
+        Some(&Value::string("Alice"))
     );
 
     // Bob (vertex 2) should NOT have been inserted
@@ -550,7 +550,7 @@ fn test_multi_cycle_flush_and_load() {
             .expect("Charlie should survive reload");
         assert_eq!(
             charlie.properties.get("name"),
-            Some(&Value::String("Charlie".to_string()))
+            Some(&Value::string("Charlie"))
         );
 
         let dave = common::create_person_vertex(4, "Dave", 40);
@@ -574,7 +574,7 @@ fn test_multi_cycle_flush_and_load() {
             .expect("Charlie should survive");
         assert_eq!(
             charlie.properties.get("name"),
-            Some(&Value::String("Charlie".to_string()))
+            Some(&Value::string("Charlie"))
         );
 
         // Dave from cycle 3 survived
@@ -584,7 +584,7 @@ fn test_multi_cycle_flush_and_load() {
             .expect("Dave should survive");
         assert_eq!(
             dave.properties.get("name"),
-            Some(&Value::String("Dave".to_string()))
+            Some(&Value::string("Dave"))
         );
 
         // Edge from cycle 2 survived
@@ -696,7 +696,7 @@ fn test_unique_index_rejects_duplicate() {
         schema_name: "Person".to_string(),
         fields: vec![IndexField::new(
             "name".to_string(),
-            Value::String(String::new()),
+            Value::string(""),
             false,
         )],
         properties: vec![],
@@ -756,7 +756,7 @@ fn test_string_vertex_id_operations() {
         vec![Tag::new(
             "Person".to_string(),
             vec![
-                ("name".to_string(), Value::String("Alice".to_string())),
+                ("name".to_string(), Value::string("Alice")),
                 ("age".to_string(), Value::BigInt(30)),
             ]
             .into_iter()
@@ -768,7 +768,7 @@ fn test_string_vertex_id_operations() {
         vec![Tag::new(
             "Person".to_string(),
             vec![
-                ("name".to_string(), Value::String("Bob".to_string())),
+                ("name".to_string(), Value::string("Bob")),
                 ("age".to_string(), Value::BigInt(25)),
             ]
             .into_iter()
@@ -785,7 +785,7 @@ fn test_string_vertex_id_operations() {
         .expect("Alice should exist with string ID");
     assert_eq!(
         alice_retrieved.properties.get("name"),
-        Some(&Value::String("Alice".to_string()))
+        Some(&Value::string("Alice"))
     );
 
     // Scan all
@@ -846,7 +846,7 @@ fn test_update_vertex_properties() {
             vec![
                 (
                     "name".to_string(),
-                    Value::String("AliceUpdated".to_string()),
+                    Value::string("AliceUpdated"),
                 ),
                 ("age".to_string(), Value::BigInt(31)),
             ]
@@ -863,7 +863,7 @@ fn test_update_vertex_properties() {
         .expect("Vertex should exist after update");
     assert_eq!(
         retrieved.properties.get("name"),
-        Some(&Value::String("AliceUpdated".to_string()))
+        Some(&Value::string("AliceUpdated"))
     );
     assert_eq!(retrieved.properties.get("age"), Some(&Value::BigInt(31)));
 }

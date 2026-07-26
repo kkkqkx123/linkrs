@@ -44,7 +44,7 @@ fn generation_rebuild_restarts_after_publish_io_failure() {
         .lookup_index(
             "test_space",
             "person_name_idx",
-            &Value::String("Alice".to_string()),
+            &Value::string("Alice"),
         )
         .expect("rebuilt index should be readable");
     assert_eq!(

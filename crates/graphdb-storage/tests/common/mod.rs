@@ -98,7 +98,7 @@ pub fn create_person_vertex(id: i64, name: &str, age: i64) -> Vertex {
         vec![Tag::new(
             "Person".to_string(),
             vec![
-                ("name".to_string(), Value::String(name.to_string())),
+                ("name".to_string(), Value::string(name)),
                 ("age".to_string(), Value::BigInt(age)),
             ]
             .into_iter()
@@ -117,9 +117,9 @@ pub fn create_multi_tag_vertex(
     salary: i64,
 ) -> Vertex {
     let mut props: HashMap<String, Value> = HashMap::new();
-    props.insert("name".to_string(), Value::String(name.to_string()));
+    props.insert("name".to_string(), Value::string(name));
     props.insert("age".to_string(), Value::BigInt(age));
-    props.insert("company".to_string(), Value::String(company.to_string()));
+    props.insert("company".to_string(), Value::string(company));
     props.insert("salary".to_string(), Value::BigInt(salary));
 
     Vertex {
@@ -128,13 +128,13 @@ pub fn create_multi_tag_vertex(
         tags: vec![
             Tag::new("Person".to_string(), {
                 let mut p = HashMap::new();
-                p.insert("name".to_string(), Value::String(name.to_string()));
+                p.insert("name".to_string(), Value::string(name));
                 p.insert("age".to_string(), Value::BigInt(age));
                 p
             }),
             Tag::new("Employee".to_string(), {
                 let mut p = HashMap::new();
-                p.insert("company".to_string(), Value::String(company.to_string()));
+                p.insert("company".to_string(), Value::string(company));
                 p.insert("salary".to_string(), Value::BigInt(salary));
                 p
             }),
@@ -187,7 +187,7 @@ pub fn create_person_name_index(storage: &mut GraphStorage, space: &str) {
         schema_name: "Person".to_string(),
         fields: vec![IndexField::new(
             "name".to_string(),
-            Value::String(String::new()),
+            Value::string(""),
             false,
         )],
         properties: vec![],
@@ -221,7 +221,7 @@ pub fn verify_test_data(storage: &GraphStorage, space: &str) {
         .expect("Alice should exist");
     assert_eq!(
         alice.properties.get("name"),
-        Some(&Value::String("Alice".to_string()))
+        Some(&Value::string("Alice"))
     );
     assert_eq!(alice.properties.get("age"), Some(&Value::BigInt(30)));
 
@@ -231,7 +231,7 @@ pub fn verify_test_data(storage: &GraphStorage, space: &str) {
         .expect("Bob should exist");
     assert_eq!(
         bob.properties.get("name"),
-        Some(&Value::String("Bob".to_string()))
+        Some(&Value::string("Bob"))
     );
 
     let edge = storage

@@ -76,13 +76,13 @@ async fn test_multi_term_search_scoring() {
 
     let doc_4_score = results
         .iter()
-        .find(|r| r.doc_id == graphdb_core::core::Value::String("doc_4".to_string()))
+        .find(|r| r.doc_id == graphdb_core::core::Value::string("doc_4"))
         .map(|r| r.score)
         .unwrap_or(0.0);
 
     let doc_2_score = results
         .iter()
-        .find(|r| r.doc_id == graphdb_core::core::Value::String("doc_2".to_string()))
+        .find(|r| r.doc_id == graphdb_core::core::Value::string("doc_2"))
         .map(|r| r.score)
         .unwrap_or(0.0);
 

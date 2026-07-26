@@ -233,7 +233,7 @@ fn test_session_execute_with_params() {
         .expect("INSERT failed");
 
     let mut params = HashMap::new();
-    params.insert("name".to_string(), Value::String("Alice".to_string()));
+    params.insert("name".to_string(), Value::string("Alice"));
 
     let result = session
         .execute_with_params(
@@ -247,7 +247,7 @@ fn test_session_execute_with_params() {
     assert_eq!(row.get_by_index(0), Some(&Value::Int(30)));
 
     let mut params2 = HashMap::new();
-    params2.insert("name".to_string(), Value::String("Bob".to_string()));
+    params2.insert("name".to_string(), Value::string("Bob"));
 
     let result2 = session
         .execute_with_params(
@@ -275,7 +275,7 @@ fn test_session_execute_with_params_unknown_param() {
         .expect("use space failed");
 
     let mut params = HashMap::new();
-    params.insert("unknown".to_string(), Value::String("value".to_string()));
+    params.insert("unknown".to_string(), Value::string("value"));
 
     let result = session.execute_with_params("SHOW SPACES", params);
     assert!(
@@ -733,7 +733,7 @@ fn test_row_get() {
 fn test_row_get_by_index() {
     let mut values = HashMap::new();
     values.insert("id".to_string(), Value::Int(42));
-    values.insert("name".to_string(), Value::String("测试".to_string()));
+    values.insert("name".to_string(), Value::string("测试"));
     let core_row = graphdb::api::core::Row { values };
     let row = Row::from_core(core_row);
 
@@ -745,7 +745,7 @@ fn test_row_get_by_index() {
 fn test_row_columns() {
     let mut values = HashMap::new();
     values.insert("id".to_string(), Value::Int(42));
-    values.insert("name".to_string(), Value::String("测试".to_string()));
+    values.insert("name".to_string(), Value::string("测试"));
     let core_row = graphdb::api::core::Row { values };
     let row = Row::from_core(core_row);
 
@@ -769,7 +769,7 @@ fn test_row_has_column() {
 #[test]
 fn test_row_get_string() {
     let mut values = HashMap::new();
-    values.insert("name".to_string(), Value::String("测试".to_string()));
+    values.insert("name".to_string(), Value::string("测试"));
     let core_row = graphdb::api::core::Row { values };
     let row = Row::from_core(core_row);
 
@@ -844,7 +844,7 @@ fn test_row_get_edge() {
 fn test_row_len() {
     let mut values = HashMap::new();
     values.insert("id".to_string(), Value::Int(42));
-    values.insert("name".to_string(), Value::String("测试".to_string()));
+    values.insert("name".to_string(), Value::string("测试"));
     let core_row = graphdb::api::core::Row { values };
     let row = Row::from_core(core_row);
 

@@ -121,7 +121,7 @@ impl StreamingQueryResult {
             }
             ExecutionResult::SpaceSwitched(summary) => {
                 let row = vec![
-                    crate::core::Value::String(summary.name.clone()),
+                    crate::core::Value::string(summary.name.clone()),
                     crate::core::Value::BigInt(summary.id as i64),
                 ];
                 let col_names = vec!["space_name".to_string(), "space_id".to_string()];
@@ -143,7 +143,7 @@ impl StreamingQueryResult {
                 let runtime = Arc::new(ExecutionRuntime::default_budget());
                 Self {
                     inner: Arc::new(Mutex::new(StreamState::Materialized {
-                        rows: vec![vec![crate::core::Value::String(msg)]],
+                        rows: vec![vec![crate::core::Value::string(msg)]],
                         col_names,
                         exhausted: false,
                     })),

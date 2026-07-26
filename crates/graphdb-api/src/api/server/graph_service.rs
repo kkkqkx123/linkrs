@@ -672,7 +672,7 @@ impl<
                 let vid_type_idx = ds.col_names.iter().position(|c| c == "vid_type");
                 let row = ds.rows.first()?;
                 let name = match row.get(name_idx)? {
-                    crate::core::Value::String(s) => s.clone(),
+                    crate::core::Value::String(s) => s.to_string(),
                     _ => return None,
                 };
                 let id = match row.get(id_idx)? {

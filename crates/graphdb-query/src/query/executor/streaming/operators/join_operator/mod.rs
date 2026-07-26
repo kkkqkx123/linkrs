@@ -51,7 +51,7 @@ impl From<Value> for JoinKeyValue {
         match value {
             Value::Int(i) => JoinKeyValue::I32(i),
             Value::BigInt(i) => JoinKeyValue::I64(i),
-            Value::String(s) => JoinKeyValue::String(s),
+            Value::String(s) => JoinKeyValue::String(s.to_string()),
             other => JoinKeyValue::Multi(vec![other]),
         }
     }

@@ -402,7 +402,7 @@ impl From<VertexId> for Value {
         if let Some(i) = vid.as_int64() {
             Value::BigInt(i)
         } else if let Some(s) = vid.as_str() {
-            Value::String(s.to_string())
+            Value::string(s)
         } else {
             Value::Blob(vid.into_inner())
         }

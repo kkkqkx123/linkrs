@@ -598,7 +598,7 @@ impl<S: StorageClient> SchemaApi<S> {
             DataType::BigInt => Value::BigInt(0),
             DataType::Float => Value::Float(0.0),
             DataType::Double => Value::Double(0.0),
-            DataType::String | DataType::FixedString(_) => Value::String(String::new()),
+            DataType::String | DataType::FixedString(_) => Value::string(""),
             DataType::Bool => Value::Bool(false),
             DataType::Date => Value::Date(DateValue {
                 year: 1970,

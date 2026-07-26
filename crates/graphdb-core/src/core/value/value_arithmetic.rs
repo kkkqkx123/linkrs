@@ -2,6 +2,7 @@
 //!
 //! This module provides methods for arithmetic, logical, and bitwise operations on values.
 use crate::core::value::Value;
+use compact_str::CompactString;
 
 impl Value {
     /// Addition operation
@@ -42,11 +43,15 @@ impl Value {
             (Double(a), Float(b)) => Ok(Double(a + *b as f64)),
 
             // String concatenation
-            (String(a), String(b)) => Ok(String(format!("{}{}", a, b))),
-            (String(a), FixedString { data: b, .. }) => Ok(String(format!("{}{}", a, b))),
-            (FixedString { data: a, .. }, String(b)) => Ok(String(format!("{}{}", a, b))),
+            (String(a), String(b)) => Ok(String(CompactString::new(&format!("{}{}", a, b)))),
+            (String(a), FixedString { data: b, .. }) => {
+                Ok(String(CompactString::new(&format!("{}{}", a, b))))
+            }
+            (FixedString { data: a, .. }, String(b)) => {
+                Ok(String(CompactString::new(&format!("{}{}", a, b))))
+            }
             (FixedString { data: a, .. }, FixedString { data: b, .. }) => {
-                Ok(String(format!("{}{}", a, b)))
+                Ok(String(CompactString::new(&format!("{}{}", a, b))))
             }
             _ => Err("Cannot perform addition on these value types".to_string()),
         }

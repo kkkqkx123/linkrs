@@ -171,7 +171,7 @@ impl<S: graphdb::storage::StorageClient + 'static> ValidationHelper<S> {
                         if let (Value::String(field), Value::String(field_type)) =
                             (&row[0], &row[1])
                         {
-                            schema.push((field.clone(), field_type.clone()));
+                            schema.push((field.to_string(), field_type.to_string()));
                         }
                     }
                 }

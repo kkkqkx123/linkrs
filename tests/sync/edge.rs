@@ -55,12 +55,12 @@ fn test_edge_insert_sync_via_manager() {
     let vertex1 = create_test_vertex(
         1,
         "Person",
-        vec![("name", Value::String("Alice".to_string()))],
+        vec![("name", Value::string("Alice"))],
     );
     let vertex2 = create_test_vertex(
         2,
         "Person",
-        vec![("name", Value::String("Bob".to_string()))],
+        vec![("name", Value::string("Bob"))],
     );
     harness
         .insert_vertex("test_space", vertex1)
@@ -170,12 +170,12 @@ fn test_edge_with_fulltext_property_sync() {
     let vertex1 = create_test_vertex(
         1,
         "Person",
-        vec![("name", Value::String("Alice".to_string()))],
+        vec![("name", Value::string("Alice"))],
     );
     let vertex2 = create_test_vertex(
         2,
         "Person",
-        vec![("name", Value::String("Bob".to_string()))],
+        vec![("name", Value::string("Bob"))],
     );
     harness
         .insert_vertex("test_space", vertex1)
@@ -190,7 +190,7 @@ fn test_edge_with_fulltext_property_sync() {
     let mut props = HashMap::new();
     props.insert(
         "description".to_string(),
-        Value::String("Alice knows Bob since 2020".to_string()),
+        Value::string("Alice knows Bob since 2020"),
     );
     let edge = graphdb::core::Edge::new(
         VertexId::from_int64(1),
@@ -269,12 +269,12 @@ fn test_edge_delete_sync_via_manager() {
     let vertex1 = create_test_vertex(
         1,
         "Person",
-        vec![("name", Value::String("Alice".to_string()))],
+        vec![("name", Value::string("Alice"))],
     );
     let vertex2 = create_test_vertex(
         2,
         "Person",
-        vec![("name", Value::String("Bob".to_string()))],
+        vec![("name", Value::string("Bob"))],
     );
     harness
         .insert_vertex("test_space", vertex1)
@@ -289,7 +289,7 @@ fn test_edge_delete_sync_via_manager() {
     let mut props = HashMap::new();
     props.insert(
         "description".to_string(),
-        Value::String("Alice knows Bob".to_string()),
+        Value::string("Alice knows Bob"),
     );
     let edge = graphdb::core::Edge::new(
         VertexId::from_int64(1),
@@ -385,12 +385,12 @@ fn test_edge_update_sync_via_manager() {
     let vertex1 = create_test_vertex(
         1,
         "Person",
-        vec![("name", Value::String("Alice".to_string()))],
+        vec![("name", Value::string("Alice"))],
     );
     let vertex2 = create_test_vertex(
         2,
         "Person",
-        vec![("name", Value::String("Bob".to_string()))],
+        vec![("name", Value::string("Bob"))],
     );
     harness
         .insert_vertex("test_space", vertex1)
@@ -405,7 +405,7 @@ fn test_edge_update_sync_via_manager() {
     let mut old_props = HashMap::new();
     old_props.insert(
         "description".to_string(),
-        Value::String("old description".to_string()),
+        Value::string("old description"),
     );
     let old_edge = graphdb::core::Edge::new(
         VertexId::from_int64(1),
@@ -426,7 +426,7 @@ fn test_edge_update_sync_via_manager() {
     let mut new_props = HashMap::new();
     new_props.insert(
         "description".to_string(),
-        Value::String("new description".to_string()),
+        Value::string("new description"),
     );
     let new_edge = graphdb::core::Edge::new(
         VertexId::from_int64(1),
@@ -462,11 +462,11 @@ fn test_edge_update_sync_via_manager() {
             EdgeProps::new(
                 &[(
                     "description".to_string(),
-                    Value::String("old description".to_string()),
+                    Value::string("old description"),
                 )],
                 &[(
                     "description".to_string(),
-                    Value::String("new description".to_string()),
+                    Value::string("new description"),
                 )],
             ),
         )
@@ -489,7 +489,7 @@ fn test_edge_update_sync_via_manager() {
     if let Some(edge) = edge_opt {
         assert_eq!(
             edge.props.get("description"),
-            Some(&Value::String("new description".to_string()))
+            Some(&Value::string("new description"))
         );
     }
 }
@@ -523,12 +523,12 @@ fn test_edge_delete_no_index_graceful() {
     let vertex1 = create_test_vertex(
         1,
         "Person",
-        vec![("name", Value::String("Alice".to_string()))],
+        vec![("name", Value::string("Alice"))],
     );
     let vertex2 = create_test_vertex(
         2,
         "Person",
-        vec![("name", Value::String("Bob".to_string()))],
+        vec![("name", Value::string("Bob"))],
     );
     harness
         .insert_vertex("test_space", vertex1)
