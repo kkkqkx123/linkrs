@@ -54,9 +54,8 @@ define_logical_plan_node! {
 mod vector {
     use crate::define_logical_plan_node;
     use crate::query::parser::ast::vector::VectorQueryExpr;
-    use crate::query::planning::plan::core::nodes::search::vector::data_access::{
-        OutputField, VectorFilter,
-    };
+    use crate::query::planning::plan::core::nodes::search::vector::data_access::OutputField;
+    use vector_client::types::VectorFilter;
 
     define_logical_plan_node! {
         pub struct LogicalVectorSearchNode {

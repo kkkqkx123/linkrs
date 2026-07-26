@@ -163,7 +163,7 @@ impl<S: StorageClient + Clone + 'static + graphdb_storage::storage::UndoTarget> 
             None => return,
         };
         let name = match row.values.get("space_name") {
-            Some(Value::String(s)) => s.clone(),
+            Some(Value::String(s)) => s.to_string(),
             _ => return,
         };
         let id = match row.values.get("space_id") {

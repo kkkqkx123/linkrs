@@ -9,7 +9,7 @@ use crate::query::planning::plan::core::nodes::base::plan_node_category::PlanNod
 use crate::query::planning::plan::core::nodes::base::plan_node_traits::{PlanNode, ZeroInputNode};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "qdrant")]
-use vector_client::types::VectorFilter;
+pub use vector_client::types::VectorFilter;
 
 #[cfg(not(feature = "qdrant"))]
 #[derive(Debug, Clone)]

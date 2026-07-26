@@ -17,6 +17,9 @@ use crate::query::planning::plan::core::nodes::management::FulltextManageNode;
 use crate::search::manager::FulltextIndexManager;
 use crate::storage::QueryStorage;
 
+#[cfg(feature = "fulltext-search")]
+use crate::query::executor::streaming::chunk::{ColumnInfo, Schema};
+
 #[cfg(not(feature = "fulltext-search"))]
 fn fulltext_command_name(cmd: &FulltextManageNode) -> &str {
     cmd.node_type_id()

@@ -992,7 +992,7 @@ fn value_to_proto_value(value: crate::core::Value) -> super::proto::Value {
         crate::core::Value::Float(f) => ProtoValue::FloatValue(f as f64),
         crate::core::Value::Double(d) => ProtoValue::DoubleValue(d),
         crate::core::Value::Decimal128(d) => ProtoValue::StringValue(d.to_string()),
-        crate::core::Value::String(s) => ProtoValue::StringValue(s),
+        crate::core::Value::String(s) => ProtoValue::StringValue(s.to_string()),
         crate::core::Value::FixedString { data, .. } => ProtoValue::StringValue(data),
         crate::core::Value::Date(d) => ProtoValue::StringValue(d.to_string()),
         crate::core::Value::Time(t) => ProtoValue::StringValue(t.to_string()),

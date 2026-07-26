@@ -191,7 +191,7 @@ impl Row {
     /// Getting String Values
     pub fn get_string(&self, column: &str) -> Option<String> {
         self.get(column).and_then(|v| match v {
-            Value::String(s) => Some(s.clone()),
+            Value::String(s) => Some(s.to_string()),
             _ => None,
         })
     }

@@ -899,42 +899,56 @@ pub(crate) fn convert_logical_to_physical(logical: LogicalNodeEnum) -> PlanNodeE
         #[cfg(feature = "qdrant")]
         LogicalNodeEnum::VectorSearch(n) => {
             let mut node = crate::query::planning::plan::core::nodes::search::vector::data_access::VectorSearchNode::new(
-                n.space_id, &n.index_name, n.query_vector,
+                crate::query::planning::plan::core::nodes::search::vector::data_access::VectorSearchParams::new(
+                    n.index_name.clone(),
+                    n.space_id,
+                    n.tag_name.clone(),
+                    n.field_name.clone(),
+                    n.query.clone(),
+                )
+                .with_threshold(n.threshold.unwrap_or(0.0))
+                .with_filter(n.filter.clone())
+                .with_limit(n.limit)
+                .with_offset(n.offset)
+                .with_output_fields(n.output_fields.clone())
+                .with_metadata_version(n.metadata_version),
             );
-            if let Some(l) = n.limit {
-                node.set_limit(l);
-            }
             if let Some(var) = n.output_var {
                 node.set_output_var(var);
             }
             node.set_col_names(n.col_names);
-            node.set_column_types(n.column_types);
             PlanNodeEnum::VectorSearch(node)
         }
 
         #[cfg(feature = "qdrant")]
         LogicalNodeEnum::VectorLookup(n) => {
             let mut node = crate::query::planning::plan::core::nodes::search::vector::data_access::VectorLookupNode::new(
-                n.space_id, &n.index_name,
+                n.schema_name,
+                n.index_name,
+                n.query,
+                n.yield_fields,
+                n.limit,
             );
             if let Some(var) = n.output_var {
                 node.set_output_var(var);
             }
             node.set_col_names(n.col_names);
-            node.set_column_types(n.column_types);
             PlanNodeEnum::VectorLookup(node)
         }
 
         #[cfg(feature = "qdrant")]
         LogicalNodeEnum::VectorMatch(n) => {
             let mut node = crate::query::planning::plan::core::nodes::search::vector::data_access::VectorMatchNode::new(
-                n.space_id, &n.index_name, n.query_vector,
-            );
+                n.pattern,
+                n.field,
+                n.query,
+                n.threshold,
+                n.yield_fields,
+            ).with_metadata(n.space_id, n.tag_name, n.field_name);
             if let Some(var) = n.output_var {
                 node.set_output_var(var);
             }
             node.set_col_names(n.col_names);
-            node.set_column_types(n.column_types);
             PlanNodeEnum::VectorMatch(node)
         }
     }

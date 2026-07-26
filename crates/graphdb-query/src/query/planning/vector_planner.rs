@@ -396,7 +396,7 @@ impl VectorSearchPlanner {
     /// Convert core::Value to String for filter conditions
     fn value_to_string(&self, value: &crate::core::Value) -> Option<String> {
         match value {
-            crate::core::Value::String(s) => Some(s.clone()),
+            crate::core::Value::String(s) => Some(s.to_string()),
             crate::core::Value::Int(i) => Some(i.to_string()),
             crate::core::Value::Float(f) => Some(f.to_string()),
             crate::core::Value::Bool(b) => Some(b.to_string()),

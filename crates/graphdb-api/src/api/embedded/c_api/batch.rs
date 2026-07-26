@@ -515,7 +515,7 @@ fn value_to_vertex_id(value: &crate::core::Value) -> Option<VertexId> {
     match value {
         Value::Int(i) => Some(VertexId::from_int64(*i as i64)),
         Value::BigInt(i) => Some(VertexId::from_int64(*i)),
-        Value::String(s) => Some(VertexId::from_string(s)),
+        Value::String(s) => Some(VertexId::from_string(s.to_string())),
         _ => None,
     }
 }

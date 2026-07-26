@@ -1,8 +1,6 @@
 use std::sync::Arc;
-use std::time::Instant;
 
 use crate::core::metadata::{IndexMetadataManager, SchemaManager};
-use crate::core::stats::StatsManager;
 use crate::core::types::{
     EdgeTypeInfo, Index, InsertEdgeInfo, InsertVertexInfo, LabelId, PasswordInfo, PropertyDef,
     SpaceInfo, TagInfo, UpdateInfo, UserAlterInfo, UserInfo, VertexId,
@@ -17,76 +15,37 @@ use crate::storage::{
 use crate::storage::macros::forward_methods;
 use crate::sync::SyncManager;
 
-macro_rules! wrap_read {
-    ($fn:ident($self:ident $(, $arg:ident: $ty:ty)*) -> $ret:ty) => {
-        fn $fn(&$self, $($arg: $ty),*) -> $ret {
-            let start = Instant::now();
-            let result = $self.inner.$fn($($arg),*);
-            $self.record_read(start.elapsed().as_micros() as u64, result.is_ok());
-            result
-        }
-    };
-}
-
-macro_rules! wrap_write {
-    ($fn:ident($self:ident $(, $arg:ident: $ty:ty)*) -> $ret:ty) => {
-        fn $fn(&mut $self, $($arg: $ty),*) -> $ret {
-            let start = Instant::now();
-            let result = $self.inner.$fn($($arg),*);
-            $self.record_write(start.elapsed().as_micros() as u64, result.is_ok());
-            result
-        }
-    };
-}
-
 pub struct MetricsStorage<S: StorageClient> {
     inner: S,
-    stats_manager: Arc<StatsManager>,
 }
 
 impl<S: StorageClient> MetricsStorage<S> {
-    pub fn new(inner: S, stats_manager: Arc<StatsManager>) -> Self {
-        Self {
-            inner,
-            stats_manager,
-        }
+    pub fn new(inner: S) -> Self {
+        Self { inner }
     }
 
     pub fn into_inner(self) -> S {
         self.inner
     }
-
-    pub fn stats_manager(&self) -> &Arc<StatsManager> {
-        &self.stats_manager
-    }
-
-    fn record_read(&self, latency_us: u64, success: bool) {
-        self.stats_manager.record_storage_read(latency_us, success);
-    }
-
-    fn record_write(&self, latency_us: u64, success: bool) {
-        self.stats_manager.record_storage_write(latency_us, success);
-    }
 }
 
 impl<S: StorageClient> StorageReader for MetricsStorage<S> {
-    wrap_read!(get_vertex(self, space: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError>);
-    wrap_read!(scan_vertices(self, space: &str) -> Result<Vec<Vertex>, StorageError>);
-    wrap_read!(scan_vertices_by_tag(self, space: &str, tag: &str) -> Result<Vec<Vertex>, StorageError>);
-    wrap_read!(scan_vertices_by_prop(self, space: &str, tag: &str, prop: &str, value: &Value) -> Result<Vec<Vertex>, StorageError>);
-    wrap_read!(get_edge(self, space: &str, src: &VertexId, dst: &VertexId, edge_type: &str, rank: i64) -> Result<Option<Edge>, StorageError>);
-    wrap_read!(get_node_edges(self, space: &str, node_id: &VertexId, direction: EdgeDirection) -> Result<Vec<Edge>, StorageError>);
-    wrap_read!(scan_edges_by_type(self, space: &str, edge_type: &str) -> Result<Vec<Edge>, StorageError>);
-    wrap_read!(scan_all_edges(self, space: &str) -> Result<Vec<Edge>, StorageError>);
-    wrap_read!(count_vertices_by_tag(self, space: &str, tag: &str) -> Result<u64, StorageError>);
-    wrap_read!(count_edges_by_type(self, space: &str, edge_type: &str) -> Result<u64, StorageError>);
-    wrap_read!(lookup_index(self, space: &str, index: &str, value: &Value) -> Result<Vec<Value>, StorageError>);
-    wrap_read!(get_vertex_with_schema(self, space: &str, tag: &str, id: &Value) -> Result<Option<(TagInfo, Vec<u8>)>, StorageError>);
-    wrap_read!(get_edge_with_schema(self, space: &str, edge_type: &str, src: &Value, dst: &Value) -> Result<Option<(EdgeTypeInfo, Vec<u8>)>, StorageError>);
-    wrap_read!(scan_vertices_with_schema(self, space: &str, tag: &str) -> Result<Vec<(TagInfo, Vec<u8>)>, StorageError>);
-    wrap_read!(scan_edges_with_schema(self, space: &str, edge_type: &str) -> Result<Vec<(EdgeTypeInfo, Vec<u8>)>, StorageError>);
-
     forward_methods!(inner;
+        fn get_vertex(&self, space: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError>;
+        fn scan_vertices(&self, space: &str) -> Result<Vec<Vertex>, StorageError>;
+        fn scan_vertices_by_tag(&self, space: &str, tag: &str) -> Result<Vec<Vertex>, StorageError>;
+        fn scan_vertices_by_prop(&self, space: &str, tag: &str, prop: &str, value: &Value) -> Result<Vec<Vertex>, StorageError>;
+        fn get_edge(&self, space: &str, src: &VertexId, dst: &VertexId, edge_type: &str, rank: i64) -> Result<Option<Edge>, StorageError>;
+        fn get_node_edges(&self, space: &str, node_id: &VertexId, direction: EdgeDirection) -> Result<Vec<Edge>, StorageError>;
+        fn scan_edges_by_type(&self, space: &str, edge_type: &str) -> Result<Vec<Edge>, StorageError>;
+        fn scan_all_edges(&self, space: &str) -> Result<Vec<Edge>, StorageError>;
+        fn count_vertices_by_tag(&self, space: &str, tag: &str) -> Result<u64, StorageError>;
+        fn count_edges_by_type(&self, space: &str, edge_type: &str) -> Result<u64, StorageError>;
+        fn lookup_index(&self, space: &str, index: &str, value: &Value) -> Result<Vec<Value>, StorageError>;
+        fn get_vertex_with_schema(&self, space: &str, tag: &str, id: &Value) -> Result<Option<(TagInfo, Vec<u8>)>, StorageError>;
+        fn get_edge_with_schema(&self, space: &str, edge_type: &str, src: &Value, dst: &Value) -> Result<Option<(EdgeTypeInfo, Vec<u8>)>, StorageError>;
+        fn scan_vertices_with_schema(&self, space: &str, tag: &str) -> Result<Vec<(TagInfo, Vec<u8>)>, StorageError>;
+        fn scan_edges_with_schema(&self, space: &str, edge_type: &str) -> Result<Vec<(EdgeTypeInfo, Vec<u8>)>, StorageError>;
         fn get_space(&self, space: &str) -> Result<Option<SpaceInfo>, StorageError>;
         fn get_space_by_id(&self, space_id: u64) -> Result<Option<SpaceInfo>, StorageError>;
         fn list_spaces(&self) -> Result<Vec<SpaceInfo>, StorageError>;
@@ -100,32 +59,35 @@ impl<S: StorageClient> StorageReader for MetricsStorage<S> {
         fn list_tag_indexes(&self, space: &str) -> Result<Vec<Index>, StorageError>;
         fn get_edge_index(&self, space: &str, index: &str) -> Result<Option<Index>, StorageError>;
         fn list_edge_indexes(&self, space: &str) -> Result<Vec<Index>, StorageError>;
+        fn get_vertex_version_history(&self, space: &str, tag: &str) -> Result<Option<crate::storage::LabelVersionHistory>, StorageError>;
+        fn get_edge_version_history(&self, space: &str, edge_type: &str) -> Result<Option<crate::storage::LabelVersionHistory>, StorageError>;
+        fn get_vertex_schema_changes(&self, space: &str, tag: &str, from_version: u64, to_version: u64) -> Result<Vec<crate::storage::PropertyChange>, StorageError>;
+        fn get_edge_schema_changes(&self, space: &str, edge_type: &str, from_version: u64, to_version: u64) -> Result<Vec<crate::storage::PropertyChange>, StorageError>;
+        fn detect_vertex_breaking_changes(&self, space: &str, tag: &str, from_version: u64, to_version: u64) -> Result<Vec<crate::storage::PropertyChange>, StorageError>;
+        fn detect_edge_breaking_changes(&self, space: &str, edge_type: &str, from_version: u64, to_version: u64) -> Result<Vec<crate::storage::PropertyChange>, StorageError>;
     );
-
-    wrap_read!(get_vertex_version_history(self, space: &str, tag: &str) -> Result<Option<crate::storage::LabelVersionHistory>, StorageError>);
-    wrap_read!(get_edge_version_history(self, space: &str, edge_type: &str) -> Result<Option<crate::storage::LabelVersionHistory>, StorageError>);
-    wrap_read!(get_vertex_schema_changes(self, space: &str, tag: &str, from_version: u64, to_version: u64) -> Result<Vec<crate::storage::PropertyChange>, StorageError>);
-    wrap_read!(get_edge_schema_changes(self, space: &str, edge_type: &str, from_version: u64, to_version: u64) -> Result<Vec<crate::storage::PropertyChange>, StorageError>);
-    wrap_read!(detect_vertex_breaking_changes(self, space: &str, tag: &str, from_version: u64, to_version: u64) -> Result<Vec<crate::storage::PropertyChange>, StorageError>);
-    wrap_read!(detect_edge_breaking_changes(self, space: &str, edge_type: &str, from_version: u64, to_version: u64) -> Result<Vec<crate::storage::PropertyChange>, StorageError>);
 }
 
 impl<S: StorageClient> StorageWriter for MetricsStorage<S> {
-    wrap_write!(insert_vertex(self, space: &str, vertex: Vertex) -> Result<VertexId, StorageError>);
-    wrap_write!(update_vertex(self, space: &str, vertex: Vertex) -> Result<(), StorageError>);
+    forward_methods!(inner;
+        fn insert_vertex(&mut self, space: &str, vertex: Vertex) -> Result<VertexId, StorageError>;
+        fn update_vertex(&mut self, space: &str, vertex: Vertex) -> Result<(), StorageError>;
+        fn delete_vertex_with_edges(&mut self, space: &str, id: &VertexId) -> Result<(), StorageError>;
+        fn batch_insert_vertices(&mut self, space: &str, vertices: Vec<Vertex>) -> Result<Vec<VertexId>, StorageError>;
+        fn delete_tags(&mut self, space: &str, vertex_id: &VertexId, tag_names: &[String]) -> Result<usize, StorageError>;
+        fn insert_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError>;
+        fn update_edge(&mut self, space: &str, edge: Edge) -> Result<(), StorageError>;
+        fn batch_insert_edges(&mut self, space: &str, edges: Vec<Edge>) -> Result<(), StorageError>;
+        fn insert_vertex_data(&mut self, space: &str, info: &InsertVertexInfo) -> Result<bool, StorageError>;
+        fn insert_edge_data(&mut self, space: &str, info: &InsertEdgeInfo) -> Result<bool, StorageError>;
+        fn delete_vertex_data(&mut self, space: &str, vertex_id: &str) -> Result<bool, StorageError>;
+        fn delete_edge_data(&mut self, space: &str, src: &str, dst: &str, rank: i64) -> Result<bool, StorageError>;
+        fn update_data(&mut self, space: &str, space_id: u64, info: &UpdateInfo) -> Result<bool, StorageError>;
+    );
 
     fn delete_vertex(&mut self, space: &str, id: &VertexId) -> Result<(), StorageError> {
-        let start = Instant::now();
-        let result = StorageWriter::delete_vertex(&mut self.inner, space, id);
-        self.record_write(start.elapsed().as_micros() as u64, result.is_ok());
-        result
+        StorageWriter::delete_vertex(&mut self.inner, space, id)
     }
-
-    wrap_write!(delete_vertex_with_edges(self, space: &str, id: &VertexId) -> Result<(), StorageError>);
-    wrap_write!(batch_insert_vertices(self, space: &str, vertices: Vec<Vertex>) -> Result<Vec<VertexId>, StorageError>);
-    wrap_write!(delete_tags(self, space: &str, vertex_id: &VertexId, tag_names: &[String]) -> Result<usize, StorageError>);
-    wrap_write!(insert_edge(self, space: &str, edge: Edge) -> Result<(), StorageError>);
-    wrap_write!(update_edge(self, space: &str, edge: Edge) -> Result<(), StorageError>);
 
     fn delete_edge(
         &mut self,
@@ -135,167 +97,78 @@ impl<S: StorageClient> StorageWriter for MetricsStorage<S> {
         edge_type: &str,
         rank: i64,
     ) -> Result<(), StorageError> {
-        let start = Instant::now();
-        let result = StorageWriter::delete_edge(&mut self.inner, space, src, dst, edge_type, rank);
-        self.record_write(start.elapsed().as_micros() as u64, result.is_ok());
-        result
+        StorageWriter::delete_edge(&mut self.inner, space, src, dst, edge_type, rank)
     }
-
-    wrap_write!(batch_insert_edges(self, space: &str, edges: Vec<Edge>) -> Result<(), StorageError>);
-    wrap_write!(insert_vertex_data(self, space: &str, info: &InsertVertexInfo) -> Result<bool, StorageError>);
-    wrap_write!(insert_edge_data(self, space: &str, info: &InsertEdgeInfo) -> Result<bool, StorageError>);
-    wrap_write!(delete_vertex_data(self, space: &str, vertex_id: &str) -> Result<bool, StorageError>);
-    wrap_write!(delete_edge_data(self, space: &str, src: &str, dst: &str, rank: i64) -> Result<bool, StorageError>);
-    wrap_write!(update_data(self, space: &str, space_id: u64, info: &UpdateInfo) -> Result<bool, StorageError>);
 }
 
 impl<S: StorageClient> StorageSchemaOps for MetricsStorage<S> {
-    wrap_write!(create_space(self, space: &mut SpaceInfo) -> Result<bool, StorageError>);
-    wrap_write!(drop_space(self, space: &str) -> Result<bool, StorageError>);
-    wrap_write!(clear_space(self, space: &str) -> Result<bool, StorageError>);
-    wrap_write!(alter_space_comment(self, space_id: u64, comment: String) -> Result<bool, StorageError>);
-    wrap_write!(create_tag(self, space: &str, tag: &TagInfo) -> Result<u32, StorageError>);
-    wrap_write!(alter_tag(self, space: &str, tag: &str, additions: Vec<PropertyDef>, deletions: Vec<String>) -> Result<bool, StorageError>);
-    wrap_write!(rename_vertex_property(self, label: LabelId, old_name: &str, new_name: &str) -> Result<(), StorageError>);
-    wrap_write!(rename_tag_property(self, space: &str, tag: &str, old_name: &str, new_name: &str) -> Result<bool, StorageError>);
-    wrap_write!(drop_tag(self, space: &str, tag: &str) -> Result<bool, StorageError>);
-    wrap_write!(create_edge_type(self, space: &str, edge: &EdgeTypeInfo) -> Result<u32, StorageError>);
-    wrap_write!(alter_edge_type(self, space: &str, edge_type: &str, additions: Vec<PropertyDef>, deletions: Vec<String>) -> Result<bool, StorageError>);
-    wrap_write!(drop_edge_type(self, space: &str, edge_type: &str) -> Result<bool, StorageError>);
-    wrap_write!(create_tag_index(self, space: &str, info: &Index) -> Result<bool, StorageError>);
-    wrap_write!(drop_tag_index(self, space: &str, index: &str) -> Result<bool, StorageError>);
-    wrap_write!(rebuild_tag_index(self, space: &str, index: &str) -> Result<bool, StorageError>);
-    wrap_write!(create_edge_index(self, space: &str, info: &Index) -> Result<bool, StorageError>);
-    wrap_write!(drop_edge_index(self, space: &str, index: &str) -> Result<bool, StorageError>);
-    wrap_write!(rebuild_edge_index(self, space: &str, index: &str) -> Result<bool, StorageError>);
+    forward_methods!(inner;
+        fn create_space(&mut self, space: &mut SpaceInfo) -> Result<bool, StorageError>;
+        fn drop_space(&mut self, space: &str) -> Result<bool, StorageError>;
+        fn clear_space(&mut self, space: &str) -> Result<bool, StorageError>;
+        fn alter_space_comment(&mut self, space_id: u64, comment: String) -> Result<bool, StorageError>;
+        fn create_tag(&mut self, space: &str, tag: &TagInfo) -> Result<u32, StorageError>;
+        fn alter_tag(&mut self, space: &str, tag: &str, additions: Vec<PropertyDef>, deletions: Vec<String>) -> Result<bool, StorageError>;
+        fn rename_vertex_property(&mut self, label: LabelId, old_name: &str, new_name: &str) -> Result<(), StorageError>;
+        fn rename_tag_property(&mut self, space: &str, tag: &str, old_name: &str, new_name: &str) -> Result<bool, StorageError>;
+        fn drop_tag(&mut self, space: &str, tag: &str) -> Result<bool, StorageError>;
+        fn create_edge_type(&mut self, space: &str, edge: &EdgeTypeInfo) -> Result<u32, StorageError>;
+        fn alter_edge_type(&mut self, space: &str, edge_type: &str, additions: Vec<PropertyDef>, deletions: Vec<String>) -> Result<bool, StorageError>;
+        fn drop_edge_type(&mut self, space: &str, edge_type: &str) -> Result<bool, StorageError>;
+        fn create_tag_index(&mut self, space: &str, info: &Index) -> Result<bool, StorageError>;
+        fn drop_tag_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError>;
+        fn rebuild_tag_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError>;
+        fn create_edge_index(&mut self, space: &str, info: &Index) -> Result<bool, StorageError>;
+        fn drop_edge_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError>;
+        fn rebuild_edge_index(&mut self, space: &str, index: &str) -> Result<bool, StorageError>;
+    );
 }
 
 impl<S: StorageClient> StorageAuthOps for MetricsStorage<S> {
-    wrap_write!(change_password(self, info: &PasswordInfo) -> Result<bool, StorageError>);
-    wrap_write!(create_user(self, info: &UserInfo) -> Result<bool, StorageError>);
-    wrap_write!(alter_user(self, info: &UserAlterInfo) -> Result<bool, StorageError>);
-    wrap_write!(drop_user(self, username: &str) -> Result<bool, StorageError>);
+    forward_methods!(inner;
+        fn change_password(&mut self, info: &PasswordInfo) -> Result<bool, StorageError>;
+        fn create_user(&mut self, info: &UserInfo) -> Result<bool, StorageError>;
+        fn alter_user(&mut self, info: &UserAlterInfo) -> Result<bool, StorageError>;
+        fn drop_user(&mut self, username: &str) -> Result<bool, StorageError>;
+        fn grant_role(&mut self, username: &str, space_id: u64, role: RoleType) -> Result<bool, StorageError>;
+        fn revoke_role(&mut self, username: &str, space_id: u64) -> Result<bool, StorageError>;
+    );
 
-    fn user_exists(&self, username: &str) -> bool {
-        self.inner.user_exists(username)
-    }
-
-    wrap_write!(grant_role(self, username: &str, space_id: u64, role: RoleType) -> Result<bool, StorageError>);
-    wrap_write!(revoke_role(self, username: &str, space_id: u64) -> Result<bool, StorageError>);
+    forward_methods!(inner;
+        fn user_exists(&self, username: &str) -> bool;
+    );
 }
 
 impl<S: StorageClient> StorageAdmin for MetricsStorage<S> {
-    fn load_from_disk(&mut self) -> Result<(), StorageError> {
-        let start = Instant::now();
-        let result = self.inner.load_from_disk();
-        self.record_write(start.elapsed().as_micros() as u64, result.is_ok());
-        result
-    }
-
-    fn save_to_disk(&self) -> Result<(), StorageError> {
-        let start = Instant::now();
-        let result = self.inner.save_to_disk();
-        self.record_write(start.elapsed().as_micros() as u64, result.is_ok());
-        result
-    }
-
     forward_methods!(inner;
-        fn get_storage_stats(&self) -> StorageStats;
-        fn get_db_path(&self) -> &str;
+        fn load_from_disk(&mut self) -> Result<(), StorageError>;
+        fn repair_dangling_edges(&mut self, space: &str) -> Result<usize, StorageError>;
     );
 
-    fn find_dangling_edges(&self, space: &str) -> Result<Vec<Edge>, StorageError> {
-        let start = Instant::now();
-        let result = self.inner.find_dangling_edges(space);
-        self.record_read(start.elapsed().as_micros() as u64, result.is_ok());
-        result
-    }
-
-    fn repair_dangling_edges(&mut self, space: &str) -> Result<usize, StorageError> {
-        let start = Instant::now();
-        let result = self.inner.repair_dangling_edges(space);
-        self.record_write(start.elapsed().as_micros() as u64, result.is_ok());
-        result
-    }
+    forward_methods!(inner;
+        fn save_to_disk(&self) -> Result<(), StorageError>;
+        fn get_storage_stats(&self) -> StorageStats;
+        fn get_db_path(&self) -> &str;
+        fn find_dangling_edges(&self, space: &str) -> Result<Vec<Edge>, StorageError>;
+    );
 }
 
 impl<S: StorageClient> StoragePersistenceOps for MetricsStorage<S> {
-    fn flush(&self) -> Result<(), StorageError> {
-        let start = Instant::now();
-        let result = self.inner.flush();
-        self.record_write(start.elapsed().as_micros() as u64, result.is_ok());
-        result
-    }
-
-    fn save_data(&self) -> crate::core::StorageResult<()> {
-        let start = Instant::now();
-        let result = self.inner.save_data();
-        self.record_write(start.elapsed().as_micros() as u64, result.is_ok());
-        result
-    }
-
-    fn save_data_to_dir(&self, dir: &std::path::Path) -> crate::core::StorageResult<()> {
-        let start = Instant::now();
-        let result = self.inner.save_data_to_dir(dir);
-        self.record_write(start.elapsed().as_micros() as u64, result.is_ok());
-        result
-    }
-
-    fn create_checkpoint(
-        &self,
-    ) -> crate::core::StorageResult<Option<crate::storage::CheckpointStats>> {
-        let start = Instant::now();
-        let result = self.inner.create_checkpoint();
-        self.record_write(start.elapsed().as_micros() as u64, result.is_ok());
-        result
-    }
-
-    fn verify_snapshot(&self, snapshot_id: u64) -> crate::core::StorageResult<bool> {
-        let start = Instant::now();
-        let result = self.inner.verify_snapshot(snapshot_id);
-        self.record_read(start.elapsed().as_micros() as u64, result.is_ok());
-        result
-    }
-
-    fn cleanup_snapshots(&self) -> crate::core::StorageResult<usize> {
-        let start = Instant::now();
-        let result = self.inner.cleanup_snapshots();
-        self.record_write(start.elapsed().as_micros() as u64, result.is_ok());
-        result
-    }
-
     forward_methods!(inner;
+        fn flush(&self) -> Result<(), StorageError>;
+        fn save_data(&self) -> crate::core::StorageResult<()>;
+        fn save_data_to_dir(&self, dir: &std::path::Path) -> crate::core::StorageResult<()>;
+        fn create_checkpoint(&self) -> crate::core::StorageResult<Option<crate::storage::CheckpointStats>>;
+        fn verify_snapshot(&self, snapshot_id: u64) -> crate::core::StorageResult<bool>;
+        fn cleanup_snapshots(&self) -> crate::core::StorageResult<usize>;
         fn snapshot_stats(&self) -> crate::storage::SnapshotStats;
         fn persistence_diagnostics(&self) -> Option<crate::storage::PersistenceDiagnostics>;
+        fn compact(&self, config: &crate::core::types::CompactConfig) -> crate::core::StorageResult<()>;
+        fn auto_flush_if_needed(&self) -> crate::core::StorageResult<bool>;
+        fn auto_checkpoint_if_needed(&self) -> crate::core::StorageResult<Option<crate::storage::CheckpointStats>>;
         fn should_flush(&self) -> bool;
         fn should_checkpoint(&self) -> bool;
     );
-
-    fn compact(
-        &self,
-        config: &crate::core::types::CompactConfig,
-    ) -> crate::core::StorageResult<()> {
-        let start = Instant::now();
-        let result = self.inner.compact(config);
-        self.record_write(start.elapsed().as_micros() as u64, result.is_ok());
-        result
-    }
-
-    fn auto_flush_if_needed(&self) -> crate::core::StorageResult<bool> {
-        let start = Instant::now();
-        let result = self.inner.auto_flush_if_needed();
-        self.record_write(start.elapsed().as_micros() as u64, result.is_ok());
-        result
-    }
-
-    fn auto_checkpoint_if_needed(
-        &self,
-    ) -> crate::core::StorageResult<Option<crate::storage::CheckpointStats>> {
-        let start = Instant::now();
-        let result = self.inner.auto_checkpoint_if_needed();
-        self.record_write(start.elapsed().as_micros() as u64, result.is_ok());
-        result
-    }
 }
 
 impl<S: StorageClient + StorageSchemaContextOps> StorageSchemaContextOps for MetricsStorage<S> {
@@ -309,14 +182,12 @@ impl<S: StorageClient> StorageOperationContextOps for MetricsStorage<S> {
     fn bind_auto_commit_context(&self) -> StorageResult<Self> {
         Ok(Self {
             inner: self.inner.bind_auto_commit_context()?,
-            stats_manager: self.stats_manager.clone(),
         })
     }
 
     fn bind_operation_context(&self, context: StorageOperationContext) -> Self {
         Self {
             inner: self.inner.bind_operation_context(context),
-            stats_manager: self.stats_manager.clone(),
         }
     }
 
@@ -330,36 +201,11 @@ impl<S: StorageClient> StorageOperationContextOps for MetricsStorage<S> {
 }
 
 impl<S: StorageClient> StorageCommitOps for MetricsStorage<S> {
-    fn commit_staged_writes(
-        &self,
-        transaction_id: crate::core::types::TransactionId,
-        intents: &[crate::core::wal::OutboxIntent],
-    ) -> crate::core::StorageResult<crate::core::types::CommitLsn> {
-        let start = Instant::now();
-        let result = self.inner.commit_staged_writes(transaction_id, intents);
-        self.record_write(start.elapsed().as_micros() as u64, result.is_ok());
-        result
-    }
-
-    fn abort_staged_writes(
-        &self,
-        transaction_id: crate::core::types::TransactionId,
-    ) -> crate::core::StorageResult<()> {
-        let start = Instant::now();
-        let result = self.inner.abort_staged_writes(transaction_id);
-        self.record_write(start.elapsed().as_micros() as u64, result.is_ok());
-        result
-    }
-
-    fn recover_outbox_projection(
-        &self,
-        sync_manager: &crate::sync::SyncManager,
-    ) -> crate::core::StorageResult<usize> {
-        let start = Instant::now();
-        let result = self.inner.recover_outbox_projection(sync_manager);
-        self.record_write(start.elapsed().as_micros() as u64, result.is_ok());
-        result
-    }
+    forward_methods!(inner;
+        fn commit_staged_writes(&self, transaction_id: crate::core::types::TransactionId, intents: &[crate::core::wal::OutboxIntent]) -> crate::core::StorageResult<crate::core::types::CommitLsn>;
+        fn abort_staged_writes(&self, transaction_id: crate::core::types::TransactionId) -> crate::core::StorageResult<()>;
+        fn recover_outbox_projection(&self, sync_manager: &crate::sync::SyncManager) -> crate::core::StorageResult<usize>;
+    );
 }
 
 impl<S: StorageClient + StorageSyncContextOps> StorageSyncContextOps for MetricsStorage<S> {
@@ -406,7 +252,6 @@ where
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
-            stats_manager: self.stats_manager.clone(),
         }
     }
 }
@@ -608,9 +453,6 @@ impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::Undo
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use crate::core::stats::{MetricType, StatsManager};
     use crate::core::types::VertexId;
     use crate::storage::{
         GraphStorage, MetricsStorage, MockStorage, StoragePersistenceOps, StorageReader,
@@ -618,32 +460,11 @@ mod tests {
     };
 
     #[test]
-    fn records_read_and_write_metrics() {
-        let stats_manager = Arc::new(StatsManager::new());
-        let inner = MockStorage::new().expect("Failed to create MockStorage");
-        let mut storage = MetricsStorage::new(inner, stats_manager.clone());
-
-        storage
-            .get_vertex("test", &VertexId::from_int64(1))
-            .expect("Failed to read vertex");
-        storage
-            .batch_insert_edges("test", Vec::new())
-            .expect("Failed to write edges");
-
-        assert_eq!(stats_manager.get_value(MetricType::StorageReadOps), Some(1));
-        assert_eq!(
-            stats_manager.get_value(MetricType::StorageWriteOps),
-            Some(1)
-        );
-    }
-
-    #[test]
     fn delegates_admin_checkpoint_operations() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let inner = GraphStorage::new_with_path(temp_dir.path().to_path_buf())
             .expect("Failed to create GraphStorage");
-        let stats_manager = Arc::new(StatsManager::new());
-        let storage = MetricsStorage::new(inner, stats_manager);
+        let storage = MetricsStorage::new(inner);
 
         let checkpoint = storage
             .create_checkpoint()

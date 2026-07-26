@@ -4,7 +4,6 @@
 //! that can be used for both vertex and edge indexes.
 
 use crate::core::types::storage_ids::VertexId;
-use crate::core::types::Timestamp;
 use crate::core::value::ordered_codec::OrderedCodec;
 use crate::core::wal::EntityRef;
 use crate::core::{StorageError, StorageResult};
@@ -16,7 +15,7 @@ use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::path::Path;
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
+    atomic::AtomicU64,
     Arc,
 };
 
@@ -66,131 +65,6 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
             self.forward_index.read().len(),
             self.reverse_index.read().len(),
         )
-    }
-
-    pub fn gc_tombstones(&self, safe_ts: Timestamp) -> Result<usize, StorageError> {
-        let mut removed_count = 0usize;
-
-        {
-            let mut forward_index = self.forward_index.write();
-            let keys_to_remove: Vec<SecondaryIndexKey> = forward_index
-                .iter()
-                .filter(|(_, entry)| {
-                    entry
-                        .deleted_ts
-                        .is_some_and(|deleted_ts| deleted_ts < safe_ts)
-                })
-                .map(|(key, _)| key.clone())
-                .collect();
-
-            removed_count += keys_to_remove.len();
-            for key in &keys_to_remove {
-                forward_index.remove(key);
-            }
-        }
-
-        {
-            let mut reverse_index = self.reverse_index.write();
-            let keys_to_remove: Vec<SecondaryIndexKey> = reverse_index
-                .iter()
-                .filter(|(_, entry)| {
-                    entry
-                        .deleted_ts
-                        .is_some_and(|deleted_ts| deleted_ts < safe_ts)
-                })
-                .map(|(key, _)| key.clone())
-                .collect();
-
-            removed_count += keys_to_remove.len();
-            for key in &keys_to_remove {
-                reverse_index.remove(key);
-            }
-        }
-
-        Ok(removed_count)
-    }
-
-    pub fn gc_tombstones_incremental(
-        &self,
-        safe_ts: Timestamp,
-        batch_size: usize,
-    ) -> Result<usize, StorageError> {
-        let mut total_removed = 0usize;
-
-        {
-            let mut forward_index = self.forward_index.write();
-            let mut keys_to_remove = Vec::with_capacity(batch_size.min(1000));
-
-            for (key, entry) in forward_index.iter() {
-                if keys_to_remove.len() >= batch_size {
-                    break;
-                }
-                if entry
-                    .deleted_ts
-                    .is_some_and(|deleted_ts| deleted_ts < safe_ts)
-                {
-                    keys_to_remove.push(key.clone());
-                }
-            }
-
-            total_removed += keys_to_remove.len();
-            for key in &keys_to_remove {
-                forward_index.remove(key);
-            }
-        }
-
-        if total_removed >= batch_size {
-            return Ok(total_removed);
-        }
-
-        {
-            let mut reverse_index = self.reverse_index.write();
-            let remaining = batch_size - total_removed;
-            let mut keys_to_remove = Vec::with_capacity(remaining.min(1000));
-
-            for (key, entry) in reverse_index.iter() {
-                if keys_to_remove.len() >= remaining {
-                    break;
-                }
-                if entry
-                    .deleted_ts
-                    .is_some_and(|deleted_ts| deleted_ts < safe_ts)
-                {
-                    keys_to_remove.push(key.clone());
-                }
-            }
-
-            total_removed += keys_to_remove.len();
-            for key in &keys_to_remove {
-                reverse_index.remove(key);
-            }
-        }
-
-        Ok(total_removed)
-    }
-
-    pub fn tombstone_count(&self) -> usize {
-        let forward_count = self
-            .forward_index
-            .read()
-            .iter()
-            .filter(|(_, entry)| entry.deleted_ts.is_some())
-            .count();
-
-        let reverse_count = self
-            .reverse_index
-            .read()
-            .iter()
-            .filter(|(_, entry)| entry.deleted_ts.is_some())
-            .count();
-
-        forward_count + reverse_count
-    }
-
-    pub fn flush<P: AsRef<Path>>(&self, path: P) -> StorageResult<()> {
-        let forward = self.forward_index.read();
-        let reverse = self.reverse_index.read();
-        Self::flush_data(path, &forward, &reverse)
     }
 
     pub(crate) fn flush_data<P: AsRef<Path>>(
@@ -273,29 +147,6 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
     ) {
         *self.forward_index.write() = forward;
         *self.reverse_index.write() = reverse;
-    }
-
-    pub fn snapshot_data(
-        &self,
-    ) -> (
-        BTreeMap<SecondaryIndexKey, IndexRecord>,
-        BTreeMap<SecondaryIndexKey, IndexRecord>,
-    ) {
-        (
-            self.forward_index.read().clone(),
-            self.reverse_index.read().clone(),
-        )
-    }
-
-    pub fn load<P: AsRef<Path>>(&mut self, path: P) -> StorageResult<()> {
-        let path = path.as_ref();
-        let (forward_index, reverse_index, next_version) = Self::load_data(path)?;
-
-        *self.forward_index.write() = forward_index;
-        *self.reverse_index.write() = reverse_index;
-        self.version_counter.store(next_version, Ordering::Release);
-
-        Ok(())
     }
 
     pub(crate) fn load_data<P: AsRef<Path>>(path: P) -> StorageResult<LoadedIndexData> {
@@ -416,18 +267,10 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
         Ok((index, max_version))
     }
 
-    pub fn forward_index(&self) -> &Arc<RwLock<BTreeMap<SecondaryIndexKey, IndexRecord>>> {
-        &self.forward_index
-    }
-
     pub(crate) fn forward_index_handle(
         &self,
     ) -> Arc<RwLock<BTreeMap<SecondaryIndexKey, IndexRecord>>> {
         Arc::new(RwLock::new(self.forward_index.read().clone()))
-    }
-
-    pub fn reverse_index(&self) -> &Arc<RwLock<BTreeMap<SecondaryIndexKey, IndexRecord>>> {
-        &self.reverse_index
     }
 
     fn extract_version_from_key(key: &[u8]) -> u64 {
@@ -440,6 +283,7 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
         bytes.copy_from_slice(&key[start..]);
         u64::from_le_bytes(bytes)
     }
+
 }
 
 impl<K: IndexKeyGenerator> Default for GenericIndexManager<K> {

@@ -11,6 +11,25 @@ use crate::storage::index::IndexDataManagerImpl;
 use std::collections::BTreeMap;
 
 impl IndexDataManagerImpl {
+    #[cfg(test)]
+    pub fn open_tag_index_cursor(
+        &self,
+        space_id: u64,
+        index: &Index,
+        plan: &IndexScanPlan,
+    ) -> StorageResult<VertexIndexCursor> {
+        self.open_tag_index_cursor_full(space_id, index, plan, None, None)
+    }
+
+    #[cfg(test)]
+    pub fn open_edge_index_cursor(
+        &self,
+        space_id: u64,
+        index: &Index,
+        plan: &IndexScanPlan,
+    ) -> StorageResult<EdgeIndexCursor> {
+        self.open_edge_index_cursor_full(space_id, index, plan, None, None)
+    }
     pub fn open_tag_index_cursor_full(
         &self,
         space_id: u64,

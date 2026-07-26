@@ -8,19 +8,16 @@
 //! Index keys now use the order-preserving `OrderedCodec`, eliminating the
 //! need for post-filtering predicate matches on range scans.
 
-use crate::core::types::{Index, Timestamp, MAX_TIMESTAMP};
+use crate::core::types::{Index, Timestamp};
 use crate::core::value::ordered_codec::OrderedCodec;
 use crate::core::wal::EntityRef;
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::cursor::{IndexCursor, IndexPredicate, IndexRow, IndexScanPlan};
 use crate::storage::index::generic_index_manager::GenericIndexManager;
 use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
-use crate::storage::index::key_codec::key_builder::normalize_int_value;
 use crate::storage::index::key_codec::{KeyBuilder, KeyParser, VertexIndexKeyGen};
 use crate::storage::index::manifest::{ManifestCatalog, ManifestHandle};
 use crate::storage::index::types::{IndexRecord, StaleChecker};
-use std::collections::HashSet;
-use std::path::Path;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -35,141 +32,8 @@ impl VertexIndexManager {
         }
     }
 
-    pub fn clear_tag_index(&self, space_id: u64, index_name: &str) -> Result<(), StorageError> {
-        let prefix = KeyBuilder::build_vertex_index_prefix(space_id, index_name);
-        let end = KeyBuilder::build_range_end(&prefix);
-
-        let mut forward_keys_to_mark: Vec<SecondaryIndexKey> = Vec::new();
-        let mut reverse_keys_to_mark: Vec<SecondaryIndexKey> = Vec::new();
-
-        {
-            let forward_index = self.base.forward_index().read();
-            for (key_bytes, entry) in forward_index.range(prefix.0.clone()..end.0) {
-                if entry.is_visible_at(MAX_TIMESTAMP) {
-                    forward_keys_to_mark.push(key_bytes.clone());
-                }
-            }
-        }
-
-        {
-            let reverse_index = self.base.reverse_index().read();
-            for (key_bytes, entry) in reverse_index.iter() {
-                if !entry.is_visible_at(MAX_TIMESTAMP) {
-                    continue;
-                }
-                if key_bytes.len() < 9 || key_bytes[0..8] != space_id.to_le_bytes() {
-                    continue;
-                }
-
-                if let Ok((_vertex_id_bytes, parsed_index_name)) =
-                    KeyParser::parse_vertex_reverse_key_v2(key_bytes)
-                {
-                    if parsed_index_name == index_name {
-                        reverse_keys_to_mark.push(key_bytes.clone());
-                    }
-                }
-            }
-        }
-
-        {
-            let mut forward_index = self.base.forward_index().write();
-            for key in &forward_keys_to_mark {
-                if let Some(entry) = forward_index.get_mut(key) {
-                    entry.mark_deleted(MAX_TIMESTAMP);
-                }
-            }
-        }
-
-        {
-            let mut reverse_index = self.base.reverse_index().write();
-            for key in &reverse_keys_to_mark {
-                if let Some(entry) = reverse_index.get_mut(key) {
-                    entry.mark_deleted(MAX_TIMESTAMP);
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn lookup_tag_index(
-        &self,
-        space_id: u64,
-        index: &Index,
-        value: &Value,
-    ) -> Result<Vec<Value>, StorageError> {
-        self.lookup_tag_index_mvcc(space_id, index, value, MAX_TIMESTAMP)
-    }
-
-    pub fn lookup_tag_index_mvcc(
-        &self,
-        space_id: u64,
-        index: &Index,
-        value: &Value,
-        read_ts: Timestamp,
-    ) -> Result<Vec<Value>, StorageError> {
-        let prefix = KeyBuilder::build_vertex_index_prefix(space_id, &index.name);
-        let end = KeyBuilder::build_range_end(&prefix);
-
-        let mut results = Vec::new();
-        let mut seen = HashSet::new();
-
-        let forward_index = self.base.forward_index().read();
-        for (compressed_key, entry) in forward_index.range(prefix.0.clone()..end.0) {
-            if !entry.is_visible_at(read_ts) {
-                continue;
-            }
-
-            let key_bytes = compressed_key.as_slice();
-            if let Ok(vertex_id) = KeyParser::parse_vertex_id_from_key(key_bytes) {
-                if let Ok(stored_value) = KeyParser::parse_prop_value_from_key(key_bytes) {
-                    if normalize_int_value(&stored_value) == normalize_int_value(value)
-                        && seen.insert(vertex_id.clone())
-                    {
-                        results.push(vertex_id);
-                    }
-                }
-            }
-        }
-
-        Ok(results)
-    }
-
-    pub fn flush<P: AsRef<Path>>(&self, path: P) -> StorageResult<()> {
-        self.base.flush(path)
-    }
-
-    pub fn load<P: AsRef<Path>>(&mut self, path: P) -> StorageResult<()> {
-        self.base.load(path)
-    }
-
-    pub fn gc_tombstones(&self, safe_ts: Timestamp) -> Result<usize, StorageError> {
-        self.base.gc_tombstones(safe_ts)
-    }
-
-    pub fn gc_tombstones_incremental(
-        &self,
-        safe_ts: Timestamp,
-        batch_size: usize,
-    ) -> Result<usize, StorageError> {
-        self.base.gc_tombstones_incremental(safe_ts, batch_size)
-    }
-
-    pub fn tombstone_count(&self) -> usize {
-        self.base.tombstone_count()
-    }
-
     pub fn base(&self) -> &GenericIndexManager<VertexIndexKeyGen> {
         &self.base
-    }
-
-    pub fn open_tag_index_cursor(
-        &self,
-        space_id: u64,
-        index: &Index,
-        plan: &IndexScanPlan,
-    ) -> StorageResult<VertexIndexCursor> {
-        self.open_tag_index_cursor_full(space_id, index, plan, None, None)
     }
 
     pub fn open_tag_index_cursor_full(
