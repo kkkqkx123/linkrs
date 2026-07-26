@@ -44,41 +44,28 @@ impl EdgeIndexOps for IndexDataManagerImpl {
             .read()
             .get(&IndexIdentity { space_id, index_id })
             .cloned();
-        let prefix = KeyBuilder::build_edge_index_prefix(space_id, index_name);
-        let end = KeyBuilder::build_range_end(&prefix);
-        let expected_entity = edge_entity_ref(edge_src, edge_dst, edge_type, ranking);
+        let reverse_prefix = KeyBuilder::build_edge_reverse_key(
+            space_id, edge_src, edge_dst, edge_type, ranking, index_name,
+        )?;
+        let reverse_end = KeyBuilder::build_range_end(&reverse_prefix);
         let mut existing_values = Vec::new();
         let mut existing_columns = Vec::new();
         let mut existing_columns_ts = 0;
         for shard in generation.shards() {
-            for (key, record) in shard
-                .forward()
+            for (_key, record) in shard
+                .reverse()
                 .read()
-                .range(prefix.0.clone()..end.0.clone())
+                .range(reverse_prefix.0.clone()..reverse_end.0.clone())
             {
                 if !record.is_visible_at(write_ts) {
                     continue;
                 }
-                let matches_entity = record
-                    .entity_ref
-                    .as_ref()
-                    .zip(expected_entity.as_ref())
-                    .is_some_and(|(actual, expected)| actual == expected)
-                    || KeyParser::parse_edge_identity_from_key(key).is_ok_and(
-                        |(candidate_src, candidate_dst, candidate_type, candidate_rank)| {
-                            candidate_src == *edge_src
-                                && candidate_dst == *edge_dst
-                                && candidate_type == edge_type
-                                && candidate_rank == ranking
-                        },
-                    );
-                if !matches_entity {
-                    continue;
-                }
-                if let Ok(value) = KeyParser::parse_prop_value_from_edge_key(key) {
-                    let nv = normalize_int_value(&value);
-                    if !existing_values.contains(&nv) {
-                        existing_values.push(nv);
+                if let Some(fwd_key) = &record.encoded_indexed_value {
+                    if let Ok(value) = KeyParser::parse_prop_value_from_edge_key(fwd_key) {
+                        let nv = normalize_int_value(&value);
+                        if !existing_values.contains(&nv) {
+                            existing_values.push(nv);
+                        }
                     }
                 }
                 if record.created_ts >= existing_columns_ts {
@@ -140,7 +127,8 @@ impl EdgeIndexOps for IndexDataManagerImpl {
                 })?;
             let entity_ref = edge_entity_ref(edge_src, edge_dst, edge_type, ranking);
             let mut entry = IndexRecord::new_with_columns(write_ts, included_columns.clone())
-                .with_entity_version(write_ts);
+                .with_entity_version(write_ts)
+                .with_encoded_value(forward.0.clone());
             if let Some(entity) = entity_ref {
                 entry = entry.with_entity_ref(entity);
             }

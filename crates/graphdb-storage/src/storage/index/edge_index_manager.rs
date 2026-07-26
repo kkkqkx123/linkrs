@@ -376,7 +376,8 @@ mod tests {
     use crate::core::Value;
     use crate::storage::cursor::{IndexCursor, IndexPredicate, IndexRow, IndexScanPlan};
 
-    use super::{EdgeIdentity, EdgeIndexManager};
+    use crate::storage::index::types::EdgeIdentity;
+    use super::EdgeIndexManager;
 
     fn create_test_index(name: &str, schema_name: &str) -> Index {
         Index::new(IndexConfig {

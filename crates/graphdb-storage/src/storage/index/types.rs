@@ -45,6 +45,9 @@ pub struct IndexRecord {
     pub entity_version: Option<Timestamp>,
     pub included_columns: Vec<(String, Value)>,
     pub entity_ref: Option<EntityRef>,
+    /// Encoded form of the indexed property value, used to link reverse entries
+    /// back to their forward counterparts without full index scans.
+    pub encoded_indexed_value: Option<Vec<u8>>,
 }
 
 impl IndexRecord {
@@ -55,6 +58,7 @@ impl IndexRecord {
             entity_version: None,
             included_columns: Vec::new(),
             entity_ref: None,
+            encoded_indexed_value: None,
         }
     }
 
@@ -65,6 +69,7 @@ impl IndexRecord {
             entity_version: None,
             included_columns,
             entity_ref: None,
+            encoded_indexed_value: None,
         }
     }
 
@@ -75,6 +80,11 @@ impl IndexRecord {
 
     pub fn with_entity_version(mut self, version: Timestamp) -> Self {
         self.entity_version = Some(version);
+        self
+    }
+
+    pub fn with_encoded_value(mut self, encoded: Vec<u8>) -> Self {
+        self.encoded_indexed_value = Some(encoded);
         self
     }
 

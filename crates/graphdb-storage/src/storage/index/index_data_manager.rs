@@ -5,7 +5,7 @@ use crate::core::types::{
 use crate::core::wal::{EntityRef, OutboxIntent};
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::index::helpers::{flush_split_generation, merge_split_wal_changes};
-use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
+use crate::storage::index::key_codec::key_types::{ByteKey, SecondaryIndexKey};
 use crate::storage::index::key_codec::{KeyBuilder, KeyParser};
 use crate::storage::index::manifest::{
     GenerationBuildState, GenerationState, IndexManifest, IndexShard, ManifestCatalog,
@@ -16,7 +16,7 @@ use crate::storage::index::shard_runtime::{
 };
 use crate::storage::index::types::{EdgeIdentity, IndexIdentity, IndexRecord};
 use parking_lot::RwLock;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -812,32 +812,36 @@ impl IndexDataManagerImpl {
             .iter()
             .filter_map(|shard| generation.shard(shard.shard_id))
         {
-            let reverse_keys = shard
+            let reverse_meta: Vec<(SecondaryIndexKey, Option<Vec<u8>>)> = shard
                 .reverse()
                 .read()
                 .range(reverse.0.clone()..reverse_end.0.clone())
                 .filter(|(_, entry)| entry.is_visible_at(write_ts))
-                .map(|(key, _)| key.clone())
-                .collect::<Vec<_>>();
-            for key in reverse_keys {
-                if let Some(entry) = shard.reverse().write().get_mut(&key) {
+                .map(|(key, entry)| (key.clone(), entry.encoded_indexed_value.clone()))
+                .collect();
+            let mut seen_fwd: HashSet<Vec<u8>> = HashSet::new();
+            for (rev_key, fwd_key) in &reverse_meta {
+                if let Some(entry) = shard.reverse().write().get_mut(rev_key) {
                     entry.mark_deleted(write_ts);
                 }
-            }
-            let forward_keys = shard
-                .forward()
-                .read()
-                .iter()
-                .filter(|(key, entry)| {
-                    entry.is_visible_at(write_ts)
-                        && KeyParser::parse_vertex_id_from_key(key)
-                            .is_ok_and(|candidate| candidate == *vertex_id)
-                })
-                .map(|(key, _)| key.clone())
-                .collect::<Vec<_>>();
-            for key in forward_keys {
-                if let Some(entry) = shard.forward().write().get_mut(&key) {
-                    entry.mark_deleted(write_ts);
+                let Some(fwd_logical) = fwd_key else {
+                    continue;
+                };
+                if !seen_fwd.insert(fwd_logical.clone()) {
+                    continue;
+                }
+                let fwd_end = KeyBuilder::build_range_end(&ByteKey(fwd_logical.clone()));
+                let fwd_targets: Vec<SecondaryIndexKey> = shard
+                    .forward()
+                    .read()
+                    .range(fwd_logical.clone()..fwd_end.0.clone())
+                    .filter(|(_, entry)| entry.is_visible_at(write_ts))
+                    .map(|(k, _)| k.clone())
+                    .collect();
+                for fwd_key in fwd_targets {
+                    if let Some(entry) = shard.forward().write().get_mut(&fwd_key) {
+                        entry.mark_deleted(write_ts);
+                    }
                 }
             }
         }
@@ -871,38 +875,36 @@ impl IndexDataManagerImpl {
             .iter()
             .filter_map(|shard| generation.shard(shard.shard_id))
         {
-            let reverse_keys = shard
+            let reverse_meta: Vec<(SecondaryIndexKey, Option<Vec<u8>>)> = shard
                 .reverse()
                 .read()
                 .range(reverse.0.clone()..reverse_end.0.clone())
                 .filter(|(_, entry)| entry.is_visible_at(write_ts))
-                .map(|(key, _)| key.clone())
-                .collect::<Vec<_>>();
-            for key in reverse_keys {
-                if let Some(entry) = shard.reverse().write().get_mut(&key) {
+                .map(|(key, entry)| (key.clone(), entry.encoded_indexed_value.clone()))
+                .collect();
+            let mut seen_fwd: HashSet<Vec<u8>> = HashSet::new();
+            for (rev_key, fwd_key) in &reverse_meta {
+                if let Some(entry) = shard.reverse().write().get_mut(rev_key) {
                     entry.mark_deleted(write_ts);
                 }
-            }
-            let forward_keys = shard
-                .forward()
-                .read()
-                .iter()
-                .filter(|(key, entry)| {
-                    entry.is_visible_at(write_ts)
-                        && KeyParser::parse_edge_identity_from_key(key).is_ok_and(
-                            |(candidate_src, candidate_dst, candidate_type, candidate_rank)| {
-                                candidate_src == *src
-                                    && candidate_dst == *dst
-                                    && candidate_type == edge_type
-                                    && candidate_rank == ranking
-                            },
-                        )
-                })
-                .map(|(key, _)| key.clone())
-                .collect::<Vec<_>>();
-            for key in forward_keys {
-                if let Some(entry) = shard.forward().write().get_mut(&key) {
-                    entry.mark_deleted(write_ts);
+                let Some(fwd_logical) = fwd_key else {
+                    continue;
+                };
+                if !seen_fwd.insert(fwd_logical.clone()) {
+                    continue;
+                }
+                let fwd_end = KeyBuilder::build_range_end(&ByteKey(fwd_logical.clone()));
+                let fwd_targets: Vec<SecondaryIndexKey> = shard
+                    .forward()
+                    .read()
+                    .range(fwd_logical.clone()..fwd_end.0.clone())
+                    .filter(|(_, entry)| entry.is_visible_at(write_ts))
+                    .map(|(k, _)| k.clone())
+                    .collect();
+                for fwd_key in fwd_targets {
+                    if let Some(entry) = shard.forward().write().get_mut(&fwd_key) {
+                        entry.mark_deleted(write_ts);
+                    }
                 }
             }
         }

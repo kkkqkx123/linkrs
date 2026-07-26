@@ -38,35 +38,27 @@ impl VertexIndexOps for IndexDataManagerImpl {
             .read()
             .get(&IndexIdentity { space_id, index_id })
             .cloned();
-        let prefix = KeyBuilder::build_vertex_index_prefix(space_id, index_name);
-        let end = KeyBuilder::build_range_end(&prefix);
-        let expected_entity = vertex_entity_ref(vertex_id);
+        let reverse_prefix =
+            KeyBuilder::build_vertex_reverse_key_v2(space_id, vertex_id, index_name)?;
+        let reverse_end = KeyBuilder::build_range_end(&reverse_prefix);
         let mut existing_values = Vec::new();
         let mut existing_columns = Vec::new();
         let mut existing_columns_ts = 0;
         for shard in generation.shards() {
-            for (key, record) in shard
-                .forward()
+            for (_key, record) in shard
+                .reverse()
                 .read()
-                .range(prefix.0.clone()..end.0.clone())
+                .range(reverse_prefix.0.clone()..reverse_end.0.clone())
             {
                 if !record.is_visible_at(write_ts) {
                     continue;
                 }
-                let matches_entity = record
-                    .entity_ref
-                    .as_ref()
-                    .zip(expected_entity.as_ref())
-                    .is_some_and(|(actual, expected)| actual == expected)
-                    || KeyParser::parse_vertex_id_from_key(key)
-                        .is_ok_and(|candidate| candidate == *vertex_id);
-                if !matches_entity {
-                    continue;
-                }
-                if let Ok(value) = KeyParser::parse_prop_value_from_key(key) {
-                    let nv = normalize_int_value(&value);
-                    if !existing_values.contains(&nv) {
-                        existing_values.push(nv);
+                if let Some(fwd_key) = &record.encoded_indexed_value {
+                    if let Ok(value) = KeyParser::parse_prop_value_from_key(fwd_key) {
+                        let nv = normalize_int_value(&value);
+                        if !existing_values.contains(&nv) {
+                            existing_values.push(nv);
+                        }
                     }
                 }
                 if record.created_ts >= existing_columns_ts {
@@ -124,7 +116,8 @@ impl VertexIndexOps for IndexDataManagerImpl {
                     StorageError::invalid_operation("Index manifest does not cover the ordered key")
                 })?;
             let mut entry = IndexRecord::new_with_columns(write_ts, included_columns.clone())
-                .with_entity_version(write_ts);
+                .with_entity_version(write_ts)
+                .with_encoded_value(forward.0.clone());
             if let Some(entity) = vertex_entity_ref(vertex_id) {
                 entry = entry.with_entity_ref(entity);
             }
@@ -166,7 +159,7 @@ impl VertexIndexOps for IndexDataManagerImpl {
         let runtime = self.runtime(space_id, index_id)?;
         let _fence = runtime.read_fence();
         let (manifest, _runtime, generation) = self.active_generation(space_id, index_id)?;
-        let prefix = KeyBuilder::build_vertex_index_prefix(space_id, &index.name);
+        let prefix = KeyBuilder::build_vertex_index_value_prefix(space_id, &index.name, value)?;
         let end = KeyBuilder::build_range_end(&prefix);
         let mut seen = std::collections::HashSet::new();
         let mut results = Vec::new();
@@ -182,9 +175,6 @@ impl VertexIndexOps for IndexDataManagerImpl {
                 .range(prefix.0.clone()..end.0.clone())
             {
                 if !entry.is_visible_at(read_ts) {
-                    continue;
-                }
-                if !KeyParser::parse_prop_value_from_key(key).is_ok_and(|stored| normalize_int_value(&stored) == normalize_int_value(value)) {
                     continue;
                 }
                 if let Ok(vertex_id) = KeyParser::parse_vertex_id_from_key(key) {

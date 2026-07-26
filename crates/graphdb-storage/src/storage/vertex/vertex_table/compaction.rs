@@ -265,7 +265,7 @@ mod tests {
 
         // Empty table should compact without error
         assert!(coordinator.execute(&mut table).is_ok());
-        assert!(!coordinator.has_remapped());
+        assert!(!coordinator.has_remapped);
     }
 
     #[test]
@@ -285,7 +285,7 @@ mod tests {
         assert!(coordinator.execute(&mut table).is_ok());
 
         // Since there are no gaps, no remapping should occur
-        assert!(!coordinator.has_remapped());
+        assert!(!coordinator.has_remapped);
         assert_eq!(table.id_indexer.len(), 1);
     }
 
@@ -312,7 +312,7 @@ mod tests {
         assert!(coordinator.execute(&mut table).is_ok());
 
         // After compaction on a table with no gaps, nothing should be remapped
-        assert!(!coordinator.has_remapped());
+        assert!(!coordinator.has_remapped);
         assert_eq!(table.id_indexer.len(), 5);
     }
 }

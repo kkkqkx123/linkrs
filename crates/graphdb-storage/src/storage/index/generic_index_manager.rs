@@ -113,6 +113,14 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
 
             write_entity_ref(writer, &entry.entity_ref)?;
 
+            if let Some(encoded) = &entry.encoded_indexed_value {
+                writer.write_all(&[1u8])?;
+                writer.write_all(&(encoded.len() as u32).to_le_bytes())?;
+                writer.write_all(encoded)?;
+            } else {
+                writer.write_all(&[0u8])?;
+            }
+
             if let Some(entity_version) = entry.entity_version {
                 writer.write_all(&[1u8])?;
                 writer.write_all(&entity_version.to_le_bytes())?;
@@ -233,6 +241,18 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
 
             let entity_ref = read_entity_ref(&mut file)?;
 
+            let mut has_encoded_value = [0u8; 1];
+            let encoded_indexed_value = if file.read_exact(&mut has_encoded_value).is_ok() && has_encoded_value[0] == 1 {
+                let mut encoded_len_bytes = [0u8; 4];
+                file.read_exact(&mut encoded_len_bytes)?;
+                let encoded_len = u32::from_le_bytes(encoded_len_bytes) as usize;
+                let mut encoded = vec![0u8; encoded_len];
+                file.read_exact(&mut encoded)?;
+                Some(encoded)
+            } else {
+                None
+            };
+
             let mut has_entity_version = [0u8; 1];
             if file.read_exact(&mut has_entity_version).is_ok() {
                 let entity_version = if has_entity_version[0] == 1 {
@@ -248,6 +268,7 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
                     entity_version,
                     included_columns,
                     entity_ref,
+                    encoded_indexed_value: encoded_indexed_value.clone(),
                 };
                 max_version = max_version.max(Self::extract_version_from_key(&key));
                 index.insert(key, entry);
@@ -258,6 +279,7 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
                     entity_version: None,
                     included_columns,
                     entity_ref,
+                    encoded_indexed_value: encoded_indexed_value.clone(),
                 };
                 max_version = max_version.max(Self::extract_version_from_key(&key));
                 index.insert(key, entry);

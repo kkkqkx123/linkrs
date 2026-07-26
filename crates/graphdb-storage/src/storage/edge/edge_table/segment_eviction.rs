@@ -176,8 +176,8 @@ mod tests {
 
     #[test]
     fn test_global_clock_monotonic() {
-        let t1 = super::residency::GLOBAL_ACCESS_CLOCK.tick();
-        let t2 = super::residency::GLOBAL_ACCESS_CLOCK.tick();
+        let t1 = super::super::residency::GLOBAL_ACCESS_CLOCK.tick();
+        let t2 = super::super::residency::GLOBAL_ACCESS_CLOCK.tick();
         assert!(t1 < t2);
     }
 }

@@ -494,7 +494,6 @@ mod tests {
             initial_capacity: 2,
             growth_factor: 2.0,
             max_capacity: MAX_CAPACITY,
-            enable_free_list: true,
         });
 
         assert!(indexer.insert(IdKey::Text("v1".to_string())).is_ok());
@@ -520,7 +519,6 @@ mod tests {
             initial_capacity: 2,
             growth_factor: DEFAULT_GROWTH_FACTOR,
             max_capacity: 3,
-            enable_free_list: true,
         });
 
         assert!(indexer.insert(IdKey::Text("v1".to_string())).is_ok());

@@ -179,7 +179,10 @@ fn test_batch_insert() {
         ),
     ];
 
-    let ids = table.batch_insert(&vertices, 100).unwrap();
+    let ids: Vec<u32> = vertices
+        .into_iter()
+        .map(|(ext_id, props)| table.insert(&ext_id, &props, 100).unwrap())
+        .collect();
     assert_eq!(ids.len(), 3);
     assert_eq!(ids[0], 0);
     assert_eq!(ids[1], 1);
@@ -748,9 +751,7 @@ fn test_vertex_gc_placeholder() {
 }
 
 #[test]
-fn test_vertex_mvcc_table_trait() {
-    use crate::storage::mvcc::MVCCTable;
-
+fn test_vertex_mvcc_table_ops() {
     let schema = create_test_schema();
     let mut table = VertexTable::new(0, "person".to_string(), schema);
 
@@ -762,12 +763,12 @@ fn test_vertex_mvcc_table_trait() {
         )
         .unwrap();
 
-    let snap = <VertexTable as MVCCTable>::register_snapshot(&mut table, 100).unwrap();
+    let snap = table.register_snapshot(100).unwrap();
     assert_eq!(table.active_snapshot_count(), 1);
 
-    <VertexTable as MVCCTable>::unregister_snapshot(&mut table, snap).unwrap();
+    table.unregister_snapshot(snap).unwrap();
     assert_eq!(table.active_snapshot_count(), 0);
 
-    let gc_count = <VertexTable as MVCCTable>::gc(&mut table, 200).unwrap();
+    let gc_count = table.gc(200).unwrap();
     assert_eq!(gc_count, 0);
 }
