@@ -57,28 +57,56 @@ impl From<Value> for JoinKeyValue {
     }
 }
 
+fn try_column_value(
+    expr: &Expression,
+    layout: &SlotLayout,
+    columns: &[Vec<Value>],
+    row_idx: usize,
+) -> Option<Value> {
+    let name = expr.as_variable()?;
+    let slot = layout.slot_id(name)?;
+    if slot < columns.len() {
+        Some(columns[slot][row_idx].clone())
+    } else {
+        None
+    }
+}
+
+fn eval_join_expr(expr: &Expression, ctx: &mut BorrowedRowContext) -> Result<Value, QueryError> {
+    ExpressionEvaluator::evaluate(expr, ctx)
+        .map_err(|e| QueryError::execution(format!("HashJoin key evaluation failed: {}", e)))
+}
+
 fn evaluate_join_key(
     row: &[Value],
     col_names: &[String],
     key_expressions: &[Expression],
+    columns: Option<(&[Vec<Value>], usize)>,
 ) -> Result<JoinKeyValue, QueryError> {
     if key_expressions.is_empty() {
         return Ok(JoinKeyValue::Multi(Vec::new()));
     }
 
     let layout = Arc::new(SlotLayout::from_names(col_names));
-    let mut context = BorrowedRowContext::new(row, layout);
+    let mut ctx = BorrowedRowContext::new(row, Arc::clone(&layout));
+
+    let eval_one = |expr: &Expression, ctx: &mut BorrowedRowContext| -> Result<Value, QueryError> {
+        if let Some((cols, row_idx)) = columns {
+            if let Some(val) = try_column_value(expr, &layout, cols, row_idx) {
+                return Ok(val);
+            }
+        }
+        eval_join_expr(expr, ctx)
+    };
 
     if key_expressions.len() == 1 {
-        let value = ExpressionEvaluator::evaluate(&key_expressions[0], &mut context)
-            .map_err(|e| QueryError::execution(format!("HashJoin key evaluation failed: {}", e)))?;
+        let value = eval_one(&key_expressions[0], &mut ctx)?;
         return Ok(JoinKeyValue::from(value));
     }
 
     let mut key = Vec::with_capacity(key_expressions.len());
     for expr in key_expressions {
-        let value = ExpressionEvaluator::evaluate(expr, &mut context)
-            .map_err(|e| QueryError::execution(format!("HashJoin key evaluation failed: {}", e)))?;
+        let value = eval_one(expr, &mut ctx)?;
         key.push(value);
     }
     Ok(JoinKeyValue::Multi(key))

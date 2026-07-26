@@ -26,6 +26,7 @@ use crate::core::error::QueryError;
 use crate::core::Value;
 use crate::query::executor::base::{ExecutionResult, MemoryBudget};
 use crate::storage::QueryStorage;
+use crate::utils::Arena;
 
 use super::parameters::{ParameterFrame, ParameterSchema};
 use super::query_registry::{QueryGuard, QueryId, QueryMetadata, QueryRegistry};
@@ -75,6 +76,10 @@ pub struct QueryBindings {
     /// M6: Engine-level shared scheduler.  When set, all queries share the
     /// same worker pool instead of creating per-query threads.
     pub shared_scheduler: Option<Arc<super::pool::SharedScheduler>>,
+    /// Number of partitions for partitioned execution. 0 = non-partitioned.
+    pub partition_count: usize,
+    /// Optional thread-safe bumpalo arena for executor temporary allocations.
+    pub arena: Option<Arc<parking_lot::Mutex<Arena>>>,
     #[cfg(feature = "fulltext-search")]
     pub fulltext_manager: Option<Arc<crate::search::manager::FulltextIndexManager>>,
     #[cfg(feature = "qdrant")]
@@ -102,6 +107,8 @@ impl QueryBindings {
             user_name: None,
             transaction,
             shared_scheduler: context.shared_scheduler.clone(),
+            partition_count: 0,
+            arena: context.arena.clone(),
             #[cfg(feature = "fulltext-search")]
             fulltext_manager: context.fulltext_manager.clone(),
             #[cfg(feature = "qdrant")]

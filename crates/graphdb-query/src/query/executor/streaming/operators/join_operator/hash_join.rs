@@ -29,26 +29,33 @@ pub(super) fn next_hash_join(
     right: &mut StreamingExecutor,
 ) -> Result<Option<DataChunk>, QueryError> {
     if !*left_consumed {
-        while let Some(chunk) = right.advance()? {
+        while let Some(mut chunk) = right.advance()? {
             base.ensure_not_cancelled()?;
             let col_names = chunk.col_names();
             if right_col_names.is_empty() {
                 *right_col_names = col_names.clone();
             }
-            for row in chunk.rows {
-                memory_tracker.try_reserve_row(&row)?;
-                let hash_key = evaluate_join_key(&row, &col_names, hash_keys)?;
+            chunk.materialize_columns();
+            let cols = chunk.columns.as_deref();
+            for (row_idx, row) in chunk.rows.iter().enumerate() {
+                memory_tracker.try_reserve_row(row)?;
+                let hash_key = evaluate_join_key(
+                    row,
+                    &col_names,
+                    hash_keys,
+                    cols.map(|c| (c, row_idx)),
+                )?;
                 build_side_hash
                     .entry(hash_key)
                     .or_default()
                     .push(row.clone());
-                all_right_rows.push(row);
+                all_right_rows.push(row.clone());
             }
         }
         *left_consumed = true;
     }
 
-    while let Some(left_chunk) = left.advance()? {
+    while let Some(mut left_chunk) = left.advance()? {
         let left_col_names = left_chunk.col_names();
         let mut result_rows = Vec::new();
 
@@ -59,9 +66,15 @@ pub(super) fn next_hash_join(
         } else {
             None
         };
-
-        for left_row in &left_chunk.rows {
-            let probe_key = evaluate_join_key(left_row, &left_col_names, probe_keys)?;
+        left_chunk.materialize_columns();
+        let left_cols = left_chunk.columns.as_deref();
+        for (row_idx, left_row) in left_chunk.rows.iter().enumerate() {
+            let probe_key = evaluate_join_key(
+                left_row,
+                &left_col_names,
+                probe_keys,
+                left_cols.map(|c| (c, row_idx)),
+            )?;
             let matching_right_rows = build_side_hash.get(&probe_key);
 
             if let Some(right_rows) = matching_right_rows {
@@ -116,26 +129,33 @@ pub(super) fn next_hash_left_join(
     right: &mut StreamingExecutor,
 ) -> Result<Option<DataChunk>, QueryError> {
     if !*left_consumed {
-        while let Some(chunk) = right.advance()? {
+        while let Some(mut chunk) = right.advance()? {
             base.ensure_not_cancelled()?;
             let col_names = chunk.col_names();
             if right_col_names.is_empty() {
                 *right_col_names = col_names.clone();
             }
-            for row in chunk.rows {
-                memory_tracker.try_reserve_row(&row)?;
-                let hash_key = evaluate_join_key(&row, &col_names, hash_keys)?;
+            chunk.materialize_columns();
+            let cols = chunk.columns.as_deref();
+            for (row_idx, row) in chunk.rows.iter().enumerate() {
+                memory_tracker.try_reserve_row(row)?;
+                let hash_key = evaluate_join_key(
+                    row,
+                    &col_names,
+                    hash_keys,
+                    cols.map(|c| (c, row_idx)),
+                )?;
                 build_side_hash
                     .entry(hash_key)
                     .or_default()
                     .push(row.clone());
-                all_right_rows.push(row);
+                all_right_rows.push(row.clone());
             }
         }
         *left_consumed = true;
     }
 
-    while let Some(left_chunk) = left.advance()? {
+    while let Some(mut left_chunk) = left.advance()? {
         let left_col_names = left_chunk.col_names();
         let mut result_rows = Vec::new();
 
@@ -146,9 +166,15 @@ pub(super) fn next_hash_left_join(
         } else {
             None
         };
-
-        for left_row in &left_chunk.rows {
-            let probe_key = evaluate_join_key(left_row, &left_col_names, probe_keys)?;
+        left_chunk.materialize_columns();
+        let left_cols = left_chunk.columns.as_deref();
+        for (row_idx, left_row) in left_chunk.rows.iter().enumerate() {
+            let probe_key = evaluate_join_key(
+                left_row,
+                &left_col_names,
+                probe_keys,
+                left_cols.map(|c| (c, row_idx)),
+            )?;
             let matching_right_rows = build_side_hash.get(&probe_key);
 
             if let Some(right_rows) = matching_right_rows {

@@ -228,12 +228,12 @@ fn collect_dependent_tables(bound: &crate::query::binder::BoundStatement) -> Vec
     if let crate::query::binder::BoundStatement::Match(match_stmt) = bound {
         for node in &match_stmt.query_graph.nodes {
             for tag in &node.tags {
-                tables.push(tag.tag_name.clone());
+                tables.push(tag.tag_name.to_string());
             }
         }
         for edge in &match_stmt.query_graph.edges {
             for edge_type in &edge.edge_types {
-                tables.push(edge_type.edge_type_name.clone());
+                tables.push(edge_type.edge_type_name.to_string());
             }
         }
     }

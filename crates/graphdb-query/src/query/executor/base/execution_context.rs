@@ -9,6 +9,7 @@ use crate::core::Value;
 use crate::query::executor::expression::functions::global_registry_ref;
 use crate::query::executor::expression::functions::OwnedFunctionRef;
 use crate::query::executor::streaming::pool::SharedScheduler;
+use crate::utils::Arena;
 #[cfg(feature = "fulltext-search")]
 use crate::search::manager::FulltextIndexManager;
 #[cfg(feature = "fulltext-search")]
@@ -43,6 +44,8 @@ pub struct ExecutionContext {
     pub max_buffered_chunks: usize,
     /// M6: Engine-level shared scheduler.
     pub shared_scheduler: Option<Arc<SharedScheduler>>,
+    /// Optional thread-safe bumpalo arena for executor temporary allocations.
+    pub arena: Option<Arc<parking_lot::Mutex<Arena>>>,
 }
 
 impl ExecutionContext {
@@ -69,6 +72,7 @@ impl ExecutionContext {
             chunk_size: Self::DEFAULT_CHUNK_SIZE,
             max_buffered_chunks: Self::DEFAULT_MAX_BUFFERED_CHUNKS,
             shared_scheduler: None,
+            arena: None,
         }
     }
 
@@ -95,6 +99,7 @@ impl ExecutionContext {
             chunk_size: Self::DEFAULT_CHUNK_SIZE,
             max_buffered_chunks: Self::DEFAULT_MAX_BUFFERED_CHUNKS,
             shared_scheduler: None,
+            arena: None,
         }
     }
 
@@ -120,6 +125,7 @@ impl ExecutionContext {
             chunk_size: Self::DEFAULT_CHUNK_SIZE,
             max_buffered_chunks: Self::DEFAULT_MAX_BUFFERED_CHUNKS,
             shared_scheduler: None,
+            arena: None,
         }
     }
 
@@ -155,6 +161,7 @@ impl ExecutionContext {
             chunk_size: Self::DEFAULT_CHUNK_SIZE,
             max_buffered_chunks: Self::DEFAULT_MAX_BUFFERED_CHUNKS,
             shared_scheduler: None,
+            arena: None,
         }
     }
 
@@ -225,6 +232,7 @@ impl Default for ExecutionContext {
             chunk_size: Self::DEFAULT_CHUNK_SIZE,
             max_buffered_chunks: Self::DEFAULT_MAX_BUFFERED_CHUNKS,
             shared_scheduler: None,
+            arena: None,
         }
     }
 }

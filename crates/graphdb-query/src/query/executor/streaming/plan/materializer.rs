@@ -420,6 +420,15 @@ impl PhysicalPlanMaterializer {
             runtime.set_worker_pool(Some(pool));
         }
 
+        // Phase 1: size state_arenas for partitioned execution so each
+        // partition gets its own arena, eliminating contention on arena 0.
+        if bindings.partition_count > 0 {
+            runtime.set_partition_count(bindings.partition_count + 1);
+        }
+
+        // Phase 3: wire bumpalo arena into the runtime for temporary allocations.
+        runtime.arena = bindings.arena.clone();
+
         Arc::new(runtime)
     }
 }

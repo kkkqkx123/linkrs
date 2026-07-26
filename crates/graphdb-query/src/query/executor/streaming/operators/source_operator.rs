@@ -637,6 +637,7 @@ impl SourceOperator {
                     let reservation = reserve_memory(base, &rows)?;
                     let mut chunk =
                         DataChunk::new_with_layout(rows, Arc::clone(&base.output_layout));
+                    
                     if let Some(r) = reservation {
                         chunk = chunk.with_memory_reservation(r);
                     }
@@ -667,6 +668,7 @@ impl SourceOperator {
                     let reservation = reserve_memory(base, &rows)?;
                     let mut chunk =
                         DataChunk::new_with_layout(rows, Arc::clone(&base.output_layout));
+                    
                     if let Some(r) = reservation {
                         chunk = chunk.with_memory_reservation(r);
                     }
@@ -706,6 +708,7 @@ impl SourceOperator {
                             let rows = vec![make_vertex_row(vertex)];
                             let reservation = reserve_memory(base, &rows)?;
                             let mut chunk = DataChunk::new_with_layout(rows, base.output_layout.clone());
+                            
                             if let Some(r) = reservation {
                                 chunk = chunk.with_memory_reservation(r);
                             }
@@ -767,6 +770,7 @@ impl SourceOperator {
                     if !rows.is_empty() {
                         let reservation = reserve_memory(base, &rows)?;
                         let mut chunk = DataChunk::new_with_layout(rows, base.output_layout.clone());
+                        
                         if let Some(r) = reservation {
                             chunk = chunk.with_memory_reservation(r);
                         }
@@ -791,6 +795,7 @@ impl SourceOperator {
                 if !rows.is_empty() {
                     let reservation = reserve_memory(base, &rows)?;
                     let mut chunk = DataChunk::new_with_layout(rows, base.output_layout.clone());
+                    
                     if let Some(r) = reservation {
                         chunk = chunk.with_memory_reservation(r);
                     }
@@ -930,9 +935,9 @@ impl SourceOperator {
                             *position = end;
                             if !rows.is_empty() {
                                 let reservation = reserve_memory(base, &rows)?;
-                                let mut chunk =
-                                    DataChunk::new_with_layout(rows, base.output_layout.clone());
-                                if let Some(r) = reservation {
+                    let mut chunk =
+                        DataChunk::new_with_layout(rows, Arc::clone(&base.output_layout));
+                    if let Some(r) = reservation {
                                     chunk = chunk.with_memory_reservation(r);
                                 }
                                 return Ok(Some(chunk));
@@ -1017,7 +1022,7 @@ impl SourceOperator {
                     return Ok(None);
                 }
                 *emitted = true;
-                let chunk =
+                let mut chunk =
                     DataChunk::new_with_layout(vec![Vec::new()], Arc::clone(&base.output_layout));
                 Ok(Some(chunk))
             }
@@ -1029,8 +1034,9 @@ impl SourceOperator {
                 match frame {
                     Some((layout, row)) => {
                         let _ = layout;
-                        let chunk =
+                        let mut chunk =
                             DataChunk::new_with_layout(vec![row], Arc::clone(&base.output_layout));
+                        
                         Ok(Some(chunk))
                     }
                     None => Ok(None),

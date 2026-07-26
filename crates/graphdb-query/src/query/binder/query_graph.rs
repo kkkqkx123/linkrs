@@ -1,16 +1,17 @@
 use crate::core::types::semantic::ValueType;
 use crate::core::types::EdgeDirection;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct BoundTagRef {
-    pub tag_name: String,
+    pub tag_name: Arc<str>,
     pub properties: HashMap<String, ValueType>,
 }
 
 #[derive(Debug, Clone)]
 pub struct BoundEdgeTypeRef {
-    pub edge_type_name: String,
+    pub edge_type_name: Arc<str>,
     pub properties: HashMap<String, ValueType>,
 }
 

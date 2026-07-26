@@ -76,6 +76,7 @@ use bumpalo::Bump;
 ///
 /// This is a wrapper around `bumpalo::Bump` providing a clean API
 /// for arena-based memory allocation.
+#[derive(Debug)]
 pub struct Arena {
     inner: Bump,
 }

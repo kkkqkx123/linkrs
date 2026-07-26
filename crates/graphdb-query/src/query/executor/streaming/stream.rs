@@ -138,6 +138,7 @@ impl ResultStream {
         };
         self.runtime.profile_end();
         self.runtime.release_resources();
+        self.runtime.reset_arena();
         self.closed = true;
         result
     }

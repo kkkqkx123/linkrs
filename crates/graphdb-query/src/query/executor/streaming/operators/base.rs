@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use parking_lot::Mutex;
+
 use super::super::runtime::{ExecutionRuntime, OperatorProfileKey};
 use super::super::spill::SpillManager;
 use super::super::state::{
@@ -7,6 +9,7 @@ use super::super::state::{
 };
 use crate::query::executor::streaming::plan::types::PhysicalOperatorId;
 use crate::query::executor::streaming::slot::SlotLayout;
+use crate::utils::Arena;
 
 /// Explicit operator lifecycle state machine.
 ///
@@ -255,6 +258,11 @@ impl OperatorBase {
     /// Convenience accessor for the spill manager from the runtime.
     pub fn spill_manager(&self) -> Option<Arc<SpillManager>> {
         self.runtime.as_ref().and_then(|rt| rt.get_spill_manager())
+    }
+
+    /// Return a reference to the bumpalo arena, if configured.
+    pub fn arena(&self) -> Option<&Arc<Mutex<Arena>>> {
+        self.runtime.as_ref().and_then(|rt| rt.arena())
     }
 }
 

@@ -152,6 +152,7 @@ impl StreamingExecutionEngine {
         self.root_executor = Some(Box::new(executor));
         self.partition_executors.clear();
         self.partition_count = partition_count;
+        self.ensure_partition_arenas();
         self.configure_registered_root_parallelism();
         Ok(())
     }
@@ -179,6 +180,7 @@ impl StreamingExecutionEngine {
         }
         self.root_executor = None;
         self.partition_count = self.partition_executors.len();
+        self.ensure_partition_arenas();
     }
 
     /// Build and register a partitioned executor tree.
@@ -233,6 +235,7 @@ impl StreamingExecutionEngine {
         }
         self.partition_executors.clear();
         self.partition_count = partition_count;
+        self.ensure_partition_arenas();
         self.configure_registered_root_parallelism();
         Ok(())
     }
@@ -349,6 +352,7 @@ impl StreamingExecutionEngine {
         self.root_executor = Some(Box::new(global_join));
         self.partition_executors.clear();
         self.partition_count = partition_count;
+        self.ensure_partition_arenas();
         self.configure_registered_root_parallelism();
         Ok(())
     }
@@ -403,6 +407,16 @@ impl StreamingExecutionEngine {
         self.partition_count
     }
 
+    /// Ensure runtime state_arenas match the engine's partition count.
+    /// Best-effort: only succeeds when the Arc is unique at call time.
+    fn ensure_partition_arenas(&mut self) {
+        if let Some(arc) = self.runtime.as_mut() {
+            if let Some(rt) = Arc::get_mut(arc) {
+                rt.set_partition_count(self.partition_count + 1);
+            }
+        }
+    }
+
     /// Attach an execution runtime (for cancellation, profiling, memory tracking).
     /// Also propagates the runtime recursively into all operators.
     /// If `max_workers > 1` and no shared scheduler is configured, creates
@@ -428,6 +442,9 @@ impl StreamingExecutionEngine {
             }
         }
         self.runtime = Some(runtime);
+        // Phase 1 safety net: ensure arenas match partition count if the Arc
+        // is still unique at this point (e.g. when called before any clones).
+        self.ensure_partition_arenas();
     }
 
     fn configure_registered_root_parallelism(&mut self) {
@@ -488,6 +505,7 @@ impl StreamingExecutionEngine {
         };
         if let Some(ref runtime) = self.runtime {
             runtime.release_resources();
+            runtime.reset_arena();
         }
         result
     }
@@ -528,6 +546,7 @@ impl StreamingExecutionEngine {
             if let Some(ref rt) = self.runtime {
                 rt.profile_end();
                 rt.release_resources();
+                rt.reset_arena();
             }
         }
 

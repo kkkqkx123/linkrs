@@ -19,6 +19,7 @@ use crate::query::executor::base::MemoryBudget;
 use crate::query::executor::streaming::pool::TaskScheduler;
 use crate::query::query_manager::QueryManager;
 use crate::storage::QueryStorage;
+use crate::utils::Arena;
 
 /// Query identity information
 #[derive(Debug, Clone, Default)]
@@ -424,6 +425,9 @@ pub struct ExecutionRuntime {
     /// Runtime parameter name→value map, bound at materialization time.
     /// Operators read this to resolve `Expression::Parameter` references.
     pub parameter_values: Option<Arc<HashMap<String, Value>>>,
+
+    /// Per-query bumpalo arena for executor temporary allocations.
+    pub arena: Option<Arc<Mutex<Arena>>>,
 }
 
 impl ExecutionRuntime {
@@ -465,6 +469,7 @@ impl ExecutionRuntime {
             state_arenas: vec![Mutex::new(StateArenaSet::new())],
             correlation_frame: Mutex::new(None),
             parameter_values: None,
+            arena: None,
         }
     }
 
@@ -757,6 +762,18 @@ impl ExecutionRuntime {
     /// Access the spill manager.
     pub fn get_spill_manager(&self) -> Option<Arc<SpillManager>> {
         self.spill_manager.lock().clone()
+    }
+
+    /// Return a reference to the bumpalo arena, if configured.
+    pub fn arena(&self) -> Option<&Arc<Mutex<Arena>>> {
+        self.arena.as_ref()
+    }
+
+    /// Reset the bumpalo arena, freeing all temporary allocations.
+    pub fn reset_arena(&self) {
+        if let Some(arena) = &self.arena {
+            arena.lock().reset();
+        }
     }
 
     /// Set the per-partition output channel capacity for parallel operators.

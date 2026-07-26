@@ -34,12 +34,15 @@ use super::query_graph::{
 };
 use super::scope::{BinderScope, BinderVariable};
 
+use crate::query::executor::streaming::interner::StrInterner;
+
 /// The Binder transforms a parsed AST into a fully resolved BoundStatement.
 pub struct Binder {
     scope: BinderScope,
     schema_manager: Option<Arc<SchemaManager>>,
     space_name: Option<String>,
     space_id: u64,
+    interner: StrInterner,
 }
 
 impl Binder {
@@ -49,6 +52,7 @@ impl Binder {
             schema_manager: None,
             space_name: None,
             space_id: 0,
+            interner: StrInterner::new(),
         }
     }
 
@@ -516,7 +520,7 @@ impl Binder {
             self.scope.define_variable(BinderVariable {
                 name: node.variable.clone(),
                 alias_type: AliasType::Node,
-                tags: node.tags.iter().map(|t| t.tag_name.clone()).collect(),
+                tags: node.tags.iter().map(|t| t.tag_name.to_string()).collect(),
                 properties: node.tags.iter().flat_map(|t| t.properties.clone()).collect(),
                 is_defined: true,
             });
@@ -525,7 +529,7 @@ impl Binder {
             self.scope.define_variable(BinderVariable {
                 name: edge.variable.clone(),
                 alias_type: AliasType::Edge,
-                tags: edge.edge_types.iter().map(|e| e.edge_type_name.clone()).collect(),
+                tags: edge.edge_types.iter().map(|e| e.edge_type_name.to_string()).collect(),
                 properties: edge.edge_types.iter().flat_map(|e| e.properties.clone()).collect(),
                 is_defined: true,
             });
@@ -693,7 +697,7 @@ impl Binder {
                     }
 
                     resolved.push(BoundTagRef {
-                        tag_name: label.clone(),
+                        tag_name: self.interner.intern(label),
                         properties,
                     });
                 }
@@ -703,7 +707,7 @@ impl Binder {
 
         for label in labels {
             resolved.push(BoundTagRef {
-                tag_name: label.clone(),
+                tag_name: self.interner.intern(label),
                 properties: std::collections::HashMap::new(),
             });
         }
@@ -741,7 +745,7 @@ impl Binder {
                     }
 
                     resolved.push(BoundEdgeTypeRef {
-                        edge_type_name: et.clone(),
+                        edge_type_name: self.interner.intern(et),
                         properties,
                     });
                 }
@@ -751,7 +755,7 @@ impl Binder {
 
         for et in edge_types {
             resolved.push(BoundEdgeTypeRef {
-                edge_type_name: et.clone(),
+                edge_type_name: self.interner.intern(et),
                 properties: std::collections::HashMap::new(),
             });
         }

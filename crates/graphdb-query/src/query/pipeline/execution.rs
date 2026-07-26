@@ -401,6 +401,9 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         if let Some(ref space_name) = query_context.space_name() {
             context.space_name = Some(space_name.clone());
         }
+        if query_context.has_arena() {
+            context.arena = Some(Arc::new(parking_lot::Mutex::new(crate::utils::Arena::new())));
+        }
         context
     }
 }

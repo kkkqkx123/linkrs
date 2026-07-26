@@ -181,6 +181,8 @@ mod tests {
             query_text: None,
             transaction: TransactionScope::None,
             shared_scheduler: None,
+            partition_count: 0,
+            arena: None,
             #[cfg(feature = "fulltext-search")]
             fulltext_manager: None,
             #[cfg(feature = "qdrant")]

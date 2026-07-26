@@ -319,6 +319,64 @@ impl DataChunk {
         }
     }
 
+    /// Create a DataChunk from column-major data.
+    ///
+    /// Builds rows by transposing columns, and stores the columnar
+    /// representation directly (avoiding a separate materialization pass).
+    /// This is more efficient when the caller already has column-major data.
+    ///
+    /// Panics if column lengths are inconsistent or layout width doesn't
+    /// match the number of columns.
+    pub fn from_columns(
+        columns: Vec<Vec<Value>>,
+        layout: Arc<SlotLayout>,
+    ) -> Self {
+        let num_cols = columns.len();
+        assert!(
+            layout.is_empty() || num_cols == layout.len(),
+            "DataChunk::from_columns: column count {} does not match layout width {}",
+            num_cols,
+            layout.len()
+        );
+        let num_rows = columns.first().map(|c| c.len()).unwrap_or(0);
+        assert!(
+            columns.iter().all(|c| c.len() == num_rows),
+            "DataChunk::from_columns: column length mismatch"
+        );
+
+        let mut rows = Vec::with_capacity(num_rows);
+        for row_idx in 0..num_rows {
+            let mut row = Vec::with_capacity(num_cols);
+            for col_idx in 0..num_cols {
+                row.push(columns[col_idx][row_idx].clone());
+            }
+            rows.push(row);
+        }
+
+        let schema = Arc::new(Schema::new(
+            layout
+                .slots
+                .iter()
+                .map(|info| ColumnInfo {
+                    name: info.name.clone(),
+                    data_type: info
+                        .data_type
+                        .as_ref()
+                        .map(|dt| dt.to_string().to_lowercase())
+                        .unwrap_or_else(|| "unknown".to_string()),
+                })
+                .collect(),
+        ));
+
+        Self {
+            rows,
+            columns: Some(columns),
+            schema,
+            layout,
+            memory_reservation: None,
+        }
+    }
+
     /// Attach columnar data to this chunk.
     ///
     /// The columns Vec must have one inner Vec per column, each with length
