@@ -279,6 +279,16 @@ impl CsrSegment {
         self.residency.read().is_resident()
     }
 
+    /// Returns true if this segment's CSR data has been evicted to disk.
+    pub fn is_evicted(&self) -> bool {
+        self.residency.read().is_evicted()
+    }
+
+    /// Returns the spill file size in bytes (0 if resident).
+    pub fn spill_size(&self) -> u64 {
+        self.residency.read().spill_size()
+    }
+
     /// Begin eviction: CAS from Unlocked → Marked (first pass).
     /// The segment remains readable by optimistic readers while marked.
     /// Returns true if the segment was successfully marked.
@@ -339,14 +349,16 @@ impl CsrSegment {
     ///
     /// Uses CAS to transition: Evicted → Unlocked.
     pub fn reload_from_spill(&self) -> StorageResult<()> {
+        if self.is_resident() {
+            return Err(StorageError::invalid_operation(
+                "segment is already resident".to_string(),
+            ));
+        }
+
         let residency = self.residency.read();
         let spill_path = match &*residency {
-            SegmentResidency::Resident => {
-                return Err(StorageError::invalid_operation(
-                    "segment is already resident".to_string(),
-                ));
-            }
             SegmentResidency::Evicted { spill_path, .. } => spill_path.clone(),
+            SegmentResidency::Resident => unreachable!(), // checked above
         };
         drop(residency);
 

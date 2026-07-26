@@ -15,6 +15,7 @@ pub(crate) mod edge;
 pub(crate) mod encoding;
 pub(crate) mod engine;
 pub(crate) mod index;
+pub(crate) mod macros;
 pub(crate) mod mvcc;
 pub(crate) mod naming;
 pub(crate) mod schema;

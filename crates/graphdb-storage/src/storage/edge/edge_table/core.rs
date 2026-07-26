@@ -3,10 +3,11 @@
 //! Provides fundamental edge table functionality including insertion, deletion,
 //! querying, property management, and basic maintenance operations.
 
-use super::super::{Csr, CsrBase, CsrVariant, EdgeRecord, EdgeSchema, MutableCsrTrait, Nbr};
 use super::free_space::SegmentFreeList;
 use super::mvcc::MVCCManager;
+use super::residency::GLOBAL_ACCESS_CLOCK;
 use super::segment::{CsrSegment, SegmentVersion};
+use super::super::{Csr, CsrBase, CsrVariant, EdgeRecord, EdgeSchema, MutableCsrTrait, Nbr};
 use crate::core::types::{EdgeId, LabelId, Timestamp, VertexId};
 use crate::core::{DataType, StorageError, StorageResult, Value};
 use crate::storage::edge::PropertyTable;
@@ -15,13 +16,7 @@ use crate::storage::schema::{
 };
 use crate::storage::types::{PropertyId, StoragePropertyDef};
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-
-fn access_clock_tick() -> u64 {
-    static ACCESS_CLOCK: AtomicU64 = AtomicU64::new(0);
-    ACCESS_CLOCK.fetch_add(1, Ordering::Relaxed)
-}
 
 #[derive(Debug, Clone)]
 pub struct EdgeTableConfig {
@@ -261,13 +256,18 @@ impl TimeTravelEdgeStore {
             }
 
             // Ensure segment data is resident (reload from spill if evicted)
-            if !segment.is_resident() {
+            if segment.is_evicted() {
                 let _ = segment.reload_from_spill();
             }
-            segment.record_access(access_clock_tick());
+            segment.record_access(GLOBAL_ACCESS_CLOCK.tick());
 
-            // Binary search for the specific edge in this segment
-            let positioned_edges = segment.csr.read().edges_of_with_position(src);
+            // Try optimistic read first (seqlock-style, avoids RwLock contention).
+            // If the segment is locked or the state changed during the read,
+            // fall back to the RwLock read path.
+            let positioned_edges = segment
+                .try_optimistic_read(|csr| csr.edges_of_with_position(src))
+                .unwrap_or_else(|| segment.csr.read().edges_of_with_position(src));
+
             for (position, edge) in positioned_edges {
                 if edge.neighbor == dst && edge.timestamp <= ts {
                     let edge_id = segment.recover_edge_id(&edge, position);
@@ -318,12 +318,17 @@ impl TimeTravelEdgeStore {
             }
 
             // Ensure segment data is resident (reload from spill if evicted)
-            if !segment.is_resident() {
+            if segment.is_evicted() {
                 let _ = segment.reload_from_spill();
             }
-            segment.record_access(access_clock_tick());
+            segment.record_access(GLOBAL_ACCESS_CLOCK.tick());
 
-            for (position, edge) in segment.csr.read().edges_of_with_position(src) {
+            // Optimistic read with RwLock fallback
+            let positioned_edges = segment
+                .try_optimistic_read(|csr| csr.edges_of_with_position(src))
+                .unwrap_or_else(|| segment.csr.read().edges_of_with_position(src));
+
+            for (position, edge) in positioned_edges {
                 if edge.timestamp <= ts {
                     let edge_id = segment.recover_edge_id(&edge, position);
                     if !self.mvcc.is_tombstoned(edge_id, ts) {

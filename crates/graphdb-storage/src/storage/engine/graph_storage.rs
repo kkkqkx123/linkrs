@@ -171,6 +171,12 @@ impl GraphStorage {
         self
     }
 
+    pub fn with_vertex_gc(mut self, config: crate::storage::vertex::VertexGcConfig) -> Self {
+        let new_ctx = Arc::new((*self.ctx).clone().with_vertex_gc(config));
+        self.ctx = new_ctx;
+        self
+    }
+
     /// Set the StatsManager for recording MVCC metrics.
     ///
     /// This injects the stats manager into the GraphStorageContext,
@@ -1401,6 +1407,42 @@ impl StorageGcOps for GraphStorage {
 
     fn stop_index_gc(&self) {
         self.ctx.stop_index_gc();
+    }
+}
+
+/// Direct vertex GC controls (outside StorageGcOps trait).
+impl GraphStorage {
+    pub fn is_vertex_gc_running(&self) -> bool {
+        self.ctx.is_vertex_gc_running()
+    }
+
+    pub fn start_vertex_gc(&self) -> Option<std::thread::JoinHandle<()>> {
+        self.ctx.start_vertex_gc()
+    }
+
+    pub fn stop_vertex_gc(&self) {
+        self.ctx.stop_vertex_gc();
+    }
+
+    /// Batch delete vertices by external string IDs.
+    pub fn batch_delete_vertices(
+        &self,
+        label: crate::core::types::LabelId,
+        external_ids: &[&str],
+        ts: crate::core::types::Timestamp,
+    ) -> crate::core::StorageResult<usize> {
+        self.ctx.batch_delete_vertices(label, external_ids, ts)
+    }
+
+    /// Batch delete vertices by external i64 IDs.
+    pub fn batch_delete_vertices_by_i64(
+        &self,
+        label: crate::core::types::LabelId,
+        external_ids: &[i64],
+        ts: crate::core::types::Timestamp,
+    ) -> crate::core::StorageResult<usize> {
+        self.ctx
+            .batch_delete_vertices_by_i64(label, external_ids, ts)
     }
 }
 

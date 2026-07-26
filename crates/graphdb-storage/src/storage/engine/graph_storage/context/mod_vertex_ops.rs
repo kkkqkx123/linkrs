@@ -373,6 +373,66 @@ impl GraphStorageContext {
         Ok(())
     }
 
+    pub fn batch_delete_vertices(
+        &self,
+        label: LabelId,
+        external_ids: &[&str],
+        ts: Timestamp,
+    ) -> StorageResult<usize> {
+        if !self.persistent.is_open.load(Ordering::Acquire) {
+            return Err(StorageError::storage_not_open());
+        }
+
+        let count = self
+            .persistent
+            .data_store
+            .with_vertex_tables_mut(|vertex_tables| {
+                let table = vertex_tables.get_mut(&label).ok_or_else(|| {
+                    StorageError::label_not_found(format!("vertex label {}", label))
+                })?;
+                table.batch_delete(external_ids, ts)
+            })?;
+
+        for external_id in external_ids {
+            self.persistent
+                .cache_manager
+                .remove_cached_vertex_id(label, external_id);
+        }
+        self.mark_vertex_modified(label);
+
+        Ok(count)
+    }
+
+    pub fn batch_delete_vertices_by_i64(
+        &self,
+        label: LabelId,
+        external_ids: &[i64],
+        ts: Timestamp,
+    ) -> StorageResult<usize> {
+        if !self.persistent.is_open.load(Ordering::Acquire) {
+            return Err(StorageError::storage_not_open());
+        }
+
+        let count = self
+            .persistent
+            .data_store
+            .with_vertex_tables_mut(|vertex_tables| {
+                let table = vertex_tables.get_mut(&label).ok_or_else(|| {
+                    StorageError::label_not_found(format!("vertex label {}", label))
+                })?;
+                table.batch_delete_i64(external_ids, ts)
+            })?;
+
+        for external_id in external_ids {
+            self.persistent
+                .cache_manager
+                .remove_cached_vertex_id(label, &external_id.to_string());
+        }
+        self.mark_vertex_modified(label);
+
+        Ok(count)
+    }
+
     pub fn update_vertex_property(
         &self,
         label: LabelId,

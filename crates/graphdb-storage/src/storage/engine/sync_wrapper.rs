@@ -6,6 +6,7 @@
 use crate::core::metadata::{IndexMetadataManager, SchemaManager};
 use crate::core::types::{EdgeTypeInfo, TagInfo, VertexId};
 use crate::core::{Edge, StorageError, StorageResult, Value, Vertex};
+use crate::storage::macros::forward_methods;
 use crate::storage::{
     StorageAdmin, StorageAuthOps, StorageClient, StorageCommitOps, StorageGcOps,
     StorageOperationContext, StorageOperationContextOps, StoragePersistenceOps, StorageReader,
@@ -498,37 +499,6 @@ impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::Undo
     }
 }
 
-macro_rules! forward_storage_methods {
-    ($field:ident; $(fn $name:ident(&self $(, $arg:ident : $ty:ty)* $(,)?);)+) => {
-        $(
-            fn $name(&self, $($arg: $ty),*) {
-                self.$field.$name($($arg),*)
-            }
-        )+
-    };
-    ($field:ident; $(fn $name:ident(&mut self $(, $arg:ident : $ty:ty)* $(,)?);)+) => {
-        $(
-            fn $name(&mut self, $($arg: $ty),*) {
-                self.$field.$name($($arg),*)
-            }
-        )+
-    };
-    ($field:ident; $(fn $name:ident(&self $(, $arg:ident : $ty:ty)* $(,)?) -> $ret:ty;)+) => {
-        $(
-            fn $name(&self, $($arg: $ty),*) -> $ret {
-                self.$field.$name($($arg),*)
-            }
-        )+
-    };
-    ($field:ident; $(fn $name:ident(&mut self $(, $arg:ident : $ty:ty)* $(,)?) -> $ret:ty;)+) => {
-        $(
-            fn $name(&mut self, $($arg: $ty),*) -> $ret {
-                self.$field.$name($($arg),*)
-            }
-        )+
-    };
-}
-
 macro_rules! forward_auto_commit_methods {
     ($field:ident; $(fn $name:ident(&mut self $(, $arg:ident : $ty:ty)* $(,)?) -> $ret:ty;)+) => {
         $(
@@ -544,7 +514,7 @@ macro_rules! forward_auto_commit_methods {
 }
 
 impl<S: StorageClient + 'static> StorageReader for SyncWrapper<S> {
-    forward_storage_methods!(inner;
+    forward_methods!(inner;
         fn get_vertex(&self, space: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError>;
         fn scan_vertices(&self, space: &str) -> Result<Vec<Vertex>, StorageError>;
         fn scan_vertices_by_tag(&self, space: &str, tag: &str) -> Result<Vec<Vertex>, StorageError>;
@@ -835,7 +805,7 @@ impl<S: StorageClient + 'static> StorageSchemaOps for SyncWrapper<S> {
 }
 
 impl<S: StorageClient + 'static> StorageAuthOps for SyncWrapper<S> {
-    forward_storage_methods!(inner;
+    forward_methods!(inner;
         fn change_password(&mut self, info: &crate::core::types::PasswordInfo) -> Result<bool, StorageError>;
         fn create_user(&mut self, info: &crate::core::types::UserInfo) -> Result<bool, StorageError>;
         fn alter_user(&mut self, info: &crate::core::types::UserAlterInfo) -> Result<bool, StorageError>;
@@ -855,12 +825,12 @@ impl<S: StorageClient + 'static> StorageAuthOps for SyncWrapper<S> {
 }
 
 impl<S: StorageClient + 'static> StorageAdmin for SyncWrapper<S> {
-    forward_storage_methods!(inner;
+    forward_methods!(inner;
         fn load_from_disk(&mut self) -> Result<(), StorageError>;
         fn repair_dangling_edges(&mut self, space: &str) -> Result<usize, StorageError>;
     );
 
-    forward_storage_methods!(inner;
+    forward_methods!(inner;
         fn save_to_disk(&self) -> Result<(), StorageError>;
         fn get_storage_stats(&self) -> crate::storage::StorageStats;
         fn find_dangling_edges(&self, space: &str) -> Result<Vec<Edge>, StorageError>;
@@ -869,7 +839,7 @@ impl<S: StorageClient + 'static> StorageAdmin for SyncWrapper<S> {
 }
 
 impl<S: StorageClient + 'static> StoragePersistenceOps for SyncWrapper<S> {
-    forward_storage_methods!(inner;
+    forward_methods!(inner;
         fn flush(&self) -> Result<(), StorageError>;
         fn save_data(&self) -> crate::core::StorageResult<()>;
         fn save_data_to_dir(&self, dir: &std::path::Path) -> crate::core::StorageResult<()>;
@@ -916,7 +886,7 @@ impl<S: StorageClient + 'static> StoragePersistenceOps for SyncWrapper<S> {
 impl<S: StorageClient + StorageSchemaContextOps + 'static> StorageSchemaContextOps
     for SyncWrapper<S>
 {
-    forward_storage_methods!(inner;
+    forward_methods!(inner;
         fn get_schema_manager(&self) -> Option<Arc<SchemaManager>>;
         fn get_index_metadata_manager(&self) -> Option<Arc<dyn IndexMetadataManager>>;
     );
@@ -996,7 +966,7 @@ impl<S: StorageClient + 'static> StorageSyncContextOps for SyncWrapper<S> {
 }
 
 impl<S: StorageClient + 'static> StorageRecoveryOps for SyncWrapper<S> {
-    forward_storage_methods!(inner;
+    forward_methods!(inner;
         fn needs_recovery(&self) -> bool;
         fn recover_from_wal(&self) -> crate::core::StorageResult<crate::transaction::wal::recovery::RecoveryStats>;
         fn recover_from_wal_with_config(
@@ -1008,12 +978,12 @@ impl<S: StorageClient + 'static> StorageRecoveryOps for SyncWrapper<S> {
 }
 
 impl<S: StorageClient + 'static> StorageGcOps for SyncWrapper<S> {
-    forward_storage_methods!(inner;
+    forward_methods!(inner;
         fn is_index_gc_running(&self) -> bool;
         fn start_index_gc(&self) -> Option<std::thread::JoinHandle<()>>;
     );
 
-    forward_storage_methods!(inner;
+    forward_methods!(inner;
         fn stop_index_gc(&self);
     );
 }
@@ -1021,12 +991,12 @@ impl<S: StorageClient + 'static> StorageGcOps for SyncWrapper<S> {
 impl<S: crate::storage::client::StorageClient + StorageSnapshotOps + 'static>
     crate::storage::client::StorageSnapshotOps for SyncWrapper<S>
 {
-    forward_storage_methods!(inner;
+    forward_methods!(inner;
         fn export_snapshot(&self, ts: crate::core::types::Timestamp) -> crate::core::StorageResult<Vec<crate::storage::engine::graph_storage::context::ExportedEdgeSnapshotRecord>>;
         fn get_freeze_stats(&self) -> Option<crate::storage::engine::background_freeze::FreezeStats>;
     );
 
-    forward_storage_methods!(inner;
+    forward_methods!(inner;
         fn trigger_background_freeze(&self) -> crate::core::StorageResult<()>;
     );
 }

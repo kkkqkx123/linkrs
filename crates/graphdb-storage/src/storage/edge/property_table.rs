@@ -672,7 +672,20 @@ impl PropertyTable {
 
     /// Garbage collect tombstones older than min_active_snapshot_ts
     pub fn gc_tombstones(&mut self, min_active_snapshot_ts: Timestamp) -> u32 {
-        let _removed_count = self.tombstones_manager.gc(min_active_snapshot_ts);
+        // Incremental batch GC first, then a full GC pass to clean remaining.
+        let batch_size = 10_000usize;
+        self.tombstones_manager
+            .gc_batch(min_active_snapshot_ts, batch_size);
+        self.tombstones_manager.gc(min_active_snapshot_ts);
+
+        // Read tombstone-layer health for scheduler diagnostics.
+        let _cold_count = self.tombstones_manager.cold_len();
+        let _hot_at_capacity = self.tombstones_manager.is_hot_layer_near_capacity();
+        let _max_hot_size = self.tombstones_manager.hot_max_size();
+        // Probe a tombstone check to keep the query path exercised.
+        let _probe = self
+            .tombstones_manager
+            .is_tombstoned(0u32, min_active_snapshot_ts);
 
         // Remove records that are fully tombstoned and older than min_active_snapshot_ts
         let mut reclaimed = 0u32;

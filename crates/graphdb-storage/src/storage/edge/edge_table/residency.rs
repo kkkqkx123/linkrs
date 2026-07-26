@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::LazyLock;
 
 /// Residency state of a segment's CSR data.
 #[derive(Debug, Clone)]
@@ -70,6 +71,13 @@ impl Default for AccessClock {
         Self::new()
     }
 }
+
+/// Global shared access clock for LRU eviction ordering.
+///
+/// Both the read path (recording segment accesses) and the eviction engine
+/// (comparing last-access timestamps) use this single clock instance,
+/// ensuring that LRU timestamps are comparable across the system.
+pub(crate) static GLOBAL_ACCESS_CLOCK: LazyLock<AccessClock> = LazyLock::new(AccessClock::new);
 
 #[cfg(test)]
 mod tests {

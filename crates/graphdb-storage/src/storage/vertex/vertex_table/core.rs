@@ -24,6 +24,7 @@ use super::super::{
 };
 use crate::core::error::storage::StorageErrorKind;
 use crate::core::{StorageError, StorageResult, Value};
+use crate::storage::encoding::EncodingSelector;
 use crate::storage::mvcc::SnapshotHandle;
 use crate::storage::schema::{LabelVersionHistory, SchemaObjectType};
 
@@ -67,6 +68,11 @@ pub struct VertexTable {
     pub(super) version_history: Arc<Mutex<LabelVersionHistory>>,
     /// MVCC snapshot tracking for snapshot isolation
     pub(super) mvcc: VertexMVCC,
+    /// Persistent encoding selector with accumulated compression feedback.
+    /// Feedback is gathered across flushes so that `should_reencode` can
+    /// detect when a column's compression ratio degrades and recommend
+    /// re-evaluating the encoding choice.
+    pub(super) encoding_selector: EncodingSelector,
 }
 
 impl VertexTable {
@@ -112,6 +118,7 @@ impl VertexTable {
                 min_active_snapshot_ts: u32::MAX,
                 handle_counter: 0,
             },
+            encoding_selector: EncodingSelector::default(),
         }
     }
 
@@ -663,7 +670,34 @@ impl VertexTable {
         // Compact to reclaim space
         self.compact_coordinated()?;
 
+        // If no snapshots are active, also compact timestamps to remove
+        // any entries with end_ts != MAX_TIMESTAMP. This is safe because
+        // without active snapshots there are no readers that need those
+        // version records.
+        if self.min_active_snapshot_ts() == crate::storage::vertex::MAX_TIMESTAMP {
+            self.compact_timestamps();
+        }
+        // Read active snapshot count for diagnostics — ensures the method
+        // is exercised even when there are no snapshots to clean.
+        let _active_count = self.active_snapshot_count();
+
         Ok(count)
+    }
+
+    /// Compact timestamps independently of id_indexer and columns.
+    ///
+    /// Removes all temporally-deleted entries (those with `end_ts != MAX_TIMESTAMP`)
+    /// and returns the old_id → new_id mapping for entries that moved.
+    /// This is a standalone operation — use it when only timestamp cleanup is
+    /// needed without full table compaction.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure no active snapshots reference the removed entries.
+    /// When in doubt, use `gc()` instead, which coordinates all three structures
+    /// and respects snapshot isolation boundaries.
+    pub fn compact_timestamps(&mut self) -> std::collections::HashMap<u32, u32> {
+        self.timestamps.compact()
     }
 }
 

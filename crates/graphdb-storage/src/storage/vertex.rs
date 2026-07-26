@@ -10,6 +10,7 @@
 //! - `VertexTimestamp`: MVCC timestamp tracking for vertices
 
 pub mod column_store;
+pub mod gc_manager;
 pub mod id_indexer;
 pub mod vertex_table;
 pub mod vertex_timestamp;
@@ -17,6 +18,7 @@ pub mod vertex_timestamp;
 use crate::storage::types::StoragePropertyDef;
 
 pub use column_store::ColumnStore;
+pub use gc_manager::VertexGcConfig;
 pub use id_indexer::{IdIndexer, IdKey};
 pub use vertex_table::VertexTable;
 pub use vertex_timestamp::VertexTimestamp;

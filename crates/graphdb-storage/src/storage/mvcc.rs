@@ -139,6 +139,10 @@ impl<T: Clone + Copy + Eq + std::hash::Hash + Ord> TieredTombstoneManager<T> {
     /// Perform garbage collection: remove tombstones older than min_ts
     ///
     /// Returns the count of entries removed.
+    ///
+    /// After a full GC pass the cold cursor is reset so that subsequent
+    /// incremental `gc_batch` calls start from the beginning of the
+    /// (now-compacted) cold layer.
     pub fn gc(&mut self, min_ts: Timestamp) -> usize {
         let before_hot = self.hot_tombstones.len();
         let before_cold = self.cold_tombstones.len();
@@ -148,6 +152,10 @@ impl<T: Clone + Copy + Eq + std::hash::Hash + Ord> TieredTombstoneManager<T> {
 
         // Clean cold layer (preserves sort order since we only retain newer entries)
         self.cold_tombstones.retain(|e| e.delete_ts >= min_ts);
+
+        // Reset incremental GC cursor — full GC is complete, so the next
+        // gc_batch should scan from the beginning.
+        self.cold_gc_cursor = 0;
 
         let after_hot = self.hot_tombstones.len();
         let after_cold = self.cold_tombstones.len();

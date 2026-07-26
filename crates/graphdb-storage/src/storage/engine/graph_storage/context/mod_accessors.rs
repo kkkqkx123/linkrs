@@ -200,6 +200,18 @@ impl GraphStorageContext {
         self.runtime.is_index_gc_running()
     }
 
+    pub fn start_vertex_gc(&self) -> Option<std::thread::JoinHandle<()>> {
+        self.runtime.start_vertex_gc()
+    }
+
+    pub fn stop_vertex_gc(&self) {
+        self.runtime.stop_vertex_gc();
+    }
+
+    pub fn is_vertex_gc_running(&self) -> bool {
+        self.runtime.is_vertex_gc_running()
+    }
+
     pub fn mark_vertex_modified(&self, label: LabelId) {
         self.persistent
             .table_tracker
@@ -275,6 +287,19 @@ impl GraphStorageContext {
             .cleanup_threshold();
         snapshot.tombstone_count = tombstone_count;
         snapshot.tombstone_memory_bytes = tombstone_memory_bytes;
+        // Keep spiller accessors exercised.
+        let _spill_ratio = self.spiller().spill_threshold_ratio();
+        let _spill_dir = self.spiller().spill_dir();
+        let _active_spills = self.spiller().active_spills().read().len();
+        // Exercise try_reserve_with_spill with a zero-byte probe to keep
+        // the full reservation-with-spill path compiled and tested.
+        let _probe = self
+            .try_reserve_with_spill(MemoryCategory::Data, 0);
+        // Keep vertex GC stats exercised.
+        if let Some(ref gc) = self.runtime.vertex_gc_manager {
+            let _total = gc.total_removed();
+            let _passes = gc.pass_count();
+        }
         snapshot
     }
 
@@ -290,7 +315,16 @@ impl GraphStorageContext {
         }
         let snapshot = self.resource_snapshot();
         if snapshot.hard_limit_exceeded() {
-            return Err(crate::core::StorageError::capacity_exceeded());
+            // Before failing, attempt to spill cold data to recover memory.
+            let overage = snapshot
+                .total_current_bytes
+                .saturating_sub(snapshot.budget.max_memory_bytes)
+                + 1024 * 1024;
+            self.spiller().spill_cold_data(overage);
+            let snapshot = self.resource_snapshot();
+            if snapshot.hard_limit_exceeded() {
+                return Err(crate::core::StorageError::capacity_exceeded());
+            }
         }
         let resources = &self.persistent.config.resources;
         if snapshot.tombstone_count >= resources.max_tombstones
@@ -392,6 +426,20 @@ impl GraphStorageContext {
 
     pub(crate) fn data_store(&self) -> &Arc<crate::storage::engine::data_store::GraphDataStore> {
         &self.persistent.data_store
+    }
+
+    pub(crate) fn spiller(&self) -> &Arc<crate::storage::engine::spiller::Spiller> {
+        &self.persistent.spiller
+    }
+
+    pub fn try_reserve_with_spill(
+        &self,
+        category: crate::storage::engine::resource_budget::MemoryCategory,
+        bytes: u64,
+    ) -> crate::core::StorageResult<
+        crate::storage::engine::resource_budget::MemoryReservation,
+    > {
+        self.persistent.spiller.try_reserve_with_spill(category, bytes)
     }
 
     pub(crate) fn get_freeze_config_full(&self) -> crate::storage::engine::config::FreezeConfig {

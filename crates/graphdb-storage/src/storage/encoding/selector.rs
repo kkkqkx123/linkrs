@@ -175,7 +175,11 @@ impl EncodingSelector {
         }
 
         if avg_len >= self.thresholds.avg_length_threshold {
-            return EncodingType::Fsst;
+            // Only use FSST when cardinality exceeds the rebuild threshold,
+            // avoiding unnecessary FSST model maintenance on near-constant data.
+            if cardinality_ratio >= self.thresholds.fsst_rebuild_threshold {
+                return EncodingType::Fsst;
+            }
         }
 
         if cardinality_ratio < 0.8 {

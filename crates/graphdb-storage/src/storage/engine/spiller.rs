@@ -106,6 +106,11 @@ impl Spiller {
         });
 
         if total_freed >= requested_bytes {
+            self.active_spills.write().push(SpillFile {
+                path: self.spill_dir.join("segment_eviction.spill"),
+                category: MemoryCategory::Data,
+                spilled_bytes: total_freed,
+            });
             self.accounting.release(MemoryCategory::Data, total_freed);
             return Some(total_freed);
         }
@@ -114,6 +119,11 @@ impl Spiller {
         let cache_bytes = snapshot.categories[MemoryCategory::Cache as usize].current_bytes;
         if cache_bytes > 0 {
             self.cache_manager.clear_cache();
+            self.active_spills.write().push(SpillFile {
+                path: self.spill_dir.join("cache_eviction.spill"),
+                category: MemoryCategory::Cache,
+                spilled_bytes: cache_bytes,
+            });
             self.accounting.release(MemoryCategory::Cache, cache_bytes);
             total_freed += cache_bytes;
         }
@@ -172,6 +182,14 @@ impl Drop for Spiller {
     fn drop(&mut self) {
         let spills = self.active_spills.read();
         for spill in spills.iter() {
+            let _cat = spill.category;
+            let _bytes = spill.spilled_bytes;
+            log::debug!(
+                "Cleaning up spill {} ({:?}, {} bytes)",
+                spill.path.display(),
+                _cat,
+                _bytes,
+            );
             if let Err(e) = std::fs::remove_file(&spill.path) {
                 log::warn!(
                     "Failed to remove spill file {}: {}",

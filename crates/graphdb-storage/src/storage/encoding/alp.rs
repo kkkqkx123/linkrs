@@ -266,7 +266,7 @@ impl AlpColumn {
             return None;
         }
 
-        for exc in &self.encoder.exceptions {
+        for exc in self.encoder.exceptions() {
             if exc.row_idx as usize == row_idx {
                 return Some(exc.original_value);
             }
@@ -293,8 +293,8 @@ impl AlpColumn {
 
         match value {
             Some(v) => {
+                let int_val = self.encoder.compress(v);
                 let scaled = v * self.encoder.factor;
-                let int_val = scaled.round() as i64;
                 let is_lossless = scaled.is_finite()
                     && scaled.abs() < i64::MAX as f64
                     && (int_val as f64 / self.encoder.factor - v).abs() < ALP_EPSILON;

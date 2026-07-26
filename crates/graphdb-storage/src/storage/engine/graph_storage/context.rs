@@ -17,7 +17,7 @@ use crate::storage::engine::persistence_coordinator::PersistenceCoordinator;
 use crate::storage::engine::resource_budget::{MemoryAccounting, MemoryBudget};
 use crate::storage::engine::spiller::Spiller;
 use crate::storage::index::{IndexDataManagerImpl, IndexGcConfig, IndexGcManager};
-use crate::storage::vertex::IdKey;
+use crate::storage::vertex::{gc_manager::VertexGcManager, IdKey};
 use crate::storage::StorageOperationContext;
 use crate::transaction::VersionManager;
 
@@ -324,6 +324,7 @@ impl DeferredWalOps {
 #[derive(Clone)]
 struct GraphStorageRuntime {
     index_gc_manager: Option<Arc<IndexGcManager>>,
+    vertex_gc_manager: Option<Arc<VertexGcManager>>,
     background_freeze_manager: Option<Arc<BackgroundFreezeManager>>,
     deferred_wal_ops: DeferredWalOps,
     background_freeze_running: Arc<AtomicBool>,
@@ -361,6 +362,7 @@ impl GraphStorageRuntime {
     fn new() -> Self {
         Self {
             index_gc_manager: None,
+            vertex_gc_manager: None,
             background_freeze_manager: None,
             deferred_wal_ops: DeferredWalOps::new(),
             background_freeze_running: Arc::new(AtomicBool::new(false)),
@@ -378,6 +380,25 @@ impl GraphStorageRuntime {
 
         Self {
             index_gc_manager: Some(Arc::new(gc_manager)),
+            vertex_gc_manager: self.vertex_gc_manager.clone(),
+            background_freeze_manager: self.background_freeze_manager.clone(),
+            deferred_wal_ops: self.deferred_wal_ops.clone(),
+            background_freeze_running: self.background_freeze_running.clone(),
+        }
+    }
+
+    fn with_vertex_gc(
+        &self,
+        data_store: &Arc<GraphDataStore>,
+        version_manager: &Arc<VersionManager>,
+        config: crate::storage::vertex::VertexGcConfig,
+    ) -> Self {
+        let gc_manager =
+            VertexGcManager::new(data_store.clone(), version_manager.clone(), config);
+
+        Self {
+            index_gc_manager: self.index_gc_manager.clone(),
+            vertex_gc_manager: Some(Arc::new(gc_manager)),
             background_freeze_manager: self.background_freeze_manager.clone(),
             deferred_wal_ops: self.deferred_wal_ops.clone(),
             background_freeze_running: self.background_freeze_running.clone(),
@@ -387,6 +408,7 @@ impl GraphStorageRuntime {
     fn with_background_freeze(&self, manager: Arc<BackgroundFreezeManager>) -> Self {
         Self {
             index_gc_manager: self.index_gc_manager.clone(),
+            vertex_gc_manager: self.vertex_gc_manager.clone(),
             background_freeze_manager: Some(manager),
             deferred_wal_ops: self.deferred_wal_ops.clone(),
             background_freeze_running: self.background_freeze_running.clone(),
@@ -409,6 +431,25 @@ impl GraphStorageRuntime {
         self.index_gc_manager
             .as_ref()
             .map(|g: &Arc<IndexGcManager>| g.is_running())
+            .unwrap_or(false)
+    }
+
+    fn start_vertex_gc(&self) -> Option<std::thread::JoinHandle<()>> {
+        self.vertex_gc_manager
+            .as_ref()
+            .map(|gc: &Arc<VertexGcManager>| gc.start_background_gc())
+    }
+
+    fn stop_vertex_gc(&self) {
+        if let Some(ref gc) = self.vertex_gc_manager {
+            gc.stop();
+        }
+    }
+
+    fn is_vertex_gc_running(&self) -> bool {
+        self.vertex_gc_manager
+            .as_ref()
+            .map(|g: &Arc<VertexGcManager>| g.is_running())
             .unwrap_or(false)
     }
 }

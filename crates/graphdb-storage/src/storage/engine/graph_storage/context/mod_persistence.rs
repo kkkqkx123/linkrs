@@ -56,12 +56,12 @@ impl GraphStorageContext {
         {
             self.persistent
                 .data_store
-                .with_vertex_tables(|vertex_tables| {
-                    for (label_id, table) in vertex_tables {
+                .with_vertex_tables_mut(|vertex_tables| {
+                    for (label_id, table) in vertex_tables.iter_mut() {
                         let table_dir = vertex_dir.join(format!("label_{}", label_id));
                         table.flush(&table_dir, compression)?;
                     }
-                    Ok::<(), crate::core::StorageError>(())
+                    Ok(())
                 })?;
         }
 

@@ -11,7 +11,7 @@ use std::path::Path;
 
 use crate::core::{StorageError, StorageResult};
 use crate::storage::compression::CompressionType;
-use crate::storage::encoding::{EncodingSelector, EncodingType};
+use crate::storage::encoding::EncodingType;
 use crate::storage::persistence::{read_header, section, write_header_to, HEADER_SIZE};
 use crate::storage::vertex::IdKey;
 
@@ -34,7 +34,7 @@ fn take_bytes(cursor: &mut &[u8], len: u32, field: &str) -> StorageResult<Vec<u8
 
 impl VertexTable {
     pub fn flush<P: AsRef<Path>>(
-        &self,
+        &mut self,
         path: P,
         compression: crate::storage::compression::CompressionType,
     ) -> StorageResult<()> {
@@ -58,7 +58,8 @@ impl VertexTable {
         // Encoding is a flush-time concern. Work on a snapshot so active
         // writes keep using the unmodified in-memory representation.
         let mut columns = self.columns.clone();
-        let mut selector = EncodingSelector::default();
+        // Use the persistent encoding selector so compression feedback
+        // accumulates across flushes, enabling the re-encoding detector.
         let selections = columns
             .columns()
             .iter()
@@ -68,7 +69,8 @@ impl VertexTable {
                     .collect::<Vec<_>>();
                 (
                     col.name.clone(),
-                    selector.select_for_column(&col.data_type, &values),
+                    self.encoding_selector
+                        .select_for_column(&col.data_type, &values),
                 )
             })
             .collect::<Vec<_>>();
@@ -77,7 +79,7 @@ impl VertexTable {
                 columns.apply_encoding_to_column(
                     name,
                     *encoding_type,
-                    selector.thresholds().fsst_max_symbols,
+                    self.encoding_selector.thresholds().fsst_max_symbols,
                 )?;
             }
         }
@@ -94,8 +96,19 @@ impl VertexTable {
                             stats.raw_size,
                             stats.compressed_size,
                         );
-                        selector
+                        self.encoding_selector
                             .record_compression_result(*encoding_type, stats.compression_ratio());
+                        if self.encoding_selector.should_reencode(*encoding_type) {
+                            log::info!(
+                                "column={} encoding={:?} avg_ratio={:.2} exceeds threshold, \
+                                 consider re-encoding",
+                                name,
+                                encoding_type,
+                                self.encoding_selector
+                                    .thresholds()
+                                    .reencode_threshold,
+                            );
+                        }
                     }
                 }
             }
@@ -333,13 +346,9 @@ impl VertexTable {
         )?;
         let schema_json = String::from_utf8(schema_bytes)
             .map_err(|e| StorageError::deserialize_error(e.to_string()))?;
-        self.schema = serde_json::from_str(&schema_json)
+        let schema: crate::storage::vertex::VertexSchema = serde_json::from_str(&schema_json)
             .map_err(|e| StorageError::deserialize_error(e.to_string()))?;
-
-        // Rebuild property index cache
-        for (idx, prop) in self.schema.properties.iter().enumerate() {
-            self.property_index_cache.insert(prop.name.clone(), idx);
-        }
+        self.set_schema(schema);
         if !meta_cursor.is_empty() {
             return Err(StorageError::deserialize_error(
                 "trailing bytes in vertex metadata",

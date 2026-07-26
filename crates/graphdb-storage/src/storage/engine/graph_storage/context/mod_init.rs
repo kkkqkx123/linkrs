@@ -6,6 +6,7 @@ use crate::core::StorageResult;
 use crate::storage::engine::background_freeze::BackgroundFreezeManager;
 use crate::storage::engine::PersistenceConfig;
 use crate::storage::index::IndexGcConfig;
+use crate::storage::vertex::VertexGcConfig;
 
 use super::{GraphStorageContext, GraphStoragePersistent, GraphStorageRuntime};
 
@@ -41,6 +42,16 @@ impl GraphStorageContext {
     pub fn with_index_gc(mut self, config: IndexGcConfig) -> Self {
         let runtime = self.runtime.with_index_gc(
             &self.persistent.index_data_manager,
+            &self.persistent.version_manager,
+            config,
+        );
+        self.runtime = runtime;
+        self
+    }
+
+    pub fn with_vertex_gc(mut self, config: VertexGcConfig) -> Self {
+        let runtime = self.runtime.with_vertex_gc(
+            &self.persistent.data_store,
             &self.persistent.version_manager,
             config,
         );

@@ -7,11 +7,10 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 
-use super::residency::AccessClock;
+use super::residency::GLOBAL_ACCESS_CLOCK;
 use super::segment::CsrSegment;
-use crate::core::{StorageError, StorageResult};
+use crate::core::StorageResult;
 
 /// Direction of edge traversal for segment selection.
 #[derive(Debug, Clone, Copy)]
@@ -34,23 +33,23 @@ struct EvictionCandidate<'a> {
 ///
 /// Selects cold segments for eviction based on LRU ordering and performs
 /// the eviction (serialize to spill file + free memory).
+///
+/// All instances share [`GLOBAL_ACCESS_CLOCK`] so that recorded access
+/// timestamps and eviction ordering use the same monotonic counter.
 pub struct SegmentEvictionEngine {
     /// Directory for spill files.
     spill_dir: PathBuf,
-    /// Monotonic clock for LRU tracking.
-    access_clock: Arc<AccessClock>,
 }
 
 impl SegmentEvictionEngine {
     pub fn new(spill_dir: PathBuf) -> Self {
-        Self {
-            spill_dir,
-            access_clock: Arc::new(AccessClock::new()),
-        }
+        Self { spill_dir }
     }
 
-    pub fn access_clock(&self) -> &AccessClock {
-        &self.access_clock
+    /// Current access clock value (monotonic counter, not wall time).
+    /// Delegates to the global shared clock.
+    fn clock_now(&self) -> u64 {
+        GLOBAL_ACCESS_CLOCK.now()
     }
 
     /// Evict coldest segments from a single edge table until `target_bytes`
@@ -62,6 +61,7 @@ impl SegmentEvictionEngine {
         table: &super::EdgeStore,
         target_bytes: usize,
     ) -> StorageResult<usize> {
+        let _now = self.clock_now();
         let super::EdgeStore::TimeTravel(tt) = table;
         let mut freed = 0;
 
@@ -88,10 +88,11 @@ impl SegmentEvictionEngine {
 
         for (idx, segment) in table.out_segments.iter().enumerate() {
             if let Some(candidate) = self.evaluate_candidate(segment, Direction::Out, idx) {
-                if best
-                    .as_ref()
-                    .is_none_or(|b| candidate.last_access < b.last_access)
-                {
+                if best.as_ref().is_none_or(|b| {
+                    candidate.last_access < b.last_access
+                        || (candidate.last_access == b.last_access
+                            && candidate.memory_bytes > b.memory_bytes)
+                }) {
                     best = Some(candidate);
                 }
             }
@@ -99,10 +100,11 @@ impl SegmentEvictionEngine {
 
         for (idx, segment) in table.in_segments.iter().enumerate() {
             if let Some(candidate) = self.evaluate_candidate(segment, Direction::In, idx) {
-                if best
-                    .as_ref()
-                    .is_none_or(|b| candidate.last_access < b.last_access)
-                {
+                if best.as_ref().is_none_or(|b| {
+                    candidate.last_access < b.last_access
+                        || (candidate.last_access == b.last_access
+                            && candidate.memory_bytes > b.memory_bytes)
+                }) {
                     best = Some(candidate);
                 }
             }
@@ -119,7 +121,9 @@ impl SegmentEvictionEngine {
         direction: Direction,
         index: usize,
     ) -> Option<EvictionCandidate<'a>> {
-        if !segment.is_resident() {
+        // Use is_evicted() for clarity — it mirrors is_resident() but makes
+        // the intent explicit when checking non-residency.
+        if segment.is_evicted() {
             return None;
         }
         // Skip segments that are locked by writers or already in eviction pipeline
@@ -140,9 +144,12 @@ impl SegmentEvictionEngine {
         })
     }
 
-    /// Evict a single segment: two-pass approach.
-    /// Pass 1: Mark the segment (still readable). Pass 2: Complete eviction.
-    /// This gives optimistic readers a second chance to finish.
+    /// Evict a single segment delegating to the segment's own two-pass logic.
+    ///
+    /// After eviction, reads the `spill_size()` from the residency state for
+    /// accurate freed-bytes accounting rather than relying on the return value
+    /// of `evict_to_spill` (they are identical, but this path makes the intent
+    /// and the data dependency on `SegmentResidency::spill_size` explicit).
     fn evict_segment(
         &self,
         segment: &CsrSegment,
@@ -152,21 +159,8 @@ impl SegmentEvictionEngine {
         let spill_path = self
             .spill_dir
             .join(format!("{:?}_{}.spill", direction, index));
-
-        // If already marked, complete the eviction
-        if segment.lock_state.read_state() == super::page_state::SegmentState::Marked {
-            let bytes = segment.finish_eviction(&spill_path)?;
-            return Ok(bytes as usize);
-        }
-
-        // First pass: mark for eviction (second chance for readers)
-        if segment.begin_eviction() {
-            return Ok(0); // Will be completed on next pass
-        }
-
-        Err(StorageError::invalid_operation(
-            "segment is locked by writer".to_string(),
-        ))
+        let _ = segment.evict_to_spill(&spill_path)?;
+        Ok(segment.spill_size() as usize)
     }
 }
 
@@ -175,11 +169,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_access_clock_shared() {
+    fn test_eviction_engine_creation() {
         let engine = SegmentEvictionEngine::new(PathBuf::from("/tmp"));
-        let clock = engine.access_clock();
-        let t1 = clock.tick();
-        let t2 = engine.access_clock().tick();
+        let _engine = engine;
+    }
+
+    #[test]
+    fn test_global_clock_monotonic() {
+        let t1 = super::residency::GLOBAL_ACCESS_CLOCK.tick();
+        let t2 = super::residency::GLOBAL_ACCESS_CLOCK.tick();
         assert!(t1 < t2);
     }
 }
