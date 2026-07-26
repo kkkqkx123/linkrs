@@ -263,7 +263,7 @@ impl QueryExecutionInstance {
             .engine
             .take()
             .ok_or_else(|| QueryError::execution("Engine already consumed".to_string()))?;
-        let chunks = engine.execute()?;
+        let chunks = engine.execute_collected()?;
         let dataset =
             convert_chunks_to_dataset(chunks, Some(self.plan.output.output_layout.names()))?;
         Ok(ExecutionResult::DataSet { data: dataset })
@@ -283,7 +283,7 @@ impl QueryExecutionInstance {
             .engine
             .take()
             .ok_or_else(|| QueryError::execution("Engine already consumed".to_string()))?;
-        let stream = engine.into_stream()?;
+        let stream = engine.execute()?;
         Ok(StreamingQueryResult::new_with_schema(
             stream,
             self.runtime.clone(),
@@ -292,17 +292,21 @@ impl QueryExecutionInstance {
     }
 
     /// Execute with a discard sink (for side-effect-only commands).
+    ///
+    /// Uses streaming internally to avoid materializing results that will be discarded.
     pub fn execute_discard(&mut self) -> Result<(), QueryError> {
         assert!(
             matches!(self.sink, ResultSink::Discard),
             "QueryExecutionInstance::execute_discard requires Discard sink"
         );
 
-        let mut engine = self
+        let engine = self
             .engine
             .take()
             .ok_or_else(|| QueryError::execution("Engine already consumed".to_string()))?;
-        let _ = engine.execute()?;
+        let mut stream = engine.execute()?;
+        while stream.next_chunk()?.is_some() {}
+        stream.close()?;
         Ok(())
     }
 

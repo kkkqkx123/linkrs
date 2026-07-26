@@ -2266,5 +2266,5 @@ impl BlockingOperator {
 }
 
 #[cfg(test)]
-#[path = "test.rs"]
+#[path = "blocking/test.rs"]
 mod tests;

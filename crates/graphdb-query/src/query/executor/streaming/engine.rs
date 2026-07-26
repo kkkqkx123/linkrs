@@ -510,21 +510,39 @@ impl StreamingExecutionEngine {
         result
     }
 
-    /// Execute the streaming query via direct single-thread pull
+    /// Execute the query and return a streaming result handle.
     ///
-    /// Cancel checking and profile instrumentation are built into
-    /// [`StreamingExecutor`] dispatch (`open`/`advance`/`close`).
+    /// This is the default execution path. Results are delivered chunk-at-a-time
+    /// via [`ResultStream`], enabling:
+    /// - Low first-chunk latency (no need to wait for full materialization)
+    /// - Constant memory usage regardless of result size
+    /// - Cooperative cancellation mid-stream
     ///
-    /// If partition executors are registered, each partition is executed
-    /// sequentially and the results are concatenated in partition order.
+    /// For cases that require full materialization (e.g. EXPLAIN/PROFILE
+    /// diagnostics, test assertions), use [`execute_collected`](Self::execute_collected).
     ///
-    /// On any failure the partially-opened executor tree is closed,
-    /// profile is ended and runtime resources are released before the
-    /// error is returned.
+    /// # Partitioned Execution
+    /// When partition executors are registered, partitions are executed
+    /// sequentially and the collected chunks are wrapped in a stream.
+    /// Formal P8 parallelism runs through the Gather-based root.
+    pub fn execute(mut self) -> Result<ResultStream, QueryError> {
+        if !self.partition_executors.is_empty() {
+            let chunks = self.execute_collected()?;
+            let runtime = self
+                .runtime
+                .take()
+                .ok_or_else(|| QueryError::execution("No ExecutionRuntime attached".to_string()))?;
+            runtime.profile_start();
+            return Ok(ResultStream::from_collected(chunks, self, runtime));
+        }
+        self.into_stream()
+    }
+
+    /// Execute and collect all chunks into memory (explicit materialization).
     ///
-    /// Cancellation is checked between chunks when a runtime is attached,
-    /// allowing long-running queries to be interrupted.
-    pub fn execute(&mut self) -> Result<Vec<DataChunk>, QueryError> {
+    /// Use this when you need the full result set upfront. For streaming
+    /// consumption, prefer [`execute`](Self::execute).
+    pub fn execute_collected(&mut self) -> Result<Vec<DataChunk>, QueryError> {
         let profile_started = self.runtime.is_some();
         if profile_started {
             self.runtime.as_ref().unwrap().profile_start();
@@ -635,27 +653,6 @@ impl StreamingExecutionEngine {
         Ok(output_chunks)
     }
 
-    /// Execute and return a streaming result handle for chunk-at-a-time consumption.
-    ///
-    /// This is the preferred path for large result sets — it avoids full
-    /// materialization and delivers chunks as they become available.
-    /// Requires a runtime to have been set (via [`set_runtime`]).
-    ///
-    /// When partition executors are registered, falls back to materializing
-    /// all chunks (the streaming path currently only supports single-root).
-    pub fn execute_streaming(mut self) -> Result<ResultStream, QueryError> {
-        if !self.partition_executors.is_empty() {
-            let chunks = self.execute_partitions()?;
-            let runtime = self
-                .runtime
-                .take()
-                .ok_or_else(|| QueryError::execution("No ExecutionRuntime attached".to_string()))?;
-            runtime.profile_start();
-            return Ok(ResultStream::from_collected(chunks, self, runtime));
-        }
-        self.into_stream()
-    }
-
     /// Convert this engine into a [`ResultStream`] for chunk-at-a-time consumption.
     ///
     /// Requires a runtime to have been set (via [`set_runtime`]).
@@ -734,7 +731,7 @@ mod tests {
         let scan = scan_executor(buffer, vec![]);
         engine.register_executor(0, scan);
 
-        let result = engine.execute();
+        let result = engine.execute_collected();
         assert!(result.is_ok());
         let chunks = result.unwrap();
         assert_eq!(chunks.len(), 1);
@@ -771,7 +768,7 @@ mod tests {
 
         // Cancel before execution
         runtime.cancel();
-        let result = engine.execute();
+        let result = engine.execute_collected();
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("killed") || err.contains("cancelled"));
@@ -801,7 +798,7 @@ mod tests {
         let scan = scan_executor(buffer, vec![]);
         engine.register_executor(0, scan);
 
-        let result = engine.execute();
+        let result = engine.execute_collected();
         assert!(result.is_ok());
         let chunks = result.unwrap();
         // 100 rows with chunk size 1024 → single chunk
@@ -829,7 +826,7 @@ mod tests {
 
         engine.register_executor(0, limit);
 
-        let result = engine.execute();
+        let result = engine.execute_collected();
         assert!(result.is_ok());
         let chunks = result.unwrap();
         let total: usize = chunks.iter().map(|c| c.len()).sum();
@@ -875,7 +872,7 @@ mod tests {
 
         let mut engine = StreamingExecutionEngine::new();
         engine.register_executor(0, join);
-        let chunks = engine.execute().expect("hash join should execute");
+        let chunks = engine.execute_collected().expect("hash join should execute");
 
         assert_eq!(
             chunks
@@ -933,7 +930,7 @@ mod tests {
             partitioned_scan_executor(p1_data, 1, vec![]),
         ]);
 
-        let result = engine.execute().unwrap();
+        let result = engine.execute_collected().unwrap();
         let total_rows: usize = result.iter().map(|c| c.len()).sum();
         assert_eq!(total_rows, 100);
 
@@ -960,7 +957,7 @@ mod tests {
             partitioned_scan_executor(p2_data, 2, vec![]),
         ]);
 
-        let result = engine.execute().unwrap();
+        let result = engine.execute_collected().unwrap();
         let total_rows: usize = result.iter().map(|c| c.len()).sum();
         assert_eq!(total_rows, 99);
 
@@ -985,7 +982,7 @@ mod tests {
             partitioned_scan_executor(p1_data, 1, vec![]),
         ]);
 
-        let result = engine.execute().unwrap();
+        let result = engine.execute_collected().unwrap();
         let total_rows: usize = result.iter().map(|c| c.len()).sum();
         assert_eq!(total_rows, 50);
     }
@@ -998,7 +995,7 @@ mod tests {
         // Single execution
         let mut single_engine = StreamingExecutionEngine::new();
         single_engine.register_executor(0, scan_executor(all_data.clone(), vec![]));
-        let single_result = single_engine.execute().unwrap();
+        let single_result = single_engine.execute_collected().unwrap();
         let single_ids = extract_ids(&single_result);
 
         // Partitioned execution (4 partitions)
@@ -1013,7 +1010,7 @@ mod tests {
 
         let mut part_engine = StreamingExecutionEngine::new();
         part_engine.register_partition_executors(partition_executors);
-        let part_result = part_engine.execute().unwrap();
+        let part_result = part_engine.execute_collected().unwrap();
         let part_ids = extract_ids(&part_result);
 
         // Both should contain all 0..99
@@ -1063,7 +1060,7 @@ mod tests {
             .expect("gather tree should be registered");
 
         assert_eq!(engine.partition_count(), 2);
-        let chunks = engine.execute().expect("gather execution should succeed");
+        let chunks = engine.execute_collected().expect("gather execution should succeed");
         assert_eq!(chunks.iter().map(DataChunk::len).sum::<usize>(), 5);
 
         let profile = runtime.profile().flush_to_collector();
@@ -1120,7 +1117,7 @@ mod tests {
             )
             .expect("build parallel gather");
 
-        let chunks = engine.execute().expect("parallel gather execute");
+        let chunks = engine.execute_collected().expect("parallel gather execute");
         assert_eq!(
             extract_ids(&chunks),
             (0..3_000).map(|value| value as i64).collect::<Vec<_>>()
@@ -1202,7 +1199,7 @@ mod tests {
             )
             .expect("build parallel merge gather");
 
-        let chunks = engine.execute().expect("parallel merge gather execute");
+        let chunks = engine.execute_collected().expect("parallel merge gather execute");
         assert_eq!(extract_ids(&chunks), vec![1, 2, 3, 4]);
         assert_eq!(runtime.profile().parallel_workers.load(std::sync::atomic::Ordering::Relaxed), 2);
     }
@@ -1232,7 +1229,7 @@ mod tests {
             )
             .expect("partitioned sort should build");
 
-        let chunks = engine.execute().expect("partitioned sort should execute");
+        let chunks = engine.execute_collected().expect("partitioned sort should execute");
         assert_eq!(extract_ids(&chunks), vec![1, 2, 3]);
         assert_eq!(chunks[0].col_names(), vec!["id"]);
     }
@@ -1284,7 +1281,7 @@ mod tests {
             .expect("partitioned aggregate tree should build");
 
         let chunks = engine
-            .execute()
+            .execute_collected()
             .expect("partitioned aggregate should execute");
         assert_eq!(chunks.len(), 1);
         assert_eq!(
@@ -1325,7 +1322,7 @@ mod tests {
             )
             .expect("partitioned dedup tree should build");
 
-        let chunks = engine.execute().expect("partitioned dedup should execute");
+        let chunks = engine.execute_collected().expect("partitioned dedup should execute");
         let mut ids = extract_ids(&chunks);
         ids.sort();
         assert_eq!(ids, vec![1, 2, 3]);
@@ -1373,7 +1370,7 @@ mod tests {
             )
             .expect("partitioned limit tree should build");
 
-        let chunks = engine.execute().expect("partitioned limit should execute");
+        let chunks = engine.execute_collected().expect("partitioned limit should execute");
         assert_eq!(extract_ids(&chunks), vec![2, 3, 4]);
     }
 
@@ -1444,7 +1441,7 @@ mod tests {
             .expect("partitioned hash join tree should build");
 
         let chunks = engine
-            .execute()
+            .execute_collected()
             .expect("partitioned hash join should execute");
         assert_eq!(
             chunks

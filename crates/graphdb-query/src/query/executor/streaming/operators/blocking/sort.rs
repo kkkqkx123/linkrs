@@ -200,14 +200,19 @@ pub(crate) fn compare_two_rows_for_merge(
     sort_expressions: &[Expression],
     sort_directions: &[SortDirection],
 ) -> std::cmp::Ordering {
+    let mut ctx_a = BorrowedRowContext::new(a, Arc::clone(layout));
+    let mut ctx_b = BorrowedRowContext::new(b, Arc::clone(layout));
+
     for (idx, expr) in sort_expressions.iter().enumerate() {
         let direction = sort_directions
             .get(idx)
             .copied()
             .unwrap_or(SortDirection::Ascending);
 
-        let mut ctx_a = BorrowedRowContext::new(a, Arc::clone(layout));
-        let mut ctx_b = BorrowedRowContext::new(b, Arc::clone(layout));
+        if idx > 0 {
+            ctx_a.set_row(a);
+            ctx_b.set_row(b);
+        }
 
         let val_a =
             ExpressionEvaluator::evaluate(expr, &mut ctx_a).unwrap_or(Value::Null(NullType::Null));
@@ -247,14 +252,19 @@ pub(crate) fn compare_rows_for_topn(
     sort_expressions: &[Expression],
     sort_directions: &[SortDirection],
 ) -> std::cmp::Ordering {
+    let mut ctx_a = BorrowedRowContext::new(a, Arc::clone(layout));
+    let mut ctx_b = BorrowedRowContext::new(b, Arc::clone(layout));
+
     for (idx, expr) in sort_expressions.iter().enumerate() {
         let direction = sort_directions
             .get(idx)
             .copied()
             .unwrap_or(SortDirection::Ascending);
 
-        let mut ctx_a = BorrowedRowContext::new(a, Arc::clone(layout));
-        let mut ctx_b = BorrowedRowContext::new(b, Arc::clone(layout));
+        if idx > 0 {
+            ctx_a.set_row(a);
+            ctx_b.set_row(b);
+        }
 
         let val_a =
             ExpressionEvaluator::evaluate(expr, &mut ctx_a).unwrap_or(Value::Null(NullType::Null));

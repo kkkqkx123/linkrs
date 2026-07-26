@@ -475,7 +475,7 @@ impl ExecutionRuntime {
             state_arenas: vec![Mutex::new(StateArenaSet::new())],
             correlation_frame: Mutex::new(None),
             parameter_values: None,
-            arena: None,
+            arena: Some(Arc::new(Mutex::new(Arena::new()))),
         }
     }
 

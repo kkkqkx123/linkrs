@@ -11,7 +11,7 @@ use self::serialization::*;
 use self::transform::*;
 
 #[cfg(test)]
-#[path = "test.rs"]
+#[path = "geography/test.rs"]
 mod tests;
 
 define_function_enum! {
