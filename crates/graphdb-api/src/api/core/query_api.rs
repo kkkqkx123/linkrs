@@ -9,7 +9,7 @@ use crate::core::StatsManager;
 use crate::query::executor::streaming::StreamingQueryResult;
 use crate::query::{OptimizerEngine, QueryPipelineManager};
 use crate::storage::{
-    QueryStorage, StorageClient, StorageOperationContext, StorageOperationContextOps,
+    QueryStorage, StorageClient, StorageOperationContext,
 };
 use crate::sync::SyncManager;
 use crate::transaction::TransactionExecution;

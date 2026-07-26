@@ -211,10 +211,6 @@ impl IndexRuntime {
             .insert(generation.generation, Arc::new(generation));
     }
 
-    pub(crate) fn remove_generation(&self, generation: IndexGeneration) {
-        self.generations.write().remove(&generation);
-    }
-
     pub(crate) fn generations(&self) -> Vec<Arc<GenerationRuntime>> {
         self.generations.read().values().cloned().collect()
     }

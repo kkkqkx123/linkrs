@@ -248,6 +248,7 @@ impl FsstEncoder {
         result
     }
 
+    #[cfg(test)]
     pub fn decode_to_string(&self, encoded: &[u8]) -> Option<String> {
         let bytes = self.decode(encoded);
         String::from_utf8(bytes).ok()

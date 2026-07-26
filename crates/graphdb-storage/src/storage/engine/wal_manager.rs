@@ -161,20 +161,6 @@ impl WalManager {
         Ok(())
     }
 
-    pub fn append_transaction(
-        &self,
-        transaction_id: TransactionId,
-        entries: Vec<TransactionWalEntry>,
-        intents: &[OutboxIntent],
-    ) -> StorageResult<CommitLsn> {
-        self.append_transaction_with_durability(
-            transaction_id,
-            entries,
-            intents,
-            crate::core::types::DurabilityLevel::Sync,
-        )
-    }
-
     pub fn append_transaction_with_durability(
         &self,
         transaction_id: TransactionId,

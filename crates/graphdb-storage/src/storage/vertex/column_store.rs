@@ -883,10 +883,6 @@ impl Column {
         &self.encoding
     }
 
-    pub fn stats(&self) -> Option<&ColumnStats> {
-        self.stats.as_ref()
-    }
-
     pub fn set_stats(&mut self, stats: ColumnStats) {
         self.stats = Some(stats);
     }
@@ -1286,10 +1282,6 @@ impl ColumnStore {
         self.columns.first().map(|c| c.len()).unwrap_or(0)
     }
 
-    pub fn column_stats(&self, name: &str) -> Option<&ColumnStats> {
-        self.get_column(name).and_then(|c| c.stats())
-    }
-
     pub fn clear(&mut self) {
         for col in &mut self.columns {
             col.clear();
@@ -1304,10 +1296,6 @@ impl ColumnStore {
 
     pub fn columns(&self) -> &[Column] {
         &self.columns
-    }
-
-    pub fn columns_mut(&mut self) -> &mut [Column] {
-        &mut self.columns
     }
 
     pub fn load_column_from_raw(

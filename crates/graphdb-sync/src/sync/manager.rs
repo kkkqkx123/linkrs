@@ -1462,6 +1462,7 @@ fn payload_to_intent(
     })
 }
 
+#[cfg(feature = "fulltext-search")]
 fn edge_entity_id(
     src: impl std::fmt::Display,
     dst: impl std::fmt::Display,

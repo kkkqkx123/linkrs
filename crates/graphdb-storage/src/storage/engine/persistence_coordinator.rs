@@ -264,6 +264,7 @@ impl PersistenceCoordinator {
     }
 
     /// Enable a deterministic failure at a persistence boundary.
+    #[cfg(test)]
     pub fn inject_failure(&self, point: PersistenceFaultPoint) {
         self.fault_points.write().insert(point);
     }
@@ -1135,20 +1136,6 @@ impl PersistenceCoordinator {
         visit(root, &mut refs)?;
         refs.sort_by_key(|reference| reference.index_id);
         Ok(refs)
-    }
-
-    /// Get the latest safe LSN from the published manifest.
-    pub fn latest_safe_lsn(&self) -> StorageResult<graphdb_core::core::types::CommitLsn> {
-        self.manifest_manager
-            .latest_safe_lsn()
-            .map_err(StorageError::db_error)
-    }
-
-    /// Load the latest published checkpoint manifest.
-    pub fn load_latest_manifest(&self) -> StorageResult<Option<CheckpointManifest>> {
-        self.manifest_manager
-            .load_latest()
-            .map_err(StorageError::db_error)
     }
 
     pub fn set_outbox_materialized_lsn_provider(&self, provider: OutboxFrontierProvider) {

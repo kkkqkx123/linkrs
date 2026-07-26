@@ -26,6 +26,7 @@ pub struct AddEdgeParams {
 }
 
 /// Parameters for delete_edge operation
+#[cfg(test)]
 pub struct DeleteEdgeParams {
     pub src_label: LabelId,
     pub src_vid: u32,
@@ -215,6 +216,7 @@ impl TransactionOps {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn delete_edge(
         edge_tables: &mut HashMap<EdgeTableKey, EdgeStore>,
         params: DeleteEdgeParams,

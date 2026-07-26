@@ -5,15 +5,14 @@
 //! Every name reference has been resolved against the catalog so that
 //! downstream phases never need to re-parse or re-resolve the AST.
 
-use crate::core::types::expr::contextual::ContextualExpression;
-use crate::core::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
+use crate::core::types::operators::{BinaryOperator, UnaryOperator};
 use crate::core::types::{EdgeDirection, OrderDirection, Span};
 use crate::core::DataType;
 use crate::core::Value;
 use crate::query::parser::ast::{
-    EdgeRange, LimitClause, SampleClause, SkipClause, Steps,
+    LimitClause, SampleClause, SkipClause, Steps,
 };
-use crate::core::types::semantic::{AliasType, ColumnDef, ValueType};
+use crate::core::types::semantic::{ColumnDef, ValueType};
 
 use super::query_graph::QueryGraph;
 

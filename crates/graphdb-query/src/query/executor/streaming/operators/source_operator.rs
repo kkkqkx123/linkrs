@@ -1022,7 +1022,7 @@ impl SourceOperator {
                     return Ok(None);
                 }
                 *emitted = true;
-                let mut chunk =
+                let chunk =
                     DataChunk::new_with_layout(vec![Vec::new()], Arc::clone(&base.output_layout));
                 Ok(Some(chunk))
             }
@@ -1032,9 +1032,8 @@ impl SourceOperator {
                 })?;
                 let frame = rt.take_correlation_frame();
                 match frame {
-                    Some((layout, row)) => {
-                        let _ = layout;
-                        let mut chunk =
+                    Some((_layout, row)) => {
+                        let chunk =
                             DataChunk::new_with_layout(vec![row], Arc::clone(&base.output_layout));
                         
                         Ok(Some(chunk))

@@ -4,10 +4,8 @@ use crate::core::error::DBError;
 use crate::core::metadata::SchemaManager;
 use crate::core::types::expr::contextual::ContextualExpression;
 use crate::core::types::expr::Expression;
-use crate::core::types::operators::{AggregateFunction, BinaryOperator, UnaryOperator};
 use crate::core::types::semantic::{AliasType, ValueType};
 use crate::core::types::EdgeDirection;
-use crate::core::types::Span;
 use crate::core::value::NullType;
 use crate::core::DataType;
 use crate::core::Value;
@@ -15,7 +13,7 @@ use crate::core::DBResult;
 use crate::query::parser::ast::pattern::{PathElement, Pattern};
 use crate::query::parser::ast::stmt::Ast;
 use crate::query::parser::ast::{
-    EdgeRange, FetchTarget, MatchDeleteTarget, ReturnItem, SetOperationType, Steps, Stmt,
+    FetchTarget, MatchDeleteTarget, ReturnItem, SetOperationType, Stmt,
 };
 
 use super::bound::{
@@ -106,16 +104,6 @@ impl Binder {
         self.bind_inner_expr(&inner, type_hint.as_ref())
     }
 
-    fn bind_optional_expr(
-        &mut self,
-        expr: &Option<ContextualExpression>,
-    ) -> DBResult<Option<BoundExpression>> {
-        match expr {
-            Some(e) => self.bind_expr(e).map(Some),
-            None => Ok(None),
-        }
-    }
-
     fn bind_inner_expr(
         &mut self,
         expr: &Expression,
@@ -128,7 +116,7 @@ impl Binder {
             }
             Expression::Variable(v) => {
                 let dt = type_hint.cloned().unwrap_or(DataType::String);
-                let col_type = if let Some(var_info) = self.scope.lookup(v) {
+                let _col_type = if let Some(var_info) = self.scope.lookup(v) {
                     var_info.properties.get(v).cloned()
                 } else {
                     None
@@ -196,7 +184,7 @@ impl Binder {
                 func,
                 args,
                 distinct,
-                filter,
+                filter: _filter,
             } => {
                 let args = args
                     .iter()
@@ -432,15 +420,15 @@ impl Binder {
                     return_type: DataType::String,
                 })
             }
-            Expression::Exists { body } => Err(DBError::from(
+            Expression::Exists { body: _body } => Err(DBError::from(
                 crate::core::error::QueryError::invalid_query(
                     "EXISTS subquery binding not yet implemented".to_string(),
                 ),
             )),
             Expression::In {
                 expr: innerexpr,
-                subquery,
-                negated,
+                subquery: _subquery,
+                negated: _negated,
             } => {
                 let _e = self.bind_inner_expr(innerexpr, None)?;
                 Err(DBError::from(

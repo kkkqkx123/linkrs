@@ -527,7 +527,4 @@ impl GraphStorageContext {
         self.runtime.deferred_wal_ops.drain_deletes()
     }
 
-    pub fn spiller(&self) -> &std::sync::Arc<crate::storage::engine::spiller::Spiller> {
-        &self.persistent.spiller
-    }
 }

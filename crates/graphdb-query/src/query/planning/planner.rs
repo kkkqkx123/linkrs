@@ -9,7 +9,6 @@
 use std::sync::Arc;
 
 use crate::query::binder::BoundStatement;
-use crate::query::parser::ast::stmt::Ast;
 use crate::query::parser::ast::Stmt;
 use crate::query::planning::plan::ExecutionPlan;
 use crate::query::planning::plan::SubPlan;

@@ -14,8 +14,6 @@ use std::io::Read;
 
 use crate::core::{StorageError, StorageResult};
 
-use crate::storage::safe_read::{BoundedReader, SafeSerializable};
-
 pub const DEFAULT_PAGE_SIZE: usize = 64 * 1024 - 1;
 pub const MAX_PAGE_SIZE: usize = 64 * 1024 * 1024;
 pub const PAGE_MAGIC: [u8; 4] = *b"PGZC";
@@ -372,53 +370,6 @@ impl PageReader {
         }
         Ok(result)
     }
-
-    /// Skip one page without allocating or decompressing its payload.
-    pub fn skip_page<R: std::io::Read>(&self, reader: &mut R) -> StorageResult<()> {
-        let header = PageHeader::deserialize(reader)?;
-        if header.page_size == 0 || header.page_size as usize > self.page_size {
-            return Err(StorageError::deserialize_error(format!(
-                "invalid page size: {}, reader page size: {}",
-                header.page_size, self.page_size
-            )));
-        }
-        if !matches!(
-            header.compression_type,
-            COMPRESSION_MARKER_NONE | COMPRESSION_MARKER_ZSTD
-        ) {
-            return Err(StorageError::deserialize_error(format!(
-                "unknown page compression type: {}",
-                header.compression_type
-            )));
-        }
-        if header.compressed_len as usize > MAX_PAGE_SIZE.saturating_mul(2) {
-            return Err(StorageError::deserialize_error(format!(
-                "compressed page is too large: {}",
-                header.compressed_len
-            )));
-        }
-        let mut bounded = BoundedReader::new(reader, header.compressed_len as usize);
-        bounded.skip_all()?;
-        if bounded.remaining() != 0 {
-            return Err(StorageError::io_error(
-                "truncated page payload while skipping".to_string(),
-            ));
-        }
-        Ok(())
-    }
-
-    /// Read a page by ordinal. The current format has no offset index, so this
-    /// seeks forward page by page while avoiding decompression of skipped pages.
-    pub fn read_page_at<R: std::io::Read>(
-        &self,
-        reader: &mut R,
-        page_index: u32,
-    ) -> StorageResult<Vec<u8>> {
-        for _ in 0..page_index {
-            self.skip_page(reader)?;
-        }
-        self.read_page(reader)
-    }
 }
 
 pub fn write_shadow_file<P: AsRef<std::path::Path>>(path: P, data: &[u8]) -> StorageResult<()> {
@@ -522,103 +473,6 @@ pub fn decompress_from_reader(reader: &mut impl std::io::Read) -> StorageResult<
     }
 }
 
-impl SafeSerializable for PageHeader {
-    fn serialize(&self, writer: &mut impl std::io::Write) -> StorageResult<()> {
-        PageHeader::serialize(self, writer).map(|_| ())
-    }
-
-    fn deserialize(reader: &mut BoundedReader<'_>) -> StorageResult<Self> {
-        let mut magic = [0u8; 4];
-        reader.read_exact(&mut magic)?;
-        if magic != PAGE_MAGIC {
-            return Err(StorageError::deserialize_error(format!(
-                "Invalid page magic: {:?}, expected {:?}",
-                magic, PAGE_MAGIC
-            )));
-        }
-        let mut buf = [0u8; 13];
-        reader.read_exact(&mut buf)?;
-        let page_size = u32::from_le_bytes(
-            buf[0..4]
-                .try_into()
-                .map_err(|_| StorageError::deserialize_error("invalid page size bytes"))?,
-        );
-        let compression_type = buf[4];
-        let crc32 = u32::from_le_bytes(
-            buf[5..9]
-                .try_into()
-                .map_err(|_| StorageError::deserialize_error("invalid page crc bytes"))?,
-        );
-        let compressed_len = u32::from_le_bytes(
-            buf[9..13]
-                .try_into()
-                .map_err(|_| StorageError::deserialize_error("invalid page length bytes"))?,
-        );
-        Ok(Self {
-            page_size,
-            compression_type,
-            crc32,
-            compressed_len,
-        })
-    }
-}
-
-impl SafeSerializable for ColumnFileHeader {
-    fn serialize(&self, writer: &mut impl std::io::Write) -> StorageResult<()> {
-        ColumnFileHeader::serialize(self, writer).map(|_| ())
-    }
-
-    fn deserialize(reader: &mut BoundedReader<'_>) -> StorageResult<Self> {
-        let mut magic = [0u8; 8];
-        reader.read_exact(&mut magic)?;
-        if magic != COLUMN_FILE_MAGIC {
-            return Err(StorageError::deserialize_error(format!(
-                "Invalid column file magic: {:?}, expected {:?}",
-                magic, COLUMN_FILE_MAGIC
-            )));
-        }
-        let mut buf = [0u8; 44];
-        reader.read_exact(&mut buf)?;
-        let version = u16::from_le_bytes(
-            buf[0..2]
-                .try_into()
-                .map_err(|_| StorageError::deserialize_error("invalid column version bytes"))?,
-        );
-        if version != COLUMN_FILE_VERSION {
-            return Err(StorageError::unsupported_version(
-                version as u32,
-                COLUMN_FILE_VERSION as u32,
-            ));
-        }
-        let page_size = u32::from_le_bytes(
-            buf[2..6]
-                .try_into()
-                .map_err(|_| StorageError::deserialize_error("invalid column page size bytes"))?,
-        ) as usize;
-        if page_size == 0 || page_size > MAX_PAGE_SIZE {
-            return Err(StorageError::deserialize_error(format!(
-                "invalid column page size: {}",
-                page_size
-            )));
-        }
-        let page_count = u32::from_le_bytes(
-            buf[6..10]
-                .try_into()
-                .map_err(|_| StorageError::deserialize_error("invalid page count bytes"))?,
-        );
-        let total_rows = u32::from_le_bytes(
-            buf[10..14]
-                .try_into()
-                .map_err(|_| StorageError::deserialize_error("invalid row count bytes"))?,
-        );
-        Ok(Self {
-            page_size,
-            page_count,
-            total_rows,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -672,58 +526,6 @@ mod tests {
             err.kind(),
             crate::core::error::storage::StorageErrorKind::UnsupportedVersion
         );
-    }
-
-    #[test]
-    fn test_page_header_safe_serializable_roundtrip() {
-        let header = PageHeader {
-            page_size: 128,
-            compression_type: COMPRESSION_MARKER_ZSTD,
-            crc32: 0xDEADBEEF,
-            compressed_len: 64,
-        };
-        let mut buffer = Vec::new();
-        header.serialize(&mut buffer).unwrap();
-        let mut cursor = std::io::Cursor::new(&buffer);
-        let mut bounded = BoundedReader::new(&mut cursor, buffer.len());
-        let result = PageHeader::deserialize(&mut bounded).unwrap();
-        assert_eq!(result.page_size, header.page_size);
-        assert_eq!(result.compression_type, header.compression_type);
-        assert_eq!(result.crc32, header.crc32);
-        assert_eq!(result.compressed_len, header.compressed_len);
-    }
-
-    #[test]
-    fn test_page_header_safe_serializable_rejects_truncated() {
-        let header = PageHeader {
-            page_size: 128,
-            compression_type: COMPRESSION_MARKER_ZSTD,
-            crc32: 0xDEADBEEF,
-            compressed_len: 64,
-        };
-        let mut buffer = Vec::new();
-        header.serialize(&mut buffer).unwrap();
-        let truncated = &buffer[..buffer.len() - 2];
-        let mut cursor = std::io::Cursor::new(truncated);
-        let mut bounded = BoundedReader::new(&mut cursor, truncated.len());
-        let result = PageHeader::deserialize(&mut bounded);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_column_file_header_safe_serializable_rejects_truncated() {
-        let header = ColumnFileHeader {
-            page_size: 4096,
-            page_count: 10,
-            total_rows: 1000,
-        };
-        let mut buffer = Vec::new();
-        header.serialize(&mut buffer).unwrap();
-        let truncated = &buffer[..buffer.len() - 10];
-        let mut cursor = std::io::Cursor::new(truncated);
-        let mut bounded = BoundedReader::new(&mut cursor, truncated.len());
-        let result = ColumnFileHeader::deserialize(&mut bounded);
-        assert!(result.is_err());
     }
 
     #[test]

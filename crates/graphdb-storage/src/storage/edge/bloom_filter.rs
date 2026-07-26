@@ -80,6 +80,7 @@ impl EdgeDeletionBloomFilter {
     }
 
     /// Clear all bits
+    #[cfg(test)]
     pub fn clear(&mut self) {
         self.bits.iter_mut().for_each(|w| *w = 0);
     }

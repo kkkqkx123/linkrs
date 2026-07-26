@@ -243,7 +243,6 @@ impl<'a> ExpressionBinder<'a> {
             AggregateFunction::GroupConcatWithOrder(_, _, _) => DataType::String,
             AggregateFunction::VecSum(_) => DataType::Vector,
             AggregateFunction::VecAvg(_) => DataType::Vector,
-            _ => DataType::String,
         }
     }
 }

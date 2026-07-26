@@ -230,17 +230,6 @@ impl CompactionCoordinator {
         table.timestamps = new_timestamps;
     }
 
-    /// Get the ID mapping that was computed during this compaction
-    ///
-    /// Useful for logging or debugging to see which IDs were remapped.
-    pub fn id_mapping(&self) -> &HashMap<u32, u32> {
-        &self.id_mapping
-    }
-
-    /// Check whether any remapping occurred
-    pub fn has_remapped(&self) -> bool {
-        self.has_remapped
-    }
 }
 
 #[cfg(test)]

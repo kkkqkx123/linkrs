@@ -102,7 +102,6 @@ pub struct IdIndexerConfig {
     pub initial_capacity: usize,
     pub growth_factor: f64,
     pub max_capacity: usize,
-    pub enable_free_list: bool,
 }
 
 impl Default for IdIndexerConfig {
@@ -111,7 +110,6 @@ impl Default for IdIndexerConfig {
             initial_capacity: DEFAULT_INITIAL_CAPACITY,
             growth_factor: DEFAULT_GROWTH_FACTOR,
             max_capacity: MAX_CAPACITY,
-            enable_free_list: true,
         }
     }
 }
@@ -141,10 +139,6 @@ pub struct IdManager {
 impl IdManager {
     pub fn new() -> Self {
         Self::with_config(IdIndexerConfig::default())
-    }
-
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self::with_config(IdIndexerConfig::default().with_initial_capacity(capacity))
     }
 
     pub fn with_config(config: IdIndexerConfig) -> Self {
@@ -202,6 +196,7 @@ impl IdManager {
         self.key_to_id.len()
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.key_to_id.is_empty()
     }
@@ -364,6 +359,7 @@ impl IdIndexer {
         manager.len()
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         let manager = self.manager.lock();
         manager.is_empty()
@@ -388,6 +384,7 @@ impl IdIndexer {
         manager.clear();
     }
 
+    #[cfg(test)]
     pub fn memory_usage(&self) -> usize {
         let manager = self.manager.lock();
         manager.memory_usage()

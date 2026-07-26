@@ -46,6 +46,7 @@ impl<T: Clone + PartialEq> RleEncoder<T> {
         self.cumulative_counts.push(self.total_count);
     }
 
+    #[cfg(test)]
     pub fn decode(&self, index: usize) -> Option<&T> {
         if index >= self.total_count {
             return None;

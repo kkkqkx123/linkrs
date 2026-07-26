@@ -81,6 +81,7 @@ pub fn write_header_to<W: std::io::Write>(writer: &mut W, section_id: u32) -> st
 
 /// Validate that the persistence version matches the expected version.
 /// Returns `StorageError::UnsupportedVersion` on mismatch.
+#[cfg(test)]
 pub fn check_version(version: u32) -> StorageResult<()> {
     if version != CURRENT_VERSION {
         return Err(StorageError::unsupported_version(version, CURRENT_VERSION));

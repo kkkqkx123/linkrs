@@ -460,6 +460,7 @@ impl GraphDataStore {
         self.vertex_label_id_for_name(name)
     }
 
+    #[cfg(test)]
     pub(crate) fn vertex_label_id_for_name(&self, name: &str) -> Option<LabelId> {
         self.read_vertex_label_names().get(name).copied()
     }
