@@ -134,12 +134,6 @@ impl VertexTimestamp {
         mapping
     }
 
-    /// Compact without returning mapping (for backward compatibility)
-    #[deprecated = "use compact() instead, which now returns the mapping"]
-    pub fn compact_without_mapping(&mut self) {
-        let _ = self.compact();
-    }
-
     pub fn dump(&self) -> Vec<Timestamp> {
         let mut result = Vec::with_capacity(self.start_ts.len() * 2);
         for i in 0..self.start_ts.len() {

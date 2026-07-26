@@ -15,7 +15,13 @@ use crate::storage::schema::{
 };
 use crate::storage::types::{PropertyId, StoragePropertyDef};
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+
+fn access_clock_tick() -> u64 {
+    static ACCESS_CLOCK: AtomicU64 = AtomicU64::new(0);
+    ACCESS_CLOCK.fetch_add(1, Ordering::Relaxed)
+}
 
 #[derive(Debug, Clone)]
 pub struct EdgeTableConfig {
@@ -254,6 +260,12 @@ impl TimeTravelEdgeStore {
                 continue;
             }
 
+            // Ensure segment data is resident (reload from spill if evicted)
+            if !segment.is_resident() {
+                let _ = segment.reload_from_spill();
+            }
+            segment.record_access(access_clock_tick());
+
             // Binary search for the specific edge in this segment
             let positioned_edges = segment.csr.read().edges_of_with_position(src);
             for (position, edge) in positioned_edges {
@@ -304,6 +316,12 @@ impl TimeTravelEdgeStore {
             if segment.deletion_info.all_deleted_before(ts) {
                 continue;
             }
+
+            // Ensure segment data is resident (reload from spill if evicted)
+            if !segment.is_resident() {
+                let _ = segment.reload_from_spill();
+            }
+            segment.record_access(access_clock_tick());
 
             for (position, edge) in segment.csr.read().edges_of_with_position(src) {
                 if edge.timestamp <= ts {

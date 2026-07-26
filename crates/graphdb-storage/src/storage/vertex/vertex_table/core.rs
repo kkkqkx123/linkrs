@@ -24,7 +24,7 @@ use super::super::{
 };
 use crate::core::error::storage::StorageErrorKind;
 use crate::core::{StorageError, StorageResult, Value};
-use crate::storage::mvcc::{MVCCTable, SnapshotHandle};
+use crate::storage::mvcc::SnapshotHandle;
 use crate::storage::schema::{LabelVersionHistory, SchemaObjectType};
 
 #[derive(Debug, Clone)]
@@ -330,52 +330,6 @@ impl VertexTable {
             )));
         }
         Ok(())
-    }
-
-    /// Batch insert multiple vertices in a single operation.
-    /// All inserts are validated before any state modification to ensure atomicity.
-    /// Returns the internal IDs of inserted vertices in the same order as input.
-    pub fn batch_insert(
-        &mut self,
-        vertices: &[(String, Vec<(String, Value)>)],
-        ts: Timestamp,
-    ) -> StorageResult<Vec<u32>> {
-        if !self.is_open {
-            return Err(StorageError::storage_not_open());
-        }
-
-        if vertices.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // Proceed with inserts; validation happens in insert_by_key.
-        // Rollback ensures atomicity if any insert fails.
-        let mut result_ids = Vec::with_capacity(vertices.len());
-        let mut inserted_external_ids = Vec::new();
-        for (i, (external_id, properties)) in vertices.iter().enumerate() {
-            match self.insert_by_key(IdKey::Text(external_id.clone()), properties, ts) {
-                Ok(id) => {
-                    result_ids.push(id);
-                    inserted_external_ids.push(external_id.clone());
-                }
-                Err(e) => {
-                    // Rollback: revert all previous inserts from both timestamps and id_indexer
-                    for (prev_id, prev_external_id) in
-                        result_ids.iter().zip(inserted_external_ids.iter())
-                    {
-                        self.timestamps.remove(*prev_id, ts);
-                        self.id_indexer
-                            .remove(&IdKey::Text(prev_external_id.clone()));
-                    }
-                    return Err(StorageError::invalid_operation(format!(
-                        "Batch insert failed at index {}: {}",
-                        i, e
-                    )));
-                }
-            }
-        }
-
-        Ok(result_ids)
     }
 
     /// Batch delete multiple vertices by external ID.
@@ -710,29 +664,6 @@ impl VertexTable {
         self.compact_coordinated()?;
 
         Ok(count)
-    }
-}
-
-/// Implement MVCCTable trait for VertexTable to support snapshot isolation
-impl MVCCTable for VertexTable {
-    fn register_snapshot(&mut self, ts: Timestamp) -> StorageResult<SnapshotHandle> {
-        VertexTable::register_snapshot(self, ts)
-    }
-
-    fn unregister_snapshot(&mut self, handle: SnapshotHandle) -> StorageResult<()> {
-        VertexTable::unregister_snapshot(self, handle)
-    }
-
-    fn active_snapshot_count(&self) -> usize {
-        VertexTable::active_snapshot_count(self)
-    }
-
-    fn min_active_snapshot_ts(&self) -> Timestamp {
-        VertexTable::min_active_snapshot_ts(self)
-    }
-
-    fn gc(&mut self, min_ts: Timestamp) -> StorageResult<usize> {
-        VertexTable::gc(self, min_ts)
     }
 }
 

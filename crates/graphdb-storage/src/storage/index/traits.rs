@@ -56,23 +56,6 @@ pub trait EdgeIndexOps: Send + Sync {
         write_ts: Timestamp,
     ) -> Result<(), StorageError>;
 
-    fn lookup_edge_index(
-        &self,
-        space_id: u64,
-        index: &Index,
-        value: &Value,
-    ) -> Result<Vec<(Value, Value, String, i64)>, StorageError> {
-        self.lookup_edge_index_mvcc(space_id, index, value, MAX_TIMESTAMP)
-    }
-
-    fn lookup_edge_index_mvcc(
-        &self,
-        space_id: u64,
-        index: &Index,
-        value: &Value,
-        read_ts: Timestamp,
-    ) -> Result<Vec<(Value, Value, String, i64)>, StorageError>;
-
     fn clear_edge_index(&self, space_id: u64, index_name: &str) -> Result<(), StorageError>;
 }
 

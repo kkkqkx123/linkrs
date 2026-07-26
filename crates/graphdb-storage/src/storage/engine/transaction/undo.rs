@@ -52,15 +52,18 @@ impl UndoTarget for GraphStorageContext {
 
     fn delete_edge(&self, edge_ctx: EdgeDeletionContext) -> UndoLogResult<()> {
         let edge = edge_ctx.edge_id;
-        self.delete_edge(
-            &crate::storage::engine::params::EdgeOperationParams {
-                edge_label: edge.edge_label,
-                src_label: edge.src_label,
-                src_id: edge.src_vid,
-                dst_label: edge.dst_label,
-                dst_id: edge.dst_vid,
-                rank: edge.rank,
-            },
+        let params = crate::storage::engine::params::EdgeOperationParams {
+            edge_label: edge.edge_label,
+            src_label: edge.src_label,
+            src_id: edge.src_vid,
+            dst_label: edge.dst_label,
+            dst_id: edge.dst_vid,
+            rank: edge.rank,
+        };
+        self.delete_edge_by_offset(
+            &params,
+            edge_ctx.oe_offset,
+            edge_ctx.ie_offset,
             edge_ctx.timestamp,
         )
         .map_err(|error| UndoLogError::UndoFailed(error.to_string()))?;

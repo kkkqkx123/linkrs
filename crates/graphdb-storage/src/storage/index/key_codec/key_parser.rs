@@ -239,11 +239,6 @@ mod tests {
         let (parsed_vid_bytes, parsed_name) = KeyParser::parse_vertex_reverse_key_v2(&key.0)
             .expect("parse_vertex_reverse_key_v2 should succeed");
         assert_eq!(parsed_name, index_name);
-
-        let _expected_bytes = KeyBuilder::build_vertex_reverse_prefix_v2(space_id, &vertex_id)
-            .expect("build_vertex_reverse_prefix_v2 should succeed");
-        // The reverse prefix without index_name + rest should give us just the entity
-        let entity_bytes = &parsed_vid_bytes;
-        assert!(!entity_bytes.is_empty());
+        assert!(!parsed_vid_bytes.is_empty());
     }
 }

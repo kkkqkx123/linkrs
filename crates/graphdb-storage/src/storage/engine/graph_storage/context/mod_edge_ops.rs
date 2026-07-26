@@ -169,6 +169,26 @@ impl GraphStorageContext {
     }
 
     pub fn delete_edge(&self, params: &EdgeOperationParams, ts: Timestamp) -> StorageResult<bool> {
+        self.delete_edge_impl(params, None, None, ts)
+    }
+
+    pub fn delete_edge_by_offset(
+        &self,
+        params: &EdgeOperationParams,
+        oe_offset: i32,
+        ie_offset: i32,
+        ts: Timestamp,
+    ) -> StorageResult<bool> {
+        self.delete_edge_impl(params, Some(oe_offset), Some(ie_offset), ts)
+    }
+
+    fn delete_edge_impl(
+        &self,
+        params: &EdgeOperationParams,
+        oe_offset: Option<i32>,
+        ie_offset: Option<i32>,
+        ts: Timestamp,
+    ) -> StorageResult<bool> {
         if !self.persistent.is_open.load(Ordering::Acquire) {
             return Err(StorageError::storage_not_open());
         }
@@ -217,7 +237,12 @@ impl GraphStorageContext {
                 let edge_table = edge_tables.get_mut(&key).ok_or_else(|| {
                     StorageError::label_not_found(format!("edge label {}", params.edge_label))
                 })?;
-                edge_table.delete_edge(src_internal, dst_internal, params.rank, ts)
+                match (oe_offset, ie_offset) {
+                    (Some(oe), Some(ie)) => {
+                        edge_table.delete_edge_by_offset(src_internal, dst_internal, params.rank, oe, ie, ts)
+                    }
+                    _ => edge_table.delete_edge(src_internal, dst_internal, params.rank, ts),
+                }
             })?;
         if deleted {
             self.mark_edge_modified(params.edge_label);

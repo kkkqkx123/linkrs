@@ -60,14 +60,6 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
         }
     }
 
-    pub(crate) fn physical_key(&self, logical_key: &[u8]) -> SecondaryIndexKey {
-        let version = self.version_counter.fetch_add(1, Ordering::Relaxed);
-        let mut physical_key = Vec::with_capacity(logical_key.len() + std::mem::size_of::<u64>());
-        physical_key.extend_from_slice(logical_key);
-        physical_key.extend_from_slice(&version.to_le_bytes());
-        physical_key
-    }
-
     #[cfg(test)]
     pub(crate) fn entry_count(&self) -> (usize, usize) {
         (

@@ -4,7 +4,6 @@
 //! (VertexTable, EdgeTable, PropertyTable). Implements a tiered tombstone management
 //! system for efficient garbage collection.
 
-use crate::core::error::StorageResult;
 use crate::core::types::storage_ids::Timestamp;
 use std::collections::HashMap;
 
@@ -23,37 +22,6 @@ impl SnapshotHandle {
     pub fn new(ts: Timestamp, id: u64) -> Self {
         Self { ts, id }
     }
-}
-
-/// Unified MVCC interface that all storage tables must implement
-///
-/// Provides methods for registering and unregistering snapshots, tracking active snapshots,
-/// and performing garbage collection on old versions.
-pub trait MVCCTable {
-    /// Register a new snapshot at the given timestamp
-    ///
-    /// Returns a SnapshotHandle that must be used to unregister the snapshot later.
-    /// Each call increments the reference count for this timestamp.
-    fn register_snapshot(&mut self, ts: Timestamp) -> StorageResult<SnapshotHandle>;
-
-    /// Unregister a snapshot, allowing GC of related version data
-    ///
-    /// This decrements the reference count for the snapshot's timestamp.
-    /// When the count reaches 0, the timestamp is removed from tracking.
-    fn unregister_snapshot(&mut self, handle: SnapshotHandle) -> StorageResult<()>;
-
-    /// Get the count of currently active snapshots
-    fn active_snapshot_count(&self) -> usize;
-
-    /// Get the minimum timestamp among all active snapshots
-    ///
-    /// Returns u32::MAX if no active snapshots exist.
-    fn min_active_snapshot_ts(&self) -> Timestamp;
-
-    /// Perform garbage collection on version data older than min_ts
-    ///
-    /// Returns the number of version entries cleaned up.
-    fn gc(&mut self, min_ts: Timestamp) -> StorageResult<usize>;
 }
 
 /// Tombstone entry representing a deletion with its timestamp

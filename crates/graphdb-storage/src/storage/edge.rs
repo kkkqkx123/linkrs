@@ -30,7 +30,6 @@ pub mod bloom_filter;
 pub mod csr;
 pub mod csr_trait;
 pub mod csr_variant;
-#[path = "edge_table/mod.rs"]
 pub mod edge_table;
 pub mod fragmentation_stats;
 pub mod labeled_mutable_csr;

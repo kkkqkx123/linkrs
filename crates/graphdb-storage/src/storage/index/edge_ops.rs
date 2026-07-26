@@ -1,4 +1,4 @@
-use crate::core::types::{Index, IndexType, Timestamp, MAX_TIMESTAMP};
+use crate::core::types::{IndexType, Timestamp, MAX_TIMESTAMP};
 use crate::core::{StorageError, Value};
 use crate::storage::index::helpers::{
     effective_index_values, edge_entity_ref, merged_included_columns,
@@ -166,54 +166,6 @@ impl EdgeIndexOps for IndexDataManagerImpl {
             self.clear_edge_entity(edge, index_name, write_ts)?;
         }
         Ok(())
-    }
-
-    fn lookup_edge_index_mvcc(
-        &self,
-        space_id: u64,
-        index: &Index,
-        value: &Value,
-        read_ts: Timestamp,
-    ) -> Result<Vec<(Value, Value, String, i64)>, StorageError> {
-        let Some(index_id) = self.index_alias(space_id, &index.name) else {
-            return Ok(Vec::new());
-        };
-        let runtime = self.runtime(space_id, index_id)?;
-        let _fence = runtime.read_fence();
-        let (manifest, _runtime, generation) = self.active_generation(space_id, index_id)?;
-        let prefix = KeyBuilder::build_edge_index_prefix(space_id, &index.name);
-        let end = KeyBuilder::build_range_end(&prefix);
-        let mut seen = std::collections::HashSet::new();
-        let mut results = Vec::new();
-        for shard in manifest
-            .manifest()
-            .shards
-            .iter()
-            .filter_map(|shard| generation.shard(shard.shard_id))
-        {
-            for (key, entry) in shard
-                .forward()
-                .read()
-                .range(prefix.0.clone()..end.0.clone())
-            {
-                if !entry.is_visible_at(read_ts) {
-                    continue;
-                }
-                if !KeyParser::parse_prop_value_from_edge_key(key).is_ok_and(
-                    |stored| normalize_int_value(&stored) == normalize_int_value(value),
-                ) {
-                    continue;
-                }
-                if let Ok((src, dst, edge_type, ranking)) =
-                    KeyParser::parse_edge_identity_from_key(key)
-                {
-                    if seen.insert((src.clone(), dst.clone(), edge_type.clone(), ranking)) {
-                        results.push((src, dst, edge_type, ranking));
-                    }
-                }
-            }
-        }
-        Ok(results)
     }
 
     fn clear_edge_index(&self, space_id: u64, index_name: &str) -> Result<(), StorageError> {
