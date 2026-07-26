@@ -6,9 +6,7 @@
 //! - Vector search configuration handling
 //! - Error handling when schema_manager is not available
 
-mod common;
-
-use common::TestStorage;
+use graphdb::test_utils::TestStorage;
 use graphdb::api::core::QueryApi;
 use graphdb::api::server::graph_service::GraphService;
 use graphdb::config::Config;

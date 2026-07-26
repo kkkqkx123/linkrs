@@ -1,7 +1,7 @@
 // benches/analyzer/bottleneck_detector.rs
 //! Performance bottleneck detection module
 
-use crate::analyzer::AnalysisMetrics;
+use super::metrics::AnalysisMetrics;
 use serde::{Deserialize, Serialize};
 
 /// Performance bottleneck types

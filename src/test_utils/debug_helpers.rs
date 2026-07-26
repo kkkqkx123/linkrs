@@ -4,9 +4,9 @@
 //! All code in this module is conditionally compiled with `#[cfg(test)]`
 //! to avoid polluting production code.
 
-use graphdb::core::Value;
-use graphdb::query::planning::plan::ExecutionPlan;
-use graphdb::query::DataSet;
+use crate::core::Value;
+use crate::query::planning::plan::ExecutionPlan;
+use crate::query::DataSet;
 
 /// Formats a query plan into a human-readable string representation
 pub fn format_query_plan(plan: &ExecutionPlan) -> String {
@@ -25,7 +25,7 @@ pub fn format_query_plan(plan: &ExecutionPlan) -> String {
 
 fn format_plan_node(
     output: &mut String,
-    node: &graphdb::query::planning::plan::PlanNodeEnum,
+    node: &crate::query::planning::plan::PlanNodeEnum,
     indent: usize,
 ) {
     let prefix = "  ".repeat(indent);
@@ -183,9 +183,9 @@ macro_rules! assert_with_debug {
         if !$condition {
             eprintln!("\nAssertion failed: {}", $msg);
             eprintln!("\nQuery Plan:");
-            $crate::common::debug_helpers::print_query_plan($plan);
+            $crate::test_utils::debug_helpers::print_query_plan($plan);
             eprintln!("\nResult Dataset:");
-            $crate::common::debug_helpers::print_dataset($dataset);
+            $crate::test_utils::debug_helpers::print_dataset($dataset);
             panic!("{}", $msg);
         }
     };

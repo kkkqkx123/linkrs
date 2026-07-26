@@ -14,8 +14,6 @@ use serde_json::json;
 use std::sync::Arc;
 use tower::ServiceExt;
 
-mod common;
-
 /// Test helper to create a test web state with temporary storage
 /// Returns the web state and a valid session ID for testing
 async fn create_test_web_state() -> (

@@ -170,8 +170,8 @@ pub(super) fn traverse_on_chunk(
 
                 let mut out_row = row.clone();
                 out_row.push(Value::Vertex(Box::new(event.vertex)));
-                out_row.push(Value::string(edge_type.to_string()));
-                out_row.push(Value::string(dir_str.to_string()));
+                out_row.push(Value::string(edge_type));
+                out_row.push(Value::string(dir_str));
                 out_row.push(Value::BigInt(event.depth as i64));
                 out_rows.push(out_row);
             }

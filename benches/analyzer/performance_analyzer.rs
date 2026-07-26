@@ -1,7 +1,8 @@
 // benches/analyzer/performance_analyzer.rs
 //! Performance analyzer for benchmark analysis using EXPLAIN and PROFILE
 
-use crate::analyzer::{AnalysisMetrics, BottleneckDetector, NodeMetrics};
+use super::metrics::{AnalysisMetrics, NodeMetrics};
+use super::bottleneck_detector::BottleneckDetector;
 use regex::Regex;
 use std::time::SystemTime;
 

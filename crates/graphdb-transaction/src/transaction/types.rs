@@ -739,19 +739,14 @@ impl TransactionStats {
 }
 
 /// Concurrency mode for write transactions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ConcurrencyMode {
     /// Standard optimistic concurrency — conflict detection at commit time.
+    #[default]
     Optimistic,
     /// Acquire an exclusive write lock at transaction begin time.
     /// Guarantees no conflicts at commit, but limits write concurrency to 1.
     Pessimistic,
-}
-
-impl Default for ConcurrencyMode {
-    fn default() -> Self {
-        Self::Optimistic
-    }
 }
 
 /// Write Set - tracks entities modified by a transaction for conflict detection

@@ -6,7 +6,7 @@ use crate::api::core::{CoreError, CoreResult, QueryRequest, TransactionHandle};
 use crate::api::embedded::result::QueryResult;
 use crate::api::embedded::session::Session;
 use crate::core::Value;
-use crate::storage::{StorageClient, StorageOperationContext};
+use crate::storage::StorageClient;
 use crate::transaction::types::{SavepointId, SavepointInfo};
 use crate::transaction::{DurabilityLevel, IsolationLevel, TransactionOptions};
 use std::collections::HashMap;

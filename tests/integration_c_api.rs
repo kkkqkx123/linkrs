@@ -12,14 +12,12 @@
 
 #![cfg(feature = "embedded")]
 
-mod common;
-
 use std::ffi::CString;
 use std::ptr;
 
 use graphdb::api::embedded::c_api::error::graphdb_error_code_t;
 
-use common::c_api_helpers::{
+use graphdb::test_utils::c_api_helpers::{
     CApiTestBatch, CApiTestDatabase, CApiTestResult, CApiTestSession, CApiTestTransaction,
 };
 

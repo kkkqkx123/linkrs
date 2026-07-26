@@ -319,7 +319,7 @@ impl PhysicalPlanMaterializer {
         }
 
         // Check unknown params (present in bindings but not in schema).
-        for (name, _value) in bindings.parameters.iter() {
+        for name in bindings.parameters.keys() {
             if schema.slot(name).is_none() {
                 errors.push(format!("Unknown parameter: {}", name));
             }

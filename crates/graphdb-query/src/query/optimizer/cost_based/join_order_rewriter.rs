@@ -287,10 +287,10 @@ pub fn assign_leaf_info(chain: &mut FlattenedJoinChain, stats: &StatisticsManage
 }
 
 fn has_index_scan(node: &PlanNodeEnum) -> bool {
-    match node {
-        PlanNodeEnum::IndexScan(_) | PlanNodeEnum::EdgeIndexScan(_) => true,
-        _ => false,
-    }
+    matches!(
+        node,
+        PlanNodeEnum::IndexScan(_) | PlanNodeEnum::EdgeIndexScan(_)
+    )
 }
 
 pub fn build_optimizer_input(

@@ -1412,7 +1412,6 @@ fn payload_to_intent(
         OutboxPayload::CreateIndex {
             space_id,
             index_name,
-            index_type: _,
             ..
         } => (
             *space_id,

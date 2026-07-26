@@ -140,6 +140,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+autobenches = false
 
 [lib]
 name = "graphdb"
@@ -163,6 +164,10 @@ clap.workspace = true
 flexi_logger.workspace = true
 tracing.workspace = true
 tokio.workspace = true
+parking_lot.workspace = true
+tempfile.workspace = true
+rand.workspace = true
+vector-client = { path = "crates/vector-client" }
 
 cbindgen.workspace = true
 
@@ -190,18 +195,14 @@ codegen-units = 64
 [dev-dependencies]
 futures.workspace = true
 tokio-test = "0.4.4"
-tempfile = "3.23.0"
 criterion = { version = "0.5", features = ["async_tokio"] }
 serial_test = "3.0"
-parking_lot = "0.12"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 axum = { version = "0.8", features = ["macros"] }
 tower = "0.5"
-vector-client = { path = "crates/vector-client" }
 async-trait = "0.1"
 dashmap = "6.1"
-rand = "0.8"
 log = "0.4"
 regex = "1"
 toml = "1.1"

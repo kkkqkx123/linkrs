@@ -1,7 +1,8 @@
 // benches/common/analysis_integration.rs
 //! Helper functions for integrating performance analysis into existing benchmarks
 
-use crate::analyzer::{AnalysisMetrics, BottleneckDetector};
+use crate::analyzer::{AnalysisMetrics};
+use crate::analyzer::bottleneck_detector::BottleneckDetector;
 use std::fs;
 
 /// Save analysis metrics to JSON file

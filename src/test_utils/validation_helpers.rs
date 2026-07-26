@@ -2,24 +2,24 @@
 //!
 //! Provides functions to validate data state in storage after operations
 
-use crate::common::TestResult;
-use graphdb::core::Value;
-use graphdb::query::executor::base::ExecutionResult;
-use graphdb::query::QueryPipelineManager;
+use crate::test_utils::TestResult;
+use crate::core::Value;
+use crate::query::executor::base::ExecutionResult;
+use crate::query::QueryPipelineManager;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Data validation helper for verifying storage state
-pub struct ValidationHelper<S: graphdb::storage::StorageClient + 'static> {
+pub struct ValidationHelper<S: crate::storage::StorageClient + 'static> {
     pipeline: QueryPipelineManager<S>,
 }
 
-impl<S: graphdb::storage::StorageClient + 'static> ValidationHelper<S> {
+impl<S: crate::storage::StorageClient + 'static> ValidationHelper<S> {
     /// Create a new validation helper
     pub fn new(storage: Arc<RwLock<S>>) -> Self {
-        use graphdb::core::stats::StatsManager;
-        use graphdb::query::optimizer::OptimizerEngine;
+        use crate::core::stats::StatsManager;
+        use crate::query::optimizer::OptimizerEngine;
         use std::sync::Arc;
 
         let stats_manager = Arc::new(StatsManager::new());

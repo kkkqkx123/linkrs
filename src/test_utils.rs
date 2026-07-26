@@ -1,7 +1,3 @@
-//! Integration Testing Shared Tool Module
-//!
-//! Provide test infrastructure and helper functions for all integration tests
-
 #![allow(dead_code)]
 
 pub mod assertions;
@@ -17,32 +13,25 @@ pub mod test_scenario;
 pub mod transaction_helpers;
 pub mod validation_helpers;
 
-// C API helpers only compiled when embedded feature is enabled
 #[cfg(feature = "embedded")]
 pub mod c_api_helpers;
 
-use graphdb::core::error::DBError;
-use graphdb::core::metadata::SchemaManager;
-use graphdb::storage::PropertyGraphConfig;
-use graphdb::storage::{GraphStorage, StorageSchemaContextOps};
+use crate::core::error::DBError;
+use crate::core::metadata::SchemaManager;
+use crate::storage::PropertyGraphConfig;
+use crate::storage::{GraphStorage, StorageSchemaContextOps};
 use parking_lot::RwLock;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Lightweight result type for test code
 pub type TestResult<T> = Result<T, Box<DBError>>;
 
-/// Test Storage Instance Wrapper
-///
-/// Creates an in-memory storage instance with minimal resource footprint.
-/// For tests requiring persistence, use `new_with_path()` instead.
 pub struct TestStorage {
     storage: Arc<RwLock<GraphStorage>>,
     temp_path: Option<PathBuf>,
 }
 
 impl TestStorage {
-    /// Creating a New Test Storage Instance (in-memory, minimal resource usage)
     pub fn new() -> TestResult<Self> {
         let storage = Arc::new(RwLock::new(
             GraphStorage::new_with_config(PropertyGraphConfig::test())
@@ -54,7 +43,6 @@ impl TestStorage {
         })
     }
 
-    /// Creating a Test Storage Instance with a specific path and persistence
     pub fn new_with_path(path: PathBuf) -> TestResult<Self> {
         let storage = Arc::new(RwLock::new(
             GraphStorage::new_with_config(PropertyGraphConfig::test())
@@ -67,12 +55,10 @@ impl TestStorage {
         })
     }
 
-    /// Getting a Reference to a Storage Instance
     pub fn storage(&self) -> Arc<RwLock<GraphStorage>> {
         self.storage.clone()
     }
 
-    /// Getting the Schema Manager from Storage
     pub fn schema_manager(&self) -> Arc<SchemaManager> {
         let storage = self.storage.read();
         storage

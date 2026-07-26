@@ -6,8 +6,6 @@
 use graphdb::core::types::TransactionId;
 use graphdb::transaction::{TransactionManager, TransactionManagerConfig, TransactionOptions};
 
-use std::sync::Arc;
-use std::time::Duration;
 
 /// Verify that the same transaction lifecycle (begin → commit) works
 /// regardless of whether the transaction is created via `begin_transaction`

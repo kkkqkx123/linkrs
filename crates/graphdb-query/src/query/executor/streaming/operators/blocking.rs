@@ -2166,7 +2166,6 @@ impl BlockingOperator {
             }
             Self::PartialAggregate {
                 state,
-                memory_tracker: _,
                 ..
             } => {
                 if state.as_ref().is_some_and(|s| !s.group_map.is_empty()) {
@@ -2189,7 +2188,6 @@ impl BlockingOperator {
             }
             Self::FinalAggregate {
                 state,
-                memory_tracker: _,
                 ..
             } => {
                 if state.as_ref().is_some_and(|s| !s.group_map.is_empty()) {

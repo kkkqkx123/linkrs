@@ -9,9 +9,8 @@
 //! - Multiple operations rollback - verify correct order of rollback
 //! - Savepoint with operation rollback - integration test
 
-use super::common;
 
-use common::test_scenario::TestScenario;
+use graphdb::test_utils::test_scenario::TestScenario;
 use graphdb::core::Value;
 use std::collections::HashMap;
 

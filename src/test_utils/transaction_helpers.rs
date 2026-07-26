@@ -2,9 +2,9 @@
 //!
 //! Provides helper functions and utilities for transaction integration tests
 
-use graphdb::core::error::DBResult;
-use graphdb::core::Value;
-use graphdb::transaction::{
+use crate::core::error::DBResult;
+use crate::core::Value;
+use crate::transaction::{
     TransactionError, TransactionId, TransactionManager, TransactionOptions, TransactionState,
 };
 use std::collections::HashMap;
@@ -13,8 +13,8 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 
 /// Convert TransactionError to DBError
-fn txn_err_to_db_err(e: TransactionError) -> graphdb::core::error::DBError {
-    graphdb::core::error::DBError::transaction(e.to_string())
+fn txn_err_to_db_err(e: TransactionError) -> crate::core::error::DBError {
+    crate::core::error::DBError::transaction(e.to_string())
 }
 
 /// Transaction test context for managing test transactions
@@ -49,7 +49,7 @@ impl TransactionTestContext {
     /// Commit a transaction by name
     pub async fn commit_transaction(&mut self, name: &str) -> DBResult<()> {
         let txn_id = self.active_transactions.remove(name).ok_or_else(|| {
-            graphdb::core::error::DBError::transaction(format!("Transaction '{}' not found", name))
+            crate::core::error::DBError::transaction(format!("Transaction '{}' not found", name))
         })?;
 
         let manager = self.manager.lock().await;
@@ -63,7 +63,7 @@ impl TransactionTestContext {
     /// Rollback a transaction by name
     pub async fn rollback_transaction(&mut self, name: &str) -> DBResult<()> {
         let txn_id = self.active_transactions.remove(name).ok_or_else(|| {
-            graphdb::core::error::DBError::transaction(format!("Transaction '{}' not found", name))
+            crate::core::error::DBError::transaction(format!("Transaction '{}' not found", name))
         })?;
 
         let manager = self.manager.lock().await;
@@ -129,7 +129,7 @@ pub fn options_with_query_timeout(timeout: Duration) -> TransactionOptions {
 
 /// Create high-performance write options (no immediate durability)
 pub fn high_performance_options() -> TransactionOptions {
-    use graphdb::transaction::DurabilityLevel;
+    use crate::transaction::DurabilityLevel;
     TransactionOptions::new().with_durability(DurabilityLevel::None)
 }
 

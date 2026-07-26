@@ -6,8 +6,6 @@
 //! - Space deletion with index cleanup
 //! - Cross-space isolation verification
 
-mod common;
-
 use graphdb::core::types::{IsolationLevel, SpaceInfo};
 #[cfg(feature = "fulltext-search")]
 use graphdb::search::FulltextIndexManager;

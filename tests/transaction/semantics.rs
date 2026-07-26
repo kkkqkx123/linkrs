@@ -6,11 +6,8 @@
 //! - Savepoint rollback only undoes post-savepoint operations
 //! - Out-of-order commit does not expose lower-timestamp writes
 
-use graphdb::core::types::TransactionId;
 use graphdb::transaction::{TransactionManager, TransactionManagerConfig, TransactionOptions};
 
-use std::sync::Arc;
-use std::time::Duration;
 
 /// Verify that after a full rollback, the transaction's write timestamp is released
 /// and the data it wrote is not visible through a new read transaction.

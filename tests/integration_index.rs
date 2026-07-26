@@ -7,11 +7,9 @@
 //! - Index queries (exact queries, range queries)
 //! - index cache
 
-mod common;
-
 #[cfg(feature = "qdrant")]
-use common::storage_helpers::knows_edge_type_info;
-use common::{
+use graphdb::test_utils::storage_helpers::knows_edge_type_info;
+use graphdb::test_utils::{
     assertions::{assert_count, assert_none, assert_ok, assert_some},
     storage_helpers::{create_test_space, person_tag_info},
     TestStorage,

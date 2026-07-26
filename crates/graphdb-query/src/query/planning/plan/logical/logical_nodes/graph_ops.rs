@@ -113,7 +113,7 @@ impl Clone for LogicalApplyNode {
             left_input_var: self.left_input_var.clone(),
             right_input_var: self.right_input_var.clone(),
             correlated_cols: self.correlated_cols.clone(),
-            apply_kind: self.apply_kind.clone(),
+            apply_kind: self.apply_kind,
             output_var: self.output_var.clone(),
             col_names: self.col_names.clone(),
             column_types: self.column_types.clone(),
@@ -154,13 +154,13 @@ impl LogicalApplyNode {
         &mut self.right
     }
     pub fn set_left_input(&mut self, input: LogicalNodeEnum) {
-        self.left = Box::new(input.clone());
-        if self.deps.len() > 0 {
+        *self.left = input.clone();
+        if !self.deps.is_empty() {
             self.deps[0] = input.clone();
         }
     }
     pub fn set_right_input(&mut self, input: LogicalNodeEnum) {
-        self.right = Box::new(input.clone());
+        *self.right = input.clone();
         if self.deps.len() > 1 {
             self.deps[1] = input.clone();
         }
@@ -213,13 +213,13 @@ impl crate::query::planning::plan::logical::logical_node_traits::LogicalBinaryIn
         &mut self.right
     }
     fn set_left_input(&mut self, input: LogicalNodeEnum) {
-        self.left = Box::new(input.clone());
-        if self.deps.len() > 0 {
+        *self.left = input.clone();
+        if !self.deps.is_empty() {
             self.deps[0] = input.clone();
         }
     }
     fn set_right_input(&mut self, input: LogicalNodeEnum) {
-        self.right = Box::new(input.clone());
+        *self.right = input.clone();
         if self.deps.len() > 1 {
             self.deps[1] = input.clone();
         }

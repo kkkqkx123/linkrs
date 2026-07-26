@@ -10,3 +10,5 @@ pub use graphdb_transaction::transaction;
 
 #[cfg(feature = "embedded")]
 pub mod c_api;
+
+pub mod test_utils;

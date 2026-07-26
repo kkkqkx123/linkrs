@@ -7,8 +7,6 @@
 //! Role Granting and Revoking (GRANT/REVOKE)
 //! Permission check scenarios
 
-mod common;
-
 use std::sync::Arc;
 
 use graphdb::api::server::permission::OperationType;

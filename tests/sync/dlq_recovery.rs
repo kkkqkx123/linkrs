@@ -2,7 +2,7 @@
 //!
 //! Tests for DLQ recovery, retry, and the RecoveryResult struct
 
-use crate::common::sync_helpers::SyncTestHarness;
+use graphdb::test_utils::sync_helpers::SyncTestHarness;
 use graphdb::core::types::DataType;
 use graphdb::sync::dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};
 use graphdb::sync::types::{ChangeType, IndexData, IndexOpKey, IndexOperation, IndexType};

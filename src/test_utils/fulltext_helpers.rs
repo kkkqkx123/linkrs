@@ -5,8 +5,8 @@
 #![allow(dead_code)]
 #![cfg(feature = "fulltext-search")]
 
-use graphdb::core::Value;
-use graphdb::search::{
+use crate::core::Value;
+use crate::search::{
     EngineType, FulltextConfig, FulltextIndexManager, SearchError, SearchResult,
 };
 use std::sync::Arc;
@@ -28,7 +28,7 @@ impl FulltextTestContext {
             enabled: true,
             index_path: temp_dir.path().to_path_buf(),
             default_engine: EngineType::Bm25,
-            sync: graphdb::search::SyncConfig::default(),
+            sync: crate::search::SyncConfig::default(),
             tantivy: Default::default(),
             cache_size: 100,
             max_result_cache: 1000,
@@ -125,12 +125,12 @@ impl FulltextTestContext {
         space_id: u64,
         tag_name: &str,
         field_name: &str,
-    ) -> Option<graphdb::search::IndexMetadata> {
+    ) -> Option<crate::search::IndexMetadata> {
         self.manager.get_metadata(space_id, tag_name, field_name)
     }
 
     /// Get space indexes
-    pub fn get_space_indexes(&self, space_id: u64) -> Vec<graphdb::search::IndexMetadata> {
+    pub fn get_space_indexes(&self, space_id: u64) -> Vec<crate::search::IndexMetadata> {
         self.manager.get_space_indexes(space_id)
     }
 
@@ -152,7 +152,7 @@ impl FulltextTestContext {
         space_id: u64,
         tag_name: &str,
         field_name: &str,
-    ) -> Result<graphdb::search::IndexStats, SearchError> {
+    ) -> Result<crate::search::IndexStats, SearchError> {
         self.manager.get_stats(space_id, tag_name, field_name).await
     }
 }

@@ -148,6 +148,12 @@ pub struct ProfileBoard {
     pub parallel_buffered_bytes_peak: AtomicUsize,
 }
 
+impl Default for ProfileBoard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProfileBoard {
     pub fn new() -> Self {
         Self {
@@ -198,7 +204,7 @@ impl ProfileBoard {
     pub fn flush_to_collector(&self) -> ProfileCollector {
         let mut collector = ProfileCollector::new();
         let guard = self.entries.read();
-        for (_key, entry) in guard.iter() {
+        for entry in guard.values() {
             collector.operators.insert(
                 OperatorProfileKey::new(entry.physical_operator_id, entry.partition_id),
                 entry.snapshot(),

@@ -294,7 +294,7 @@ fn bench_real_cursor_scan(c: &mut Criterion) {
                     &ScanOptions::new()
                         .with_offset(1_000)
                         .with_limit(1_000)
-                        .with_projection(vec!["value".to_string()]),
+                        .with_projection_named(vec!["value".to_string()]),
                 )
                 .expect("projected cursor should open");
             let mut count = 0usize;

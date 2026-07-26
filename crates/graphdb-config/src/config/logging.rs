@@ -26,7 +26,7 @@ fn log_format(
         now.format(TS_DASHES_BLANK_COLONS_DOT_BLANK),
         record.level(),
         record.module_path().unwrap_or("unknown"),
-        &record.args()
+        record.args()
     )
 }
 

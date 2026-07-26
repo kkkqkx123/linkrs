@@ -10,9 +10,15 @@
 //! - optimizer: Query optimization
 //! - extended_types: Extended type support (geography, vector, fulltext)
 
+#[path = "e2e/common.rs"]
 pub mod common;
+#[path = "e2e/data_driven.rs"]
 pub mod data_driven;
+#[path = "e2e/extended_types.rs"]
 pub mod extended_types;
+#[path = "e2e/optimizer.rs"]
 pub mod optimizer;
+#[path = "e2e/schema_manager.rs"]
 pub mod schema_manager;
+#[path = "e2e/social_network.rs"]
 pub mod social_network;

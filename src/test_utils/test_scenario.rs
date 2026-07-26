@@ -2,17 +2,17 @@
 //!
 //! Provides a high-level API for writing integration tests with fluent interface
 
-use crate::common::TestResult;
-use graphdb::core::types::VertexId;
-use graphdb::core::Value;
-use graphdb::query::executor::base::ExecutionResult;
-use graphdb::query::QueryPipelineManager;
-use graphdb::storage::{GraphStorage, StorageReader, StorageSchemaContextOps};
+use crate::test_utils::TestResult;
+use crate::core::types::VertexId;
+use crate::core::Value;
+use crate::query::executor::base::ExecutionResult;
+use crate::query::QueryPipelineManager;
+use crate::storage::{GraphStorage, StorageReader, StorageSchemaContextOps};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::common::TestStorage;
+use crate::test_utils::TestStorage;
 
 /// Test scenario builder for fluent test writing
 pub struct TestScenario {
@@ -20,7 +20,7 @@ pub struct TestScenario {
     pipeline: QueryPipelineManager<GraphStorage>,
     last_result: Option<ExecutionResult>,
     last_error: Option<String>,
-    current_space: Option<graphdb::core::types::SpaceInfo>,
+    current_space: Option<crate::core::types::SpaceInfo>,
 }
 
 impl TestScenario {
@@ -29,8 +29,8 @@ impl TestScenario {
         let test_storage = TestStorage::new()?;
         let storage = test_storage.storage();
 
-        use graphdb::core::stats::StatsManager;
-        use graphdb::query::optimizer::OptimizerEngine;
+        use crate::core::stats::StatsManager;
+        use crate::query::optimizer::OptimizerEngine;
         use std::sync::Arc;
 
         let stats_manager = Arc::new(StatsManager::new());

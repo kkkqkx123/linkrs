@@ -25,23 +25,41 @@
 //! - Storage integration - transaction integration with storage layer
 //! - Edge advanced - advanced edge operations and patterns
 
+#[path = "transaction/admission_timeout.rs"]
 mod admission_timeout;
+#[path = "transaction/advanced.rs"]
 mod advanced;
+#[path = "transaction/api_consistency.rs"]
 mod api_consistency;
+#[path = "transaction/basic.rs"]
 mod basic;
-mod common;
+#[path = "transaction/complex.rs"]
 mod complex;
+#[path = "transaction/concurrent.rs"]
 mod concurrent;
+#[path = "transaction/config_options.rs"]
 mod config_options;
+#[path = "transaction/deadlock_prevention.rs"]
 mod deadlock_prevention;
+#[path = "transaction/edge.rs"]
 mod edge;
+#[path = "transaction/edge_advanced.rs"]
 mod edge_advanced;
+#[path = "transaction/error_scenarios.rs"]
 mod error_scenarios;
+#[path = "transaction/http_api.rs"]
 mod http_api;
+#[path = "transaction/lifecycle.rs"]
 mod lifecycle;
+#[path = "transaction/recovery.rs"]
 mod recovery;
+#[path = "transaction/rollback_operations.rs"]
 mod rollback_operations;
+#[path = "transaction/semantics.rs"]
 mod semantics;
+#[path = "transaction/storage_integration.rs"]
 mod storage_integration;
+#[path = "transaction/timeout.rs"]
 mod timeout;
+#[path = "transaction/vertex.rs"]
 mod vertex;

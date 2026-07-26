@@ -7,7 +7,7 @@
 //! - Timeout/shutdown resource cleanup completeness
 
 use graphdb::transaction::{
-    TransactionErrorKind, TransactionManager, TransactionManagerConfig, TransactionOptions,
+    TransactionManager, TransactionManagerConfig, TransactionOptions,
 };
 
 use std::sync::Arc;

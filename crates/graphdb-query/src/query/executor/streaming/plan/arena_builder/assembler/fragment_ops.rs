@@ -54,7 +54,7 @@ impl ArenaPlanAssembler {
 
     pub(super) fn push_unary_op(
         operators: &mut Vec<PhysicalOperatorSpec>,
-        fragments: &mut Vec<FragmentSpec>,
+        fragments: &mut [FragmentSpec],
         op_alloc: &mut PhysicalOperatorIdAllocator,
         child_fid: FragmentId,
         node_id: i64,
@@ -84,7 +84,7 @@ impl ArenaPlanAssembler {
 
     pub(super) fn push_blocking_op(
         operators: &mut Vec<PhysicalOperatorSpec>,
-        fragments: &mut Vec<FragmentSpec>,
+        fragments: &mut [FragmentSpec],
         op_alloc: &mut PhysicalOperatorIdAllocator,
         child_fid: FragmentId,
         node_id: i64,

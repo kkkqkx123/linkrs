@@ -101,7 +101,7 @@ fn make_modify_result(
     op: &str,
     count: u64,
 ) -> DataChunk {
-    let row = vec![Value::string(op.to_string()), Value::BigInt(count as i64)];
+    let row = vec![Value::string(op), Value::BigInt(count as i64)];
     DataChunk::new_with_layout(vec![row], output_layout)
 }
 

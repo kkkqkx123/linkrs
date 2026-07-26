@@ -13,9 +13,8 @@
 //! - String operations
 //! - Savepoint rollback
 
-use super::common;
 
-use common::test_scenario::TestScenario;
+use graphdb::test_utils::test_scenario::TestScenario;
 use graphdb::core::Value;
 use graphdb::transaction::{TransactionManager, TransactionManagerConfig, TransactionOptions};
 use std::collections::HashMap;

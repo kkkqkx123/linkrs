@@ -244,7 +244,7 @@ pub(super) fn handle_bi_traverse(
                                         let mut out_row = row.clone();
                                         out_row.push(Value::Vertex(Box::new(vertex)));
                                         out_row.push(Value::string(edge_types.join("/")));
-                                        out_row.push(Value::string("both".to_string()));
+                                        out_row.push(Value::string("both"));
                                         out_row.push(Value::BigInt((depth + 1) as i64));
                                         out_rows.push(out_row);
                                     }

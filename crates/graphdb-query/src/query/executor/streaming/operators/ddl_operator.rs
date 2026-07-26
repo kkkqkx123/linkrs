@@ -56,13 +56,13 @@ mod schema_executor;
 
 fn make_manage_result(action: &str, name: Option<&str>, status: &str) -> DataChunk {
     let name_val = name
-        .map(|n| Value::string(n.to_string()))
+        .map(|n| Value::string(n))
         .unwrap_or(Value::Null(NullType::Null));
     DataChunk::new_with_layout(
         vec![vec![
-            Value::string(action.to_string()),
+            Value::string(action),
             name_val,
-            Value::string(status.to_string()),
+            Value::string(status),
         ]],
         manage_result_layout(),
     )

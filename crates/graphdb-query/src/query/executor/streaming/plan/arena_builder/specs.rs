@@ -113,7 +113,7 @@ pub(super) fn build_source_spec(
                         Some(
                             src_vids
                                 .split(',')
-                                .map(|s| crate::core::Value::string(s.trim().to_string()))
+                                .map(|s| crate::core::Value::string(s.trim()))
                                 .collect::<Vec<_>>(),
                         )
                     }

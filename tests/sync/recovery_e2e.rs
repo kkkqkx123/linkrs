@@ -4,7 +4,7 @@
 //! Note: storage writes in `insert_vertex_with_txn` are immediate (not transactional).
 //! Rollback only affects sync/index state, not storage.
 
-use crate::common::sync_helpers::SyncTestHarness;
+use graphdb::test_utils::sync_helpers::SyncTestHarness;
 use graphdb::core::{types::DataType, Value};
 use graphdb::storage::StorageWriter;
 use graphdb::sync::dead_letter_queue::{DeadLetterEntry, DeadLetterQueue, DeadLetterQueueConfig};

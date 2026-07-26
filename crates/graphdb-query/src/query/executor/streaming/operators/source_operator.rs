@@ -617,8 +617,6 @@ impl SourceOperator {
             Self::StorageScanVertices {
                 space_name,
                 cursor,
-                col_names: _,
-                projected_properties: _,
                 ..
             } => loop {
                 base.ensure_not_cancelled()?;
@@ -649,7 +647,6 @@ impl SourceOperator {
             Self::StorageScanEdges {
                 space_name,
                 cursor,
-                col_names: _,
                 ..
             } => loop {
                 base.ensure_not_cancelled()?;

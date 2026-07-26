@@ -280,7 +280,7 @@ impl ExpressionParser {
                 _ => None,
             },
             "trim" if args.len() == 1 => match args[0] {
-                Value::String(s) => Some(Value::string(s.trim().to_string())),
+                Value::String(s) => Some(Value::string(s.trim())),
                 _ => None,
             },
             _ => None,

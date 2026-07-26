@@ -4,9 +4,9 @@
 
 #![allow(dead_code)]
 
-use graphdb::core::types::VertexId;
-use graphdb::core::vertex_edge_path::{Edge, Tag, Vertex};
-use graphdb::core::Value;
+use crate::core::types::VertexId;
+use crate::core::vertex_edge_path::{Edge, Tag, Vertex};
+use crate::core::Value;
 use std::collections::HashMap;
 
 /// Create simple vertices (with only one label)

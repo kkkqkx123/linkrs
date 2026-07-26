@@ -11,9 +11,8 @@
 //! These tests specifically verify the fix for the deadlock issue caused by
 //! calling block_on inside spawn_blocking contexts.
 
-use super::common;
 
-use common::test_scenario::TestScenario;
+use graphdb::test_utils::test_scenario::TestScenario;
 use graphdb::api::server::http::handlers::query_types::{
     QueryData, QueryMetadata, QueryRequest, QueryResponse,
 };

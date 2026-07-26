@@ -10,7 +10,7 @@ use crate::core::Value;
 use crate::core::{SessionStatistics, StatsManager};
 use crate::query::executor::expression::functions::{CustomFunction, FunctionRegistry};
 use crate::search::FulltextIndexManager;
-use crate::storage::{StorageClient, StorageOperationContextOps};
+use crate::storage::StorageClient;
 #[cfg(feature = "qdrant")]
 use crate::sync::vector_sync::SearchOptions;
 use crate::sync::SyncManager;

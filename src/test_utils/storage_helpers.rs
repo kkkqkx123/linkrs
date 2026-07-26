@@ -4,9 +4,9 @@
 
 #![allow(dead_code)]
 
-use graphdb::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo};
-use graphdb::core::DataType;
-use graphdb::storage::GraphStorage;
+use crate::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo};
+use crate::core::DataType;
+use crate::storage::GraphStorage;
 use parking_lot::{RwLock, RwLockWriteGuard};
 use std::sync::Arc;
 

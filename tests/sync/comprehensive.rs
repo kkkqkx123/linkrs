@@ -3,7 +3,7 @@
 //! Tests covering remaining paths not covered by sync_2pc_protocol,
 //! sync_fault_tolerance, or sync_transaction_basic.
 
-use crate::common::sync_helpers::{create_test_vertex, SyncTestHarness};
+use graphdb::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
 use graphdb::core::types::DataType;
 use graphdb::core::Value;
 

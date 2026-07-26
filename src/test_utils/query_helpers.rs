@@ -2,24 +2,24 @@
 //!
 //! Provides convenient query execution and result extraction functions for tests
 
-use crate::common::TestResult;
-use graphdb::core::error::DBError;
-use graphdb::core::Value;
-use graphdb::query::executor::base::ExecutionResult;
-use graphdb::query::QueryPipelineManager;
+use crate::test_utils::TestResult;
+use crate::core::error::DBError;
+use crate::core::Value;
+use crate::query::executor::base::ExecutionResult;
+use crate::query::QueryPipelineManager;
 use parking_lot::RwLock;
 use std::sync::Arc;
 
 /// Query execution helper
-pub struct QueryHelper<S: graphdb::storage::StorageClient + 'static> {
+pub struct QueryHelper<S: crate::storage::StorageClient + 'static> {
     pipeline: QueryPipelineManager<S>,
 }
 
-impl<S: graphdb::storage::StorageClient + 'static> QueryHelper<S> {
+impl<S: crate::storage::StorageClient + 'static> QueryHelper<S> {
     /// Create a new query helper
     pub fn new(storage: Arc<RwLock<S>>) -> Self {
-        use graphdb::core::stats::StatsManager;
-        use graphdb::query::optimizer::OptimizerEngine;
+        use crate::core::stats::StatsManager;
+        use crate::query::optimizer::OptimizerEngine;
         use std::sync::Arc;
 
         let stats_manager = Arc::new(StatsManager::new());

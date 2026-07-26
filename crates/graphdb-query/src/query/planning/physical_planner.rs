@@ -13,6 +13,12 @@ pub trait PhysicalPlanner: Send + Sync + std::fmt::Debug {
 #[derive(Debug)]
 pub struct DefaultPhysicalPlanner;
 
+impl Default for DefaultPhysicalPlanner {
+    fn default() -> Self {
+        Self
+    }
+}
+
 impl DefaultPhysicalPlanner {
     pub fn new() -> Self {
         Self

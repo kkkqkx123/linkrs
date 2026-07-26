@@ -10,6 +10,12 @@ define_logical_plan_node! {
     input: ZeroInputNode
 }
 
+impl Default for LogicalStartNode {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LogicalStartNode {
     pub fn new() -> Self {
         Self {

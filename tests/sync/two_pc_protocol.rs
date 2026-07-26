@@ -2,7 +2,7 @@
 //!
 //! Tests for two-phase commit protocol implementation
 
-use crate::common::sync_helpers::{create_test_vertex, SyncTestHarness};
+use graphdb::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
 use graphdb::core::types::{DataType, TransactionId};
 use graphdb::core::Value;
 use std::path::Path;

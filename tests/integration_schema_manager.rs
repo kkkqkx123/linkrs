@@ -5,9 +5,7 @@
 //! - Schema manager is properly initialized when vector search is enabled but fails
 //! - Basic DDL operations work regardless of vector search configuration
 
-mod common;
-
-use common::TestStorage;
+use graphdb::test_utils::TestStorage;
 use graphdb::core::stats::StatsManager;
 use graphdb::query::optimizer::OptimizerEngine;
 use graphdb::query::QueryPipelineManager;

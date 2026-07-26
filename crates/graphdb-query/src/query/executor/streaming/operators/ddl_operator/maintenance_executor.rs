@@ -39,35 +39,35 @@ pub(super) fn execute_show_stats(
         ]));
         let rows = vec![
             vec![
-                Value::string("total_vertices".to_string()),
+                Value::string("total_vertices"),
                 Value::BigInt(stats.total_vertices as i64),
             ],
             vec![
-                Value::string("total_edges".to_string()),
+                Value::string("total_edges"),
                 Value::BigInt(stats.total_edges as i64),
             ],
             vec![
-                Value::string("total_spaces".to_string()),
+                Value::string("total_spaces"),
                 Value::BigInt(stats.total_spaces as i64),
             ],
             vec![
-                Value::string("total_tags".to_string()),
+                Value::string("total_tags"),
                 Value::BigInt(stats.total_tags as i64),
             ],
             vec![
-                Value::string("total_edge_types".to_string()),
+                Value::string("total_edge_types"),
                 Value::BigInt(stats.total_edge_types as i64),
             ],
             vec![
-                Value::string("total_size_bytes".to_string()),
+                Value::string("total_size_bytes"),
                 Value::BigInt(stats.total_size_bytes as i64),
             ],
             vec![
-                Value::string("data_size_bytes".to_string()),
+                Value::string("data_size_bytes"),
                 Value::BigInt(stats.data_size_bytes as i64),
             ],
             vec![
-                Value::string("index_size_bytes".to_string()),
+                Value::string("index_size_bytes"),
                 Value::BigInt(stats.index_size_bytes as i64),
             ],
         ];
@@ -75,7 +75,7 @@ pub(super) fn execute_show_stats(
     } else {
         let schema = super::make_single_col_schema("message", "string");
         Ok(Some(DataChunk::new(
-            vec![vec![Value::string("no storage available".to_string())]],
+            vec![vec![Value::string("no storage available")]],
             schema,
         )))
     }

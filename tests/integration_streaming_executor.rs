@@ -18,8 +18,6 @@ use graphdb::query::executor::streaming::operators::source_operator::SourceOpera
 use graphdb::query::executor::streaming::operators::unary_operator::UnaryOperator;
 use graphdb::query::executor::streaming::operators::unary_operator::UnaryOperatorState;
 
-mod common;
-
 #[allow(dead_code)]
 fn unary_state() -> UnaryOperatorState {
     UnaryOperatorState { parameters: None }
@@ -620,7 +618,7 @@ fn test_distinct_all_same() {
 
 #[cfg(test)]
 mod storage_backed {
-    use super::common::TestStorage;
+    use graphdb::test_utils::TestStorage;
     use graphdb::core::stats::StatsManager;
     use graphdb::core::types::VertexId;
     use graphdb::core::types::{PropertyDef, SpaceInfo, TagInfo};

@@ -6,9 +6,7 @@
 //! - CREATE (a:Label1)-[:Type]->(b:Label2) - 创建路径
 //! - Automatic Schema Inference and Creation
 
-mod common;
-
-use common::TestStorage;
+use graphdb::test_utils::TestStorage;
 
 use graphdb::core::stats::StatsManager;
 use graphdb::query::optimizer::OptimizerEngine;

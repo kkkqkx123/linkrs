@@ -400,17 +400,16 @@ impl OptimizerEngine {
         // Try PatternApply unnesting at this level first.
         if let PatternApply(apply) = node {
             let analysis = self.batch_plan_analyzer.analyze(node);
-            match self.subquery_unnesting_optimizer.should_unnest(apply, &analysis) {
-                UnnestDecision::ShouldUnnest { ref reason, .. } => {
-                    log::debug!(
-                        "CBO: unnesting PatternApply -> HashInnerJoin ({:?})",
-                        reason
-                    );
-                    if let Ok(join) = self.subquery_unnesting_optimizer.unnest(apply.clone()) {
-                        return self.unnest_subqueries(&join);
-                    }
+            if let UnnestDecision::ShouldUnnest { ref reason, .. } =
+                self.subquery_unnesting_optimizer.should_unnest(apply, &analysis)
+            {
+                log::debug!(
+                    "CBO: unnesting PatternApply -> HashInnerJoin ({:?})",
+                    reason
+                );
+                if let Ok(join) = self.subquery_unnesting_optimizer.unnest(apply.clone()) {
+                    return self.unnest_subqueries(&join);
                 }
-                _ => {}
             }
         }
 

@@ -747,9 +747,7 @@ impl<'a> ExprParser<'a> {
                 return Ok(ParseResult {
                     expr: Expression::Aggregate {
                         func: crate::core::types::operators::AggregateFunction::Count(None),
-                        args: vec![Expression::Literal(crate::core::Value::string(
-                            "*".to_string(),
-                        ))],
+                        args: vec![Expression::Literal(crate::core::Value::string("*"))],
                         distinct: false,
                         filter: None,
                     },

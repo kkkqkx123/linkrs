@@ -2,7 +2,7 @@
 //!
 //! Tests for basic transaction synchronization functionality
 
-use crate::common::sync_helpers::{create_test_vertex, SyncTestHarness};
+use graphdb::test_utils::sync_helpers::{create_test_vertex, SyncTestHarness};
 use graphdb::core::types::{DataType, VertexId};
 use graphdb::core::Value;
 use graphdb::storage::{StorageReader, StorageSchemaOps, StorageWriter};

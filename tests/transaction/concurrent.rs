@@ -7,9 +7,8 @@
 //! - Transaction isolation - repeatable read
 //! - Read committed data only
 
-use super::common;
 
-use common::test_scenario::TestScenario;
+use graphdb::test_utils::test_scenario::TestScenario;
 use graphdb::core::Value;
 use graphdb::transaction::{
     TransactionErrorKind, TransactionManager, TransactionManagerConfig, TransactionOptions,

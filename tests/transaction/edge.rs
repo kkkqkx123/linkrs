@@ -8,9 +8,8 @@
 //! - Multiple edge types
 //! - Edge direction validation
 
-use super::common;
 
-use common::test_scenario::TestScenario;
+use graphdb::test_utils::test_scenario::TestScenario;
 
 /// Test edge creation in transaction
 #[test]

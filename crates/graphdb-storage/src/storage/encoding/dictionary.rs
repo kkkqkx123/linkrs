@@ -219,7 +219,7 @@ impl DictionaryColumn {
     pub fn get(&self, row_idx: usize) -> Option<Value> {
         self.encoder
             .decode(row_idx)
-            .map(|s| Value::string(s))
+            .map(Value::string)
     }
 
     pub fn len(&self) -> usize {

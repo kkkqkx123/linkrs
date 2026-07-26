@@ -4,19 +4,19 @@
 
 #![cfg(feature = "fulltext-search")]
 
-use graphdb::core::types::TransactionId;
-use graphdb::core::types::VertexId;
-use graphdb::core::types::{DataType, PropertyDef, SpaceInfo, TagInfo};
-use graphdb::core::vertex_edge_path::Tag;
-use graphdb::core::{Value, Vertex};
-use graphdb::search::{
+use crate::core::types::TransactionId;
+use crate::core::types::VertexId;
+use crate::core::types::{DataType, PropertyDef, SpaceInfo, TagInfo};
+use crate::core::vertex_edge_path::Tag;
+use crate::core::{Value, Vertex};
+use crate::search::{
     EngineType, FulltextConfig, FulltextIndexManager, SyncConfig, TantivyConfig, TokenizerKind,
 };
-use graphdb::storage::GraphStorage;
-use graphdb::storage::{StorageCommitOps, StorageReader, StorageSchemaOps, StorageWriter};
-use graphdb::sync::batch::BatchConfig;
-use graphdb::sync::coordinator::{ChangeType, SyncCoordinator};
-use graphdb::sync::manager::SyncManager;
+use crate::storage::GraphStorage;
+use crate::storage::{StorageCommitOps, StorageReader, StorageSchemaOps, StorageWriter};
+use crate::sync::batch::BatchConfig;
+use crate::sync::coordinator::{ChangeType, SyncCoordinator};
+use crate::sync::manager::SyncManager;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -67,7 +67,7 @@ impl SyncTestHarness {
             max_buffer_size: 1000,
             enable_persistence: false,
             persistence_path: None,
-            failure_policy: graphdb::search::SyncFailurePolicy::FailOpen,
+            failure_policy: crate::search::SyncFailurePolicy::FailOpen,
         };
 
         let sync_coordinator =
@@ -284,7 +284,7 @@ impl SyncTestHarness {
                             tag_name,
                             &Value::from(vertex_id),
                             &[(field_name.clone(), value.clone())],
-                            graphdb::sync::coordinator::ChangeType::Delete,
+                            crate::sync::coordinator::ChangeType::Delete,
                         )?;
                     }
                 }
@@ -299,7 +299,7 @@ impl SyncTestHarness {
                         tag_name,
                         &Value::from(vertex_id),
                         &[(field_name.clone(), value.clone())],
-                        graphdb::sync::coordinator::ChangeType::Insert,
+                        crate::sync::coordinator::ChangeType::Insert,
                     )?;
                 }
             }
@@ -315,7 +315,7 @@ impl SyncTestHarness {
                         tag_name,
                         &Value::from(vertex_id),
                         &[(field_name.clone(), value.clone())],
-                        graphdb::sync::coordinator::ChangeType::Insert,
+                        crate::sync::coordinator::ChangeType::Insert,
                     )?;
                 }
             }
@@ -338,7 +338,7 @@ impl SyncTestHarness {
 
         let space_id = self.storage.get_space_id(space_name)?;
         let txn_id = TransactionId(self.current_txn_id.unwrap());
-        let vertex_id = graphdb::core::types::VertexId::from_int64(vid);
+        let vertex_id = crate::core::types::VertexId::from_int64(vid);
         let vid_value = Value::Int(vid as i32);
 
         // Get the vertex to extract tag and field info for index cleanup
@@ -352,7 +352,7 @@ impl SyncTestHarness {
                         tag_name,
                         &vid_value,
                         &[(field_name.clone(), value.clone())],
-                        graphdb::sync::coordinator::ChangeType::Delete,
+                        crate::sync::coordinator::ChangeType::Delete,
                     )?;
                 }
             }
@@ -370,7 +370,7 @@ impl SyncTestHarness {
         field_name: &str,
         query: &str,
         limit: usize,
-    ) -> Result<Vec<graphdb::search::SearchResult>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<crate::search::SearchResult>, Box<dyn std::error::Error>> {
         let space_id = self.storage.get_space_id(space_name)?;
         let results = self.rt.block_on(async {
             self.sync_manager
@@ -499,11 +499,11 @@ pub fn create_test_vertex_with_vector(
     let mut properties = HashMap::new();
     properties.insert(
         string_prop.0.to_string(),
-        Value::string(string_prop.1.to_string()),
+        Value::string(string_prop.1),
     );
 
     // Convert Vec<f32> to VectorValue
-    use graphdb::core::VectorValue;
+    use crate::core::VectorValue;
     let vector_value = VectorValue::Dense(vector_prop.1);
     properties.insert(vector_prop.0.to_string(), Value::Vector(vector_value));
 

@@ -6,8 +6,6 @@
 //! - Log rotation function
 //! - Log Level Filtering
 
-mod common;
-
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -509,7 +507,7 @@ fn test_log_timestamp_format() {
             now.format(TS_DASHES_BLANK_COLONS_DOT_BLANK),
             record.level(),
             record.module_path().unwrap_or("unknown"),
-            &record.args()
+            record.args()
         )
     }
 

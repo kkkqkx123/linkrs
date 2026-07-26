@@ -1216,7 +1216,7 @@ pub(crate) fn delete_vertex_data(
                 ctx,
                 ctx.index_metadata_manager(),
                 space_info.space_id,
-                &Value::string(vertex_id.to_string()),
+                &Value::string(vertex_id),
                 &tag.tag_name,
                 ts,
             )?;
