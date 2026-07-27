@@ -453,11 +453,7 @@ impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::Undo
 
 #[cfg(test)]
 mod tests {
-    use crate::core::types::VertexId;
-    use crate::storage::{
-        GraphStorage, MetricsStorage, MockStorage, StoragePersistenceOps, StorageReader,
-        StorageWriter,
-    };
+    use crate::storage::{GraphStorage, MetricsStorage, StoragePersistenceOps};
 
     #[test]
     fn delegates_admin_checkpoint_operations() {

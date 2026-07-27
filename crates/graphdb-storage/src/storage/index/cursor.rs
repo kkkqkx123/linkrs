@@ -9,8 +9,106 @@ use crate::storage::index::types::IndexRecord;
 use crate::storage::index::types::StaleChecker;
 use crate::storage::index::vertex_index_manager::{compute_vertex_index_scan_range, VertexIndexCursor};
 use crate::storage::index::IndexDataManagerImpl;
-use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::sync::Arc;
+
+/// Lazy forward iterator over a generation chain for a single shard.
+///
+/// Loads entries from one generation at a time (newest first), tracking
+/// seen and tombstoned keys to properly handle the chain semantics without
+/// pre‑merging the entire data set.  Entries are yielded in gen‑by‑gen order
+/// (all visible keys from gen N, then filler keys from gen N‑1, …), so the
+/// cursor must not assume global key ordering across generations.
+pub(crate) struct ChainForwardIterator {
+    chain: Vec<Arc<GenerationRuntime>>,
+    shard_id: u32,
+    read_ts: u64,
+    range_start: Vec<u8>,
+    range_end: Vec<u8>,
+    gen_idx: usize,
+    pos: usize,
+    current_entries: Vec<(SecondaryIndexKey, IndexRecord)>,
+    seen: HashSet<SecondaryIndexKey>,
+    tombstoned: HashSet<SecondaryIndexKey>,
+}
+
+impl ChainForwardIterator {
+    pub(crate) fn new(
+        chain: Vec<Arc<GenerationRuntime>>,
+        shard_id: u32,
+        read_ts: u64,
+        range_start: Vec<u8>,
+        range_end: Vec<u8>,
+    ) -> Self {
+        Self {
+            chain,
+            shard_id,
+            read_ts,
+            range_start,
+            range_end,
+            gen_idx: 0,
+            pos: 0,
+            current_entries: Vec::new(),
+            seen: HashSet::new(),
+            tombstoned: HashSet::new(),
+        }
+    }
+
+    fn load_next_gen(&mut self) {
+        while self.gen_idx < self.chain.len() {
+            if let Some(shard) = self.chain[self.gen_idx].shard(self.shard_id) {
+                self.current_entries = shard
+                    .forward_range(&self.range_start, &self.range_end)
+                    .collect();
+                self.gen_idx += 1;
+                if !self.current_entries.is_empty() {
+                    self.pos = 0;
+                    return;
+                }
+            } else {
+                self.gen_idx += 1;
+            }
+        }
+        self.current_entries = Vec::new();
+    }
+}
+
+impl Iterator for ChainForwardIterator {
+    type Item = (SecondaryIndexKey, IndexRecord);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.pos >= self.current_entries.len() {
+                self.load_next_gen();
+                if self.current_entries.is_empty() {
+                    return None;
+                }
+            }
+
+            let (key, entry) = &self.current_entries[self.pos];
+            self.pos += 1;
+
+            let key = key.clone();
+            let entry = entry.clone();
+
+            if entry.created_ts > self.read_ts {
+                continue;
+            }
+            if entry.deleted_ts.is_some_and(|d| d <= self.read_ts) {
+                self.tombstoned.insert(key);
+                continue;
+            }
+            if self.tombstoned.contains(&key) {
+                continue;
+            }
+            if !self.seen.insert(key.clone()) {
+                continue;
+            }
+
+            return Some((key, entry));
+        }
+    }
+}
 
 impl IndexDataManagerImpl {
     #[cfg(test)]
@@ -57,18 +155,26 @@ impl IndexDataManagerImpl {
         let chain = runtime.generation_chain_until(manifest.generation)?;
 
         let (start, end) = compute_vertex_index_scan_range(space_id, index, plan)?;
-        let shard_ranges: Vec<(Arc<BTreeMap<SecondaryIndexKey, IndexRecord>>, Vec<u8>, Vec<u8>)> =
-            manifest
-                .scan_ranges_with_shard(&plan.partition, &start, &end)
-                .into_iter()
-                .filter_map(|(shard_id, lower, upper)| {
-                    merge_gen_chain_forward(&chain, shard_id, plan.read_timestamp)
-                        .map(|merged| (merged, lower, upper))
+        let shard_iterators: Vec<ChainForwardIterator> = manifest
+            .scan_ranges_with_shard(&plan.partition, &start, &end)
+            .into_iter()
+            .filter_map(|(shard_id, lower, upper)| {
+                // Fast check: skip if no data exists for this shard across any generation
+                let has_data = chain.iter().any(|gen| gen.shard(shard_id).is_some());
+                has_data.then(|| {
+                    ChainForwardIterator::new(
+                        chain.clone(),
+                        shard_id,
+                        plan.read_timestamp,
+                        lower,
+                        upper,
+                    )
                 })
-                .collect();
+            })
+            .collect();
 
         Ok(VertexIndexCursor::new(
-            shard_ranges,
+            shard_iterators,
             plan,
             stale_checker,
             Some(handle),
@@ -99,51 +205,28 @@ impl IndexDataManagerImpl {
         let chain = runtime.generation_chain_until(manifest.generation)?;
 
         let (start, end) = compute_edge_index_scan_range(space_id, index, plan)?;
-        let shard_ranges: Vec<(Arc<BTreeMap<SecondaryIndexKey, IndexRecord>>, Vec<u8>, Vec<u8>)> =
-            manifest
-                .scan_ranges_with_shard(&plan.partition, &start, &end)
-                .into_iter()
-                .filter_map(|(shard_id, lower, upper)| {
-                    merge_gen_chain_forward(&chain, shard_id, plan.read_timestamp)
-                        .map(|merged| (merged, lower, upper))
+        let shard_iterators: Vec<ChainForwardIterator> = manifest
+            .scan_ranges_with_shard(&plan.partition, &start, &end)
+            .into_iter()
+            .filter_map(|(shard_id, lower, upper)| {
+                let has_data = chain.iter().any(|gen| gen.shard(shard_id).is_some());
+                has_data.then(|| {
+                    ChainForwardIterator::new(
+                        chain.clone(),
+                        shard_id,
+                        plan.read_timestamp,
+                        lower,
+                        upper,
+                    )
                 })
-                .collect();
+            })
+            .collect();
 
         Ok(EdgeIndexCursor::new(
-            shard_ranges,
+            shard_iterators,
             plan,
             stale_checker,
             Some(handle),
         ))
-    }
-}
-
-fn merge_gen_chain_forward(
-    chain: &[Arc<GenerationRuntime>],
-    shard_id: u32,
-    read_ts: u64,
-) -> Option<Arc<BTreeMap<SecondaryIndexKey, IndexRecord>>> {
-    let mut merged = BTreeMap::new();
-    let mut tombstoned = std::collections::HashSet::new();
-    for gen in chain {
-        let Some(shard) = gen.shard(shard_id) else { continue };
-        for (key, entry) in shard.iter_forward() {
-            if tombstoned.contains(&key) {
-                continue;
-            }
-            if entry.created_ts > read_ts {
-                continue;
-            }
-            if entry.deleted_ts.is_some_and(|d| d <= read_ts) {
-                tombstoned.insert(key);
-                continue;
-            }
-            merged.entry(key).or_insert(entry);
-        }
-    }
-    if merged.is_empty() {
-        None
-    } else {
-        Some(Arc::new(merged))
     }
 }

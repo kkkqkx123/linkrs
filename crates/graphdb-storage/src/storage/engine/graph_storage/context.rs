@@ -172,10 +172,14 @@ impl GraphStoragePersistent {
             data_store,
             cache_manager,
             table_tracker,
-            config,
             is_open: Arc::new(AtomicBool::new(true)),
             last_compacted_vertices: Arc::new(Mutex::new(Vec::new())),
-            index_data_manager: Arc::new(RwLock::new(IndexDataManagerImpl::new())),
+            index_data_manager: {
+                let dm = IndexDataManagerImpl::new();
+                dm.set_memory_limit_bytes(config.resources.index_memory_bytes);
+                Arc::new(RwLock::new(dm))
+            },
+            config,
             schema_manager: Arc::new(SchemaManager::new()),
             index_metadata_manager: Arc::new(IndexManager::new()),
             version_manager: Arc::new(VersionManager::new()),

@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::core::types::Timestamp;
 use crate::core::wal::types::{
-    Lsn, RecordType, UpdateWalUnit, WalCompression, WalError, WalFileHeader, WalHeader, WalOpType,
+    Lsn, RecordType, WalCompression, WalError, WalFileHeader, WalHeader, WalOpType,
     WalRecoveryMode, WalResult, WAL_FILE_HEADER_SIZE, WAL_HEADER_SIZE,
 };
 
@@ -22,9 +22,6 @@ pub trait WalParser: Send + Sync {
 
     /// Get the last timestamp
     fn last_timestamp(&self) -> Timestamp;
-
-    /// Get all update WAL units
-    fn get_update_wals(&self) -> &[UpdateWalUnit];
 }
 
 /// Recovery result from parsing WAL files
@@ -188,12 +185,10 @@ impl ParallelWalParser {
     ) -> WalResult<RecoveryResult> {
         use std::io::Read;
 
-        let mut result = RecoveryResult::default();
-
         let metadata = std::fs::metadata(path).map_err(|e| WalError::IoError(e.to_string()))?;
 
         if metadata.len() == 0 {
-            return Ok(result);
+            return Ok(RecoveryResult::default());
         }
 
         let mut file = File::open(path).map_err(|e| WalError::IoError(e.to_string()))?;
@@ -215,191 +210,7 @@ impl ParallelWalParser {
         }
 
         let file_start_lsn = file_header.start_lsn();
-        let mut fragment_buffer = FragmentBuffer::new();
-        let mut expected_prev_lsn = file_start_lsn;
-
-        let mut offset = WAL_FILE_HEADER_SIZE;
-        while offset + WAL_HEADER_SIZE <= buffer.len() {
-            let header = match WalHeader::from_bytes(&buffer[offset..offset + WAL_HEADER_SIZE]) {
-                Some(h) => h,
-                None => match recovery_mode {
-                    WalRecoveryMode::AbortOnCorruption => {
-                        return Err(WalError::Corrupted(format!(
-                            "Invalid WAL header at offset {}",
-                            offset
-                        )));
-                    }
-                    _ => {
-                        result.corrupted_count += 1;
-                        offset += 1;
-                        continue;
-                    }
-                },
-            };
-
-            if header.timestamp == 0 && header.length() == 0 && header.lsn == 0 {
-                break;
-            }
-
-            let expected_lsn = header
-                .prev_lsn()
-                .as_u64()
-                .checked_add(WAL_HEADER_SIZE as u64)
-                .and_then(|lsn| lsn.checked_add(header.length() as u64))
-                .ok_or_else(|| WalError::Corrupted(format!("LSN overflow at offset {}", offset)))?;
-            if header.prev_lsn() != expected_prev_lsn || header.lsn() != Lsn::new(expected_lsn) {
-                return Err(WalError::Corrupted(format!(
-                    "Invalid LSN chain at offset {}: expected prev {}, got prev {}, lsn {}",
-                    offset,
-                    expected_prev_lsn,
-                    header.prev_lsn(),
-                    header.lsn()
-                )));
-            }
-
-            let remaining = buffer.len() - offset - WAL_HEADER_SIZE;
-            if !header.is_length_valid(remaining) {
-                result.corrupted_count += 1;
-                break;
-            }
-
-            let payload_start = offset + WAL_HEADER_SIZE;
-            let payload_end = payload_start + header.length() as usize;
-
-            if let Err(error) = WalOpType::try_from(header.op_type) {
-                match recovery_mode {
-                    WalRecoveryMode::AbortOnCorruption => return Err(error),
-                    _ => {
-                        result.corrupted_count += 1;
-                        offset = payload_end;
-                        continue;
-                    }
-                }
-            }
-
-            let payload = buffer[payload_start..payload_end].to_vec();
-
-            if verify_checksum && header.checksum != 0 {
-                let computed = Self::compute_checksum_static(&header, &payload);
-                if computed != header.checksum {
-                    match recovery_mode {
-                        WalRecoveryMode::AbortOnCorruption => {
-                            return Err(WalError::ChecksumMismatch {
-                                expected: header.checksum,
-                                actual: computed,
-                            });
-                        }
-                        _ => {
-                            result.corrupted_count += 1;
-                            offset = payload_end;
-                            continue;
-                        }
-                    }
-                }
-            }
-
-            let final_payload = if header.is_compressed() {
-                match Self::decompress_payload_static(&payload, header.compression()) {
-                    Ok(decompressed) => decompressed,
-                    Err(e) => match recovery_mode {
-                        WalRecoveryMode::AbortOnCorruption => {
-                            return Err(e);
-                        }
-                        _ => {
-                            result.corrupted_count += 1;
-                            offset = payload_end;
-                            continue;
-                        }
-                    },
-                }
-            } else {
-                payload
-            };
-
-            let record_type = header.record_type;
-            let entry_lsn = header.lsn();
-            expected_prev_lsn = entry_lsn;
-
-            if record_type == RecordType::Full {
-                result.all_entries.push(ParsedWalEntry {
-                    header,
-                    payload: final_payload,
-                    checksum_valid: true,
-                    offset,
-                    lsn: entry_lsn,
-                    prev_lsn: header.prev_lsn(),
-                    file_start_lsn,
-                });
-
-                result.last_timestamp = result.last_timestamp.max(header.timestamp);
-                if entry_lsn > result.last_lsn {
-                    result.last_lsn = entry_lsn;
-                }
-            } else {
-                let is_complete = fragment_buffer.add_fragment(header, final_payload);
-
-                if is_complete {
-                    let assembled = fragment_buffer.assemble().unwrap_or_default();
-                    let first_header = fragment_buffer
-                        .get_first_header()
-                        .cloned()
-                        .unwrap_or(header);
-                    fragment_buffer.reset();
-
-                    let first_entry_lsn = first_header.lsn();
-
-                    result.all_entries.push(ParsedWalEntry {
-                        header: first_header,
-                        payload: assembled,
-                        checksum_valid: true,
-                        offset,
-                        lsn: first_entry_lsn,
-                        prev_lsn: first_header.prev_lsn(),
-                        file_start_lsn,
-                    });
-
-                    result.last_timestamp = result.last_timestamp.max(first_header.timestamp);
-                    if first_entry_lsn > result.last_lsn {
-                        result.last_lsn = first_entry_lsn;
-                    }
-                }
-            }
-
-            offset = payload_end;
-        }
-
-        Ok(result)
-    }
-
-    /// Compute checksum for verification (static version)
-    fn compute_checksum_static(header: &WalHeader, payload: &[u8]) -> u32 {
-        use crc32fast::Hasher;
-        let mut hasher = Hasher::new();
-        hasher.update(&header.length.to_le_bytes());
-        hasher.update(&[
-            header.op_type,
-            header.is_update as u8,
-            header.record_type as u8,
-        ]);
-        hasher.update(&header.flags.to_le_bytes());
-        hasher.update(&header.timestamp.to_le_bytes());
-        hasher.update(&header.lsn.to_le_bytes());
-        hasher.update(&header.prev_lsn.to_le_bytes());
-        hasher.update(payload);
-        hasher.finalize()
-    }
-
-    /// Decompress payload (static version)
-    fn decompress_payload_static(
-        payload: &[u8],
-        compression: WalCompression,
-    ) -> WalResult<Vec<u8>> {
-        match compression {
-            WalCompression::Zstd => {
-                zstd::decode_all(payload).map_err(|e| WalError::DeserializationError(e.to_string()))
-            }
-            WalCompression::None => Ok(payload.to_vec()),
-        }
+        parse_wal_file_bytes(&buffer, file_start_lsn, recovery_mode, verify_checksum)
     }
 
     /// Merge multiple recovery results into one
@@ -464,8 +275,6 @@ pub struct LocalWalParser {
     corrupted_count: usize,
     /// Number of skipped entries
     skipped_count: usize,
-    /// Fragment buffer for reassembling large records
-    fragment_buffer: FragmentBuffer,
 }
 
 /// Buffer for reassembling fragmented WAL records
@@ -549,6 +358,182 @@ impl FragmentBuffer {
     }
 }
 
+fn parse_wal_file_bytes(
+    buffer: &[u8],
+    file_start_lsn: Lsn,
+    recovery_mode: WalRecoveryMode,
+    verify_checksum: bool,
+) -> WalResult<RecoveryResult> {
+    let mut result = RecoveryResult::default();
+    let mut fragment_buffer = FragmentBuffer::new();
+    let mut expected_prev_lsn = file_start_lsn;
+
+    let mut offset = WAL_FILE_HEADER_SIZE;
+    while offset + WAL_HEADER_SIZE <= buffer.len() {
+        let header = match WalHeader::from_bytes(&buffer[offset..offset + WAL_HEADER_SIZE]) {
+            Some(h) => h,
+            None => match recovery_mode {
+                WalRecoveryMode::AbortOnCorruption => {
+                    return Err(WalError::Corrupted(format!(
+                        "Invalid WAL header at offset {}",
+                        offset
+                    )));
+                }
+                _ => {
+                    result.corrupted_count += 1;
+                    offset += 1;
+                    continue;
+                }
+            },
+        };
+
+        if header.timestamp == 0 && header.length() == 0 && header.lsn == 0 {
+            break;
+        }
+
+        let expected_lsn = header
+            .prev_lsn()
+            .as_u64()
+            .checked_add(WAL_HEADER_SIZE as u64)
+            .and_then(|lsn| lsn.checked_add(header.length() as u64))
+            .ok_or_else(|| WalError::Corrupted(format!("LSN overflow at offset {}", offset)))?;
+        if header.prev_lsn() != expected_prev_lsn || header.lsn() != Lsn::new(expected_lsn) {
+            return Err(WalError::Corrupted(format!(
+                "Invalid LSN chain at offset {}: expected prev {}, got prev {}, lsn {}",
+                offset, expected_prev_lsn, header.prev_lsn(), header.lsn()
+            )));
+        }
+
+        let remaining = buffer.len() - offset - WAL_HEADER_SIZE;
+        if !header.is_length_valid(remaining) {
+            result.corrupted_count += 1;
+            break;
+        }
+
+        let payload_start = offset + WAL_HEADER_SIZE;
+        let payload_end = payload_start + header.length() as usize;
+
+        if let Err(error) = WalOpType::try_from(header.op_type) {
+            match recovery_mode {
+                WalRecoveryMode::AbortOnCorruption => return Err(error),
+                _ => {
+                    result.corrupted_count += 1;
+                    offset = payload_end;
+                    continue;
+                }
+            }
+        }
+
+        let payload = buffer[payload_start..payload_end].to_vec();
+
+        if verify_checksum && header.checksum != 0 {
+            let computed = compute_checksum(&header, &payload);
+            if computed != header.checksum {
+                match recovery_mode {
+                    WalRecoveryMode::AbortOnCorruption => {
+                        return Err(WalError::ChecksumMismatch {
+                            expected: header.checksum,
+                            actual: computed,
+                        });
+                    }
+                    _ => {
+                        result.corrupted_count += 1;
+                        offset = payload_end;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        let final_payload = if header.is_compressed() {
+            match decompress_payload(&payload, header.compression()) {
+                Ok(decompressed) => decompressed,
+                Err(e) => match recovery_mode {
+                    WalRecoveryMode::AbortOnCorruption => return Err(e),
+                    _ => {
+                        result.corrupted_count += 1;
+                        offset = payload_end;
+                        continue;
+                    }
+                },
+            }
+        } else {
+            payload
+        };
+
+        let record_type = header.record_type;
+        let entry_lsn = header.lsn();
+        expected_prev_lsn = entry_lsn;
+
+        if record_type == RecordType::Full {
+            result.all_entries.push(ParsedWalEntry {
+                header,
+                payload: final_payload,
+                checksum_valid: true,
+                offset,
+                lsn: entry_lsn,
+                prev_lsn: header.prev_lsn(),
+                file_start_lsn,
+            });
+            result.last_timestamp = result.last_timestamp.max(header.timestamp);
+            if entry_lsn > result.last_lsn {
+                result.last_lsn = entry_lsn;
+            }
+        } else {
+            let is_complete = fragment_buffer.add_fragment(header, final_payload);
+            if is_complete {
+                let assembled = fragment_buffer.assemble().unwrap_or_default();
+                let first_header = fragment_buffer
+                    .get_first_header()
+                    .cloned()
+                    .unwrap_or(header);
+                fragment_buffer.reset();
+
+                let first_entry_lsn = first_header.lsn();
+                result.all_entries.push(ParsedWalEntry {
+                    header: first_header,
+                    payload: assembled,
+                    checksum_valid: true,
+                    offset,
+                    lsn: first_entry_lsn,
+                    prev_lsn: first_header.prev_lsn(),
+                    file_start_lsn,
+                });
+                result.last_timestamp = result.last_timestamp.max(first_header.timestamp);
+                if first_entry_lsn > result.last_lsn {
+                    result.last_lsn = first_entry_lsn;
+                }
+            }
+        }
+
+        offset = payload_end;
+    }
+
+    Ok(result)
+}
+
+fn compute_checksum(header: &WalHeader, payload: &[u8]) -> u32 {
+    use crc32fast::Hasher;
+    let mut hasher = Hasher::new();
+    hasher.update(&header.length.to_le_bytes());
+    hasher.update(&[header.op_type, header.is_update as u8, header.record_type as u8]);
+    hasher.update(&header.flags.to_le_bytes());
+    hasher.update(&header.timestamp.to_le_bytes());
+    hasher.update(&header.lsn.to_le_bytes());
+    hasher.update(&header.prev_lsn.to_le_bytes());
+    hasher.update(payload);
+    hasher.finalize()
+}
+
+fn decompress_payload(payload: &[u8], compression: WalCompression) -> WalResult<Vec<u8>> {
+    match compression {
+        WalCompression::Zstd => {
+            zstd::decode_all(payload).map_err(|e| WalError::DeserializationError(e.to_string()))
+        }
+        WalCompression::None => Ok(payload.to_vec()),
+    }
+}
+
 impl LocalWalParser {
     /// Create a new local WAL parser
     pub fn new() -> Self {
@@ -563,7 +548,6 @@ impl LocalWalParser {
             verify_checksum: true,
             corrupted_count: 0,
             skipped_count: 0,
-            fragment_buffer: FragmentBuffer::new(),
         }
     }
 
@@ -683,185 +667,18 @@ impl LocalWalParser {
 
         let file_start_lsn = file_header.start_lsn();
         self.file_headers.push(file_header);
-        let mut expected_prev_lsn = file_start_lsn;
 
-        let mut offset = WAL_FILE_HEADER_SIZE;
-        while offset + WAL_HEADER_SIZE <= buffer.len() {
-            let header = match WalHeader::from_bytes(&buffer[offset..offset + WAL_HEADER_SIZE]) {
-                Some(h) => h,
-                None => match self.recovery_mode {
-                    WalRecoveryMode::AbortOnCorruption => {
-                        return Err(WalError::Corrupted(format!(
-                            "Invalid WAL header at offset {}",
-                            offset
-                        )));
-                    }
-                    _ => {
-                        self.corrupted_count += 1;
-                        offset += 1;
-                        continue;
-                    }
-                },
-            };
+        let result = parse_wal_file_bytes(&buffer, file_start_lsn, self.recovery_mode, self.verify_checksum)?;
 
-            if header.timestamp == 0 && header.length() == 0 && header.lsn == 0 {
-                break;
-            }
-
-            let expected_lsn = header
-                .prev_lsn()
-                .as_u64()
-                .checked_add(WAL_HEADER_SIZE as u64)
-                .and_then(|lsn| lsn.checked_add(header.length() as u64))
-                .ok_or_else(|| WalError::Corrupted(format!("LSN overflow at offset {}", offset)))?;
-            if header.prev_lsn() != expected_prev_lsn || header.lsn() != Lsn::new(expected_lsn) {
-                return Err(WalError::Corrupted(format!(
-                    "Invalid LSN chain at offset {}: expected prev {}, got prev {}, lsn {}",
-                    offset,
-                    expected_prev_lsn,
-                    header.prev_lsn(),
-                    header.lsn()
-                )));
-            }
-
-            let remaining = buffer.len() - offset - WAL_HEADER_SIZE;
-            if !header.is_length_valid(remaining) {
-                self.corrupted_count += 1;
-                break;
-            }
-
-            let payload_start = offset + WAL_HEADER_SIZE;
-            let payload_end = payload_start + header.length() as usize;
-
-            if let Err(error) = WalOpType::try_from(header.op_type) {
-                match self.recovery_mode {
-                    WalRecoveryMode::AbortOnCorruption => return Err(error),
-                    _ => {
-                        self.corrupted_count += 1;
-                        offset = payload_end;
-                        continue;
-                    }
-                }
-            }
-
-            let payload = buffer[payload_start..payload_end].to_vec();
-
-            if self.verify_checksum && header.checksum != 0 && !header.verify_checksum(&payload) {
-                match self.recovery_mode {
-                    WalRecoveryMode::AbortOnCorruption => {
-                        return Err(WalError::ChecksumMismatch {
-                            expected: header.checksum,
-                            actual: self.compute_checksum(&header, &payload),
-                        });
-                    }
-                    _ => {
-                        self.corrupted_count += 1;
-                        offset = payload_end;
-                        continue;
-                    }
-                }
-            }
-
-            let final_payload = if header.is_compressed() {
-                match Self::decompress_payload(&payload, header.compression()) {
-                    Ok(decompressed) => decompressed,
-                    Err(e) => match self.recovery_mode {
-                        WalRecoveryMode::AbortOnCorruption => {
-                            return Err(e);
-                        }
-                        _ => {
-                            self.corrupted_count += 1;
-                            offset = payload_end;
-                            continue;
-                        }
-                    },
-                }
-            } else {
-                payload
-            };
-
-            let record_type = header.record_type;
-            let entry_lsn = header.lsn();
-            expected_prev_lsn = entry_lsn;
-
-            if record_type == RecordType::Full {
-                self.all_entries.push(ParsedWalEntry {
-                    header,
-                    payload: final_payload,
-                    checksum_valid: true,
-                    offset,
-                    lsn: entry_lsn,
-                    prev_lsn: header.prev_lsn(),
-                    file_start_lsn,
-                });
-
-                self.last_timestamp = self.last_timestamp.max(header.timestamp);
-                if entry_lsn > self.last_lsn {
-                    self.last_lsn = entry_lsn;
-                }
-            } else {
-                let is_complete = self.fragment_buffer.add_fragment(header, final_payload);
-
-                if is_complete {
-                    let assembled = self.fragment_buffer.assemble().unwrap_or_default();
-                    let first_header = self
-                        .fragment_buffer
-                        .get_first_header()
-                        .cloned()
-                        .unwrap_or(header);
-                    self.fragment_buffer.reset();
-
-                    let first_entry_lsn = first_header.lsn();
-
-                    self.all_entries.push(ParsedWalEntry {
-                        header: first_header,
-                        payload: assembled,
-                        checksum_valid: true,
-                        offset,
-                        lsn: first_entry_lsn,
-                        prev_lsn: first_header.prev_lsn(),
-                        file_start_lsn,
-                    });
-
-                    self.last_timestamp = self.last_timestamp.max(first_header.timestamp);
-                    if first_entry_lsn > self.last_lsn {
-                        self.last_lsn = first_entry_lsn;
-                    }
-                }
-            }
-
-            offset = payload_end;
+        self.all_entries.extend(result.all_entries);
+        self.corrupted_count += result.corrupted_count;
+        self.skipped_count += result.skipped_count;
+        self.last_timestamp = self.last_timestamp.max(result.last_timestamp);
+        if result.last_lsn > self.last_lsn {
+            self.last_lsn = result.last_lsn;
         }
 
         Ok(())
-    }
-
-    /// Compute checksum for verification
-    fn compute_checksum(&self, header: &WalHeader, payload: &[u8]) -> u32 {
-        use crc32fast::Hasher;
-        let mut hasher = Hasher::new();
-        hasher.update(&header.length.to_le_bytes());
-        hasher.update(&[
-            header.op_type,
-            header.is_update as u8,
-            header.record_type as u8,
-        ]);
-        hasher.update(&header.flags.to_le_bytes());
-        hasher.update(&header.timestamp.to_le_bytes());
-        hasher.update(&header.lsn.to_le_bytes());
-        hasher.update(&header.prev_lsn.to_le_bytes());
-        hasher.update(payload);
-        hasher.finalize()
-    }
-
-    /// Decompress payload
-    fn decompress_payload(payload: &[u8], compression: WalCompression) -> WalResult<Vec<u8>> {
-        match compression {
-            WalCompression::Zstd => {
-                zstd::decode_all(payload).map_err(|e| WalError::DeserializationError(e.to_string()))
-            }
-            WalCompression::None => Ok(payload.to_vec()),
-        }
     }
 
     /// Get all WAL entries as an iterator
@@ -925,10 +742,6 @@ impl WalParser for LocalWalParser {
 
     fn last_timestamp(&self) -> Timestamp {
         self.last_timestamp
-    }
-
-    fn get_update_wals(&self) -> &[UpdateWalUnit] {
-        &[]
     }
 }
 

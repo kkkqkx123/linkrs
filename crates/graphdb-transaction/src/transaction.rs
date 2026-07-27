@@ -79,9 +79,8 @@ pub use undo_log::{
 pub use wal::{
     ColumnId, CreateEdgeTypeRedo, CreateVertexTypeRedo, DeleteEdgeRedo, DeleteVertexRedo, EdgeId,
     InsertEdgeRedo, InsertVertexRedo, LabelId, LocalWalParser, LocalWalWriter, Timestamp,
-    UpdateEdgePropRedo, UpdateVertexPropRedo, UpdateWalUnit, VertexId, WalConfig, WalContentUnit,
-    WalEntryIter, WalError, WalHeader, WalOpType, WalParser, WalParserFactory, WalResult,
-    WalWriter,
+    UpdateEdgePropRedo, UpdateVertexPropRedo, VertexId, WalConfig, WalEntryIter, WalError, WalHeader,
+    WalOpType, WalParser, WalParserFactory, WalResult, WalWriter,
 };
 
 /// Transaction Management Module Version

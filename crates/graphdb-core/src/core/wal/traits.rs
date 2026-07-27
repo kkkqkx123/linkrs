@@ -1,7 +1,3 @@
-//! WAL Traits
-//!
-//! Core traits for WAL writer and recovery applier.
-
 use crate::core::error::StorageResult;
 use crate::core::types::{LabelId, Timestamp, VertexId};
 use crate::core::Value;
@@ -15,37 +11,26 @@ use super::redo::{
 };
 use super::types::{WalOpType, WalResult};
 
-/// WAL writer trait
 pub trait WalWriter: Send + Sync {
     fn open(&mut self) -> WalResult<()>;
     fn close(&mut self);
-    fn append(&mut self, data: &[u8]) -> WalResult<bool>;
-    /// Append one logical WAL record and let the writer assign its LSN chain.
+    fn append(&mut self, data: &[u8]) -> WalResult<()>;
+
     fn append_entry(
         &mut self,
         op_type: WalOpType,
         timestamp: Timestamp,
         payload: &[u8],
-    ) -> WalResult<bool>;
+    ) -> WalResult<()>;
     fn sync(&self) -> WalResult<()>;
 
-    /// Block until the WAL record at `appended_lsn` is durable (fsynced).
-    ///
-    /// Default implementation calls `sync()`. Implementations that support
-    /// group commit should override this to participate in the coordinated
-    /// sync protocol.
     fn wait_for_durable(&self, _appended_lsn: u64) -> WalResult<()> {
         self.sync()
     }
 }
 
-/// Trait for applying recovered operations to the storage engine.
-/// Implementors handle the actual data modifications during WAL replay.
 pub trait RecoveryApplier {
-    // ========================================================================
     // Data Operations
-    // ========================================================================
-
     fn replay_insert_vertex(
         &self,
         label: LabelId,
@@ -80,10 +65,7 @@ pub trait RecoveryApplier {
 
     fn replay_delete_edge(&self, redo: &DeleteEdgeRedo, ts: Timestamp) -> StorageResult<()>;
 
-    // ========================================================================
     // Schema Operations
-    // ========================================================================
-
     fn replay_create_space(&self, redo: &CreateSpaceRedo, ts: Timestamp) -> StorageResult<()>;
 
     fn replay_drop_space(&self, redo: &DropSpaceRedo, ts: Timestamp) -> StorageResult<()>;
@@ -148,10 +130,7 @@ pub trait RecoveryApplier {
         ts: Timestamp,
     ) -> StorageResult<()>;
 
-    // ========================================================================
     // System Operations
-    // ========================================================================
-
     fn replay_create_tag_index(
         &self,
         redo: &CreateTagIndexRedo,
@@ -169,7 +148,6 @@ pub trait RecoveryApplier {
     fn replay_drop_edge_index(&self, redo: &DropEdgeIndexRedo, ts: Timestamp) -> StorageResult<()>;
 
     fn replay_compact(&self, _ts: Timestamp) -> StorageResult<()> {
-        log::info!("Compact WAL entry replayed (no-op)");
         Ok(())
     }
 }

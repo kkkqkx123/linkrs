@@ -1,10 +1,7 @@
-//! Recovery Manager
-//!
-//! Provides crash recovery functionality using WAL replay.
-
 use std::path::PathBuf;
 
 use postcard::from_bytes;
+use serde::de::DeserializeOwned;
 
 use crate::core::types::Timestamp;
 use crate::core::{StorageError, StorageResult};
@@ -18,7 +15,23 @@ use crate::transaction::wal::{
     WalParser, WalRecoveryMode,
 };
 
-/// Recovery configuration
+macro_rules! recovery_arm_ref {
+    ($applier:expr, $op:expr, $entry:expr, $payload:expr, $ts:expr, $stats:expr, $redo_type:ty, $replay_fn:ident) => {{
+        match deserialize_redo::<$redo_type>($payload) {
+            Ok(redo) => {
+                $applier.$replay_fn(&redo, $ts)?;
+                $stats.wal_entries_replayed += 1;
+                $stats.last_lsn = $entry.lsn;
+            }
+            Err(e) => {
+                return Err(recovery_deserialize_error(
+                    &mut $stats, $entry.lsn, $op, e,
+                ))
+            }
+        }
+    }};
+}
+
 #[derive(Debug, Clone)]
 pub struct RecoveryConfig {
     pub wal_dir: PathBuf,
@@ -42,7 +55,6 @@ impl Default for RecoveryConfig {
     }
 }
 
-/// Recovery statistics
 #[derive(Debug, Default, Clone)]
 pub struct RecoveryStats {
     pub wal_entries_replayed: usize,
@@ -50,19 +62,33 @@ pub struct RecoveryStats {
     pub checkpoints_processed: usize,
     pub recovery_time_ms: u64,
     pub errors_encountered: usize,
-    pub last_lsn: crate::transaction::wal::Lsn,
+    pub last_lsn: Lsn,
     pub max_timestamp: Timestamp,
-    /// Highest transaction identity observed in WAL control records.
     pub max_transaction_id: u64,
 }
 
-/// Trait for applying recovered operations to the storage engine.
 pub use crate::core::wal::traits::RecoveryApplier;
 
-/// Recovery manager for crash recovery
 pub struct RecoveryManager {
     config: RecoveryConfig,
     stats: RecoveryStats,
+}
+
+fn recovery_deserialize_error(
+    stats: &mut RecoveryStats,
+    lsn: Lsn,
+    op_type: WalOpType,
+    error: StorageError,
+) -> StorageError {
+    stats.errors_encountered += 1;
+    StorageError::wal_error(format!(
+        "Failed to deserialize {} at {}: {}",
+        op_type, lsn, error
+    ))
+}
+
+fn deserialize_redo<T: DeserializeOwned>(payload: &[u8]) -> StorageResult<T> {
+    from_bytes(payload).map_err(|e| StorageError::deserialize_error(e.to_string()))
 }
 
 impl RecoveryManager {
@@ -73,7 +99,6 @@ impl RecoveryManager {
         }
     }
 
-    /// Perform crash recovery with a RecoveryApplier for WAL replay
     pub fn recover_with_applier(
         &mut self,
         applier: &dyn RecoveryApplier,
@@ -84,9 +109,6 @@ impl RecoveryManager {
         self.stats.last_lsn = self.config.start_lsn.unwrap_or(Lsn::ZERO);
 
         let wal_result = self.parse_wal_files()?;
-        // Keep the parser's maximum before committed-only filtering. A crash
-        // can leave an aborted or incomplete transaction with the newest
-        // timestamp/ID, and reopening must not allocate either value again.
         self.stats.max_timestamp = wal_result.last_timestamp;
         self.stats.max_transaction_id = self.max_transaction_id(&wal_result);
         self.stats.errors_encountered = wal_result
@@ -100,9 +122,7 @@ impl RecoveryManager {
         }
 
         self.restore_from_checkpoint(&wal_result)?;
-
         self.replay_wal_entries(&wal_result, applier)?;
-
         self.stats.recovery_time_ms = start.elapsed().as_millis() as u64;
 
         Ok(self.stats.clone())
@@ -137,13 +157,11 @@ impl RecoveryManager {
             .unwrap_or(0)
     }
 
-    /// Parse WAL files
     fn parse_wal_files(&self) -> StorageResult<RecoveryResult> {
         if self.config.parallel_recovery {
             let parser = ParallelWalParser::new()
                 .with_recovery_mode(self.config.recovery_mode)
                 .with_verify_checksum(self.config.verify_checksum);
-
             parser
                 .parse_parallel(&self.config.wal_dir)
                 .map_err(|e| StorageError::db_error(format!("WAL parse error: {}", e)))
@@ -152,7 +170,6 @@ impl RecoveryManager {
             parser
                 .open(&self.config.wal_dir.to_string_lossy())
                 .map_err(|e| StorageError::db_error(format!("WAL open error: {}", e)))?;
-
             Ok(RecoveryResult {
                 all_entries: parser.parse_all_entries(),
                 last_timestamp: parser.last_timestamp(),
@@ -163,29 +180,20 @@ impl RecoveryManager {
         }
     }
 
-    /// Restore from checkpoint
     fn restore_from_checkpoint(&mut self, _wal_result: &RecoveryResult) -> StorageResult<()> {
         if !self.config.data_dir.exists() {
             std::fs::create_dir_all(&self.config.data_dir)?;
             return Ok(());
         }
-
         self.stats.checkpoints_processed = 1;
-
         Ok(())
     }
 
-    /// Replay WAL entries using a RecoveryApplier
     fn replay_wal_entries(
         &mut self,
         wal_result: &RecoveryResult,
         applier: &dyn RecoveryApplier,
     ) -> StorageResult<()> {
-        // Legacy schema/data records predate the transactional sync envelope
-        // and are already durable individually. Keep replaying that format
-        // until the DDL path is migrated to the same commit sink. A WAL that
-        // contains any sync envelope record must use the strict committed
-        // transaction parser so an incomplete tail is never applied.
         let has_sync_envelope = wal_result.all_entries.iter().any(|entry| {
             matches!(
                 WalOpType::try_from(entry.header.op_type),
@@ -209,12 +217,11 @@ impl RecoveryManager {
                 })?;
         for transaction in transactions {
             self.replay_parsed_entries(&transaction.redo_entries, applier)?;
-            self.stats.last_lsn = crate::transaction::wal::Lsn::new(transaction.commit_lsn.get());
+            self.stats.last_lsn = Lsn::new(transaction.commit_lsn.get());
         }
         Ok(())
     }
 
-    /// Replay parsed WAL entries (new format)
     fn replay_parsed_entries(
         &mut self,
         entries: &[ParsedWalEntry],
@@ -243,509 +250,142 @@ impl RecoveryManager {
             let payload = &entry.payload;
 
             match op_type {
-                WalOpType::InsertVertex => match self.deserialize_insert_vertex(payload) {
-                    Ok(redo) => {
-                        applier.replay_insert_vertex(redo.label, redo.vid, &redo.properties, ts)?;
-                        self.stats.wal_entries_replayed += 1;
-                        self.stats.last_lsn = entry.lsn;
-                    }
-                    Err(e) => {
-                        return Err(self.recovery_deserialize_error(
-                            entry.lsn,
-                            WalOpType::InsertVertex,
-                            e,
-                        ))
-                    }
-                },
-                WalOpType::InsertEdge => match self.deserialize_insert_edge(payload) {
-                    Ok(redo) => {
-                        applier.replay_insert_edge(&redo, ts)?;
-                        self.stats.wal_entries_replayed += 1;
-                        self.stats.last_lsn = entry.lsn;
-                    }
-                    Err(e) => {
-                        return Err(self.recovery_deserialize_error(
-                            entry.lsn,
-                            WalOpType::InsertEdge,
-                            e,
-                        ))
-                    }
-                },
-                WalOpType::UpdateVertexProp => match self.deserialize_update_vertex_prop(payload) {
-                    Ok(redo) => {
-                        applier.replay_update_vertex_prop(
-                            redo.label,
-                            redo.vid,
-                            &redo.prop_name,
-                            &redo.value,
-                            ts,
-                        )?;
-                        self.stats.wal_entries_replayed += 1;
-                        self.stats.last_lsn = entry.lsn;
-                    }
-                    Err(e) => {
-                        return Err(self.recovery_deserialize_error(
-                            entry.lsn,
-                            WalOpType::UpdateVertexProp,
-                            e,
-                        ))
-                    }
-                },
-                WalOpType::UpdateEdgeProp => match self.deserialize_update_edge_prop(payload) {
-                    Ok(redo) => {
-                        applier.replay_update_edge_prop(&redo, ts)?;
-                        self.stats.wal_entries_replayed += 1;
-                        self.stats.last_lsn = entry.lsn;
-                    }
-                    Err(e) => {
-                        return Err(self.recovery_deserialize_error(
-                            entry.lsn,
-                            WalOpType::UpdateEdgeProp,
-                            e,
-                        ))
-                    }
-                },
-                WalOpType::DeleteVertex => match self.deserialize_delete_vertex(payload) {
-                    Ok(redo) => {
-                        applier.replay_delete_vertex(redo.label, redo.vid, ts)?;
-                        self.stats.wal_entries_replayed += 1;
-                        self.stats.last_lsn = entry.lsn;
-                    }
-                    Err(e) => {
-                        return Err(self.recovery_deserialize_error(
-                            entry.lsn,
-                            WalOpType::DeleteVertex,
-                            e,
-                        ))
-                    }
-                },
-                WalOpType::DeleteEdge => match self.deserialize_delete_edge(payload) {
-                    Ok(redo) => {
-                        applier.replay_delete_edge(&redo, ts)?;
-                        self.stats.wal_entries_replayed += 1;
-                        self.stats.last_lsn = entry.lsn;
-                    }
-                    Err(e) => {
-                        return Err(self.recovery_deserialize_error(
-                            entry.lsn,
-                            WalOpType::DeleteEdge,
-                            e,
-                        ))
-                    }
-                },
-                WalOpType::CreateVertexType => match self.deserialize_create_vertex_type(payload) {
-                    Ok(redo) => {
-                        applier.replay_create_vertex_type(&redo, ts)?;
-                        self.stats.wal_entries_replayed += 1;
-                        self.stats.last_lsn = entry.lsn;
-                    }
-                    Err(e) => {
-                        return Err(self.recovery_deserialize_error(
-                            entry.lsn,
-                            WalOpType::CreateVertexType,
-                            e,
-                        ))
-                    }
-                },
-                WalOpType::CreateEdgeType => match self.deserialize_create_edge_type(payload) {
-                    Ok(redo) => {
-                        applier.replay_create_edge_type(&redo, ts)?;
-                        self.stats.wal_entries_replayed += 1;
-                        self.stats.last_lsn = entry.lsn;
-                    }
-                    Err(e) => {
-                        return Err(self.recovery_deserialize_error(
-                            entry.lsn,
-                            WalOpType::CreateEdgeType,
-                            e,
-                        ))
-                    }
-                },
-                WalOpType::DeleteVertexType => match self.deserialize_delete_vertex_type(payload) {
-                    Ok(redo) => {
-                        applier.replay_delete_vertex_type(&redo, ts)?;
-                        self.stats.wal_entries_replayed += 1;
-                        self.stats.last_lsn = entry.lsn;
-                    }
-                    Err(e) => {
-                        return Err(self.recovery_deserialize_error(
-                            entry.lsn,
-                            WalOpType::DeleteVertexType,
-                            e,
-                        ))
-                    }
-                },
-                WalOpType::DeleteEdgeType => match self.deserialize_delete_edge_type(payload) {
-                    Ok(redo) => {
-                        applier.replay_delete_edge_type(&redo, ts)?;
-                        self.stats.wal_entries_replayed += 1;
-                        self.stats.last_lsn = entry.lsn;
-                    }
-                    Err(e) => {
-                        return Err(self.recovery_deserialize_error(
-                            entry.lsn,
-                            WalOpType::DeleteEdgeType,
-                            e,
-                        ))
-                    }
-                },
-                WalOpType::CreateSpace => match self.deserialize_create_space(payload) {
-                    Ok(redo) => {
-                        applier.replay_create_space(&redo, ts)?;
-                        self.stats.wal_entries_replayed += 1;
-                        self.stats.last_lsn = entry.lsn;
-                    }
-                    Err(e) => {
-                        return Err(self.recovery_deserialize_error(
-                            entry.lsn,
-                            WalOpType::CreateSpace,
-                            e,
-                        ))
-                    }
-                },
-                WalOpType::DropSpace => match self.deserialize_drop_space(payload) {
-                    Ok(redo) => {
-                        applier.replay_drop_space(&redo, ts)?;
-                        self.stats.wal_entries_replayed += 1;
-                        self.stats.last_lsn = entry.lsn;
-                    }
-                    Err(e) => {
-                        return Err(self.recovery_deserialize_error(
-                            entry.lsn,
-                            WalOpType::DropSpace,
-                            e,
-                        ))
-                    }
-                },
-                WalOpType::ClearSpace => match self.deserialize_clear_space(payload) {
-                    Ok(redo) => {
-                        applier.replay_clear_space(&redo, ts)?;
-                        self.stats.wal_entries_replayed += 1;
-                        self.stats.last_lsn = entry.lsn;
-                    }
-                    Err(e) => {
-                        return Err(self.recovery_deserialize_error(
-                            entry.lsn,
-                            WalOpType::ClearSpace,
-                            e,
-                        ))
-                    }
-                },
-                WalOpType::AlterSpaceComment => {
-                    match self.deserialize_alter_space_comment(payload) {
-                        Ok(redo) => {
-                            applier.replay_alter_space_comment(&redo, ts)?;
-                            self.stats.wal_entries_replayed += 1;
-                            self.stats.last_lsn = entry.lsn;
-                        }
-                        Err(e) => {
-                            return Err(self.recovery_deserialize_error(
-                                entry.lsn,
-                                WalOpType::AlterSpaceComment,
-                                e,
-                            ))
-                        }
-                    }
+                WalOpType::InsertVertex => {
+                    let redo: InsertVertexRedo = deserialize_redo(payload)?;
+                    applier.replay_insert_vertex(redo.label, redo.vid, &redo.properties, ts)?;
+                    self.stats.wal_entries_replayed += 1;
+                    self.stats.last_lsn = entry.lsn;
                 }
-                WalOpType::OutboxIntent
-                | WalOpType::TransactionCommit
-                | WalOpType::TransactionAbort => {}
-                WalOpType::AddVertexProp => match self.deserialize_add_vertex_prop(payload) {
-                    Ok(redo) => {
-                        applier.replay_add_vertex_prop(&redo, ts)?;
-                        self.stats.wal_entries_replayed += 1;
-                        self.stats.last_lsn = entry.lsn;
-                    }
-                    Err(e) => {
-                        return Err(self.recovery_deserialize_error(
-                            entry.lsn,
-                            WalOpType::AddVertexProp,
-                            e,
-                        ))
-                    }
-                },
-                WalOpType::AddEdgeProp => match self.deserialize_add_edge_prop(payload) {
-                    Ok(redo) => {
-                        applier.replay_add_edge_prop(&redo, ts)?;
-                        self.stats.wal_entries_replayed += 1;
-                        self.stats.last_lsn = entry.lsn;
-                    }
-                    Err(e) => {
-                        return Err(self.recovery_deserialize_error(
-                            entry.lsn,
-                            WalOpType::AddEdgeProp,
-                            e,
-                        ))
-                    }
-                },
-                WalOpType::DeleteVertexProp => match self.deserialize_delete_vertex_prop(payload) {
-                    Ok(redo) => {
-                        applier.replay_delete_vertex_prop(&redo, ts)?;
-                        self.stats.wal_entries_replayed += 1;
-                        self.stats.last_lsn = entry.lsn;
-                    }
-                    Err(e) => {
-                        return Err(self.recovery_deserialize_error(
-                            entry.lsn,
-                            WalOpType::DeleteVertexProp,
-                            e,
-                        ))
-                    }
-                },
-                WalOpType::DeleteEdgeProp => match self.deserialize_delete_edge_prop(payload) {
-                    Ok(redo) => {
-                        applier.replay_delete_edge_prop(&redo, ts)?;
-                        self.stats.wal_entries_replayed += 1;
-                        self.stats.last_lsn = entry.lsn;
-                    }
-                    Err(e) => {
-                        return Err(self.recovery_deserialize_error(
-                            entry.lsn,
-                            WalOpType::DeleteEdgeProp,
-                            e,
-                        ))
-                    }
-                },
-                WalOpType::RenameVertexProp => match self.deserialize_rename_vertex_prop(payload) {
-                    Ok(redo) => {
-                        applier.replay_rename_vertex_prop(&redo, ts)?;
-                        self.stats.wal_entries_replayed += 1;
-                        self.stats.last_lsn = entry.lsn;
-                    }
-                    Err(e) => {
-                        return Err(self.recovery_deserialize_error(
-                            entry.lsn,
-                            WalOpType::RenameVertexProp,
-                            e,
-                        ))
-                    }
-                },
-                WalOpType::RenameEdgeProp => match self.deserialize_rename_edge_prop(payload) {
-                    Ok(redo) => {
-                        applier.replay_rename_edge_prop(&redo, ts)?;
-                        self.stats.wal_entries_replayed += 1;
-                        self.stats.last_lsn = entry.lsn;
-                    }
-                    Err(e) => {
-                        return Err(self.recovery_deserialize_error(
-                            entry.lsn,
-                            WalOpType::RenameEdgeProp,
-                            e,
-                        ))
-                    }
-                },
+                WalOpType::InsertEdge => {
+                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
+                        InsertEdgeRedo, replay_insert_edge)
+                }
+                WalOpType::UpdateVertexProp => {
+                    let redo: UpdateVertexPropRedo = deserialize_redo(payload)?;
+                    applier.replay_update_vertex_prop(
+                        redo.label,
+                        redo.vid,
+                        &redo.prop_name,
+                        &redo.value,
+                        ts,
+                    )?;
+                    self.stats.wal_entries_replayed += 1;
+                    self.stats.last_lsn = entry.lsn;
+                }
+                WalOpType::UpdateEdgeProp => {
+                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
+                        UpdateEdgePropRedo, replay_update_edge_prop)
+                }
+                WalOpType::DeleteVertex => {
+                    let redo: DeleteVertexRedo = deserialize_redo(payload)?;
+                    applier.replay_delete_vertex(redo.label, redo.vid, ts)?;
+                    self.stats.wal_entries_replayed += 1;
+                    self.stats.last_lsn = entry.lsn;
+                }
+                WalOpType::DeleteEdge => {
+                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
+                        DeleteEdgeRedo, replay_delete_edge)
+                }
+                WalOpType::CreateVertexType => {
+                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
+                        CreateVertexTypeRedo, replay_create_vertex_type)
+                }
+                WalOpType::CreateEdgeType => {
+                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
+                        CreateEdgeTypeRedo, replay_create_edge_type)
+                }
+                WalOpType::DeleteVertexType => {
+                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
+                        DeleteVertexTypeRedo, replay_delete_vertex_type)
+                }
+                WalOpType::DeleteEdgeType => {
+                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
+                        DeleteEdgeTypeRedo, replay_delete_edge_type)
+                }
+                WalOpType::CreateSpace => {
+                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
+                        CreateSpaceRedo, replay_create_space)
+                }
+                WalOpType::DropSpace => {
+                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
+                        DropSpaceRedo, replay_drop_space)
+                }
+                WalOpType::ClearSpace => {
+                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
+                        ClearSpaceRedo, replay_clear_space)
+                }
+                WalOpType::AlterSpaceComment => {
+                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
+                        AlterSpaceCommentRedo, replay_alter_space_comment)
+                }
+                WalOpType::AddVertexProp => {
+                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
+                        AddVertexPropRedo, replay_add_vertex_prop)
+                }
+                WalOpType::AddEdgeProp => {
+                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
+                        AddEdgePropRedo, replay_add_edge_prop)
+                }
+                WalOpType::DeleteVertexProp => {
+                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
+                        DeleteVertexPropRedo, replay_delete_vertex_prop)
+                }
+                WalOpType::DeleteEdgeProp => {
+                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
+                        DeleteEdgePropRedo, replay_delete_edge_prop)
+                }
+                WalOpType::RenameVertexProp => {
+                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
+                        RenameVertexPropRedo, replay_rename_vertex_prop)
+                }
+                WalOpType::RenameEdgeProp => {
+                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
+                        RenameEdgePropRedo, replay_rename_edge_prop)
+                }
+                WalOpType::CreateTagIndex => {
+                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
+                        CreateTagIndexRedo, replay_create_tag_index)
+                }
+                WalOpType::DropTagIndex => {
+                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
+                        DropTagIndexRedo, replay_drop_tag_index)
+                }
+                WalOpType::CreateEdgeIndex => {
+                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
+                        CreateEdgeIndexRedo, replay_create_edge_index)
+                }
+                WalOpType::DropEdgeIndex => {
+                    recovery_arm_ref!(applier, op_type, entry, payload, ts, self.stats,
+                        DropEdgeIndexRedo, replay_drop_edge_index)
+                }
                 WalOpType::Compact => {
                     applier.replay_compact(ts)?;
                     self.stats.wal_entries_replayed += 1;
                 }
-                WalOpType::CreateTagIndex => match self.deserialize_create_tag_index(payload) {
-                    Ok(redo) => {
-                        applier.replay_create_tag_index(&redo, ts)?;
-                        self.stats.wal_entries_replayed += 1;
-                        self.stats.last_lsn = entry.lsn;
-                    }
-                    Err(e) => {
-                        return Err(self.recovery_deserialize_error(
-                            entry.lsn,
-                            WalOpType::CreateTagIndex,
-                            e,
-                        ))
-                    }
-                },
-                WalOpType::DropTagIndex => match self.deserialize_drop_tag_index(payload) {
-                    Ok(redo) => {
-                        applier.replay_drop_tag_index(&redo, ts)?;
-                        self.stats.wal_entries_replayed += 1;
-                        self.stats.last_lsn = entry.lsn;
-                    }
-                    Err(e) => {
-                        return Err(self.recovery_deserialize_error(
-                            entry.lsn,
-                            WalOpType::DropTagIndex,
-                            e,
-                        ))
-                    }
-                },
-                WalOpType::CreateEdgeIndex => match self.deserialize_create_edge_index(payload) {
-                    Ok(redo) => {
-                        applier.replay_create_edge_index(&redo, ts)?;
-                        self.stats.wal_entries_replayed += 1;
-                        self.stats.last_lsn = entry.lsn;
-                    }
-                    Err(e) => {
-                        return Err(self.recovery_deserialize_error(
-                            entry.lsn,
-                            WalOpType::CreateEdgeIndex,
-                            e,
-                        ))
-                    }
-                },
-                WalOpType::DropEdgeIndex => match self.deserialize_drop_edge_index(payload) {
-                    Ok(redo) => {
-                        applier.replay_drop_edge_index(&redo, ts)?;
-                        self.stats.wal_entries_replayed += 1;
-                        self.stats.last_lsn = entry.lsn;
-                    }
-                    Err(e) => {
-                        return Err(self.recovery_deserialize_error(
-                            entry.lsn,
-                            WalOpType::DropEdgeIndex,
-                            e,
-                        ))
-                    }
-                },
+                WalOpType::OutboxIntent
+                | WalOpType::TransactionCommit
+                | WalOpType::TransactionAbort => {}
             }
         }
 
         Ok(())
     }
 
-    fn recovery_deserialize_error(
-        &mut self,
-        lsn: Lsn,
-        op_type: WalOpType,
-        error: StorageError,
-    ) -> StorageError {
-        self.stats.errors_encountered += 1;
-        StorageError::wal_error(format!(
-            "Failed to deserialize {} at {}: {}",
-            op_type, lsn, error
-        ))
-    }
-
-    fn deserialize_insert_vertex(&self, payload: &[u8]) -> StorageResult<InsertVertexRedo> {
-        from_bytes(payload).map_err(|e| StorageError::deserialize_error(e.to_string()))
-    }
-
-    fn deserialize_insert_edge(&self, payload: &[u8]) -> StorageResult<InsertEdgeRedo> {
-        from_bytes(payload).map_err(|e| StorageError::deserialize_error(e.to_string()))
-    }
-
-    fn deserialize_update_vertex_prop(
-        &self,
-        payload: &[u8],
-    ) -> StorageResult<UpdateVertexPropRedo> {
-        from_bytes(payload).map_err(|e| StorageError::deserialize_error(e.to_string()))
-    }
-
-    fn deserialize_update_edge_prop(&self, payload: &[u8]) -> StorageResult<UpdateEdgePropRedo> {
-        from_bytes(payload).map_err(|e| StorageError::deserialize_error(e.to_string()))
-    }
-
-    fn deserialize_delete_vertex(&self, payload: &[u8]) -> StorageResult<DeleteVertexRedo> {
-        from_bytes(payload).map_err(|e| StorageError::deserialize_error(e.to_string()))
-    }
-
-    fn deserialize_delete_edge(&self, payload: &[u8]) -> StorageResult<DeleteEdgeRedo> {
-        from_bytes(payload).map_err(|e| StorageError::deserialize_error(e.to_string()))
-    }
-
-    fn deserialize_create_vertex_type(
-        &self,
-        payload: &[u8],
-    ) -> StorageResult<CreateVertexTypeRedo> {
-        from_bytes(payload).map_err(|e| StorageError::deserialize_error(e.to_string()))
-    }
-
-    fn deserialize_create_edge_type(&self, payload: &[u8]) -> StorageResult<CreateEdgeTypeRedo> {
-        from_bytes(payload).map_err(|e| StorageError::deserialize_error(e.to_string()))
-    }
-
-    fn deserialize_delete_vertex_type(
-        &self,
-        payload: &[u8],
-    ) -> StorageResult<DeleteVertexTypeRedo> {
-        from_bytes(payload).map_err(|e| StorageError::deserialize_error(e.to_string()))
-    }
-
-    fn deserialize_delete_edge_type(&self, payload: &[u8]) -> StorageResult<DeleteEdgeTypeRedo> {
-        from_bytes(payload).map_err(|e| StorageError::deserialize_error(e.to_string()))
-    }
-
-    fn deserialize_create_space(&self, payload: &[u8]) -> StorageResult<CreateSpaceRedo> {
-        from_bytes(payload).map_err(|e| StorageError::deserialize_error(e.to_string()))
-    }
-
-    fn deserialize_drop_space(&self, payload: &[u8]) -> StorageResult<DropSpaceRedo> {
-        from_bytes(payload).map_err(|e| StorageError::deserialize_error(e.to_string()))
-    }
-
-    fn deserialize_clear_space(&self, payload: &[u8]) -> StorageResult<ClearSpaceRedo> {
-        from_bytes(payload).map_err(|e| StorageError::deserialize_error(e.to_string()))
-    }
-
-    fn deserialize_alter_space_comment(
-        &self,
-        payload: &[u8],
-    ) -> StorageResult<AlterSpaceCommentRedo> {
-        from_bytes(payload).map_err(|e| StorageError::deserialize_error(e.to_string()))
-    }
-
-    fn deserialize_add_vertex_prop(&self, payload: &[u8]) -> StorageResult<AddVertexPropRedo> {
-        from_bytes(payload).map_err(|e| StorageError::deserialize_error(e.to_string()))
-    }
-
-    fn deserialize_add_edge_prop(&self, payload: &[u8]) -> StorageResult<AddEdgePropRedo> {
-        from_bytes(payload).map_err(|e| StorageError::deserialize_error(e.to_string()))
-    }
-
-    fn deserialize_delete_vertex_prop(
-        &self,
-        payload: &[u8],
-    ) -> StorageResult<DeleteVertexPropRedo> {
-        from_bytes(payload).map_err(|e| StorageError::deserialize_error(e.to_string()))
-    }
-
-    fn deserialize_delete_edge_prop(&self, payload: &[u8]) -> StorageResult<DeleteEdgePropRedo> {
-        from_bytes(payload).map_err(|e| StorageError::deserialize_error(e.to_string()))
-    }
-
-    fn deserialize_rename_vertex_prop(
-        &self,
-        payload: &[u8],
-    ) -> StorageResult<RenameVertexPropRedo> {
-        from_bytes(payload).map_err(|e| StorageError::deserialize_error(e.to_string()))
-    }
-
-    fn deserialize_rename_edge_prop(&self, payload: &[u8]) -> StorageResult<RenameEdgePropRedo> {
-        from_bytes(payload).map_err(|e| StorageError::deserialize_error(e.to_string()))
-    }
-
-    fn deserialize_create_tag_index(&self, payload: &[u8]) -> StorageResult<CreateTagIndexRedo> {
-        from_bytes(payload).map_err(|e| StorageError::deserialize_error(e.to_string()))
-    }
-
-    fn deserialize_drop_tag_index(&self, payload: &[u8]) -> StorageResult<DropTagIndexRedo> {
-        from_bytes(payload).map_err(|e| StorageError::deserialize_error(e.to_string()))
-    }
-
-    fn deserialize_create_edge_index(&self, payload: &[u8]) -> StorageResult<CreateEdgeIndexRedo> {
-        from_bytes(payload).map_err(|e| StorageError::deserialize_error(e.to_string()))
-    }
-
-    fn deserialize_drop_edge_index(&self, payload: &[u8]) -> StorageResult<DropEdgeIndexRedo> {
-        from_bytes(payload).map_err(|e| StorageError::deserialize_error(e.to_string()))
-    }
-
-    /// Get recovery statistics
     pub fn stats(&self) -> &RecoveryStats {
         &self.stats
     }
 
-    /// Check if recovery is needed
     pub fn needs_recovery(&self) -> bool {
         self.config.wal_dir.exists()
             && std::fs::read_dir(&self.config.wal_dir)
-                .map(|entries| entries.count() > 0)
+                .map(|mut entries| entries.next().is_some())
                 .unwrap_or(false)
     }
 
-    /// Clear WAL files after successful recovery
     pub fn clear_wal_files(&self) -> StorageResult<()> {
         if !self.config.wal_dir.exists() {
             return Ok(());
         }
-
         for entry in std::fs::read_dir(&self.config.wal_dir)? {
             let entry = entry?;
             let path = entry.path();
@@ -753,7 +393,6 @@ impl RecoveryManager {
                 std::fs::remove_file(&path)?;
             }
         }
-
         Ok(())
     }
 }

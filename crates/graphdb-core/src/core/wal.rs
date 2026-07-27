@@ -23,8 +23,8 @@ pub use sync::{
 pub use traits::{RecoveryApplier, WalWriter};
 pub use types::{
     align_to_block, block_padding_needed, blocks_needed, is_block_aligned, wal_flags, ArchiveMode,
-    CompressionLevel, Lsn, ParsedWalEntry, RecordType, RecoveryResult, SyncPolicy, UpdateWalUnit,
-    WalCompression, WalConfig, WalContentUnit, WalError, WalFileHeader, WalHeader, WalOpType,
-    WalRecoveryMode, WalResult, WalStats, WAL_BLOCK_SIZE, WAL_FILE_HEADER_SIZE, WAL_HEADER_SIZE,
-    WAL_MAGIC, WAL_MAX_RECORD_SIZE, WAL_VERSION,
+    CompressionLevel, Lsn, ParsedWalEntry, RecordType, RecoveryResult, SyncPolicy, WalCompression,
+    WalConfig, WalError, WalFileHeader, WalHeader, WalOpType, WalRecoveryMode, WalResult, WalStats,
+    WAL_BLOCK_SIZE, WAL_FILE_HEADER_SIZE, WAL_HEADER_SIZE, WAL_MAGIC, WAL_MAX_RECORD_SIZE,
+    WAL_VERSION,
 };

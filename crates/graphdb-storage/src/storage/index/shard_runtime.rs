@@ -32,8 +32,8 @@ pub(crate) struct ShardRuntime {
     forward: ArcSwap<BTreeMap<SecondaryIndexKey, IndexRecord>>,
     reverse: ArcSwap<BTreeMap<SecondaryIndexKey, IndexRecord>>,
     dirty: AtomicBool,
-    forward_prefix: Vec<u8>,
-    reverse_prefix: Vec<u8>,
+    forward_prefix: Arc<[u8]>,
+    reverse_prefix: Arc<[u8]>,
     prefix_forward_len: usize,
     prefix_reverse_len: usize,
     wal_file: PathBuf,
@@ -49,33 +49,10 @@ impl ShardRuntime {
             forward: ArcSwap::new(Arc::new(BTreeMap::new())),
             reverse: ArcSwap::new(Arc::new(BTreeMap::new())),
             dirty: AtomicBool::new(false),
-            forward_prefix: Vec::new(),
-            reverse_prefix: Vec::new(),
+            forward_prefix: Arc::from([] as [u8; 0]),
+            reverse_prefix: Arc::from([] as [u8; 0]),
             prefix_forward_len: 0,
             prefix_reverse_len: 0,
-            wal_file,
-            wal_entries: Mutex::new(Vec::new()),
-            wal_size_bytes: AtomicU64::new(0),
-        }
-    }
-
-    fn new_with_prefix(
-        checkpoint_file: PathBuf,
-        forward_prefix: Vec<u8>,
-        reverse_prefix: Vec<u8>,
-    ) -> Self {
-        let prefix_forward_len = forward_prefix.len();
-        let prefix_reverse_len = reverse_prefix.len();
-        let wal_file = checkpoint_file.join("index.wal");
-        Self {
-            checkpoint_file,
-            forward: ArcSwap::new(Arc::new(BTreeMap::new())),
-            reverse: ArcSwap::new(Arc::new(BTreeMap::new())),
-            dirty: AtomicBool::new(false),
-            forward_prefix,
-            reverse_prefix,
-            prefix_forward_len,
-            prefix_reverse_len,
             wal_file,
             wal_entries: Mutex::new(Vec::new()),
             wal_size_bytes: AtomicU64::new(0),
@@ -90,8 +67,8 @@ impl ShardRuntime {
             forward: ArcSwap::new(Arc::new(forward)),
             reverse: ArcSwap::new(Arc::new(reverse)),
             dirty: AtomicBool::new(false),
-            forward_prefix: Vec::new(),
-            reverse_prefix: Vec::new(),
+            forward_prefix: Arc::from([] as [u8; 0]),
+            reverse_prefix: Arc::from([] as [u8; 0]),
             prefix_forward_len: 0,
             prefix_reverse_len: 0,
             wal_file: PathBuf::new(),
@@ -102,14 +79,6 @@ impl ShardRuntime {
         // Replay WAL entries if present
         sr.replay_wal()?;
         Ok(sr)
-    }
-
-    pub(crate) fn forward_prefix_len(&self) -> usize {
-        self.prefix_forward_len
-    }
-
-    pub(crate) fn reverse_prefix_len(&self) -> usize {
-        self.prefix_reverse_len
     }
 
     fn strip_forward_prefix(&self, key: &SecondaryIndexKey) -> SecondaryIndexKey {
@@ -128,26 +97,6 @@ impl ShardRuntime {
         }
     }
 
-    fn prepend_forward_prefix(&self, key: &SecondaryIndexKey) -> SecondaryIndexKey {
-        if self.prefix_forward_len > 0 {
-            let mut full = self.forward_prefix.clone();
-            full.extend_from_slice(key);
-            full
-        } else {
-            key.clone()
-        }
-    }
-
-    fn prepend_reverse_prefix(&self, key: &SecondaryIndexKey) -> SecondaryIndexKey {
-        if self.prefix_reverse_len > 0 {
-            let mut full = self.reverse_prefix.clone();
-            full.extend_from_slice(key);
-            full
-        } else {
-            key.clone()
-        }
-    }
-
     pub(crate) fn read_forward(
         &self,
     ) -> arc_swap::Guard<Arc<BTreeMap<SecondaryIndexKey, IndexRecord>>> {
@@ -160,8 +109,6 @@ impl ShardRuntime {
         self.reverse.load()
     }
 
-    /// Iterate forward range with full-key semantics: accepts full-key bounds,
-    /// returns entries with full forward keys (prefix reconstructed).
     pub(crate) fn forward_range<'a>(
         &'a self,
         lower: &[u8],
@@ -173,20 +120,23 @@ impl ShardRuntime {
         } else {
             Bound::Included(lower.to_vec())
         };
-        let upper_suffix = if self.prefix_forward_len > 0 && upper.len() >= self.prefix_forward_len
+        let upper_suffix = if self.prefix_forward_len > 0 && upper.len() > self.prefix_forward_len
         {
             Bound::Excluded(upper[self.prefix_forward_len..].to_vec())
+        } else if self.prefix_forward_len > 0 && upper.len() == self.prefix_forward_len {
+            Bound::Unbounded
         } else {
             Bound::Excluded(upper.to_vec())
         };
         let map = self.forward.load();
         let plen = self.prefix_forward_len;
-        let fwd_prefix = self.forward_prefix.clone();
+        let prefix = Arc::clone(&self.forward_prefix);
         let range: Vec<_> = map
             .range((lower_suffix, upper_suffix))
             .map(move |(k, v)| {
                 if plen > 0 {
-                    let mut full = fwd_prefix.clone();
+                    let mut full = Vec::with_capacity(prefix.len() + k.len());
+                    full.extend_from_slice(&prefix);
                     full.extend_from_slice(k);
                     (full, v.clone())
                 } else {
@@ -197,7 +147,6 @@ impl ShardRuntime {
         range.into_iter()
     }
 
-    /// Iterate reverse range with full-key semantics.
     pub(crate) fn reverse_range<'a>(
         &'a self,
         lower: &[u8],
@@ -210,19 +159,22 @@ impl ShardRuntime {
                 Bound::Included(lower.to_vec())
             };
         let upper_suffix =
-            if self.prefix_reverse_len > 0 && upper.len() >= self.prefix_reverse_len {
+            if self.prefix_reverse_len > 0 && upper.len() > self.prefix_reverse_len {
                 Bound::Excluded(upper[self.prefix_reverse_len..].to_vec())
+            } else if self.prefix_reverse_len > 0 && upper.len() == self.prefix_reverse_len {
+                Bound::Unbounded
             } else {
                 Bound::Excluded(upper.to_vec())
             };
         let map = self.reverse.load();
         let plen = self.prefix_reverse_len;
-        let rev_prefix = self.reverse_prefix.clone();
+        let prefix = Arc::clone(&self.reverse_prefix);
         let range: Vec<_> = map
             .range((lower_suffix, upper_suffix))
             .map(move |(k, v)| {
                 if plen > 0 {
-                    let mut full = rev_prefix.clone();
+                    let mut full = Vec::with_capacity(prefix.len() + k.len());
+                    full.extend_from_slice(&prefix);
                     full.extend_from_slice(k);
                     (full, v.clone())
                 } else {
@@ -238,12 +190,13 @@ impl ShardRuntime {
         let rev = self.reverse.load();
         let plen_f = self.prefix_forward_len;
         let plen_r = self.prefix_reverse_len;
-        let fwd_prefix = self.forward_prefix.clone();
-        let rev_prefix = self.reverse_prefix.clone();
+        let fwd_prefix = Arc::clone(&self.forward_prefix);
+        let rev_prefix = Arc::clone(&self.reverse_prefix);
         let forward = if plen_f > 0 {
             fwd.iter()
                 .map(|(k, v)| {
-                    let mut full = fwd_prefix.clone();
+                    let mut full = Vec::with_capacity(fwd_prefix.len() + k.len());
+                    full.extend_from_slice(&fwd_prefix);
                     full.extend_from_slice(k);
                     (full, v.clone())
                 })
@@ -254,7 +207,8 @@ impl ShardRuntime {
         let reverse = if plen_r > 0 {
             rev.iter()
                 .map(|(k, v)| {
-                    let mut full = rev_prefix.clone();
+                    let mut full = Vec::with_capacity(rev_prefix.len() + k.len());
+                    full.extend_from_slice(&rev_prefix);
                     full.extend_from_slice(k);
                     (full, v.clone())
                 })
@@ -413,33 +367,15 @@ impl ShardRuntime {
         self.wal_size_bytes.load(Ordering::Relaxed)
     }
 
-    /// Iterate all forward entries returning full keys.
-    pub(crate) fn iter_forward(&self) -> Vec<(SecondaryIndexKey, IndexRecord)> {
-        let map = self.forward.load();
-        let plen = self.prefix_forward_len;
-        let fwd_prefix = self.forward_prefix.clone();
-        map.iter()
-            .map(|(k, v)| {
-                if plen > 0 {
-                    let mut full = fwd_prefix.clone();
-                    full.extend_from_slice(k);
-                    (full, v.clone())
-                } else {
-                    (k.clone(), v.clone())
-                }
-            })
-            .collect()
-    }
-
-    /// Iterate all reverse entries returning full keys.
     pub(crate) fn iter_reverse(&self) -> Vec<(SecondaryIndexKey, IndexRecord)> {
         let map = self.reverse.load();
         let plen = self.prefix_reverse_len;
-        let rev_prefix = self.reverse_prefix.clone();
+        let prefix = Arc::clone(&self.reverse_prefix);
         map.iter()
             .map(|(k, v)| {
                 if plen > 0 {
-                    let mut full = rev_prefix.clone();
+                    let mut full = Vec::with_capacity(prefix.len() + k.len());
+                    full.extend_from_slice(&prefix);
                     full.extend_from_slice(k);
                     (full, v.clone())
                 } else {
@@ -466,18 +402,18 @@ impl ShardRuntime {
         }
     }
 
-    /// Full flush without WAL - used by checkpoint.
     fn full_flush<K: IndexKeyGenerator>(&self) -> StorageResult<()> {
         let fwd = self.forward.load();
         let rev = self.reverse.load();
         let plen_f = self.prefix_forward_len;
         let plen_r = self.prefix_reverse_len;
-        let fwd_prefix = self.forward_prefix.clone();
-        let rev_prefix = self.reverse_prefix.clone();
+        let fwd_prefix = Arc::clone(&self.forward_prefix);
+        let rev_prefix = Arc::clone(&self.reverse_prefix);
         let full_fwd: BTreeMap<_, _> = if plen_f > 0 {
             fwd.iter()
                 .map(|(k, v)| {
-                    let mut full = fwd_prefix.clone();
+                    let mut full = Vec::with_capacity(fwd_prefix.len() + k.len());
+                    full.extend_from_slice(&fwd_prefix);
                     full.extend_from_slice(k);
                     (full, v.clone())
                 })
@@ -488,7 +424,8 @@ impl ShardRuntime {
         let full_rev: BTreeMap<_, _> = if plen_r > 0 {
             rev.iter()
                 .map(|(k, v)| {
-                    let mut full = rev_prefix.clone();
+                    let mut full = Vec::with_capacity(rev_prefix.len() + k.len());
+                    full.extend_from_slice(&rev_prefix);
                     full.extend_from_slice(k);
                     (full, v.clone())
                 })
@@ -550,7 +487,7 @@ fn wal_entry_for(is_forward: bool, key: SecondaryIndexKey, record: IndexRecord) 
 }
 
 /// Estimate WAL entry size in bytes.
-fn wal_record_size(key: &[u8], record: &IndexRecord) -> u64 {
+fn wal_record_size(key: &[u8], _record: &IndexRecord) -> u64 {
     (key.len() + std::mem::size_of::<IndexRecord>()) as u64
 }
 
@@ -592,6 +529,8 @@ impl GenerationRuntime {
     ) -> Self {
         let prefix_f_len = forward_prefix.len();
         let prefix_r_len = reverse_prefix.len();
+        let fwd_prefix: Arc<[u8]> = forward_prefix.into();
+        let rev_prefix: Arc<[u8]> = reverse_prefix.into();
         let mut shards = HashMap::new();
         for shard_def in &manifest.shards {
             let (forward, reverse) = maps.get(&shard_def.shard_id).cloned().unwrap_or_default();
@@ -612,8 +551,8 @@ impl GenerationRuntime {
                 reverse
             };
             let mut sr = ShardRuntime::empty(shard_def.checkpoint_file.clone());
-            sr.forward_prefix = forward_prefix.clone();
-            sr.reverse_prefix = reverse_prefix.clone();
+            sr.forward_prefix = Arc::clone(&fwd_prefix);
+            sr.reverse_prefix = Arc::clone(&rev_prefix);
             sr.prefix_forward_len = prefix_f_len;
             sr.prefix_reverse_len = prefix_r_len;
             sr.forward.store(Arc::new(stripped_fwd));
@@ -838,24 +777,6 @@ impl IndexRuntime {
         Ok(())
     }
 
-    /// Checkpoint all generations: full flush + clear WAL.
-    pub(crate) fn checkpoint_all<K: IndexKeyGenerator>(
-        &self,
-        manifest: &IndexManifest,
-    ) -> StorageResult<()> {
-        let generation = self.generation(manifest.generation).ok_or_else(|| {
-            StorageError::not_found(format!(
-                "Missing runtime generation {}",
-                manifest.generation
-            ))
-        })?;
-        for shard in &manifest.shards {
-            if let Some(s) = generation.shard(shard.shard_id) {
-                s.checkpoint::<K>()?;
-            }
-        }
-        Ok(())
-    }
 }
 
 pub(crate) fn generation_from_maps(

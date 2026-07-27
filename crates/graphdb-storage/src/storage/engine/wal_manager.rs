@@ -74,10 +74,6 @@ impl WalManager {
         Ok(())
     }
 
-    pub fn writer(&self) -> Option<Arc<RwLock<LocalWalWriter>>> {
-        self.local_writer.clone()
-    }
-
     pub(crate) fn set_index_barrier_registry(&mut self, registry: IndexBarrierRegistry) {
         self.barrier_registry = Some(registry);
     }
@@ -156,9 +152,21 @@ impl WalManager {
         writer
             .write()
             .append_entry(op_type, timestamp, &payload)
-            .map_err(|e| StorageError::wal_error(format!("Failed to append WAL entry: {:?}", e)))?;
+            .map_err(|e| StorageError::wal_error(format!("Failed to append WAL entry: {}", e)))?;
 
         Ok(())
+    }
+
+    pub fn append_entry(&self, op_type: WalOpType, timestamp: Timestamp, payload: &[u8]) -> StorageResult<()> {
+        let Some(writer) = self.local_writer.as_ref() else {
+            return Err(StorageError::wal_error(
+                "WAL writer is not initialized".to_string(),
+            ));
+        };
+        writer
+            .write()
+            .append_entry(op_type, timestamp, payload)
+            .map_err(|e| StorageError::wal_error(format!("Failed to append WAL entry: {}", e)))
     }
 
     pub fn append_transaction_with_durability(
@@ -246,7 +254,7 @@ mod tests {
             .open(temp_dir.path(), 0)
             .expect("Failed to open WAL");
 
-        assert!(manager.writer().is_some());
+        assert_eq!(manager.current_lsn(), Lsn::ZERO);
     }
 
     #[test]

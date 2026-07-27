@@ -721,38 +721,6 @@ pub mod wal_flags {
     pub const COMPRESSED: u16 = 0x0001;
 }
 
-#[derive(Debug, Clone)]
-pub struct WalContentUnit {
-    pub data: Vec<u8>,
-    pub size: usize,
-}
-
-impl WalContentUnit {
-    pub fn new(data: Vec<u8>) -> Self {
-        let size = data.len();
-        Self { data, size }
-    }
-
-    pub fn as_slice(&self) -> &[u8] {
-        &self.data
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct UpdateWalUnit {
-    pub timestamp: Timestamp,
-    pub content: WalContentUnit,
-}
-
-impl UpdateWalUnit {
-    pub fn new(timestamp: Timestamp, data: Vec<u8>) -> Self {
-        Self {
-            timestamp,
-            content: WalContentUnit::new(data),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SyncPolicy {
     Never,
@@ -811,8 +779,6 @@ pub struct WalConfig {
     pub max_file_size: usize,
     pub max_total_size: usize,
     pub ttl_seconds: u64,
-    pub checkpoint_interval: u64,
-    pub auto_checkpoint: bool,
     pub archive_dir: Option<String>,
     pub archive_mode: ArchiveMode,
     pub sync_policy: SyncPolicy,
@@ -833,8 +799,6 @@ impl Default for WalConfig {
             max_file_size: 16 * 1024 * 1024,
             max_total_size: 256 * 1024 * 1024,
             ttl_seconds: 0,
-            checkpoint_interval: 10000,
-            auto_checkpoint: true,
             archive_dir: None,
             archive_mode: ArchiveMode::None,
             sync_policy: SyncPolicy::EveryWrite,
@@ -926,16 +890,6 @@ impl WalConfig {
 
     pub fn with_ttl_seconds(mut self, seconds: u64) -> Self {
         self.ttl_seconds = seconds;
-        self
-    }
-
-    pub fn with_checkpoint_interval(mut self, interval: u64) -> Self {
-        self.checkpoint_interval = interval;
-        self
-    }
-
-    pub fn with_auto_checkpoint(mut self, enabled: bool) -> Self {
-        self.auto_checkpoint = enabled;
         self
     }
 

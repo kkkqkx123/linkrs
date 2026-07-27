@@ -365,8 +365,6 @@ impl BitPackedIntColumn {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     fn select_bitpacking(values: &[i64]) -> bool {
         if values.is_empty() {
             return false;

@@ -51,9 +51,6 @@ impl IndexGcOps for IndexDataManagerImpl {
         count
     }
 
-    fn retire_generations(&self, safe_ts: Timestamp) -> usize {
-        self.retire_generations(safe_ts)
-    }
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 use crate::core::stats::StatsManager;
 use crate::core::types::{
-    CommitLsn, Index, IndexGeneration, IndexType, SnapshotTimestamp, Timestamp, MAX_TIMESTAMP,
+    CommitLsn, Index, IndexGeneration, IndexType, SnapshotTimestamp, Timestamp,
 };
 use crate::core::value::ordered_codec::OrderedCodec;
 use crate::core::wal::{EntityRef, OutboxIntent};
@@ -87,24 +87,25 @@ impl IndexDataManagerImpl {
             return Ok(());
         }
 
-        // Find the index with the most generations to compact
         let runtimes = self.runtimes.read();
-        let mut target: Option<(IndexIdentity, usize)> = None;
+        let mut target: Option<(IndexIdentity, Arc<IndexRuntime>)> = None;
         for (identity, runtime) in runtimes.iter() {
             let gen_count = runtime.generations().len();
             if gen_count > 1 {
                 match &target {
-                    None => target = Some((*identity, gen_count)),
-                    Some((_, max)) if gen_count > *max => target = Some((*identity, gen_count)),
+                    None => target = Some((*identity, Arc::clone(runtime))),
+                    Some((_, max_r)) if gen_count > max_r.generations().len() => {
+                        target = Some((*identity, Arc::clone(runtime)));
+                    }
                     _ => {}
                 }
             }
         }
         drop(runtimes);
 
-        if let Some((identity, _)) = target {
-            // Use MAX_TIMESTAMP as safe_ts to merge all generations
-            self.compact_native_index(identity, MAX_TIMESTAMP)?;
+        if let Some((identity, runtime)) = target {
+            let safe_ts = runtime.barrier_lsn().get();
+            self.compact_native_index(identity, safe_ts)?;
         }
         Ok(())
     }

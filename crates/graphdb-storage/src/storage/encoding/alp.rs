@@ -419,8 +419,6 @@ impl Default for AlpColumn {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     fn select_alp(values: &[f64]) -> bool {
         if values.len() < 64 {
             return false;

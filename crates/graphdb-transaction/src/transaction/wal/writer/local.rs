@@ -5,7 +5,7 @@ use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::compression::{self as compression_mod, create_compressor, Compressor};
 use super::group_commit::GroupCommitCoordinator;
@@ -31,9 +31,6 @@ pub struct LocalWalWriter {
     current_lsn: AtomicU64,
     last_synced_lsn: AtomicU64,
     file_start_lsn: Lsn,
-    lsn_since_checkpoint: u64,
-    last_cleanup_time: Option<Instant>,
-    writes_since_cleanup: u64,
     stats: WalStats,
     config: WalConfig,
     is_open: AtomicBool,
@@ -63,9 +60,6 @@ impl LocalWalWriter {
             current_lsn: AtomicU64::new(0),
             last_synced_lsn: AtomicU64::new(0),
             file_start_lsn: Lsn::ZERO,
-            lsn_since_checkpoint: 0,
-            last_cleanup_time: None,
-            writes_since_cleanup: 0,
             stats: WalStats::new(),
             config,
             is_open: AtomicBool::new(false),
@@ -95,9 +89,6 @@ impl LocalWalWriter {
             current_lsn: AtomicU64::new(0),
             last_synced_lsn: AtomicU64::new(0),
             file_start_lsn: Lsn::ZERO,
-            lsn_since_checkpoint: 0,
-            last_cleanup_time: None,
-            writes_since_cleanup: 0,
             stats: WalStats::new(),
             config,
             is_open: AtomicBool::new(false),
@@ -231,27 +222,6 @@ impl LocalWalWriter {
         PathBuf::from(&self.wal_uri).join(format!("thread_{}_wal_{:08X}", self.thread_id, version))
     }
 
-    /// List all WAL files in the directory
-    fn list_wal_files(&self) -> WalResult<Vec<PathBuf>> {
-        let wal_dir = self.get_wal_dir();
-
-        if !wal_dir.exists() {
-            return Ok(Vec::new());
-        }
-
-        let mut files = Vec::new();
-        for entry in std::fs::read_dir(&wal_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if self.is_managed_wal_file(&path) {
-                files.push(path);
-            }
-        }
-
-        Ok(files)
-    }
-
     /// Determine whether a path belongs to this writer's WAL set.
     fn is_managed_wal_file(&self, path: &Path) -> bool {
         path.file_name()
@@ -283,17 +253,6 @@ impl LocalWalWriter {
         }
 
         Ok(WalFileHeader::from_bytes(&buffer))
-    }
-
-    /// Get total size of all WAL files
-    fn get_total_wal_size(&self) -> WalResult<usize> {
-        let mut total = 0;
-        for file in self.list_wal_files()? {
-            if let Ok(metadata) = std::fs::metadata(&file) {
-                total += metadata.len() as usize;
-            }
-        }
-        Ok(total)
     }
 
     /// Check if rotation is needed
@@ -429,85 +388,6 @@ impl LocalWalWriter {
         Ok(())
     }
 
-    /// Clean up old WAL files based on size and TTL
-    fn cleanup_old_wal_files(&mut self) -> WalResult<usize> {
-        let now = Instant::now();
-        if let Some(last_time) = self.last_cleanup_time {
-            if now.duration_since(last_time) < Duration::from_secs(1) {
-                return Ok(0);
-            }
-        }
-
-        if self.writes_since_cleanup < 100 {
-            return Ok(0);
-        }
-
-        let mut deleted_count = 0;
-        let current_file = self.current_file_path();
-
-        let mut wal_files = self.list_wal_files()?;
-
-        if wal_files.is_empty() {
-            self.writes_since_cleanup = 0;
-            return Ok(0);
-        }
-
-        wal_files.sort();
-
-        if self.config.max_total_size > 0 {
-            let total_size = self.get_total_wal_size()?;
-
-            if total_size > self.config.max_total_size {
-                let mut current_size = total_size;
-
-                for file in &wal_files {
-                    if current_file.as_ref().is_some_and(|current| current == file) {
-                        continue;
-                    }
-
-                    if current_size <= self.config.max_total_size {
-                        break;
-                    }
-
-                    let file_size = std::fs::metadata(file)?.len() as usize;
-
-                    self.delete_or_archive_file(file)?;
-
-                    current_size -= file_size;
-                    deleted_count += 1;
-                }
-            }
-        }
-
-        if self.config.ttl_seconds > 0 {
-            let ttl = Duration::from_secs(self.config.ttl_seconds);
-
-            for file in &wal_files {
-                if current_file.as_ref().is_some_and(|current| current == file) {
-                    continue;
-                }
-
-                if let Ok(metadata) = std::fs::metadata(file) {
-                    if let Ok(modified) = metadata.modified() {
-                        if modified.elapsed().unwrap_or(Duration::from_secs(0)) > ttl {
-                            self.delete_or_archive_file(file)?;
-                            deleted_count += 1;
-                        }
-                    }
-                }
-            }
-        }
-
-        if deleted_count > 0 {
-            log::info!("Cleaned up {} old WAL files", deleted_count);
-        }
-
-        self.last_cleanup_time = Some(Instant::now());
-        self.writes_since_cleanup = 0;
-
-        Ok(deleted_count)
-    }
-
     /// Rewrite the current file header with the latest checkpoint sequence.
     fn refresh_file_header(&mut self) -> WalResult<()> {
         if self.file.is_none() {
@@ -579,33 +459,13 @@ impl LocalWalWriter {
         Ok(deleted_count)
     }
 
-    /// Check if auto-checkpoint should be triggered
-    fn maybe_trigger_checkpoint(&mut self) -> WalResult<()> {
-        if !self.config.auto_checkpoint {
-            return Ok(());
-        }
-
-        self.lsn_since_checkpoint += 1;
-
-        if self.lsn_since_checkpoint >= self.config.checkpoint_interval {
-            log::debug!(
-                "Triggering auto-checkpoint at LSN {}",
-                self.current_lsn.load(Ordering::SeqCst)
-            );
-
-            self.lsn_since_checkpoint = 0;
-        }
-
-        Ok(())
-    }
-
     /// Append a WAL entry with checksum and LSN
     pub fn append_entry(
         &mut self,
         op_type: WalOpType,
         timestamp: Timestamp,
         payload: &[u8],
-    ) -> WalResult<bool> {
+    ) -> WalResult<()> {
         self.check_poisoned()?;
         if !self.is_open.load(Ordering::SeqCst) {
             return Err(WalError::Closed);
@@ -627,23 +487,21 @@ impl LocalWalWriter {
         timestamp: Timestamp,
         payload: &[u8],
         compression: WalCompression,
-    ) -> WalResult<bool> {
+    ) -> WalResult<()> {
         let prev_lsn = Lsn::new(self.current_lsn.load(Ordering::SeqCst));
         let entry_size = WAL_HEADER_SIZE + payload.len();
         let new_lsn = Lsn::new(prev_lsn.as_u64() + entry_size as u64);
 
-        let header = if self.config.checksum_enabled {
-            WalHeader::new(op_type, timestamp, payload.len() as u32)
-                .with_lsn(new_lsn, prev_lsn)
-                .with_record_type(RecordType::Full)
-                .with_checksum(payload)
-                .with_compression(compression)
-        } else {
-            WalHeader::new(op_type, timestamp, payload.len() as u32)
-                .with_lsn(new_lsn, prev_lsn)
-                .with_record_type(RecordType::Full)
-                .with_compression(compression)
-        };
+        let header = self.build_wal_header(
+            op_type,
+            timestamp,
+            payload.len(),
+            prev_lsn,
+            new_lsn,
+            RecordType::Full,
+            payload,
+            compression,
+        );
 
         self.write_entry(&header, payload, new_lsn)
     }
@@ -655,7 +513,7 @@ impl LocalWalWriter {
         timestamp: Timestamp,
         payload: &[u8],
         compression: WalCompression,
-    ) -> WalResult<bool> {
+    ) -> WalResult<()> {
         let total_chunks = payload.len().div_ceil(WAL_MAX_RECORD_SIZE);
         let mut offset = 0;
         let mut chunk_index = 0;
@@ -685,18 +543,16 @@ impl LocalWalWriter {
                 RecordType::Middle
             };
 
-            let header = if self.config.checksum_enabled {
-                WalHeader::new(op_type, timestamp, chunk_size as u32)
-                    .with_lsn(new_lsn, prev_lsn)
-                    .with_record_type(record_type)
-                    .with_checksum(chunk_data)
-                    .with_compression(compression)
-            } else {
-                WalHeader::new(op_type, timestamp, chunk_size as u32)
-                    .with_lsn(new_lsn, prev_lsn)
-                    .with_record_type(record_type)
-                    .with_compression(compression)
-            };
+            let header = self.build_wal_header(
+                op_type,
+                timestamp,
+                chunk_size,
+                prev_lsn,
+                new_lsn,
+                record_type,
+                chunk_data,
+                compression,
+            );
 
             if let Err(e) = self.write_entry(&header, chunk_data, new_lsn) {
                 log::error!(
@@ -715,11 +571,11 @@ impl LocalWalWriter {
             chunks_written += 1;
         }
 
-        Ok(true)
+        Ok(())
     }
 
     /// Write a single entry to the file
-    fn write_entry(&mut self, header: &WalHeader, payload: &[u8], new_lsn: Lsn) -> WalResult<bool> {
+    fn write_entry(&mut self, header: &WalHeader, payload: &[u8], new_lsn: Lsn) -> WalResult<()> {
         let header_bytes = header.as_bytes();
 
         let file = self.file.as_mut().ok_or(WalError::Closed)?;
@@ -757,11 +613,34 @@ impl LocalWalWriter {
             }
         }
 
-        Ok(true)
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_wal_header(
+        &self,
+        op_type: WalOpType,
+        timestamp: Timestamp,
+        payload_len: usize,
+        prev_lsn: Lsn,
+        new_lsn: Lsn,
+        record_type: RecordType,
+        payload: &[u8],
+        compression: WalCompression,
+    ) -> WalHeader {
+        let header = WalHeader::new(op_type, timestamp, payload_len as u32)
+            .with_lsn(new_lsn, prev_lsn)
+            .with_record_type(record_type)
+            .with_compression(compression);
+        if self.config.checksum_enabled {
+            header.with_checksum(payload)
+        } else {
+            header
+        }
     }
 
     /// Append multiple entries as a batch (for group commit)
-    pub fn append_batch(&mut self, entries: &[(WalOpType, Timestamp, &[u8])]) -> WalResult<bool> {
+    pub fn append_batch(&mut self, entries: &[(WalOpType, Timestamp, &[u8])]) -> WalResult<()> {
         self.append_batch_with_durability(entries, crate::core::types::DurabilityLevel::Sync)
     }
 
@@ -769,7 +648,7 @@ impl LocalWalWriter {
         &mut self,
         entries: &[(WalOpType, Timestamp, &[u8])],
         durability: crate::core::types::DurabilityLevel,
-    ) -> WalResult<bool> {
+    ) -> WalResult<()> {
         self.check_poisoned()?;
         if !self.is_open.load(Ordering::SeqCst) {
             return Err(WalError::Closed);
@@ -785,16 +664,16 @@ impl LocalWalWriter {
             let entry_size = WAL_HEADER_SIZE + final_payload.len();
             let new_lsn = Lsn::new(prev_lsn.as_u64() + entry_size as u64);
 
-            let header = if self.config.checksum_enabled {
-                WalHeader::new(*op_type, *timestamp, final_payload.len() as u32)
-                    .with_lsn(new_lsn, prev_lsn)
-                    .with_checksum(&final_payload)
-                    .with_compression(compression)
-            } else {
-                WalHeader::new(*op_type, *timestamp, final_payload.len() as u32)
-                    .with_lsn(new_lsn, prev_lsn)
-                    .with_compression(compression)
-            };
+            let header = self.build_wal_header(
+                *op_type,
+                *timestamp,
+                final_payload.len(),
+                prev_lsn,
+                new_lsn,
+                RecordType::Full,
+                &final_payload,
+                compression,
+            );
 
             total_len += WAL_HEADER_SIZE + final_payload.len();
             compressed_entries.push((header, final_payload));
@@ -832,7 +711,7 @@ impl LocalWalWriter {
             self.last_synced_lsn.store(new_lsn, Ordering::SeqCst);
         }
 
-        Ok(true)
+        Ok(())
     }
 
     pub fn append_transaction_batch(
@@ -1083,7 +962,7 @@ impl WalWriter for LocalWalWriter {
         self.group_commit = None;
     }
 
-    fn append(&mut self, data: &[u8]) -> WalResult<bool> {
+    fn append(&mut self, data: &[u8]) -> WalResult<()> {
         self.check_poisoned()?;
         if !self.is_open.load(Ordering::SeqCst) {
             return Err(WalError::Closed);
@@ -1122,17 +1001,7 @@ impl WalWriter for LocalWalWriter {
             }
         }
 
-        self.writes_since_cleanup += 1;
-
-        if self.config.max_total_size > 0 || self.config.ttl_seconds > 0 {
-            self.cleanup_old_wal_files()?;
-        }
-
-        if self.config.auto_checkpoint {
-            self.maybe_trigger_checkpoint()?;
-        }
-
-        Ok(true)
+        Ok(())
     }
 
     fn append_entry(
@@ -1140,7 +1009,7 @@ impl WalWriter for LocalWalWriter {
         op_type: WalOpType,
         timestamp: Timestamp,
         payload: &[u8],
-    ) -> WalResult<bool> {
+    ) -> WalResult<()> {
         LocalWalWriter::append_entry(self, op_type, timestamp, payload)
     }
 
@@ -1531,38 +1400,6 @@ mod tests {
         }
 
         assert!(writer.version >= 2);
-        writer.close();
-    }
-
-    #[test]
-    fn test_wal_cleanup_by_size() {
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let wal_path = temp_dir.path().to_string_lossy().to_string();
-
-        let config = WalConfig::default()
-            .with_max_file_size(1024)
-            .with_max_total_size(4096)
-            .with_truncate_size(4096);
-
-        let mut writer = LocalWalWriter::with_config(&wal_path, 0, config.clone());
-        writer.open().expect("Failed to open WAL");
-
-        let data = vec![0u8; 512];
-        for _ in 0..20 {
-            writer.append(&data).expect("Failed to append");
-        }
-
-        writer.cleanup_old_wal_files().expect("Failed to cleanup");
-
-        assert!(writer
-            .file_path
-            .as_ref()
-            .expect("WAL file path should exist")
-            .exists());
-        let total_size = writer
-            .get_total_wal_size()
-            .expect("Failed to get total size");
-        assert!(total_size > 0);
         writer.close();
     }
 

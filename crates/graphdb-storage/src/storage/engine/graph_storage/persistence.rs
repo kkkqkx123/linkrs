@@ -363,20 +363,6 @@ pub(crate) fn compact_transactional(
     })?;
 
     let result = {
-        let wal_writer = {
-            let coordinator = persistence.read();
-            let wal_mgr = coordinator.wal_manager();
-            let wal_reader = wal_mgr
-                .as_ref()
-                .ok_or_else(|| StorageError::db_error("WAL not enabled".to_string()))?
-                .read();
-            wal_reader
-                .writer()
-                .ok_or_else(|| StorageError::db_error("WAL writer not initialized".to_string()))?
-        };
-
-        let mut wal_writer_guard = wal_writer.write();
-
         let before_stats = ctx.get_compact_stats();
         log::info!(
             "Starting transactional compaction: enable_structure_compaction={}, config={{ segment_merge_enabled: {} }}, size={}/{}",
@@ -386,9 +372,18 @@ pub(crate) fn compact_transactional(
             before_stats.total_size
         );
 
-        wal_writer_guard
-            .append_entry(crate::core::wal::types::WalOpType::Compact, timestamp, &[])
-            .map_err(|e| StorageError::wal_error(format!("Failed to append compact WAL: {}", e)))?;
+        {
+            let coordinator = persistence.read();
+            let wal_mgr = coordinator.wal_manager();
+            let wal_guard = wal_mgr
+                .as_ref()
+                .ok_or_else(|| StorageError::db_error("WAL not enabled".to_string()))?
+                .read();
+
+            wal_guard
+                .append_entry(crate::core::wal::types::WalOpType::Compact, timestamp, &[])
+                .map_err(|e| StorageError::wal_error(format!("Failed to append compact WAL: {}", e)))?;
+        }
 
         ctx.compact(config, timestamp)
             .map_err(|e| StorageError::db_error(format!("Compaction failed: {}", e)))

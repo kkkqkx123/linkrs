@@ -3,12 +3,10 @@ use crate::core::value::ordered_codec::OrderedCodec;
 use crate::core::wal::EntityRef;
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::cursor::{IndexCursor, IndexPredicate, IndexRow, IndexScanPlan};
-use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
+use crate::storage::index::cursor::ChainForwardIterator;
 use crate::storage::index::key_codec::{KeyBuilder, KeyParser};
 use crate::storage::index::manifest::ManifestHandle;
 use crate::storage::index::types::StaleChecker;
-use std::collections::BTreeMap;
-use std::sync::Arc;
 
 pub(crate) fn compute_edge_index_scan_range(
     space_id: u64,
@@ -76,12 +74,9 @@ pub(crate) fn compute_edge_index_scan_range(
     }
 }
 
-type IndexRecord = crate::storage::index::types::IndexRecord;
-
 pub struct EdgeIndexCursor {
-    shard_ranges: Vec<(Arc<BTreeMap<SecondaryIndexKey, IndexRecord>>, Vec<u8>, Vec<u8>)>,
+    shard_iterators: Vec<ChainForwardIterator>,
     current_range: usize,
-    next_key: Option<SecondaryIndexKey>,
     exhausted: bool,
     offset_remaining: usize,
     limit: Option<usize>,
@@ -99,9 +94,8 @@ pub struct EdgeIndexCursor {
 impl std::fmt::Debug for EdgeIndexCursor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EdgeIndexCursor")
-            .field("shard_ranges_count", &self.shard_ranges.len())
+            .field("shard_iterators_count", &self.shard_iterators.len())
             .field("current_range", &self.current_range)
-            .field("next_key", &self.next_key)
             .field("exhausted", &self.exhausted)
             .field("offset_remaining", &self.offset_remaining)
             .field("limit", &self.limit)
@@ -118,15 +112,14 @@ impl std::fmt::Debug for EdgeIndexCursor {
 
 impl EdgeIndexCursor {
     pub(crate) fn new(
-        shard_ranges: Vec<(Arc<BTreeMap<SecondaryIndexKey, IndexRecord>>, Vec<u8>, Vec<u8>)>,
+        shard_iterators: Vec<ChainForwardIterator>,
         plan: &IndexScanPlan,
         stale_checker: Option<StaleChecker>,
         manifest_handle: Option<ManifestHandle>,
     ) -> Self {
         Self {
-            shard_ranges,
+            shard_iterators,
             current_range: 0,
-            next_key: None,
             exhausted: false,
             offset_remaining: plan.offset,
             limit: plan.limit,
@@ -141,101 +134,76 @@ impl EdgeIndexCursor {
             partition_id_range: plan.partition_id_range.clone(),
         }
     }
-
 }
 
 impl IndexCursor for EdgeIndexCursor {
     type Row = IndexRow;
 
     fn next_batch(&mut self, batch_size: usize) -> Result<Vec<Self::Row>, StorageError> {
-        if self.exhausted || self.shard_ranges.is_empty() {
+        if self.exhausted || self.shard_iterators.is_empty() {
             self.exhausted = true;
             return Ok(Vec::new());
         }
         let mut rows = Vec::with_capacity(batch_size.max(1));
         let batch_limit = batch_size.max(1);
-        while self.current_range < self.shard_ranges.len() && rows.len() < batch_limit {
-            let (ref map, ref range_start, ref range_end) =
-                self.shard_ranges[self.current_range];
-            let scan = if let Some(ref next_key) = self.next_key {
-                map.range((
-                    std::ops::Bound::Excluded(next_key.clone()),
-                    std::ops::Bound::Excluded(range_end.clone()),
-                ))
-            } else {
-                map.range((
-                    std::ops::Bound::Included(range_start.clone()),
-                    std::ops::Bound::Excluded(range_end.clone()),
-                ))
+        while self.current_range < self.shard_iterators.len() && rows.len() < batch_limit {
+            let key_entry = self.shard_iterators[self.current_range].next();
+            let Some((key, entry)) = key_entry else {
+                self.current_range += 1;
+                continue;
             };
-            let mut paused = false;
-            for (key, entry) in scan {
-                self.next_key = Some(key.clone());
-                if !entry.is_visible_at(self.read_timestamp) {
-                    self.invisible_skipped += 1;
-                    continue;
-                }
-                let entity_ref = match &entry.entity_ref {
-                    Some(entity_ref) => entity_ref.clone(),
-                    None => match parse_edge_entity_ref(key) {
-                        Some(entity_ref) => entity_ref,
-                        None => {
-                            self.malformed_skipped += 1;
-                            continue;
-                        }
-                    },
+
+            let entity_ref = match &entry.entity_ref {
+                Some(entity_ref) => entity_ref.clone(),
+                None => match parse_edge_entity_ref(&key) {
+                    Some(entity_ref) => entity_ref,
+                    None => {
+                        self.malformed_skipped += 1;
+                        continue;
+                    }
+                },
+            };
+            if self
+                .stale_checker
+                .as_ref()
+                .is_some_and(|checker| !checker(&entity_ref, entry.entity_version))
+            {
+                self.stale_skipped += 1;
+                continue;
+            }
+            if let Some(ref prange) = self.partition_id_range {
+                let src = match &entity_ref {
+                    crate::core::wal::EntityRef::Edge { src, .. } => src,
+                    _ => continue,
                 };
-                if self
-                    .stale_checker
-                    .as_ref()
-                    .is_some_and(|checker| !checker(&entity_ref, entry.entity_version))
-                {
-                    self.stale_skipped += 1;
-                    continue;
-                }
-                if let Some(ref prange) = self.partition_id_range {
-                    let src = match &entity_ref {
-                        crate::core::wal::EntityRef::Edge { src, .. } => src,
-                        _ => continue,
-                    };
-                    let bytes = src.as_bytes();
-                    if bytes.len() == 8 {
-                        let mut buf = [0u8; 8];
-                        buf.copy_from_slice(bytes);
-                        let vid_i64 = i64::from_be_bytes(buf);
-                        if vid_i64 < prange.start || vid_i64 >= prange.end {
-                            continue;
-                        }
+                let bytes = src.as_bytes();
+                if bytes.len() == 8 {
+                    let mut buf = [0u8; 8];
+                    buf.copy_from_slice(bytes);
+                    let vid_i64 = i64::from_be_bytes(buf);
+                    if vid_i64 < prange.start || vid_i64 >= prange.end {
+                        continue;
                     }
                 }
-                if self.offset_remaining > 0 {
-                    self.offset_remaining -= 1;
-                    continue;
-                }
-                rows.push(project_edge_row(
-                    entity_ref,
-                    entry.included_columns.as_deref(),
-                    self.projection.as_deref(),
-                ));
-                self.emitted += 1;
-                if self.limit.is_some_and(|limit| self.emitted >= limit)
-                    || rows.len() >= batch_limit
-                {
-                    paused = true;
-                    break;
-                }
             }
+            if self.offset_remaining > 0 {
+                self.offset_remaining -= 1;
+                continue;
+            }
+            rows.push(project_edge_row(
+                entity_ref,
+                entry.included_columns.as_deref(),
+                self.projection.as_deref(),
+            ));
+            self.emitted += 1;
             if self.limit.is_some_and(|limit| self.emitted >= limit) {
-                self.exhausted = true;
+                if self.current_range + 1 >= self.shard_iterators.len() {
+                    self.exhausted = true;
+                }
                 break;
             }
-            if paused {
-                break;
-            }
-            self.current_range += 1;
-            self.next_key = None;
         }
-        self.exhausted |= self.current_range >= self.shard_ranges.len();
+        self.exhausted |= self.current_range >= self.shard_iterators.len();
         Ok(rows)
     }
 
