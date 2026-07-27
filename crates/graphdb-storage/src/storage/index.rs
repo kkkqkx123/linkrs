@@ -36,6 +36,7 @@ pub(crate) mod traits;
 pub(crate) mod types;
 pub(crate) mod vertex_index_manager;
 pub(crate) mod vertex_ops;
+pub(crate) mod wal;
 
 #[cfg(test)]
 pub(crate) mod tests;

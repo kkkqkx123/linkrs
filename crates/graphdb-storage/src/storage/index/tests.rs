@@ -608,12 +608,13 @@ fn included_columns_survive_rebuild_from_snapshot() {
     }
     drop(manifest);
 
+    let next_gen = IndexGeneration::new(3);
     let checkpoint_dir = directory
         .path()
         .join("indexes")
         .join("1")
         .join("1")
-        .join("generation-2")
+        .join(format!("generation-{}", next_gen.get()))
         .join("shard-0");
     GenericIndexManager::<crate::storage::index::key_codec::EdgeIndexKeyGen>::flush_data(
         &checkpoint_dir,
@@ -622,7 +623,6 @@ fn included_columns_survive_rebuild_from_snapshot() {
     )
     .expect("flush checkpoint");
 
-    let next_gen = IndexGeneration::new(2);
     let next_manifest = IndexManifest::new(
         1,
         1,
@@ -665,4 +665,130 @@ fn included_columns_survive_rebuild_from_snapshot() {
         }
         _ => panic!("expected covering row after rebuild"),
     }
+}
+
+#[test]
+fn wal_recovers_data_after_checkpoint() {
+    use crate::core::types::storage_ids::VertexId;
+    use crate::core::wal::EntityRef;
+    use crate::storage::index::shard_runtime::ShardRuntime;
+    use crate::storage::index::types::IndexRecord;
+
+    let temp_dir = std::env::temp_dir().join("graphdb_wal_test");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let checkpoint_file = temp_dir.join("checkpoint");
+    std::fs::create_dir_all(&checkpoint_file).unwrap();
+
+    // Create a shard and insert data
+    let shard = ShardRuntime::empty(checkpoint_file.clone());
+    let mut forward = BTreeMap::new();
+    let mut reverse = BTreeMap::new();
+
+    forward.insert(
+        vec![1, 2, 3],
+        IndexRecord::new(100)
+            .with_entity_ref(EntityRef::Vertex(VertexId::from_int64(42)))
+            .with_entity_version(50),
+    );
+    reverse.insert(
+        vec![4, 5, 6],
+        IndexRecord::new(100)
+            .with_entity_ref(EntityRef::Vertex(VertexId::from_int64(42))),
+    );
+
+    shard.replace(forward, reverse);
+
+    // Flush WAL to disk
+    shard.flush_wal().unwrap();
+
+    // Verify WAL file exists
+    let wal_path = checkpoint_file.join("index.wal");
+    assert!(wal_path.exists(), "WAL file should exist after flush_wal");
+
+    // Load a new shard from the same checkpoint - should replay WAL
+    let loaded_shard = ShardRuntime::load::<VertexIndexKeyGen>(checkpoint_file.clone()).unwrap();
+
+    let fwd = loaded_shard.read_forward();
+    let rev = loaded_shard.read_reverse();
+    assert_eq!(fwd.len(), 1, "Should have 1 forward entry after WAL replay");
+    assert_eq!(rev.len(), 1, "Should have 1 reverse entry after WAL replay");
+
+    // Cleanup
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn checkpoint_clears_wal() {
+    use crate::storage::index::shard_runtime::ShardRuntime;
+    use crate::storage::index::types::IndexRecord;
+
+    let temp_dir = std::env::temp_dir().join("graphdb_checkpoint_test");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let checkpoint_file = temp_dir.join("checkpoint");
+    std::fs::create_dir_all(&checkpoint_file).unwrap();
+
+    let shard = ShardRuntime::empty(checkpoint_file.clone());
+    let mut forward = BTreeMap::new();
+    forward.insert(vec![1, 2, 3], IndexRecord::new(100));
+    shard.replace(forward, BTreeMap::new());
+
+    // Flush WAL
+    shard.flush_wal().unwrap();
+    let wal_path = checkpoint_file.join("index.wal");
+    assert!(wal_path.exists());
+
+    // Checkpoint - should clear WAL
+    shard.checkpoint::<VertexIndexKeyGen>().unwrap();
+    assert!(!wal_path.exists(), "WAL file should be removed after checkpoint");
+
+    // Cleanup
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn memory_limit_triggers_compaction() {
+    let manager = IndexDataManagerImpl::new();
+    let index = create_tag_index("name_idx", "Person");
+
+    // Set a very low memory limit to trigger compaction
+    manager.set_memory_limit_bytes(1);
+
+    manager
+        .register_native_index(1, &index)
+        .expect("register index");
+
+    // First update
+    manager
+        .update_vertex_indexes_mvcc(
+            1,
+            &Value::Int(1),
+            "name_idx",
+            &[("name".to_string(), Value::string("Alice"))],
+            100,
+        )
+        .expect("first update");
+
+    // Second update - should trigger compaction due to memory limit
+    manager
+        .update_vertex_indexes_mvcc(
+            1,
+            &Value::Int(2),
+            "name_idx",
+            &[("name".to_string(), Value::string("Bob"))],
+            200,
+        )
+        .expect("second update with memory limit");
+
+    // Verify data is still accessible
+    let results = manager
+        .lookup_tag_index_mvcc(1, &index, &Value::string("Alice"), 300)
+        .expect("lookup Alice");
+    assert!(!results.is_empty(), "Alice should be found");
+
+    // Cleanup - reset limit
+    manager.set_memory_limit_bytes(0);
 }

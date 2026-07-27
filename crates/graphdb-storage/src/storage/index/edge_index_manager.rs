@@ -6,8 +6,8 @@ use crate::storage::cursor::{IndexCursor, IndexPredicate, IndexRow, IndexScanPla
 use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
 use crate::storage::index::key_codec::{KeyBuilder, KeyParser};
 use crate::storage::index::manifest::ManifestHandle;
-use crate::storage::index::shard_runtime::ShardRuntime;
 use crate::storage::index::types::StaleChecker;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub(crate) fn compute_edge_index_scan_range(
@@ -76,8 +76,10 @@ pub(crate) fn compute_edge_index_scan_range(
     }
 }
 
+type IndexRecord = crate::storage::index::types::IndexRecord;
+
 pub struct EdgeIndexCursor {
-    shard_ranges: Vec<(Arc<ShardRuntime>, Vec<u8>, Vec<u8>)>,
+    shard_ranges: Vec<(Arc<BTreeMap<SecondaryIndexKey, IndexRecord>>, Vec<u8>, Vec<u8>)>,
     current_range: usize,
     next_key: Option<SecondaryIndexKey>,
     exhausted: bool,
@@ -116,7 +118,7 @@ impl std::fmt::Debug for EdgeIndexCursor {
 
 impl EdgeIndexCursor {
     pub(crate) fn new(
-        shard_ranges: Vec<(Arc<ShardRuntime>, Vec<u8>, Vec<u8>)>,
+        shard_ranges: Vec<(Arc<BTreeMap<SecondaryIndexKey, IndexRecord>>, Vec<u8>, Vec<u8>)>,
         plan: &IndexScanPlan,
         stale_checker: Option<StaleChecker>,
         manifest_handle: Option<ManifestHandle>,
@@ -153,16 +155,15 @@ impl IndexCursor for EdgeIndexCursor {
         let mut rows = Vec::with_capacity(batch_size.max(1));
         let batch_limit = batch_size.max(1);
         while self.current_range < self.shard_ranges.len() && rows.len() < batch_limit {
-            let (ref shard, ref range_start, ref range_end) =
+            let (ref map, ref range_start, ref range_end) =
                 self.shard_ranges[self.current_range];
-            let index = shard.read_forward();
             let scan = if let Some(ref next_key) = self.next_key {
-                index.range((
+                map.range((
                     std::ops::Bound::Excluded(next_key.clone()),
                     std::ops::Bound::Excluded(range_end.clone()),
                 ))
             } else {
-                index.range((
+                map.range((
                     std::ops::Bound::Included(range_start.clone()),
                     std::ops::Bound::Excluded(range_end.clone()),
                 ))
@@ -224,7 +225,6 @@ impl IndexCursor for EdgeIndexCursor {
                     break;
                 }
             }
-            drop(index);
             if self.limit.is_some_and(|limit| self.emitted >= limit) {
                 self.exhausted = true;
                 break;

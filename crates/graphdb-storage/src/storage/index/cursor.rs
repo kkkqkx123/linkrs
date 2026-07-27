@@ -2,11 +2,14 @@ use crate::core::types::Index;
 use crate::core::{StorageError, StorageResult};
 use crate::storage::cursor::IndexScanPlan;
 use crate::storage::index::edge_index_manager::{compute_edge_index_scan_range, EdgeIndexCursor};
+use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
 use crate::storage::index::manifest::ManifestCatalog;
-use crate::storage::index::shard_runtime::ShardRuntime;
+use crate::storage::index::shard_runtime::GenerationRuntime;
+use crate::storage::index::types::IndexRecord;
 use crate::storage::index::types::StaleChecker;
 use crate::storage::index::vertex_index_manager::{compute_vertex_index_scan_range, VertexIndexCursor};
 use crate::storage::index::IndexDataManagerImpl;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 impl IndexDataManagerImpl {
@@ -51,19 +54,18 @@ impl IndexDataManagerImpl {
         let _fence = runtime.read_fence();
         let handle = catalog.acquire();
         let manifest = handle.manifest();
-        let generation = runtime
-            .generation(manifest.generation)
-            .ok_or_else(|| StorageError::not_found("Index runtime generation is unavailable"))?;
+        let chain = runtime.generation_chain_until(manifest.generation)?;
 
         let (start, end) = compute_vertex_index_scan_range(space_id, index, plan)?;
-        let shard_ranges: Vec<(Arc<ShardRuntime>, Vec<u8>, Vec<u8>)> = manifest
-            .scan_ranges_with_shard(&plan.partition, &start, &end)
-            .into_iter()
-            .filter_map(|(shard_id, lower, upper)| {
-                let shard = generation.shard(shard_id)?;
-                Some((shard, lower, upper))
-            })
-            .collect();
+        let shard_ranges: Vec<(Arc<BTreeMap<SecondaryIndexKey, IndexRecord>>, Vec<u8>, Vec<u8>)> =
+            manifest
+                .scan_ranges_with_shard(&plan.partition, &start, &end)
+                .into_iter()
+                .filter_map(|(shard_id, lower, upper)| {
+                    merge_gen_chain_forward(&chain, shard_id, plan.read_timestamp)
+                        .map(|merged| (merged, lower, upper))
+                })
+                .collect();
 
         Ok(VertexIndexCursor::new(
             shard_ranges,
@@ -94,19 +96,18 @@ impl IndexDataManagerImpl {
         let _fence = runtime.read_fence();
         let handle = catalog.acquire();
         let manifest = handle.manifest();
-        let generation = runtime
-            .generation(manifest.generation)
-            .ok_or_else(|| StorageError::not_found("Index runtime generation is unavailable"))?;
+        let chain = runtime.generation_chain_until(manifest.generation)?;
 
         let (start, end) = compute_edge_index_scan_range(space_id, index, plan)?;
-        let shard_ranges: Vec<(Arc<ShardRuntime>, Vec<u8>, Vec<u8>)> = manifest
-            .scan_ranges_with_shard(&plan.partition, &start, &end)
-            .into_iter()
-            .filter_map(|(shard_id, lower, upper)| {
-                let shard = generation.shard(shard_id)?;
-                Some((shard, lower, upper))
-            })
-            .collect();
+        let shard_ranges: Vec<(Arc<BTreeMap<SecondaryIndexKey, IndexRecord>>, Vec<u8>, Vec<u8>)> =
+            manifest
+                .scan_ranges_with_shard(&plan.partition, &start, &end)
+                .into_iter()
+                .filter_map(|(shard_id, lower, upper)| {
+                    merge_gen_chain_forward(&chain, shard_id, plan.read_timestamp)
+                        .map(|merged| (merged, lower, upper))
+                })
+                .collect();
 
         Ok(EdgeIndexCursor::new(
             shard_ranges,
@@ -114,5 +115,35 @@ impl IndexDataManagerImpl {
             stale_checker,
             Some(handle),
         ))
+    }
+}
+
+fn merge_gen_chain_forward(
+    chain: &[Arc<GenerationRuntime>],
+    shard_id: u32,
+    read_ts: u64,
+) -> Option<Arc<BTreeMap<SecondaryIndexKey, IndexRecord>>> {
+    let mut merged = BTreeMap::new();
+    let mut tombstoned = std::collections::HashSet::new();
+    for gen in chain {
+        let Some(shard) = gen.shard(shard_id) else { continue };
+        for (key, entry) in shard.iter_forward() {
+            if tombstoned.contains(&key) {
+                continue;
+            }
+            if entry.created_ts > read_ts {
+                continue;
+            }
+            if entry.deleted_ts.is_some_and(|d| d <= read_ts) {
+                tombstoned.insert(key);
+                continue;
+            }
+            merged.entry(key).or_insert(entry);
+        }
+    }
+    if merged.is_empty() {
+        None
+    } else {
+        Some(Arc::new(merged))
     }
 }

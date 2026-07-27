@@ -46,7 +46,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::storage::index::traits::IndexGcOps;
-use crate::storage::index::types::GcStats;
+use crate::storage::index::types::{GcStats, IndexIdentity};
 use crate::storage::index::IndexDataManagerImpl;
 
 /// GC manager configuration
@@ -64,6 +64,10 @@ pub struct IndexGcConfig {
     pub tombstone_threshold: usize,
     /// Enable aggressive GC when threshold exceeded
     pub aggressive_gc_enabled: bool,
+    /// Tombstone ratio (percentage) above which generational compaction is triggered
+    pub compaction_threshold: usize,
+    /// Enable generational compaction to remove tombstones
+    pub compaction_enabled: bool,
 }
 
 impl Default for IndexGcConfig {
@@ -75,6 +79,8 @@ impl Default for IndexGcConfig {
             timestamp_margin: 1,
             tombstone_threshold: 10000,
             aggressive_gc_enabled: true,
+            compaction_threshold: 30,
+            compaction_enabled: true,
         }
     }
 }
@@ -101,6 +107,16 @@ impl IndexGcConfig {
 
     pub fn with_timestamp_margin(mut self, margin: Timestamp) -> Self {
         self.timestamp_margin = margin;
+        self
+    }
+
+    pub fn with_compaction_threshold(mut self, threshold: usize) -> Self {
+        self.compaction_threshold = threshold;
+        self
+    }
+
+    pub fn with_compaction_enabled(mut self, enabled: bool) -> Self {
+        self.compaction_enabled = enabled;
         self
     }
 }
@@ -161,6 +177,20 @@ impl IndexGcManager {
         self.total_removed
             .fetch_add(stats.total_removed() as u64, Ordering::Release);
 
+        // After tombstone GC, check if generational compaction is needed
+        if self.needs_compaction() {
+            let compacted = self.run_compaction(safe_ts);
+            if compacted > 0 {
+                tracing::info!(indexes_compacted = compacted, "Generational compaction completed");
+            }
+        }
+
+        // Retire generations whose max_ts is past the safe timestamp
+        let retired = self.index_manager.retire_generations(safe_ts);
+        if retired > 0 {
+            tracing::info!(generations_retired = retired, "Generation retirement completed");
+        }
+
         stats
     }
 
@@ -211,6 +241,51 @@ impl IndexGcManager {
     pub fn needs_aggressive_gc(&self) -> bool {
         self.config.aggressive_gc_enabled
             && self.tombstone_count() > self.config.tombstone_threshold
+    }
+
+    /// Check if generational compaction is needed based on tombstone ratio
+    pub fn needs_compaction(&self) -> bool {
+        if !self.config.compaction_enabled {
+            return false;
+        }
+        let tombstones = self.tombstone_count();
+        if tombstones == 0 {
+            return false;
+        }
+        let active = self.index_manager.active_entry_count().max(1);
+        let ratio = tombstones * 100 / active;
+        ratio > self.config.compaction_threshold
+    }
+
+    /// Run generational compaction on all indexes
+    ///
+    /// Returns the number of indexes compacted.
+    pub fn run_compaction(&self, safe_ts: Timestamp) -> usize {
+        if safe_ts == 0 {
+            return 0;
+        }
+        let identities: Vec<IndexIdentity> = self
+            .index_manager
+            .runtimes
+            .read()
+            .keys()
+            .copied()
+            .collect();
+        let mut compacted = 0;
+        for identity in identities {
+            match self.index_manager.compact_native_index(identity, safe_ts) {
+                Ok(true) => compacted += 1,
+                Ok(false) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        "Compaction failed for index {}: {}",
+                        identity.index_id,
+                        e
+                    );
+                }
+            }
+        }
+        compacted
     }
 
     /// Start background GC thread

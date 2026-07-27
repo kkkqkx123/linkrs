@@ -1,63 +1,19 @@
-use crate::core::types::{IndexType, Timestamp};
+use crate::core::types::Timestamp;
 use crate::core::{StorageError, StorageResult};
-use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
 use crate::storage::index::traits::IndexGcOps;
-use crate::storage::index::types::{GcStats, IndexRecord};
+use crate::storage::index::types::GcStats;
 use crate::storage::index::IndexDataManagerImpl;
-use std::collections::BTreeMap;
-use std::sync::Arc;
 
 impl IndexDataManagerImpl {
     pub(crate) fn gc_runtime(
         &self,
-        safe_ts: Timestamp,
-        batch_size: usize,
+        _safe_ts: Timestamp,
+        _batch_size: usize,
     ) -> StorageResult<GcStats> {
-        let mut remaining = batch_size;
-        let mut stats = GcStats::default();
-        for (index_id, runtime) in self.runtimes.read().iter() {
-            let index_type = self.index_types.read().get(index_id).cloned();
-            for generation in runtime.generations() {
-                for shard in generation.shards() {
-                    let mut remove = |map: &arc_swap::ArcSwapAny<
-                        Arc<BTreeMap<SecondaryIndexKey, IndexRecord>>,
-                    >| {
-                        if remaining == 0 {
-                            return 0;
-                        }
-                        let keys: Vec<_> = map
-                            .load()
-                            .iter()
-                            .filter(|(_, entry)| {
-                                entry.deleted_ts.is_some_and(|deleted| deleted < safe_ts)
-                            })
-                            .take(remaining)
-                            .map(|(key, _)| key.clone())
-                            .collect();
-                        let count = keys.len();
-                        if count > 0 {
-                            let mut data = map.load_full().as_ref().clone();
-                            for key in &keys {
-                                data.remove(key);
-                            }
-                            map.store(Arc::new(data));
-                            remaining = remaining.saturating_sub(count);
-                        }
-                        count
-                    };
-                    let removed = remove(&shard.forward) + remove(&shard.reverse);
-                    match index_type {
-                        Some(IndexType::TagIndex) => stats.vertex_entries_removed += removed,
-                        Some(IndexType::EdgeIndex) => stats.edge_entries_removed += removed,
-                        None => {}
-                    }
-                    if remaining == 0 {
-                        return Ok(stats);
-                    }
-                }
-            }
-        }
-        Ok(stats)
+        // Tombstone cleanup is handled by generation retirement + compaction.
+        // Per-entry tombstone removal is no longer needed because clear paths
+        // now publish delta generations (tombstones live in sub-generations).
+        Ok(GcStats::default())
     }
 }
 
@@ -94,6 +50,10 @@ impl IndexGcOps for IndexDataManagerImpl {
         }
         count
     }
+
+    fn retire_generations(&self, safe_ts: Timestamp) -> usize {
+        self.retire_generations(safe_ts)
+    }
 }
 
 #[cfg(test)]
@@ -110,7 +70,7 @@ mod tests {
     }
 
     #[test]
-    fn tombstones_are_removed_after_gc() {
+    fn tombstones_are_published_as_delta_generations() {
         let manager = IndexDataManagerImpl::new();
 
         let index = Index::new(IndexConfig {
@@ -147,10 +107,17 @@ mod tests {
             "expected tombstones after delete"
         );
 
+        // With delta generation approach, per-entry tombstone removal is
+        // replaced by generation retirement + compaction.
+        // gc_runtime returns 0 — tombstones live in sub-generations until
+        // compaction or the entire generation is retired.
         let stats = manager
             .gc_tombstones_incremental(25, 100)
             .expect("gc should succeed");
-        assert!(stats.total_removed() > 0, "expected removed entries");
-        assert_eq!(manager.tombstone_count(), 0);
+        assert_eq!(stats.total_removed(), 0, "per-entry GC is a no-op");
+        assert!(
+            manager.tombstone_count() > 0,
+            "tombstones remain until compaction retires the delta generation"
+        );
     }
 }

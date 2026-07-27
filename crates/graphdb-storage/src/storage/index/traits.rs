@@ -67,4 +67,7 @@ pub trait IndexGcOps: Send + Sync {
         batch_size: usize,
     ) -> Result<GcStats, StorageError>;
     fn tombstone_count(&self) -> usize;
+    /// Retire generations whose max_ts < safe_ts.
+    /// Returns the number of generations retired.
+    fn retire_generations(&self, safe_ts: Timestamp) -> usize;
 }
