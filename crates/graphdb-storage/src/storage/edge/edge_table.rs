@@ -442,13 +442,13 @@ impl<'a> EdgeSnapshotHandle<'a> {
     }
 
     pub fn release(mut self) {
-        self.ts = u32::MAX;
+        self.ts = Timestamp::MAX;
     }
 }
 
 impl<'a> Drop for EdgeSnapshotHandle<'a> {
     fn drop(&mut self) {
-        if self.ts != u32::MAX {
+        if self.ts != Timestamp::MAX {
             self.table.unregister_snapshot(self.ts);
         }
     }
@@ -645,7 +645,7 @@ impl core::TimeTravelEdgeStore {
                 merge::merge_selected_segments_with_deletion_filter_with_free_space(
                     &mut self.out_segments,
                     out_indices,
-                    u32::MAX,
+                    Timestamp::MAX,
                     min_active_snapshot_ts,
                     &mut self.out_free_space,
                 );
@@ -655,7 +655,7 @@ impl core::TimeTravelEdgeStore {
                 merge::merge_selected_segments_with_deletion_filter_with_free_space(
                     &mut self.in_segments,
                     in_indices,
-                    u32::MAX,
+                    Timestamp::MAX,
                     min_active_snapshot_ts,
                     &mut self.in_free_space,
                 );
@@ -846,7 +846,7 @@ impl core::TimeTravelEdgeStore {
         self.properties = persistence::load_properties(&props_path)?;
 
         if self.next_edge_id.0 == 0 {
-            let ts = u32::MAX;
+            let ts = Timestamp::MAX;
             let max_id = self
                 .out_csr
                 .iter(ts)

@@ -36,7 +36,7 @@ pub enum DeletionInfo {
 impl DeletionInfo {
     /// Create from deletion timestamps. NoDeletes if min=MAX or max=0.
     pub fn new(min: Timestamp, max: Timestamp) -> Self {
-        if min == u32::MAX || max == 0 {
+        if min == Timestamp::MAX || max == 0 {
             DeletionInfo::NoDeletes
         } else {
             DeletionInfo::HasDeletes {
@@ -49,7 +49,7 @@ impl DeletionInfo {
 
     /// Create with known deleted count (used during freeze/segment creation)
     pub fn with_count(min: Timestamp, max: Timestamp, deleted_count: u32) -> Self {
-        if min == u32::MAX || max == 0 || deleted_count == 0 {
+        if min == Timestamp::MAX || max == 0 || deleted_count == 0 {
             DeletionInfo::NoDeletes
         } else {
             DeletionInfo::HasDeletes {
@@ -151,8 +151,8 @@ impl SegmentVersion {
         crc = crc
             .wrapping_mul(31)
             .wrapping_add(segment.csr.read().edge_count() as u32);
-        crc = crc.wrapping_mul(31).wrapping_add(segment.create_ts_min);
-        crc = crc.wrapping_mul(31).wrapping_add(segment.create_ts_max);
+        crc = crc.wrapping_mul(31).wrapping_add(segment.create_ts_min as u32);
+        crc = crc.wrapping_mul(31).wrapping_add(segment.create_ts_max as u32);
         crc
     }
 
@@ -197,7 +197,7 @@ impl CsrSegment {
         create_ts_max: Timestamp,
         deletion_info: DeletionInfo,
     ) -> Self {
-        Self::with_creation_ts(csr, create_ts_min, create_ts_max, deletion_info, u32::MAX)
+        Self::with_creation_ts(csr, create_ts_min, create_ts_max, deletion_info, Timestamp::MAX)
     }
 
     pub fn with_creation_ts(
@@ -235,8 +235,8 @@ impl CsrSegment {
     }
 
     /// Calculate age of this segment in timestamp units
-    pub fn age(&self, current_ts: Timestamp) -> u32 {
-        if self.created_at_ts == u32::MAX {
+    pub fn age(&self, current_ts: Timestamp) -> Timestamp {
+        if self.created_at_ts == Timestamp::MAX {
             0
         } else {
             current_ts.saturating_sub(self.created_at_ts)
@@ -261,7 +261,7 @@ impl CsrSegment {
     /// Get deletion info as (min, max) range for serialization
     pub fn deletion_range(&self) -> (Timestamp, Timestamp) {
         match self.deletion_info {
-            DeletionInfo::NoDeletes => (u32::MAX, 0),
+            DeletionInfo::NoDeletes => (Timestamp::MAX, 0),
             DeletionInfo::HasDeletes { min_ts, max_ts, .. } => (min_ts, max_ts),
         }
     }

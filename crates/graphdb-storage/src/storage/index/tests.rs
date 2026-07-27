@@ -188,7 +188,7 @@ fn split_writes_only_the_selected_index_to_each_shard() {
     let second_prefix = KeyBuilder::build_vertex_index_prefix(1, "second").0;
     let mut shard_entries = 0;
     for shard in &manifest.manifest().shards {
-        let (forward, _, _) = GenericIndexManager::<VertexIndexKeyGen>::load_data(&shard.checkpoint_file)
+        let (forward, _) = GenericIndexManager::<VertexIndexKeyGen>::load_data(&shard.checkpoint_file)
             .expect("load split shard");
         shard_entries += forward.len();
         assert!(forward.keys().all(|key| key.starts_with(&first_prefix)));

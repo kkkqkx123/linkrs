@@ -131,10 +131,12 @@ pub(crate) fn flush_split_generation<K: crate::storage::index::key_codec::IndexK
         let data = runtime
             .shard(entry.shard_id)
             .ok_or_else(|| StorageError::not_found("Split generation shard is unavailable"))?;
+        let forward = data.read_forward();
+        let reverse = data.read_reverse();
         GenericIndexManager::<K>::flush_data(
             &entry.checkpoint_file,
-            &data.forward().read(),
-            &data.reverse().read(),
+            &forward,
+            &reverse,
         )?;
     }
     Ok(())

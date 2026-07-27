@@ -274,12 +274,6 @@ pub trait IndexCursor: Send + std::fmt::Debug {
     /// cause premature exhaustion.
     fn next_batch(&mut self, batch_size: usize) -> Result<Vec<Self::Row>, StorageError>;
 
-    /// Return the total number of rows that matched the index predicate
-    /// at cursor creation time (before stale filtering).
-    fn estimated_match_count(&self) -> Option<u64> {
-        None
-    }
-
     /// Number of stale rows skipped so far (for diagnostics).
     fn stale_skipped(&self) -> u64 {
         0

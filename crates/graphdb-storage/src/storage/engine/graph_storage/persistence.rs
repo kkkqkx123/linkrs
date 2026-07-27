@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::core::types::{CompactConfig, CompactTarget};
+use crate::core::types::{CompactConfig, CompactTarget, Timestamp};
 use crate::core::{StorageError, StorageResult};
 use crate::storage::engine::paths::StoragePaths;
 use crate::storage::engine::persistence_coordinator::{
@@ -631,7 +631,7 @@ fn read_checkpoint_metadata(dir: &Path) -> StorageResult<CheckpointInfo> {
 
     let mut checkpoint_id: Option<u64> = None;
     let mut lsn: Option<u64> = None;
-    let mut timestamp: Option<u32> = None;
+    let mut timestamp: Option<Timestamp> = None;
     let mut format_version: Option<u32> = None;
 
     for line in reader.lines() {
@@ -719,7 +719,7 @@ mod tests {
 
     fn write_insert_vertex_wal(
         wal_dir: &Path,
-        timestamp: u32,
+        timestamp: u64,
         label: u32,
         vid: i64,
         name: &str,

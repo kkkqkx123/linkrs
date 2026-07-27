@@ -40,7 +40,7 @@ use crate::core::{DataType, DateValue, StorageError, StorageResult, Value};
 use crate::storage::encoding::EncodingType;
 use crate::storage::mvcc::TieredTombstoneManager;
 use crate::storage::naming::NameIndexer;
-use crate::storage::persistence::{read_header, read_u32_le, section, write_header};
+use crate::storage::persistence::{read_header, read_u32_le, read_u64_le, section, write_header};
 use crate::storage::types::PropertyId;
 
 pub use super::property_schema::{
@@ -950,11 +950,11 @@ impl PropertyTable {
             offset += 1;
 
             if marker == 1 {
-                let create_ts = read_u32_le(data, &mut offset)?;
+                let create_ts = read_u64_le(data, &mut offset)?;
                 let has_delete_ts = data[offset];
                 offset += 1;
                 let delete_ts = if has_delete_ts == 1 {
-                    Some(read_u32_le(data, &mut offset)?)
+                    Some(read_u64_le(data, &mut offset)?)
                 } else {
                     None
                 };

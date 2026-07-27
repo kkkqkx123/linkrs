@@ -97,7 +97,7 @@ const CHECKPOINT_FORMAT_VERSION: u32 = 2;
 pub struct CheckpointInfo {
     pub checkpoint_id: u64,
     pub lsn: Lsn,
-    pub timestamp: u32,
+    pub timestamp: Timestamp,
 }
 
 #[derive(Debug, Clone)]
@@ -810,7 +810,7 @@ impl PersistenceCoordinator {
 
         let mut checkpoint_id: Option<u64> = None;
         let mut lsn: Option<u64> = None;
-        let mut timestamp: Option<u32> = None;
+        let mut timestamp: Option<Timestamp> = None;
         let mut format_version: Option<u32> = None;
         let mut files = Vec::new();
 

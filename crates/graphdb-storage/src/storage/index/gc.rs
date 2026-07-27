@@ -5,6 +5,7 @@ use crate::storage::index::traits::IndexGcOps;
 use crate::storage::index::types::{GcStats, IndexRecord};
 use crate::storage::index::IndexDataManagerImpl;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 impl IndexDataManagerImpl {
     pub(crate) fn gc_runtime(
@@ -18,29 +19,33 @@ impl IndexDataManagerImpl {
             let index_type = self.index_types.read().get(index_id).cloned();
             for generation in runtime.generations() {
                 for shard in generation.shards() {
-                    let mut remove =
-                        |map: &parking_lot::RwLock<BTreeMap<SecondaryIndexKey, IndexRecord>>| {
-                            if remaining == 0 {
-                                return 0;
+                    let mut remove = |map: &arc_swap::ArcSwapAny<
+                        Arc<BTreeMap<SecondaryIndexKey, IndexRecord>>,
+                    >| {
+                        if remaining == 0 {
+                            return 0;
+                        }
+                        let keys: Vec<_> = map
+                            .load()
+                            .iter()
+                            .filter(|(_, entry)| {
+                                entry.deleted_ts.is_some_and(|deleted| deleted < safe_ts)
+                            })
+                            .take(remaining)
+                            .map(|(key, _)| key.clone())
+                            .collect();
+                        let count = keys.len();
+                        if count > 0 {
+                            let mut data = map.load_full().as_ref().clone();
+                            for key in &keys {
+                                data.remove(key);
                             }
-                            let keys = map
-                                .read()
-                                .iter()
-                                .filter(|(_, entry)| {
-                                    entry.deleted_ts.is_some_and(|deleted| deleted < safe_ts)
-                                })
-                                .take(remaining)
-                                .map(|(key, _)| key.clone())
-                                .collect::<Vec<_>>();
-                            let count = keys.len();
-                            let mut data = map.write();
-                            for key in keys {
-                                data.remove(&key);
-                            }
+                            map.store(Arc::new(data));
                             remaining = remaining.saturating_sub(count);
-                            count
-                        };
-                    let removed = remove(shard.forward()) + remove(shard.reverse());
+                        }
+                        count
+                    };
+                    let removed = remove(&shard.forward) + remove(&shard.reverse);
                     match index_type {
                         Some(IndexType::TagIndex) => stats.vertex_entries_removed += removed,
                         Some(IndexType::EdgeIndex) => stats.edge_entries_removed += removed,
@@ -75,14 +80,12 @@ impl IndexGcOps for IndexDataManagerImpl {
             for generation in runtime.generations() {
                 for shard in generation.shards() {
                     count += shard
-                        .forward()
-                        .read()
+                        .read_forward()
                         .values()
                         .filter(|entry| entry.deleted_ts.is_some())
                         .count();
                     count += shard
-                        .reverse()
-                        .read()
+                        .read_reverse()
                         .values()
                         .filter(|entry| entry.deleted_ts.is_some())
                         .count();

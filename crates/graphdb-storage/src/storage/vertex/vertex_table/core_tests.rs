@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::types::Timestamp;
 use crate::core::DataType;
 use crate::storage::types::StoragePropertyDef;
 
@@ -475,12 +476,12 @@ fn test_compact_multiple_cycles() {
                 .insert(
                     &format!("v{}_{}", cycle, i),
                     &[("name".to_string(), Value::string(format!("P{}", i)))],
-                    ts_insert as u32,
+                    ts_insert,
                 )
                 .unwrap_or_else(|_| panic!("insert cycle {} should succeed", cycle));
         }
 
-        let scan_count = table.scan(ts_insert as u32).count();
+        let scan_count = table.scan(ts_insert).count();
 
         let mut expected_after_insert = 0;
         for i in 0..=cycle {
@@ -501,7 +502,7 @@ fn test_compact_multiple_cycles() {
         for i in 0..10 {
             if i % 2 == 0 {
                 table
-                    .delete(&format!("v{}_{}", cycle, i), ts_delete as u32)
+                    .delete(&format!("v{}_{}", cycle, i), ts_delete)
                     .unwrap_or_else(|_| panic!("delete cycle {} should succeed", cycle));
             }
         }
@@ -520,7 +521,7 @@ fn test_compact_multiple_cycles() {
             }
         }
 
-        let final_scan = table.scan(ts_compact as u32).count();
+        let final_scan = table.scan(ts_compact).count();
 
         assert_eq!(
             final_scan, expected_count,
@@ -650,7 +651,7 @@ fn test_vertex_snapshot_isolation() {
 
     table.unregister_snapshot(snap1).unwrap();
     assert_eq!(table.active_snapshot_count(), 0);
-    assert_eq!(table.min_active_snapshot_ts(), u32::MAX);
+    assert_eq!(table.min_active_snapshot_ts(), Timestamp::MAX);
 }
 
 #[test]
@@ -697,7 +698,7 @@ fn test_vertex_multiple_snapshots() {
 
     table.unregister_snapshot(snap2).unwrap();
     assert_eq!(table.active_snapshot_count(), 0);
-    assert_eq!(table.min_active_snapshot_ts(), u32::MAX);
+    assert_eq!(table.min_active_snapshot_ts(), Timestamp::MAX);
 }
 
 #[test]
@@ -728,7 +729,7 @@ fn test_vertex_concurrent_snapshots_same_timestamp() {
 
     table.unregister_snapshot(snap2).unwrap();
     assert_eq!(table.active_snapshot_count(), 0);
-    assert_eq!(table.min_active_snapshot_ts(), u32::MAX);
+    assert_eq!(table.min_active_snapshot_ts(), Timestamp::MAX);
 }
 
 #[test]

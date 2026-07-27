@@ -311,7 +311,7 @@ impl Csr {
             let neighbor = read_vertex_id(data, &mut offset)?;
             let raw_edge_id = read_u64_le(data, &mut offset)?;
             let prop_offset = read_u32_le(data, &mut offset)?;
-            let timestamp = read_u32_le(data, &mut offset)?;
+            let timestamp = read_u64_le(data, &mut offset)?;
 
             edges.push(ImmutableNbr::with_timestamp(
                 neighbor,

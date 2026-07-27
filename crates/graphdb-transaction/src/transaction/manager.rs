@@ -455,7 +455,7 @@ impl TransactionManager {
     /// - `options`: Transaction options (timeout, etc.)
     pub fn begin_snapshot_read(
         &self,
-        snapshot_ts: u32,
+        snapshot_ts: Timestamp,
         options: TransactionOptions,
     ) -> Result<TransactionId, TransactionError> {
         if self.shutdown_flag.load(Ordering::SeqCst) != 0 {
@@ -1533,12 +1533,12 @@ impl TransactionManager {
     }
 
     /// Get current write timestamp
-    pub fn write_timestamp(&self) -> u32 {
+    pub fn write_timestamp(&self) -> Timestamp {
         self.version_manager.write_timestamp()
     }
 
     /// Get current read timestamp
-    pub fn read_timestamp(&self) -> u32 {
+    pub fn read_timestamp(&self) -> Timestamp {
         self.version_manager.read_timestamp()
     }
 

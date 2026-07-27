@@ -3,7 +3,7 @@
 //! Unified WAL (Write-Ahead Log) manager that properly integrates with LocalWalWriter.
 //! This module provides a single source of truth for LSN management and WAL operations.
 
-use crate::core::types::{CommitLsn, TransactionId};
+use crate::core::types::{CommitLsn, Timestamp, TransactionId};
 use crate::core::wal::types::WalOpType;
 use crate::core::wal::OutboxIntent;
 use crate::core::{StorageError, StorageResult};
@@ -140,7 +140,7 @@ impl WalManager {
     pub fn append_redo<T: Serialize>(
         &self,
         op_type: WalOpType,
-        timestamp: u32,
+        timestamp: Timestamp,
         redo: &T,
     ) -> StorageResult<()> {
         let Some(writer) = self.local_writer.as_ref() else {

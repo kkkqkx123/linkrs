@@ -853,7 +853,7 @@ mod tests {
 
     fn write_insert_vertex_wal(
         wal_dir: &Path,
-        timestamp: u32,
+        timestamp: Timestamp,
         label: LabelId,
         vid: i64,
         name: &str,
@@ -874,7 +874,7 @@ mod tests {
             to_allocvec(&redo).map_err(|e| StorageError::serialize_error(e.to_string()))?;
         let lsn = writer
             .append_transaction_batch(
-                crate::core::types::TransactionId::new(u64::from(timestamp)),
+                crate::core::types::TransactionId::new(timestamp),
                 vec![TransactionWalEntry {
                     op_type: WalOpType::InsertVertex,
                     timestamp,

@@ -238,7 +238,7 @@ impl Nbr {
             edge_id,
             prop_offset,
             create_ts,
-            delete_ts: u32::MAX,
+            delete_ts: Timestamp::MAX,
         }
     }
 

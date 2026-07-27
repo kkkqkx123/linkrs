@@ -258,14 +258,14 @@ mod tests {
     fn test_deletion_stats_tracking() {
         let mut table = create_edge_table_with_props();
 
-        for i in 0..5 {
+        for i in 0..5u64 {
             table
                 .insert_edge(
                     0,
                     1,
                     i as i64,
                     &[("weight".to_string(), Value::Double(i as f64))],
-                    100 + i as u32,
+                    100 + i,
                 )
                 .unwrap();
         }

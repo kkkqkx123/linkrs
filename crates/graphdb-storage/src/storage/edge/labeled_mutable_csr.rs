@@ -225,8 +225,8 @@ impl CsrBase for LabeledMutableCsr {
 
             let edge_id = EdgeId(read_u64_le(data, &mut offset)? as u64);
             let prop_offset = read_u32_le(data, &mut offset)?;
-            let create_ts = read_u32_le(data, &mut offset)?;
-            let delete_ts = read_u32_le(data, &mut offset)?;
+            let create_ts = read_u64_le(data, &mut offset)?;
+            let delete_ts = read_u64_le(data, &mut offset)?;
 
             self.nbr_list.push(Nbr {
                 neighbor: VertexId::from_bytes(neighbor_bytes),
@@ -306,7 +306,7 @@ impl MutableCsrTrait for LabeledMutableCsr {
             let start = lr.offset as usize;
 
             for nbr in &mut self.nbr_list[start..end] {
-                if nbr.neighbor == dst && nbr.delete_ts == u32::MAX {
+                if nbr.neighbor == dst && nbr.delete_ts == Timestamp::MAX {
                     nbr.delete_ts = ts;
                     return true;
                 }
@@ -352,8 +352,8 @@ impl MutableCsrTrait for LabeledMutableCsr {
             if idx < self.nbr_list.len() {
                 let nbr = &mut self.nbr_list[idx];
                 // Only revert deletions that happened at or before rollback time.
-                if nbr.delete_ts < u32::MAX && nbr.delete_ts <= ts {
-                    nbr.delete_ts = u32::MAX;
+                if nbr.delete_ts < Timestamp::MAX && nbr.delete_ts <= ts {
+                    nbr.delete_ts = Timestamp::MAX;
                     return true;
                 }
             }

@@ -664,7 +664,7 @@ impl TimeTravelEdgeStore {
             return Vec::new();
         }
 
-        let nbrs = if ts == u32::MAX && !self.snapshot_dirty && self.current_snapshot_out.is_some()
+        let nbrs = if ts == Timestamp::MAX && !self.snapshot_dirty && self.current_snapshot_out.is_some()
         {
             // Fast path: use current snapshot (single CSR lookup instead of per-segment iteration)
             self.merged_edges_of_current(&self.out_csr, src)
@@ -715,7 +715,7 @@ impl TimeTravelEdgeStore {
             return Vec::new();
         }
 
-        let nbrs = if ts == u32::MAX && !self.snapshot_dirty && self.current_snapshot_in.is_some() {
+        let nbrs = if ts == Timestamp::MAX && !self.snapshot_dirty && self.current_snapshot_in.is_some() {
             self.merged_edges_of_current_in(&self.in_csr, dst)
         } else {
             self.merged_edges_of(
@@ -785,7 +785,7 @@ impl TimeTravelEdgeStore {
                         .csr
                         .read()
                         .iter()
-                        .filter(|(_, edge)| !self.mvcc.is_tombstoned(edge.edge_id, u32::MAX))
+                        .filter(|(_, edge)| !self.mvcc.is_tombstoned(edge.edge_id, Timestamp::MAX))
                         .count() as u64
                 })
                 .sum::<u64>()
@@ -1187,7 +1187,7 @@ impl TimeTravelEdgeStore {
         // Build snapshot for out direction
         if !self.out_segments.is_empty() {
             use super::snapshot::SnapshotBuilder;
-            let ts = u32::MAX;
+            let ts = Timestamp::MAX;
             let mut builder = SnapshotBuilder::new();
             for segment in self.out_segments.iter().rev() {
                 builder.add_segment_edges(segment, ts, &self.mvcc.tombstones);
@@ -1204,7 +1204,7 @@ impl TimeTravelEdgeStore {
         // Build snapshot for in direction
         if !self.in_segments.is_empty() {
             use super::snapshot::SnapshotBuilder;
-            let ts = u32::MAX;
+            let ts = Timestamp::MAX;
             let mut builder = SnapshotBuilder::new();
             for segment in self.in_segments.iter().rev() {
                 builder.add_segment_edges(segment, ts, &self.mvcc.tombstones);
@@ -1228,15 +1228,15 @@ impl TimeTravelEdgeStore {
         let mut result = Vec::new();
 
         // 1. From mutable CSR
-        if let Some(iter) = delta.iter_edges_of(src, u32::MAX) {
+        if let Some(iter) = delta.iter_edges_of(src, Timestamp::MAX) {
             for nbr in iter {
-                if !self.mvcc.is_tombstoned(nbr.edge_id, u32::MAX) && seen.insert(nbr.edge_id) {
+                if !self.mvcc.is_tombstoned(nbr.edge_id, Timestamp::MAX) && seen.insert(nbr.edge_id) {
                     result.push(*nbr);
                 }
             }
         } else {
-            for nbr in delta.edges_of(src, u32::MAX) {
-                if !self.mvcc.is_tombstoned(nbr.edge_id, u32::MAX) && seen.insert(nbr.edge_id) {
+            for nbr in delta.edges_of(src, Timestamp::MAX) {
+                if !self.mvcc.is_tombstoned(nbr.edge_id, Timestamp::MAX) && seen.insert(nbr.edge_id) {
                     result.push(nbr);
                 }
             }
@@ -1245,7 +1245,7 @@ impl TimeTravelEdgeStore {
         // 2. From current snapshot (pre-merged segments, single CSR lookup)
         if let Some(ref snapshot) = self.current_snapshot_out {
             for edge in snapshot.edges_of(src).iter() {
-                if !self.mvcc.is_tombstoned(edge.edge_id, u32::MAX) && seen.insert(edge.edge_id) {
+                if !self.mvcc.is_tombstoned(edge.edge_id, Timestamp::MAX) && seen.insert(edge.edge_id) {
                     result.push(Nbr::new(
                         edge.neighbor,
                         edge.edge_id,
@@ -1264,15 +1264,15 @@ impl TimeTravelEdgeStore {
         let mut seen = HashSet::new();
         let mut result = Vec::new();
 
-        if let Some(iter) = delta.iter_edges_of(dst, u32::MAX) {
+        if let Some(iter) = delta.iter_edges_of(dst, Timestamp::MAX) {
             for nbr in iter {
-                if !self.mvcc.is_tombstoned(nbr.edge_id, u32::MAX) && seen.insert(nbr.edge_id) {
+                if !self.mvcc.is_tombstoned(nbr.edge_id, Timestamp::MAX) && seen.insert(nbr.edge_id) {
                     result.push(*nbr);
                 }
             }
         } else {
-            for nbr in delta.edges_of(dst, u32::MAX) {
-                if !self.mvcc.is_tombstoned(nbr.edge_id, u32::MAX) && seen.insert(nbr.edge_id) {
+            for nbr in delta.edges_of(dst, Timestamp::MAX) {
+                if !self.mvcc.is_tombstoned(nbr.edge_id, Timestamp::MAX) && seen.insert(nbr.edge_id) {
                     result.push(nbr);
                 }
             }
@@ -1280,7 +1280,7 @@ impl TimeTravelEdgeStore {
 
         if let Some(ref snapshot) = self.current_snapshot_in {
             for edge in snapshot.edges_of(dst).iter() {
-                if !self.mvcc.is_tombstoned(edge.edge_id, u32::MAX) && seen.insert(edge.edge_id) {
+                if !self.mvcc.is_tombstoned(edge.edge_id, Timestamp::MAX) && seen.insert(edge.edge_id) {
                     result.push(Nbr::new(
                         edge.neighbor,
                         edge.edge_id,

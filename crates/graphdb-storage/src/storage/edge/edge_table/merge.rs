@@ -39,8 +39,8 @@ pub fn merge_selected_segments_with_deletion_filter_with_free_space(
     let merge_count = sorted_indices.len();
 
     let mut merged_entries = Vec::new();
-    let mut min_create_ts = u32::MAX;
-    let mut max_create_ts = 0u32;
+    let mut min_create_ts = Timestamp::MAX;
+    let mut max_create_ts = 0u64;
     let mut merged_deletion_info = DeletionInfo::NoDeletes;
     let mut physically_deleted_count = 0u32;
 
@@ -279,8 +279,8 @@ fn merge_adaptive_impl(
     to_merge.sort();
 
     let mut merged_entries = Vec::new();
-    let mut min_create_ts = u32::MAX;
-    let mut max_create_ts = 0u32;
+    let mut min_create_ts = Timestamp::MAX;
+    let mut max_create_ts = 0u64;
     let mut merged_deletion_info = DeletionInfo::NoDeletes;
     let mut to_remove = Vec::new();
 
@@ -485,13 +485,13 @@ mod tests {
         let schema = create_test_schema();
         let mut table = TimeTravelEdgeStore::with_config(schema, config).unwrap();
 
-        for t in 0..5 {
+        for t in 0..5u64 {
             for src in 0..10 {
                 table
-                    .insert_edge(src as u32, src as u32 + 1, t as i64, &[], t as u32)
+                    .insert_edge(src as u32, src as u32 + 1, t as i64, &[], t)
                     .unwrap();
             }
-            table.freeze_csr_only(t as u32);
+            table.freeze_csr_only(t);
         }
 
         let total_segments = table.out_segments.len() + table.in_segments.len();
@@ -512,17 +512,17 @@ mod tests {
         let schema = create_test_schema();
         let mut table = TimeTravelEdgeStore::with_config(schema, config).unwrap();
 
-        for t in 0..4 {
+        for t in 0..4u64 {
             for src in 0..5 {
                 let dst = src + 1;
                 table
-                    .insert_edge(src as u32, dst as u32, t as i64, &[], t as u32)
+                    .insert_edge(src as u32, dst as u32, t as i64, &[], t)
                     .unwrap();
             }
-            table.freeze_csr_only(t as u32);
+            table.freeze_csr_only(t);
         }
 
-        let snapshot = table.export_snapshot(u32::MAX).unwrap();
+        let snapshot = table.export_snapshot(Timestamp::MAX).unwrap();
         for src in 0..5 {
             let edges = snapshot.get_out_edges(src as u32);
             assert!(
@@ -548,13 +548,13 @@ mod tests {
         let schema = create_test_schema();
         let mut table = TimeTravelEdgeStore::new(schema).unwrap();
 
-        for i in 0..5 {
-            table.insert_edge(i, i + 1, 0, &[], 100 + i).unwrap();
+        for i in 0..5u64 {
+            table.insert_edge(i as u32, i as u32 + 1, 0, &[], 100 + i).unwrap();
         }
         table.freeze_csr_only(105);
 
-        for i in 5..10 {
-            table.insert_edge(i, i + 1, 0, &[], 110 + i).unwrap();
+        for i in 5..10u64 {
+            table.insert_edge(i as u32, i as u32 + 1, 0, &[], 110 + i).unwrap();
         }
         table.freeze_csr_only(120);
 
@@ -572,17 +572,17 @@ mod tests {
         let schema = create_test_schema();
         let mut table = TimeTravelEdgeStore::new(schema).unwrap();
 
-        let edge_count = 20;
+        let edge_count = 20u64;
         for i in 0..edge_count {
-            let src = i % 5;
-            let dst = (i / 5) + 5;
+            let src = (i % 5) as u32;
+            let dst = ((i / 5) + 5) as u32;
             table.insert_edge(src, dst, 0, &[], 100 + i).unwrap();
         }
         table.freeze_csr_only(100 + edge_count);
 
-        for i in 0..10 {
-            let src = (i + 10) % 5;
-            let dst = 20 + i;
+        for i in 0..10u64 {
+            let src = ((i + 10) % 5) as u32;
+            let dst = (20 + i) as u32;
             table.insert_edge(src, dst, 0, &[], 200 + i).unwrap();
         }
         table.freeze_csr_only(210);
@@ -602,16 +602,16 @@ mod tests {
         let schema = create_test_schema();
         let mut table = TimeTravelEdgeStore::new(schema).unwrap();
 
-        for i in 0..100 {
-            let src = i % 20;
-            let dst = 100 + (i / 20) * 20 + i % 20;
+        for i in 0..100u64 {
+            let src = (i % 20) as u32;
+            let dst = (100 + (i / 20) * 20 + i % 20) as u32;
             table.insert_edge(src, dst, 0, &[], 1000 + i).unwrap();
         }
         table.freeze_csr_only(1100);
 
-        for i in 0..50 {
-            let src = (i + 5) % 20;
-            let dst = 500 + i;
+        for i in 0..50u64 {
+            let src = ((i + 5) % 20) as u32;
+            let dst = (500 + i) as u32;
             table.insert_edge(src, dst, 0, &[], 2000 + i).unwrap();
         }
         table.freeze_csr_only(2050);
@@ -629,13 +629,13 @@ mod tests {
         let schema = create_test_schema();
         let mut table = TimeTravelEdgeStore::new(schema).unwrap();
 
-        for batch in 0..5 {
+        for batch in 0..5u64 {
             for i in 0..10 {
                 table
-                    .insert_edge(0, 1, (batch * 100 + i) as i64, &[], 100 + batch as u32)
+                    .insert_edge(0, 1, (batch * 100 + i) as i64, &[], 100 + batch)
                     .unwrap();
             }
-            table.freeze_csr_only(105 + batch as u32);
+            table.freeze_csr_only(105 + batch);
         }
 
         let initial_count = table.out_segments.len() + table.in_segments.len();
@@ -683,13 +683,13 @@ mod tests {
         let schema = create_test_schema();
         let mut table = TimeTravelEdgeStore::new(schema).unwrap();
 
-        for batch in 0..3 {
+        for batch in 0..3u64 {
             for i in 0..5 {
                 table
-                    .insert_edge(0, 1, (batch * 10 + i) as i64, &[], 100 + batch as u32)
+                    .insert_edge(0, 1, (batch * 10 + i) as i64, &[], 100 + batch)
                     .unwrap();
             }
-            table.freeze_csr_only(105 + batch as u32);
+            table.freeze_csr_only(105 + batch);
         }
 
         let initial_count = table.out_segments.len() + table.in_segments.len();
@@ -706,13 +706,13 @@ mod tests {
         let schema = create_test_schema();
         let mut table = TimeTravelEdgeStore::new(schema).unwrap();
 
-        for batch in 0..3 {
+        for batch in 0..3u64 {
             for i in 0..5 {
                 table
-                    .insert_edge(0, 1, (batch * 10 + i) as i64, &[], 100 + batch as u32)
+                    .insert_edge(0, 1, (batch * 10 + i) as i64, &[], 100 + batch)
                     .unwrap();
             }
-            table.freeze_csr_only(105 + batch as u32);
+            table.freeze_csr_only(105 + batch);
         }
 
         let initial_segments = table.out_segments.len() + table.in_segments.len();

@@ -268,7 +268,7 @@ impl GraphStorage {
         let rebuild_gate = self.ctx.index_data_manager().read().rebuild_gate();
         let _rebuild_guard = rebuild_gate.write();
         let snapshot_timestamp =
-            SnapshotTimestamp::new(u64::from(self.ctx.get_read_timestamp().max(1)));
+            SnapshotTimestamp::new(self.ctx.get_read_timestamp().max(1));
         let start_lsn = {
             let current = index_manager::current_wal_lsn(&self.ctx);
             if current == CommitLsn::ZERO {
@@ -1034,7 +1034,7 @@ impl StorageSchemaOps for GraphStorage {
             space,
             index_name,
             &vertices,
-            crate::core::types::SnapshotTimestamp::new(u64::from(snapshot_timestamp)),
+            crate::core::types::SnapshotTimestamp::new(snapshot_timestamp),
             start_lsn,
         );
         if let Some(stats) = self.ctx.stats_manager() {
@@ -1084,7 +1084,7 @@ impl StorageSchemaOps for GraphStorage {
             space,
             index_name,
             &edges,
-            crate::core::types::SnapshotTimestamp::new(u64::from(snapshot_timestamp)),
+            crate::core::types::SnapshotTimestamp::new(snapshot_timestamp),
             start_lsn,
         );
         if let Some(stats) = self.ctx.stats_manager() {

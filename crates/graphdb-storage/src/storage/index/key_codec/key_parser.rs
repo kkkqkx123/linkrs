@@ -34,20 +34,6 @@ impl KeyParser {
         Ok(vertex_id)
     }
 
-    pub fn parse_prop_value_from_key(key_bytes: &[u8]) -> Result<Value, StorageError> {
-        let mut pos = 9;
-        if key_bytes.len() < pos + 4 {
-            return Err(StorageError::db_error("Invalid key: too short".to_string()));
-        }
-        let index_name_len =
-            u32::from_le_bytes(key_bytes[pos..pos + 4].try_into().unwrap_or([0; 4])) as usize;
-        pos += 4 + index_name_len;
-
-        // Decode the prop value only
-        let (prop_value, _consumed) = codec().decode_value_inner(&key_bytes[pos..])?;
-        Ok(prop_value)
-    }
-
     // ========================================================================
     // Edge Forward Index Key Parsing
     // ========================================================================
@@ -97,21 +83,6 @@ impl KeyParser {
         };
 
         Ok((src_val, dst_val, edge_type.to_string(), ranking))
-    }
-
-    pub fn parse_prop_value_from_edge_key(key_bytes: &[u8]) -> Result<Value, StorageError> {
-        let mut pos = 9;
-        if key_bytes.len() < pos + 4 {
-            return Err(StorageError::db_error(
-                "Invalid edge key: too short".to_string(),
-            ));
-        }
-        let index_name_len =
-            u32::from_le_bytes(key_bytes[pos..pos + 4].try_into().unwrap_or([0; 4])) as usize;
-        pos += 4 + index_name_len;
-
-        let (prop_value, _consumed) = codec().decode_value_inner(&key_bytes[pos..])?;
-        Ok(prop_value)
     }
 
     // ========================================================================
@@ -203,6 +174,71 @@ impl KeyParser {
             .map_err(|e| StorageError::db_error(format!("Invalid index_name encoding: {}", e)))?;
 
         Ok((vertex_id_bytes, index_name))
+    }
+
+    /// Extract the encoded property value from a reverse key that includes it.
+    /// Returns the remaining bytes after the index_name as the encoded value.
+    pub fn extract_value_from_reverse_key(key_bytes: &[u8]) -> Result<Vec<u8>, StorageError> {
+        if key_bytes.len() < 9 {
+            return Err(StorageError::db_error(
+                "Invalid reverse key: too short".to_string(),
+            ));
+        }
+        let mut pos = 9;
+
+        let (_entity_id, consumed) = codec().decode_value_inner(&key_bytes[pos..])?;
+        pos += consumed;
+
+        if key_bytes.len() < pos + 4 {
+            return Err(StorageError::db_error(
+                "Invalid reverse key: missing index_name_len".to_string(),
+            ));
+        }
+        let index_name_len =
+            u32::from_le_bytes(key_bytes[pos..pos + 4].try_into().unwrap_or([0; 4])) as usize;
+        pos += 4;
+
+        if key_bytes.len() < pos + index_name_len {
+            return Err(StorageError::db_error(
+                "Invalid reverse key: index_name exceeds key length".to_string(),
+            ));
+        }
+        pos += index_name_len;
+
+        Ok(key_bytes[pos..].to_vec())
+    }
+
+    /// Extract the encoded property value from an edge reverse key that includes it.
+    pub fn extract_value_from_edge_reverse_key(key_bytes: &[u8]) -> Result<Vec<u8>, StorageError> {
+        if key_bytes.len() < 9 {
+            return Err(StorageError::db_error(
+                "Invalid edge reverse key: too short".to_string(),
+            ));
+        }
+        let mut pos = 9;
+
+        for _ in 0..4 {
+            let (_, consumed) = codec().decode_value_inner(&key_bytes[pos..])?;
+            pos += consumed;
+        }
+
+        if key_bytes.len() < pos + 4 {
+            return Err(StorageError::db_error(
+                "Invalid edge reverse key: missing index_name_len".to_string(),
+            ));
+        }
+        let index_name_len =
+            u32::from_le_bytes(key_bytes[pos..pos + 4].try_into().unwrap_or([0; 4])) as usize;
+        pos += 4;
+
+        if key_bytes.len() < pos + index_name_len {
+            return Err(StorageError::db_error(
+                "Invalid edge reverse key: index_name exceeds key length".to_string(),
+            ));
+        }
+        pos += index_name_len;
+
+        Ok(key_bytes[pos..].to_vec())
     }
 }
 

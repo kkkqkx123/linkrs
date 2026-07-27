@@ -1452,7 +1452,7 @@ fn update_vertex_indexes(
     vertex_id: &Value,
     tag_name: &str,
     props: &[(String, Value)],
-    ts: u32,
+    ts: Timestamp,
 ) -> StorageResult<()> {
     let indexes = index_metadata_manager.list_tag_indexes(space_id)?;
     for index in indexes {
@@ -1502,7 +1502,7 @@ fn refresh_vertex_indexes(
     vertex_id: &Value,
     tag_name: &str,
     props: &[(String, Value)],
-    ts: u32,
+    ts: Timestamp,
 ) -> StorageResult<()> {
     let index_names = tag_index_names(index_metadata_manager, space_id, tag_name)?;
     if index_names.is_empty() {
@@ -1527,7 +1527,7 @@ fn delete_vertex_indexes(
     space_id: u64,
     vertex_id: &Value,
     tag_name: &str,
-    ts: u32,
+    ts: Timestamp,
 ) -> StorageResult<()> {
     let index_names = tag_index_names(index_metadata_manager, space_id, tag_name)?;
     if !index_names.is_empty() {

@@ -323,6 +323,18 @@ impl IndexManifest {
         query_lower: &[u8],
         query_upper: &[u8],
     ) -> Vec<(Vec<u8>, Vec<u8>)> {
+        self.scan_ranges_with_shard(selector, query_lower, query_upper)
+            .into_iter()
+            .map(|(_, lower, upper)| (lower, upper))
+            .collect()
+    }
+
+    pub fn scan_ranges_with_shard(
+        &self,
+        selector: &PartitionSelector,
+        query_lower: &[u8],
+        query_upper: &[u8],
+    ) -> Vec<(u32, Vec<u8>, Vec<u8>)> {
         self.select_shards(selector)
             .into_iter()
             .filter(|shard| shard.intersects(Some(query_lower), Some(query_upper)))
@@ -335,7 +347,7 @@ impl IndexManifest {
                     || query_upper.to_vec(),
                     |value| value.min(query_upper).to_vec(),
                 );
-                (lower < upper).then_some((lower, upper))
+                (lower < upper).then_some((shard.shard_id, lower, upper))
             })
             .collect()
     }

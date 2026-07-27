@@ -2,8 +2,8 @@
 #[allow(clippy::module_inception)]
 mod tests {
     use crate::core::types::{
-        EdgeTypeInfo, Index, IndexConfig, IndexField, IndexType, PropertyDef, SpaceInfo, UserInfo,
-        VertexId,
+        EdgeTypeInfo, Index, IndexConfig, IndexField, IndexType, PropertyDef, SpaceInfo, Timestamp,
+        UserInfo, VertexId,
     };
     use crate::core::vertex_edge_path::Tag;
     use crate::core::DataType;
@@ -1559,7 +1559,7 @@ mod tests {
             strategy: FreezeStrategyType::Conservative,
             delta_edge_threshold: 1000,
             delta_memory_threshold_bytes: 256 * 1024 * 1024,
-            max_segment_age: u32::MAX,
+            max_segment_age: Timestamp::MAX,
             deletion_threshold: 0.5,
             adaptive_segment_threshold: 50,
             adaptive_maximum_segments: 150,
@@ -1716,8 +1716,8 @@ mod tests {
         let initial_threshold = snapshot_tracker.cleanup_threshold();
         assert_eq!(
             initial_threshold,
-            u32::MAX,
-            "Initial cleanup_threshold should be u32::MAX"
+            Timestamp::MAX,
+            "Initial cleanup_threshold should be Timestamp::MAX"
         );
 
         // Acquire a read timestamp (creates a snapshot)
@@ -1740,8 +1740,8 @@ mod tests {
         let final_threshold = snapshot_tracker.cleanup_threshold();
         assert_eq!(
             final_threshold,
-            u32::MAX,
-            "Final cleanup_threshold should be u32::MAX after releasing"
+            Timestamp::MAX,
+            "Final cleanup_threshold should be Timestamp::MAX after releasing"
         );
 
         // Verify compaction works (it uses cleanup_threshold internally)
@@ -1761,7 +1761,7 @@ mod tests {
         let snapshot_tracker = version_manager.snapshot_tracker();
 
         // Initially, no active snapshots
-        assert_eq!(snapshot_tracker.cleanup_threshold(), u32::MAX);
+        assert_eq!(snapshot_tracker.cleanup_threshold(), Timestamp::MAX);
         assert_eq!(snapshot_tracker.active_count(), 0);
 
         // Acquire multiple read timestamps
@@ -1797,6 +1797,6 @@ mod tests {
         // Release the last one
         version_manager.release_read_timestamp();
         assert_eq!(snapshot_tracker.active_count(), 0);
-        assert_eq!(snapshot_tracker.cleanup_threshold(), u32::MAX);
+        assert_eq!(snapshot_tracker.cleanup_threshold(), Timestamp::MAX);
     }
 }

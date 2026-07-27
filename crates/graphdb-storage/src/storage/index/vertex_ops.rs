@@ -1,4 +1,5 @@
 use crate::core::types::{Index, IndexType, Timestamp, MAX_TIMESTAMP};
+use crate::core::value::ordered_codec::OrderedCodec;
 use crate::core::{StorageError, Value};
 use crate::storage::index::helpers::{
     effective_index_values, merged_included_columns, vertex_entity_ref,
@@ -45,16 +46,15 @@ impl VertexIndexOps for IndexDataManagerImpl {
         let mut existing_columns = Vec::new();
         let mut existing_columns_ts = 0;
         for shard in generation.shards() {
-            for (_key, record) in shard
-                .reverse()
-                .read()
+            for (key, record) in shard
+                .read_reverse()
                 .range(reverse_prefix.0.clone()..reverse_end.0.clone())
             {
                 if !record.is_visible_at(write_ts) {
                     continue;
                 }
-                if let Some(fwd_key) = &record.encoded_indexed_value {
-                    if let Ok(value) = KeyParser::parse_prop_value_from_key(fwd_key) {
+                if let Ok(encoded) = KeyParser::extract_value_from_reverse_key(key) {
+                    if let Ok(value) = OrderedCodec::new().decode(&encoded) {
                         let nv = normalize_int_value(&value);
                         if !existing_values.contains(&nv) {
                             existing_values.push(nv);
@@ -63,51 +63,120 @@ impl VertexIndexOps for IndexDataManagerImpl {
                 }
                 if record.created_ts >= existing_columns_ts {
                     existing_columns_ts = record.created_ts;
-                    existing_columns = record.included_columns.clone();
+                    existing_columns = record.included_columns.clone().unwrap_or_default();
                 }
             }
         }
-        let indexed_values =
-            effective_index_values(index_definition.as_ref(), props, existing_values);
+        let new_values =
+            effective_index_values(index_definition.as_ref(), props, existing_values.clone());
         let included_columns =
             merged_included_columns(index_definition.as_ref(), existing_columns, props);
-        if !indexed_values.is_empty() {
-            self.clear_vertex_entity(space_id, vertex_id, index_name, write_ts)?;
-        }
-        for value in indexed_values {
+
+        let values_to_remove: Vec<&Value> = existing_values
+            .iter()
+            .filter(|v| !new_values.contains(v))
+            .collect();
+        let values_to_add: Vec<&Value> = new_values
+            .iter()
+            .filter(|v| !existing_values.contains(v))
+            .collect();
+        let values_to_update: Vec<&Value> = new_values
+            .iter()
+            .filter(|v| existing_values.contains(v))
+            .collect();
+
+        for value in &values_to_update {
             let forward =
-                KeyBuilder::build_vertex_index_key(space_id, index_name, &value, vertex_id)?;
-            let reverse = KeyBuilder::build_vertex_reverse_key_v2(space_id, vertex_id, index_name)?;
-            let forward_end = KeyBuilder::build_range_end(&forward);
-            let reverse_end = KeyBuilder::build_range_end(&reverse);
-            for shard in generation.shards() {
-                let keys = shard
-                    .forward()
-                    .read()
-                    .range(forward.0.clone()..forward_end.0.clone())
-                    .filter(|(_, entry)| entry.is_visible_at(write_ts))
-                    .map(|(key, _)| key.clone())
-                    .collect::<Vec<_>>();
-                let mut data = shard.forward().write();
-                for key in keys {
-                    if let Some(entry) = data.get_mut(&key) {
-                        entry.mark_deleted(write_ts);
-                    }
+                KeyBuilder::build_vertex_index_key(space_id, index_name, value, vertex_id)?;
+            let reverse =
+                KeyBuilder::build_vertex_reverse_key_with_value(space_id, vertex_id, index_name, value)?;
+            let target = manifest
+                .manifest()
+                .route_key(&forward.0)
+                .and_then(|shard| generation.shard(shard.shard_id))
+                .ok_or_else(|| {
+                    StorageError::invalid_operation("Index manifest does not cover the ordered key")
+                })?;
+            let fwd_key = forward.0.clone();
+            target.update_forward(|map| {
+                if let Some(entry) = map.get_mut(&fwd_key) {
+                    entry.mark_deleted(write_ts);
                 }
-                let keys = shard
-                    .reverse()
-                    .read()
-                    .range(reverse.0.clone()..reverse_end.0.clone())
-                    .filter(|(_, entry)| entry.is_visible_at(write_ts))
-                    .map(|(key, _)| key.clone())
-                    .collect::<Vec<_>>();
-                let mut data = shard.reverse().write();
-                for key in keys {
-                    if let Some(entry) = data.get_mut(&key) {
-                        entry.mark_deleted(write_ts);
-                    }
+            });
+            let rev_key = reverse.0.clone();
+            target.update_reverse(|map| {
+                if let Some(entry) = map.get_mut(&rev_key) {
+                    entry.mark_deleted(write_ts);
                 }
+            });
+            let mut entry = IndexRecord::new_with_columns(write_ts, included_columns.clone())
+                .with_entity_version(write_ts);
+            if let Some(entity) = vertex_entity_ref(vertex_id) {
+                entry = entry.with_entity_ref(entity);
             }
+            target.update_forward(|map| {
+                map.insert(target.versioned_key(&forward.0), entry.clone());
+            });
+            target.update_reverse(|map| {
+                map.insert(target.versioned_key(&reverse.0), entry);
+            });
+            target.mark_dirty();
+        }
+
+        for value in &values_to_remove {
+            let forward =
+                KeyBuilder::build_vertex_index_key(space_id, index_name, value, vertex_id)?;
+            let reverse =
+                KeyBuilder::build_vertex_reverse_key_v2(space_id, vertex_id, index_name)?;
+            let target = manifest
+                .manifest()
+                .route_key(&forward.0)
+                .and_then(|shard| generation.shard(shard.shard_id))
+                .ok_or_else(|| {
+                    StorageError::invalid_operation("Index manifest does not cover the ordered key")
+                })?;
+            let forward_end = KeyBuilder::build_range_end(&forward);
+            let fwd_keys: Vec<_> = target
+                .read_forward()
+                .range(forward.0.clone()..forward_end.0.clone())
+                .filter(|(_, entry)| entry.is_visible_at(write_ts))
+                .map(|(key, _)| key.clone())
+                .collect();
+            if !fwd_keys.is_empty() {
+                target.update_forward(|map| {
+                    for key in &fwd_keys {
+                        if let Some(entry) = map.get_mut(key) {
+                            entry.mark_deleted(write_ts);
+                        }
+                    }
+                });
+            }
+            let reverse_end = KeyBuilder::build_range_end(&reverse);
+            let rev_keys: Vec<_> = target
+                .read_reverse()
+                .range(reverse.0.clone()..reverse_end.0.clone())
+                .filter(|(_, entry)| entry.is_visible_at(write_ts))
+                .map(|(key, _)| key.clone())
+                .collect();
+            if !rev_keys.is_empty() {
+                target.update_reverse(|map| {
+                    for key in &rev_keys {
+                        if let Some(entry) = map.get_mut(key) {
+                            entry.mark_deleted(write_ts);
+                        }
+                    }
+                });
+            }
+            if !fwd_keys.is_empty() || !rev_keys.is_empty() {
+                target.mark_dirty();
+            }
+        }
+
+        for value in &values_to_add {
+            let forward =
+                KeyBuilder::build_vertex_index_key(space_id, index_name, value, vertex_id)?;
+            let reverse =
+                KeyBuilder::build_vertex_reverse_key_with_value(space_id, vertex_id, index_name, value)?;
             let target = manifest
                 .manifest()
                 .route_key(&forward.0)
@@ -116,19 +185,17 @@ impl VertexIndexOps for IndexDataManagerImpl {
                     StorageError::invalid_operation("Index manifest does not cover the ordered key")
                 })?;
             let mut entry = IndexRecord::new_with_columns(write_ts, included_columns.clone())
-                .with_entity_version(write_ts)
-                .with_encoded_value(forward.0.clone());
+                .with_entity_version(write_ts);
             if let Some(entity) = vertex_entity_ref(vertex_id) {
                 entry = entry.with_entity_ref(entity);
             }
-            target
-                .forward()
-                .write()
-                .insert(target.physical_key(&forward.0), entry.clone());
-            target
-                .reverse()
-                .write()
-                .insert(target.physical_key(&reverse.0), entry);
+            target.update_forward(|map| {
+                map.insert(forward.0, entry.clone());
+            });
+            target.update_reverse(|map| {
+                map.insert(reverse.0, entry);
+            });
+            target.mark_dirty();
         }
         Ok(())
     }
@@ -170,8 +237,7 @@ impl VertexIndexOps for IndexDataManagerImpl {
             .filter_map(|shard| generation.shard(shard.shard_id))
         {
             for (key, entry) in shard
-                .forward()
-                .read()
+                .read_forward()
                 .range(prefix.0.clone()..end.0.clone())
             {
                 if !entry.is_visible_at(read_ts) {

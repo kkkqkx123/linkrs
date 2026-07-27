@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use crate::core::error::storage::StorageErrorKind;
+use crate::core::types::Timestamp;
 use crate::core::StorageError;
 use crate::storage::compression::CompressionType;
 
@@ -172,8 +173,8 @@ pub struct MergeConfig {
     /// Enable adaptive merge during compaction
     pub enable_adaptive_merge: bool,
     /// Maximum age (in timestamp units) before a segment should be merged
-    /// 0 = never merge due to age, u32::MAX = always merge
-    pub max_segment_age: u32,
+    /// 0 = never merge due to age, Timestamp::MAX = always merge
+    pub max_segment_age: Timestamp,
     /// Deletion ratio threshold for merge priority (0.0-1.0)
     /// Segments with deletion ratio > this threshold get higher merge priority
     pub deletion_threshold: f64,
@@ -214,7 +215,7 @@ pub struct FreezeConfig {
 
     // ── Merge Configuration ──
     /// Maximum age (in timestamp units) before a segment should be merged
-    pub max_segment_age: u32,
+    pub max_segment_age: Timestamp,
     /// Deletion ratio threshold for merge priority (0.0-1.0)
     pub deletion_threshold: f64,
 
@@ -241,7 +242,7 @@ impl FreezeConfig {
             strategy: FreezeStrategyType::Conservative,
             delta_edge_threshold: 50_000,
             delta_memory_threshold_bytes: 128 * 1024 * 1024, // 128MB
-            max_segment_age: u32::MAX,                       // Never merge
+            max_segment_age: Timestamp::MAX,                  // Never merge
             deletion_threshold: 0.5,
             adaptive_segment_threshold: 20, // Low threshold for dev
             adaptive_maximum_segments: 50,  // Force freeze if >50 segments
@@ -545,7 +546,7 @@ impl PropertyGraphConfig {
                 strategy: FreezeStrategyType::Conservative,
                 delta_edge_threshold: 5000,
                 delta_memory_threshold_bytes: 16 * 1024 * 1024,
-                max_segment_age: u32::MAX,
+                max_segment_age: Timestamp::MAX,
                 deletion_threshold: 0.5,
                 adaptive_segment_threshold: 50,
                 adaptive_maximum_segments: 150,
@@ -554,7 +555,7 @@ impl PropertyGraphConfig {
             merge_config: MergeConfig {
                 enable_adaptive_merge: false,
                 enable_lsm_tiering: false,
-                max_segment_age: u32::MAX,
+                max_segment_age: Timestamp::MAX,
                 ..Default::default()
             },
         }
@@ -610,7 +611,7 @@ pub struct FreezeDecisionInput {
     pub delta_edge_count: u64,
     pub delta_memory_bytes: u64,
     pub segment_count: usize,
-    pub oldest_segment_age: u32,
+    pub oldest_segment_age: Timestamp,
     pub deletion_ratio: f64,
 }
 

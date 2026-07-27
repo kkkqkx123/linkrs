@@ -115,7 +115,7 @@ impl VertexTable {
             version_history,
             mvcc: VertexMVCC {
                 active_snapshots: HashMap::new(),
-                min_active_snapshot_ts: u32::MAX,
+                min_active_snapshot_ts: Timestamp::MAX,
                 handle_counter: 0,
             },
             encoding_selector: EncodingSelector::default(),
@@ -602,7 +602,7 @@ impl VertexTable {
             .keys()
             .min()
             .copied()
-            .unwrap_or(u32::MAX);
+            .unwrap_or(Timestamp::MAX);
 
         self.mvcc.handle_counter += 1;
         Ok(SnapshotHandle::new(ts, self.mvcc.handle_counter))
@@ -627,7 +627,7 @@ impl VertexTable {
             .keys()
             .min()
             .copied()
-            .unwrap_or(u32::MAX);
+            .unwrap_or(Timestamp::MAX);
 
         Ok(())
     }

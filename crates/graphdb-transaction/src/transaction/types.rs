@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::types::{CommitLsn, EdgeIdentifier, VertexId};
+use crate::core::types::{CommitLsn, EdgeIdentifier, Timestamp, VertexId};
 use crate::transaction::undo_log::UndoLogEntry;
 use crate::transaction::wal::TransactionWalEntry;
 
@@ -258,17 +258,17 @@ pub enum TransactionType {
 pub enum TransactionEvent {
     Committed {
         txn_id: TransactionId,
-        write_timestamp: u32,
+        write_timestamp: Timestamp,
         write_set: Box<WriteSet>,
         schema_catalog_version: u64,
     },
     Aborted {
         txn_id: TransactionId,
-        write_timestamp: u32,
+        write_timestamp: Timestamp,
     },
     CommitDurableButUnfinalized {
         txn_id: TransactionId,
-        write_timestamp: u32,
+        write_timestamp: Timestamp,
         commit_lsn: CommitLsn,
     },
     BudgetWarning {
@@ -856,8 +856,8 @@ pub struct TransactionInfo {
     pub mutation_count: u64,
     pub modified_tables: Vec<String>,
     pub savepoint_count: usize,
-    pub read_timestamp: u32,
-    pub write_timestamp: u32,
+    pub read_timestamp: Timestamp,
+    pub write_timestamp: Timestamp,
     pub owner: Option<String>,
     pub last_activity: Duration,
     pub rollback_only: bool,
@@ -874,8 +874,8 @@ pub struct TransactionInfo {
 #[derive(Debug, Clone)]
 pub struct TransactionExecution {
     transaction_id: TransactionId,
-    read_timestamp: u32,
-    write_timestamp: Option<u32>,
+    read_timestamp: Timestamp,
+    write_timestamp: Option<Timestamp>,
     read_only: bool,
     auto_commit: bool,
     rollback_only: bool,
@@ -886,8 +886,8 @@ pub struct TransactionExecution {
 impl TransactionExecution {
     pub fn new(
         transaction_id: TransactionId,
-        read_timestamp: u32,
-        write_timestamp: Option<u32>,
+        read_timestamp: Timestamp,
+        write_timestamp: Option<Timestamp>,
         read_only: bool,
         auto_commit: bool,
         owner: Option<String>,
@@ -908,11 +908,11 @@ impl TransactionExecution {
         self.transaction_id
     }
 
-    pub fn read_timestamp(&self) -> u32 {
+    pub fn read_timestamp(&self) -> Timestamp {
         self.read_timestamp
     }
 
-    pub fn write_timestamp(&self) -> Option<u32> {
+    pub fn write_timestamp(&self) -> Option<Timestamp> {
         self.write_timestamp
     }
 
@@ -978,7 +978,7 @@ pub(crate) struct SavepointParams {
 pub struct TransactionResourceMetrics {
     pub active_snapshots: u64,
     pub pending_writes: i32,
-    pub committed_frontier_lag: u32,
+    pub committed_frontier_lag: Timestamp,
     pub staged_wal_bytes: u64,
     pub undo_bytes: u64,
     pub prepared_transactions: u64,

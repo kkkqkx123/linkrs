@@ -3,6 +3,7 @@
 //! Each manifest generation owns independent shard maps. This makes the
 //! manifest handle a real data-generation pin instead of metadata only.
 
+use arc_swap::ArcSwap;
 use crate::core::types::{CommitLsn, IndexGeneration};
 use crate::core::{StorageError, StorageResult};
 use crate::storage::index::generic_index_manager::GenericIndexManager;
@@ -13,10 +14,8 @@ use crate::storage::index::types::IndexRecord;
 use parking_lot::{Condvar, Mutex, RwLock};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Arc,
-};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 
 /// Shared publish barriers used by native indexes and WAL truncation.
 pub(crate) type IndexBarrierRegistry = Arc<RwLock<HashMap<(u64, u64), CommitLsn>>>;
@@ -27,34 +26,40 @@ pub(crate) type IndexMaps = (
 );
 
 pub(crate) struct ShardRuntime {
-    checkpoint_file: PathBuf,
-    forward: RwLock<BTreeMap<SecondaryIndexKey, IndexRecord>>,
-    reverse: RwLock<BTreeMap<SecondaryIndexKey, IndexRecord>>,
+    pub(crate) checkpoint_file: PathBuf,
+    pub(crate) forward: ArcSwap<BTreeMap<SecondaryIndexKey, IndexRecord>>,
+    pub(crate) reverse: ArcSwap<BTreeMap<SecondaryIndexKey, IndexRecord>>,
     version_counter: AtomicU64,
+    dirty: AtomicBool,
 }
 
 impl ShardRuntime {
     fn empty(checkpoint_file: PathBuf) -> Self {
         Self {
             checkpoint_file,
-            forward: RwLock::new(BTreeMap::new()),
-            reverse: RwLock::new(BTreeMap::new()),
+            forward: ArcSwap::new(Arc::new(BTreeMap::new())),
+            reverse: ArcSwap::new(Arc::new(BTreeMap::new())),
             version_counter: AtomicU64::new(1),
+            dirty: AtomicBool::new(false),
         }
     }
 
     fn load<K: IndexKeyGenerator>(checkpoint_file: PathBuf) -> StorageResult<Self> {
-        let (forward, reverse, next_version) =
+        let (forward, reverse) =
             GenericIndexManager::<K>::load_data(&checkpoint_file)?;
         Ok(Self {
             checkpoint_file,
-            forward: RwLock::new(forward),
-            reverse: RwLock::new(reverse),
-            version_counter: AtomicU64::new(next_version),
+            forward: ArcSwap::new(Arc::new(forward)),
+            reverse: ArcSwap::new(Arc::new(reverse)),
+            version_counter: AtomicU64::new(1),
+            dirty: AtomicBool::new(false),
         })
     }
 
-    pub(crate) fn physical_key(&self, logical: &[u8]) -> SecondaryIndexKey {
+    /// Creates a versioned physical key for the same logical key.
+    /// Used in the update path to preserve the old entry for snapshot isolation
+    /// while inserting a new version with the same logical key.
+    pub(crate) fn versioned_key(&self, logical: &[u8]) -> SecondaryIndexKey {
         let version = self.version_counter.fetch_add(1, Ordering::Relaxed);
         let mut key = Vec::with_capacity(logical.len() + std::mem::size_of::<u64>());
         key.extend_from_slice(logical);
@@ -62,16 +67,43 @@ impl ShardRuntime {
         key
     }
 
-    pub(crate) fn forward(&self) -> &RwLock<BTreeMap<SecondaryIndexKey, IndexRecord>> {
-        &self.forward
+    pub(crate) fn read_forward(
+        &self,
+    ) -> arc_swap::Guard<Arc<BTreeMap<SecondaryIndexKey, IndexRecord>>> {
+        self.forward.load()
     }
 
-    pub(crate) fn reverse(&self) -> &RwLock<BTreeMap<SecondaryIndexKey, IndexRecord>> {
-        &self.reverse
+    pub(crate) fn read_reverse(
+        &self,
+    ) -> arc_swap::Guard<Arc<BTreeMap<SecondaryIndexKey, IndexRecord>>> {
+        self.reverse.load()
+    }
+
+    pub(crate) fn update_forward(
+        &self,
+        f: impl FnOnce(&mut BTreeMap<SecondaryIndexKey, IndexRecord>),
+    ) {
+        let mut map = self.forward.load_full().as_ref().clone();
+        f(&mut map);
+        self.forward.store(Arc::new(map));
+        self.dirty.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn update_reverse(
+        &self,
+        f: impl FnOnce(&mut BTreeMap<SecondaryIndexKey, IndexRecord>),
+    ) {
+        let mut map = self.reverse.load_full().as_ref().clone();
+        f(&mut map);
+        self.reverse.store(Arc::new(map));
+        self.dirty.store(true, Ordering::Release);
     }
 
     pub(crate) fn snapshot(&self) -> IndexMaps {
-        (self.forward.read().clone(), self.reverse.read().clone())
+        (
+            self.forward.load_full().as_ref().clone(),
+            self.reverse.load_full().as_ref().clone(),
+        )
     }
 
     pub(crate) fn replace(
@@ -79,16 +111,29 @@ impl ShardRuntime {
         forward: BTreeMap<SecondaryIndexKey, IndexRecord>,
         reverse: BTreeMap<SecondaryIndexKey, IndexRecord>,
     ) {
-        *self.forward.write() = forward;
-        *self.reverse.write() = reverse;
+        self.forward.store(Arc::new(forward));
+        self.reverse.store(Arc::new(reverse));
+        self.dirty.store(true, Ordering::Release);
+    }
+
+    /// Mark this shard as dirty (data changed since last flush).
+    pub(crate) fn mark_dirty(&self) {
+        self.dirty.store(true, Ordering::Release);
     }
 
     pub(crate) fn flush<K: IndexKeyGenerator>(&self) -> StorageResult<()> {
+        if !self.dirty.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let fwd = self.forward.load();
+        let rev = self.reverse.load();
         GenericIndexManager::<K>::flush_data(
             &self.checkpoint_file,
-            &self.forward.read(),
-            &self.reverse.read(),
-        )
+            &fwd,
+            &rev,
+        )?;
+        self.dirty.store(false, Ordering::Release);
+        Ok(())
     }
 
     pub(crate) fn memory_usage_bytes(&self) -> u64 {
@@ -97,9 +142,14 @@ impl ShardRuntime {
                 .map(|(key, record)| {
                     let included_columns = record
                         .included_columns
-                        .iter()
-                        .map(|(name, value)| name.capacity() as u64 + value.estimated_size() as u64)
-                        .sum::<u64>();
+                        .as_ref()
+                        .map_or(0, |cols| {
+                            cols.iter()
+                                .map(|(name, value)| {
+                                    name.capacity() as u64 + value.estimated_size() as u64
+                                })
+                                .sum::<u64>()
+                        });
                     std::mem::size_of::<IndexRecord>() as u64
                         + key.capacity() as u64
                         + included_columns
@@ -107,7 +157,9 @@ impl ShardRuntime {
                 .sum()
         }
 
-        map_size(&self.forward.read()) + map_size(&self.reverse.read())
+        let fwd = self.forward.load();
+        let rev = self.reverse.load();
+        map_size(&fwd) + map_size(&rev)
     }
 }
 

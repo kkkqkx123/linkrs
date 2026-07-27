@@ -73,7 +73,6 @@ impl SnapshotTracker {
 
     /// Add a new snapshot, incrementing its reference count
     pub fn add_snapshot(&self, ts: Timestamp) -> Result<(), StorageError> {
-        let ts = ts as u64;
         self.active_references.fetch_add(1, Ordering::SeqCst);
 
         // Increment reference count or create new entry
@@ -108,8 +107,6 @@ impl SnapshotTracker {
     ///
     /// When reference count reaches zero, the snapshot is removed
     pub fn release_snapshot(&self, ts: Timestamp) -> Result<(), StorageError> {
-        let ts = ts as u64;
-
         match self.snapshots.get(&ts) {
             Some(count) => {
                 let new_count = count.fetch_sub(1, Ordering::SeqCst) - 1;
@@ -147,9 +144,9 @@ impl SnapshotTracker {
     pub fn min_active_snapshot(&self) -> Timestamp {
         let min = self.min_active.load(Ordering::Acquire);
         if min == u64::MAX {
-            u32::MAX // No active snapshots
+            u64::MAX // No active snapshots
         } else {
-            min as u32
+            min
         }
     }
 
@@ -174,7 +171,6 @@ impl SnapshotTracker {
 
     /// Get the reference count for a specific snapshot (for testing)
     pub fn ref_count(&self, ts: Timestamp) -> Option<u64> {
-        let ts = ts as u64;
         self.snapshots
             .get(&ts)
             .map(|count| count.load(Ordering::SeqCst))
@@ -232,7 +228,7 @@ mod tests {
         assert_eq!(tracker.min_active_snapshot(), 100);
 
         assert!(tracker.release_snapshot(100).is_ok());
-        assert_eq!(tracker.min_active_snapshot(), u32::MAX);
+        assert_eq!(tracker.min_active_snapshot(), u64::MAX);
     }
 
     #[test]
@@ -246,7 +242,7 @@ mod tests {
         assert_eq!(tracker.min_active_snapshot(), 100);
 
         assert!(tracker.release_snapshot(100).is_ok());
-        assert_eq!(tracker.min_active_snapshot(), u32::MAX);
+        assert_eq!(tracker.min_active_snapshot(), u64::MAX);
     }
 
     #[test]
@@ -294,7 +290,7 @@ mod tests {
 
         // Release last one
         tracker.release_snapshot(150).unwrap();
-        assert_eq!(tracker.cleanup_threshold(), u32::MAX);
+        assert_eq!(tracker.cleanup_threshold(), u64::MAX);
     }
 
     #[test]
@@ -311,7 +307,7 @@ mod tests {
             let tracker_clone = Arc::clone(&tracker);
             let handle = thread::spawn(move || {
                 for ts in (i * 100)..(i * 100 + 50) {
-                    let _ = tracker_clone.add_snapshot(ts as u32);
+                    let _ = tracker_clone.add_snapshot(ts);
                 }
             });
             handles.push(handle);
@@ -351,7 +347,7 @@ mod tests {
         assert_eq!(tracker.min_active_snapshot(), 300);
 
         tracker.release_snapshot(300).unwrap();
-        assert_eq!(tracker.min_active_snapshot(), u32::MAX);
+        assert_eq!(tracker.min_active_snapshot(), u64::MAX);
     }
 
     #[test]
@@ -370,14 +366,14 @@ mod tests {
             let errors = Arc::clone(&error_count);
             let handle = thread::spawn(move || {
                 for cycle in 0..100 {
-                    let ts = (tid * 1000 + cycle) as u32;
+                    let ts = tid * 1000 + cycle;
                     if t.add_snapshot(ts).is_err() {
                         errors.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
 
                 for cycle in 0..100 {
-                    let ts = (tid * 1000 + cycle) as u32;
+                    let ts = tid * 1000 + cycle;
                     if t.release_snapshot(ts).is_err() {
                         errors.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
@@ -392,6 +388,6 @@ mod tests {
 
         // No errors should occur
         assert_eq!(error_count.load(std::sync::atomic::Ordering::SeqCst), 0);
-        assert_eq!(tracker.min_active_snapshot(), u32::MAX);
+        assert_eq!(tracker.min_active_snapshot(), u64::MAX);
     }
 }

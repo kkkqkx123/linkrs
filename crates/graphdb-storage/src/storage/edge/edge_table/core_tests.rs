@@ -228,7 +228,7 @@ fn test_reverse_index_consistency_insert() {
     let src = 0u32;
     let dst = 1u32;
     let rank = 10i64;
-    let ts = 100u32;
+    let ts = 100u64;
 
     table
         .insert_edge(

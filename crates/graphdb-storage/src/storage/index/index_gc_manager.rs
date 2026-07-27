@@ -40,7 +40,7 @@
 
 use crate::core::types::Timestamp;
 use crate::transaction::VersionManager;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -113,7 +113,7 @@ pub struct IndexGcManager {
     index_manager: IndexDataManagerImpl,
     version_manager: Arc<VersionManager>,
     config: IndexGcConfig,
-    last_gc_ts: AtomicU32,
+    last_gc_ts: AtomicU64,
     running: Arc<AtomicBool>,
     stats: AtomicU64,
     total_removed: AtomicU64,
@@ -130,7 +130,7 @@ impl IndexGcManager {
             index_manager,
             version_manager,
             config,
-            last_gc_ts: AtomicU32::new(0),
+            last_gc_ts: AtomicU64::new(0),
             running: Arc::new(AtomicBool::new(false)),
             stats: AtomicU64::new(0),
             total_removed: AtomicU64::new(0),
@@ -276,7 +276,7 @@ impl Clone for IndexGcManager {
             index_manager: self.index_manager.clone(),
             version_manager: self.version_manager.clone(),
             config: self.config.clone(),
-            last_gc_ts: AtomicU32::new(self.last_gc_ts.load(Ordering::Acquire)),
+            last_gc_ts: AtomicU64::new(self.last_gc_ts.load(Ordering::Acquire)),
             running: self.running.clone(),
             stats: AtomicU64::new(self.stats.load(Ordering::Acquire)),
             total_removed: AtomicU64::new(self.total_removed.load(Ordering::Acquire)),

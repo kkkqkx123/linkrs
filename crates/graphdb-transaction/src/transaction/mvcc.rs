@@ -14,7 +14,7 @@
 //! proper timeout support.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -96,15 +96,15 @@ impl VersionManagerConfig {
 }
 
 pub struct VersionManager {
-    write_ts: AtomicU32,
-    read_ts: AtomicU32,
+    write_ts: AtomicU64,
+    read_ts: AtomicU64,
     pending_reqs: AtomicI32,
     lock: Mutex<()>,
     condvar: Condvar,
     config: VersionManagerConfig,
     snapshot_tracker: Arc<SnapshotTracker>,
     write_states: Mutex<BTreeMap<Timestamp, WriteTimestampState>>,
-    retention_frontier: AtomicU32,
+    retention_frontier: AtomicU64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,22 +122,22 @@ impl VersionManager {
     pub fn with_config(config: VersionManagerConfig) -> Self {
         let retention_frontier = config.retention_frontier;
         Self {
-            write_ts: AtomicU32::new(1),
-            read_ts: AtomicU32::new(1),
+            write_ts: AtomicU64::new(1),
+            read_ts: AtomicU64::new(1),
             pending_reqs: AtomicI32::new(0),
             lock: Mutex::new(()),
             condvar: Condvar::new(),
             config,
             snapshot_tracker: Arc::new(SnapshotTracker::new()),
             write_states: Mutex::new(BTreeMap::new()),
-            retention_frontier: AtomicU32::new(retention_frontier),
+            retention_frontier: AtomicU64::new(retention_frontier),
         }
     }
 
     pub fn init_ts(&self, ts: Timestamp) {
         // `write_ts` is the last allocated timestamp. Keeping the baseline at
         // the recovered timestamp makes the next allocation checked and
-        // contiguous, including at the u32 boundary.
+        // contiguous, including at the u64 boundary.
         self.write_ts.store(ts, Ordering::SeqCst);
         self.read_ts.store(ts, Ordering::SeqCst);
         self.write_states.lock().clear();
@@ -647,7 +647,7 @@ mod tests {
 
         // Release last
         vm.commit_write_timestamp(ts3);
-        assert_eq!(tracker.cleanup_threshold(), u32::MAX); // No active snapshots
+        assert_eq!(tracker.cleanup_threshold(), u64::MAX); // No active snapshots
     }
 
     #[test]
@@ -732,7 +732,7 @@ mod tests {
     #[test]
     fn test_timestamp_exhaustion_is_reported() {
         let vm = VersionManager::new();
-        vm.init_ts(u32::MAX);
+        vm.init_ts(Timestamp::MAX);
 
         assert!(matches!(
             vm.try_next_write_timestamp(),

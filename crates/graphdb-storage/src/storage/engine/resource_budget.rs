@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::core::error::storage::StorageErrorKind;
+use crate::core::types::Timestamp;
 use crate::core::{StorageError, StorageResult};
 
 /// Memory ownership categories used by the storage engine.
@@ -140,7 +141,7 @@ pub struct ResourceSnapshot {
     pub soft_limit_events: u64,
     pub hard_limit_rejections: u64,
     pub active_snapshots: usize,
-    pub oldest_snapshot_ts: u32,
+    pub oldest_snapshot_ts: Timestamp,
     pub tombstone_count: usize,
     pub tombstone_memory_bytes: u64,
 }
@@ -321,7 +322,7 @@ impl MemoryAccounting {
             soft_limit_events: self.soft_limit_events.load(Ordering::Relaxed),
             hard_limit_rejections: self.hard_limit_rejections.load(Ordering::Relaxed),
             active_snapshots: 0,
-            oldest_snapshot_ts: u32::MAX,
+            oldest_snapshot_ts: Timestamp::MAX,
             tombstone_count: 0,
             tombstone_memory_bytes: 0,
         }

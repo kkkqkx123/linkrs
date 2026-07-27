@@ -56,7 +56,7 @@ impl MVCCManager {
             tombstones: HashMap::new(),
             cold_tombstones: Vec::new(),
             cold_bloom_filter: EdgeDeletionBloomFilter::with_capacity(BLOOM_FILTER_CAPACITY),
-            min_active_snapshot_ts: u32::MAX,
+            min_active_snapshot_ts: Timestamp::MAX,
             active_snapshots: HashMap::new(),
             cold_gc_cursor: 0,
         }
@@ -228,7 +228,7 @@ impl MVCCManager {
                 .keys()
                 .copied()
                 .min()
-                .unwrap_or(u32::MAX);
+                .unwrap_or(Timestamp::MAX);
             self.gc_tombstones_batch(new_min_ts, DEFAULT_TOMBSTONE_GC_BATCH);
         }
 
@@ -274,7 +274,7 @@ impl MVCCManager {
             .keys()
             .copied()
             .min()
-            .unwrap_or(u32::MAX)
+            .unwrap_or(Timestamp::MAX)
     }
 
     /// Get number of active snapshots (for testing and debugging)
@@ -369,11 +369,11 @@ mod tests {
     fn test_tombstones_gc_multiple_edges() {
         let mut table = create_edge_table_with_props();
 
-        for i in 0..10 {
+        for i in 0..10u64 {
             table
                 .mvcc
                 .tombstones
-                .insert(EdgeId(i), 100 + (i as u32 * 10));
+                .insert(EdgeId(i), 100 + (i * 10));
         }
 
         assert_eq!(table.mvcc.tombstones.len(), 10);
@@ -426,14 +426,14 @@ mod tests {
     fn test_mvcc_metrics_gc_count() {
         let mut table = create_edge_table_with_props();
 
-        for i in 0..5 {
+        for i in 0..5u64 {
             table
                 .insert_edge(
                     0,
                     1,
                     i as i64,
                     &[("weight".to_string(), Value::Double(i as f64))],
-                    i as u32,
+                    i,
                 )
                 .unwrap();
         }
@@ -463,14 +463,14 @@ mod tests {
         let stats_manager = Arc::new(StatsManager::new());
         table.set_stats_manager(stats_manager.clone());
 
-        for i in 0..5 {
+        for i in 0..5u64 {
             table
                 .insert_edge(
                     0,
                     1,
                     i as i64,
                     &[("weight".to_string(), Value::Double(i as f64))],
-                    i as u32,
+                    i,
                 )
                 .unwrap();
         }
@@ -487,8 +487,8 @@ mod tests {
         stats_manager.record_tombstone_stats(
             tom_stats.count as u64,
             tom_stats.memory_bytes as u64,
-            tom_stats.oldest_delete_ts,
-            tom_stats.newest_delete_ts,
+            tom_stats.oldest_delete_ts.map(|ts| ts as u32),
+            tom_stats.newest_delete_ts.map(|ts| ts as u32),
             1,
         );
 
@@ -522,9 +522,9 @@ mod tests {
         let mut mvcc = MVCCManager::new();
 
         // Add 100 tombstones to cold layer, sorted by EdgeId
-        for i in 0..100 {
+        for i in 0..100u64 {
             mvcc.cold_tombstones
-                .push((EdgeId(i as u64), 100 + i as u32));
+                .push((EdgeId(i), 100 + i));
         }
         mvcc.cold_tombstones.sort_by_key(|k| k.0);
 
@@ -538,11 +538,11 @@ mod tests {
 
         // Test binary search - all should be found
         for i in 0..100 {
-            assert!(mvcc.is_tombstoned_cold(EdgeId(i as u64), u32::MAX));
+            assert!(mvcc.is_tombstoned_cold(EdgeId(i as u64), Timestamp::MAX));
         }
 
         // Test edge cases
-        assert!(!mvcc.is_tombstoned_cold(EdgeId(200), u32::MAX)); // Not in cold layer
+        assert!(!mvcc.is_tombstoned_cold(EdgeId(200), Timestamp::MAX)); // Not in cold layer
         assert!(!mvcc.is_tombstoned_cold(EdgeId(0), 50)); // Before delete_ts
     }
 
@@ -552,14 +552,14 @@ mod tests {
 
         // Add 100K tombstones to cold layer, simulating large delete set
         for i in 0..100_000 {
-            mvcc.cold_tombstones.push((EdgeId(i as u64), u32::MAX - 1));
+            mvcc.cold_tombstones.push((EdgeId(i as u64), Timestamp::MAX - 1));
         }
         mvcc.cold_tombstones.sort_by_key(|k| k.0);
 
         let start = std::time::Instant::now();
         for i in 0..10_000 {
             let idx = i * 10; // Sparse queries
-            let _ = mvcc.is_tombstoned(EdgeId(idx as u64), u32::MAX);
+            let _ = mvcc.is_tombstoned(EdgeId(idx as u64), Timestamp::MAX);
         }
         let elapsed = start.elapsed();
 
@@ -582,9 +582,9 @@ mod tests {
 
         // Fill hot layer to trigger promotion
         // Use timestamps well above GC threshold to avoid premature cleanup
-        for i in 0..200_000 {
+        for i in 0..200_000u64 {
             mvcc.tombstones
-                .insert(EdgeId(i as u64), 10_000 + (i as u32 % 1000));
+                .insert(EdgeId(i), 10_000 + (i % 1000));
         }
 
         assert!(mvcc.tombstones.len() > HOT_TOMBSTONE_GC_THRESHOLD);
@@ -607,7 +607,7 @@ mod tests {
         // Verify we can still use binary search after promotion
         if !mvcc.cold_tombstones.is_empty() {
             let first_edge_id = mvcc.cold_tombstones[0].0;
-            assert!(mvcc.is_tombstoned_cold(first_edge_id, u32::MAX));
+            assert!(mvcc.is_tombstoned_cold(first_edge_id, Timestamp::MAX));
         }
     }
 
@@ -631,9 +631,9 @@ mod tests {
         }
 
         // Test queries across both layers
-        assert!(mvcc.is_tombstoned(EdgeId(1), u32::MAX)); // Hot layer
-        assert!(mvcc.is_tombstoned(EdgeId(10), u32::MAX)); // Cold layer via binary search
-        assert!(!mvcc.is_tombstoned(EdgeId(999), u32::MAX)); // Neither layer
+        assert!(mvcc.is_tombstoned(EdgeId(1), Timestamp::MAX)); // Hot layer
+        assert!(mvcc.is_tombstoned(EdgeId(10), Timestamp::MAX)); // Cold layer via binary search
+        assert!(!mvcc.is_tombstoned(EdgeId(999), Timestamp::MAX)); // Neither layer
 
         // Verify GC doesn't break cold layer sort
         mvcc.gc_tombstones(120);

@@ -653,9 +653,9 @@ impl VertexTable {
 
         let mut timestamps = Vec::with_capacity(count);
         for _ in 0..count {
-            let mut ts_bytes = [0u8; 4];
+            let mut ts_bytes = [0u8; 8];
             cursor.read_exact(&mut ts_bytes)?;
-            timestamps.push(u32::from_le_bytes(ts_bytes));
+            timestamps.push(u64::from_le_bytes(ts_bytes));
         }
 
         self.timestamps.load(&timestamps);

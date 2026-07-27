@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::core::types::{CommitLsn, DurabilityLevel, EdgeIdentifier, TransactionId, VertexId};
+use crate::core::types::{CommitLsn, DurabilityLevel, EdgeIdentifier, Timestamp, TransactionId, VertexId};
 
 use super::context::TransactionContext;
 use super::error::TransactionError;
@@ -11,7 +11,7 @@ use super::undo_log::UndoLogEntry;
 #[derive(Debug, Clone)]
 pub struct TransactionCommitDescriptor {
     pub transaction_id: TransactionId,
-    pub write_timestamp: u32,
+    pub write_timestamp: Timestamp,
     pub durability: DurabilityLevel,
     pub write_set: WriteSet,
 }
@@ -23,7 +23,7 @@ pub struct TransactionCommitDescriptor {
 #[derive(Debug, Clone)]
 pub struct TransactionAbortDescriptor {
     pub transaction_id: TransactionId,
-    pub write_timestamp: u32,
+    pub write_timestamp: Timestamp,
     pub context: Arc<TransactionContext>,
 }
 

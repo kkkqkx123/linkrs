@@ -43,11 +43,8 @@ pub struct IndexRecord {
     pub created_ts: Timestamp,
     pub deleted_ts: Option<Timestamp>,
     pub entity_version: Option<Timestamp>,
-    pub included_columns: Vec<(String, Value)>,
+    pub included_columns: Option<Vec<(String, Value)>>,
     pub entity_ref: Option<EntityRef>,
-    /// Encoded form of the indexed property value, used to link reverse entries
-    /// back to their forward counterparts without full index scans.
-    pub encoded_indexed_value: Option<Vec<u8>>,
 }
 
 impl IndexRecord {
@@ -56,9 +53,8 @@ impl IndexRecord {
             created_ts,
             deleted_ts: None,
             entity_version: None,
-            included_columns: Vec::new(),
+            included_columns: None,
             entity_ref: None,
-            encoded_indexed_value: None,
         }
     }
 
@@ -67,9 +63,8 @@ impl IndexRecord {
             created_ts,
             deleted_ts: None,
             entity_version: None,
-            included_columns,
+            included_columns: Some(included_columns),
             entity_ref: None,
-            encoded_indexed_value: None,
         }
     }
 
@@ -80,11 +75,6 @@ impl IndexRecord {
 
     pub fn with_entity_version(mut self, version: Timestamp) -> Self {
         self.entity_version = Some(version);
-        self
-    }
-
-    pub fn with_encoded_value(mut self, encoded: Vec<u8>) -> Self {
-        self.encoded_indexed_value = Some(encoded);
         self
     }
 
@@ -173,7 +163,7 @@ mod tests {
         let columns = vec![("name".to_string(), Value::string("test"))];
         let record = IndexRecord::new_with_columns(10, columns.clone());
         assert_eq!(record.created_ts, 10);
-        assert_eq!(record.included_columns, columns);
+        assert_eq!(record.included_columns, Some(columns));
     }
 
     #[test]

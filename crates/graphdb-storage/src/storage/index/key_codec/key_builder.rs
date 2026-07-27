@@ -108,6 +108,28 @@ impl KeyBuilder {
         Ok(ByteKey(key))
     }
 
+    /// Build a reverse key that includes the encoded property value,
+    /// enabling forward-key reconstruction without a separate field.
+    pub fn build_vertex_reverse_key_with_value(
+        space_id: u64,
+        vertex_id: &Value,
+        index_name: &str,
+        prop_value: &Value,
+    ) -> Result<ByteKey, StorageError> {
+        let encoded_entity = codec().encode(vertex_id)?;
+        let encoded_value = codec().encode(&normalize_int_value(prop_value))?;
+
+        let mut key = Vec::new();
+        key.extend_from_slice(&space_id.to_le_bytes());
+        key.push(KEY_TYPE_VERTEX_REVERSE);
+        key.extend_from_slice(&encoded_entity);
+        key.extend_from_slice(&(index_name.len() as u32).to_le_bytes());
+        key.extend_from_slice(index_name.as_bytes());
+        key.extend_from_slice(&encoded_value);
+
+        Ok(ByteKey(key))
+    }
+
     // ========================================================================
     // Edge Forward Index Keys
     // ========================================================================
@@ -185,6 +207,35 @@ impl KeyBuilder {
         key.extend_from_slice(&encoded_rank);
         key.extend_from_slice(&(index_name.len() as u32).to_le_bytes());
         key.extend_from_slice(index_name.as_bytes());
+        Ok(ByteKey(key))
+    }
+
+    /// Build an edge reverse key that includes the encoded property value.
+    pub fn build_edge_reverse_key_with_value(
+        space_id: u64,
+        edge_src: &Value,
+        edge_dst: &Value,
+        edge_type: &str,
+        ranking: i64,
+        index_name: &str,
+        prop_value: &Value,
+    ) -> Result<ByteKey, StorageError> {
+        let encoded_src = codec().encode(edge_src)?;
+        let encoded_dst = codec().encode(edge_dst)?;
+        let encoded_type = codec().encode(&Value::string(edge_type))?;
+        let encoded_rank = codec().encode(&Value::BigInt(ranking))?;
+        let encoded_value = codec().encode(&normalize_int_value(prop_value))?;
+
+        let mut key = Vec::new();
+        key.extend_from_slice(&space_id.to_le_bytes());
+        key.push(KEY_TYPE_EDGE_REVERSE);
+        key.extend_from_slice(&encoded_src);
+        key.extend_from_slice(&encoded_dst);
+        key.extend_from_slice(&encoded_type);
+        key.extend_from_slice(&encoded_rank);
+        key.extend_from_slice(&(index_name.len() as u32).to_le_bytes());
+        key.extend_from_slice(index_name.as_bytes());
+        key.extend_from_slice(&encoded_value);
         Ok(ByteKey(key))
     }
 

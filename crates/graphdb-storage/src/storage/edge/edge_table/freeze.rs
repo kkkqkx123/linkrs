@@ -149,7 +149,7 @@ impl TimeTravelEdgeStore {
                 }
                 None
             })
-            .fold((u32::MAX, 0), |(min, max), ts| {
+            .fold((Timestamp::MAX, 0), |(min, max), ts| {
                 (std::cmp::min(min, ts), std::cmp::max(max, ts))
             });
 

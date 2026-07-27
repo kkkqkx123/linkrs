@@ -176,17 +176,17 @@ pub fn load_metadata(
     for _ in 0..tombstone_count {
         let mut edge_id_bytes = [0u8; 8];
         cursor.read_exact(&mut edge_id_bytes)?;
-        let mut delete_ts_bytes = [0u8; 4];
+        let mut delete_ts_bytes = [0u8; 8];
         cursor.read_exact(&mut delete_ts_bytes)?;
         tombstones.insert(
             EdgeId(u64::from_le_bytes(edge_id_bytes)),
-            u32::from_le_bytes(delete_ts_bytes),
+            u64::from_le_bytes(delete_ts_bytes),
         );
     }
 
-    let mut min_snapshot_ts_bytes = [0u8; 4];
+    let mut min_snapshot_ts_bytes = [0u8; 8];
     cursor.read_exact(&mut min_snapshot_ts_bytes)?;
-    let min_active_snapshot_ts = u32::from_le_bytes(min_snapshot_ts_bytes);
+    let min_active_snapshot_ts = u64::from_le_bytes(min_snapshot_ts_bytes);
 
     Ok((
         label,
@@ -239,21 +239,21 @@ pub fn load_csr(
     let segment_count = u64::from_le_bytes(segment_count_bytes) as usize;
 
     for _ in 0..segment_count {
-        let mut create_ts_min_bytes = [0u8; 4];
+        let mut create_ts_min_bytes = [0u8; 8];
         cursor.read_exact(&mut create_ts_min_bytes)?;
-        let create_ts_min = u32::from_le_bytes(create_ts_min_bytes);
+        let create_ts_min = u64::from_le_bytes(create_ts_min_bytes);
 
-        let mut create_ts_max_bytes = [0u8; 4];
+        let mut create_ts_max_bytes = [0u8; 8];
         cursor.read_exact(&mut create_ts_max_bytes)?;
-        let create_ts_max = u32::from_le_bytes(create_ts_max_bytes);
+        let create_ts_max = u64::from_le_bytes(create_ts_max_bytes);
 
-        let mut delete_ts_min_bytes = [0u8; 4];
+        let mut delete_ts_min_bytes = [0u8; 8];
         cursor.read_exact(&mut delete_ts_min_bytes)?;
-        let delete_ts_min = u32::from_le_bytes(delete_ts_min_bytes);
+        let delete_ts_min = u64::from_le_bytes(delete_ts_min_bytes);
 
-        let mut delete_ts_max_bytes = [0u8; 4];
+        let mut delete_ts_max_bytes = [0u8; 8];
         cursor.read_exact(&mut delete_ts_max_bytes)?;
-        let delete_ts_max = u32::from_le_bytes(delete_ts_max_bytes);
+        let delete_ts_max = u64::from_le_bytes(delete_ts_max_bytes);
 
         let mut segment_len_bytes = [0u8; 8];
         cursor.read_exact(&mut segment_len_bytes)?;
@@ -442,7 +442,7 @@ mod tests {
         };
         let mut table = TimeTravelEdgeStore::new(schema).unwrap();
 
-        let ts = 100u32;
+        let ts = 100u64;
         table
             .insert_edge(1, 2, 0, &[("weight".to_string(), Value::Double(1.5))], ts)
             .unwrap();
@@ -555,9 +555,9 @@ mod tests {
     fn test_segment_size_estimation() {
         let mut table = create_edge_table();
 
-        for i in 0..50 {
+        for i in 0..50u64 {
             table
-                .insert_edge(i % 10, 100 + i, 0, &[], 1000 + i)
+                .insert_edge((i % 10) as u32, (100 + i) as u32, 0, &[], 1000 + i)
                 .unwrap();
         }
 

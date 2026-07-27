@@ -12,17 +12,17 @@ use crate::storage::index::key_codec::IndexKeyGenerator;
 use crate::storage::index::types::IndexRecord;
 use parking_lot::RwLock;
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::marker::PhantomData;
 use std::path::Path;
-use std::sync::{
-    atomic::AtomicU64,
-    Arc,
-};
+use std::sync::Arc;
+
+const MAGIC_FORWARD: [u8; 4] = *b"INDF";
+const MAGIC_REVERSE: [u8; 4] = *b"INDR";
 
 type LoadedIndexData = (
     BTreeMap<SecondaryIndexKey, IndexRecord>,
     BTreeMap<SecondaryIndexKey, IndexRecord>,
-    u64,
 );
 
 /// Generic index manager
@@ -34,7 +34,6 @@ type LoadedIndexData = (
 pub struct GenericIndexManager<K: IndexKeyGenerator> {
     forward_index: Arc<RwLock<BTreeMap<SecondaryIndexKey, IndexRecord>>>,
     reverse_index: Arc<RwLock<BTreeMap<SecondaryIndexKey, IndexRecord>>>,
-    version_counter: Arc<AtomicU64>,
     _marker: PhantomData<K>,
 }
 
@@ -43,7 +42,6 @@ impl<K: IndexKeyGenerator> Clone for GenericIndexManager<K> {
         Self {
             forward_index: Arc::clone(&self.forward_index),
             reverse_index: Arc::clone(&self.reverse_index),
-            version_counter: Arc::clone(&self.version_counter),
             _marker: PhantomData,
         }
     }
@@ -54,7 +52,6 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
         Self {
             forward_index: Arc::new(RwLock::new(BTreeMap::new())),
             reverse_index: Arc::new(RwLock::new(BTreeMap::new())),
-            version_counter: Arc::new(AtomicU64::new(1)),
             _marker: PhantomData,
         }
     }
@@ -88,7 +85,43 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
         writer.write_all(&count.to_le_bytes())?;
 
         for (key, entry) in index.iter() {
-            writer.write_all(&(key.len() as u32).to_le_bytes())?;
+            let mut hasher = crc32fast::Hasher::new();
+            let key_len = key.len() as u32;
+            hasher.update(&key_len.to_le_bytes());
+            hasher.update(key);
+            hasher.update(&entry.created_ts.to_le_bytes());
+            if let Some(deleted_ts) = entry.deleted_ts {
+                hasher.update(&[1u8]);
+                hasher.update(&deleted_ts.to_le_bytes());
+            } else {
+                hasher.update(&[0u8]);
+            }
+            let num_included = entry.included_columns.as_ref().map_or(0, |v| v.len()) as u32;
+            hasher.update(&num_included.to_le_bytes());
+            if let Some(columns) = &entry.included_columns {
+                for (name, value) in columns {
+                    let name_bytes = name.as_bytes();
+                    hasher.update(&(name_bytes.len() as u32).to_le_bytes());
+                    hasher.update(name_bytes);
+                    let value_bytes = OrderedCodec::new().encode(value).map_err(|e| {
+                        std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+                    })?;
+                    hasher.update(&(value_bytes.len() as u32).to_le_bytes());
+                    hasher.update(&value_bytes);
+                }
+            }
+
+            let entity_ref_encoded = encode_entity_ref(&entry.entity_ref);
+            hasher.update(&entity_ref_encoded);
+
+            if let Some(entity_version) = entry.entity_version {
+                hasher.update(&[1u8]);
+                hasher.update(&entity_version.to_le_bytes());
+            } else {
+                hasher.update(&[0u8]);
+            }
+
+            writer.write_all(&key_len.to_le_bytes())?;
             writer.write_all(key)?;
             writer.write_all(&entry.created_ts.to_le_bytes())?;
             if let Some(deleted_ts) = entry.deleted_ts {
@@ -97,36 +130,29 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
             } else {
                 writer.write_all(&[0u8])?;
             }
-
-            let num_included = entry.included_columns.len() as u32;
             writer.write_all(&num_included.to_le_bytes())?;
-            for (name, value) in &entry.included_columns {
-                let name_bytes = name.as_bytes();
-                writer.write_all(&(name_bytes.len() as u32).to_le_bytes())?;
-                writer.write_all(name_bytes)?;
-                let value_bytes = OrderedCodec::new().encode(value).map_err(|e| {
-                    std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
-                })?;
-                writer.write_all(&(value_bytes.len() as u32).to_le_bytes())?;
-                writer.write_all(&value_bytes)?;
+            if let Some(columns) = &entry.included_columns {
+                for (name, value) in columns {
+                    let name_bytes = name.as_bytes();
+                    writer.write_all(&(name_bytes.len() as u32).to_le_bytes())?;
+                    writer.write_all(name_bytes)?;
+                    let value_bytes = OrderedCodec::new().encode(value).map_err(|e| {
+                        std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+                    })?;
+                    writer.write_all(&(value_bytes.len() as u32).to_le_bytes())?;
+                    writer.write_all(&value_bytes)?;
+                }
             }
-
             write_entity_ref(writer, &entry.entity_ref)?;
-
-            if let Some(encoded) = &entry.encoded_indexed_value {
-                writer.write_all(&[1u8])?;
-                writer.write_all(&(encoded.len() as u32).to_le_bytes())?;
-                writer.write_all(encoded)?;
-            } else {
-                writer.write_all(&[0u8])?;
-            }
-
             if let Some(entity_version) = entry.entity_version {
                 writer.write_all(&[1u8])?;
                 writer.write_all(&entity_version.to_le_bytes())?;
             } else {
                 writer.write_all(&[0u8])?;
             }
+
+            let checksum = hasher.finalize();
+            writer.write_all(&checksum.to_le_bytes())?;
         }
 
         Ok(())
@@ -138,6 +164,12 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
     ) -> StorageResult<()> {
         let temporary = path.with_extension("tmp");
         let mut file = std::fs::File::create(&temporary)?;
+        let magic = if path.to_string_lossy().contains("forward") {
+            MAGIC_FORWARD
+        } else {
+            MAGIC_REVERSE
+        };
+        file.write_all(&magic)?;
         Self::flush_index_map(&mut file, index)?;
         file.sync_all()?;
         drop(file);
@@ -145,53 +177,46 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
         Ok(())
     }
 
-    /// Atomically replace the inner forward and reverse index data.
-    /// This enables crash-safe generation rebuilds: build a new BTreeMap in isolation,
-    /// flush it to a checkpoint file, then swap in one write-lock cycle.
-    pub fn replace_data(
-        &self,
-        forward: BTreeMap<SecondaryIndexKey, IndexRecord>,
-        reverse: BTreeMap<SecondaryIndexKey, IndexRecord>,
-    ) {
-        *self.forward_index.write() = forward;
-        *self.reverse_index.write() = reverse;
-    }
-
     pub(crate) fn load_data<P: AsRef<Path>>(path: P) -> StorageResult<LoadedIndexData> {
         let path = path.as_ref();
         let loader = Self::new();
-        let (forward_index, forward_max_version) =
-            loader.load_index_file(&path.join("forward_index.bin"))?;
-        let (reverse_index, reverse_max_version) =
-            loader.load_index_file(&path.join("reverse_index.bin"))?;
-        Ok((
-            forward_index,
-            reverse_index,
-            forward_max_version
-                .max(reverse_max_version)
-                .saturating_add(1),
-        ))
+        let forward_index = loader.load_index_file(&path.join("forward_index.bin"))?;
+        let reverse_index = loader.load_index_file(&path.join("reverse_index.bin"))?;
+        Ok((forward_index, reverse_index))
     }
 
     fn load_index_file(
         &self,
         path: &Path,
-    ) -> StorageResult<(BTreeMap<SecondaryIndexKey, IndexRecord>, u64)> {
+    ) -> StorageResult<BTreeMap<SecondaryIndexKey, IndexRecord>> {
         use std::fs::File;
         use std::io::Read;
 
         if !path.exists() {
-            return Ok((BTreeMap::new(), 0));
+            return Ok(BTreeMap::new());
         }
 
         let mut file = File::open(path)?;
+
+        let expected_magic = if path.to_string_lossy().contains("forward") {
+            MAGIC_FORWARD
+        } else {
+            MAGIC_REVERSE
+        };
+        let mut magic = [0u8; 4];
+        file.read_exact(&mut magic)?;
+        if magic != expected_magic {
+            return Err(StorageError::db_error(format!(
+                "Corrupted index file: magic mismatch in {:?}",
+                path
+            )));
+        }
 
         let mut count_bytes = [0u8; 8];
         file.read_exact(&mut count_bytes)?;
         let count = u64::from_le_bytes(count_bytes);
 
         let mut index = BTreeMap::new();
-        let mut max_version = 0u64;
 
         for _ in 0..count {
             let mut key_len_bytes = [0u8; 4];
@@ -201,111 +226,105 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
             let mut key = vec![0u8; key_len];
             file.read_exact(&mut key)?;
 
-            let mut created_ts_bytes = [0u8; 4];
+            let mut created_ts_bytes = [0u8; 8];
             file.read_exact(&mut created_ts_bytes)?;
-            let created_ts = u32::from_le_bytes(created_ts_bytes);
+            let created_ts = u64::from_le_bytes(created_ts_bytes);
 
             let mut has_deleted = [0u8; 1];
             file.read_exact(&mut has_deleted)?;
             let deleted_ts = if has_deleted[0] == 1 {
-                let mut deleted_ts_bytes = [0u8; 4];
+                let mut deleted_ts_bytes = [0u8; 8];
                 file.read_exact(&mut deleted_ts_bytes)?;
-                Some(u32::from_le_bytes(deleted_ts_bytes))
+                Some(u64::from_le_bytes(deleted_ts_bytes))
             } else {
                 None
             };
 
-            let mut included_columns = Vec::new();
             let mut num_included_bytes = [0u8; 4];
-            if file.read_exact(&mut num_included_bytes).is_ok() {
-                let num_included = u32::from_le_bytes(num_included_bytes) as usize;
-                for _ in 0..num_included {
-                    let mut name_len_bytes = [0u8; 4];
-                    file.read_exact(&mut name_len_bytes)?;
-                    let name_len = u32::from_le_bytes(name_len_bytes) as usize;
-                    let mut name_bytes = vec![0u8; name_len];
-                    file.read_exact(&mut name_bytes)?;
-                    let name = String::from_utf8(name_bytes).map_err(|e| {
-                        StorageError::db_error(format!("Invalid included column name: {e}"))
-                    })?;
+            file.read_exact(&mut num_included_bytes)?;
+            let num_included = u32::from_le_bytes(num_included_bytes) as usize;
+            let mut included_columns = Vec::with_capacity(num_included);
+            for _ in 0..num_included {
+                let mut name_len_bytes = [0u8; 4];
+                file.read_exact(&mut name_len_bytes)?;
+                let name_len = u32::from_le_bytes(name_len_bytes) as usize;
+                let mut name_bytes = vec![0u8; name_len];
+                file.read_exact(&mut name_bytes)?;
+                let name = String::from_utf8(name_bytes).map_err(|e| {
+                    StorageError::db_error(format!("Invalid included column name: {e}"))
+                })?;
 
-                    let mut value_len_bytes = [0u8; 4];
-                    file.read_exact(&mut value_len_bytes)?;
-                    let value_len = u32::from_le_bytes(value_len_bytes) as usize;
-                    let mut value_bytes = vec![0u8; value_len];
-                    file.read_exact(&mut value_bytes)?;
-                    let value = OrderedCodec::new().decode(&value_bytes)?;
-                    included_columns.push((name, value));
-                }
+                let mut value_len_bytes = [0u8; 4];
+                file.read_exact(&mut value_len_bytes)?;
+                let value_len = u32::from_le_bytes(value_len_bytes) as usize;
+                let mut value_bytes = vec![0u8; value_len];
+                file.read_exact(&mut value_bytes)?;
+                let value = OrderedCodec::new().decode(&value_bytes)?;
+                included_columns.push((name, value));
             }
 
             let entity_ref = read_entity_ref(&mut file)?;
 
-            let mut has_encoded_value = [0u8; 1];
-            let encoded_indexed_value = if file.read_exact(&mut has_encoded_value).is_ok() && has_encoded_value[0] == 1 {
-                let mut encoded_len_bytes = [0u8; 4];
-                file.read_exact(&mut encoded_len_bytes)?;
-                let encoded_len = u32::from_le_bytes(encoded_len_bytes) as usize;
-                let mut encoded = vec![0u8; encoded_len];
-                file.read_exact(&mut encoded)?;
-                Some(encoded)
+            let mut has_entity_version = [0u8; 1];
+            file.read_exact(&mut has_entity_version)?;
+            let entity_version = if has_entity_version[0] == 1 {
+                let mut bytes = [0u8; 8];
+                file.read_exact(&mut bytes)?;
+                Some(u64::from_le_bytes(bytes))
             } else {
                 None
             };
 
-            let mut has_entity_version = [0u8; 1];
-            if file.read_exact(&mut has_entity_version).is_ok() {
-                let entity_version = if has_entity_version[0] == 1 {
-                    let mut bytes = [0u8; 4];
-                    file.read_exact(&mut bytes)?;
-                    Some(u32::from_le_bytes(bytes))
-                } else {
-                    None
-                };
-                let entry = IndexRecord {
-                    created_ts,
-                    deleted_ts,
-                    entity_version,
-                    included_columns,
-                    entity_ref,
-                    encoded_indexed_value: encoded_indexed_value.clone(),
-                };
-                max_version = max_version.max(Self::extract_version_from_key(&key));
-                index.insert(key, entry);
-            } else {
-                let entry = IndexRecord {
-                    created_ts,
-                    deleted_ts,
-                    entity_version: None,
-                    included_columns,
-                    entity_ref,
-                    encoded_indexed_value: encoded_indexed_value.clone(),
-                };
-                max_version = max_version.max(Self::extract_version_from_key(&key));
-                index.insert(key, entry);
+            let mut stored_checksum = [0u8; 4];
+            file.read_exact(&mut stored_checksum)?;
+            let stored_checksum = u32::from_le_bytes(stored_checksum);
+
+            // Verify checksum
+            let mut hasher = crc32fast::Hasher::new();
+            hasher.update(&key_len_bytes);
+            hasher.update(&key);
+            hasher.update(&created_ts_bytes);
+            hasher.update(&has_deleted);
+            if let Some(dts) = deleted_ts {
+                hasher.update(&dts.to_le_bytes());
             }
+            hasher.update(&num_included_bytes);
+            for (name, _) in &included_columns {
+                hasher.update(&(name.len() as u32).to_le_bytes());
+                hasher.update(name.as_bytes());
+            }
+            for (_, value) in &included_columns {
+                let encoded = OrderedCodec::new().encode(value).map_err(|e| {
+                    StorageError::db_error(format!("Re-encode error for checksum: {e}"))
+                })?;
+                hasher.update(&(encoded.len() as u32).to_le_bytes());
+                hasher.update(&encoded);
+            }
+            hasher.update(&encode_entity_ref(&entity_ref));
+            hasher.update(&has_entity_version);
+            if let Some(ev) = entity_version {
+                hasher.update(&ev.to_le_bytes());
+            }
+            let computed = hasher.finalize();
+            if computed != stored_checksum {
+                return Err(StorageError::db_error(format!(
+                    "Checksum mismatch in index file {:?}",
+                    path
+                )));
+            }
+
+            let entry = IndexRecord {
+                created_ts,
+                deleted_ts,
+                entity_version,
+                included_columns: Some(included_columns),
+                entity_ref,
+            };
+            index.insert(key, entry);
         }
 
-        Ok((index, max_version))
+        Ok(index)
     }
-
-    pub(crate) fn forward_index_handle(
-        &self,
-    ) -> Arc<RwLock<BTreeMap<SecondaryIndexKey, IndexRecord>>> {
-        Arc::new(RwLock::new(self.forward_index.read().clone()))
-    }
-
-    fn extract_version_from_key(key: &[u8]) -> u64 {
-        if key.len() < std::mem::size_of::<u64>() {
-            return 0;
-        }
-
-        let start = key.len() - std::mem::size_of::<u64>();
-        let mut bytes = [0u8; std::mem::size_of::<u64>()];
-        bytes.copy_from_slice(&key[start..]);
-        u64::from_le_bytes(bytes)
-    }
-
 }
 
 impl<K: IndexKeyGenerator> Default for GenericIndexManager<K> {
@@ -315,6 +334,12 @@ impl<K: IndexKeyGenerator> Default for GenericIndexManager<K> {
 }
 
 // ── EntityRef binary serialization helpers ──
+
+fn encode_entity_ref(entity_ref: &Option<EntityRef>) -> Vec<u8> {
+    let mut buf = Vec::new();
+    write_entity_ref(&mut buf, entity_ref).expect("Vec::write is infallible");
+    buf
+}
 
 fn write_entity_ref<W: std::io::Write>(
     writer: &mut W,

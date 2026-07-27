@@ -172,16 +172,16 @@ impl SingleMutableCsr {
         let nbr = &mut self.nbr_list[src_idx];
 
         // Reject if there's an active edge with newer or equal timestamp
-        if nbr.delete_ts == u32::MAX && ts <= nbr.create_ts {
+        if nbr.delete_ts == Timestamp::MAX && ts <= nbr.create_ts {
             return false;
         }
 
-        let was_empty = nbr.delete_ts < u32::MAX;
+        let was_empty = nbr.delete_ts < Timestamp::MAX;
         nbr.neighbor = dst;
         nbr.edge_id = edge_id;
         nbr.prop_offset = prop_offset;
         nbr.create_ts = ts;
-        nbr.delete_ts = u32::MAX;
+        nbr.delete_ts = Timestamp::MAX;
 
         if was_empty {
             self.edge_count.fetch_add(1, Ordering::Relaxed);
@@ -199,7 +199,7 @@ impl SingleMutableCsr {
 
         let nbr = &mut self.nbr_list[src_idx];
 
-        if nbr.delete_ts < u32::MAX || nbr.create_ts > ts {
+        if nbr.delete_ts < Timestamp::MAX || nbr.create_ts > ts {
             return false;
         }
 
@@ -221,7 +221,7 @@ impl SingleMutableCsr {
 
         let nbr = &mut self.nbr_list[src_idx];
 
-        if nbr.neighbor != dst || nbr.delete_ts < u32::MAX || nbr.create_ts > ts {
+        if nbr.neighbor != dst || nbr.delete_ts < Timestamp::MAX || nbr.create_ts > ts {
             return false;
         }
 
@@ -264,8 +264,8 @@ impl SingleMutableCsr {
         let nbr = &mut self.nbr_list[src_idx];
 
         // Only revert deletions that happened at or before rollback time.
-        if nbr.delete_ts < u32::MAX && nbr.delete_ts <= ts {
-            nbr.delete_ts = u32::MAX;
+        if nbr.delete_ts < Timestamp::MAX && nbr.delete_ts <= ts {
+            nbr.delete_ts = Timestamp::MAX;
             self.edge_count.fetch_add(1, Ordering::Relaxed);
             return true;
         }
@@ -371,8 +371,8 @@ impl SingleMutableCsr {
             let neighbor = read_vertex_id(data, &mut offset)?;
             let raw_edge_id = read_u64_le(data, &mut offset)?;
             let prop_offset = read_u32_le(data, &mut offset)?;
-            let create_ts = read_u32_le(data, &mut offset)?;
-            let delete_ts = read_u32_le(data, &mut offset)?;
+            let create_ts = read_u64_le(data, &mut offset)?;
+            let delete_ts = read_u64_le(data, &mut offset)?;
 
             nbr_list.push(Nbr::with_delete_ts(
                 neighbor,

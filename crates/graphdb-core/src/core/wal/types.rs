@@ -491,8 +491,8 @@ impl WalHeader {
         bytes[offset..offset + 2].copy_from_slice(&self.flags.to_le_bytes());
         offset += 2;
 
-        bytes[offset..offset + 4].copy_from_slice(&self.timestamp.to_le_bytes());
-        offset += 4;
+        bytes[offset..offset + 8].copy_from_slice(&self.timestamp.to_le_bytes());
+        offset += 8;
 
         bytes[offset..offset + 8].copy_from_slice(&self.lsn.to_le_bytes());
         offset += 8;
@@ -537,8 +537,8 @@ impl WalHeader {
         let flags = u16::from_le_bytes(bytes[offset..offset + 2].try_into().ok()?);
         offset += 2;
 
-        let timestamp = u32::from_le_bytes(bytes[offset..offset + 4].try_into().ok()?);
-        offset += 4;
+        let timestamp = u64::from_le_bytes(bytes[offset..offset + 8].try_into().ok()?);
+        offset += 8;
 
         let lsn = u64::from_le_bytes(bytes[offset..offset + 8].try_into().ok()?);
         offset += 8;

@@ -252,12 +252,12 @@ mod tests {
     #[test]
     fn test_timestamp_monotonic_increase() {
         let mut vts = VertexTimestamp::new();
-        let mut last_ts = 0u32;
+        let mut last_ts = 0u64;
 
         // Simulate inserting vertices with increasing timestamps
-        for i in 0..10 {
+        for i in 0..10u64 {
             let ts = 100 + i;
-            vts.insert(i, ts);
+            vts.insert(i as u32, ts);
             assert!(
                 ts > last_ts,
                 "Timestamps should be monotonically increasing"
@@ -283,7 +283,7 @@ mod tests {
         // Verify it's visible again for all future timestamps up to MAX_TIMESTAMP-1
         assert!(vts.is_valid(0, 200));
         assert!(vts.is_valid(0, 1000));
-        assert!(vts.is_valid(0, u32::MAX - 2));
+        assert!(vts.is_valid(0, Timestamp::MAX - 2));
     }
 
     /// Test: Verify revert_remove with incorrect timestamp
@@ -365,20 +365,20 @@ mod tests {
         assert_eq!(vts.get_end_ts(1), Some(300)); // Deleted at 300
     }
 
-    /// Test: Verify behavior with u32::MAX timestamp
+    /// Test: Verify behavior with Timestamp::MAX timestamp
     #[test]
     fn test_max_timestamp_handling() {
         let mut vts = VertexTimestamp::new();
 
-        // Insert at u32::MAX - 2 (highest valid value before MAX_TIMESTAMP)
-        vts.insert(0, u32::MAX - 2);
-        assert!(vts.is_valid(0, u32::MAX - 2));
-        assert!(!vts.is_valid(0, u32::MAX - 1));
+        // Insert at Timestamp::MAX - 2 (highest valid value before MAX_TIMESTAMP)
+        vts.insert(0, Timestamp::MAX - 2);
+        assert!(vts.is_valid(0, Timestamp::MAX - 2));
+        assert!(!vts.is_valid(0, Timestamp::MAX - 1));
 
-        // Deletion at u32::MAX - 1
-        vts.remove(0, u32::MAX - 1);
-        assert!(vts.is_valid(0, u32::MAX - 2));
-        assert!(!vts.is_valid(0, u32::MAX - 1));
+        // Deletion at Timestamp::MAX - 1
+        vts.remove(0, Timestamp::MAX - 1);
+        assert!(vts.is_valid(0, Timestamp::MAX - 2));
+        assert!(!vts.is_valid(0, Timestamp::MAX - 1));
     }
 
     /// Test: Verify iter_deleted returns correct deleted vertices

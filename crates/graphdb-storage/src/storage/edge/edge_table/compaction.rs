@@ -288,7 +288,7 @@ impl TimeTravelEdgeStore {
                     let result = self.merge_segments_with_config_and_deletion_filter(
                         config.segment_merge_threshold,
                         merge_threshold,
-                        if min_active_snapshot_ts < u32::MAX {
+                        if min_active_snapshot_ts < Timestamp::MAX {
                             Some(min_active_snapshot_ts)
                         } else {
                             None
@@ -333,8 +333,8 @@ impl TimeTravelEdgeStore {
             stats.record_tombstone_stats(
                 tom_stats.count as u64,
                 tom_stats.memory_bytes as u64,
-                tom_stats.oldest_delete_ts,
-                tom_stats.newest_delete_ts,
+                tom_stats.oldest_delete_ts.map(|ts| ts as u32),
+                tom_stats.newest_delete_ts.map(|ts| ts as u32),
                 self.mvcc.active_snapshots.len() as u64,
             );
         }

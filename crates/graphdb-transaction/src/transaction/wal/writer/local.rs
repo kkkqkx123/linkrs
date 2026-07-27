@@ -603,7 +603,7 @@ impl LocalWalWriter {
     pub fn append_entry(
         &mut self,
         op_type: WalOpType,
-        timestamp: u32,
+        timestamp: Timestamp,
         payload: &[u8],
     ) -> WalResult<bool> {
         self.check_poisoned()?;
@@ -624,7 +624,7 @@ impl LocalWalWriter {
     fn append_single_entry(
         &mut self,
         op_type: WalOpType,
-        timestamp: u32,
+        timestamp: Timestamp,
         payload: &[u8],
         compression: WalCompression,
     ) -> WalResult<bool> {
@@ -652,7 +652,7 @@ impl LocalWalWriter {
     fn append_fragmented_entry(
         &mut self,
         op_type: WalOpType,
-        timestamp: u32,
+        timestamp: Timestamp,
         payload: &[u8],
         compression: WalCompression,
     ) -> WalResult<bool> {
@@ -761,13 +761,13 @@ impl LocalWalWriter {
     }
 
     /// Append multiple entries as a batch (for group commit)
-    pub fn append_batch(&mut self, entries: &[(WalOpType, u32, &[u8])]) -> WalResult<bool> {
+    pub fn append_batch(&mut self, entries: &[(WalOpType, Timestamp, &[u8])]) -> WalResult<bool> {
         self.append_batch_with_durability(entries, crate::core::types::DurabilityLevel::Sync)
     }
 
     pub fn append_batch_with_durability(
         &mut self,
-        entries: &[(WalOpType, u32, &[u8])],
+        entries: &[(WalOpType, Timestamp, &[u8])],
         durability: crate::core::types::DurabilityLevel,
     ) -> WalResult<bool> {
         self.check_poisoned()?;
@@ -1300,7 +1300,7 @@ mod tests {
         let mut writer = LocalWalWriter::new(&wal_path, 0);
         writer.open().expect("Failed to open WAL");
 
-        let entries: Vec<(WalOpType, u32, &[u8])> = vec![
+        let entries: Vec<(WalOpType, Timestamp, &[u8])> = vec![
             (WalOpType::InsertVertex, 1, b"vertex1"),
             (WalOpType::InsertVertex, 2, b"vertex2"),
             (WalOpType::InsertEdge, 3, b"edge1"),

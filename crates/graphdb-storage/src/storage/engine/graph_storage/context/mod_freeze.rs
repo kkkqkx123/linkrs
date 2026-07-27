@@ -1,4 +1,4 @@
-use crate::core::types::CompactConfig;
+use crate::core::types::{CompactConfig, Timestamp};
 use crate::core::StorageResult;
 use crate::storage::edge::edge_table::segment_eviction::SegmentEvictionEngine;
 use crate::storage::engine::background_freeze::{FreezeGuard, FreezeStats};
@@ -43,7 +43,7 @@ impl GraphStorageContext {
 
     pub fn trigger_background_freeze(&self) -> StorageResult<()> {
         let config = CompactConfig::with_fixed_ratio(true, 2.0).enable_segment_merge(1000);
-        let ts = u32::MAX;
+        let ts = Timestamp::MAX;
         let mut total_frozen = 0u64;
         let mut any_frozen = false;
         let mut freeze_reasons = std::collections::HashSet::new();

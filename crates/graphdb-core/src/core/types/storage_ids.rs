@@ -15,12 +15,12 @@ use crate::core::Value;
 // ============================================================================
 
 /// Timestamp type for MVCC
-pub type Timestamp = u32;
+pub type Timestamp = u64;
 
-/// Invalid timestamp sentinel value (u32::MAX indicates "deleted" or "not set")
-pub const INVALID_TIMESTAMP: Timestamp = u32::MAX;
-/// Maximum valid timestamp value (u32::MAX - 1 used for "latest" queries)
-pub const MAX_TIMESTAMP: Timestamp = u32::MAX - 1;
+/// Invalid timestamp sentinel value (u64::MAX indicates "deleted" or "not set")
+pub const INVALID_TIMESTAMP: Timestamp = u64::MAX;
+/// Maximum valid timestamp value (u64::MAX - 1 used for "latest" queries)
+pub const MAX_TIMESTAMP: Timestamp = u64::MAX - 1;
 
 /// Label ID type for vertex and edge type identification
 pub type LabelId = u32;

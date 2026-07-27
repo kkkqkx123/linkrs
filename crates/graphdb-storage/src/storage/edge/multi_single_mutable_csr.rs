@@ -235,8 +235,8 @@ impl CsrBase for MultiSingleMutableCsr {
 
             let edge_id = EdgeId(read_u64_le(data, &mut offset)? as u64);
             let prop_offset = read_u32_le(data, &mut offset)?;
-            let create_ts = read_u32_le(data, &mut offset)?;
-            let delete_ts = read_u32_le(data, &mut offset)?;
+            let create_ts = read_u64_le(data, &mut offset)?;
+            let delete_ts = read_u64_le(data, &mut offset)?;
 
             self.edges.push(Nbr {
                 neighbor: VertexId::from_bytes(neighbor_bytes),
@@ -346,8 +346,8 @@ impl MutableCsrTrait for MultiSingleMutableCsr {
             let slot = base + offset as usize;
             let nbr = &mut self.edges[slot];
             // Only revert deletions that happened at or before rollback time.
-            if nbr.delete_ts < u32::MAX && nbr.delete_ts <= ts {
-                nbr.delete_ts = u32::MAX;
+            if nbr.delete_ts < Timestamp::MAX && nbr.delete_ts <= ts {
+                nbr.delete_ts = Timestamp::MAX;
                 return true;
             }
         }

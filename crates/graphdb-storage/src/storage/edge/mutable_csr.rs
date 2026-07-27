@@ -52,8 +52,8 @@ fn read_nbr(data: &[u8], offset: &mut usize) -> StorageResult<Nbr> {
     let neighbor = read_vertex_id(data, offset)?;
     let raw_edge_id = read_u64_le(data, offset)?;
     let prop_offset = read_u32_le(data, offset)?;
-    let create_ts = read_u32_le(data, offset)?;
-    let delete_ts = read_u32_le(data, offset)?;
+    let create_ts = read_u64_le(data, offset)?;
+    let delete_ts = read_u64_le(data, offset)?;
     Ok(Nbr::with_delete_ts(
         neighbor,
         EdgeId(raw_edge_id),
@@ -256,13 +256,13 @@ impl MutableCsr {
         let base = self.adj_offsets[src_idx] as usize;
         for i in 0..degree {
             let nbr = &self.nbr_list[base + i];
-            if nbr.neighbor == dst && nbr.delete_ts == u32::MAX {
+            if nbr.neighbor == dst && nbr.delete_ts == Timestamp::MAX {
                 return false;
             }
         }
         for chunk in &self.overflow_chunks[src_idx] {
             for nbr in chunk {
-                if nbr.neighbor == dst && nbr.delete_ts == u32::MAX {
+                if nbr.neighbor == dst && nbr.delete_ts == Timestamp::MAX {
                     return false;
                 }
             }
@@ -319,7 +319,7 @@ impl MutableCsr {
         let offset = self.adj_offsets[src_idx] as usize;
         for i in 0..degree {
             let nbr = &mut self.nbr_list[offset + i];
-            if nbr.edge_id == edge_id && nbr.delete_ts == u32::MAX && nbr.create_ts <= ts {
+            if nbr.edge_id == edge_id && nbr.delete_ts == Timestamp::MAX && nbr.create_ts <= ts {
                 nbr.delete_ts = ts;
                 self.edge_count.fetch_sub(1, Ordering::Relaxed);
                 return true;
@@ -329,7 +329,7 @@ impl MutableCsr {
         // Scan overflow
         if let Some((chunk_idx, edge_idx)) = self.scan_overflow_for_edge_id(src_idx, edge_id) {
             let nbr = &mut self.overflow_chunks[src_idx][chunk_idx][edge_idx];
-            if nbr.delete_ts == u32::MAX && nbr.create_ts <= ts {
+            if nbr.delete_ts == Timestamp::MAX && nbr.create_ts <= ts {
                 nbr.delete_ts = ts;
                 self.edge_count.fetch_sub(1, Ordering::Relaxed);
                 return true;
@@ -353,7 +353,7 @@ impl MutableCsr {
         let offset = self.adj_offsets[src_idx] as usize;
         for i in 0..degree {
             let nbr = &mut self.nbr_list[offset + i];
-            if nbr.neighbor == dst && nbr.delete_ts == u32::MAX && nbr.create_ts <= ts {
+            if nbr.neighbor == dst && nbr.delete_ts == Timestamp::MAX && nbr.create_ts <= ts {
                 nbr.delete_ts = ts;
                 self.edge_count.fetch_sub(1, Ordering::Relaxed);
                 deleted = true;
@@ -364,7 +364,7 @@ impl MutableCsr {
         let indices = self.scan_overflow_for_dst(src_idx, dst);
         for (chunk_idx, edge_idx) in indices {
             let nbr = &mut self.overflow_chunks[src_idx][chunk_idx][edge_idx];
-            if nbr.delete_ts == u32::MAX && nbr.create_ts <= ts {
+            if nbr.delete_ts == Timestamp::MAX && nbr.create_ts <= ts {
                 nbr.delete_ts = ts;
                 self.edge_count.fetch_sub(1, Ordering::Relaxed);
                 deleted = true;
@@ -387,7 +387,7 @@ impl MutableCsr {
             return false;
         }
         let nbr = &mut self.nbr_list[idx];
-        if nbr.delete_ts == u32::MAX && nbr.create_ts <= ts {
+        if nbr.delete_ts == Timestamp::MAX && nbr.create_ts <= ts {
             nbr.delete_ts = ts;
             self.edge_count.fetch_sub(1, Ordering::Relaxed);
             return true;
@@ -419,8 +419,8 @@ impl MutableCsr {
         let nbr = &mut self.nbr_list[idx];
         // Only revert deletions that happened at or before rollback time.
         // Prevents rolling back deletions that occur after the rollback point.
-        if nbr.delete_ts < u32::MAX && nbr.delete_ts <= ts {
-            nbr.delete_ts = u32::MAX;
+        if nbr.delete_ts < Timestamp::MAX && nbr.delete_ts <= ts {
+            nbr.delete_ts = Timestamp::MAX;
             self.edge_count.fetch_add(1, Ordering::Relaxed);
             return true;
         }
@@ -672,9 +672,9 @@ impl MutableCsr {
     /// Compact CSR by removing deleted edges and reclaiming space.
     /// Merges overflow back into primary, restoring flat CSR layout.
     ///
-    /// Removes all edges marked as deleted (delete_ts < u32::MAX).
+    /// Removes all edges marked as deleted (delete_ts != Timestamp::MAX).
     /// The ts parameter reserves space for future edges.
-    pub fn compact_with_ts(&mut self, _ts: u32, reserve_ratio: f32) -> usize {
+    pub fn compact_with_ts(&mut self, _ts: Timestamp, reserve_ratio: f32) -> usize {
         // Phase 1: compact individual vertex data (primary + overflow)
         // and compute new layout.
         let mut new_offsets = Vec::with_capacity(self.vertex_capacity());
@@ -692,7 +692,7 @@ impl MutableCsr {
             // Collect active edges from primary (not deleted)
             for i in 0..degree {
                 let nbr = &self.nbr_list[start + i];
-                if nbr.delete_ts == u32::MAX {
+                if nbr.delete_ts == Timestamp::MAX {
                     new_edges.push(*nbr);
                 } else {
                     removed_count += 1;
@@ -702,7 +702,7 @@ impl MutableCsr {
             // Collect active edges from overflow
             for chunk in &self.overflow_chunks[vid] {
                 for nbr in chunk {
-                    if nbr.delete_ts == u32::MAX {
+                    if nbr.delete_ts == Timestamp::MAX {
                         new_edges.push(*nbr);
                     } else {
                         removed_count += 1;

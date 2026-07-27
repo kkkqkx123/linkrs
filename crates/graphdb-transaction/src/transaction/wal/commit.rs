@@ -1,6 +1,6 @@
 use crc32fast::Hasher;
 
-use crate::core::types::{CommitLsn, TransactionId};
+use crate::core::types::{CommitLsn, Timestamp, TransactionId};
 use crate::core::wal::{
     OutboxIntent, TransactionAbort, TransactionCommit, WalError, WalOpType, WalResult,
 };
@@ -10,7 +10,7 @@ use super::parser::ParsedWalEntry;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransactionWalEntry {
     pub op_type: WalOpType,
-    pub timestamp: u32,
+    pub timestamp: Timestamp,
     pub payload: Vec<u8>,
 }
 
@@ -39,7 +39,7 @@ fn parsed_batch_checksum(entries: &[ParsedWalEntry]) -> WalResult<u32> {
     Ok(hasher.finalize())
 }
 
-fn checksum_entry(hasher: &mut Hasher, op_type: WalOpType, timestamp: u32, payload: &[u8]) {
+fn checksum_entry(hasher: &mut Hasher, op_type: WalOpType, timestamp: Timestamp, payload: &[u8]) {
     hasher.update(&[op_type as u8]);
     hasher.update(&timestamp.to_le_bytes());
     hasher.update(&(payload.len() as u64).to_le_bytes());

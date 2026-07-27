@@ -11,7 +11,7 @@ use std::sync::Arc;
 use super::{GraphStorageContext, WriteTimestampLease};
 
 impl GraphStorageContext {
-    pub fn get_read_timestamp(&self) -> u32 {
+    pub fn get_read_timestamp(&self) -> Timestamp {
         if let Some(operation) = &self.operation_context {
             operation.read_timestamp
         } else {
@@ -19,7 +19,7 @@ impl GraphStorageContext {
         }
     }
 
-    pub fn get_write_timestamp(&self) -> StorageResult<u32> {
+    pub fn get_write_timestamp(&self) -> StorageResult<Timestamp> {
         if let Some(operation) = &self.operation_context {
             if operation.read_only {
                 return Err(StorageError::invalid_operation(

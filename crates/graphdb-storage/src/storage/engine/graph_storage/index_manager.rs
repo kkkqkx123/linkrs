@@ -1,5 +1,5 @@
 use crate::core::metadata::index_manager::IndexMetadataManager;
-use crate::core::types::{CommitLsn, Index, IndexGeneration, IndexStatus, SnapshotTimestamp};
+use crate::core::types::{CommitLsn, Index, IndexGeneration, IndexStatus, SnapshotTimestamp, Timestamp};
 use crate::core::wal::EntityRef;
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::index::generic_index_manager::GenericIndexManager;
@@ -288,14 +288,6 @@ pub(crate) fn list_tag_indexes(
     ctx.index_metadata_manager().list_tag_indexes(space_id)
 }
 
-/// Build a physical index key by appending a unique version suffix.
-fn make_physical_key(logical_key: &[u8], version: u64) -> Vec<u8> {
-    let mut physical_key = Vec::with_capacity(logical_key.len() + 8);
-    physical_key.extend_from_slice(logical_key);
-    physical_key.extend_from_slice(&version.to_le_bytes());
-    physical_key
-}
-
 fn edge_entity_ref(edge: &crate::core::Edge) -> EntityRef {
     EntityRef::Edge {
         src: edge.src,
@@ -316,7 +308,7 @@ fn stable_hash(bytes: &[u8]) -> u64 {
     hash & (i64::MAX as u64)
 }
 
-fn record_changed_after(record: &IndexRecord, snapshot_timestamp: u32) -> bool {
+fn record_changed_after(record: &IndexRecord, snapshot_timestamp: Timestamp) -> bool {
     record.created_ts > snapshot_timestamp
         || record
             .deleted_ts
@@ -326,7 +318,7 @@ fn record_changed_after(record: &IndexRecord, snapshot_timestamp: u32) -> bool {
 fn replay_wal_partition<F, R>(
     (mut active_forward, mut active_reverse): IndexDataMaps,
     (rebuilt_forward, rebuilt_reverse): IndexDataMaps,
-    snapshot_timestamp: u32,
+    snapshot_timestamp: Timestamp,
     intents: &[crate::core::wal::OutboxIntent],
     matches_forward: F,
     matches_reverse: R,
@@ -379,11 +371,10 @@ fn build_vertex_index_data(
     space_id: u64,
     index: &Index,
     vertices: &[crate::core::Vertex],
-    snapshot_timestamp: u32,
+    snapshot_timestamp: Timestamp,
 ) -> StorageResult<IndexDataMaps> {
     let mut forward = BTreeMap::new();
     let mut reverse = BTreeMap::new();
-    let mut version_counter = 1u64;
 
     for vertex in vertices {
         let indexed_values: Vec<Value> = index
@@ -410,18 +401,15 @@ fn build_vertex_index_data(
             let logical_reverse_key =
                 KeyBuilder::build_vertex_reverse_key_v2(space_id, &vid_value, &index.name)?;
 
-            let entry = IndexRecord::new(snapshot_timestamp)
-                .with_entity_version(snapshot_timestamp)
-                .with_entity_ref(EntityRef::Vertex(vertex.vid));
-            let mut entry = entry;
-            entry.included_columns = included_columns.clone();
-            let fwd_key = make_physical_key(&logical_forward_key.0, version_counter);
-            version_counter = version_counter.wrapping_add(1);
-            let rev_key = make_physical_key(&logical_reverse_key.0, version_counter);
-            version_counter = version_counter.wrapping_add(1);
+            let entry = IndexRecord::new_with_columns(
+                snapshot_timestamp,
+                included_columns.clone(),
+            )
+            .with_entity_version(snapshot_timestamp)
+            .with_entity_ref(EntityRef::Vertex(vertex.vid));
 
-            forward.insert(fwd_key, entry.clone());
-            reverse.insert(rev_key, entry);
+            forward.insert(logical_forward_key.0, entry.clone());
+            reverse.insert(logical_reverse_key.0, entry);
         }
     }
     Ok((forward, reverse))
@@ -524,9 +512,7 @@ pub(crate) fn rebuild_tag_index(
     )?;
 
     // Build new index data from the snapshot without touching the active generation.
-    let snapshot_ts = u32::try_from(snapshot_timestamp.get()).map_err(|_| {
-        StorageError::invalid_operation("Snapshot timestamp exceeds the MVCC timestamp range")
-    })?;
+    let snapshot_ts = snapshot_timestamp.get();
     let (forward, reverse) = build_vertex_index_data(space_id, &index, vertices, snapshot_ts)?;
     fail_if_generation_fault_is_injected(GenerationFaultPoint::SnapshotBuild)?;
 
@@ -729,11 +715,10 @@ fn build_edge_index_data(
     space_id: u64,
     index: &Index,
     edges: &[crate::core::Edge],
-    snapshot_timestamp: u32,
+    snapshot_timestamp: Timestamp,
 ) -> StorageResult<IndexDataMaps> {
     let mut forward = BTreeMap::new();
     let mut reverse = BTreeMap::new();
-    let mut version_counter = 1u64;
 
     for edge in edges {
         let indexed_values: Vec<Value> = index
@@ -773,17 +758,15 @@ fn build_edge_index_data(
                 &index.name,
             )?;
 
-            let mut entry = IndexRecord::new(snapshot_timestamp)
-                .with_entity_version(snapshot_timestamp)
-                .with_entity_ref(edge_entity_ref(edge));
-            entry.included_columns = included_columns.clone();
-            let fwd_key = make_physical_key(&logical_forward_key.0, version_counter);
-            version_counter = version_counter.wrapping_add(1);
-            let rev_key = make_physical_key(&logical_reverse_key.0, version_counter);
-            version_counter = version_counter.wrapping_add(1);
+            let entry = IndexRecord::new_with_columns(
+                snapshot_timestamp,
+                included_columns.clone(),
+            )
+            .with_entity_version(snapshot_timestamp)
+            .with_entity_ref(edge_entity_ref(edge));
 
-            forward.insert(fwd_key, entry.clone());
-            reverse.insert(rev_key, entry);
+            forward.insert(logical_forward_key.0, entry.clone());
+            reverse.insert(logical_reverse_key.0, entry);
         }
     }
     Ok((forward, reverse))
@@ -825,9 +808,7 @@ pub(crate) fn rebuild_edge_index(
         IndexStatus::Building,
     )?;
 
-    let snapshot_ts = u32::try_from(snapshot_timestamp.get()).map_err(|_| {
-        StorageError::invalid_operation("Snapshot timestamp exceeds the MVCC timestamp range")
-    })?;
+    let snapshot_ts = snapshot_timestamp.get();
     let (forward, reverse) = build_edge_index_data(space_id, &index, edges, snapshot_ts)?;
     fail_if_generation_fault_is_injected(GenerationFaultPoint::SnapshotBuild)?;
 
