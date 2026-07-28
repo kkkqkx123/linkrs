@@ -33,7 +33,6 @@ fn test_manager_config_custom() {
         default_timeout: Duration::from_secs(60),
         max_concurrent_transactions: 500,
         auto_cleanup: false,
-        admission_timeout: Duration::from_secs(10),
         commit_retry_attempts: 3,
         abort_retry_attempts: 3,
         ..Default::default()
@@ -167,7 +166,6 @@ fn test_manager_with_custom_config() {
         default_timeout: Duration::from_secs(60),
         max_concurrent_transactions: 100,
         auto_cleanup: true,
-        admission_timeout: Duration::from_secs(10),
         commit_retry_attempts: 3,
         abort_retry_attempts: 3,
         ..Default::default()
@@ -357,7 +355,6 @@ fn test_manager_config_clone() {
         default_timeout: Duration::from_secs(45),
         max_concurrent_transactions: 200,
         auto_cleanup: false,
-        admission_timeout: Duration::from_secs(10),
         commit_retry_attempts: 3,
         abort_retry_attempts: 3,
         ..Default::default()

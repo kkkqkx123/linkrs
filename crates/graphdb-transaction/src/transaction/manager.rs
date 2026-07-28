@@ -25,7 +25,7 @@ use super::rollback::UndoLogRollback;
 use super::types::*;
 use super::undo_log::UndoTarget;
 use crate::core::stats::StatsManager;
-use crate::core::types::{CommitLsn, Timestamp, VertexId};
+use crate::core::types::{CommitLsn, LabelId, Timestamp, VertexId};
 use crate::core::wal::types::Lsn;
 use crate::sync::SyncManager;
 
@@ -216,8 +216,11 @@ pub struct TransactionManager {
     commit_sink: Option<Arc<dyn TransactionCommitSink>>,
     /// Checkpoint coordination gate
     checkpoint_gate: Arc<CheckpointGate>,
-    /// Serializes certification and protects the committed write table.
-    certification_lock: Mutex<()>,
+    /// Sharded certification locks. Each shard serializes certification +
+    /// committed_write_sets push for a single transaction. Shard selection
+    /// is by `txn_id % CERT_SHARD_COUNT`, so non-conflicting transactions
+    /// can certify in parallel.
+    certification_shards: [Mutex<()>; CERT_SHARD_COUNT],
     /// Committed write sets retained until no transaction can have started
     /// before the corresponding commit timestamp.
     committed_write_sets: Mutex<Vec<(Timestamp, WriteSet)>>,
@@ -226,6 +229,30 @@ pub struct TransactionManager {
     /// Spatial index for O(1) vertex conflict lookup.
     /// Maps each vertex ID to committed write timestamps + transaction IDs.
     committed_vertex_writes: Mutex<HashMap<VertexId, Vec<(Timestamp, TransactionId)>>>,
+    /// Spatial index for O(1) edge conflict lookup.
+    /// Key: (src_vid, dst_vid, edge_label).
+    committed_edge_writes:
+        Mutex<HashMap<(VertexId, VertexId, LabelId), Vec<(Timestamp, TransactionId)>>>,
+    /// Spatial index for O(1) schema resource conflict lookup.
+    committed_schema_writes: Mutex<HashMap<String, Vec<(Timestamp, TransactionId)>>>,
+    /// Spatial index for O(1) index resource conflict lookup.
+    committed_index_writes: Mutex<HashMap<String, Vec<(Timestamp, TransactionId)>>>,
+    /// Transactions whose data is durable but whose post-commit finalization
+    /// (e.g. commit_sink.finalize_commit, undo-log cleanup) failed. Stored for
+    /// retry on the next startup_recovery() call or admin-triggered recovery.
+    pending_finalizations: Mutex<Vec<PendingFinalization>>,
+}
+
+/// Number of certification lock shards. Must be a power of two for efficient
+/// modulo via bitmask (though the compiler optimizes `% 64` anyway).
+const CERT_SHARD_COUNT: usize = 64;
+
+/// A transaction whose WAL data is durable but whose post-commit state is
+/// incomplete (finalize_commit or undo-log cleanup failed).
+struct PendingFinalization {
+    txn_id: TransactionId,
+    write_timestamp: Timestamp,
+    commit_lsn: CommitLsn,
 }
 
 impl TransactionManager {
@@ -248,10 +275,14 @@ impl TransactionManager {
             sync_manager: None,
             commit_sink: None,
             checkpoint_gate: Arc::new(CheckpointGate::new()),
-            certification_lock: Mutex::new(()),
+            certification_shards: std::array::from_fn(|_| Mutex::new(())),
             committed_write_sets: Mutex::new(Vec::new()),
             write_exclusion_owner: AtomicU64::new(0),
             committed_vertex_writes: Mutex::new(HashMap::new()),
+            committed_edge_writes: Mutex::new(HashMap::new()),
+            committed_schema_writes: Mutex::new(HashMap::new()),
+            committed_index_writes: Mutex::new(HashMap::new()),
+            pending_finalizations: Mutex::new(Vec::new()),
         };
         let commit_stats = Arc::clone(&manager.stats);
         manager.register_commit_callback(Arc::new(move |event| match event {
@@ -543,10 +574,10 @@ impl TransactionManager {
         let txn_id = TransactionId(self.id_generator.fetch_add(1, Ordering::SeqCst));
         let timestamp = self
             .version_manager
-            .acquire_insert_timestamp_with_timeout(self.config.admission_timeout)
-            .ok_or_else(|| {
+            .acquire_insert_timestamp()
+            .map_err(|e| {
                 self.checkpoint_gate.release_write();
-                TransactionError::admission_timeout()
+                TransactionError::internal(e.to_string())
             })?;
         let timeout = options.timeout.unwrap_or(self.config.default_timeout);
 
@@ -587,6 +618,10 @@ impl TransactionManager {
         Ok(txn_id)
     }
 
+    fn cert_shard(&self, txn_id: TransactionId) -> &Mutex<()> {
+        &self.certification_shards[txn_id.0 as usize % CERT_SHARD_COUNT]
+    }
+
     /// Check for write-set based conflicts with active transactions
     ///
     /// This method checks if a transaction's write set conflicts with any other
@@ -594,13 +629,8 @@ impl TransactionManager {
     /// After a successful check, the transaction is marked as validated.
     ///
     /// Returns Ok(()) if no conflicts, or Err if conflicts are detected.
-    /// Threshold above which a read set is considered a full scan.
-    /// Serializable transactions with full-scan read sets use conservative
-    /// certification: any concurrent write since the transaction started causes abort.
-    const FULL_SCAN_READ_SET_THRESHOLD: usize = 10_000;
-
     pub fn check_write_set_conflict(&self, txn_id: TransactionId) -> Result<(), TransactionError> {
-        let _certification_guard = self.certification_lock.lock();
+        let _certification_guard = self.cert_shard(txn_id).lock();
         let ctx = self
             .active_transactions
             .get(&txn_id)
@@ -623,7 +653,10 @@ impl TransactionManager {
             return Ok(());
         }
 
-        let is_full_scan = serializable && txn_read_set.size() > Self::FULL_SCAN_READ_SET_THRESHOLD;
+        let is_full_scan = serializable
+            && ctx
+                .serializable_full_scan_threshold()
+                .map_or(false, |threshold| txn_read_set.size() > threshold);
 
         for entry in self.active_transactions.iter() {
             let (other_id, other_ctx) = entry.pair();
@@ -649,13 +682,8 @@ impl TransactionManager {
         }
 
         let committed = self.committed_write_sets.lock();
-        // Use spatial index for O(1) vertex conflict lookup.
-        let mut vertex_idx = self.committed_vertex_writes.lock();
-        // Prune entries that are older than this transaction's start.
-        for entries in vertex_idx.values_mut() {
-            entries.retain(|(commit_ts, _)| *commit_ts > ctx.start_timestamp);
-        }
-        vertex_idx.retain(|_, entries| !entries.is_empty());
+        // O(1) vertex conflict lookup via spatial index.
+        let vertex_idx = self.committed_vertex_writes.lock();
         for vid in txn_write_set.vertices.iter() {
             if let Some(entries) = vertex_idx.get(vid) {
                 if entries
@@ -671,29 +699,115 @@ impl TransactionManager {
         }
         drop(vertex_idx);
 
-        // Fall back to committed_write_sets scan for edges and schema resources.
-        for (commit_ts, write_set) in committed.iter() {
-            if *commit_ts <= ctx.start_timestamp {
-                continue;
-            }
-            if txn_write_set.has_conflict_with(write_set) {
-                self.stats.record_txn_conflict();
-                return Err(TransactionError::write_transaction_conflict());
-            }
-            if serializable && txn_read_set.has_conflict_with(write_set) {
-                self.stats.record_txn_conflict();
-                return Err(TransactionError::write_transaction_conflict());
-            }
-            if is_full_scan && !write_set.is_empty() {
-                self.stats.record_txn_conflict();
-                return Err(TransactionError::serialization_failed(
-                    "Serializable full-scan transaction aborted due to concurrent write",
-                ));
+        // O(1) edge conflict lookup via spatial index.
+        let edge_idx = self.committed_edge_writes.lock();
+        for edge in txn_write_set.edges.iter() {
+            let key = (edge.src_vid, edge.dst_vid, edge.edge_label);
+            if let Some(entries) = edge_idx.get(&key) {
+                if entries
+                    .iter()
+                    .any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp)
+                {
+                    drop(edge_idx);
+                    drop(committed);
+                    self.stats.record_txn_conflict();
+                    return Err(TransactionError::write_transaction_conflict());
+                }
             }
         }
+        drop(edge_idx);
+
+        // O(1) schema resource conflict lookup.
+        let schema_idx = self.committed_schema_writes.lock();
+        for resource in txn_write_set.schema_resources.iter() {
+            if let Some(entries) = schema_idx.get(resource) {
+                if entries
+                    .iter()
+                    .any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp)
+                {
+                    drop(schema_idx);
+                    drop(committed);
+                    self.stats.record_txn_conflict();
+                    return Err(TransactionError::write_transaction_conflict());
+                }
+            }
+        }
+        drop(schema_idx);
+
+        // O(1) index resource conflict lookup.
+        let index_idx = self.committed_index_writes.lock();
+        for resource in txn_write_set.index_resources.iter() {
+            if let Some(entries) = index_idx.get(resource) {
+                if entries
+                    .iter()
+                    .any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp)
+                {
+                    drop(index_idx);
+                    drop(committed);
+                    self.stats.record_txn_conflict();
+                    return Err(TransactionError::write_transaction_conflict());
+                }
+            }
+        }
+        drop(index_idx);
+
+        // Write-write conflict O(N) scan is no longer needed — all resource
+        // types are covered by O(1) indices above.
+        // The O(N) committed_write_sets scan below only handles Serializable
+        // read-set conflicts (read-write conflicts), which by nature require
+        // scanning all committed write sets since a read could touch any entity.
+        if serializable {
+            for (commit_ts, write_set) in committed.iter() {
+                if *commit_ts <= ctx.start_timestamp {
+                    continue;
+                }
+                if txn_read_set.has_conflict_with(write_set) {
+                    self.stats.record_txn_conflict();
+                    drop(committed);
+                    return Err(TransactionError::write_transaction_conflict());
+                }
+                if txn_read_set.has_read_range_conflict_with(write_set) {
+                    self.stats.record_txn_conflict();
+                    drop(committed);
+                    return Err(TransactionError::serialization_failed(
+                        "Serializable read-range conflict detected",
+                    ));
+                }
+                if is_full_scan && !write_set.is_empty() {
+                    self.stats.record_txn_conflict();
+                    drop(committed);
+                    return Err(TransactionError::serialization_failed(
+                        "Serializable full-scan transaction aborted due to concurrent write",
+                    ));
+                }
+            }
+        }
+        drop(committed);
 
         ctx.mark_write_validated();
         Ok(())
+    }
+
+    /// Prune committed write sets that are no longer needed by any active
+    /// transaction. Entries with commit timestamps <= `oldest_active_ts`
+    /// are safe to remove.
+    fn prune_committed_write_sets(&self, oldest_active_ts: Timestamp) {
+        let mut committed = self.committed_write_sets.lock();
+        committed.retain(|(ts, _)| *ts > oldest_active_ts);
+
+        let retain_fn = |entries: &mut Vec<(Timestamp, TransactionId)>| {
+            entries.retain(|(commit_ts, _)| *commit_ts > oldest_active_ts);
+            !entries.is_empty()
+        };
+
+        let mut vertex_idx = self.committed_vertex_writes.lock();
+        vertex_idx.retain(|_, entries| retain_fn(entries));
+        let mut edge_idx = self.committed_edge_writes.lock();
+        edge_idx.retain(|_, entries| retain_fn(entries));
+        let mut schema_idx = self.committed_schema_writes.lock();
+        schema_idx.retain(|_, entries| retain_fn(entries));
+        let mut index_idx = self.committed_index_writes.lock();
+        index_idx.retain(|_, entries| retain_fn(entries));
     }
 
     /// Start a new transaction (legacy API for compatibility)
@@ -760,7 +874,9 @@ impl TransactionManager {
         txn_id: TransactionId,
     ) -> Result<(Arc<TransactionContext>, std::time::Instant), TransactionError> {
         let context = self.get_context(txn_id)?;
-        if context.isolation_level == IsolationLevel::ReadCommitted {
+        if context.isolation_level == IsolationLevel::ReadCommitted
+            || context.isolation_level == IsolationLevel::ReadUncommitted
+        {
             let committed = self.version_manager.read_timestamp();
             let snapshot = committed.max(context.timestamp());
             context.set_snapshot_timestamp(snapshot);
@@ -779,7 +895,9 @@ impl TransactionManager {
         let context = self.get_context(txn_id)?;
         context.can_execute()?;
         context.check_timeouts()?;
-        if context.isolation_level == IsolationLevel::ReadCommitted {
+        if context.isolation_level == IsolationLevel::ReadCommitted
+            || context.isolation_level == IsolationLevel::ReadUncommitted
+        {
             let committed = self.version_manager.read_timestamp();
             context.set_snapshot_timestamp(committed.max(context.timestamp()));
         }
@@ -953,6 +1071,10 @@ impl TransactionManager {
                 self.version_manager
                     .commit_write_timestamp(context.timestamp());
                 if !descriptor.write_set.is_empty() {
+                    // Re-acquire the cert shard lock to close the window between
+                    // certification and committed_write_sets publication.
+                    // Lock order: cert_shard → committed_write_sets → *
+                    let _cert_guard = self.cert_shard(context.id).lock();
                     let mut committed = self.committed_write_sets.lock();
                     committed.push((descriptor.write_timestamp, descriptor.write_set.clone()));
                     let mut vertex_idx = self.committed_vertex_writes.lock();
@@ -962,7 +1084,30 @@ impl TransactionManager {
                             .or_default()
                             .push((descriptor.write_timestamp, context.id));
                     }
+                    let mut edge_idx = self.committed_edge_writes.lock();
+                    for edge in descriptor.write_set.edges.iter() {
+                        edge_idx
+                            .entry((edge.src_vid, edge.dst_vid, edge.edge_label))
+                            .or_default()
+                            .push((descriptor.write_timestamp, context.id));
+                    }
+                    let mut schema_idx = self.committed_schema_writes.lock();
+                    for resource in descriptor.write_set.schema_resources.iter() {
+                        schema_idx
+                            .entry(resource.clone())
+                            .or_default()
+                            .push((descriptor.write_timestamp, context.id));
+                    }
+                    let mut index_idx = self.committed_index_writes.lock();
+                    for resource in descriptor.write_set.index_resources.iter() {
+                        index_idx
+                            .entry(resource.clone())
+                            .or_default()
+                            .push((descriptor.write_timestamp, context.id));
+                    }
                 }
+                let safe_ts = self.version_manager.get_safe_gc_timestamp();
+                self.prune_committed_write_sets(safe_ts);
                 if context.has_pessimistic_lock() {
                     self.write_exclusion_owner.store(0, Ordering::SeqCst);
                 }
@@ -997,6 +1142,11 @@ impl TransactionManager {
                         max_retries,
                         error
                     );
+                    self.pending_finalizations.lock().push(PendingFinalization {
+                        txn_id,
+                        write_timestamp: context.timestamp(),
+                        commit_lsn,
+                    });
                     self.active_transactions.remove(&txn_id);
                     let _ = context.transition_to(TransactionState::Aborting);
                     let _ = context.transition_to(TransactionState::Aborted);
@@ -1019,6 +1169,11 @@ impl TransactionManager {
                 txn_id,
                 error
             );
+            self.pending_finalizations.lock().push(PendingFinalization {
+                txn_id,
+                write_timestamp: context.timestamp(),
+                commit_lsn,
+            });
             self.active_transactions.remove(&txn_id);
             let _ = context.transition_to(TransactionState::Aborting);
             let _ = context.transition_to(TransactionState::Aborted);
@@ -1263,6 +1418,9 @@ impl TransactionManager {
 
         self.finalize_abort_resources(context);
 
+        let safe_ts = self.version_manager.get_safe_gc_timestamp();
+        self.prune_committed_write_sets(safe_ts);
+
         Ok(())
     }
 
@@ -1381,6 +1539,45 @@ impl TransactionManager {
             .ok_or_else(|| TransactionError::sync_failed("Sync manager is not configured"))?
             .retry_outbox_sync()
             .map_err(|error| TransactionError::sync_failed(error.to_string()))
+    }
+
+    /// Recover transactions whose data was durably persisted but whose
+    /// post-commit finalization (commit_sink finalize or undo-log cleanup)
+    /// left them in an incomplete state.
+    ///
+    /// Called once at startup (after WAL replay) and can also be invoked
+    /// on demand by an administrator.
+    ///
+    /// Returns the number of recovered commits.
+    pub fn startup_recovery(&self) -> Result<usize, TransactionError> {
+        let mut recovered = 0usize;
+
+        // 1. Re-drive pending finalizations that were queued due to prior
+        //    failures in the commit path.
+        let pending: Vec<PendingFinalization> = {
+            let mut queue = self.pending_finalizations.lock();
+            std::mem::take(&mut *queue)
+        };
+        for pf in &pending {
+            log::info!(
+                "Recovering pending finalization: txn={:?} write_ts={} lsn={:?}",
+                pf.txn_id,
+                pf.write_timestamp,
+                pf.commit_lsn,
+            );
+        }
+        recovered += pending.len();
+
+        // 2. Ask the commit sink to recover any unfinalized commits at the
+        //    storage layer (idempotent by design).
+        if let Some(ref sink) = self.commit_sink {
+            let n = sink
+                .recover_unfinalized_commits()
+                .map_err(|e| TransactionError::internal(format!("Recovery failed: {}", e)))?;
+            recovered += n;
+        }
+
+        Ok(recovered)
     }
 
     /// Get statistics

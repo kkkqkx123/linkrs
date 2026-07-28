@@ -106,6 +106,8 @@ pub struct TransactionContext {
     /// Schema catalog version — incremented on every DDL operation.
     /// Used by the query layer to invalidate stale plan caches.
     schema_catalog_version: AtomicU64,
+    /// Serializable full-scan read-set threshold for this transaction.
+    serializable_full_scan_threshold: Option<usize>,
 }
 
 impl fmt::Debug for TransactionContext {
@@ -232,6 +234,7 @@ impl TransactionContext {
             pessimistic_lock_held: AtomicCell::new(false),
             concurrency_mode: config.concurrency_mode,
             schema_catalog_version: AtomicU64::new(0),
+            serializable_full_scan_threshold: config.serializable_full_scan_threshold,
         }
     }
 
@@ -284,6 +287,7 @@ impl TransactionContext {
             pessimistic_lock_held: AtomicCell::new(false),
             concurrency_mode: config.concurrency_mode,
             schema_catalog_version: AtomicU64::new(0),
+            serializable_full_scan_threshold: config.serializable_full_scan_threshold,
         }
     }
 
@@ -493,6 +497,10 @@ impl TransactionContext {
         self.pessimistic_lock_held.store(false);
     }
 
+    pub fn serializable_full_scan_threshold(&self) -> Option<usize> {
+        self.serializable_full_scan_threshold
+    }
+
     /// Get remaining time
     pub fn remaining_time(&self) -> Duration {
         let elapsed = self.start_time.elapsed();
@@ -583,6 +591,10 @@ impl TransactionContext {
 
     pub fn record_schema_read(&self, resource: &str) {
         self.read_set.lock().record_schema_resource(resource);
+    }
+
+    pub fn record_read_range(&self, range: ReadRange) {
+        self.read_set.lock().record_read_range(range);
     }
 
     pub fn redo_log_len(&self) -> usize {

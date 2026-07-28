@@ -88,4 +88,18 @@ pub trait TransactionCommitSink: Send + Sync {
     ) -> Result<(), String> {
         self.abort_transaction(descriptor.transaction_id)
     }
+
+    /// Called during startup recovery (after WAL replay) to finalize commits
+    /// that were persisted but left unfinalized due to a prior crash or
+    /// partial failure. The implementation should re-run any post-commit
+    /// finalization for LSNs that appear in the WAL whose post-commit state
+    /// is incomplete.
+    ///
+    /// Returns the number of recovered commits.
+    ///
+    /// Default: no-op (safe for sinks that don't require post-commit
+    /// finalization or whose finalization is idempotent on replay).
+    fn recover_unfinalized_commits(&self) -> Result<usize, String> {
+        Ok(0)
+    }
 }

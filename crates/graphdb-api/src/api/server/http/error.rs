@@ -81,7 +81,6 @@ impl HttpError {
             Self::Conflict(message)
         } else if message.contains("[transaction_timeout]")
             || message.contains("[transaction_expired]")
-            || message.contains("[admission_timeout]")
         {
             Self::BadRequest(message)
         } else if message.contains("[invalid_state") || message.contains("[savepoint") {

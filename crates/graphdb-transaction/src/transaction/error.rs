@@ -33,7 +33,6 @@ pub enum TransactionErrorKind {
     InvalidStateForAbort,
     InvalidStateForExecution,
     TransactionTimeout,
-    AdmissionTimeout,
     TransactionExpired,
     RollbackFailed,
     TooManyTransactions,
@@ -67,7 +66,6 @@ impl TransactionErrorKind {
             TransactionErrorKind::InvalidStateForAbort => "invalid_state_for_abort",
             TransactionErrorKind::InvalidStateForExecution => "invalid_state_for_execution",
             TransactionErrorKind::TransactionTimeout => "transaction_timeout",
-            TransactionErrorKind::AdmissionTimeout => "admission_timeout",
             TransactionErrorKind::TransactionExpired => "transaction_expired",
             TransactionErrorKind::RollbackFailed => "rollback_failed",
             TransactionErrorKind::TooManyTransactions => "too_many_transactions",
@@ -223,13 +221,6 @@ impl TransactionError {
         )
     }
 
-    pub fn admission_timeout() -> Self {
-        Self::new(
-            TransactionErrorKind::AdmissionTimeout,
-            "Timed out waiting for transaction admission",
-        )
-    }
-
     pub fn rollback_failed(message: impl Into<String>) -> Self {
         Self::new(TransactionErrorKind::RollbackFailed, message)
     }
@@ -306,9 +297,7 @@ impl TransactionError {
     pub fn is_timeout(&self) -> bool {
         matches!(
             self.kind,
-            TransactionErrorKind::TransactionTimeout
-                | TransactionErrorKind::TransactionExpired
-                | TransactionErrorKind::AdmissionTimeout
+            TransactionErrorKind::TransactionTimeout | TransactionErrorKind::TransactionExpired
         )
     }
 

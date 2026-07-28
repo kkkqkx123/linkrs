@@ -26,6 +26,8 @@ pub enum TransactionIsolationLevel {
     ReadCommitted,
     /// Serializable - certify read and write dependencies at commit.
     Serializable,
+    /// Read Uncommitted - dirty reads allowed, no snapshot isolation.
+    ReadUncommitted,
 }
 
 impl fmt::Display for TransactionIsolationLevel {
@@ -34,6 +36,7 @@ impl fmt::Display for TransactionIsolationLevel {
             TransactionIsolationLevel::RepeatableRead => write!(f, "REPEATABLE READ"),
             TransactionIsolationLevel::ReadCommitted => write!(f, "READ COMMITTED"),
             TransactionIsolationLevel::Serializable => write!(f, "SERIALIZABLE"),
+            TransactionIsolationLevel::ReadUncommitted => write!(f, "READ UNCOMMITTED"),
         }
     }
 }

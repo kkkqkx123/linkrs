@@ -424,6 +424,11 @@ pub struct TransactionConfig {
     pub budget_warning_threshold: f64,
     /// Concurrency control strategy for write transactions.
     pub concurrency_mode: ConcurrencyMode,
+    /// Serializable full-scan read-set threshold.
+    /// When a Serializable transaction's read set exceeds this many entries,
+    /// conservative certification is used: any concurrent write since the
+    /// transaction started causes an abort. `None` disables full-scan detection.
+    pub serializable_full_scan_threshold: Option<usize>,
 }
 
 impl Default for TransactionConfig {
@@ -440,6 +445,7 @@ impl Default for TransactionConfig {
             max_undo_bytes: 128 * 1024 * 1024,
             budget_warning_threshold: 0.8,
             concurrency_mode: ConcurrencyMode::Optimistic,
+            serializable_full_scan_threshold: Some(10_000),
         }
     }
 }
@@ -503,6 +509,11 @@ impl TransactionConfig {
         self.concurrency_mode = mode;
         self
     }
+
+    pub fn with_serializable_full_scan_threshold(mut self, threshold: Option<usize>) -> Self {
+        self.serializable_full_scan_threshold = threshold;
+        self
+    }
 }
 
 /// Transaction Manager Configuration
@@ -510,13 +521,10 @@ impl TransactionConfig {
 pub struct TransactionManagerConfig {
     /// Default transaction timeout duration
     pub default_timeout: Duration,
-    /// Maximum concurrent transactions
+    /// Maximum concurrent transactions (reads + writes)
     pub max_concurrent_transactions: usize,
     /// Whether to automatically cleanup expired transactions
     pub auto_cleanup: bool,
-    /// Timeout for transaction admission when beginning a write transaction.
-    /// If admission cannot complete within this duration, the begin operation fails.
-    pub admission_timeout: Duration,
     /// Maximum number of retry attempts for commit sink failures before aborting the transaction.
     pub commit_retry_attempts: u32,
     /// Maximum number of retry attempts for abort/sync rollback failures before reporting failure.
@@ -532,7 +540,6 @@ impl Default for TransactionManagerConfig {
             default_timeout: Duration::from_secs(30),
             max_concurrent_transactions: 1000,
             auto_cleanup: true,
-            admission_timeout: Duration::from_secs(10),
             commit_retry_attempts: 3,
             abort_retry_attempts: 3,
             txn_config: TransactionConfig::default(),
@@ -760,6 +767,8 @@ pub struct WriteSet {
     pub schema_resources: HashSet<String>,
     /// Index resources changed by this transaction.
     pub index_resources: HashSet<String>,
+    /// Predicate-based read ranges for Serializable phantom detection.
+    pub read_ranges: Vec<ReadRange>,
 }
 
 impl WriteSet {
@@ -792,6 +801,23 @@ impl WriteSet {
 
     pub fn record_index_resource(&mut self, resource: impl Into<String>) {
         self.index_resources.insert(resource.into());
+    }
+
+    /// Record a predicate-based read range for Serializable phantom detection.
+    pub fn record_read_range(&mut self, range: ReadRange) {
+        self.read_ranges.push(range);
+    }
+
+    /// Check whether any committed write falls within a recorded read range.
+    pub fn has_read_range_conflict_with(&self, committed: &WriteSet) -> bool {
+        for range in &self.read_ranges {
+            for vid in &committed.vertices {
+                if range.contains(vid) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Check if write set is empty
@@ -839,6 +865,66 @@ impl WriteSet {
             return true;
         }
         false
+    }
+}
+
+/// A predicate-based range of vertex IDs read by a Serializable transaction.
+///
+/// Used for phantom detection: if a concurrent write creates a vertex whose
+/// ID falls within this range and matches the label, the Serializable
+/// transaction is aborted to prevent phantoms.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReadRange {
+    /// Vertex label (vertex type name).
+    pub label: String,
+    /// Optional property column name for the indexed predicate.
+    pub column: Option<String>,
+    /// Lower bound (inclusive when `start_inclusive` is true).
+    pub start: Option<VertexId>,
+    /// Upper bound (inclusive when `end_inclusive` is true).
+    pub end: Option<VertexId>,
+}
+
+impl ReadRange {
+    pub fn new(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            column: None,
+            start: None,
+            end: None,
+        }
+    }
+
+    pub fn with_column(mut self, column: impl Into<String>) -> Self {
+        self.column = Some(column.into());
+        self
+    }
+
+    pub fn with_start(mut self, start: VertexId) -> Self {
+        self.start = Some(start);
+        self
+    }
+
+    pub fn with_end(mut self, end: VertexId) -> Self {
+        self.end = Some(end);
+        self
+    }
+
+    /// Check whether the given `VertexId` falls within this range.
+    pub fn contains(&self, vid: &VertexId) -> bool {
+        if let Some(ref start) = self.start {
+            let cmp = vid.as_bytes().cmp(start.as_bytes());
+            if cmp == std::cmp::Ordering::Less {
+                return false;
+            }
+        }
+        if let Some(ref end) = self.end {
+            let cmp = vid.as_bytes().cmp(end.as_bytes());
+            if cmp == std::cmp::Ordering::Greater {
+                return false;
+            }
+        }
+        true
     }
 }
 
