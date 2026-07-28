@@ -350,6 +350,7 @@ mod tests {
             properties: vec![],
             index_type: IndexType::TagIndex,
             is_unique: false,
+            covering: false,
             partial_condition: None,
         });
         let props = vec![
@@ -375,6 +376,7 @@ mod tests {
             properties: vec![],
             index_type: IndexType::TagIndex,
             is_unique: false,
+            covering: false,
             partial_condition: None,
         });
         let props = vec![("age".to_string(), Value::Int(30))];
@@ -401,6 +403,7 @@ mod tests {
             properties: vec!["since".to_string()],
             index_type: IndexType::EdgeIndex,
             is_unique: false,
+            covering: false,
             partial_condition: None,
         });
         let existing = vec![("since".to_string(), Value::Int(2020))];
@@ -420,6 +423,7 @@ mod tests {
             properties: vec!["since".to_string()],
             index_type: IndexType::EdgeIndex,
             is_unique: false,
+            covering: false,
             partial_condition: None,
         });
         let existing = vec![];

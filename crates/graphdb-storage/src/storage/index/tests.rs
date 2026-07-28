@@ -29,6 +29,7 @@ fn create_tag_index(name: &str, schema_name: &str) -> Index {
         properties: vec![],
         index_type: IndexType::TagIndex,
         is_unique: false,
+        covering: false,
         partial_condition: None,
     })
 }
@@ -43,6 +44,7 @@ fn create_edge_index_with_included_properties() -> Index {
         properties: vec!["since".to_string()],
         index_type: IndexType::EdgeIndex,
         is_unique: false,
+        covering: true,
         partial_condition: None,
     })
 }
@@ -712,8 +714,8 @@ fn wal_recovers_data_after_checkpoint() {
 
     let fwd = loaded_shard.read_forward();
     let rev = loaded_shard.read_reverse();
-    assert_eq!(fwd.len(), 1, "Should have 1 forward entry after WAL replay");
-    assert_eq!(rev.len(), 1, "Should have 1 reverse entry after WAL replay");
+    assert_eq!(fwd.entry_count(), 1, "Should have 1 forward entry after WAL replay");
+    assert_eq!(rev.entry_count(), 1, "Should have 1 reverse entry after WAL replay");
 
     // Cleanup
     let _ = std::fs::remove_dir_all(&temp_dir);

@@ -413,6 +413,10 @@ fn property_graph_config_from_config(
             .then(|| Duration::from_secs(storage.cache_ttl_secs)),
         cache_tti: (storage.cache_tti_secs > 0)
             .then(|| Duration::from_secs(storage.cache_tti_secs)),
+        index_pool_capacity_bytes: storage.index_pool_capacity_bytes,
+        index_eviction_enabled: storage.index_eviction_enabled,
+        index_eviction_high_ratio: storage.index_eviction_high_ratio,
+        index_eviction_low_ratio: storage.index_eviction_low_ratio,
         ..config.resources
     };
     config

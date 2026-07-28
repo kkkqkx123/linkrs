@@ -690,6 +690,7 @@ impl RecoveryApplier for GraphStorageContext {
             properties: redo.properties.clone(),
             index_type: crate::core::types::IndexType::TagIndex,
             is_unique: redo.is_unique,
+            covering: false,
             partial_condition: None,
         });
         match self
@@ -742,6 +743,7 @@ impl RecoveryApplier for GraphStorageContext {
             properties: redo.properties.clone(),
             index_type: crate::core::types::IndexType::EdgeIndex,
             is_unique: redo.is_unique,
+            covering: false,
             partial_condition: None,
         });
         match self

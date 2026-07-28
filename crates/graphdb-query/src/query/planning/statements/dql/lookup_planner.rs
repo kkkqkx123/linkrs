@@ -105,6 +105,7 @@ impl Planner for LookupPlanner {
                 status: crate::core::types::IndexStatus::Active,
                 is_unique: false,
                 comment: None,
+                covering: false,
                 partial_condition: None,
             });
 

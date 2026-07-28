@@ -197,6 +197,12 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
         }
 
         let mut file = File::open(path)?;
+        let file_size = file.metadata()?.len();
+        if file_size < 12 {
+            return Err(StorageError::db_error(format!(
+                "Index file too small ({file_size} bytes), likely corrupted: {path:?}"
+            )));
+        }
 
         let expected_magic = if path.to_string_lossy().contains("forward") {
             MAGIC_FORWARD
@@ -217,6 +223,7 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
         let count = u64::from_le_bytes(count_bytes);
 
         let mut index = BTreeMap::new();
+        let mut loaded = 0u64;
 
         for _ in 0..count {
             let mut key_len_bytes = [0u8; 4];
@@ -321,6 +328,16 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
                 entity_ref,
             };
             index.insert(key, entry);
+            loaded += 1;
+        }
+
+        let mut trailing = Vec::new();
+        file.read_to_end(&mut trailing)?;
+        if !trailing.is_empty() {
+            return Err(StorageError::db_error(format!(
+                "Index file has {} trailing bytes after {loaded} entries: {path:?}",
+                trailing.len()
+            )));
         }
 
         Ok(index)

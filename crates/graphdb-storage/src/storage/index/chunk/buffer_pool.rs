@@ -1,0 +1,393 @@
+use crate::storage::index::chunk::chunk::ChunkId;
+use parking_lot::Mutex;
+use std::collections::HashMap;
+use std::error::Error;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Clone)]
+pub(crate) struct CachedItem<T: Clone + Send + Sync> {
+    pub(crate) item: T,
+    pub(crate) pin_count: Arc<AtomicU64>,
+    pub(crate) dirty: Arc<AtomicBool>,
+    clock_flag: Arc<AtomicBool>,
+    last_access: Arc<AtomicU64>,
+    size: usize,
+}
+
+impl<T: Clone + Send + Sync> CachedItem<T> {
+    pub(crate) fn new(item: T, size: usize) -> Self {
+        Self {
+            item,
+            pin_count: Arc::new(AtomicU64::new(0)),
+            dirty: Arc::new(AtomicBool::new(false)),
+            clock_flag: Arc::new(AtomicBool::new(true)),
+            last_access: Arc::new(AtomicU64::new(timestamp_nanos())),
+            size,
+        }
+    }
+
+    pub(crate) fn pin(&self) {
+        self.pin_count.fetch_add(1, Ordering::AcqRel);
+        self.last_access.store(timestamp_nanos(), Ordering::Relaxed);
+    }
+
+    pub(crate) fn unpin(&self) {
+        self.pin_count.fetch_sub(1, Ordering::AcqRel);
+    }
+
+    pub(crate) fn is_pinned(&self) -> bool {
+        self.pin_count.load(Ordering::Acquire) > 0
+    }
+
+    pub(crate) fn mark_dirty(&self) {
+        self.dirty.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn mark_clean(&self) {
+        self.dirty.store(false, Ordering::Release);
+    }
+
+    pub(crate) fn touch(&self) {
+        self.clock_flag.store(true, Ordering::Release);
+        self.last_access.store(timestamp_nanos(), Ordering::Relaxed);
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct BufferPool<T: Clone + Send + Sync> {
+    inner: Arc<BufferPoolInner<T>>,
+}
+
+struct BufferPoolInner<T: Clone + Send + Sync> {
+    capacity: AtomicU64,
+    chunks: Mutex<HashMap<ChunkId, CachedItem<T>>>,
+    clock_hand: Mutex<usize>,
+    cached_ids: Mutex<Vec<ChunkId>>,
+    loader: Mutex<Option<Arc<dyn Fn(ChunkId) -> Option<(T, usize)> + Send + Sync>>>,
+    writer: Mutex<Option<Arc<dyn Fn(ChunkId, &T) -> Result<(), Box<dyn Error + Send + Sync>> + Send + Sync>>>,
+}
+
+impl<T: Clone + Send + Sync> BufferPool<T> {
+    pub(crate) fn new(capacity_bytes: u64) -> Self {
+        Self {
+            inner: Arc::new(BufferPoolInner {
+                capacity: AtomicU64::new(capacity_bytes),
+                chunks: Mutex::new(HashMap::new()),
+                clock_hand: Mutex::new(0),
+                cached_ids: Mutex::new(Vec::new()),
+                loader: Mutex::new(None),
+                writer: Mutex::new(None),
+            }),
+        }
+    }
+
+    pub(crate) fn set_capacity(&self, capacity_bytes: u64) {
+        self.inner.capacity.store(capacity_bytes, Ordering::Release);
+    }
+
+    pub(crate) fn capacity(&self) -> u64 {
+        self.inner.capacity.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn get(&self, id: ChunkId) -> Option<CachedItem<T>> {
+        let chunks = self.inner.chunks.lock();
+        chunks.get(&id).cloned()
+    }
+
+    pub(crate) fn set_loader<F>(&self, loader: F)
+    where
+        F: Fn(ChunkId) -> Option<(T, usize)> + Send + Sync + 'static,
+    {
+        *self.inner.loader.lock() = Some(Arc::new(loader));
+    }
+
+    pub(crate) fn set_writer<F>(&self, writer: F)
+    where
+        F: Fn(ChunkId, &T) -> Result<(), Box<dyn Error + Send + Sync>> + Send + Sync + 'static,
+    {
+        *self.inner.writer.lock() = Some(Arc::new(writer));
+    }
+
+    /// Get chunk from pool, loading from disk via loader callback if not cached.
+    pub(crate) fn get_or_load(&self, id: ChunkId) -> Option<CachedItem<T>> {
+        // Fast path: already cached
+        if let Some(item) = self.get(id) {
+            return Some(item);
+        }
+        // Slow path: invoke loader
+        let loader = self.inner.loader.lock().clone()?;
+        let (item, size) = loader(id)?;
+        self.insert(id, item.clone(), size);
+        self.get(id)
+    }
+
+    pub(crate) fn insert(&self, id: ChunkId, item: T, size: usize) {
+        let cached = CachedItem::new(item, size);
+        let mut chunks = self.inner.chunks.lock();
+        chunks.insert(id, cached);
+        let mut ids = self.inner.cached_ids.lock();
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+
+    pub(crate) fn remove(&self, id: ChunkId) -> Option<CachedItem<T>> {
+        let mut chunks = self.inner.chunks.lock();
+        let removed = chunks.remove(&id);
+        if removed.is_some() {
+            let mut ids = self.inner.cached_ids.lock();
+            ids.retain(|i| *i != id);
+        }
+        removed
+    }
+
+    pub(crate) fn contains(&self, id: ChunkId) -> bool {
+        let chunks = self.inner.chunks.lock();
+        chunks.contains_key(&id)
+    }
+
+    pub(crate) fn current_usage(&self) -> u64 {
+        let chunks = self.inner.chunks.lock();
+        chunks.values().map(|c| c.size as u64).sum()
+    }
+
+    pub(crate) fn evict(&self, target_bytes: u64) -> u64 {
+        let mut chunks = self.inner.chunks.lock();
+        let mut ids = self.inner.cached_ids.lock();
+
+        if chunks.is_empty() {
+            return 0;
+        }
+
+        let mut evicted = 0u64;
+        let mut attempts = 0u64;
+        let max_attempts = ids.len() as u64 * 2;
+
+        if ids.is_empty() {
+            ids.extend(chunks.keys().copied());
+        }
+
+        let mut hand = self.inner.clock_hand.lock().wrapping_rem(ids.len().max(1));
+
+        while evicted < target_bytes && attempts < max_attempts {
+            if ids.is_empty() {
+                break;
+            }
+            if hand >= ids.len() {
+                hand = 0;
+            }
+            let id = ids[hand];
+            if let Some(cached) = chunks.get(&id) {
+                if cached.is_pinned() {
+                    hand = (hand + 1) % ids.len().max(1);
+                    attempts += 1;
+                    continue;
+                }
+                let flag = cached.clock_flag.load(Ordering::Acquire);
+                if flag {
+                    cached.clock_flag.store(false, Ordering::Release);
+                    hand = (hand + 1) % ids.len().max(1);
+                    attempts += 1;
+                    continue;
+                }
+                let item = chunks.remove(&id);
+                if let Some(item) = item {
+                    // Write back dirty chunk before eviction
+                    if item.dirty.load(Ordering::Acquire) {
+                        if let Some(writer) = self.inner.writer.lock().as_ref() {
+                            if let Err(e) = writer(id, &item.item) {
+                                tracing::warn!("Failed to write back chunk {id} during eviction: {e}");
+                            }
+                        }
+                    }
+                    evicted += item.size as u64;
+                    ids.retain(|i| *i != id);
+                    if ids.is_empty() {
+                        break;
+                    }
+                }
+                if ids.is_empty() {
+                    break;
+                }
+                hand = hand % ids.len().max(1);
+            } else {
+                ids.retain(|i| chunks.contains_key(i));
+                if ids.is_empty() {
+                    break;
+                }
+                hand = hand % ids.len().max(1);
+            }
+            attempts += 1;
+        }
+
+        *self.inner.clock_hand.lock() = hand;
+        evicted
+    }
+
+    pub(crate) fn evict_all(&self) {
+        let mut chunks = self.inner.chunks.lock();
+        let mut ids = self.inner.cached_ids.lock();
+        chunks.retain(|_, c| c.is_pinned());
+        ids.retain(|id| chunks.contains_key(id));
+    }
+
+    pub(crate) fn pin_count(&self) -> u64 {
+        let chunks = self.inner.chunks.lock();
+        chunks
+            .values()
+            .map(|c| c.pin_count.load(Ordering::Acquire))
+            .sum()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        let chunks = self.inner.chunks.lock();
+        chunks.len()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub(crate) fn ids(&self) -> Vec<ChunkId> {
+        let ids = self.inner.cached_ids.lock();
+        ids.clone()
+    }
+
+    pub(crate) fn total_dirty_bytes(&self) -> u64 {
+        let chunks = self.inner.chunks.lock();
+        chunks
+            .values()
+            .filter(|c| c.dirty.load(Ordering::Acquire))
+            .map(|c| c.size as u64)
+            .sum()
+    }
+}
+
+impl<T: Clone + Send + Sync> std::fmt::Debug for BufferPool<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BufferPool")
+            .field("capacity", &self.capacity())
+            .field("usage", &self.current_usage())
+            .field("chunks", &self.len())
+            .finish()
+    }
+}
+
+fn timestamp_nanos() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn make_pool() -> BufferPool<&'static str> {
+        BufferPool::new(1024)
+    }
+
+    #[test]
+    fn insert_and_get() {
+        let pool = make_pool();
+        pool.insert(1, "hello", 8);
+        let item = pool.get(1);
+        assert!(item.is_some());
+        assert_eq!(item.unwrap().item, "hello");
+    }
+
+    #[test]
+    fn get_missing_returns_none() {
+        let pool = make_pool();
+        assert!(pool.get(99).is_none());
+    }
+
+    #[test]
+    fn remove_drops_item() {
+        let pool = make_pool();
+        pool.insert(1, "data", 4);
+        let removed = pool.remove(1);
+        assert!(removed.is_some());
+        assert!(pool.get(1).is_none());
+    }
+
+    #[test]
+    fn contains_returns_presence() {
+        let pool = make_pool();
+        assert!(!pool.contains(42));
+        pool.insert(42, "present", 4);
+        assert!(pool.contains(42));
+    }
+
+    #[test]
+    fn current_usage_sums_sizes() {
+        let pool = BufferPool::new(8192);
+        pool.insert(1, "a", 100);
+        pool.insert(2, "b", 200);
+        assert_eq!(pool.current_usage(), 300);
+    }
+
+    #[test]
+    fn evict_removes_items_under_pressure() {
+        let pool = BufferPool::new(512);
+        pool.insert(1, "entry1", 200);
+        pool.insert(2, "entry2", 200);
+        pool.insert(3, "entry3", 200);
+        assert_eq!(pool.len(), 3);
+        let evicted = pool.evict(400);
+        assert!(evicted >= 400, "evicted {evicted} bytes, expected >=400");
+        assert!(pool.len() < 3, "expected some evictions");
+    }
+
+    #[test]
+    fn pinned_items_are_not_evicted() {
+        let pool = BufferPool::new(256);
+        pool.insert(1, "pinned", 200);
+        if let Some(item) = pool.get(1) {
+            item.pin();
+        }
+        pool.insert(2, "evictable", 200);
+        pool.evict(400);
+        assert!(pool.contains(1), "pinned item should survive eviction");
+        pool.get(1).map(|i| i.unpin());
+    }
+
+    #[test]
+    fn evict_all_keeps_pinned_only() {
+        let pool = BufferPool::new(1024);
+        pool.insert(1, "pin_me", 100);
+        pool.insert(2, "can_go", 100);
+        if let Some(item) = pool.get(1) {
+            item.pin();
+        }
+        pool.evict_all();
+        assert!(pool.contains(1));
+        assert!(!pool.contains(2));
+    }
+
+    #[test]
+    fn capacity_set_and_get() {
+        let pool: BufferPool<&'static str> = BufferPool::new(1000);
+        assert_eq!(pool.capacity(), 1000);
+        pool.set_capacity(2000);
+        assert_eq!(pool.capacity(), 2000);
+    }
+
+    #[test]
+    fn empty_pool_evicts_zero() {
+        let pool = make_pool();
+        assert_eq!(pool.evict(100), 0);
+    }
+
+    #[test]
+    fn len_and_is_empty() {
+        let pool = make_pool();
+        assert!(pool.is_empty());
+        assert_eq!(pool.len(), 0);
+        pool.insert(1, "x", 1);
+        assert!(!pool.is_empty());
+        assert_eq!(pool.len(), 1);
+    }
+}

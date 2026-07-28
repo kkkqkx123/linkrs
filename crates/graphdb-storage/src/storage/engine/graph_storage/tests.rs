@@ -717,8 +717,9 @@ mod tests {
             )],
             properties: vec![],
             index_type: IndexType::TagIndex,
-            is_unique: false,
-            partial_condition: None,
+        is_unique: false,
+        covering: false,
+        partial_condition: None,
         });
         storage.create_tag_index("test_space", &index).unwrap();
 
@@ -784,8 +785,9 @@ mod tests {
             )],
             properties: vec![],
             index_type: IndexType::TagIndex,
-            is_unique: false,
-            partial_condition: None,
+        is_unique: false,
+        covering: false,
+        partial_condition: None,
         });
         storage.create_tag_index("test_space", &index).unwrap();
 

@@ -177,6 +177,12 @@ impl GraphStoragePersistent {
             index_data_manager: {
                 let dm = IndexDataManagerImpl::new();
                 dm.set_memory_limit_bytes(config.resources.index_memory_bytes);
+                dm.set_pool_capacity(config.resources.index_pool_capacity_bytes);
+                dm.set_eviction_config(
+                    config.resources.index_eviction_enabled,
+                    config.resources.index_eviction_high_ratio,
+                    config.resources.index_eviction_low_ratio,
+                );
                 Arc::new(RwLock::new(dm))
             },
             config,

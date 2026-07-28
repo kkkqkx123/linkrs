@@ -15,7 +15,7 @@ use crate::storage::index::manifest::{
     ManifestHandle,
 };
 use crate::storage::index::shard_runtime::{
-    generation_from_maps, GenerationRuntime, IndexBarrierRegistry, IndexMaps, IndexRuntime,
+    generation_from_maps_with_pool_capacity, GenerationRuntime, IndexBarrierRegistry, IndexMaps, IndexRuntime,
 };
 use crate::storage::index::types::{EdgeIdentity, IndexIdentity, IndexRecord};
 use parking_lot::RwLock;
@@ -23,7 +23,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 #[derive(Clone)]
 pub struct IndexDataManagerImpl {
@@ -39,6 +39,16 @@ pub struct IndexDataManagerImpl {
     pub(crate) stats_manager: Option<Arc<StatsManager>>,
     /// Memory limit in bytes for all indexes. 0 means unlimited.
     pub(crate) memory_limit_bytes: Arc<AtomicU64>,
+    /// Cached total memory usage for fast check_memory_limit
+    pub(crate) total_memory_usage: Arc<AtomicU64>,
+    /// Per-shard buffer pool capacity in bytes.
+    pub(crate) pool_capacity: Arc<AtomicU64>,
+    /// Enable chunk-level eviction under memory pressure.
+    pub(crate) eviction_enabled: Arc<AtomicBool>,
+    /// Eviction high-water ratio (stored as ratio * 10000 as integer).
+    pub(crate) eviction_high_ratio: Arc<AtomicU64>,
+    /// Eviction low-water ratio (stored as ratio * 10000 as integer).
+    pub(crate) eviction_low_ratio: Arc<AtomicU64>,
 }
 
 impl IndexDataManagerImpl {
@@ -63,6 +73,11 @@ impl IndexDataManagerImpl {
             rebuild_gate: Arc::new(RwLock::new(())),
             stats_manager: None,
             memory_limit_bytes: Arc::new(AtomicU64::new(0)),
+            total_memory_usage: Arc::new(AtomicU64::new(0)),
+            pool_capacity: Arc::new(AtomicU64::new(128 * 1024 * 1024)),
+            eviction_enabled: Arc::new(AtomicBool::new(true)),
+            eviction_high_ratio: Arc::new(AtomicU64::new(8500)),
+            eviction_low_ratio: Arc::new(AtomicU64::new(6500)),
         }
     }
 
@@ -75,37 +90,123 @@ impl IndexDataManagerImpl {
         self.memory_limit_bytes.store(limit, Ordering::Relaxed);
     }
 
+    /// Set per-shard buffer pool capacity in bytes.
+    pub fn set_pool_capacity(&self, capacity: u64) {
+        self.pool_capacity.store(capacity, Ordering::Relaxed);
+    }
+
+    /// Set eviction configuration.
+    pub fn set_eviction_config(&self, enabled: bool, high_ratio: f64, low_ratio: f64) {
+        self.eviction_enabled.store(enabled, Ordering::Relaxed);
+        self.eviction_high_ratio
+            .store((high_ratio * 10000.0) as u64, Ordering::Relaxed);
+        self.eviction_low_ratio
+            .store((low_ratio * 10000.0) as u64, Ordering::Relaxed);
+    }
+
+    fn eviction_enabled(&self) -> bool {
+        self.eviction_enabled.load(Ordering::Relaxed)
+    }
+
+    fn eviction_high_ratio(&self) -> f64 {
+        self.eviction_high_ratio.load(Ordering::Relaxed) as f64 / 10000.0
+    }
+
+    fn eviction_low_ratio(&self) -> f64 {
+        self.eviction_low_ratio.load(Ordering::Relaxed) as f64 / 10000.0
+    }
+
     /// Get current memory usage and check against limit. If exceeded, trigger
-    /// compaction on the index with the most generations.
+    /// eviction of cold chunks first, then compaction on the index with the
+    /// most generations or retire old ones.
     pub(crate) fn check_memory_limit(&self) -> StorageResult<()> {
         let limit = self.memory_limit_bytes.load(Ordering::Relaxed);
         if limit == 0 {
             return Ok(());
         }
-        let usage = self.memory_usage_bytes();
+        let usage = self.total_memory_usage.load(Ordering::Relaxed);
         if usage <= limit {
             return Ok(());
         }
 
-        let runtimes = self.runtimes.read();
-        let mut target: Option<(IndexIdentity, Arc<IndexRuntime>)> = None;
-        for (identity, runtime) in runtimes.iter() {
-            let gen_count = runtime.generations().len();
-            if gen_count > 1 {
-                match &target {
-                    None => target = Some((*identity, Arc::clone(runtime))),
-                    Some((_, max_r)) if gen_count > max_r.generations().len() => {
-                        target = Some((*identity, Arc::clone(runtime)));
+        // Step 1: evict cold chunks under memory pressure
+        if self.eviction_enabled() {
+            let high = self.eviction_high_ratio();
+            let low = self.eviction_low_ratio();
+            self.evict_cold_chunks_for_pressure(limit, high, low)?;
+        }
+
+        // Step 2: compaction if still over limit
+        if self.memory_usage_bytes() > limit {
+            let runtimes = self.runtimes.read();
+            let mut target: Option<(IndexIdentity, Arc<IndexRuntime>)> = None;
+            for (identity, runtime) in runtimes.iter() {
+                let gen_count = runtime.generations().len();
+                if gen_count > 1 {
+                    match &target {
+                        None => target = Some((*identity, Arc::clone(runtime))),
+                        Some((_, max_r)) if gen_count > max_r.generations().len() => {
+                            target = Some((*identity, Arc::clone(runtime)));
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
-        }
-        drop(runtimes);
+            drop(runtimes);
 
-        if let Some((identity, runtime)) = target {
-            let safe_ts = runtime.barrier_lsn().get();
-            self.compact_native_index(identity, safe_ts)?;
+            if let Some((identity, runtime)) = target {
+                let safe_ts = runtime.barrier_lsn().get();
+                self.compact_native_index(identity, safe_ts)?;
+                // If still over limit, force compact to merge all generations
+                if self.memory_usage_bytes() > limit {
+                    self.compact_native_index_impl(identity, safe_ts, true)?;
+                }
+            } else {
+                // No index with multiple generations; try retiring oldest non-active
+                // generation across all indexes to reduce memory pressure
+                self.retire_generations(u64::MAX);
+            }
+        }
+
+        let new_usage = self.memory_usage_bytes();
+        self.total_memory_usage.store(new_usage, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Evict cold chunks across all runtimes to bring memory down toward the
+    /// low-water ratio of the given limit.
+    fn evict_cold_chunks_for_pressure(
+        &self,
+        limit: u64,
+        high_ratio: f64,
+        low_ratio: f64,
+    ) -> StorageResult<()> {
+        // Eviction requires disk persistence; in-memory-only mode cannot recover evicted chunks
+        if self.index_root.is_none() {
+            return Ok(());
+        }
+        let high = (limit as f64 * high_ratio) as u64;
+        let low = (limit as f64 * low_ratio) as u64;
+        let runtimes = self.runtimes.read();
+        // Evict from the runtime with the highest memory usage first
+        let mut candidates: Vec<(IndexIdentity, u64)> = runtimes
+            .iter()
+            .map(|(id, rt)| (*id, rt.memory_usage_bytes()))
+            .collect();
+        drop(runtimes);
+        candidates.sort_by(|a, b| b.1.cmp(&a.1));
+
+        for (identity, _mem) in candidates {
+            if self.memory_usage_bytes() <= low {
+                break;
+            }
+            let runtimes = self.runtimes.read();
+            let runtime = match runtimes.get(&identity) {
+                Some(rt) => Arc::clone(rt),
+                None => continue,
+            };
+            drop(runtimes);
+            runtime.evict_cold_chunks(self.memory_usage_bytes(), high, low)?;
         }
         Ok(())
     }
@@ -133,6 +234,12 @@ impl IndexDataManagerImpl {
             .sum()
     }
 
+    /// Sync cached memory counter with actual usage.
+    pub(crate) fn sync_memory_usage(&self) {
+        let usage = self.memory_usage_bytes();
+        self.total_memory_usage.store(usage, Ordering::Relaxed);
+    }
+
     pub fn active_entry_count(&self) -> usize {
         let mut count = 0;
         for runtime in self.runtimes.read().values() {
@@ -140,12 +247,14 @@ impl IndexDataManagerImpl {
                 for shard in generation.shards() {
                     count += shard
                         .read_forward()
-                        .values()
+                        .snapshot()
+                        .into_values()
                         .filter(|e| e.deleted_ts.is_none())
                         .count();
                     count += shard
                         .read_reverse()
-                        .values()
+                        .snapshot()
+                        .into_values()
                         .filter(|e| e.deleted_ts.is_none())
                         .count();
                 }
@@ -217,6 +326,7 @@ impl IndexDataManagerImpl {
             .entry(identity)
             .or_insert_with(|| Arc::new(IndexRuntime::new(catalog.acquire().manifest())));
         self.restore_active_generation(identity, index)?;
+        self.sync_memory_usage();
         Ok(())
     }
 
@@ -248,13 +358,14 @@ impl IndexDataManagerImpl {
                 return Ok(());
             }
         }
+        let pool_cap = self.pool_capacity.load(Ordering::Relaxed);
         let runtime = match index.index_type {
-            IndexType::TagIndex => IndexRuntime::load::<
+            IndexType::TagIndex => IndexRuntime::load_with_pool_capacity::<
                 crate::storage::index::key_codec::VertexIndexKeyGen,
-            >(handle.manifest())?,
-            IndexType::EdgeIndex => IndexRuntime::load::<
+            >(handle.manifest(), pool_cap)?,
+            IndexType::EdgeIndex => IndexRuntime::load_with_pool_capacity::<
                 crate::storage::index::key_codec::EdgeIndexKeyGen,
-            >(handle.manifest())?,
+            >(handle.manifest(), pool_cap)?,
         };
         self.runtimes.write().insert(identity, Arc::new(runtime));
         self.restored_generations
@@ -364,8 +475,6 @@ impl IndexDataManagerImpl {
         space_id: u64,
         index_id: u64,
     ) -> StorageResult<IndexMaps> {
-        let runtime = self.runtime(space_id, index_id)?;
-        let _fence = runtime.read_fence();
         let (_handle, _runtime, generation) = self.active_generation(space_id, index_id)?;
         let mut forward = BTreeMap::new();
         let mut reverse = BTreeMap::new();
@@ -385,7 +494,6 @@ impl IndexDataManagerImpl {
         barrier_lsn: CommitLsn,
     ) -> StorageResult<()> {
         let runtime = self.runtime(manifest.space_id, manifest.index_id)?;
-        let _fence = runtime.write_fence();
         let identity = IndexIdentity {
             space_id: manifest.space_id,
             index_id: manifest.index_id,
@@ -396,7 +504,8 @@ impl IndexDataManagerImpl {
             .first()
             .ok_or_else(|| StorageError::invalid_operation("Index manifest has no shards"))?;
         maps.insert(shard.shard_id, (forward, reverse));
-        runtime.install_generation(generation_from_maps(&manifest, maps, None, 0, Vec::new(), Vec::new()));
+        let pool_cap = self.pool_capacity.load(Ordering::Relaxed);
+        runtime.install_generation(generation_from_maps_with_pool_capacity(&manifest, maps, None, 0, Vec::new(), Vec::new(), pool_cap));
         self.manifest_catalog(manifest.space_id, manifest.index_id)
             .ok_or_else(|| StorageError::not_found("Index manifest catalog is unavailable"))?
             .publish(manifest)
@@ -505,7 +614,6 @@ impl IndexDataManagerImpl {
             write_ts,
         );
 
-        let _fence = runtime.write_fence();
         let active_gen = catalog.acquire().manifest().generation;
         if active_gen != current.generation {
             return Err(StorageError::invalid_operation(
@@ -519,6 +627,8 @@ impl IndexDataManagerImpl {
             stats.record_generation_publish();
         }
         self.record_manifest_state(&catalog);
+        // Recompute cached memory counter
+        self.sync_memory_usage();
         // Check memory limit and trigger compaction if needed
         let _ = self.check_memory_limit();
         Ok(())
@@ -554,6 +664,7 @@ impl IndexDataManagerImpl {
             }
             if retired > 0 {
                 self.record_manifest_state(&catalog);
+                self.sync_memory_usage();
             }
         }
         retired
@@ -563,6 +674,17 @@ impl IndexDataManagerImpl {
         &self,
         identity: IndexIdentity,
         safe_ts: Timestamp,
+    ) -> StorageResult<bool> {
+        self.compact_native_index_impl(identity, safe_ts, false)
+    }
+
+    /// Internal compact implementation with optional force flag.
+    /// When `force` is true, merges all generations regardless of tombstones.
+    fn compact_native_index_impl(
+        &self,
+        identity: IndexIdentity,
+        safe_ts: Timestamp,
+        force: bool,
     ) -> StorageResult<bool> {
         let catalog = self
             .manifest_catalog(identity.space_id, identity.index_id)
@@ -575,29 +697,32 @@ impl IndexDataManagerImpl {
         let runtime = self.runtime(identity.space_id, identity.index_id)?;
         let current = catalog.acquire().manifest().clone();
 
-        // Quick pre-check: skip if no tombstones exist
-        let has_tombstones = current.shards.iter().any(|s| {
-            runtime
-                .generation(current.generation)
-                .and_then(|g| g.shard(s.shard_id))
-                .is_some_and(|shard| {
-                    shard
-                        .read_forward()
-                        .values()
-                        .any(|e| e.deleted_ts.is_some())
-                        || shard
-                            .read_reverse()
-                            .values()
+        // Quick pre-check: skip if no tombstones exist (unless forced)
+        if !force {
+            let has_tombstones = current.shards.iter().any(|s| {
+                runtime
+                    .generation(current.generation)
+                    .and_then(|g| g.shard(s.shard_id))
+                    .is_some_and(|shard| {
+                        shard
+                            .read_forward()
+                            .snapshot()
+                            .into_values()
                             .any(|e| e.deleted_ts.is_some())
-                })
-        });
-        if !has_tombstones {
-            return Ok(false);
+                            || shard
+                                .read_reverse()
+                                .snapshot()
+                                .into_values()
+                                .any(|e| e.deleted_ts.is_some())
+                    })
+            });
+            if !has_tombstones {
+                return Ok(false);
+            }
         }
 
-        // Step 1: Snapshot full generation chain under read fence, merging visible entries
+        // Step 1: Snapshot full generation chain, merging visible entries
         let maps = {
-            let _fence = runtime.read_fence();
             let chain = runtime.generation_chain_until(current.generation)?;
             let mut maps: HashMap<u32, IndexMaps> = HashMap::new();
             for shard_def in &current.shards {
@@ -655,31 +780,34 @@ impl IndexDataManagerImpl {
         // Step 3: Create generation runtime and flush before publishing
         let current_gen = runtime.generation(current.generation);
         let (fwd_prefix, rev_prefix) = self.compute_prefixes(identity);
-        let next_runtime = generation_from_maps(
+        let pool_cap = self.pool_capacity.load(Ordering::Relaxed);
+        let next_runtime = generation_from_maps_with_pool_capacity(
             &next_manifest,
             maps,
             current_gen.as_ref(),
             safe_ts,
             fwd_prefix,
             rev_prefix,
+            pool_cap,
         );
         let index_type = self.index_types.read().get(&identity).cloned();
-        match index_type {
-            Some(IndexType::TagIndex) => {
-                flush_split_generation::<
-                    crate::storage::index::key_codec::VertexIndexKeyGen,
-                >(&next_manifest, &next_runtime)?
+        if self.index_root.is_some() {
+            match index_type {
+                Some(IndexType::TagIndex) => {
+                    flush_split_generation::<
+                        crate::storage::index::key_codec::VertexIndexKeyGen,
+                    >(&next_manifest, &next_runtime)?
+                }
+                Some(IndexType::EdgeIndex) => {
+                    flush_split_generation::<
+                        crate::storage::index::key_codec::EdgeIndexKeyGen,
+                    >(&next_manifest, &next_runtime)?
+                }
+                None => {}
             }
-            Some(IndexType::EdgeIndex) => {
-                flush_split_generation::<
-                    crate::storage::index::key_codec::EdgeIndexKeyGen,
-                >(&next_manifest, &next_runtime)?
-            }
-            None => {}
         }
 
-        // Step 4: Publish under write fence
-        let _fence = runtime.write_fence();
+        // Step 4: Publish
         let active_gen = catalog.acquire().manifest().generation;
         if active_gen != current.generation {
             return Err(StorageError::invalid_operation(
@@ -700,6 +828,8 @@ impl IndexDataManagerImpl {
                 runtime.remove_generation(current.generation);
             }
         }
+
+        self.sync_memory_usage();
 
         if let Some(catalog_ref) = self.manifest_catalog(identity.space_id, identity.index_id) {
             self.record_manifest_state(&catalog_ref);
@@ -923,7 +1053,6 @@ impl IndexDataManagerImpl {
         let next = IndexManifest::new(space_id, index_id, generation, shards)
             .map_err(StorageError::db_error)?;
         let mut maps = {
-            let _fence = runtime.read_fence();
             let chain = runtime.generation_chain_until(current.generation)?;
             let mut maps: HashMap<u32, IndexMaps> = HashMap::new();
             for current_shard in &current.shards {
@@ -1011,7 +1140,6 @@ impl IndexDataManagerImpl {
             .map_err(StorageError::invalid_operation)?;
         self.save_build_state(index_root, &build_state)?;
 
-        let _fence = runtime.write_fence();
         let active_manifest = catalog.acquire().manifest().clone();
         if active_manifest.generation != current.generation {
             return Err(StorageError::invalid_operation(
@@ -1080,7 +1208,8 @@ impl IndexDataManagerImpl {
 
         let current_gen = runtime.generation(current.generation);
         let (fwd_prefix, rev_prefix) = self.compute_prefixes(identity);
-        let next_runtime = generation_from_maps(&next, maps, current_gen.as_ref(), 0, fwd_prefix, rev_prefix);
+        let pool_cap = self.pool_capacity.load(Ordering::Relaxed);
+        let next_runtime = generation_from_maps_with_pool_capacity(&next, maps, current_gen.as_ref(), 0, fwd_prefix, rev_prefix, pool_cap);
         match index_type {
             IndexType::TagIndex => flush_split_generation::<
                 crate::storage::index::key_codec::VertexIndexKeyGen,
@@ -1197,7 +1326,6 @@ impl IndexDataManagerImpl {
         let runtime = self.runtime(space_id, index_id)?;
 
         let delta = {
-            let _fence = runtime.read_fence();
             self.wait_for_active_barrier(&runtime);
             let catalog = self.manifest_catalog(space_id, index_id).ok_or_else(|| {
                 StorageError::not_found(format!("Index {index_id} has no manifest"))
@@ -1212,6 +1340,9 @@ impl IndexDataManagerImpl {
             let mut reverse_meta: Vec<(SecondaryIndexKey, Vec<u8>)> = Vec::new();
             for gen in &chain {
                 for shard in gen.shards() {
+                    if !shard.reverse_may_have_range(&reverse_prefix.0, &reverse_end.0) {
+                        continue;
+                    }
                     for (key, record) in shard
                         .reverse_range(&reverse_prefix.0, &reverse_end.0)
                     {
@@ -1323,7 +1454,6 @@ impl IndexDataManagerImpl {
         let runtime = self.runtime(space_id, index_id)?;
 
         let delta = {
-            let _fence = runtime.read_fence();
             self.wait_for_active_barrier(&runtime);
             let catalog = self.manifest_catalog(space_id, index_id).ok_or_else(|| {
                 StorageError::not_found(format!("Index {index_id} has no manifest"))
@@ -1339,6 +1469,9 @@ impl IndexDataManagerImpl {
             let mut reverse_meta: Vec<(SecondaryIndexKey, Vec<u8>)> = Vec::new();
             for gen in &chain {
                 for shard in gen.shards() {
+                    if !shard.reverse_may_have_range(&reverse_prefix.0, &reverse_end.0) {
+                        continue;
+                    }
                     for (key, record) in shard
                         .reverse_range(&reverse_prefix.0, &reverse_end.0)
                     {
@@ -1444,7 +1577,6 @@ impl IndexDataManagerImpl {
         let runtime = self.runtime(space_id, index_id)?;
 
         let delta = {
-            let _fence = runtime.read_fence();
             self.wait_for_active_barrier(&runtime);
             let catalog = self.manifest_catalog(space_id, index_id).ok_or_else(|| {
                 StorageError::not_found(format!("Index {index_id} has no manifest"))

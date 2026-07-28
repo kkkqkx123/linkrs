@@ -147,6 +147,22 @@ pub struct StorageConfig {
     /// Ratio of new data to existing data that triggers FSST rebuild.
     #[serde(default = "default_fsst_rebuild_threshold")]
     pub fsst_rebuild_threshold: f64,
+
+    /// Per-shard native-index buffer pool capacity in bytes.
+    #[serde(default = "default_index_pool_capacity_bytes")]
+    pub index_pool_capacity_bytes: u64,
+
+    /// Enable chunk-level eviction under memory pressure.
+    #[serde(default = "default_true")]
+    pub index_eviction_enabled: bool,
+
+    /// Eviction high-water ratio: trigger eviction when usage/capacity exceeds this.
+    #[serde(default = "default_index_eviction_high_ratio")]
+    pub index_eviction_high_ratio: f64,
+
+    /// Eviction low-water target: evict down to this ratio of capacity.
+    #[serde(default = "default_index_eviction_low_ratio")]
+    pub index_eviction_low_ratio: f64,
 }
 
 fn default_compression_level() -> u32 {
@@ -237,6 +253,18 @@ fn default_fsst_rebuild_threshold() -> f64 {
     0.2
 }
 
+fn default_index_pool_capacity_bytes() -> u64 {
+    128 * 1024 * 1024
+}
+
+fn default_index_eviction_high_ratio() -> f64 {
+    0.85
+}
+
+fn default_index_eviction_low_ratio() -> f64 {
+    0.65
+}
+
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
@@ -265,6 +293,10 @@ impl Default for StorageConfig {
             avg_length_threshold: default_avg_length_threshold(),
             cardinality_ratio_threshold: default_cardinality_ratio_threshold(),
             fsst_rebuild_threshold: default_fsst_rebuild_threshold(),
+            index_pool_capacity_bytes: default_index_pool_capacity_bytes(),
+            index_eviction_enabled: true,
+            index_eviction_high_ratio: default_index_eviction_high_ratio(),
+            index_eviction_low_ratio: default_index_eviction_low_ratio(),
         }
     }
 }
@@ -301,8 +333,19 @@ impl StorageConfig {
             || self.operation_timeout_secs == 0
             || self.dirty_flush_operations == 0
             || self.dirty_flush_bytes == 0
+            || self.index_pool_capacity_bytes == 0
         {
             return Err("storage resource limits must be greater than 0".to_string());
+        }
+        if !self.index_eviction_high_ratio.is_finite()
+            || !self.index_eviction_low_ratio.is_finite()
+            || !(0.0..=1.0).contains(&self.index_eviction_high_ratio)
+            || !(0.0..=1.0).contains(&self.index_eviction_low_ratio)
+            || self.index_eviction_low_ratio >= self.index_eviction_high_ratio
+        {
+            return Err(
+                "index eviction ratios must satisfy 0 < low < high <= 1".to_string(),
+            );
         }
         Ok(())
     }

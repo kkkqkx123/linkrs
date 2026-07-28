@@ -57,9 +57,11 @@ impl ChainForwardIterator {
     fn load_next_gen(&mut self) {
         while self.gen_idx < self.chain.len() {
             if let Some(shard) = self.chain[self.gen_idx].shard(self.shard_id) {
-                self.current_entries = shard
-                    .forward_range(&self.range_start, &self.range_end)
-                    .collect();
+                if shard.forward_may_have_range(&self.range_start, &self.range_end) {
+                    self.current_entries = shard
+                        .forward_range(&self.range_start, &self.range_end)
+                        .collect();
+                }
                 self.gen_idx += 1;
                 if !self.current_entries.is_empty() {
                     self.pos = 0;
@@ -149,7 +151,6 @@ impl IndexDataManagerImpl {
             .or(owned_catalog.as_deref())
             .ok_or_else(|| StorageError::not_found("Index manifest is unavailable"))?;
         let runtime = self.runtime(space_id, plan.index_id)?;
-        let _fence = runtime.read_fence();
         let handle = catalog.acquire();
         let manifest = handle.manifest();
         let chain = runtime.generation_chain_until(manifest.generation)?;
@@ -199,7 +200,6 @@ impl IndexDataManagerImpl {
             .or(owned_catalog.as_deref())
             .ok_or_else(|| StorageError::not_found("Index manifest is unavailable"))?;
         let runtime = self.runtime(space_id, plan.index_id)?;
-        let _fence = runtime.read_fence();
         let handle = catalog.acquire();
         let manifest = handle.manifest();
         let chain = runtime.generation_chain_until(manifest.generation)?;

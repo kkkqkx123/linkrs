@@ -193,6 +193,7 @@ pub fn create_person_name_index(storage: &mut GraphStorage, space: &str) {
         properties: vec![],
         index_type: IndexType::TagIndex,
         is_unique: false,
+        covering: false,
         partial_condition: None,
     });
     storage

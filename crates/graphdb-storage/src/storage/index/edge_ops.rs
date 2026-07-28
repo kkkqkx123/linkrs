@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::core::types::{IndexType, Timestamp, MAX_TIMESTAMP};
 use crate::core::value::ordered_codec::OrderedCodec;
@@ -46,65 +46,82 @@ impl EdgeIndexOps for IndexDataManagerImpl {
         let runtime = self.runtime(space_id, index_id)?;
 
         let delta = {
-            let _fence = runtime.read_fence();
             self.wait_for_active_barrier(&runtime);
             let catalog = self
                 .manifest_catalog(space_id, index_id)
                 .ok_or_else(|| StorageError::not_found("Index manifest catalog is unavailable"))?;
             let manifest = catalog.acquire();
-            let chain = runtime.generation_chain_until(manifest.manifest().generation)?;
             let index_definition = self
                 .index_definitions
                 .read()
                 .get(&identity)
                 .cloned();
-            let reverse_prefix = KeyBuilder::build_edge_reverse_key(
-                space_id, edge_src, edge_dst, edge_type, ranking, index_name,
-            )?;
-            let reverse_end = KeyBuilder::build_range_end(&reverse_prefix);
-            let mut existing_values = Vec::new();
-            let mut existing_columns = Vec::new();
-            let mut existing_columns_ts = 0;
-            for gen in &chain {
-                for shard in gen.shards() {
-                    for (key, record) in shard
-                        .reverse_range(&reverse_prefix.0, &reverse_end.0)
-                    {
-                        if !record.is_visible_at(write_ts) {
+
+            let covering = index_definition
+                .as_ref()
+                .map_or(false, |idx| idx.covering);
+            let new_values =
+                effective_index_values(index_definition.as_ref(), props, Vec::new());
+
+            let values: Vec<Value>;
+            let included_columns: Vec<(String, Value)>;
+            if !new_values.is_empty() {
+                values = new_values;
+                included_columns = if covering {
+                    merged_included_columns(index_definition.as_ref(), Vec::new(), props)
+                } else {
+                    Vec::new()
+                };
+            } else {
+                let has_included = index_definition
+                    .as_ref()
+                    .map_or(false, |idx| !idx.properties.is_empty());
+                if !has_included {
+                    return Ok(());
+                }
+                let chain = runtime.generation_chain_until(manifest.manifest().generation)?;
+                let reverse_prefix = KeyBuilder::build_edge_reverse_key(
+                    space_id, edge_src, edge_dst, edge_type, ranking, index_name,
+                )?;
+                let reverse_end = KeyBuilder::build_range_end(&reverse_prefix);
+                let mut existing_values = Vec::new();
+                let mut existing_encoded: HashSet<Vec<u8>> = HashSet::new();
+                let mut existing_columns = Vec::new();
+                let mut covering_populated = false;
+                if let Some(latest_gen) = chain.first() {
+                    for shard in latest_gen.shards() {
+                        if !shard.reverse_may_have_range(&reverse_prefix.0, &reverse_end.0) {
                             continue;
                         }
-                        if let Ok(encoded) = KeyParser::extract_value_from_edge_reverse_key(&key) {
-                            if let Ok(value) = OrderedCodec::new().decode(&encoded) {
-                                let nv = normalize_int_value(&value);
-                                if !existing_values.contains(&nv) {
-                                    existing_values.push(nv);
+                        for (_suffix, record) in shard
+                            .reverse_range_suffix_visible(&reverse_prefix.0, &reverse_end.0, write_ts)
+                        {
+                            if let Ok(encoded) = KeyParser::extract_value_from_edge_reverse_suffix(&_suffix) {
+                                if existing_encoded.insert(encoded.clone()) {
+                                    if let Ok(value) = OrderedCodec::new().decode(&encoded) {
+                                        existing_values.push(normalize_int_value(&value));
+                                    }
+                                }
+                            }
+                            if covering && !covering_populated {
+                                if let Some(cols) = &record.included_columns {
+                                    existing_columns.clone_from(cols);
+                                    covering_populated = true;
                                 }
                             }
                         }
-                        if record.created_ts >= existing_columns_ts {
-                            existing_columns_ts = record.created_ts;
-                            existing_columns = record.included_columns.clone().unwrap_or_default();
-                        }
                     }
                 }
+                if existing_values.is_empty() {
+                    return Ok(());
+                }
+                values = existing_values;
+                included_columns = if covering {
+                    merged_included_columns(index_definition.as_ref(), existing_columns, props)
+                } else {
+                    Vec::new()
+                };
             }
-            let new_values =
-                effective_index_values(index_definition.as_ref(), props, existing_values.clone());
-            let included_columns =
-                merged_included_columns(index_definition.as_ref(), existing_columns, props);
-
-            let values_to_remove: Vec<&Value> = existing_values
-                .iter()
-                .filter(|v| !new_values.contains(v))
-                .collect();
-            let values_to_add: Vec<&Value> = new_values
-                .iter()
-                .filter(|v| !existing_values.contains(v))
-                .collect();
-            let values_to_update: Vec<&Value> = new_values
-                .iter()
-                .filter(|v| existing_values.contains(v))
-                .collect();
 
             let mut per_shard: HashMap<u32, IndexMaps> = HashMap::new();
 
@@ -120,7 +137,7 @@ impl EdgeIndexOps for IndexDataManagerImpl {
                     })
             };
 
-            for value in &values_to_update {
+            for value in &values {
                 let forward = KeyBuilder::build_edge_index_key(
                     space_id, index_name, value, edge_src, edge_dst, edge_type, ranking,
                 )?;
@@ -128,45 +145,13 @@ impl EdgeIndexOps for IndexDataManagerImpl {
                     space_id, edge_src, edge_dst, edge_type, ranking, index_name, value,
                 )?;
                 let shard_id = route(&forward.0)?;
-                let entity_ref = edge_entity_ref(edge_src, edge_dst, edge_type, ranking);
-                let mut entry = IndexRecord::new_with_columns(write_ts, included_columns.clone())
-                    .with_entity_version(write_ts);
-                if let Some(entity) = entity_ref {
-                    entry = entry.with_entity_ref(entity);
+                let mut entry = if covering {
+                    IndexRecord::new_with_columns(write_ts, included_columns.clone())
+                } else {
+                    IndexRecord::new(write_ts)
                 }
-                add_entry(&mut per_shard, shard_id, forward.0, reverse.0, entry);
-            }
-
-            for value in &values_to_remove {
-                let forward = KeyBuilder::build_edge_index_key(
-                    space_id, index_name, value, edge_src, edge_dst, edge_type, ranking,
-                )?;
-                let reverse = KeyBuilder::build_edge_reverse_key_with_value(
-                    space_id, edge_src, edge_dst, edge_type, ranking, index_name, value,
-                )?;
-                let shard_id = route(&forward.0)?;
-                let entity_ref = edge_entity_ref(edge_src, edge_dst, edge_type, ranking);
-                let mut entry = IndexRecord::new_with_columns(write_ts, included_columns.clone())
-                    .with_entity_version(write_ts);
-                entry.mark_deleted(write_ts);
-                if let Some(entity) = entity_ref {
-                    entry = entry.with_entity_ref(entity);
-                }
-                add_entry(&mut per_shard, shard_id, forward.0, reverse.0, entry);
-            }
-
-            for value in &values_to_add {
-                let forward = KeyBuilder::build_edge_index_key(
-                    space_id, index_name, value, edge_src, edge_dst, edge_type, ranking,
-                )?;
-                let reverse = KeyBuilder::build_edge_reverse_key_with_value(
-                    space_id, edge_src, edge_dst, edge_type, ranking, index_name, value,
-                )?;
-                let shard_id = route(&forward.0)?;
-                let entity_ref = edge_entity_ref(edge_src, edge_dst, edge_type, ranking);
-                let mut entry = IndexRecord::new_with_columns(write_ts, included_columns.clone())
-                    .with_entity_version(write_ts);
-                if let Some(entity) = entity_ref {
+                .with_entity_version(write_ts);
+                if let Some(entity) = edge_entity_ref(edge_src, edge_dst, edge_type, ranking) {
                     entry = entry.with_entity_ref(entity);
                 }
                 add_entry(&mut per_shard, shard_id, forward.0, reverse.0, entry);

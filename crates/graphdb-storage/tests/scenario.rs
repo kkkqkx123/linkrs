@@ -702,6 +702,7 @@ fn test_unique_index_rejects_duplicate() {
         properties: vec![],
         index_type: IndexType::TagIndex,
         is_unique: true,
+        covering: false,
         partial_condition: None,
     });
 

@@ -357,6 +357,7 @@ impl<S: StorageClient> SchemaApi<S> {
                     status: IndexStatus::Active,
                     is_unique: false,
                     comment: None,
+                    covering: false,
                     partial_condition: None,
                 };
                 storage.create_tag_index(&space_name, &index)

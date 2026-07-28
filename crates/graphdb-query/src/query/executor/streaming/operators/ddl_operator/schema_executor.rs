@@ -552,6 +552,7 @@ pub(super) fn execute_index_manage(
                 properties: index_properties.clone(),
                 index_type: IndexType::TagIndex,
                 is_unique: false,
+                covering: false,
                 partial_condition: None,
             });
             StorageSchemaOps::create_tag_index(s, space_name, &info)
@@ -580,6 +581,7 @@ pub(super) fn execute_index_manage(
                 properties: index_properties,
                 index_type: IndexType::EdgeIndex,
                 is_unique: false,
+                covering: false,
                 partial_condition: None,
             });
             StorageSchemaOps::create_edge_index(s, space_name, &info)

@@ -62,6 +62,14 @@ pub struct ResourceConfig {
     /// When true, every Moka cache eviction immediately decrements the memory
     /// accounting counter, eliminating accounting lag between refresh intervals.
     pub cache_eviction_sync: bool,
+    /// Per-shard native-index buffer pool capacity in bytes.
+    pub index_pool_capacity_bytes: u64,
+    /// Enable chunk-level eviction under memory pressure.
+    pub index_eviction_enabled: bool,
+    /// Eviction high-water ratio: trigger eviction when usage/capacity exceeds this.
+    pub index_eviction_high_ratio: f64,
+    /// Eviction low-water target: evict down to this ratio of capacity.
+    pub index_eviction_low_ratio: f64,
 }
 
 impl Default for ResourceConfig {
@@ -83,6 +91,10 @@ impl Default for ResourceConfig {
             cache_tti: Some(Duration::from_secs(300)),
             spill_threshold_ratio: 0.90,
             cache_eviction_sync: true,
+            index_pool_capacity_bytes: 128 * 1024 * 1024,
+            index_eviction_enabled: true,
+            index_eviction_high_ratio: 0.85,
+            index_eviction_low_ratio: 0.65,
         }
     }
 }

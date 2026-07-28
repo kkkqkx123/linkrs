@@ -35,16 +35,18 @@ impl IndexGcOps for IndexDataManagerImpl {
         for runtime in self.runtimes.read().values() {
             for generation in runtime.generations() {
                 for shard in generation.shards() {
-                    count += shard
-                        .read_forward()
-                        .values()
-                        .filter(|entry| entry.deleted_ts.is_some())
-                        .count();
-                    count += shard
-                        .read_reverse()
-                        .values()
-                        .filter(|entry| entry.deleted_ts.is_some())
-                        .count();
+                    let fwd = shard.read_forward();
+                    for (_, entry) in fwd.snapshot() {
+                        if entry.deleted_ts.is_some() {
+                            count += 1;
+                        }
+                    }
+                    let rev = shard.read_reverse();
+                    for (_, entry) in rev.snapshot() {
+                        if entry.deleted_ts.is_some() {
+                            count += 1;
+                        }
+                    }
                 }
             }
         }
@@ -82,8 +84,9 @@ mod tests {
             )],
             properties: vec![],
             index_type: IndexType::TagIndex,
-            is_unique: false,
-            partial_condition: None,
+        is_unique: false,
+        covering: false,
+        partial_condition: None,
         });
         manager.register_native_index(1, &index).expect("register");
         manager

@@ -185,10 +185,8 @@ impl KeyParser {
             ));
         }
         let mut pos = 9;
-
         let (_entity_id, consumed) = codec().decode_value_inner(&key_bytes[pos..])?;
         pos += consumed;
-
         if key_bytes.len() < pos + 4 {
             return Err(StorageError::db_error(
                 "Invalid reverse key: missing index_name_len".to_string(),
@@ -197,15 +195,76 @@ impl KeyParser {
         let index_name_len =
             u32::from_le_bytes(key_bytes[pos..pos + 4].try_into().unwrap_or([0; 4])) as usize;
         pos += 4;
-
         if key_bytes.len() < pos + index_name_len {
             return Err(StorageError::db_error(
                 "Invalid reverse key: index_name exceeds key length".to_string(),
             ));
         }
         pos += index_name_len;
-
         Ok(key_bytes[pos..].to_vec())
+    }
+
+    /// Extract the encoded property value from a reverse key SUFFIX (without the leading
+    /// space_id + key_type prefix). The suffix format is:
+    ///   [OrderedCodec(entity_id)] [index_name_len(4) LE] [index_name(N)]
+    ///   [OrderedCodec(prop_value)]
+    pub fn extract_value_from_reverse_suffix(suffix: &[u8]) -> Result<Vec<u8>, StorageError> {
+        if suffix.is_empty() {
+            return Err(StorageError::db_error(
+                "Invalid reverse key suffix: empty".to_string(),
+            ));
+        }
+        let mut pos = 0;
+        let (_entity_id, consumed) = codec().decode_value_inner(&suffix[pos..])?;
+        pos += consumed;
+
+        if suffix.len() < pos + 4 {
+            return Err(StorageError::db_error(
+                "Invalid reverse key suffix: missing index_name_len".to_string(),
+            ));
+        }
+        let index_name_len =
+            u32::from_le_bytes(suffix[pos..pos + 4].try_into().unwrap_or([0; 4])) as usize;
+        pos += 4;
+        if suffix.len() < pos + index_name_len {
+            return Err(StorageError::db_error(
+                "Invalid reverse key suffix: index_name exceeds suffix length".to_string(),
+            ));
+        }
+        pos += index_name_len;
+        Ok(suffix[pos..].to_vec())
+    }
+
+    /// Extract the encoded property value from an edge reverse key SUFFIX (without the leading
+    /// space_id + key_type prefix). The suffix format is:
+    ///   [OrderedCodec(src)] [OrderedCodec(dst)] [OrderedCodec(type)] [OrderedCodec(ranking)]
+    ///   [index_name_len(4) LE] [index_name(N)] [OrderedCodec(prop_value)]
+    pub fn extract_value_from_edge_reverse_suffix(suffix: &[u8]) -> Result<Vec<u8>, StorageError> {
+        if suffix.is_empty() {
+            return Err(StorageError::db_error(
+                "Invalid edge reverse key suffix: empty".to_string(),
+            ));
+        }
+        let mut pos = 0;
+        for _ in 0..4 {
+            let (_, consumed) = codec().decode_value_inner(&suffix[pos..])?;
+            pos += consumed;
+        }
+        if suffix.len() < pos + 4 {
+            return Err(StorageError::db_error(
+                "Invalid edge reverse key suffix: missing index_name_len".to_string(),
+            ));
+        }
+        let index_name_len =
+            u32::from_le_bytes(suffix[pos..pos + 4].try_into().unwrap_or([0; 4])) as usize;
+        pos += 4;
+        if suffix.len() < pos + index_name_len {
+            return Err(StorageError::db_error(
+                "Invalid edge reverse key suffix: index_name exceeds suffix length".to_string(),
+            ));
+        }
+        pos += index_name_len;
+        Ok(suffix[pos..].to_vec())
     }
 
     /// Extract the encoded property value from an edge reverse key that includes it.

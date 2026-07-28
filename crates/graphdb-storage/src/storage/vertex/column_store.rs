@@ -731,11 +731,15 @@ impl Column {
 
     pub fn set(&mut self, row_idx: usize, value: Option<&Value>) -> StorageResult<()> {
         if self.encoding.is_encoded() {
-            self.encoding.set(row_idx, value)?;
-            if row_idx >= self.len() {
-                self.sync_row_count_from_encoding();
+            if self.encoding.set(row_idx, value).is_ok() {
+                if row_idx >= self.len() {
+                    self.sync_row_count_from_encoding();
+                }
+                return Ok(());
             }
-            return Ok(());
+            // Encoded set failed (e.g., row_idx >= row_count during WAL replay).
+            // Decode back to raw column format and fall through to the raw path.
+            self.decode_encoding_to_raw()?;
         }
 
         if let Some(v) = value {
@@ -926,6 +930,18 @@ impl Column {
     fn sync_row_count_from_encoding(&mut self) {
         let encoded_len = self.encoding.len();
         self.inner_mut().resize(encoded_len);
+    }
+
+    /// Decode the compressed encoding back into the raw column storage.
+    ///
+    /// This is needed when WAL replay needs to write rows beyond the encoded
+    /// column's row_count (e.g., new vertices after a checkpoint load).
+    /// After decoding, the column falls back to its uncompressed representation.
+    fn decode_encoding_to_raw(&mut self) -> StorageResult<()> {
+        let (data, offsets, bitmap) = self.get_flush_data();
+        self.load_data_from_raw(data, offsets, bitmap.map(|b| b.into_vec()), self.len());
+        self.encoding = ColumnEncoding::None;
+        Ok(())
     }
 
     pub fn apply_fsst_encoding(&mut self, max_symbols: usize) -> StorageResult<()> {

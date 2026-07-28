@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::core::types::{Index, IndexType, Timestamp, MAX_TIMESTAMP};
 use crate::core::value::ordered_codec::OrderedCodec;
@@ -41,51 +41,55 @@ impl VertexIndexOps for IndexDataManagerImpl {
         let runtime = self.runtime(space_id, index_id)?;
 
         let delta = {
-            let _fence = runtime.read_fence();
-            self.wait_for_active_barrier(&runtime);
             let catalog = self
                 .manifest_catalog(space_id, index_id)
                 .ok_or_else(|| StorageError::not_found("Index manifest catalog is unavailable"))?;
             let manifest = catalog.acquire();
-            let chain = runtime.generation_chain_until(manifest.manifest().generation)?;
             let index_definition = self
                 .index_definitions
                 .read()
                 .get(&identity)
                 .cloned();
+
+            let covering = index_definition
+                .as_ref()
+                .map_or(false, |idx| idx.covering);
+            let new_values =
+                effective_index_values(index_definition.as_ref(), props, Vec::new());
+
+            let chain = runtime.generation_chain_until(manifest.manifest().generation)?;
+
             let reverse_prefix =
                 KeyBuilder::build_vertex_reverse_key_v2(space_id, vertex_id, index_name)?;
             let reverse_end = KeyBuilder::build_range_end(&reverse_prefix);
             let mut existing_values = Vec::new();
+            let mut existing_encoded: HashSet<Vec<u8>> = HashSet::new();
             let mut existing_columns = Vec::new();
-            let mut existing_columns_ts = 0;
-            for gen in &chain {
-                for shard in gen.shards() {
-                    for (key, record) in shard
-                        .reverse_range(&reverse_prefix.0, &reverse_end.0)
+            let mut covering_populated = false;
+            if let Some(latest_gen) = chain.first() {
+                for shard in latest_gen.shards() {
+                    if !shard.reverse_may_have_range(&reverse_prefix.0, &reverse_end.0) {
+                        continue;
+                    }
+                    for (_suffix, record) in shard
+                        .reverse_range_suffix_visible(&reverse_prefix.0, &reverse_end.0, write_ts)
                     {
-                        if !record.is_visible_at(write_ts) {
-                            continue;
-                        }
-                        if let Ok(encoded) = KeyParser::extract_value_from_reverse_key(&key) {
-                            if let Ok(value) = OrderedCodec::new().decode(&encoded) {
-                                let nv = normalize_int_value(&value);
-                                if !existing_values.contains(&nv) {
-                                    existing_values.push(nv);
+                        if let Ok(encoded) = KeyParser::extract_value_from_reverse_suffix(&_suffix) {
+                            if existing_encoded.insert(encoded.clone()) {
+                                if let Ok(value) = OrderedCodec::new().decode(&encoded) {
+                                    existing_values.push(normalize_int_value(&value));
                                 }
                             }
                         }
-                        if record.created_ts >= existing_columns_ts {
-                            existing_columns_ts = record.created_ts;
-                            existing_columns = record.included_columns.clone().unwrap_or_default();
+                        if covering && !covering_populated {
+                            if let Some(cols) = &record.included_columns {
+                                existing_columns.clone_from(cols);
+                                covering_populated = true;
+                            }
                         }
                     }
                 }
             }
-            let new_values =
-                effective_index_values(index_definition.as_ref(), props, existing_values.clone());
-            let included_columns =
-                merged_included_columns(index_definition.as_ref(), existing_columns, props);
 
             let values_to_remove: Vec<&Value> = existing_values
                 .iter()
@@ -99,6 +103,12 @@ impl VertexIndexOps for IndexDataManagerImpl {
                 .iter()
                 .filter(|v| existing_values.contains(v))
                 .collect();
+
+            let included_columns = if covering {
+                merged_included_columns(index_definition.as_ref(), existing_columns, props)
+            } else {
+                Vec::new()
+            };
 
             let mut per_shard: HashMap<u32, IndexMaps> = HashMap::new();
 
@@ -120,8 +130,12 @@ impl VertexIndexOps for IndexDataManagerImpl {
                 let reverse =
                     KeyBuilder::build_vertex_reverse_key_with_value(space_id, vertex_id, index_name, value)?;
                 let shard_id = route(&forward.0)?;
-                let mut entry = IndexRecord::new_with_columns(write_ts, included_columns.clone())
-                    .with_entity_version(write_ts);
+                let mut entry = if covering {
+                    IndexRecord::new_with_columns(write_ts, included_columns.clone())
+                } else {
+                    IndexRecord::new(write_ts)
+                }
+                .with_entity_version(write_ts);
                 if let Some(entity) = vertex_entity_ref(vertex_id) {
                     entry = entry.with_entity_ref(entity);
                 }
@@ -134,8 +148,12 @@ impl VertexIndexOps for IndexDataManagerImpl {
                 let reverse =
                     KeyBuilder::build_vertex_reverse_key_with_value(space_id, vertex_id, index_name, value)?;
                 let shard_id = route(&forward.0)?;
-                let mut entry = IndexRecord::new_with_columns(write_ts, included_columns.clone())
-                    .with_entity_version(write_ts);
+                let mut entry = if covering {
+                    IndexRecord::new_with_columns(write_ts, included_columns.clone())
+                } else {
+                    IndexRecord::new(write_ts)
+                }
+                .with_entity_version(write_ts);
                 entry.mark_deleted(write_ts);
                 if let Some(entity) = vertex_entity_ref(vertex_id) {
                     entry = entry.with_entity_ref(entity);
@@ -149,8 +167,12 @@ impl VertexIndexOps for IndexDataManagerImpl {
                 let reverse =
                     KeyBuilder::build_vertex_reverse_key_with_value(space_id, vertex_id, index_name, value)?;
                 let shard_id = route(&forward.0)?;
-                let mut entry = IndexRecord::new_with_columns(write_ts, included_columns.clone())
-                    .with_entity_version(write_ts);
+                let mut entry = if covering {
+                    IndexRecord::new_with_columns(write_ts, included_columns.clone())
+                } else {
+                    IndexRecord::new(write_ts)
+                }
+                .with_entity_version(write_ts);
                 if let Some(entity) = vertex_entity_ref(vertex_id) {
                     entry = entry.with_entity_ref(entity);
                 }
@@ -190,7 +212,6 @@ impl VertexIndexOps for IndexDataManagerImpl {
             return Ok(Vec::new());
         };
         let runtime = self.runtime(space_id, index_id)?;
-        let _fence = runtime.read_fence();
         let catalog = self
             .manifest_catalog(space_id, index_id)
             .ok_or_else(|| StorageError::not_found(format!("Index {index_id} has no manifest")))?;
@@ -202,34 +223,34 @@ impl VertexIndexOps for IndexDataManagerImpl {
         let mut seen = std::collections::HashSet::new();
         let mut tombstoned = std::collections::HashSet::new();
         let mut results = Vec::new();
-            for generation in &chain {
-                for shard in manifest
-                    .shards
-                    .iter()
-                    .filter_map(|s| generation.shard(s.shard_id))
-                {
-                    for (key, entry) in shard
-                        .forward_range(&prefix.0, &end.0)
-                {
-                    if let Ok(vertex_id) = KeyParser::parse_vertex_id_from_key(&key) {
-                        if tombstoned.contains(&vertex_id) {
-                            continue;
-                        }
-                        if seen.contains(&vertex_id) {
-                            continue;
-                        }
-                        if entry.created_ts > read_ts {
-                            continue;
-                        }
-                        if entry.deleted_ts.is_some_and(|d| d <= read_ts) {
-                            tombstoned.insert(vertex_id);
-                            continue;
-                        }
-                        seen.insert(vertex_id.clone());
-                        results.push(vertex_id);
+        for generation in &chain {
+            for shard in manifest
+                .shards
+                .iter()
+                .filter_map(|s| generation.shard(s.shard_id))
+            {
+                for (key, entry) in shard
+                    .forward_range(&prefix.0, &end.0)
+            {
+                if let Ok(vertex_id) = KeyParser::parse_vertex_id_from_key(&key) {
+                    if tombstoned.contains(&vertex_id) {
+                        continue;
                     }
+                    if seen.contains(&vertex_id) {
+                        continue;
+                    }
+                    if entry.created_ts > read_ts {
+                        continue;
+                    }
+                    if entry.deleted_ts.is_some_and(|d| d <= read_ts) {
+                        tombstoned.insert(vertex_id);
+                        continue;
+                    }
+                    seen.insert(vertex_id.clone());
+                    results.push(vertex_id);
                 }
             }
+        }
         }
         Ok(results)
     }

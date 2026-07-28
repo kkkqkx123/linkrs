@@ -225,6 +225,8 @@ pub struct IndexConfig {
     pub properties: Vec<String>,
     pub index_type: IndexType,
     pub is_unique: bool,
+    /// Whether this is a covering index (stores column data inline)
+    pub covering: bool,
     /// Optional condition for partial index
     pub partial_condition: Option<PartialIndexCondition>,
 }
@@ -241,6 +243,9 @@ pub struct Index {
     pub status: IndexStatus,
     pub is_unique: bool,
     pub comment: Option<String>,
+    /// Whether this is a covering index (stores column data inline)
+    #[serde(default)]
+    pub covering: bool,
     /// Optional condition for partial index
     pub partial_condition: Option<PartialIndexCondition>,
 }
@@ -259,6 +264,7 @@ impl Index {
             status: IndexStatus::Active,
             is_unique: config.is_unique,
             comment: None,
+            covering: config.covering,
             partial_condition: config.partial_condition,
         }
     }
@@ -343,6 +349,7 @@ mod tests {
             properties: vec![],
             index_type: IndexType::TagIndex,
             is_unique: false,
+            covering: false,
             partial_condition: None,
         };
 

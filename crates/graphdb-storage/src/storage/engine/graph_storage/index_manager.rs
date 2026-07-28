@@ -1084,8 +1084,9 @@ mod tests {
             )],
             properties: Vec::new(),
             index_type: IndexType::TagIndex,
-            is_unique: false,
-            partial_condition: None,
+        is_unique: false,
+        covering: false,
+        partial_condition: None,
         });
         let filtered = super::wal_intents_for_index(&ctx, 1, &index, CommitLsn::ZERO, barrier_lsn)
             .expect("committed intents should be readable");
@@ -1126,8 +1127,9 @@ mod tests {
             )],
             properties: Vec::new(),
             index_type: IndexType::TagIndex,
-            is_unique: false,
-            partial_condition: None,
+        is_unique: false,
+        covering: false,
+        partial_condition: None,
         });
         storage
             .create_tag_index("test_space", &index)
@@ -1214,8 +1216,9 @@ mod tests {
             )],
             properties: Vec::new(),
             index_type: IndexType::TagIndex,
-            is_unique: false,
-            partial_condition: None,
+        is_unique: false,
+        covering: false,
+        partial_condition: None,
         });
 
         {
@@ -1301,8 +1304,9 @@ mod tests {
             )],
             properties: vec![],
             index_type: IndexType::TagIndex,
-            is_unique: false,
-            partial_condition: None,
+        is_unique: false,
+        covering: false,
+        partial_condition: None,
         });
 
         super::create_tag_index(&ctx, "test_space", &index)
@@ -1554,8 +1558,9 @@ mod tests {
             )],
             properties: vec![],
             index_type: IndexType::TagIndex,
-            is_unique: false,
-            partial_condition: None,
+        is_unique: false,
+        covering: false,
+        partial_condition: None,
         });
 
         let vertices = vec![];
