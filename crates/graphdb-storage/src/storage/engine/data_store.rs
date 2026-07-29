@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -39,7 +40,7 @@ impl From<(LabelId, LabelId, LabelId)> for EdgeTableKey {
 
 pub struct GraphDataStore {
     vertex_tables: RwLock<HashMap<LabelId, VertexTable>>,
-    edge_tables: RwLock<HashMap<EdgeTableKey, EdgeStore>>,
+    edge_tables: RwLock<HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>>,
     vertex_label_names: RwLock<HashMap<String, LabelId>>,
     edge_label_names: RwLock<HashMap<String, LabelId>>,
     vertex_label_counter: RwLock<LabelId>,
@@ -68,7 +69,7 @@ impl CatalogReadSnapshot<'_> {
 
     pub(crate) fn with_edge_tables<R>(
         &self,
-        operation: impl FnOnce(&HashMap<EdgeTableKey, EdgeStore>) -> R,
+        operation: impl FnOnce(&HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>) -> R,
     ) -> R {
         self.store.with_edge_tables(operation)
     }
@@ -211,7 +212,7 @@ pub(crate) struct CatalogWriteSet<'a> {
     _vertex_label_counter: CatalogWriteGuard<'a, LabelId>,
     _edge_label_counter: CatalogWriteGuard<'a, LabelId>,
     pub vertex_tables: CatalogWriteGuard<'a, HashMap<LabelId, VertexTable>>,
-    pub edge_tables: CatalogWriteGuard<'a, HashMap<EdgeTableKey, EdgeStore>>,
+    pub edge_tables: CatalogWriteGuard<'a, HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>>,
     _edge_label_index: CatalogWriteGuard<'a, HashMap<LabelId, Vec<EdgeTableKey>>>,
 }
 
@@ -422,7 +423,7 @@ impl GraphDataStore {
         }
     }
 
-    fn read_edge_tables(&self) -> CatalogReadGuard<'_, HashMap<EdgeTableKey, EdgeStore>> {
+    fn read_edge_tables(&self) -> CatalogReadGuard<'_, HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>> {
         let started = Instant::now();
         let guard = self.edge_tables.read();
         self.lock_metrics
@@ -438,11 +439,11 @@ impl GraphDataStore {
     #[cfg(test)]
     pub(crate) fn test_read_edge_tables(
         &self,
-    ) -> CatalogReadGuard<'_, HashMap<EdgeTableKey, EdgeStore>> {
+    ) -> CatalogReadGuard<'_, HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>> {
         self.read_edge_tables()
     }
 
-    fn write_edge_tables(&self) -> CatalogWriteGuard<'_, HashMap<EdgeTableKey, EdgeStore>> {
+    fn write_edge_tables(&self) -> CatalogWriteGuard<'_, HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>> {
         let started = Instant::now();
         let guard = self.edge_tables.write();
         self.lock_metrics
@@ -529,7 +530,7 @@ impl GraphDataStore {
 
     pub(crate) fn with_edge_tables<R>(
         &self,
-        operation: impl FnOnce(&HashMap<EdgeTableKey, EdgeStore>) -> R,
+        operation: impl FnOnce(&HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>) -> R,
     ) -> R {
         let tables = self.read_edge_tables();
         operation(&tables)
@@ -553,7 +554,7 @@ impl GraphDataStore {
 
     pub(crate) fn with_edge_tables_mut<R>(
         &self,
-        operation: impl FnOnce(&mut HashMap<EdgeTableKey, EdgeStore>) -> StorageResult<R>,
+        operation: impl FnOnce(&mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>) -> StorageResult<R>,
     ) -> StorageResult<R> {
         let mut tables = self.write_edge_tables();
         operation(&mut tables)
@@ -561,7 +562,7 @@ impl GraphDataStore {
 
     pub(crate) fn with_edge_tables_mut_result<R, E>(
         &self,
-        operation: impl FnOnce(&mut HashMap<EdgeTableKey, EdgeStore>) -> Result<R, E>,
+        operation: impl FnOnce(&mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>) -> Result<R, E>,
     ) -> Result<R, E> {
         let mut tables = self.write_edge_tables();
         operation(&mut tables)
@@ -616,13 +617,54 @@ impl GraphDataStore {
         &self,
         edge_label: LabelId,
         operation: impl FnOnce(
-            &mut HashMap<EdgeTableKey, EdgeStore>,
+            &mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>,
             &[EdgeTableKey],
         ) -> StorageResult<R>,
     ) -> StorageResult<R> {
         let keys = self.edge_partition_keys(edge_label)?;
         let mut tables = self.write_edge_tables();
         operation(&mut tables, &keys)
+    }
+
+    /// Read a single edge table by key, holding only the table-level lock (not the catalog lock)
+    /// during the operation. The catalog lock is released after the table lookup.
+    pub(crate) fn with_single_edge_table<R>(
+        &self,
+        key: &EdgeTableKey,
+        operation: impl FnOnce(&EdgeStore) -> StorageResult<R>,
+    ) -> StorageResult<R> {
+        let arc = {
+            let guard = self.edge_tables.read();
+            guard.get(key).ok_or_else(|| {
+                StorageError::label_not_found(format!("edge partition {:?}", key))
+            })?.clone()
+        };
+        let guard = arc.read();
+        operation(&guard)
+    }
+
+    /// Mutate a single edge table by key, holding only the table-level lock during the operation.
+    pub(crate) fn with_single_edge_table_mut<R>(
+        &self,
+        key: &EdgeTableKey,
+        operation: impl FnOnce(&mut EdgeStore) -> StorageResult<R>,
+    ) -> StorageResult<R> {
+        let arc = {
+            let guard = self.edge_tables.read();
+            guard.get(key).ok_or_else(|| {
+                StorageError::label_not_found(format!("edge partition {:?}", key))
+            })?.clone()
+        };
+        let mut guard = arc.write();
+        operation(&mut guard)
+    }
+
+    /// Lock all edge tables and pass the catalog write guard to the operation.
+    /// For single-table access, prefer `with_single_edge_table_mut`.
+    pub(crate) fn lock_edge_tables_for_write(
+        &self,
+    ) -> CatalogWriteGuard<'_, HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>> {
+        self.write_edge_tables()
     }
 
     #[cfg(test)]
@@ -695,7 +737,7 @@ impl GraphDataStore {
             )));
         }
         *counter = (*counter).max(label.saturating_add(1));
-        edge_tables.insert(key, table(label)?);
+        edge_tables.insert(key, Arc::new(RwLock::new(table(label)?)));
         index.entry(label).or_default().push(key);
         names.insert(storage_name, label);
         Ok(label)
@@ -799,25 +841,29 @@ impl GraphDataStore {
         create: impl FnOnce(&EdgeStore) -> StorageResult<EdgeStore>,
         operation: impl FnOnce(&mut EdgeStore) -> StorageResult<R>,
     ) -> StorageResult<R> {
-        let mut tables = self.write_edge_tables();
-        let mut index = self.write_edge_label_index();
-        if !tables.contains_key(&key) {
-            let table = {
-                let template = tables.get(&template_key).ok_or_else(|| {
-                    StorageError::label_not_found(format!("edge label {}", key.edge_label))
-                })?;
-                create(template)?
-            };
-            tables.insert(key, table);
-            let indexed_keys = index.entry(key.edge_label).or_default();
-            if !indexed_keys.contains(&key) {
-                indexed_keys.push(key);
+        let table_arc = {
+            let mut tables = self.write_edge_tables();
+            let mut index = self.write_edge_label_index();
+            if !tables.contains_key(&key) {
+                let table = {
+                    let template = tables.get(&template_key).ok_or_else(|| {
+                        StorageError::label_not_found(format!("edge label {}", key.edge_label))
+                    })?;
+                    let guard = template.read();
+                    create(&guard)?
+                };
+                tables.insert(key, Arc::new(RwLock::new(table)));
+                let indexed_keys = index.entry(key.edge_label).or_default();
+                if !indexed_keys.contains(&key) {
+                    indexed_keys.push(key);
+                }
             }
-        }
-        let table = tables
-            .get_mut(&key)
-            .ok_or_else(|| StorageError::label_not_found(format!("edge partition {:?}", key)))?;
-        operation(table)
+            tables.get(&key).ok_or_else(|| {
+                StorageError::label_not_found(format!("edge partition {:?}", key))
+            })?.clone()
+        };
+        let mut guard = table_arc.write();
+        operation(&mut guard)
     }
 
     pub(crate) fn verify_invariants(&self) -> StorageResult<()> {
@@ -845,7 +891,7 @@ impl GraphDataStore {
                 )));
             }
         }
-        for (key, table) in &*edge_tables {
+        for (key, table_arc) in &*edge_tables {
             if !edge_index
                 .get(&key.edge_label)
                 .is_some_and(|keys| keys.contains(key))
@@ -855,6 +901,7 @@ impl GraphDataStore {
                     key
                 )));
             }
+            let table = table_arc.read();
             if table.schema().label_id != key.edge_label {
                 return Err(StorageError::invalid_operation(format!(
                     "edge table {:?} has mismatched schema label",

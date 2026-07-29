@@ -62,7 +62,9 @@ impl SegmentEvictionEngine {
         target_bytes: usize,
     ) -> StorageResult<usize> {
         let _now = self.clock_now();
-        let super::EdgeStore::TimeTravel(tt) = table;
+        let super::EdgeStore::TimeTravel(tt) = table else {
+            return Ok(0);
+        };
         let mut freed = 0;
 
         while freed < target_bytes {

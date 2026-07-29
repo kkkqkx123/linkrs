@@ -79,9 +79,10 @@ impl GraphStorageContext {
                             dst_label,
                             edge_label,
                         },
-                        table,
+                        arc,
                     ) in edge_tables.iter_mut()
                     {
+                        let mut table = arc.write();
                         let table_dir =
                             edge_dir.join(format!("{}_{}_{}", src_label, dst_label, edge_label));
                         table.maybe_compact_for_flush(ts, 2.0);
@@ -159,7 +160,8 @@ impl GraphStorageContext {
                                         ) {
                                             let key =
                                                 EdgeTableKey::new(src_label, dst_label, edge_label);
-                                            if let Some(table) = edge_tables.get_mut(&key) {
+                                            if let Some(arc) = edge_tables.get_mut(&key) {
+                                                let mut table = arc.write();
                                                 table.load(&path)?;
                                                 if let Some(stats) = &self.persistent.stats_manager
                                                 {

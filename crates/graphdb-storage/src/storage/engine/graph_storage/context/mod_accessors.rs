@@ -97,7 +97,8 @@ impl GraphStorageContext {
         self.persistent
             .data_store
             .with_edge_tables_mut(|edge_tables| {
-                for edge_store in edge_tables.values_mut() {
+                for arc in edge_tables.values_mut() {
+                    let mut edge_store = arc.write();
                     edge_store.register_snapshot(timestamp);
                 }
                 Ok(())
@@ -173,7 +174,8 @@ impl GraphStorageContext {
             self.persistent
                 .data_store
                 .with_edge_tables_mut(|edge_tables| {
-                    for edge_store in edge_tables.values_mut() {
+                    for arc in edge_tables.values_mut() {
+                        let mut edge_store = arc.write();
                         edge_store.unregister_snapshot(timestamp);
                     }
                     Ok(())
@@ -234,7 +236,7 @@ impl GraphStorageContext {
         let edges = self.persistent.data_store.with_edge_tables(|tables| {
             tables
                 .values()
-                .map(|table| table.memory_size())
+                .map(|arc| arc.read().memory_size())
                 .sum::<usize>()
         });
         vertices + edges
@@ -250,7 +252,7 @@ impl GraphStorageContext {
         let edges = self.persistent.data_store.with_edge_tables(|tables| {
             tables
                 .values()
-                .map(|table| table.used_memory_size())
+                .map(|arc| arc.read().used_memory_size())
                 .sum::<usize>()
         });
         vertices + edges

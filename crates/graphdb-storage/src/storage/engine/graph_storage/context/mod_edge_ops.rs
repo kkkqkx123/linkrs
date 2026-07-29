@@ -162,8 +162,8 @@ impl GraphStorageContext {
         )?;
 
         self.persistent.data_store.with_edge_tables(|edge_tables| {
-            edge_tables.get(&key).and_then(|edge_table| {
-                edge_table.get_edge(src_internal, dst_internal, params.rank, ts)
+            edge_tables.get(&key).and_then(|arc| {
+                arc.read().get_edge(src_internal, dst_internal, params.rank, ts)
             })
         })
     }
@@ -234,9 +234,10 @@ impl GraphStorageContext {
             .persistent
             .data_store
             .with_edge_tables_mut(|edge_tables| {
-                let edge_table = edge_tables.get_mut(&key).ok_or_else(|| {
+                let arc = edge_tables.get_mut(&key).ok_or_else(|| {
                     StorageError::label_not_found(format!("edge label {}", params.edge_label))
                 })?;
+                let mut edge_table = arc.write();
                 match (oe_offset, ie_offset) {
                     (Some(oe), Some(ie)) => {
                         edge_table.delete_edge_by_offset(src_internal, dst_internal, params.rank, oe, ie, ts)
@@ -282,6 +283,7 @@ impl GraphStorageContext {
             let mut records = Vec::new();
             for table in edge_tables
                 .values()
+                .map(|arc| arc.read())
                 .filter(|t| t.label() == edge_label && t.src_label() == actual_src)
             {
                 records.extend(table.out_edges(src_internal, ts));
@@ -322,6 +324,7 @@ impl GraphStorageContext {
             let mut records = Vec::new();
             for table in edge_tables
                 .values()
+                .map(|arc| arc.read())
                 .filter(|t| t.label() == edge_label && t.dst_label() == actual_dst)
             {
                 records.extend(table.in_edges(dst_internal, ts));

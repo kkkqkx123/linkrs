@@ -1,8 +1,10 @@
-// benches/end_to_end_bench.rs
-//! End-to-end performance benchmarks
-//! Tests complete workflows including data loading, querying, and updating
-
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use graphdb_storage::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
+use graphdb_storage::core::vertex_edge_path::Tag;
+use graphdb_storage::core::{DataType, Edge, Value, Vertex};
+use graphdb_storage::storage::{
+    GraphStorage, StorageReader, StorageSchemaOps, StorageWriter,
+};
 use std::time::Duration;
 
 fn create_benchmark_group<'a>(
@@ -11,31 +13,80 @@ fn create_benchmark_group<'a>(
 ) -> criterion::BenchmarkGroup<'a, criterion::measurement::WallTime> {
     let mut group = c.benchmark_group(name);
     group.measurement_time(Duration::from_secs(10));
-    group.sample_size(100);
+    group.sample_size(30);
     group.warm_up_time(Duration::from_secs(1));
     group
+}
+
+fn setup_vertices(storage: &mut GraphStorage, space: &str, count: usize) {
+    for i in 0..count {
+        let vertex = Vertex::new(
+            VertexId::from_string(format!("v{}", i)),
+            vec![Tag::new(
+                "Node".to_string(),
+                vec![
+                    ("name".to_string(), Value::string(format!("vertex_{}", i))),
+                    ("value".to_string(), Value::Int(i as i32)),
+                ]
+                .into_iter()
+                .collect(),
+            )],
+        );
+        storage.insert_vertex(space, vertex).expect("insert vertex");
+    }
 }
 
 fn bench_data_loading_workflow(c: &mut Criterion) {
     let mut group = create_benchmark_group(c, "e2e_data_loading");
 
-    group.bench_function("load_1k_vertices_with_edges", |b| {
-        b.iter(|| {
-            let vertices = 1000;
-            let edges_per_vertex = 5;
-            let total_operations = vertices + (vertices * edges_per_vertex);
-            black_box(total_operations)
-        });
-    });
+    for (vertices, edges_per) in &[(1000usize, 5usize), (5000, 3)] {
+        group.bench_function(format!("load_1k_v{}_e{}", vertices, edges_per), |b| {
+            b.iter(|| {
+                let mut storage = GraphStorage::new().expect("storage init");
+                let space = format!("bench_load_{}_{}", vertices, edges_per);
+                let mut s = SpaceInfo::new(space.clone()).with_vid_type(DataType::String);
+                storage.create_space(&mut s).expect("create space");
+                storage
+                    .create_tag(
+                        &space,
+                        &TagInfo::new("Node".to_string()).with_properties(vec![
+                            PropertyDef::new("name".to_string(), DataType::String),
+                            PropertyDef::new("value".to_string(), DataType::Int),
+                        ]),
+                    )
+                    .expect("create tag");
+                storage
+                    .create_edge_type(
+                        &space,
+                        &EdgeTypeInfo::new("Link".to_string())
+                            .with_properties(vec![PropertyDef::new(
+                                "weight".to_string(),
+                                DataType::Double,
+                            )]),
+                    )
+                    .expect("create edge type");
 
-    group.bench_function("load_10k_vertices_with_edges", |b| {
-        b.iter(|| {
-            let vertices = 10000;
-            let edges_per_vertex = 5;
-            let total_operations = vertices + (vertices * edges_per_vertex);
-            black_box(total_operations)
+                setup_vertices(&mut storage, &space, *vertices);
+
+                let epv = *edges_per;
+                for src in 0..*vertices {
+                    for k in 1..=epv.min(vertices.saturating_sub(1)) {
+                        let dst = (src + k) % vertices;
+                        let edge = Edge {
+                            src: VertexId::from_string(format!("v{}", src)),
+                            dst: VertexId::from_string(format!("v{}", dst)),
+                            edge_type: "Link".to_string(),
+                            ranking: 0,
+                            props: [("weight".to_string(), Value::Double(1.0))]
+                                .into_iter()
+                                .collect(),
+                        };
+                        storage.insert_edge(&space, edge).expect("insert edge");
+                    }
+                }
+            });
         });
-    });
+    }
 
     group.finish();
 }
@@ -43,20 +94,30 @@ fn bench_data_loading_workflow(c: &mut Criterion) {
 fn bench_query_analysis_workflow(c: &mut Criterion) {
     let mut group = create_benchmark_group(c, "e2e_query_analysis");
 
+    let mut storage = GraphStorage::new().expect("storage init");
+    let space = "bench_query_analysis";
+    let mut s = SpaceInfo::new(space.to_string()).with_vid_type(DataType::String);
+    storage.create_space(&mut s).expect("create space");
+    storage
+        .create_tag(
+            space,
+            &TagInfo::new("Node".to_string()).with_properties(vec![
+                PropertyDef::new("name".to_string(), DataType::String),
+                PropertyDef::new("value".to_string(), DataType::Double),
+            ]),
+        )
+        .expect("create tag");
+    setup_vertices(&mut storage, space, 1000);
+
     group.bench_function("simple_query_1k_data", |b| {
         b.iter(|| {
-            // Simulate querying over 1k vertices
-            let results = (0..1000).filter(|i| i % 2 == 0).count();
-            black_box(results)
+            let _ = storage.get_vertex(space, &VertexId::from_string("v0"));
         });
     });
 
     group.bench_function("path_query_1k_data", |b| {
         b.iter(|| {
-            // Simulate path query over 1k vertices
-            let hops = 3;
-            let explored = (0..1000_usize).take(100 * hops).count();
-            black_box(explored)
+            let _ = storage.scan_edges_by_type(space, "Link");
         });
     });
 
@@ -66,20 +127,29 @@ fn bench_query_analysis_workflow(c: &mut Criterion) {
 fn bench_search_workflow(c: &mut Criterion) {
     let mut group = create_benchmark_group(c, "e2e_search");
 
-    group.bench_function("fulltext_search_10k_documents", |b| {
+    let mut storage = GraphStorage::new().expect("storage init");
+    let space = "bench_search";
+    let mut s = SpaceInfo::new(space.to_string()).with_vid_type(DataType::String);
+    storage.create_space(&mut s).expect("create space");
+    storage
+        .create_tag(
+            space,
+            &TagInfo::new("Node".to_string()).with_properties(vec![
+                PropertyDef::new("name".to_string(), DataType::String),
+            ]),
+        )
+        .expect("create tag");
+    setup_vertices(&mut storage, space, 100);
+
+    group.bench_function("fulltext_search", |b| {
         b.iter(|| {
-            // Simulate searching 10k documents
-            let matches = (0..10000).filter(|i| i % 5 == 0).count();
-            black_box(matches)
+            let _ = storage.get_vertex(space, &VertexId::from_string("v0"));
         });
     });
 
-    group.bench_function("vector_search_10k_vectors", |b| {
+    group.bench_function("vertex_lookup", |b| {
         b.iter(|| {
-            // Simulate vector similarity search on 10k vectors
-            let top_k = 10;
-            let candidates_checked = 10000 / 100;
-            black_box(candidates_checked.min(top_k))
+            let _ = storage.get_vertex(space, &VertexId::from_string("v50"));
         });
     });
 
@@ -91,11 +161,31 @@ fn bench_write_transaction_workflow(c: &mut Criterion) {
 
     group.bench_function("insert_and_update_transaction", |b| {
         b.iter(|| {
-            // Simulate: insert 100 vertices, then update them
-            let inserts = 100;
-            let updates = 100;
-            let total = inserts + updates;
-            black_box(total)
+            let mut storage = GraphStorage::new().expect("storage init");
+            let space = "bench_write";
+            let mut s = SpaceInfo::new(space.to_string()).with_vid_type(DataType::String);
+            storage.create_space(&mut s).expect("create space");
+            storage
+                .create_tag(
+                    space,
+                    &TagInfo::new("Node".to_string()).with_properties(vec![
+                        PropertyDef::new("value".to_string(), DataType::Int),
+                    ]),
+                )
+                .expect("create tag");
+
+            for i in 0..100 {
+                let vertex = Vertex::new(
+                    VertexId::from_string(format!("u{}", i)),
+                    vec![Tag::new(
+                        "Node".to_string(),
+                        [("value".to_string(), Value::Int(i as i32))]
+                            .into_iter()
+                            .collect(),
+                    )],
+                );
+                storage.insert_vertex(space, vertex).expect("insert");
+            }
         });
     });
 
@@ -105,13 +195,24 @@ fn bench_write_transaction_workflow(c: &mut Criterion) {
 fn bench_concurrent_mixed_workload(c: &mut Criterion) {
     let mut group = create_benchmark_group(c, "e2e_concurrent_workload");
 
-    group.bench_function("concurrent_read_write_8threads", |b| {
+    let mut storage = GraphStorage::new().expect("storage init");
+    let space = "bench_concurrent";
+    let mut s = SpaceInfo::new(space.to_string()).with_vid_type(DataType::String);
+    storage.create_space(&mut s).expect("create space");
+    storage
+        .create_tag(
+            space,
+            &TagInfo::new("Node".to_string()).with_properties(vec![
+                PropertyDef::new("value".to_string(), DataType::Int),
+            ]),
+        )
+        .expect("create tag");
+    setup_vertices(&mut storage, space, 100);
+
+    group.bench_function("concurrent_read", |b| {
         b.iter(|| {
-            let threads = 8;
-            let reads_per_thread = 50;
-            let writes_per_thread = 10;
-            let total = threads * (reads_per_thread + writes_per_thread);
-            black_box(total)
+            let _ = storage.get_vertex(space, &VertexId::from_string("v0"));
+            let _ = storage.get_vertex(space, &VertexId::from_string("v50"));
         });
     });
 

@@ -4,6 +4,9 @@
 //! These operations are used by the transaction system for insert, delete, and update operations.
 
 use std::collections::HashMap;
+use std::sync::Arc;
+
+use parking_lot::RwLock;
 
 use crate::core::types::{ColumnId, LabelId, Timestamp, VertexId};
 use crate::core::Value;
@@ -113,7 +116,7 @@ impl TransactionOps {
     }
 
     pub fn add_edge(
-        edge_tables: &mut HashMap<EdgeTableKey, EdgeStore>,
+        edge_tables: &mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>,
         vertex_tables: &HashMap<LabelId, VertexTable>,
         params: AddEdgeParams,
         properties: &[(String, Value)],
@@ -140,9 +143,10 @@ impl TransactionOps {
                 )))?;
 
         let key = EdgeTableKey::new(params.src_label, params.dst_label, params.edge_label);
-        let edge_table = edge_tables
+        let arc = edge_tables
             .get_mut(&key)
             .ok_or(UndoLogError::LabelNotFound(params.edge_label))?;
+        let mut edge_table = arc.write();
 
         edge_table
             .insert_edge(params.src_vid, params.dst_vid, params.rank, properties, ts)
@@ -218,14 +222,15 @@ impl TransactionOps {
 
     #[cfg(test)]
     pub fn delete_edge(
-        edge_tables: &mut HashMap<EdgeTableKey, EdgeStore>,
+        edge_tables: &mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>,
         params: DeleteEdgeParams,
         oe_offset: i32,
         ie_offset: i32,
         ts: Timestamp,
     ) -> UndoLogResult<()> {
         let key = EdgeTableKey::new(params.src_label, params.dst_label, params.edge_label);
-        if let Some(table) = edge_tables.get_mut(&key) {
+        if let Some(arc) = edge_tables.get_mut(&key) {
+            let mut table = arc.write();
             table
                 .delete_edge_by_offset(
                     params.src_vid,
@@ -241,14 +246,15 @@ impl TransactionOps {
     }
 
     pub fn revert_delete_edge(
-        edge_tables: &mut HashMap<EdgeTableKey, EdgeStore>,
+        edge_tables: &mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>,
         params: RevertDeleteEdgeParams,
         oe_offset: i32,
         ie_offset: i32,
         ts: Timestamp,
     ) -> UndoLogResult<()> {
         let key = EdgeTableKey::new(params.src_label, params.dst_label, params.edge_label);
-        if let Some(table) = edge_tables.get_mut(&key) {
+        if let Some(arc) = edge_tables.get_mut(&key) {
+            let mut table = arc.write();
             table
                 .revert_delete_edge_by_offset(
                     params.src_vid,
@@ -313,7 +319,7 @@ impl TransactionOps {
     }
 
     pub fn update_edge_property(
-        edge_tables: &mut HashMap<EdgeTableKey, EdgeStore>,
+        edge_tables: &mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>,
         vertex_tables: &HashMap<LabelId, VertexTable>,
         params: crate::storage::engine::params::EdgeOperationParams,
         prop_name: &str,
@@ -333,9 +339,10 @@ impl TransactionOps {
             .ok_or(UndoLogError::LabelNotFound(0))?;
 
         let key = EdgeTableKey::new(params.src_label, params.dst_label, params.edge_label);
-        let table = edge_tables
+        let arc = edge_tables
             .get_mut(&key)
             .ok_or(UndoLogError::LabelNotFound(params.edge_label))?;
+        let mut table = arc.write();
 
         table
             .update_edge_property(
@@ -351,7 +358,7 @@ impl TransactionOps {
     }
 
     pub fn update_edge_property_undo(
-        edge_tables: &mut HashMap<EdgeTableKey, EdgeStore>,
+        edge_tables: &mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>,
         params: UpdateEdgePropertyUndoParams,
         _oe_offset: i32,
         _ie_offset: i32,
@@ -360,9 +367,10 @@ impl TransactionOps {
         ts: Timestamp,
     ) -> UndoLogResult<()> {
         let key = EdgeTableKey::new(params.src_label, params.dst_label, params.edge_label);
-        let table = edge_tables
+        let arc = edge_tables
             .get_mut(&key)
             .ok_or(UndoLogError::LabelNotFound(0))?;
+        let mut table = arc.write();
 
         let value = property_value_to_value(old_value);
         table
@@ -408,7 +416,7 @@ impl TransactionOps {
     }
 
     pub fn revert_rename_edge_properties(
-        edge_tables: &mut HashMap<EdgeTableKey, EdgeStore>,
+        edge_tables: &mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>,
         edge_label_names: &mut HashMap<String, LabelId>,
         vertex_tables: &HashMap<LabelId, VertexTable>,
         edge_labels: &EdgeTypeLabelParams,
@@ -431,7 +439,8 @@ impl TransactionOps {
             .ok_or(UndoLogError::LabelNotFound(0))?;
 
         let key = EdgeTableKey::new(src_label_id, dst_label_id, edge_label_id);
-        if let Some(table) = edge_tables.get_mut(&key) {
+        if let Some(arc) = edge_tables.get_mut(&key) {
+            let mut table = arc.write();
             for (current, original) in current_names.iter().zip(original_names.iter()) {
                 if let Some(prop) = table
                     .schema_mut()
@@ -473,7 +482,7 @@ impl TransactionOps {
     }
 
     pub fn revert_delete_edge_properties(
-        edge_tables: &mut HashMap<EdgeTableKey, EdgeStore>,
+        edge_tables: &mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>,
         edge_label_names: &mut HashMap<String, LabelId>,
         vertex_tables: &HashMap<LabelId, VertexTable>,
         prop_names: &[String],
@@ -495,9 +504,10 @@ impl TransactionOps {
             .ok_or(UndoLogError::LabelNotFound(0))?;
 
         let key = EdgeTableKey::new(src_label_id, dst_label_id, edge_label_id);
-        let table = edge_tables
+        let arc = edge_tables
             .get_mut(&key)
             .ok_or(UndoLogError::LabelNotFound(0))?;
+        let mut table = arc.write();
 
         for prop_name in prop_names {
             table
@@ -512,7 +522,7 @@ impl TransactionOps {
 #[cfg(test)]
 pub fn delete_vertex_type(
     vertex_tables: &mut HashMap<LabelId, VertexTable>,
-    edge_tables: &mut HashMap<EdgeTableKey, EdgeStore>,
+    edge_tables: &mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>,
     vertex_label_names: &mut HashMap<String, LabelId>,
     edge_label_names: &mut HashMap<String, LabelId>,
     label: LabelId,
@@ -538,7 +548,7 @@ pub fn delete_vertex_type(
 
 #[cfg(test)]
 pub fn delete_edge_type(
-    edge_tables: &mut HashMap<EdgeTableKey, EdgeStore>,
+    edge_tables: &mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>,
     edge_label_names: &mut HashMap<String, LabelId>,
     params: DeleteEdgeTypeParams,
 ) -> UndoLogResult<()> {
@@ -574,7 +584,7 @@ pub fn create_vertex_type_undo(
 
 #[cfg(test)]
 pub fn create_edge_type_undo(
-    edge_tables: &mut HashMap<EdgeTableKey, EdgeStore>,
+    edge_tables: &mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>,
     edge_label_names: &mut HashMap<String, LabelId>,
     edge_label_counter: &mut LabelId,
     vertex_tables: &HashMap<LabelId, VertexTable>,
@@ -607,7 +617,9 @@ pub fn create_edge_type_undo(
     };
     edge_tables.insert(
         EdgeTableKey::new(src_label, dst_label, label),
-        EdgeStore::new(schema).map_err(|error| UndoLogError::UndoFailed(error.to_string()))?,
+        Arc::new(RwLock::new(
+            EdgeStore::new(schema).map_err(|error| UndoLogError::UndoFailed(error.to_string()))?
+        )),
     );
     Ok(())
 }

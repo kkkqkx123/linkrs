@@ -72,7 +72,8 @@ impl GraphStorageContext {
                 let keys: Vec<EdgeTableKey> = edge_tables.keys().copied().collect();
                 if config.enable_structure_compaction {
                     for &key in &keys {
-                        let table = edge_tables.get_mut(&key).expect("edge key must exist");
+                        let arc = edge_tables.get_mut(&key).expect("edge key must exist");
+                        let mut table = arc.write();
                         let removed = table.compact_and_freeze(
                             ts,
                             config,
@@ -87,7 +88,8 @@ impl GraphStorageContext {
                     );
                 } else {
                     for &key in &keys {
-                        let table = edge_tables.get_mut(&key).expect("edge key must exist");
+                        let arc = edge_tables.get_mut(&key).expect("edge key must exist");
+                        let mut table = arc.write();
                         table.freeze_csr_only(ts);
                         table.compact_properties(ts);
                     }
@@ -142,7 +144,8 @@ impl GraphStorageContext {
             let mut adaptive_merged = 0usize;
             let mut lsm_merged = 0usize;
 
-            for table in edge_tables.values_mut() {
+            for arc in edge_tables.values_mut() {
+                let mut table = arc.write();
                 if self.persistent.config.merge_config.enable_adaptive_merge {
                     adaptive_merged += table.merge_segments_adaptive(
                         ts,

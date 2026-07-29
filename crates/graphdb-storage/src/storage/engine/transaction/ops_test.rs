@@ -1,6 +1,9 @@
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use parking_lot::RwLock;
 
     use crate::core::types::{LabelId, VertexId};
     use crate::core::Value;
@@ -108,10 +111,10 @@ mod tests {
         vertex_tables.insert(0, create_vertex_table(0, "Person"));
         vertex_tables.insert(1, create_vertex_table(1, "Person"));
 
-        let mut edge_tables: HashMap<EdgeTableKey, EdgeStore> = HashMap::new();
+        let mut edge_tables: HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>> = HashMap::new();
         edge_tables.insert(
             EdgeTableKey::new(0, 1, 0),
-            create_edge_table(0, 0, 1, "KNOWS"),
+            Arc::new(RwLock::new(create_edge_table(0, 0, 1, "KNOWS"))),
         );
 
         let vid1 = VertexId::from_int64(100);
@@ -149,10 +152,10 @@ mod tests {
         let mut vertex_tables: HashMap<LabelId, VertexTable> = HashMap::new();
         vertex_tables.insert(0, create_vertex_table(0, "Person"));
 
-        let mut edge_tables: HashMap<EdgeTableKey, EdgeStore> = HashMap::new();
+        let mut edge_tables: HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>> = HashMap::new();
         edge_tables.insert(
             EdgeTableKey::new(0, 1, 0),
-            create_edge_table(0, 0, 1, "KNOWS"),
+            Arc::new(RwLock::new(create_edge_table(0, 0, 1, "KNOWS"))),
         );
 
         let params = AddEdgeParams {
@@ -257,14 +260,14 @@ mod tests {
         vertex_tables.insert(0, create_vertex_table(0, "Person"));
         vertex_tables.insert(1, create_vertex_table(1, "Employee"));
 
-        let mut edge_tables: HashMap<EdgeTableKey, EdgeStore> = HashMap::new();
+        let mut edge_tables: HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>> = HashMap::new();
         edge_tables.insert(
             EdgeTableKey::new(0, 0, 0),
-            create_edge_table(0, 0, 0, "KNOWS"),
+            Arc::new(RwLock::new(create_edge_table(0, 0, 0, "KNOWS"))),
         );
         edge_tables.insert(
             EdgeTableKey::new(0, 1, 1),
-            create_edge_table(1, 0, 1, "WORKS_AT"),
+            Arc::new(RwLock::new(create_edge_table(1, 0, 1, "WORKS_AT"))),
         );
 
         let mut vertex_label_names: HashMap<String, LabelId> = HashMap::new();
@@ -298,10 +301,10 @@ mod tests {
         vertex_tables.insert(0, create_vertex_table(0, "Person"));
         vertex_tables.insert(1, create_vertex_table(1, "Person"));
 
-        let mut edge_tables: HashMap<EdgeTableKey, EdgeStore> = HashMap::new();
+        let mut edge_tables: HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>> = HashMap::new();
         edge_tables.insert(
             EdgeTableKey::new(0, 1, 0),
-            create_edge_table(0, 0, 1, "KNOWS"),
+            Arc::new(RwLock::new(create_edge_table(0, 0, 1, "KNOWS"))),
         );
 
         let mut edge_label_names: HashMap<String, LabelId> = HashMap::new();
@@ -350,10 +353,10 @@ mod tests {
         let mut vertex_tables: HashMap<LabelId, VertexTable> = HashMap::new();
         vertex_tables.insert(0, create_vertex_table(0, "Person"));
 
-        let mut edge_tables: HashMap<EdgeTableKey, EdgeStore> = HashMap::new();
+        let mut edge_tables: HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>> = HashMap::new();
         edge_tables.insert(
             EdgeTableKey::new(0, 0, 0),
-            create_edge_table(0, 0, 0, "KNOWS"),
+            Arc::new(RwLock::new(create_edge_table(0, 0, 0, "KNOWS"))),
         );
 
         TransactionOps::add_vertex(&mut vertex_tables, 0, VertexId::from_int64(1), &[], 1).unwrap();
@@ -437,7 +440,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut edge_tables: HashMap<EdgeTableKey, EdgeStore> = HashMap::new();
+        let mut edge_tables: HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>> = HashMap::new();
         let mut edge_label_names: HashMap<String, LabelId> = HashMap::new();
         let mut edge_label_counter: LabelId = 0;
 
@@ -460,7 +463,7 @@ mod tests {
     #[test]
     fn test_create_edge_type_undo_missing_vertex_label() {
         let vertex_tables: HashMap<LabelId, VertexTable> = HashMap::new();
-        let mut edge_tables: HashMap<EdgeTableKey, EdgeStore> = HashMap::new();
+        let mut edge_tables: HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>> = HashMap::new();
         let mut edge_label_names: HashMap<String, LabelId> = HashMap::new();
         let mut edge_label_counter: LabelId = 0;
 

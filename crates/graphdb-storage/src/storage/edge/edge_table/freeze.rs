@@ -117,12 +117,15 @@ impl TimeTravelEdgeStore {
             .max()
             .unwrap_or(0);
         let vertex_capacity = delta.vertex_capacity();
-        assert!(
-            max_vid < vertex_capacity,
-            "Vertex ID {} exceeds capacity {}",
-            max_vid,
-            vertex_capacity
-        );
+        if max_vid >= vertex_capacity {
+            log::warn!(
+                "Vertex ID {} exceeds capacity {} during freeze; using {} for segment",
+                max_vid,
+                vertex_capacity,
+                max_vid.saturating_add(1)
+            );
+        }
+        let effective_capacity = std::cmp::max(vertex_capacity, max_vid.saturating_add(1));
 
         let create_ts_min = entries
             .iter()
@@ -153,7 +156,7 @@ impl TimeTravelEdgeStore {
                 (std::cmp::min(min, ts), std::cmp::max(max, ts))
             });
 
-        let csr = free_space.build_csr(&entries, vertex_capacity);
+        let csr = free_space.build_csr(&entries, effective_capacity);
         let frozen = entries.len();
 
         let deletion_info = DeletionInfo::with_count(delete_ts_min, delete_ts_max, deleted_count);

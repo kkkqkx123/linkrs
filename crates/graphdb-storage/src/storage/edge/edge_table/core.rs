@@ -20,6 +20,7 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone)]
 pub struct EdgeTableConfig {
+    pub mode: super::EdgeStoreMode,
     pub initial_vertex_capacity: usize,
     pub initial_edge_capacity: usize,
     /// Fixed number of edges allocated per high-degree overflow chunk.
@@ -44,6 +45,7 @@ pub struct EdgeTableConfig {
 impl Default for EdgeTableConfig {
     fn default() -> Self {
         Self {
+            mode: super::EdgeStoreMode::default(),
             initial_vertex_capacity: 4096,
             initial_edge_capacity: 4096,
             overflow_chunk_edges: 4096,
@@ -205,6 +207,10 @@ impl TimeTravelEdgeStore {
     fn decode_edge_endpoint(key: VertexId) -> (VertexId, i64) {
         let bytes = key.as_bytes();
         if bytes.len() != 16 {
+            log::warn!(
+                "decode_edge_endpoint: unexpected key length {} (expected 16)",
+                bytes.len()
+            );
             return (key, 0);
         }
 

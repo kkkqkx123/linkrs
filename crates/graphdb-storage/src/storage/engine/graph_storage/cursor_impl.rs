@@ -354,8 +354,18 @@ impl EdgeCursor for GraphEdgeCursor {
                 }
 
                 let td = &target.tables[*table_idx];
-                let store = match edge_tables.get(&td.key) {
-                    Some(EdgeStore::TimeTravel(s)) => s,
+                let arc = match edge_tables.get(&td.key) {
+                    Some(a) => a.clone(),
+                    None => {
+                        *table_idx += 1;
+                        *table_state = TableScanState::new();
+                        continue;
+                    }
+                };
+                let guard = arc.read();
+                #[allow(unreachable_patterns)]
+                let store = match &*guard {
+                    EdgeStore::TimeTravel(s) => s,
                     _ => {
                         *table_idx += 1;
                         *table_state = TableScanState::new();
@@ -736,11 +746,14 @@ fn build_target(
         ctx.data_store().with_edge_tables(|edge_tables| {
             edge_tables
                 .iter()
-                .filter(|(_, store)| store.label() == edge_label_id)
-                .map(|(key, store)| TableDef {
-                    key: *key,
-                    tbl_src: store.src_label(),
-                    tbl_dst: store.dst_label(),
+                .filter(|(_, arc)| arc.read().label() == edge_label_id)
+                .map(|(key, arc)| {
+                    let store = arc.read();
+                    TableDef {
+                        key: *key,
+                        tbl_src: store.src_label(),
+                        tbl_dst: store.dst_label(),
+                    }
                 })
                 .collect()
         })

@@ -263,7 +263,8 @@ pub fn add_edge_property(
     ctx.data_store()
         .with_edge_partitions_mut(edge_label, |tables, keys| {
             for key in keys {
-                if let Some(table) = tables.get_mut(key) {
+                if let Some(arc) = tables.get_mut(key) {
+                    let mut table = arc.write();
                     table.add_property(prop.name.clone(), prop.data_type.clone(), prop.nullable)?;
                 }
             }
@@ -283,7 +284,8 @@ pub fn delete_edge_property(
     ctx.data_store()
         .with_edge_partitions_mut(edge_label, |tables, keys| {
             for key in keys {
-                if let Some(table) = tables.get_mut(key) {
+                if let Some(arc) = tables.get_mut(key) {
+                    let mut table = arc.write();
                     table.remove_property(prop_name)?;
                 }
             }
@@ -304,7 +306,8 @@ pub fn rename_edge_property(
     ctx.data_store()
         .with_edge_partitions_mut(edge_label, |tables, keys| {
             for key in keys {
-                if let Some(table) = tables.get_mut(key) {
+                if let Some(arc) = tables.get_mut(key) {
+                    let mut table = arc.write();
                     table.rename_property(old_name, new_name)?;
                 }
             }
@@ -886,6 +889,7 @@ mod tests {
             .values()
             .next()
             .unwrap()
+            .read()
             .schema()
             .schema_version;
         assert_eq!(initial_version, 1, "Initial version should be 1");
@@ -902,6 +906,7 @@ mod tests {
             .values()
             .next()
             .unwrap()
+            .read()
             .schema()
             .schema_version;
 
@@ -935,6 +940,7 @@ mod tests {
             .values()
             .next()
             .unwrap()
+            .read()
             .schema()
             .schema_version;
 
@@ -947,6 +953,7 @@ mod tests {
             .values()
             .next()
             .unwrap()
+            .read()
             .schema()
             .schema_version;
 
@@ -981,6 +988,7 @@ mod tests {
             .values()
             .next()
             .unwrap()
+            .read()
             .schema()
             .schema_version;
 
@@ -993,6 +1001,7 @@ mod tests {
             .values()
             .next()
             .unwrap()
+            .read()
             .schema()
             .schema_version;
 
@@ -1031,6 +1040,7 @@ mod tests {
                 .values()
                 .next()
                 .unwrap()
+                .read()
                 .schema()
                 .schema_version;
 

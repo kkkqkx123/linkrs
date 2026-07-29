@@ -35,7 +35,7 @@ impl GraphStorageContext {
             .with_edge_tables(|tables| {
                 tables
                     .get(&EdgeTableKey::new(src_label, dst_label, edge_label))
-                    .map(|table| table.scan(ts))
+                    .map(|arc| arc.read().scan(ts))
                     .unwrap_or_default()
             })
     }
@@ -50,7 +50,7 @@ impl GraphStorageContext {
             .catalog_read_snapshot()
             .with_edge_tables(|tables| {
                 let mut records = Vec::new();
-                for table in tables.values().filter(|table| table.label() == edge_label) {
+                for table in tables.values().map(|arc| arc.read()).filter(|table| table.label() == edge_label) {
                     records.extend(table.scan(ts));
                 }
                 records
@@ -71,7 +71,7 @@ impl GraphStorageContext {
             .with_edge_tables(|tables| {
                 tables
                     .values()
-                    .map(|table| table.edge_count() as usize)
+                    .map(|arc| arc.read().edge_count() as usize)
                     .sum()
             })
     }
@@ -92,9 +92,10 @@ impl GraphStorageContext {
                         dst_label,
                         edge_label,
                     },
-                    table,
+                    arc,
                 ) in tables
                 {
+                    let table = arc.read();
                     for edge_record in table.scan(ts) {
                         records.push((*src_label, *dst_label, *edge_label, edge_record));
                     }

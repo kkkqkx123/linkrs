@@ -91,12 +91,13 @@ impl Spiller {
         let mut total_freed: u64 = 0;
 
         self.data_store.with_edge_tables(|edge_tables| {
-            for table in edge_tables.values() {
+            for arc in edge_tables.values() {
                 if total_freed >= requested_bytes {
                     break;
                 }
                 let remaining = (requested_bytes - total_freed) as usize;
-                match engine.evict_cold_segments(table, remaining) {
+                let table = arc.read();
+                match engine.evict_cold_segments(&*table, remaining) {
                     Ok(freed) => total_freed += freed as u64,
                     Err(e) => {
                         log::warn!("Segment eviction failed during spill: {}", e);

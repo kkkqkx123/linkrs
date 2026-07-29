@@ -79,6 +79,7 @@ const DEFAULT_VERTEX_CAPACITY: usize = 1024;
 pub struct SingleMutableCsr {
     nbr_list: Vec<Nbr>,
     edge_count: AtomicU64,
+    conflict_count: AtomicU64,
 }
 
 impl Clone for SingleMutableCsr {
@@ -86,6 +87,7 @@ impl Clone for SingleMutableCsr {
         Self {
             nbr_list: self.nbr_list.clone(),
             edge_count: AtomicU64::new(self.edge_count.load(Ordering::Relaxed)),
+            conflict_count: AtomicU64::new(self.conflict_count.load(Ordering::Relaxed)),
         }
     }
 }
@@ -120,6 +122,7 @@ impl SingleMutableCsr {
         Self {
             nbr_list,
             edge_count: AtomicU64::new(0),
+            conflict_count: AtomicU64::new(0),
         }
     }
 
@@ -129,6 +132,10 @@ impl SingleMutableCsr {
 
     pub fn edge_count(&self) -> u64 {
         self.edge_count.load(Ordering::Relaxed)
+    }
+
+    pub fn conflict_count(&self) -> u64 {
+        self.conflict_count.load(Ordering::Relaxed)
     }
 
     pub fn resize(&mut self, new_vertex_capacity: usize) {
@@ -173,6 +180,11 @@ impl SingleMutableCsr {
 
         // Reject if there's an active edge with newer or equal timestamp
         if nbr.delete_ts == Timestamp::MAX && ts <= nbr.create_ts {
+            self.conflict_count.fetch_add(1, Ordering::Relaxed);
+            log::warn!(
+                "[SingleMutableCsr] insert conflict on src={}: ts={} <= existing create_ts={}",
+                src, ts, nbr.create_ts
+            );
             return false;
         }
 

@@ -437,6 +437,7 @@ pub(crate) fn scan_edges_by_type(
         let table_records = ctx.data_store().with_edge_tables(|edge_tables| {
             edge_tables
                 .values()
+                .map(|arc| arc.read())
                 .filter(|table| table.label() == edge_label_id)
                 .map(|table| (table.src_label(), table.dst_label(), table.scan(ts)))
                 .collect::<Vec<_>>()
@@ -597,6 +598,7 @@ pub(crate) fn count_edges_by_type(
         let count = ctx.data_store().with_edge_tables(|edge_tables| {
             edge_tables
                 .values()
+                .map(|arc| arc.read())
                 .filter(|t| t.label() == edge_label_id)
                 .map(|t| t.edge_count())
                 .sum()
@@ -611,7 +613,8 @@ pub(crate) fn count_edges_by_type(
     );
     let count = ctx
         .data_store()
-        .with_edge_tables(|edge_tables| edge_tables.get(&key).map(|t| t.edge_count()).unwrap_or(0));
+        .with_single_edge_table(&key, |t| Ok(t.edge_count()))
+        .unwrap_or(0);
     Ok(count)
 }
 

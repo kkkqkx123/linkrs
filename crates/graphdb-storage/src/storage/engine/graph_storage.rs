@@ -574,10 +574,7 @@ impl StorageReader for GraphStorage {
 
         let key = &keys[0];
 
-        let history = self.ctx.data_store().with_edge_tables(|edge_tables| {
-            let table = edge_tables
-                .get(key)
-                .ok_or_else(|| StorageError::label_not_found(edge_type.to_string()))?;
+        let history = self.ctx.data_store().with_single_edge_table(key, |table| {
             let version_history = table.version_history_ref();
             let guard = version_history
                 .lock()

@@ -58,7 +58,8 @@ impl GraphStorageContext {
         self.persistent
             .data_store
             .with_edge_tables_mut(|edge_tables| {
-                for table in edge_tables.values_mut() {
+                for arc in edge_tables.values_mut() {
+                    let mut table = arc.write();
                     let delta_edges = table.delta_edge_count();
                     let delta_memory = table.used_memory_size() as u64;
 
@@ -176,12 +177,13 @@ impl GraphStorageContext {
         let engine = SegmentEvictionEngine::new(spill_dir);
 
         self.persistent.data_store.with_edge_tables(|edge_tables| {
-            for table in edge_tables.values() {
+            for arc in edge_tables.values() {
                 if total_freed >= excess {
                     break;
                 }
                 let remaining = excess - total_freed;
-                match engine.evict_cold_segments(table, remaining as usize) {
+                let table = arc.read();
+                match engine.evict_cold_segments(&*table, remaining as usize) {
                     Ok(freed) => total_freed += freed as u64,
                     Err(e) => {
                         log::warn!("Segment eviction failed for table: {}", e);

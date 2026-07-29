@@ -536,7 +536,8 @@ impl RecoveryApplier for GraphStorageContext {
                             return Err(e);
                         };
                         self.data_store().with_edge_tables_mut(|edge_tables| {
-                            if let Some(table) = edge_tables.get_mut(&key) {
+                            if let Some(arc) = edge_tables.get_mut(&key) {
+                                let mut table = arc.write();
                                 let change_details =
                                     crate::storage::schema::ChangeDetails::PropertyAdded {
                                         name: prop.name.clone(),
@@ -910,7 +911,8 @@ impl GraphStorageContext {
 
         self.data_store()
             .with_edge_tables_mut(|edge_tables| -> StorageResult<()> {
-                if let Some(table) = edge_tables.get_mut(&key) {
+                if let Some(arc) = edge_tables.get_mut(&key) {
+                    let mut table = arc.write();
                     let _ = table.delete_edge(src_internal, dst_internal, redo.rank, ts)?;
                 }
                 Ok(())
