@@ -842,25 +842,36 @@ impl GraphDataStore {
         operation: impl FnOnce(&mut EdgeStore) -> StorageResult<R>,
     ) -> StorageResult<R> {
         let table_arc = {
-            let mut tables = self.write_edge_tables();
-            let mut index = self.write_edge_label_index();
-            if !tables.contains_key(&key) {
-                let table = {
-                    let template = tables.get(&template_key).ok_or_else(|| {
-                        StorageError::label_not_found(format!("edge label {}", key.edge_label))
-                    })?;
-                    let guard = template.read();
-                    create(&guard)?
-                };
-                tables.insert(key, Arc::new(RwLock::new(table)));
-                let indexed_keys = index.entry(key.edge_label).or_default();
-                if !indexed_keys.contains(&key) {
-                    indexed_keys.push(key);
+            // Phase 1: read lock (fast path — partition already exists)
+            let guard = self.edge_tables.read();
+            if let Some(arc) = guard.get(&key) {
+                arc.clone()
+            } else {
+                drop(guard);
+                // Phase 2: write lock (slow path — create partition)
+                let mut tables = self.write_edge_tables();
+                let mut index = self.write_edge_label_index();
+                if !tables.contains_key(&key) {
+                    let table = {
+                        let template = tables.get(&template_key).ok_or_else(|| {
+                            StorageError::label_not_found(format!(
+                                "edge label {}",
+                                key.edge_label
+                            ))
+                        })?;
+                        let guard = template.read();
+                        create(&guard)?
+                    };
+                    tables.insert(key, Arc::new(RwLock::new(table)));
+                    let indexed_keys = index.entry(key.edge_label).or_default();
+                    if !indexed_keys.contains(&key) {
+                        indexed_keys.push(key);
+                    }
                 }
+                tables.get(&key).ok_or_else(|| {
+                    StorageError::label_not_found(format!("edge partition {:?}", key))
+                })?.clone()
             }
-            tables.get(&key).ok_or_else(|| {
-                StorageError::label_not_found(format!("edge partition {:?}", key))
-            })?.clone()
         };
         let mut guard = table_arc.write();
         operation(&mut guard)

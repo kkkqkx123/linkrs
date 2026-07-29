@@ -18,7 +18,7 @@
 //! - `CsrVariant::Labeled`: Label-aware mutable CSR
 //! - `CsrVariant::None`: Placeholder for relationships with no edges
 
-use crate::core::StorageResult;
+use crate::core::{StorageError, StorageResult};
 
 use super::{
     CsrBase, EdgeId, EdgeStrategy, FragmentationStats, LabeledMutableCsr,
@@ -213,24 +213,26 @@ impl CsrVariant {
         }
     }
 
-    /// Estimate average bytes per edge for this CSR strategy.
+    /// Average bytes per edge based on actual memory usage.
     ///
-    /// Used for merge heuristics to more accurately calculate segment sizes.
-    /// These are empirical values derived from profiling.
-    ///
-    /// Returns estimated bytes per edge:
-    /// - Multiple: ~26 bytes (fixed arrays, standard offsets)
-    /// - Single: ~20 bytes (minimal metadata, single-per-vertex)
-    /// - MultiSingle: ~28 bytes (capacity array overhead)
-    /// - Labeled: ~36 bytes (label indexing adds overhead)
-    /// - None: 0 bytes (no edges)
+    /// Computed as `used_memory_size() / edge_count()` to dynamically adapt
+    /// to actual storage characteristics (fragmentation, compression).
+    /// Falls back to empirical defaults when edge_count is 0.
     pub fn bytes_per_edge(&self) -> usize {
-        match self {
-            CsrVariant::Multiple(_) => 26,
-            CsrVariant::Single(_) => 20,
-            CsrVariant::MultiSingle(_) => 28,
-            CsrVariant::Labeled(_) => 36,
-            CsrVariant::None { .. } => 0,
+        let edges = self.edge_count().max(1) as usize;
+        let bytes = self.used_memory_size();
+        let bpe = bytes / edges;
+        if bpe == 0 {
+            // Fallback to empirical defaults when memory size is negligible
+            match self {
+                CsrVariant::Multiple(_) => 26,
+                CsrVariant::Single(_) => 20,
+                CsrVariant::MultiSingle(_) => 28,
+                CsrVariant::Labeled(_) => 36,
+                CsrVariant::None { .. } => 0,
+            }
+        } else {
+            bpe
         }
     }
 }
@@ -339,8 +341,16 @@ impl MutableCsrTrait for CsrVariant {
         edge_id: EdgeId,
         prop_offset: u32,
         ts: Timestamp,
-    ) -> bool {
-        dispatch!(self, insert_edge(src_vid, dst, edge_id, prop_offset, ts) -> false)
+    ) -> StorageResult<()> {
+        match self {
+            CsrVariant::Multiple(csr) => csr.insert_edge(src_vid, dst, edge_id, prop_offset, ts),
+            CsrVariant::Single(csr) => csr.insert_edge(src_vid, dst, edge_id, prop_offset, ts),
+            CsrVariant::MultiSingle(csr) => csr.insert_edge(src_vid, dst, edge_id, prop_offset, ts),
+            CsrVariant::Labeled(csr) => csr.insert_edge(src_vid, dst, edge_id, prop_offset, ts),
+            CsrVariant::None { .. } => Err(StorageError::invalid_operation(
+                "no edges stored for this edge type".to_string(),
+            )),
+        }
     }
 
     fn delete_edge(&mut self, src_vid: u32, edge_id: EdgeId, ts: Timestamp) -> bool {
@@ -452,7 +462,7 @@ mod tests {
         let mut csr =
             CsrVariant::from_strategy_with_overflow(EdgeStrategy::Multiple, 10, 100, 4096).unwrap();
 
-        assert!(csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1));
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1).unwrap();
         assert_eq!(csr.edge_count(), 1);
     }
 
@@ -461,7 +471,7 @@ mod tests {
         let mut csr =
             CsrVariant::from_strategy_with_overflow(EdgeStrategy::Single, 10, 100, 4096).unwrap();
 
-        assert!(csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1));
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1).unwrap();
         assert_eq!(csr.edge_count(), 1);
     }
 
@@ -475,7 +485,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1));
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1).unwrap();
         assert_eq!(csr.edge_count(), 1);
     }
 
@@ -484,7 +494,7 @@ mod tests {
         let mut csr =
             CsrVariant::from_strategy_with_overflow(EdgeStrategy::Labeled, 10, 100, 4096).unwrap();
 
-        assert!(csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1));
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1).unwrap();
         assert_eq!(csr.edge_count(), 1);
     }
 
@@ -499,7 +509,7 @@ mod tests {
         assert!(csr.edges_of(0, 1).is_empty());
 
         // None variant should reject all insertions
-        assert!(!csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1));
+        assert!(csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1).is_err());
         assert_eq!(csr.edge_count(), 0);
 
         // None variant should reject all deletions
@@ -542,14 +552,14 @@ mod tests {
 
         // After loading, should be None variant
         assert_eq!(csr2.edge_count(), 0);
-        assert!(!csr2.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 0, 1));
+        assert!(csr2.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 0, 1).is_err());
     }
 
     #[test]
     fn test_clone() {
         let mut csr1 =
             CsrVariant::from_strategy_with_overflow(EdgeStrategy::Multiple, 10, 100, 4096).unwrap();
-        csr1.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1);
+        csr1.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 1).unwrap();
 
         let csr2 = csr1.clone();
         assert_eq!(csr2.edge_count(), 1);
@@ -562,6 +572,6 @@ mod tests {
         let mut csr2 = csr1.clone();
 
         assert_eq!(csr2.edge_count(), 0);
-        assert!(!csr2.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 0, 1));
+        assert!(csr2.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 0, 1).is_err());
     }
 }

@@ -169,7 +169,7 @@ impl SingleMutableCsr {
         edge_id: EdgeId,
         prop_offset: u32,
         ts: Timestamp,
-    ) -> bool {
+    ) -> StorageResult<()> {
         let src_idx = src as usize;
 
         if src_idx >= self.vertex_capacity() {
@@ -181,11 +181,10 @@ impl SingleMutableCsr {
         // Reject if there's an active edge with newer or equal timestamp
         if nbr.delete_ts == Timestamp::MAX && ts <= nbr.create_ts {
             self.conflict_count.fetch_add(1, Ordering::Relaxed);
-            log::warn!(
+            return Err(StorageError::conflict(format!(
                 "[SingleMutableCsr] insert conflict on src={}: ts={} <= existing create_ts={}",
                 src, ts, nbr.create_ts
-            );
-            return false;
+            )));
         }
 
         let was_empty = nbr.delete_ts < Timestamp::MAX;
@@ -199,7 +198,7 @@ impl SingleMutableCsr {
             self.edge_count.fetch_add(1, Ordering::Relaxed);
         }
 
-        true
+        Ok(())
     }
 
     pub fn delete_edge(&mut self, src: u32, edge_id: EdgeId, ts: Timestamp) -> bool {
@@ -470,7 +469,7 @@ impl MutableCsrTrait for SingleMutableCsr {
         edge_id: EdgeId,
         prop_offset: u32,
         ts: Timestamp,
-    ) -> bool {
+    ) -> StorageResult<()> {
         SingleMutableCsr::insert_edge(self, src, dst, edge_id, prop_offset, ts)
     }
 
@@ -515,9 +514,9 @@ mod tests {
     fn test_basic_operations() {
         let mut csr = SingleMutableCsr::with_capacity(10);
 
-        assert!(csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 100));
-        assert!(!csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1, 99));
-        assert!(csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(102), 1, 101));
+        csr.insert_edge(0u32, VertexId::from_int64(1), EdgeId(100), 0, 100).unwrap();
+        assert!(csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(101), 1, 99).is_err());
+        csr.insert_edge(0u32, VertexId::from_int64(2), EdgeId(102), 1, 101).unwrap();
 
         assert_eq!(csr.edge_count(), 1);
     }
@@ -527,9 +526,9 @@ mod tests {
         let mut csr1 = SingleMutableCsr::with_capacity(10);
 
         // Use insert_edge to populate data
-        csr1.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 0, 100);
-        csr1.insert_edge(1u32, VertexId::from_int64(20), EdgeId(101), 0, 100);
-        csr1.insert_edge(2u32, VertexId::from_int64(30), EdgeId(102), 0, 100);
+        csr1.insert_edge(0u32, VertexId::from_int64(10), EdgeId(100), 0, 100).unwrap();
+        csr1.insert_edge(1u32, VertexId::from_int64(20), EdgeId(101), 0, 100).unwrap();
+        csr1.insert_edge(2u32, VertexId::from_int64(30), EdgeId(102), 0, 100).unwrap();
 
         let data = csr1.dump();
 

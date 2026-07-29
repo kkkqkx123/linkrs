@@ -1,6 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering};
-
-use crate::core::types::{EdgeId, Timestamp, VertexId};
+use crate::core::types::{EdgeId, Timestamp};
 use crate::core::{StorageError, StorageResult, Value};
 use crate::storage::edge::edge_table::core::EdgeTableConfig;
 use crate::storage::edge::{
@@ -140,20 +138,17 @@ impl SimpleEdgeStore {
 
         let edge_id = self.next_edge_id.fetch_add();
 
-        if !self
+        if let Err(e) = self
             .out_csr
             .insert_edge(src, dst_key, edge_id, prop_offset, 0)
         {
             if prop_offset > 0 {
                 self.properties.delete(prop_offset);
             }
-            return Err(StorageError::edge_already_exists(format!(
-                "{} -> {}@{}",
-                src, dst, rank
-            )));
+            return Err(e);
         }
 
-        if !self
+        if let Err(e) = self
             .in_csr
             .insert_edge(dst, src_key, edge_id, prop_offset, 0)
         {
@@ -161,10 +156,7 @@ impl SimpleEdgeStore {
             if prop_offset > 0 {
                 self.properties.delete(prop_offset);
             }
-            return Err(StorageError::edge_already_exists(format!(
-                "{} -> {}@{}",
-                dst, src, rank
-            )));
+            return Err(e);
         }
 
         Ok(())

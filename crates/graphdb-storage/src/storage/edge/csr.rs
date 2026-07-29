@@ -85,14 +85,15 @@ impl Csr {
         }
     }
 
-    /// Get approximate memory bytes per edge stored in this CSR.
+    /// Average bytes per edge based on actual memory usage.
     ///
-    /// Used for merge heuristics and size estimation.
-    /// Csr is immutable (post-freeze), so uses average across strategies.
-    ///
-    /// Returns ~24 bytes per edge (immutable CSR storage).
+    /// Computed as `used_memory_size() / edge_count()` for dynamic calibration.
+    /// Falls back to 24 bytes when edge_count is 0.
     pub fn bytes_per_edge(&self) -> usize {
-        24 // Immutable CSR uses ~24 bytes per edge (compressed format)
+        let edges = self.edge_count().max(1) as usize;
+        let bytes = self.used_memory_size();
+        let bpe = bytes / edges;
+        if bpe == 0 { 24 } else { bpe }
     }
 
     /// Resize vertex capacity

@@ -113,7 +113,7 @@ impl LabeledMutableCsr {
         prop_offset: u32,
         label: LabelId,
         ts: Timestamp,
-    ) -> bool {
+    ) -> StorageResult<()> {
         if src_vid as usize >= self.vertex_capacity() {
             self.resize((src_vid as usize + 1).max(self.vertex_capacity() * 2));
         }
@@ -130,7 +130,10 @@ impl LabeledMutableCsr {
             // Check for duplicate
             for nbr in &self.nbr_list[start..end] {
                 if nbr.neighbor == dst && nbr.is_valid_at(ts) {
-                    return false; // Duplicate
+                    return Err(StorageError::edge_already_exists(format!(
+                        "{} -> {:?}",
+                        src_vid, dst
+                    )));
                 }
             }
 
@@ -153,7 +156,7 @@ impl LabeledMutableCsr {
         let degree = &mut self.degrees[src_vid as usize];
         *degree = degree.saturating_add(1);
         self.edge_count.fetch_add(1, Ordering::Relaxed);
-        true
+        Ok(())
     }
 }
 
@@ -275,7 +278,7 @@ impl MutableCsrTrait for LabeledMutableCsr {
         edge_id: EdgeId,
         prop_offset: u32,
         ts: Timestamp,
-    ) -> bool {
+    ) -> StorageResult<()> {
         // For labeled CSR, we need the label information.
         // Since we don't have it in the basic interface, we treat all edges as label 0.
         self.insert_edge_with_label(src_vid, dst, edge_id, prop_offset, 0, ts)
@@ -537,8 +540,8 @@ mod tests {
         let mut csr = LabeledMutableCsr::with_capacity(10, 100);
 
         // Insert edges with implicit label 0
-        assert!(csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 0, 1));
-        assert!(csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 4, 1));
+        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 0, 1).unwrap();
+        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 4, 1).unwrap();
 
         assert_eq!(csr.edge_count(), 2);
 
@@ -555,8 +558,8 @@ mod tests {
         let mut csr = LabeledMutableCsr::with_capacity(10, 100);
 
         // Insert edges
-        assert!(csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 0, 10));
-        assert!(csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 4, 20));
+        csr.insert_edge(0, VertexId::from_int64(1), EdgeId(100), 0, 10).unwrap();
+        csr.insert_edge(0, VertexId::from_int64(2), EdgeId(101), 4, 20).unwrap();
 
         // Query at different timestamps
         assert_eq!(csr.edges_of(0, 5).len(), 0); // Before any edge created
@@ -576,10 +579,10 @@ mod tests {
         let mut csr = LabeledMutableCsr::with_capacity(5, 100);
 
         // Insert multiple edges across vertices
-        assert!(csr.insert_edge(0, VertexId::from_int64(10), EdgeId(1), 0, 1));
-        assert!(csr.insert_edge(0, VertexId::from_int64(11), EdgeId(2), 1, 1));
-        assert!(csr.insert_edge(1, VertexId::from_int64(20), EdgeId(3), 2, 1));
-        assert!(csr.insert_edge(2, VertexId::from_int64(30), EdgeId(4), 3, 1));
+        csr.insert_edge(0, VertexId::from_int64(10), EdgeId(1), 0, 1).unwrap();
+        csr.insert_edge(0, VertexId::from_int64(11), EdgeId(2), 1, 1).unwrap();
+        csr.insert_edge(1, VertexId::from_int64(20), EdgeId(3), 2, 1).unwrap();
+        csr.insert_edge(2, VertexId::from_int64(30), EdgeId(4), 3, 1).unwrap();
 
         // Iterate and collect
         let mut edges_from_iter: Vec<_> = csr.iter(999).collect();
@@ -600,13 +603,13 @@ mod tests {
         for src in 0..5 {
             for dst in 0..3 {
                 let edge_id = (src * 3 + dst) as u64;
-                assert!(csr.insert_edge(
+                csr.insert_edge(
                     src,
                     VertexId::from_int64(100 + dst as i64),
                     EdgeId(edge_id),
                     0,
                     1
-                ));
+                ).unwrap();
             }
         }
 

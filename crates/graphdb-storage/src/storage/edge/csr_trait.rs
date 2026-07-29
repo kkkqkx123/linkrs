@@ -20,9 +20,13 @@ pub trait CsrBase: std::fmt::Debug + Send + Sync {
 pub trait MutableCsrTrait: CsrBase {
     /// Insert an edge.
     ///
+    /// Returns `Ok(())` on success, or an error explaining why insertion failed:
+    ///
     /// - `MutableCsr`: checks for duplicate (neighbor + valid timestamp) across primary and overflow,
     ///   writes to primary if space available, otherwise spills to overflow with auto-expansion.
+    ///   Returns `EdgeAlreadyExists` on duplicate.
     /// - `SingleMutableCsr`: overwrites based on timestamp ordering (only if new ts > existing ts).
+    ///   Returns `Conflict` on timestamp conflict.
     fn insert_edge(
         &mut self,
         src_vid: u32,
@@ -30,7 +34,7 @@ pub trait MutableCsrTrait: CsrBase {
         edge_id: EdgeId,
         prop_offset: u32,
         ts: Timestamp,
-    ) -> bool;
+    ) -> StorageResult<()>;
 
     /// Delete an edge by edge_id.
     ///

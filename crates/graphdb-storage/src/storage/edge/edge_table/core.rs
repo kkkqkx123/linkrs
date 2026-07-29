@@ -526,20 +526,17 @@ impl TimeTravelEdgeStore {
         let src_key = Self::edge_endpoint_key(src, rank);
 
         let edge_id = self.next_edge_id.fetch_add();
-        if !self
+        if let Err(e) = self
             .out_csr
             .insert_edge(src, dst_key, edge_id, prop_offset, ts)
         {
             if prop_offset > 0 {
                 self.properties.delete(prop_offset);
             }
-            return Err(StorageError::edge_already_exists(format!(
-                "{} -> {}@{}",
-                src, dst, rank
-            )));
+            return Err(e);
         }
 
-        if !self
+        if let Err(e) = self
             .in_csr
             .insert_edge(dst, src_key, edge_id, prop_offset, ts)
         {
@@ -547,10 +544,7 @@ impl TimeTravelEdgeStore {
             if prop_offset > 0 {
                 self.properties.delete(prop_offset);
             }
-            return Err(StorageError::edge_already_exists(format!(
-                "{} -> {}@{}",
-                dst, src, rank
-            )));
+            return Err(e);
         }
 
         // Check write backpressure after successful insertion
