@@ -234,3 +234,7 @@ harness = false
 [[bench]]
 name = "end_to_end_bench"
 harness = false
+
+[[bench]]
+name = "operator_bench"
+harness = false

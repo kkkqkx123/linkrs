@@ -223,14 +223,18 @@ impl CsrVariant {
         let bytes = self.used_memory_size();
         let bpe = bytes / edges;
         if bpe == 0 {
-            // Fallback to empirical defaults when memory size is negligible
-            match self {
+            let fallback = match self {
                 CsrVariant::Multiple(_) => 26,
                 CsrVariant::Single(_) => 20,
                 CsrVariant::MultiSingle(_) => 28,
                 CsrVariant::Labeled(_) => 36,
                 CsrVariant::None { .. } => 0,
-            }
+            };
+            log::warn!(
+                "bytes_per_edge: computed bpe=0 ({} bytes / {} edges), using fallback {}",
+                bytes, self.edge_count(), fallback
+            );
+            fallback
         } else {
             bpe
         }

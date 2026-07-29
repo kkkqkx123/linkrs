@@ -6,7 +6,6 @@ use crate::core::types::expr::Expression;
 use crate::core::Value;
 use crate::query::executor::expression::evaluator::ExpressionEvaluator;
 use crate::query::executor::streaming::chunk::DataChunk;
-use crate::query::executor::streaming::context::BorrowedRowContext;
 use crate::query::executor::streaming::executor::StreamingExecutor;
 use crate::query::executor::streaming::executor::ValueRowContext;
 use crate::query::executor::streaming::operators::base::OperatorBase;
@@ -152,49 +151,23 @@ impl UnaryOperator {
             Self::Filter { predicate, state } => loop {
                 match input.advance()? {
                     Some(mut chunk) => {
-                        let layout = chunk.get_layout();
+                        let results = chunk
+                            .evaluate_expression(predicate, state.parameters.as_ref())
+                            .map_err(|e| {
+                                QueryError::execution(format!(
+                                    "Filter predicate evaluation failed: {}",
+                                    e
+                                ))
+                            })?;
                         let mut selected = Vec::new();
-                        let mut context = match state.parameters {
-                            Some(ref params) => BorrowedRowContext::with_parameters(
-                                &chunk.rows[0],
-                                layout.clone(),
-                                params.clone(),
-                            ),
-                            None => BorrowedRowContext::new(&chunk.rows[0], layout.clone()),
-                        };
-                        for i in 0..chunk.len() {
-                            if i > 0 {
-                                context.set_row(&chunk.rows[i]);
-                            }
-                            let keep = match ExpressionEvaluator::evaluate(predicate, &mut context)
-                            {
-                                Ok(value) => match value {
-                                    Value::Bool(b) => b,
-                                    Value::Null(_) => false,
-                                    Value::Int(i) => i != 0,
-                                    Value::BigInt(i) => i != 0,
-                                    Value::Float(f) => f != 0.0,
-                                    Value::Double(f) => f != 0.0,
-                                    Value::String(s) => !s.is_empty(),
-                                    _ => true,
-                                },
-                                Err(e) => {
-                                    return Err(QueryError::execution(format!(
-                                        "Filter predicate evaluation failed: {}",
-                                        e
-                                    )));
-                                }
-                            };
-                            if keep {
+                        for (i, val) in results.into_iter().enumerate() {
+                            if matches_value(&val) {
                                 selected.push(i);
                             }
                         }
                         if !selected.is_empty() {
                             let selected_chunk = chunk.take_indices(&selected);
-                            return Ok(Some(DataChunk::new_with_layout(
-                                selected_chunk.rows,
-                                Arc::clone(&base.output_layout),
-                            )));
+                            return Ok(Some(selected_chunk));
                         }
                     }
                     None => return Ok(None),
@@ -206,35 +179,20 @@ impl UnaryOperator {
                 state,
             } => loop {
                 if let Some(chunk) = input.advance()? {
-                    let input_layout = chunk.get_layout();
-                    let mut projected_rows = Vec::new();
-                    for row in chunk.rows {
-                        let mut context = if let Some(ref params) = state.parameters {
-                            ValueRowContext::with_parameters(
-                                row,
-                                input_layout.clone(),
-                                params.clone(),
-                            )
-                        } else {
-                            ValueRowContext::new(row, input_layout.clone())
-                        };
-                        let mut projected_row = Vec::new();
-                        for expr in output_expressions.iter() {
-                            match ExpressionEvaluator::evaluate(expr, &mut context) {
-                                Ok(value) => projected_row.push(value),
-                                Err(e) => {
-                                    return Err(QueryError::execution(format!(
-                                        "Project expression evaluation failed: {}",
-                                        e
-                                    )));
-                                }
-                            }
-                        }
-                        projected_rows.push(projected_row);
+                    let params = state.parameters.as_ref();
+                    let mut columns = Vec::with_capacity(output_expressions.len());
+                    for expr in output_expressions.iter() {
+                        let col = chunk.evaluate_expression(expr, params).map_err(|e| {
+                            QueryError::execution(format!(
+                                "Project expression evaluation failed: {}",
+                                e
+                            ))
+                        })?;
+                        columns.push(col);
                     }
-                    if !projected_rows.is_empty() {
-                        return Ok(Some(DataChunk::new_with_layout(
-                            projected_rows,
+                    if !columns.is_empty() && !columns[0].is_empty() {
+                        return Ok(Some(DataChunk::from_columns(
+                            columns,
                             Arc::clone(&base.output_layout),
                         )));
                     }
@@ -297,33 +255,28 @@ impl UnaryOperator {
                 Ok(None)
             }
             Self::Assign { assignments, state } => loop {
-                if let Some(chunk) = input.advance()? {
-                    let layout = chunk.get_layout();
-                    let mut result_rows = vec![];
-                    for row in chunk.rows {
-                        let mut new_row = row.clone();
-                        for (_col_name, expr) in assignments.iter() {
-                            let mut context = if let Some(ref params) = state.parameters {
-                                ValueRowContext::with_parameters(
-                                    row.clone(),
-                                    layout.clone(),
-                                    params.clone(),
-                                )
-                            } else {
-                                ValueRowContext::new(row.clone(), layout.clone())
-                            };
-                            match ExpressionEvaluator::evaluate(expr, &mut context) {
-                                Ok(val) => new_row.push(val),
-                                Err(_) => {
-                                    new_row.push(Value::Null(crate::core::value::NullType::Null))
-                                }
-                            }
-                        }
-                        result_rows.push(new_row);
+                if let Some(mut chunk) = input.advance()? {
+                    let params = state.parameters.as_ref();
+                    // Batch-evaluate all assignment expressions first
+                    let mut new_cols: Vec<Vec<Value>> = Vec::with_capacity(assignments.len());
+                    for (_col_name, expr) in assignments.iter() {
+                        let col = match chunk.evaluate_expression(expr, params) {
+                            Ok(col) => col,
+                            Err(_) => vec![Value::Null(crate::core::value::NullType::Null); chunk.len()],
+                        };
+                        new_cols.push(col);
                     }
-                    if !result_rows.is_empty() {
+                    // Extend each row with the computed values
+                    for (i, row) in chunk.rows.iter_mut().enumerate() {
+                        for col in &new_cols {
+                            row.push(col[i].clone());
+                        }
+                    }
+                    if !chunk.rows.is_empty() {
+                        // Invalidate columnar cache since rows changed
+                        chunk.columns = None;
                         return Ok(Some(DataChunk::new_with_layout(
-                            result_rows,
+                            chunk.rows,
                             Arc::clone(&base.output_layout),
                         )));
                     }
@@ -489,5 +442,19 @@ impl UnaryOperator {
             base.lifecycle.mark_closed();
         }
         Ok(())
+    }
+}
+
+/// Convert a Value to a boolean for filter predicate evaluation.
+fn matches_value(val: &Value) -> bool {
+    match val {
+        Value::Bool(b) => *b,
+        Value::Null(_) => false,
+        Value::Int(i) => *i != 0,
+        Value::BigInt(i) => *i != 0,
+        Value::Float(f) => *f != 0.0,
+        Value::Double(f) => *f != 0.0,
+        Value::String(s) => !s.is_empty(),
+        _ => true,
     }
 }

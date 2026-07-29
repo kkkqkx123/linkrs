@@ -208,16 +208,17 @@ impl TimeTravelEdgeStore {
         let bytes = key.as_bytes();
         if bytes.len() != 16 {
             log::warn!(
-                "decode_edge_endpoint: unexpected key length {} (expected 16)",
+                "decode_edge_endpoint: unexpected key length {}, expected 16",
                 bytes.len()
             );
-            return (key, 0);
         }
-
+        let mut buf = [0u8; 16];
+        let copy_len = bytes.len().min(16);
+        buf[..copy_len].copy_from_slice(&bytes[..copy_len]);
         let mut endpoint_bytes = [0u8; 8];
-        endpoint_bytes.copy_from_slice(&bytes[..8]);
+        endpoint_bytes.copy_from_slice(&buf[..8]);
         let mut rank_bytes = [0u8; 8];
-        rank_bytes.copy_from_slice(&bytes[8..16]);
+        rank_bytes.copy_from_slice(&buf[8..16]);
 
         (
             VertexId::from_int64(i64::from_be_bytes(endpoint_bytes)),

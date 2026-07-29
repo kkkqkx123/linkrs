@@ -30,8 +30,16 @@
 //!   constructors for tests and legacy code. Always produce a layout (auto-created).
 
 use super::slot::{SlotId, SlotLayout};
+use crate::core::types::expr::Expression;
 use crate::core::Value;
 use crate::query::executor::base::MemoryReservation;
+use crate::query::executor::expression::evaluator::operations::{
+    BinaryOperationEvaluator, UnaryOperationEvaluator,
+};
+use crate::query::executor::expression::evaluator::ExpressionEvaluator;
+use crate::query::executor::expression::ExpressionError;
+use crate::query::executor::streaming::context::BorrowedRowContext;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 const ROW_POOL_MAX_SIZE: usize = 8;
@@ -586,6 +594,130 @@ impl DataChunk {
     pub fn get_or_materialize_columns(&mut self) -> &[Vec<Value>] {
         self.materialize_columns();
         self.columns.as_ref().unwrap()
+    }
+
+    // ── Batch expression evaluation ──
+
+    /// Evaluate an expression against every row in this chunk, returning one result per row.
+    ///
+    /// Uses a columnar batch path for simple expressions (Literal, Variable, Unary,
+    /// Binary, TypeCast, and Property-on-Variable), falling back to per-row evaluation
+    /// for complex expressions (Function, Aggregate, Case, Subquery, etc.).
+    ///
+    /// `params` provides parameter values (for `$name` resolution), shared across all rows.
+    pub fn evaluate_expression(
+        &self,
+        expression: &Expression,
+        params: Option<&Arc<HashMap<String, Value>>>,
+    ) -> Result<Vec<Value>, ExpressionError> {
+        if self.rows.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Fast columnar batch path
+        if let Ok(result) = self.try_evaluate_columnar(expression, params) {
+            return Ok(result);
+        }
+        // Fall back to per-row evaluation
+        self.evaluate_expression_per_row(expression, params)
+    }
+
+    /// Columnar batch evaluation path — returns Err if the expression is too complex.
+    fn try_evaluate_columnar(
+        &self,
+        expression: &Expression,
+        params: Option<&Arc<HashMap<String, Value>>>,
+    ) -> Result<Vec<Value>, ExpressionError> {
+        match expression {
+            Expression::Literal(v) => Ok(vec![v.clone(); self.rows.len()]),
+
+            Expression::Variable(name) => {
+                let slot = self.layout.slot_id(name).ok_or_else(|| {
+                    ExpressionError::undefined_variable(name)
+                })?;
+                self.get_column(slot).ok_or_else(|| {
+                    ExpressionError::undefined_variable(name)
+                })
+            }
+
+            Expression::Parameter(name) => {
+                let val = params
+                    .and_then(|p| p.get(name).cloned())
+                    .ok_or_else(|| ExpressionError::undefined_parameter(name))?;
+                Ok(vec![val; self.rows.len()])
+            }
+
+            Expression::Unary { op, operand } => {
+                let values = self.try_evaluate_columnar(operand, params)?;
+                values
+                    .into_iter()
+                    .map(|v| UnaryOperationEvaluator::evaluate(op, &v))
+                    .collect()
+            }
+
+            Expression::Binary { left, op, right } => {
+                let left_values = self.try_evaluate_columnar(left, params)?;
+                let right_values = self.try_evaluate_columnar(right, params)?;
+                left_values
+                    .into_iter()
+                    .zip(right_values)
+                    .map(|(l, r)| BinaryOperationEvaluator::evaluate(&l, op, &r))
+                    .collect()
+            }
+
+            Expression::TypeCast {
+                expression,
+                target_type,
+            } => {
+                let values = self.try_evaluate_columnar(expression, params)?;
+                values
+                    .into_iter()
+                    .map(|v| ExpressionEvaluator::eval_type_cast(&v, target_type))
+                    .collect()
+            }
+
+            Expression::Property { object, property } => {
+                if let Expression::Variable(var_name) = object.as_ref() {
+                    let compound = format!("{}.{}", var_name, property);
+                    // Fast path: compound name exists as a direct column
+                    if let Some(slot) = self.layout.slot_id(&compound) {
+                        if let Some(col) = self.get_column(slot) {
+                            return Ok(col);
+                        }
+                    }
+                    // Medium path: object is a Variable but property is not a column —
+                    // we need per-row property extraction, fall back.
+                    return Err(ExpressionError::type_error(
+                        "Property access requires per-row evaluation",
+                    ));
+                }
+                // Complex object expression — fall back
+                Err(ExpressionError::type_error(
+                    "Property access requires per-row evaluation",
+                ))
+            }
+
+            _ => Err(ExpressionError::type_error(
+                "Expression requires per-row evaluation",
+            )),
+        }
+    }
+
+    /// Per-row fallback for complex expressions.
+    fn evaluate_expression_per_row(
+        &self,
+        expression: &Expression,
+        params: Option<&Arc<HashMap<String, Value>>>,
+    ) -> Result<Vec<Value>, ExpressionError> {
+        let layout = self.get_layout();
+        let mut results = Vec::with_capacity(self.rows.len());
+        for row in &self.rows {
+            let mut ctx = match params {
+                Some(p) => BorrowedRowContext::with_parameters(row, layout.clone(), p.clone()),
+                None => BorrowedRowContext::new(row, layout.clone()),
+            };
+            results.push(ExpressionEvaluator::evaluate(expression, &mut ctx)?);
+        }
+        Ok(results)
     }
 }
 

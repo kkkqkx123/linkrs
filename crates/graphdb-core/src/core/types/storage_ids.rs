@@ -256,6 +256,14 @@ impl VertexId {
 
     pub fn from_bytes(bytes: Vec<u8>) -> Self {
         let len = bytes.len().min(VERTEX_ID_MAX_SIZE);
+        if bytes.len() > VERTEX_ID_MAX_SIZE {
+            log::warn!(
+                "VertexId::from_bytes: input length {} exceeds max {}, truncating to {}",
+                bytes.len(),
+                VERTEX_ID_MAX_SIZE,
+                len
+            );
+        }
         let mut data = [0u8; VERTEX_ID_MAX_SIZE];
         data[..len].copy_from_slice(&bytes[..len]);
         VertexId {

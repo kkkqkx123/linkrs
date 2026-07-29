@@ -613,6 +613,32 @@ impl GraphDataStore {
             .ok_or_else(|| StorageError::label_not_found(format!("edge label {}", edge_label)))
     }
 
+    /// Iterate over all partitions of a given edge label, calling `operation` on each
+    /// with only the per-table write lock held (no catalog write lock).
+    ///
+    /// Uses scatter-gather: all Arcs are collected under a brief catalog read lock,
+    /// then each table is locked individually so different edge labels' partitions
+    /// can be mutated concurrently.
+    pub(crate) fn for_each_edge_partition_mut<R>(
+        &self,
+        edge_label: LabelId,
+        operation: impl Fn(EdgeTableKey, &mut EdgeStore) -> StorageResult<R>,
+    ) -> StorageResult<Vec<R>> {
+        let keys = self.edge_partition_keys(edge_label)?;
+        let arcs: Vec<(EdgeTableKey, Arc<RwLock<EdgeStore>>)> = {
+            let guard = self.edge_tables.read();
+            keys.iter()
+                .filter_map(|key| guard.get(key).map(|arc| (*key, arc.clone())))
+                .collect()
+        };
+        arcs.into_iter()
+            .map(|(key, arc)| {
+                let mut table = arc.write();
+                operation(key, &mut table)
+            })
+            .collect()
+    }
+
     pub(crate) fn with_edge_partitions_mut<R>(
         &self,
         edge_label: LabelId,

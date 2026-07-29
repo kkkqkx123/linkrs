@@ -535,20 +535,20 @@ impl RecoveryApplier for GraphStorageContext {
                         let Some(key) = key else {
                             return Err(e);
                         };
-                        self.data_store().with_edge_tables_mut(|edge_tables| {
-                            if let Some(arc) = edge_tables.get_mut(&key) {
-                                let mut table = arc.write();
-                                let change_details =
-                                    crate::storage::schema::ChangeDetails::PropertyAdded {
-                                        name: prop.name.clone(),
-                                        data_type: prop.data_type.clone(),
-                                        nullable: prop.nullable,
-                                        default_value: None,
-                                    };
-                                table.rebuild_schema_change_from_redo(change_details)?;
-                            }
-                            Ok(())
-                        })?;
+                        let arc = self
+                            .data_store()
+                            .with_edge_tables(|tables| tables.get(&key).map(|a| a.clone()));
+                        if let Some(arc) = arc {
+                            let mut table = arc.write();
+                            let change_details =
+                                crate::storage::schema::ChangeDetails::PropertyAdded {
+                                    name: prop.name.clone(),
+                                    data_type: prop.data_type.clone(),
+                                    nullable: prop.nullable,
+                                    default_value: None,
+                                };
+                            table.rebuild_schema_change_from_redo(change_details)?;
+                        }
                     } else {
                         return Err(e);
                     }
@@ -909,14 +909,13 @@ impl GraphStorageContext {
                     Ok((src_internal, dst_internal))
                 })?;
 
-        self.data_store()
-            .with_edge_tables_mut(|edge_tables| -> StorageResult<()> {
-                if let Some(arc) = edge_tables.get_mut(&key) {
-                    let mut table = arc.write();
-                    let _ = table.delete_edge(src_internal, dst_internal, redo.rank, ts)?;
-                }
-                Ok(())
-            })?;
+        let arc = self
+            .data_store()
+            .with_edge_tables(|tables| tables.get(&key).map(|a| a.clone()));
+        if let Some(arc) = arc {
+            let mut table = arc.write();
+            let _ = table.delete_edge(src_internal, dst_internal, redo.rank, ts)?;
+        }
 
         self.mark_edge_modified(redo.edge_label);
         Ok(())

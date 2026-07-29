@@ -93,7 +93,15 @@ impl Csr {
         let edges = self.edge_count().max(1) as usize;
         let bytes = self.used_memory_size();
         let bpe = bytes / edges;
-        if bpe == 0 { 24 } else { bpe }
+        if bpe == 0 {
+            log::warn!(
+                "bytes_per_edge: computed bpe=0 ({} bytes / {} edges), using fallback 24",
+                bytes, self.edge_count()
+            );
+            24
+        } else {
+            bpe
+        }
     }
 
     /// Resize vertex capacity

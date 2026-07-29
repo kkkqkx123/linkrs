@@ -233,11 +233,7 @@ impl GraphStorageContext {
         let deleted = self
             .persistent
             .data_store
-            .with_edge_tables_mut(|edge_tables| {
-                let arc = edge_tables.get_mut(&key).ok_or_else(|| {
-                    StorageError::label_not_found(format!("edge label {}", params.edge_label))
-                })?;
-                let mut edge_table = arc.write();
+            .with_single_edge_table_mut(&key, |edge_table| {
                 match (oe_offset, ie_offset) {
                     (Some(oe), Some(ie)) => {
                         edge_table.delete_edge_by_offset(src_internal, dst_internal, params.rank, oe, ie, ts)

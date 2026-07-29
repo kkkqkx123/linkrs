@@ -357,12 +357,18 @@ fn src_key_for(src: u32) -> crate::core::types::VertexId {
 fn decode_edge_endpoint(key: crate::core::types::VertexId) -> (crate::core::types::VertexId, i64) {
     let bytes = key.as_bytes();
     if bytes.len() != 16 {
-        return (key, 0);
+        log::warn!(
+            "decode_edge_endpoint: unexpected key length {}, expected 16",
+            bytes.len()
+        );
     }
+    let mut buf = [0u8; 16];
+    let copy_len = bytes.len().min(16);
+    buf[..copy_len].copy_from_slice(&bytes[..copy_len]);
     let mut endpoint_bytes = [0u8; 8];
-    endpoint_bytes.copy_from_slice(&bytes[..8]);
+    endpoint_bytes.copy_from_slice(&buf[..8]);
     let mut rank_bytes = [0u8; 8];
-    rank_bytes.copy_from_slice(&bytes[8..16]);
+    rank_bytes.copy_from_slice(&buf[8..16]);
     (
         crate::core::types::VertexId::from_int64(i64::from_be_bytes(endpoint_bytes)),
         i64::from_be_bytes(rank_bytes),
