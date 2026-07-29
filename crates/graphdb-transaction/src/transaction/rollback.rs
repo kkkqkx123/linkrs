@@ -8,11 +8,8 @@ use crate::core::StorageError;
 use crate::transaction::undo_log::{UndoLogEntry, UndoTarget};
 
 pub use crate::transaction::undo_log::{
-    AddEdgePropUndo, AddVertexPropUndo, CreateEdgeTypeUndo, CreateVertexTypeUndo,
-    DeleteEdgePropUndo, DeleteEdgeTypeUndo, DeleteVertexPropUndo, DeleteVertexTypeUndo,
-    InsertEdgeUndo, InsertVertexUndo, PropertyValue, RelatedEdgeInfo, RemoveEdgeUndo,
-    RemoveVertexUndo, RenameEdgePropUndo, RenameVertexPropUndo, UpdateEdgePropUndo,
-    UpdateVertexPropUndo,
+    CreateEdgeTypeUndo, CreateVertexTypeUndo, InsertEdgeUndo, InsertVertexUndo, PropertyValue,
+    RelatedEdgeInfo, RemoveEdgeUndo, RemoveVertexUndo, UpdateEdgePropUndo, UpdateVertexPropUndo,
 };
 
 /// Operation logging context trait

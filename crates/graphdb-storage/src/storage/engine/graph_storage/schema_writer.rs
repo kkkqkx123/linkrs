@@ -30,15 +30,6 @@ fn append_schema_redo<T: serde::Serialize>(
 ) -> StorageResult<crate::transaction::wal::TransactionWalEntry> {
     let timestamp = ctx.get_write_timestamp()?;
 
-    if let Some(recorder) = ctx.mutation_recorder() {
-        if recorder.has_dml_entries() {
-            ctx.abort_write_timestamp(timestamp);
-            return Err(StorageError::db_error(
-                "DDL cannot be mixed with DML in the same transaction; commit or rollback first",
-            ));
-        }
-    }
-
     let result = ctx.append_wal_redo(op_type, timestamp, redo);
     match result {
         Ok(entry) => {

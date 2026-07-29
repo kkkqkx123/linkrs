@@ -970,14 +970,6 @@ impl TransactionContext {
         undo_logs.len()
     }
 
-    /// Returns true if the undo log contains any DML entries (vertex/edge mutations).
-    /// Used to enforce DDL/DML boundary: DDL cannot execute if DML has already occurred
-    /// in this transaction, and vice versa.
-    pub fn has_dml_entries(&self) -> bool {
-        let undo_logs = self.undo_logs.read();
-        undo_logs.has_dml_entries()
-    }
-
     /// Clear undo logs
     pub fn clear_undo_logs(&self) -> Result<(), TransactionError> {
         let mut undo_logs = self.undo_logs.write();
@@ -1086,10 +1078,6 @@ impl TransactionMutationRecorder for TransactionContext {
             previous_value,
         });
         let _ = self.add_undo_log(entry);
-    }
-
-    fn has_dml_entries(&self) -> bool {
-        self.has_dml_entries()
     }
 }
 

@@ -726,21 +726,12 @@ pub enum SyncPolicy {
     Never,
     #[default]
     EveryWrite,
-    Periodic {
-        interval_ms: u64,
-    },
     Batch {
         batch_size: usize,
     },
 }
 
 impl SyncPolicy {
-    pub fn periodic(interval: Duration) -> Self {
-        Self::Periodic {
-            interval_ms: interval.as_millis() as u64,
-        }
-    }
-
     pub fn batch(batch_size: usize) -> Self {
         Self::Batch { batch_size }
     }
@@ -753,22 +744,15 @@ impl SyncPolicy {
         matches!(self, Self::EveryWrite)
     }
 
-    pub fn is_periodic(&self) -> bool {
-        matches!(self, Self::Periodic { .. })
-    }
-
     pub fn is_batch(&self) -> bool {
         matches!(self, Self::Batch { .. })
     }
 
-    pub fn requires_sync(&self, write_count: usize, last_sync_time: Duration) -> bool {
+    pub fn requires_sync(&self, write_count: u64, _last_sync_elapsed: Option<Duration>) -> bool {
         match self {
             SyncPolicy::Never => false,
             SyncPolicy::EveryWrite => true,
-            SyncPolicy::Periodic { interval_ms } => {
-                last_sync_time.as_millis() as u64 >= *interval_ms
-            }
-            SyncPolicy::Batch { batch_size } => write_count >= *batch_size,
+            SyncPolicy::Batch { batch_size } => write_count >= *batch_size as u64,
         }
     }
 }
@@ -1106,10 +1090,10 @@ mod tests {
 
     #[test]
     fn test_sync_policy() {
-        assert!(SyncPolicy::EveryWrite.requires_sync(0, Duration::ZERO));
-        assert!(!SyncPolicy::Never.requires_sync(100, Duration::ZERO));
-        assert!(SyncPolicy::Batch { batch_size: 10 }.requires_sync(10, Duration::ZERO));
-        assert!(!SyncPolicy::Batch { batch_size: 10 }.requires_sync(5, Duration::ZERO));
+        assert!(SyncPolicy::EveryWrite.requires_sync(0, None));
+        assert!(!SyncPolicy::Never.requires_sync(100, None));
+        assert!(SyncPolicy::Batch { batch_size: 10 }.requires_sync(10, None));
+        assert!(!SyncPolicy::Batch { batch_size: 10 }.requires_sync(5, None));
     }
 
     #[test]

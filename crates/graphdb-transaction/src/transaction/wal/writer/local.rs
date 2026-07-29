@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use super::compression::{self as compression_mod, create_compressor, Compressor};
 use super::group_commit::GroupCommitCoordinator;
-use super::sync::{elapsed_since, should_sync};
+use super::sync::elapsed_since;
 use crate::core::types::Timestamp;
 use crate::core::wal::traits::WalWriter;
 use crate::core::wal::types::{
@@ -598,9 +598,7 @@ impl LocalWalWriter {
 
         let write_count = self.write_count.fetch_add(1, Ordering::SeqCst) + 1;
         let elapsed = elapsed_since(*self.last_sync_time.lock().unwrap());
-        let should_sync = should_sync(&self.config.sync_policy, write_count, elapsed);
-
-        if should_sync {
+        if self.config.sync_policy.requires_sync(write_count, elapsed) {
             if let Err(e) = file.sync_data() {
                 self.poison(format!("fsync failed: {}", e));
                 return Err(WalError::IoError(e.to_string()));
@@ -989,9 +987,7 @@ impl WalWriter for LocalWalWriter {
 
         let write_count = self.write_count.fetch_add(1, Ordering::SeqCst) + 1;
         let elapsed = elapsed_since(*self.last_sync_time.lock().unwrap());
-        let should_sync = should_sync(&self.config.sync_policy, write_count, elapsed);
-
-        if should_sync {
+        if self.config.sync_policy.requires_sync(write_count, elapsed) {
             file.sync_data()?;
             let lsn = self.current_lsn.load(Ordering::SeqCst);
             self.last_synced_lsn.store(lsn, Ordering::SeqCst);

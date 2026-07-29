@@ -87,12 +87,6 @@ impl FileBackedUndoLog {
         self.total_entries
     }
 
-    /// Returns true if the in-memory buffer contains any DML entries.
-    /// Used for DDL/DML boundary enforcement.
-    pub fn buffer_has_dml(&self) -> bool {
-        self.buffer.iter().any(|e| e.is_dml())
-    }
-
     pub fn clear(&mut self) -> UndoLogResult<()> {
         if let Some(ref mut f) = self.file {
             f.set_len(0).map_err(|error| {

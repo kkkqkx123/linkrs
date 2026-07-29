@@ -69,12 +69,11 @@ pub use rollback::{
 };
 pub use types::*;
 pub use undo_log::{
-    AddEdgePropUndo, AddVertexPropUndo, CreateEdgeTypeUndo, CreateVertexTypeUndo,
-    DeleteEdgePropUndo, DeleteEdgeTypeUndo, DeleteVertexPropUndo, DeleteVertexTypeUndo,
-    FileBackedUndoLog, InsertEdgeUndo, InsertVertexUndo, PropertyValue, RelatedEdgeInfo,
-    RemoveEdgeUndo, RemoveVertexUndo, RestoreEdgeUndo, SequenceCreateUndo, SequenceDropUndo,
-    SequenceIncrementUndo, UndoLogConfig, UndoLogEntry, UndoLogError, UndoLogManager,
-    UndoLogResult, UndoTarget, UpdateEdgePropUndo, UpdateVertexPropUndo,
+    CreateEdgeTypeUndo, CreateVertexTypeUndo, FileBackedUndoLog, InsertEdgeUndo, InsertVertexUndo,
+    PropertyValue, RelatedEdgeInfo, RemoveEdgeUndo, RemoveVertexUndo, RestoreEdgeUndo,
+    SequenceCreateUndo, SequenceDropUndo, SequenceIncrementUndo, UndoLogConfig, UndoLogEntry,
+    UndoLogError, UndoLogManager, UndoLogResult, UndoTarget, UpdateEdgePropUndo,
+    UpdateVertexPropUndo,
 };
 pub use wal::{
     ColumnId, CreateEdgeTypeRedo, CreateVertexTypeRedo, DeleteEdgeRedo, DeleteVertexRedo, EdgeId,

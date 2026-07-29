@@ -64,7 +64,7 @@ pub use parser::{
 };
 pub use recovery::{RecoveryApplier, RecoveryConfig, RecoveryManager, RecoveryStats};
 
-// Re-export fundamental types from core for backward compatibility
+// Re-export core types for callers working in wal context
 pub use crate::core::types::{ColumnId, EdgeId, LabelId, Timestamp, VertexId};
 pub use writer::{LocalWalWriter, WalWriter};
 

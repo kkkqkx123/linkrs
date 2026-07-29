@@ -54,12 +54,6 @@ pub trait TransactionMutationRecorder: Send + Sync + std::fmt::Debug {
 
     /// Record a sequence value change for rollback support.
     fn record_sequence_change(&self, _sequence_name: &str, _previous_value: i64) {}
-
-    /// Returns true if the transaction already has DML entries (vertex/edge mutations).
-    /// Used to enforce DDL/DML boundary at the storage layer.
-    fn has_dml_entries(&self) -> bool {
-        false
-    }
 }
 
 pub trait TransactionCommitSink: Send + Sync {

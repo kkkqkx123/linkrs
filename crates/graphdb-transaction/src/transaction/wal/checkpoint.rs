@@ -31,18 +31,14 @@ pub struct Checkpoint {
     pub redo_lsn: Lsn,
 }
 
-/// Checkpoint mode (similar to SQLite's checkpoint modes)
+/// Checkpoint mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CheckpointMode {
-    /// Passive: checkpoint as many frames as possible without blocking writers
-    Passive,
-    /// Full: block until no writers, checkpoint all frames
+    /// Auto: checkpoint without blocking writers (for automatic background checkpoints)
+    Auto,
+    /// Force: full checkpoint, blocks until completion, clears state
     #[default]
-    Full,
-    /// Restart: same as Full, but ensures next writer restarts log
-    Restart,
-    /// Truncate: same as Restart, but also truncates WAL file
-    Truncate,
+    Force,
 }
 
 /// Result of a checkpoint operation
@@ -301,12 +297,11 @@ impl CheckpointManager {
     ) -> WalResult<CheckpointResult> {
         let start_time = std::time::Instant::now();
 
-        let checkpoint = match mode {
-            CheckpointMode::Passive => self.checkpoint_passive(timestamp, lsn)?,
-            CheckpointMode::Full => self.create_checkpoint(timestamp, lsn)?,
-            CheckpointMode::Restart => self.checkpoint_restart(timestamp, lsn)?,
-            CheckpointMode::Truncate => self.checkpoint_truncate(timestamp, lsn)?,
-        };
+        let checkpoint = self.create_checkpoint(timestamp, lsn)?;
+
+        if mode == CheckpointMode::Force {
+            self.modified_tables.clear();
+        }
 
         let duration_us = start_time.elapsed().as_micros() as u64;
 
@@ -317,31 +312,6 @@ impl CheckpointManager {
             mode,
             success: true,
         })
-    }
-
-    /// Passive checkpoint: checkpoint without blocking writers
-    fn checkpoint_passive(&mut self, timestamp: Timestamp, lsn: Lsn) -> WalResult<Checkpoint> {
-        self.create_checkpoint(timestamp, lsn)
-    }
-
-    /// Restart checkpoint: full checkpoint and reset log
-    fn checkpoint_restart(&mut self, timestamp: Timestamp, lsn: Lsn) -> WalResult<Checkpoint> {
-        let checkpoint = self.create_checkpoint(timestamp, lsn)?;
-        self.modified_tables.clear();
-        Ok(checkpoint)
-    }
-
-    /// Truncate checkpoint: full checkpoint, reset log, and truncate WAL
-    fn checkpoint_truncate(&mut self, timestamp: Timestamp, lsn: Lsn) -> WalResult<Checkpoint> {
-        let checkpoint = self.checkpoint_restart(timestamp, lsn)?;
-
-        for wal_file in &checkpoint.wal_files {
-            if wal_file.exists() {
-                fs::remove_file(wal_file).map_err(|e| WalError::IoError(e.to_string()))?;
-            }
-        }
-
-        Ok(checkpoint)
     }
 
     /// Get WAL files that can be deleted before current checkpoint
@@ -459,7 +429,7 @@ impl CheckpointManager {
 
         let result = self.checkpoint(timestamp, lsn, mode)?;
 
-        if mode == CheckpointMode::Restart || mode == CheckpointMode::Truncate {
+        if mode == CheckpointMode::Force {
             if let Some(ref tracker) = self.table_tracker {
                 tracker.clear();
             }
@@ -651,7 +621,7 @@ mod tests {
         assert_eq!(manager.modified_tables().len(), 1);
 
         let result = manager
-            .create_checkpoint_with_tracker(100, Lsn::new(1000), CheckpointMode::Full)
+            .create_checkpoint_with_tracker(100, Lsn::new(1000), CheckpointMode::Force)
             .expect("Failed to create checkpoint");
 
         assert!(result.success);
