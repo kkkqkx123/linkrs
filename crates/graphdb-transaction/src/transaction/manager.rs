@@ -1076,6 +1076,63 @@ impl TransactionManager {
                     // Lock order: cert_shard → committed_write_sets → *
                     let _cert_guard = self.cert_shard(context.id).lock();
                     let mut committed = self.committed_write_sets.lock();
+
+                    // Final review: cross-shard certification race prevention.
+                    //
+                    // check_write_set_conflict() only serializes via cert_shard,
+                    // so two conflicting transactions in different shards can
+                    // both pass because each reads the other's
+                    // is_write_validated() == false and skips it.
+                    //
+                    // This re-check under cert_shard catches the race by
+                    // scanning all active (validated) transactions and all
+                    // committed entries since our start_timestamp.
+                    for entry in self.active_transactions.iter() {
+                        let (other_id, other_ctx) = entry.pair();
+                        if *other_id == context.id {
+                            continue;
+                        }
+                        if other_ctx.read_only {
+                            continue;
+                        }
+                        if !other_ctx.is_write_validated() {
+                            continue;
+                        }
+                        if descriptor.write_set.has_conflict_with(&other_ctx.get_write_set()) {
+                            drop(committed);
+                            drop(_cert_guard);
+                            self.stats.record_txn_conflict();
+                            if let Err(abort_error) = self.abort_transaction_internal(&context) {
+                                log::error!(
+                                    "Final-review abort failed for txn={:?}: {}",
+                                    context.id,
+                                    abort_error
+                                );
+                                self.stats.increment_cleanup_failure();
+                            }
+                            return Err(TransactionError::write_transaction_conflict());
+                        }
+                    }
+                    for (commit_ts, ws) in committed.iter() {
+                        if *commit_ts <= context.start_timestamp {
+                            continue;
+                        }
+                        if descriptor.write_set.has_conflict_with(ws) {
+                            drop(committed);
+                            drop(_cert_guard);
+                            self.stats.record_txn_conflict();
+                            if let Err(abort_error) = self.abort_transaction_internal(&context) {
+                                log::error!(
+                                    "Final-review(committed) abort failed for txn={:?}: {}",
+                                    context.id,
+                                    abort_error
+                                );
+                                self.stats.increment_cleanup_failure();
+                            }
+                            return Err(TransactionError::write_transaction_conflict());
+                        }
+                    }
+
                     committed.push((descriptor.write_timestamp, descriptor.write_set.clone()));
                     let mut vertex_idx = self.committed_vertex_writes.lock();
                     for vid in descriptor.write_set.vertices.iter() {

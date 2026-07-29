@@ -738,3 +738,100 @@ fn test_owner_is_required_for_kill() {
         .kill_transaction(txn_id, Some("session-1"))
         .expect("the owner should be able to kill the transaction");
 }
+
+#[test]
+fn test_cross_shard_final_review_no_false_abort() {
+    use std::sync::Barrier;
+    use std::thread;
+
+    use crate::core::types::{CommitLsn, VertexId};
+    use crate::transaction::participant::{
+        TransactionAbortDescriptor, TransactionCommitDescriptor, TransactionCommitSink,
+    };
+
+    struct PassThroughSink {
+        barrier: Arc<Barrier>,
+    }
+
+    impl TransactionCommitSink for PassThroughSink {
+        fn commit_transaction(&self, _tid: TransactionId) -> Result<CommitLsn, String> {
+            Ok(CommitLsn::new(7))
+        }
+        fn abort_transaction(&self, _tid: TransactionId) -> Result<(), String> {
+            Ok(())
+        }
+        fn commit_transaction_with_descriptor(
+            &self,
+            _descriptor: &TransactionCommitDescriptor,
+        ) -> Result<CommitLsn, String> {
+            self.barrier.wait();
+            Ok(CommitLsn::new(7))
+        }
+        fn abort_transaction_with_descriptor(
+            &self,
+            _descriptor: &TransactionAbortDescriptor,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn finalize_commit(
+            &self,
+            _descriptor: &TransactionCommitDescriptor,
+            _commit_lsn: CommitLsn,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn recover_unfinalized_commits(&self) -> Result<usize, String> {
+            Ok(0)
+        }
+    }
+
+    // Two non-conflicting transactions in different cert shards commit
+    // concurrently. The sink barrier ensures both pass certification
+    // before either enters the publication phase (final review).
+    // The final review must NOT false-positive on non-conflicting writes.
+    for iteration in 0..20 {
+        let barrier = Arc::new(Barrier::new(2));
+        let manager = Arc::new(
+            TransactionManager::new(TransactionManagerConfig::default())
+                .with_commit_sink(Arc::new(PassThroughSink {
+                    barrier: Arc::clone(&barrier),
+                })),
+        );
+
+        let vid1 = VertexId::from_int64(iteration as i64 * 2);
+        let vid2 = VertexId::from_int64(iteration as i64 * 2 + 1);
+
+        let txn1 = manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .expect("txn1");
+        let ctx1 = manager.get_context(txn1).expect("ctx1");
+        ctx1.record_vertex_write(vid1);
+        drop(ctx1);
+
+        let txn2 = manager
+            .begin_insert_transaction(TransactionOptions::default())
+            .expect("txn2");
+        let ctx2 = manager.get_context(txn2).expect("ctx2");
+        ctx2.record_vertex_write(vid2);
+        drop(ctx2);
+
+        let mgr1 = Arc::clone(&manager);
+        let mgr2 = Arc::clone(&manager);
+        let h1 = thread::spawn(move || mgr1.commit_transaction(txn1));
+        let h2 = thread::spawn(move || mgr2.commit_transaction(txn2));
+
+        let r1 = h1.join().expect("thread1");
+        let r2 = h2.join().expect("thread2");
+
+        assert!(
+            r1.is_ok(),
+            "non-conflicting txn1 should commit: {:?}",
+            r1
+        );
+        assert!(
+            r2.is_ok(),
+            "non-conflicting txn2 should commit: {:?}",
+            r2
+        );
+    }
+}
