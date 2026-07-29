@@ -342,7 +342,7 @@ impl Default for TransactionOptions {
         Self {
             timeout: None,
             read_only: false,
-            durability: DurabilityLevel::Sync,
+            durability: DurabilityLevel::default(),
             isolation_level: IsolationLevel::default(),
             query_timeout: None,
             statement_timeout: None,
@@ -435,7 +435,7 @@ impl Default for TransactionConfig {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(30),
-            durability: DurabilityLevel::Sync,
+            durability: DurabilityLevel::default(),
             isolation_level: IsolationLevel::default(),
             query_timeout: None,
             statement_timeout: None,
@@ -747,7 +747,7 @@ pub enum ConcurrencyMode {
     Optimistic,
     /// Acquire an exclusive write lock at transaction begin time.
     /// Guarantees no conflicts at commit, but limits write concurrency to 1.
-    Pessimistic,
+    SingleWriter,
 }
 
 /// Write Set - tracks entities modified by a transaction for conflict detection
@@ -1067,7 +1067,6 @@ pub struct TransactionResourceMetrics {
     pub committed_frontier_lag: Timestamp,
     pub staged_wal_bytes: u64,
     pub undo_bytes: u64,
-    pub prepared_transactions: u64,
     pub checkpoint_drain_time: Duration,
 }
 

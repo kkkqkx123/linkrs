@@ -480,7 +480,6 @@ pub async fn metrics<
             "committed_frontier_lag": resources.committed_frontier_lag,
             "staged_wal_bytes": resources.staged_wal_bytes,
             "undo_bytes": resources.undo_bytes,
-            "prepared_transactions": resources.prepared_transactions,
             "checkpoint_drain_time_ms": resources.checkpoint_drain_time.as_millis(),
         },
     })))

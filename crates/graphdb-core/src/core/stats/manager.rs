@@ -87,7 +87,6 @@ pub enum MetricType {
     TxnFrontierLag,
     TxnStagedWalBytes,
     TxnUndoBytes,
-    TxnPreparedTransactions,
     TxnCheckpointDrainTimeMs,
     // Sync metrics
     SyncOperations,
@@ -465,7 +464,6 @@ pub struct TxnResourceMetrics {
     pub frontier_lag: u64,
     pub staged_wal_bytes: u64,
     pub undo_bytes: u64,
-    pub prepared_transactions: u64,
     pub checkpoint_drain_time_ms: u64,
 }
 
@@ -1029,10 +1027,6 @@ impl StatsManager {
         self.set_value(MetricType::TxnFrontierLag, metrics.frontier_lag);
         self.set_value(MetricType::TxnStagedWalBytes, metrics.staged_wal_bytes);
         self.set_value(MetricType::TxnUndoBytes, metrics.undo_bytes);
-        self.set_value(
-            MetricType::TxnPreparedTransactions,
-            metrics.prepared_transactions,
-        );
         self.set_value(
             MetricType::TxnCheckpointDrainTimeMs,
             metrics.checkpoint_drain_time_ms,

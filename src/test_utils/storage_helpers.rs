@@ -14,7 +14,7 @@ use std::sync::Arc;
 pub fn create_test_space(name: &str) -> SpaceInfo {
     SpaceInfo::new(name.to_string())
         .with_vid_type(DataType::BigInt)
-        .with_comment(Some("测试空间".to_string()))
+        .with_comment(Some("test_space".to_string()))
 }
 
 /// Create tag information

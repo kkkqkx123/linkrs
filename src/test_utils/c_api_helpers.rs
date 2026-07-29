@@ -32,12 +32,13 @@ impl CApiTestDatabase {
     ///
     /// Use a temporary directory to create independent database files to ensure the isolation of the tests.
     pub fn new() -> Self {
-        let temp_dir = TempDir::new().expect("创建临时目录失败");
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
         let counter = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
         let db_path = temp_dir.path().join(format!("test_{}.db", counter));
 
         let path_cstring =
-            CString::new(db_path.to_str().expect("路径转换为字符串失败")).expect("创建CString失败");
+            CString::new(db_path.to_str().expect("Failed to convert path to string"))
+                .expect("Failed to create CString");
         let mut db: *mut crate::api::embedded::c_api::types::graphdb_t = ptr::null_mut();
 
         let rc = unsafe {
@@ -47,7 +48,7 @@ impl CApiTestDatabase {
         assert_eq!(
             rc,
             graphdb_error_code_t::GRAPHDB_OK as i32,
-            "打开数据库失败，错误码: {}, 路径: {:?}",
+            "Failed to open database, error code: {}, path: {:?}",
             rc,
             db_path
         );
@@ -205,7 +206,7 @@ pub struct CApiTestResult {
 impl CApiTestResult {
     /// Create results from executing queries within the conversation.
     pub fn from_query(session: &CApiTestSession, query: &str) -> Self {
-        let query_cstring = CString::new(query).expect("查询字符串无效");
+        let query_cstring = CString::new(query).expect("Invalid query string");
         let mut result: *mut crate::api::embedded::c_api::types::graphdb_result_t =
             ptr::null_mut();
 

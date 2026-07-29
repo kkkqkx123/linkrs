@@ -6,7 +6,7 @@
 
 /// Assertion results in success, return internal value
 pub fn assert_ok<T, E: std::fmt::Debug>(result: Result<T, E>) -> T {
-    result.expect("操作应该成功")
+    result.expect("Operation should succeed")
 }
 
 /// Asserts that the collection contains the specified number of elements
@@ -14,7 +14,7 @@ pub fn assert_count<T>(collection: &[T], expected: usize, item_name: &str) {
     assert_eq!(
         collection.len(),
         expected,
-        "{}数量不匹配: 期望 {}, 实际 {}",
+        "{} count mismatch: expected {}, got {}",
         item_name,
         expected,
         collection.len()
@@ -23,7 +23,7 @@ pub fn assert_count<T>(collection: &[T], expected: usize, item_name: &str) {
 
 /// Asserts that Option is Some and returns the internal value.
 pub fn assert_some<T>(opt: &Option<T>) -> &T {
-    opt.as_ref().expect("值应该是 Some")
+    opt.as_ref().expect("Value should be Some")
 }
 
 /// Asserts that Option is None

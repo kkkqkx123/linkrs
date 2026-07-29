@@ -596,13 +596,13 @@ impl TransactionManager {
 
         let context = Arc::new(TransactionContext::new(txn_id, timestamp, config));
 
-        if context.get_concurrency_mode() == ConcurrencyMode::Pessimistic {
+        if context.get_concurrency_mode() == ConcurrencyMode::SingleWriter {
             let prev = self.write_exclusion_owner.swap(txn_id.0, Ordering::SeqCst);
             if prev != 0 {
                 self.checkpoint_gate.release_write();
                 self.active_transactions.remove(&txn_id);
                 return Err(TransactionError::internal(
-                    "Pessimistic write lock is held by another transaction".to_string(),
+                    "SingleWriter lock is held by another transaction".to_string(),
                 ));
             }
             context.set_pessimistic_lock();
@@ -643,8 +643,8 @@ impl TransactionManager {
             return Ok(());
         }
 
-        // Pessimistic mode guarantees serialization via the exclusive write lock.
-        if ctx.get_concurrency_mode() == ConcurrencyMode::Pessimistic {
+        // SingleWriter mode guarantees serialization via the exclusive write lock.
+        if ctx.get_concurrency_mode() == ConcurrencyMode::SingleWriter {
             ctx.mark_write_validated();
             return Ok(());
         }
@@ -877,9 +877,7 @@ impl TransactionManager {
         txn_id: TransactionId,
     ) -> Result<(Arc<TransactionContext>, std::time::Instant), TransactionError> {
         let context = self.get_context(txn_id)?;
-        if context.isolation_level == IsolationLevel::ReadCommitted
-            || context.isolation_level == IsolationLevel::ReadUncommitted
-        {
+        if context.isolation_level == IsolationLevel::ReadCommitted {
             let committed = self.version_manager.read_timestamp();
             let snapshot = committed.max(context.timestamp());
             context.set_snapshot_timestamp(snapshot);
@@ -898,9 +896,7 @@ impl TransactionManager {
         let context = self.get_context(txn_id)?;
         context.can_execute()?;
         context.check_timeouts()?;
-        if context.isolation_level == IsolationLevel::ReadCommitted
-            || context.isolation_level == IsolationLevel::ReadUncommitted
-        {
+        if context.isolation_level == IsolationLevel::ReadCommitted {
             let committed = self.version_manager.read_timestamp();
             context.set_snapshot_timestamp(committed.max(context.timestamp()));
         }
@@ -1664,7 +1660,6 @@ impl TransactionManager {
                 .saturating_sub(self.version_manager.read_timestamp()),
             staged_wal_bytes,
             undo_bytes,
-            prepared_transactions: 0,
             checkpoint_drain_time: Duration::ZERO,
         };
         self.stats.record_resource_metrics(metrics);

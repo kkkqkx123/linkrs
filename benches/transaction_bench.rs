@@ -1,80 +1,75 @@
-// benches/transaction_bench.rs
-//! Transaction layer performance benchmarks
-//! Tests: transaction operations, MVCC, concurrency
-
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use std::hint::black_box;
+use std::sync::Arc;
 use std::time::Duration;
 
-fn create_benchmark_group<'a>(
-    c: &'a mut Criterion,
-    name: &str,
-) -> criterion::BenchmarkGroup<'a, criterion::measurement::WallTime> {
-    let mut group = c.benchmark_group(name);
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+
+use graphdb::core::types::VertexId;
+use graphdb::transaction::manager::TransactionManager;
+use graphdb::transaction::mvcc::VersionManager;
+use graphdb::transaction::types::*;
+
+fn bench_transaction_create_commit(c: &mut Criterion) {
+    let manager = TransactionManager::new(TransactionManagerConfig::default());
+
+    let mut group = c.benchmark_group("transaction_ops");
     group.measurement_time(Duration::from_secs(10));
     group.sample_size(100);
     group.warm_up_time(Duration::from_secs(1));
-    group
-}
 
-/// Generate GQL for transaction benchmark setup
-#[allow(dead_code)]
-fn generate_gql_for_transaction_bench(vertex_count: usize) -> String {
-    let mut gql = String::new();
-    gql.push_str(&format!(
-        "CREATE SPACE IF NOT EXISTS bench_txn{} (vid_type=STRING)\n",
-        vertex_count
-    ));
-    gql.push_str(&format!("USE bench_txn{}\n\n", vertex_count));
-
-    gql.push_str("CREATE TAG IF NOT EXISTS Data(\n");
-    gql.push_str("    value: INT,\n");
-    gql.push_str("    counter: INT DEFAULT 0\n");
-    gql.push_str(")\n\n");
-
-    for i in 0..vertex_count {
-        gql.push_str(&format!(
-            "INSERT VERTEX Data(value, counter) VALUES \"d{}\"({}, 0)\n",
-            i, i
-        ));
-    }
-
-    gql
-}
-
-fn bench_transaction_create_commit(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "transaction_ops");
-
-    group.bench_function("transaction_create", |b| {
-        b.iter(|| black_box("BEGIN".to_string()));
+    group.bench_function("begin_read", |b| {
+        b.iter(|| {
+            let txn = manager
+                .begin_read_transaction(TransactionOptions::default())
+                .unwrap();
+            manager.commit_transaction(txn).unwrap();
+            black_box(txn);
+        });
     });
 
-    group.bench_function("transaction_commit", |b| {
-        b.iter(|| black_box("COMMIT".to_string()));
-    });
-
-    group.bench_function("transaction_rollback", |b| {
-        b.iter(|| black_box("ROLLBACK".to_string()));
+    group.bench_function("begin_write", |b| {
+        b.iter(|| {
+            let txn = manager
+                .begin_insert_transaction(TransactionOptions::default())
+                .unwrap();
+            manager.commit_transaction(txn).unwrap();
+            black_box(txn);
+        });
     });
 
     group.finish();
 }
 
-fn bench_transaction_batch_operations(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "transaction_batch");
+fn bench_write_set_operations(c: &mut Criterion) {
+    let mut group = c.benchmark_group("write_set");
+    group.measurement_time(Duration::from_secs(10));
+    group.sample_size(100);
+    group.warm_up_time(Duration::from_secs(1));
 
-    for op_count in &[10, 100, 1000] {
-        let mut gql = String::new();
-        gql.push_str("BEGIN\n");
-        for i in 0..*op_count {
-            gql.push_str(&format!(
-                "INSERT VERTEX Data(value, counter) VALUES \"v{}\"({}, 0)\n",
-                i, i
-            ));
-        }
-        gql.push_str("COMMIT\n");
+    for size in &[10, 100, 1000] {
+        group.bench_with_input(BenchmarkId::new("build", size), size, |b, &size| {
+            b.iter(|| {
+                let mut ws = WriteSet::new();
+                for i in 0..size {
+                    ws.record_vertex(VertexId::from_int64(i as i64));
+                }
+                black_box(ws);
+            });
+        });
+    }
 
-        group.bench_with_input(BenchmarkId::from_parameter(op_count), op_count, |b, _| {
-            b.iter(|| black_box(gql.matches("INSERT VERTEX").count()));
+    for size in &[10, 100, 1000] {
+        group.bench_with_input(BenchmarkId::new("conflict_check", size), size, |b, &size| {
+            let mut ws1 = WriteSet::new();
+            let mut ws2 = WriteSet::new();
+            for i in 0..size {
+                ws1.record_vertex(VertexId::from_int64(i as i64));
+                ws2.record_vertex(VertexId::from_int64((i + size) as i64));
+            }
+            ws2.record_vertex(VertexId::from_int64(0));
+            b.iter(|| {
+                black_box(ws1.has_conflict_with(&ws2));
+            });
         });
     }
 
@@ -82,18 +77,69 @@ fn bench_transaction_batch_operations(c: &mut Criterion) {
 }
 
 fn bench_mvcc_version_management(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "mvcc_versions");
+    let vm = VersionManager::new();
 
-    for version_count in &[1, 10, 100] {
+    let mut group = c.benchmark_group("mvcc");
+    group.measurement_time(Duration::from_secs(10));
+    group.sample_size(100);
+    group.warm_up_time(Duration::from_secs(1));
+
+    group.bench_function("acquire_read_ts", |b| {
+        b.iter(|| {
+            let ts = vm.acquire_read_timestamp().unwrap();
+            vm.release_read_timestamp_at(ts);
+            black_box(ts);
+        });
+    });
+
+    group.bench_function("acquire_write_ts", |b| {
+        b.iter(|| {
+            let ts = vm.acquire_insert_timestamp().unwrap();
+            vm.commit_write_timestamp(ts);
+            black_box(ts);
+        });
+    });
+
+    group.finish();
+}
+
+fn bench_conflict_detection(c: &mut Criterion) {
+    let manager = Arc::new(TransactionManager::new(TransactionManagerConfig::default()));
+
+    let mut group = c.benchmark_group("conflict_detection");
+    group.measurement_time(Duration::from_secs(10));
+    group.sample_size(100);
+    group.warm_up_time(Duration::from_secs(1));
+
+    for vertex_count in &[1, 10, 100] {
         group.bench_with_input(
-            BenchmarkId::from_parameter(version_count),
-            version_count,
-            |b, _| {
-                // Simulate MVCC version chain traversal
+            BenchmarkId::from_parameter(vertex_count),
+            vertex_count,
+            |b, &count| {
+                let mgr = Arc::clone(&manager);
                 b.iter(|| {
-                    #[allow(clippy::unnecessary_cast)]
-                    let result = black_box((0..*version_count).map(|v| v as i32).sum::<i32>());
-                    result
+                    let txn_a = mgr
+                        .begin_insert_transaction(TransactionOptions::default())
+                        .unwrap();
+                    {
+                        let ctx = mgr.get_context(txn_a).unwrap();
+                        for i in 0..count {
+                            ctx.record_vertex_write(VertexId::from_int64(i as i64));
+                        }
+                    }
+                    let _ = mgr.check_write_set_conflict(txn_a);
+                    let txn_b = mgr
+                        .begin_insert_transaction(TransactionOptions::default())
+                        .unwrap();
+                    {
+                        let ctx = mgr.get_context(txn_b).unwrap();
+                        for i in 0..count {
+                            ctx.record_vertex_write(VertexId::from_int64((i + count) as i64));
+                        }
+                    }
+                    let _ = black_box(mgr.check_write_set_conflict(txn_b));
+                    mgr.abort_transaction(txn_a).unwrap();
+                    mgr.abort_transaction(txn_b).unwrap();
                 });
             },
         );
@@ -102,48 +148,11 @@ fn bench_mvcc_version_management(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_write_conflict_detection(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "conflict_detection");
-
-    for conflict_count in &[0, 5, 10] {
-        group.bench_with_input(
-            BenchmarkId::from_parameter(conflict_count),
-            conflict_count,
-            |b, _| {
-                // Simulate conflict checking
-                b.iter(|| black_box((0..*conflict_count).map(|c| c * 2).sum::<usize>() as i32));
-            },
-        );
-    }
-
-    group.finish();
-}
-
-fn bench_isolation_levels(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "isolation_levels");
-
-    let isolation_levels = vec![
-        "READ_UNCOMMITTED",
-        "READ_COMMITTED",
-        "REPEATABLE_READ",
-        "SERIALIZABLE",
-    ];
-
-    for level in isolation_levels {
-        group.bench_function(format!("isolation_{}", level), |b| {
-            b.iter(|| black_box(format!("BEGIN ISOLATION_LEVEL {}", level)));
-        });
-    }
-
-    group.finish();
-}
-
 criterion_group!(
     benches,
     bench_transaction_create_commit,
-    bench_transaction_batch_operations,
+    bench_write_set_operations,
     bench_mvcc_version_management,
-    bench_write_conflict_detection,
-    bench_isolation_levels
+    bench_conflict_detection,
 );
 criterion_main!(benches);

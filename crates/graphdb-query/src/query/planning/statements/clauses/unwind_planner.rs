@@ -16,7 +16,7 @@ use std::sync::Arc;
 /// UNWIND Sentence Planner
 ///
 /// Responsible for converting UNWIND clauses into execution plan nodes.
-/// UNWIND 语法：UNWIND [expression] AS [variable]
+/// UNWIND syntax: UNWIND [expression] AS [variable]
 #[derive(Debug)]
 pub struct UnwindClausePlanner;
 

@@ -517,14 +517,12 @@ impl MemoryEstimatable for LoopNode {
 /// Transaction isolation level
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum IsolationLevel {
-    /// Read uncommitted - lowest isolation level
-    ReadUncommitted,
-    /// Read committed - default for most databases
+    /// Read committed - snapshot isolation per statement
     #[default]
     ReadCommitted,
-    /// Repeatable read - ensures consistent reads within transaction
+    /// Repeatable read - consistent snapshot across entire transaction
     RepeatableRead,
-    /// Serializable - highest isolation level
+    /// Serializable - highest isolation level, certifies read-write conflicts
     Serializable,
 }
 
