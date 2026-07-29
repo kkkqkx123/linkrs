@@ -552,22 +552,6 @@ impl GraphDataStore {
         operation(&mut tables)
     }
 
-    pub(crate) fn with_edge_tables_mut<R>(
-        &self,
-        operation: impl FnOnce(&mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>) -> StorageResult<R>,
-    ) -> StorageResult<R> {
-        let mut tables = self.write_edge_tables();
-        operation(&mut tables)
-    }
-
-    pub(crate) fn with_edge_tables_mut_result<R, E>(
-        &self,
-        operation: impl FnOnce(&mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>) -> Result<R, E>,
-    ) -> Result<R, E> {
-        let mut tables = self.write_edge_tables();
-        operation(&mut tables)
-    }
-
     pub(crate) fn with_edge_label_index<R>(
         &self,
         operation: impl FnOnce(&HashMap<LabelId, Vec<EdgeTableKey>>) -> R,
@@ -668,19 +652,6 @@ impl GraphDataStore {
             .collect()
     }
 
-    pub(crate) fn with_edge_partitions_mut<R>(
-        &self,
-        edge_label: LabelId,
-        operation: impl FnOnce(
-            &mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>,
-            &[EdgeTableKey],
-        ) -> StorageResult<R>,
-    ) -> StorageResult<R> {
-        let keys = self.edge_partition_keys(edge_label)?;
-        let mut tables = self.write_edge_tables();
-        operation(&mut tables, &keys)
-    }
-
     /// Read a single edge table by key, holding only the table-level lock (not the catalog lock)
     /// during the operation. The catalog lock is released after the table lookup.
     pub(crate) fn with_single_edge_table<R>(
@@ -722,14 +693,6 @@ impl GraphDataStore {
         };
         let mut guard = arc.write();
         operation(&mut guard)
-    }
-
-    /// Lock all edge tables and pass the catalog write guard to the operation.
-    /// For single-table access, prefer `with_single_edge_table_mut`.
-    pub(crate) fn lock_edge_tables_for_write(
-        &self,
-    ) -> CatalogWriteGuard<'_, HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>> {
-        self.write_edge_tables()
     }
 
     #[cfg(test)]

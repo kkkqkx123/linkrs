@@ -123,11 +123,8 @@ impl UndoTarget for GraphStorageContext {
         ts: Timestamp,
     ) -> UndoLogResult<()> {
         let params = UpdateEdgePropertyUndoParams {
-            src_label: edge_id.src_label,
             src_vid: checked_internal_vertex_id(&edge_id.src_vid)?,
-            dst_label: edge_id.dst_label,
             dst_vid: checked_internal_vertex_id(&edge_id.dst_vid)?,
-            edge_label: edge_id.edge_label,
             rank: edge_id.rank,
         };
         let key = EdgeTableKey::new(
@@ -162,9 +159,6 @@ impl UndoTarget for GraphStorageContext {
 
     fn revert_delete_edge(&self, edge_ctx: EdgeDeletionContext) -> UndoLogResult<()> {
         let params = RevertDeleteEdgeParams {
-            src_label: edge_ctx.edge_id.src_label,
-            dst_label: edge_ctx.edge_id.dst_label,
-            edge_label: edge_ctx.edge_id.edge_label,
             src_vid: checked_internal_vertex_id(&edge_ctx.edge_id.src_vid)?,
             dst_vid: checked_internal_vertex_id(&edge_ctx.edge_id.dst_vid)?,
             rank: edge_ctx.edge_id.rank,

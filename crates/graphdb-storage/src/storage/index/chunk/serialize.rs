@@ -332,37 +332,6 @@ pub(crate) fn write_chunked_index_checkpoint<P: AsRef<Path>>(
     Ok(())
 }
 
-pub(crate) fn read_chunked_index_checkpoint<P: AsRef<Path>>(
-    dir: P,
-    pool_capacity: u64,
-) -> StorageResult<Option<ChunkedIndex>> {
-    let dir = dir.as_ref();
-    let index_path = dir.join("chunk_index.bin");
-    let prefix_path = dir.join("prefix.bin");
-
-    if !index_path.exists() || !prefix_path.exists() {
-        return Ok(None);
-    }
-
-    let prefix = std::fs::read(&prefix_path)?;
-    let mut file = std::fs::File::open(&index_path)?;
-    let descriptors = deserialize_chunk_index(&mut file)
-        .map_err(|e| StorageError::io_error(format!("Failed to read chunk index: {e}")))?;
-
-    let pool = Arc::new(BufferPool::new(pool_capacity));
-
-    for (chunk_id, _, _) in &descriptors {
-        let chunk_path = dir.join(format!("chunk_{}.bin", chunk_id));
-        if chunk_path.exists() {
-            let chunk = read_chunk_file(&chunk_path)?;
-            let size = chunk.estimated_size;
-            pool.insert(*chunk_id, chunk, size);
-        }
-    }
-
-    Ok(Some(ChunkedIndex::with_capacity(prefix, pool, descriptors)))
-}
-
 /// Read chunk index metadata only, deferring chunk data loading to on-demand.
 pub(crate) fn read_chunked_index_checkpoint_lazy<P: AsRef<Path>>(
     dir: P,
@@ -442,7 +411,7 @@ mod tests {
         let deserialized = deserialize_chunk(&mut buf.as_slice()).unwrap();
 
         assert_eq!(chunk.id, deserialized.id);
-        assert_eq!(chunk.len(), deserialized.len());
+        assert_eq!(chunk.entries.len(), deserialized.entries.len());
         assert_eq!(chunk.entries[0].1.created_ts, deserialized.entries[0].1.created_ts);
         assert_eq!(chunk.entries[1].1.included_columns.as_ref().unwrap()[0].0, "name");
     }
@@ -478,7 +447,7 @@ mod tests {
         let loaded = read_chunk_file(&path).unwrap();
 
         assert_eq!(loaded.id, 7);
-        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded.entries.len(), 1);
         assert_eq!(loaded.entries[0].1.created_ts, 42);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -495,10 +464,10 @@ mod tests {
         let index = ChunkedIndex::from_btree(vec![], &map, 65536);
 
         write_chunked_index_checkpoint(&dir, &index).unwrap();
-        let loaded = read_chunked_index_checkpoint(&dir, 65536).unwrap();
+        let loaded = read_chunked_index_checkpoint_lazy(&dir, 65536).unwrap();
         assert!(loaded.is_some());
         let loaded = loaded.unwrap();
-        assert_eq!(loaded.entry_count(), 2);
+        assert_eq!(loaded.snapshot().len(), 2);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

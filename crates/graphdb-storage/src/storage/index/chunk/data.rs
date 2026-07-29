@@ -41,19 +41,6 @@ impl Chunk {
         }
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    pub(crate) fn contains_key(&self, key: &[u8]) -> bool {
-        key >= self.min_key.as_slice() && key < self.max_key.as_slice()
-            || key == self.max_key.as_slice()
-    }
-
     pub(crate) fn range(
         &self,
         lower: &[u8],
@@ -73,24 +60,6 @@ impl Chunk {
             return Vec::new();
         }
         self.entries[start..end].to_vec()
-    }
-
-    pub(crate) fn range_iter(
-        &self,
-        lower: &[u8],
-        upper: &[u8],
-    ) -> impl Iterator<Item = &(SecondaryIndexKey, IndexRecord)> {
-        let start = self
-            .entries
-            .partition_point(|(k, _)| k.as_slice() < lower);
-        let end = if upper.is_empty() {
-            self.entries.len()
-        } else {
-            self
-                .entries
-                .partition_point(|(k, _)| k.as_slice() < upper)
-        };
-        self.entries[start..end].iter()
     }
 
     pub(crate) fn visible_range_iter(
@@ -114,23 +83,6 @@ impl Chunk {
             .filter(move |(_, entry)| entry.is_visible_at(read_ts))
     }
 
-    pub(crate) fn memory_usage(&self) -> usize {
-        let mut total = std::mem::size_of::<Self>()
-            + self.min_key.capacity()
-            + self.max_key.capacity();
-        for (k, v) in &self.entries {
-            total += k.capacity()
-                + std::mem::size_of::<IndexRecord>()
-                + v.included_columns
-                    .as_ref()
-                    .map_or(0, |cols| {
-                        cols.iter()
-                            .map(|(n, v)| n.capacity() + v.estimated_size())
-                            .sum::<usize>()
-                    });
-        }
-        total
-    }
 }
 
 pub(crate) fn build_chunks(
@@ -225,18 +177,6 @@ mod tests {
     }
 
     #[test]
-    fn chunk_contains_key() {
-        let entries = vec![make_entry(10), make_entry(20), make_entry(30)];
-        let chunk = Chunk::new(0, entries);
-        // contains_key checks if a key falls within this chunk's range [min, max]
-        assert!(chunk.contains_key(&[10]));
-        assert!(chunk.contains_key(&[20]));
-        assert!(chunk.contains_key(&[15]));  // 15 is between 10 and 30
-        assert!(!chunk.contains_key(&[5]));  // 5 is below min
-        assert!(!chunk.contains_key(&[35])); // 35 is above max
-    }
-
-    #[test]
     fn build_chunks_respects_target_size() {
         let mut entries = Vec::new();
         for i in 0u8..100 {
@@ -245,7 +185,7 @@ mod tests {
         // Each entry is very small (~56 bytes), so all 100 should fit in one chunk
         let chunks = build_chunks(entries, CHUNK_TARGET_SIZE);
         assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0].len(), 100);
+        assert_eq!(chunks[0].entries.len(), 100);
     }
 
     #[test]
@@ -259,7 +199,7 @@ mod tests {
         // Each entry is ~4KB, with 64KB target we expect ~16 entries per chunk
         let chunks = build_chunks(entries, 65536);
         assert!(chunks.len() >= 2);
-        assert!(chunks[0].len() <= 17);
+        assert!(chunks[0].entries.len() <= 17);
     }
 
     #[test]
@@ -268,13 +208,4 @@ mod tests {
         assert!(chunks.is_empty());
     }
 
-    #[test]
-    fn chunk_range_iter_yields_references() {
-        let entries = vec![make_entry(1), make_entry(2), make_entry(3)];
-        let chunk = Chunk::new(0, entries);
-        let results: Vec<_> = chunk.range_iter(&[2], &[4]).collect();
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0].0, vec![2]);
-        assert_eq!(results[1].0, vec![3]);
-    }
 }

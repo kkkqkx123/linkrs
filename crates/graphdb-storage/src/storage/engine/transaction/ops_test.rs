@@ -383,15 +383,19 @@ mod tests {
         TransactionOps::delete_edge(&mut edge_tables, del_params, 0i32, 0i32, 2).unwrap();
 
         let revert_params = RevertDeleteEdgeParams {
-            src_label: 0,
-            dst_label: 0,
-            edge_label: 0,
             src_vid: 0,
             dst_vid: 1,
             rank: 0,
         };
-        let result =
-            TransactionOps::revert_delete_edge(&mut edge_tables, revert_params, 0i32, 0i32, 3);
+        let table = edge_tables.get(&EdgeTableKey::new(0, 0, 0)).unwrap();
+        let mut edge_store = table.write();
+        let result = TransactionOps::revert_delete_edge_single(
+            &mut edge_store,
+            revert_params,
+            0i32,
+            0i32,
+            3,
+        );
         assert!(result.is_ok());
     }
 

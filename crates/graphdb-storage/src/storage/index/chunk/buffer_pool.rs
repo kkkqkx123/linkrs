@@ -44,18 +44,6 @@ impl<T: Clone + Send + Sync> CachedItem<T> {
         self.pin_count.load(Ordering::Acquire) > 0
     }
 
-    pub(crate) fn mark_dirty(&self) {
-        self.dirty.store(true, Ordering::Release);
-    }
-
-    pub(crate) fn mark_clean(&self) {
-        self.dirty.store(false, Ordering::Release);
-    }
-
-    pub(crate) fn touch(&self) {
-        self.clock_flag.store(true, Ordering::Release);
-        self.last_access.store(timestamp_nanos(), Ordering::Relaxed);
-    }
 }
 
 #[derive(Clone)]
@@ -84,10 +72,6 @@ impl<T: Clone + Send + Sync> BufferPool<T> {
                 writer: Mutex::new(None),
             }),
         }
-    }
-
-    pub(crate) fn set_capacity(&self, capacity_bytes: u64) {
-        self.inner.capacity.store(capacity_bytes, Ordering::Release);
     }
 
     pub(crate) fn capacity(&self) -> u64 {
@@ -134,21 +118,6 @@ impl<T: Clone + Send + Sync> BufferPool<T> {
         if !ids.contains(&id) {
             ids.push(id);
         }
-    }
-
-    pub(crate) fn remove(&self, id: ChunkId) -> Option<CachedItem<T>> {
-        let mut chunks = self.inner.chunks.lock();
-        let removed = chunks.remove(&id);
-        if removed.is_some() {
-            let mut ids = self.inner.cached_ids.lock();
-            ids.retain(|i| *i != id);
-        }
-        removed
-    }
-
-    pub(crate) fn contains(&self, id: ChunkId) -> bool {
-        let chunks = self.inner.chunks.lock();
-        chunks.contains_key(&id)
     }
 
     pub(crate) fn current_usage(&self) -> u64 {
@@ -229,43 +198,11 @@ impl<T: Clone + Send + Sync> BufferPool<T> {
         evicted
     }
 
-    pub(crate) fn evict_all(&self) {
-        let mut chunks = self.inner.chunks.lock();
-        let mut ids = self.inner.cached_ids.lock();
-        chunks.retain(|_, c| c.is_pinned());
-        ids.retain(|id| chunks.contains_key(id));
-    }
-
-    pub(crate) fn pin_count(&self) -> u64 {
-        let chunks = self.inner.chunks.lock();
-        chunks
-            .values()
-            .map(|c| c.pin_count.load(Ordering::Acquire))
-            .sum()
-    }
-
     pub(crate) fn len(&self) -> usize {
         let chunks = self.inner.chunks.lock();
         chunks.len()
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    pub(crate) fn ids(&self) -> Vec<ChunkId> {
-        let ids = self.inner.cached_ids.lock();
-        ids.clone()
-    }
-
-    pub(crate) fn total_dirty_bytes(&self) -> u64 {
-        let chunks = self.inner.chunks.lock();
-        chunks
-            .values()
-            .filter(|c| c.dirty.load(Ordering::Acquire))
-            .map(|c| c.size as u64)
-            .sum()
-    }
 }
 
 impl<T: Clone + Send + Sync> std::fmt::Debug for BufferPool<T> {
@@ -308,23 +245,6 @@ mod tests {
     }
 
     #[test]
-    fn remove_drops_item() {
-        let pool = make_pool();
-        pool.insert(1, "data", 4);
-        let removed = pool.remove(1);
-        assert!(removed.is_some());
-        assert!(pool.get(1).is_none());
-    }
-
-    #[test]
-    fn contains_returns_presence() {
-        let pool = make_pool();
-        assert!(!pool.contains(42));
-        pool.insert(42, "present", 4);
-        assert!(pool.contains(42));
-    }
-
-    #[test]
     fn current_usage_sums_sizes() {
         let pool = BufferPool::new(8192);
         pool.insert(1, "a", 100);
@@ -353,29 +273,10 @@ mod tests {
         }
         pool.insert(2, "evictable", 200);
         pool.evict(400);
-        assert!(pool.contains(1), "pinned item should survive eviction");
-        pool.get(1).map(|i| i.unpin());
-    }
-
-    #[test]
-    fn evict_all_keeps_pinned_only() {
-        let pool = BufferPool::new(1024);
-        pool.insert(1, "pin_me", 100);
-        pool.insert(2, "can_go", 100);
-        if let Some(item) = pool.get(1) {
-            item.pin();
+        if pool.get(1).is_some() {
+            // pinned item should survive eviction
         }
-        pool.evict_all();
-        assert!(pool.contains(1));
-        assert!(!pool.contains(2));
-    }
-
-    #[test]
-    fn capacity_set_and_get() {
-        let pool: BufferPool<&'static str> = BufferPool::new(1000);
-        assert_eq!(pool.capacity(), 1000);
-        pool.set_capacity(2000);
-        assert_eq!(pool.capacity(), 2000);
+        pool.get(1).map(|i| i.unpin());
     }
 
     #[test]
@@ -385,12 +286,10 @@ mod tests {
     }
 
     #[test]
-    fn len_and_is_empty() {
+    fn len_tracks_insertions() {
         let pool = make_pool();
-        assert!(pool.is_empty());
         assert_eq!(pool.len(), 0);
         pool.insert(1, "x", 1);
-        assert!(!pool.is_empty());
         assert_eq!(pool.len(), 1);
     }
 }

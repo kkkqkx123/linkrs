@@ -546,7 +546,7 @@ mod tests {
     #[test]
     fn test_merge_metrics_basic() {
         let schema = create_test_schema();
-        let mut table = TimeTravelEdgeStore::new(schema).unwrap();
+        let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
 
         for i in 0..5u64 {
             table.insert_edge(i as u32, i as u32 + 1, 0, &[], 100 + i).unwrap();
@@ -570,7 +570,7 @@ mod tests {
     #[test]
     fn test_merge_metrics_edge_count_accuracy() {
         let schema = create_test_schema();
-        let mut table = TimeTravelEdgeStore::new(schema).unwrap();
+        let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
 
         let edge_count = 20u64;
         for i in 0..edge_count {
@@ -600,7 +600,7 @@ mod tests {
     #[test]
     fn test_merge_metrics_performance_tracking() {
         let schema = create_test_schema();
-        let mut table = TimeTravelEdgeStore::new(schema).unwrap();
+        let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
 
         for i in 0..100u64 {
             let src = (i % 20) as u32;
@@ -627,7 +627,7 @@ mod tests {
     #[test]
     fn test_lsm_tiered_merge() {
         let schema = create_test_schema();
-        let mut table = TimeTravelEdgeStore::new(schema).unwrap();
+        let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
 
         for batch in 0..5u64 {
             for i in 0..10 {
@@ -681,7 +681,7 @@ mod tests {
     #[test]
     fn test_merge_stats_tracking() {
         let schema = create_test_schema();
-        let mut table = TimeTravelEdgeStore::new(schema).unwrap();
+        let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
 
         for batch in 0..3u64 {
             for i in 0..5 {
@@ -704,7 +704,7 @@ mod tests {
     #[test]
     fn test_adaptive_merge_strategy() {
         let schema = create_test_schema();
-        let mut table = TimeTravelEdgeStore::new(schema).unwrap();
+        let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
 
         for batch in 0..3u64 {
             for i in 0..5 {

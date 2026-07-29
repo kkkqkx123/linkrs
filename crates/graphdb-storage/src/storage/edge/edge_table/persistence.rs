@@ -409,7 +409,7 @@ pub fn read_pages_from_file(path: &Path) -> StorageResult<(Vec<u8>, u32)> {
 mod tests {
     use super::super::super::*;
     use crate::core::Value;
-    use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
+    use crate::storage::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
 
     fn create_edge_table() -> TimeTravelEdgeStore {
         let schema = EdgeSchema {
@@ -422,7 +422,7 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        TimeTravelEdgeStore::new(schema).unwrap()
+        TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap()
     }
 
     #[test]
@@ -440,7 +440,7 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        let mut table = TimeTravelEdgeStore::new(schema).unwrap();
+        let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
 
         let ts = 100u64;
         table
@@ -475,7 +475,7 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        let mut loaded_table = TimeTravelEdgeStore::new(schema2).unwrap();
+        let mut loaded_table = TimeTravelEdgeStore::with_config(schema2, EdgeTableConfig::default()).unwrap();
         loaded_table
             .load(temp_dir.path())
             .expect("load should succeed");
@@ -506,7 +506,7 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        let mut table = TimeTravelEdgeStore::new(schema).unwrap();
+        let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
 
         table
             .insert_edge(1, 2, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
@@ -539,7 +539,7 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        let mut loaded_table = TimeTravelEdgeStore::new(schema2).unwrap();
+        let mut loaded_table = TimeTravelEdgeStore::with_config(schema2, EdgeTableConfig::default()).unwrap();
         loaded_table
             .load(temp_dir.path())
             .expect("load should succeed");

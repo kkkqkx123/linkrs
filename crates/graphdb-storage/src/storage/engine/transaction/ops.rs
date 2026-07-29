@@ -48,21 +48,15 @@ pub struct DeleteEdgeTypeParams {
 
 /// Parameters for update_edge_property_undo operation
 pub struct UpdateEdgePropertyUndoParams {
-    pub src_label: LabelId,
     pub src_vid: u32,
-    pub dst_label: LabelId,
     pub dst_vid: u32,
-    pub edge_label: LabelId,
     pub rank: i64,
 }
 
 /// Parameters for revert_delete_edge operation
 pub struct RevertDeleteEdgeParams {
-    pub src_label: LabelId,
     pub src_vid: u32,
-    pub dst_label: LabelId,
     pub dst_vid: u32,
-    pub edge_label: LabelId,
     pub rank: i64,
 }
 
@@ -245,30 +239,6 @@ impl TransactionOps {
         Ok(())
     }
 
-    pub fn revert_delete_edge(
-        edge_tables: &mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>,
-        params: RevertDeleteEdgeParams,
-        oe_offset: i32,
-        ie_offset: i32,
-        ts: Timestamp,
-    ) -> UndoLogResult<()> {
-        let key = EdgeTableKey::new(params.src_label, params.dst_label, params.edge_label);
-        if let Some(arc) = edge_tables.get_mut(&key) {
-            let mut table = arc.write();
-            table
-                .revert_delete_edge_by_offset(
-                    params.src_vid,
-                    params.dst_vid,
-                    params.rank,
-                    oe_offset,
-                    ie_offset,
-                    ts,
-                )
-                .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
-        }
-        Ok(())
-    }
-
     pub fn update_vertex_property_by_vid(
         vertex_tables: &mut HashMap<LabelId, VertexTable>,
         label: LabelId,
@@ -353,33 +323,6 @@ impl TransactionOps {
                 value,
                 ts,
             )
-            .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
-        Ok(())
-    }
-
-    pub fn update_edge_property_undo(
-        edge_tables: &mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>,
-        params: UpdateEdgePropertyUndoParams,
-        prop_id: u16,
-        old_value: PropertyValue,
-        ts: Timestamp,
-    ) -> UndoLogResult<()> {
-        let key = EdgeTableKey::new(params.src_label, params.dst_label, params.edge_label);
-        let arc = edge_tables
-            .get_mut(&key)
-            .ok_or(UndoLogError::LabelNotFound(0))?;
-        let mut table = arc.write();
-
-        let value = property_value_to_value(old_value);
-        table
-            .update_edge_property_by_offset(UpdateEdgePropertyByOffsetParams {
-                src: params.src_vid,
-                dst: params.dst_vid,
-                rank: params.rank,
-                prop_id,
-                value,
-                ts,
-            })
             .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
         Ok(())
     }

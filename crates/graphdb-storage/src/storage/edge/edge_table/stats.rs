@@ -173,7 +173,7 @@ mod tests {
     use super::*;
     use crate::core::types::DataType;
     use crate::core::Value;
-    use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
+    use crate::storage::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
     use crate::storage::types::StoragePropertyDef;
 
     fn create_edge_table() -> TimeTravelEdgeStore {
@@ -187,7 +187,7 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        TimeTravelEdgeStore::new(schema).unwrap()
+        TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap()
     }
 
     fn create_edge_table_with_props() -> TimeTravelEdgeStore {
@@ -204,7 +204,7 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        TimeTravelEdgeStore::new(schema).unwrap()
+        TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap()
     }
 
     #[test]

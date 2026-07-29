@@ -23,7 +23,6 @@ pub mod persistence;
 pub mod residency;
 pub mod segment;
 pub mod segment_eviction;
-pub mod simple;
 pub mod snapshot;
 pub mod stats;
 
@@ -45,29 +44,12 @@ use crate::storage::persistence::write_header_to;
 use std::fmt;
 use std::time::Instant;
 
-/// Edge store variant selection.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum EdgeStoreMode {
-    /// Full MVCC + freeze/merge/segment (for persistent spaces).
-    #[default]
-    TimeTravel,
-    /// Single CSR, no history, lightweight (for in-memory spaces).
-    Simple,
-}
-
-/// Multi-segment CSR with freeze/merge/MVCC (full history),
-/// or single CSR with no history (Simple variant).
-pub enum EdgeStore {
-    TimeTravel(core::TimeTravelEdgeStore),
-    Simple(simple::SimpleEdgeStore),
-}
+/// Edge store with full MVCC + freeze/merge/segment.
+pub struct EdgeStore(pub core::TimeTravelEdgeStore);
 
 impl fmt::Debug for EdgeStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            EdgeStore::TimeTravel(s) => f.debug_tuple("TimeTravel").field(s).finish(),
-            EdgeStore::Simple(s) => f.debug_tuple("Simple").field(s).finish(),
-        }
+        f.debug_tuple("EdgeStore").field(&self.0).finish()
     }
 }
 
@@ -93,83 +75,48 @@ impl EdgeStore {
         Self::new_with_config(schema, EdgeTableConfig::default())
     }
 
-    pub fn new_with_config(schema: super::EdgeSchema, config: EdgeTableConfig) -> StorageResult<Self> {
-        match config.mode {
-            EdgeStoreMode::TimeTravel => Ok(EdgeStore::TimeTravel(core::TimeTravelEdgeStore::with_config(
-                schema, config,
-            )?)),
-            EdgeStoreMode::Simple => Ok(EdgeStore::Simple(simple::SimpleEdgeStore::with_config(
-                schema, config,
-            )?)),
-        }
+    pub fn new_with_config(
+        schema: super::EdgeSchema,
+        config: EdgeTableConfig,
+    ) -> StorageResult<Self> {
+        Ok(EdgeStore(core::TimeTravelEdgeStore::with_config(
+            schema, config,
+        )?))
     }
 
     pub fn needs_background_freeze(&self) -> bool {
-        match self {
-            EdgeStore::TimeTravel(store) => store.needs_background_freeze(),
-            EdgeStore::Simple(_) => false,
-        }
+        self.0.needs_background_freeze()
     }
 
     // ── Accessors ──
     pub fn label(&self) -> super::LabelId {
-        match self {
-            EdgeStore::TimeTravel(s) => s.label(),
-            EdgeStore::Simple(s) => s.label(),
-        }
+        self.0.label()
     }
 
     pub fn src_label(&self) -> super::LabelId {
-        match self {
-            EdgeStore::TimeTravel(s) => s.src_label(),
-            EdgeStore::Simple(s) => s.src_label(),
-        }
+        self.0.src_label()
     }
 
     pub fn dst_label(&self) -> super::LabelId {
-        match self {
-            EdgeStore::TimeTravel(s) => s.dst_label(),
-            EdgeStore::Simple(s) => s.dst_label(),
-        }
+        self.0.dst_label()
     }
 
     pub fn schema(&self) -> &super::EdgeSchema {
-        match self {
-            EdgeStore::TimeTravel(s) => s.schema(),
-            EdgeStore::Simple(s) => s.schema(),
-        }
+        self.0.schema()
     }
 
     pub fn schema_mut(&mut self) -> &mut super::EdgeSchema {
-        match self {
-            EdgeStore::TimeTravel(s) => s.schema_mut(),
-            EdgeStore::Simple(s) => s.schema_mut(),
-        }
+        self.0.schema_mut()
     }
 
     pub fn set_stats_manager(&mut self, stats: std::sync::Arc<crate::core::stats::StatsManager>) {
-        match self {
-            EdgeStore::TimeTravel(s) => s.set_stats_manager(stats),
-            EdgeStore::Simple(s) => s.set_stats_manager(stats),
-        }
+        self.0.set_stats_manager(stats)
     }
 
     pub fn version_history_ref(
         &self,
     ) -> std::sync::Arc<std::sync::Mutex<crate::storage::schema::LabelVersionHistory>> {
-        match self {
-            EdgeStore::TimeTravel(s) => s.version_history_ref(),
-            EdgeStore::Simple(s) => {
-                use crate::storage::schema::SchemaObjectType;
-                std::sync::Arc::new(std::sync::Mutex::new(
-                    crate::storage::schema::LabelVersionHistory::new(
-                        s.label(),
-                        s.label_name.clone(),
-                        SchemaObjectType::Edge,
-                    ),
-                ))
-            }
-        }
+        self.0.version_history_ref()
     }
 
     // ── CRUD ──
@@ -181,10 +128,7 @@ impl EdgeStore {
         property_values: &[(String, crate::core::Value)],
         ts: Timestamp,
     ) -> StorageResult<()> {
-        match self {
-            EdgeStore::TimeTravel(s) => s.insert_edge(src, dst, rank, property_values, ts),
-            EdgeStore::Simple(s) => s.insert_edge(src, dst, rank, property_values),
-        }
+        self.0.insert_edge(src, dst, rank, property_values, ts)
     }
 
     pub fn delete_edge(
@@ -194,10 +138,7 @@ impl EdgeStore {
         rank: i64,
         ts: Timestamp,
     ) -> StorageResult<bool> {
-        match self {
-            EdgeStore::TimeTravel(s) => s.delete_edge(src, dst, rank, ts),
-            EdgeStore::Simple(s) => s.delete_edge(src, dst, rank),
-        }
+        self.0.delete_edge(src, dst, rank, ts)
     }
 
     pub fn delete_edge_by_offset(
@@ -209,12 +150,8 @@ impl EdgeStore {
         ie_offset: i32,
         ts: Timestamp,
     ) -> StorageResult<bool> {
-        match self {
-            EdgeStore::TimeTravel(store) => {
-                store.delete_edge_by_offset(src, dst, rank, oe_offset, ie_offset, ts)
-            }
-            EdgeStore::Simple(s) => s.delete_edge_by_offset(src, dst, rank, oe_offset, ie_offset),
-        }
+        self.0
+            .delete_edge_by_offset(src, dst, rank, oe_offset, ie_offset, ts)
     }
 
     pub fn revert_delete_edge_by_offset(
@@ -226,14 +163,8 @@ impl EdgeStore {
         ie_offset: i32,
         ts: Timestamp,
     ) -> StorageResult<bool> {
-        match self {
-            EdgeStore::TimeTravel(s) => {
-                s.revert_delete_edge_by_offset(src, dst, rank, oe_offset, ie_offset, ts)
-            }
-            EdgeStore::Simple(s) => {
-                s.revert_delete_edge_by_offset(src, dst, rank, oe_offset, ie_offset, ts)
-            }
-        }
+        self.0
+            .revert_delete_edge_by_offset(src, dst, rank, oe_offset, ie_offset, ts)
     }
 
     pub fn get_edge(
@@ -241,26 +172,17 @@ impl EdgeStore {
         src: u32,
         dst: u32,
         rank: i64,
-        _ts: Timestamp,
+        ts: Timestamp,
     ) -> Option<super::EdgeRecord> {
-        match self {
-            EdgeStore::TimeTravel(s) => s.get_edge(src, dst, rank, _ts),
-            EdgeStore::Simple(s) => s.get_edge(src, dst, rank),
-        }
+        self.0.get_edge(src, dst, rank, ts)
     }
 
-    pub fn out_edges(&self, src: u32, _ts: Timestamp) -> Vec<super::EdgeRecord> {
-        match self {
-            EdgeStore::TimeTravel(s) => s.out_edges(src, _ts),
-            EdgeStore::Simple(s) => s.out_edges(src),
-        }
+    pub fn out_edges(&self, src: u32, ts: Timestamp) -> Vec<super::EdgeRecord> {
+        self.0.out_edges(src, ts)
     }
 
-    pub fn in_edges(&self, dst: u32, _ts: Timestamp) -> Vec<super::EdgeRecord> {
-        match self {
-            EdgeStore::TimeTravel(s) => s.in_edges(dst, _ts),
-            EdgeStore::Simple(s) => s.in_edges(dst),
-        }
+    pub fn in_edges(&self, dst: u32, ts: Timestamp) -> Vec<super::EdgeRecord> {
+        self.0.in_edges(dst, ts)
     }
 
     pub fn update_edge_property(
@@ -272,26 +194,15 @@ impl EdgeStore {
         value: &crate::core::Value,
         ts: Timestamp,
     ) -> StorageResult<bool> {
-        match self {
-            EdgeStore::TimeTravel(s) => {
-                s.update_edge_property(src, dst, rank, prop_name, value, ts)
-            }
-            EdgeStore::Simple(s) => {
-                s.update_edge_property(src, dst, rank, prop_name, value)
-            }
-        }
+        self.0
+            .update_edge_property(src, dst, rank, prop_name, value, ts)
     }
 
     pub fn update_edge_property_by_offset(
         &mut self,
         params: UpdateEdgePropertyByOffsetParams,
     ) -> StorageResult<bool> {
-        match self {
-            EdgeStore::TimeTravel(s) => s.update_edge_property_by_offset(params),
-            EdgeStore::Simple(_) => Err(StorageError::not_supported(
-                "update_edge_property_by_offset not supported in Simple mode",
-            )),
-        }
+        self.0.update_edge_property_by_offset(params)
     }
 
     // ── Schema operations ──
@@ -301,242 +212,127 @@ impl EdgeStore {
         data_type: crate::core::DataType,
         nullable: bool,
     ) -> StorageResult<()> {
-        match self {
-            EdgeStore::TimeTravel(s) => s.add_property(name, data_type, nullable),
-            EdgeStore::Simple(s) => s.add_property(name, data_type, nullable),
-        }
+        self.0.add_property(name, data_type, nullable)
     }
 
     pub fn remove_property(&mut self, name: &str) -> StorageResult<()> {
-        match self {
-            EdgeStore::TimeTravel(s) => s.remove_property(name),
-            EdgeStore::Simple(s) => s.remove_property(name),
-        }
+        self.0.remove_property(name)
     }
 
     pub fn rename_property(&mut self, old_name: &str, new_name: &str) -> StorageResult<()> {
-        match self {
-            EdgeStore::TimeTravel(s) => s.rename_property(old_name, new_name),
-            EdgeStore::Simple(s) => s.rename_property(old_name, new_name),
-        }
+        self.0.rename_property(old_name, new_name)
     }
 
     pub fn rebuild_schema_change_from_redo(
         &mut self,
         details: crate::storage::schema::ChangeDetails,
     ) -> StorageResult<()> {
-        match self {
-            EdgeStore::TimeTravel(s) => s.rebuild_schema_change_from_redo(details),
-            EdgeStore::Simple(s) => s.rebuild_schema_change_from_redo(details),
-        }
+        self.0.rebuild_schema_change_from_redo(details)
     }
 
     // ── Query ──
     pub fn scan(&self, ts: Timestamp) -> Vec<super::EdgeRecord> {
-        match self {
-            EdgeStore::TimeTravel(s) => s.scan(ts),
-            EdgeStore::Simple(s) => s.scan(),
-        }
+        self.0.scan(ts)
     }
 
     pub fn edge_count(&self) -> u64 {
-        match self {
-            EdgeStore::TimeTravel(s) => s.edge_count(),
-            EdgeStore::Simple(s) => s.edge_count(),
-        }
+        self.0.edge_count()
     }
 
     pub fn delta_edge_count(&self) -> u64 {
-        match self {
-            EdgeStore::TimeTravel(s) => s.delta_edge_count(),
-            EdgeStore::Simple(_) => 0,
-        }
+        self.0.delta_edge_count()
     }
 
     // ── Maintenance ──
-    pub fn freeze_csr_only(&mut self, _ts: Timestamp) -> usize {
-        match self {
-            EdgeStore::TimeTravel(s) => s.freeze_csr_only(_ts),
-            EdgeStore::Simple(_) => 0,
-        }
+    pub fn freeze_csr_only(&mut self, ts: Timestamp) -> usize {
+        self.0.freeze_csr_only(ts)
     }
 
     pub fn compact_and_freeze(
         &mut self,
-        _ts: Timestamp,
-        _config: &CompactConfig,
-        _mode: CompactionMode,
+        ts: Timestamp,
+        config: &CompactConfig,
+        mode: CompactionMode,
     ) -> usize {
-        match self {
-            EdgeStore::TimeTravel(s) => s.compact_and_freeze(_ts, _config, _mode),
-            EdgeStore::Simple(_) => 0,
-        }
+        self.0.compact_and_freeze(ts, config, mode)
     }
 
-    pub fn compact_properties(&mut self, _ts: Timestamp) {
-        match self {
-            EdgeStore::TimeTravel(s) => s.compact_properties(_ts),
-            EdgeStore::Simple(_) => {}
-        }
+    pub fn compact_properties(&mut self, ts: Timestamp) {
+        self.0.compact_properties(ts)
     }
 
-    pub fn maybe_compact_for_flush(&mut self, _ts: Timestamp, _threshold: f32) {
-        match self {
-            EdgeStore::TimeTravel(s) => s.maybe_compact_for_flush(_ts, _threshold),
-            EdgeStore::Simple(_) => {}
-        }
+    pub fn maybe_compact_for_flush(&mut self, ts: Timestamp, threshold: f32) {
+        self.0.maybe_compact_for_flush(ts, threshold)
     }
 
-    pub fn merge_segments_lsm_tiered(&mut self, _current_ts: Timestamp) -> usize {
-        match self {
-            EdgeStore::TimeTravel(s) => s.merge_segments_lsm_tiered(_current_ts),
-            EdgeStore::Simple(_) => 0,
-        }
+    pub fn merge_segments_lsm_tiered(&mut self, current_ts: Timestamp) -> usize {
+        self.0.merge_segments_lsm_tiered(current_ts)
     }
 
     pub fn merge_segments_adaptive(
         &mut self,
-        _current_ts: Timestamp,
-        _max_segment_age: Timestamp,
-        _deletion_threshold: f64,
-        _max_segment_size_bytes: usize,
+        current_ts: Timestamp,
+        max_segment_age: Timestamp,
+        deletion_threshold: f64,
+        max_segment_size_bytes: usize,
     ) -> usize {
-        match self {
-            EdgeStore::TimeTravel(s) => s.merge_segments_adaptive(
-                _current_ts,
-                _max_segment_age,
-                _deletion_threshold,
-                _max_segment_size_bytes,
-            ),
-            EdgeStore::Simple(_) => 0,
-        }
+        self.0.merge_segments_adaptive(
+            current_ts,
+            max_segment_age,
+            deletion_threshold,
+            max_segment_size_bytes,
+        )
     }
 
     pub fn merge_stats(&self) -> MergeStats {
-        match self {
-            EdgeStore::TimeTravel(s) => s.merge_stats(),
-            EdgeStore::Simple(_) => MergeStats::default(),
-        }
+        self.0.merge_stats()
     }
 
     pub fn deletion_stats(&self) -> stats::DeletionStats {
-        match self {
-            EdgeStore::TimeTravel(s) => s.deletion_stats(),
-            EdgeStore::Simple(_) => stats::DeletionStats::default(),
-        }
+        self.0.deletion_stats()
     }
 
     pub fn validate_segment_integrity(&self) -> usize {
-        match self {
-            EdgeStore::TimeTravel(s) => s.validate_segment_integrity(),
-            EdgeStore::Simple(_) => 0,
-        }
+        self.0.validate_segment_integrity()
     }
 
     pub fn segment_versions(&self) -> Vec<(usize, u32)> {
-        match self {
-            EdgeStore::TimeTravel(s) => s.segment_versions(),
-            EdgeStore::Simple(_) => Vec::new(),
-        }
+        self.0.segment_versions()
     }
 
     // ── Memory ──
     pub fn memory_size(&self) -> usize {
-        match self {
-            EdgeStore::TimeTravel(s) => s.memory_size(),
-            EdgeStore::Simple(s) => s.memory_size(),
-        }
+        self.0.memory_size()
     }
 
     pub fn used_memory_size(&self) -> usize {
-        match self {
-            EdgeStore::TimeTravel(s) => s.used_memory_size(),
-            EdgeStore::Simple(s) => s.memory_size(),
-        }
+        self.0.used_memory_size()
     }
 
     // ── Snapshots ──
-    pub fn register_snapshot(&mut self, _ts: Timestamp) {
-        match self {
-            EdgeStore::TimeTravel(s) => s.register_snapshot(_ts),
-            EdgeStore::Simple(_) => {}
-        }
+    pub fn register_snapshot(&mut self, ts: Timestamp) {
+        self.0.register_snapshot(ts)
     }
 
-    pub fn unregister_snapshot(&mut self, _ts: Timestamp) {
-        match self {
-            EdgeStore::TimeTravel(s) => s.unregister_snapshot(_ts),
-            EdgeStore::Simple(_) => {}
-        }
+    pub fn unregister_snapshot(&mut self, ts: Timestamp) {
+        self.0.unregister_snapshot(ts)
     }
 
-    pub fn export_snapshot(&self, _ts: Timestamp) -> StorageResult<ExportedEdgeSnapshot> {
-        match self {
-            EdgeStore::TimeTravel(s) => s.export_snapshot(_ts),
-            EdgeStore::Simple(_) => Err(StorageError::not_supported(
-                "export_snapshot not supported in Simple mode",
-            )),
-        }
-    }
-
-    pub fn snapshot_handle(&mut self, ts: Timestamp) -> EdgeSnapshotHandle<'_> {
-        self.register_snapshot(ts);
-        EdgeSnapshotHandle { table: self, ts }
+    pub fn export_snapshot(&self, ts: Timestamp) -> StorageResult<ExportedEdgeSnapshot> {
+        self.0.export_snapshot(ts)
     }
 
     // ── Persistence ──
     pub fn flush<P: AsRef<std::path::Path>>(
         &mut self,
-        _path: P,
-        _compression: crate::storage::compression::CompressionType,
+        path: P,
+        compression: crate::storage::compression::CompressionType,
     ) -> StorageResult<()> {
-        match self {
-            EdgeStore::TimeTravel(ref mut s) => s.flush(_path, _compression),
-            EdgeStore::Simple(_) => Err(StorageError::not_supported(
-                "flush not supported in Simple mode",
-            )),
-        }
+        self.0.flush(path, compression)
     }
 
-    pub fn load<P: AsRef<std::path::Path>>(&mut self, _path: P) -> StorageResult<()> {
-        match self {
-            EdgeStore::TimeTravel(s) => s.load(_path),
-            EdgeStore::Simple(_) => Err(StorageError::not_supported(
-                "load not supported in Simple mode",
-            )),
-        }
-    }
-}
-
-// ── RAII snapshot handle (works with EdgeStore) ──
-/// RAII handle for edge table snapshots.
-///
-/// Automatically unregisters the snapshot from MVCC tracking when dropped,
-/// enabling proper tombstone garbage collection.
-pub struct EdgeSnapshotHandle<'a> {
-    table: &'a mut EdgeStore,
-    ts: Timestamp,
-}
-
-impl<'a> EdgeSnapshotHandle<'a> {
-    pub fn timestamp(&self) -> Timestamp {
-        self.ts
-    }
-
-    pub fn export(&self) -> StorageResult<ExportedEdgeSnapshot> {
-        self.table.export_snapshot(self.ts)
-    }
-
-    pub fn release(mut self) {
-        self.ts = Timestamp::MAX;
-    }
-}
-
-impl<'a> Drop for EdgeSnapshotHandle<'a> {
-    fn drop(&mut self) {
-        if self.ts != Timestamp::MAX {
-            self.table.unregister_snapshot(self.ts);
-        }
+    pub fn load<P: AsRef<std::path::Path>>(&mut self, path: P) -> StorageResult<()> {
+        self.0.load(path)
     }
 }
 
@@ -956,8 +752,8 @@ impl core::TimeTravelEdgeStore {
 mod tests {
     use crate::core::types::DataType;
     use crate::core::Value;
-    use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
-    use crate::storage::edge::EdgeSchema;
+use crate::storage::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
+use crate::storage::edge::EdgeSchema;
     use crate::storage::types::StoragePropertyDef;
 
     fn create_test_schema() -> EdgeSchema {
@@ -979,7 +775,7 @@ mod tests {
     #[test]
     fn test_freeze_csr_preserves_reads() {
         let schema = create_test_schema();
-        let mut table = TimeTravelEdgeStore::new(schema).unwrap();
+        let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
 
         table
             .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
@@ -1003,7 +799,7 @@ mod tests {
     #[test]
     fn test_delete_base_segment_uses_tombstone() {
         let schema = create_test_schema();
-        let mut table = TimeTravelEdgeStore::new(schema).unwrap();
+        let mut table = TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
 
         table.insert_edge(0, 1, 0, &[], 100).unwrap();
         table.freeze_csr_only(150);

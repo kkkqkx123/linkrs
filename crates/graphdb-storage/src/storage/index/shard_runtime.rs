@@ -54,11 +54,6 @@ pub(crate) struct ShardRuntime {
 }
 
 impl ShardRuntime {
-    pub(crate) fn empty(checkpoint_file: PathBuf) -> Self {
-        const DEFAULT_POOL_CAPACITY: u64 = 64 * 1024 * 1024;
-        Self::empty_with_capacity(checkpoint_file, DEFAULT_POOL_CAPACITY)
-    }
-
     pub(crate) fn empty_with_capacity(checkpoint_file: PathBuf, pool_capacity: u64) -> Self {
         let wal_file = checkpoint_file.join("index.wal");
         Self {
@@ -98,11 +93,6 @@ impl ShardRuntime {
         idx.set_loader(make_chunk_loader(dir.clone()));
         idx.set_writer(make_chunk_writer(dir));
         self.base_reverse.store(Arc::new(idx));
-    }
-
-    pub(crate) fn load<K: IndexKeyGenerator>(checkpoint_file: PathBuf) -> StorageResult<Self> {
-        const DEFAULT_POOL_CAPACITY: u64 = 128 * 1024 * 1024;
-        Self::load_with_pool_capacity::<K>(checkpoint_file, DEFAULT_POOL_CAPACITY)
     }
 
     pub(crate) fn load_with_pool_capacity<K: IndexKeyGenerator>(
@@ -306,72 +296,6 @@ impl ShardRuntime {
             upper_suffix,
             plen,
             &prefix,
-        )
-        .into_iter()
-    }
-
-    /// Merge ChunkedIndex base with delta, filtering by visibility.
-    fn chunked_range_visible_with_delta(
-        chunked: &ChunkedIndex,
-        delta: &BTreeMap<SecondaryIndexKey, IndexRecord>,
-        lower_suffix: &[u8],
-        upper_suffix: &[u8],
-        plen: usize,
-        prefix: &[u8],
-        read_ts: Timestamp,
-    ) -> Vec<(SecondaryIndexKey, IndexRecord)> {
-        let base_results = chunked.visible_range(lower_suffix, upper_suffix, read_ts);
-        let mut merged: BTreeMap<SecondaryIndexKey, IndexRecord> = base_results
-            .into_iter()
-            .map(|(k, v)| {
-                if plen > 0 {
-                    let mut full = Vec::with_capacity(prefix.len() + k.len());
-                    full.extend_from_slice(prefix);
-                    full.extend_from_slice(&k);
-                    (full, v)
-                } else {
-                    (k, v)
-                }
-            })
-            .collect();
-        for (k, v) in delta.range((
-            Bound::Included(lower_suffix.to_vec()),
-            Bound::Excluded(upper_suffix.to_vec()),
-        )) {
-            if !v.is_visible_at(read_ts) {
-                continue;
-            }
-            if plen > 0 {
-                let mut full = Vec::with_capacity(prefix.len() + k.len());
-                full.extend_from_slice(prefix);
-                full.extend_from_slice(k);
-                merged.insert(full, v.clone());
-            } else {
-                merged.insert(k.clone(), v.clone());
-            }
-        }
-        merged.into_iter().collect()
-    }
-
-    pub(crate) fn forward_range_visible<'a>(
-        &'a self,
-        lower: &[u8],
-        upper: &[u8],
-        read_ts: Timestamp,
-    ) -> impl Iterator<Item = (SecondaryIndexKey, IndexRecord)> + 'a {
-        let plen = self.prefix_forward_len;
-        let prefix = Arc::clone(&self.forward_prefix);
-        let (lower_suffix, upper_suffix) = self.strip_bounds(lower, upper, plen);
-        let chunked = self.base_forward.load();
-        let delta = self.delta_forward.load();
-        Self::chunked_range_visible_with_delta(
-            &chunked,
-            &delta,
-            lower_suffix,
-            upper_suffix,
-            plen,
-            &prefix,
-            read_ts,
         )
         .into_iter()
     }
@@ -697,14 +621,6 @@ impl ShardRuntime {
             + delta_size(&delta_rev)
     }
 
-    /// Evict cold chunks from both forward and reverse pools.
-    /// Returns total bytes evicted.
-    pub(crate) fn evict_cold_chunks(&self, target_bytes: u64) -> u64 {
-        let fwd = self.base_forward.load();
-        let rev = self.base_reverse.load();
-        let half = target_bytes / 2;
-        fwd.pool().evict(half) + rev.pool().evict(half)
-    }
 }
 
 fn delta_size(map: &BTreeMap<SecondaryIndexKey, IndexRecord>) -> u64 {
@@ -751,7 +667,6 @@ pub(crate) struct GenerationRuntime {
     parent: Option<Weak<GenerationRuntime>>,
     pub(crate) max_ts: Timestamp,
     pub(crate) last_access: AtomicU64,
-    pub(crate) pool_capacity: u64,
 }
 
 fn now_nanos() -> u64 {
@@ -762,10 +677,6 @@ fn now_nanos() -> u64 {
 }
 
 impl GenerationRuntime {
-    pub(crate) fn empty(manifest: &IndexManifest) -> Self {
-        Self::empty_with_pool_capacity(manifest, 64 * 1024 * 1024)
-    }
-
     pub(crate) fn empty_with_pool_capacity(manifest: &IndexManifest, pool_capacity: u64) -> Self {
         Self {
             generation: manifest.generation,
@@ -785,7 +696,6 @@ impl GenerationRuntime {
             parent: None,
             max_ts: 0,
             last_access: AtomicU64::new(now_nanos()),
-            pool_capacity,
         }
     }
 
@@ -867,17 +777,11 @@ impl GenerationRuntime {
             parent: None,
             max_ts,
             last_access: AtomicU64::new(now_nanos()),
-            pool_capacity,
         };
         if let Some(p) = parent {
             gen.set_parent(p);
         }
         gen
-    }
-
-    fn load<K: IndexKeyGenerator>(manifest: &IndexManifest) -> StorageResult<Self> {
-        const DEFAULT_POOL_CAPACITY: u64 = 128 * 1024 * 1024;
-        Self::load_with_pool_capacity::<K>(manifest, DEFAULT_POOL_CAPACITY)
     }
 
     fn load_with_pool_capacity<K: IndexKeyGenerator>(
@@ -905,7 +809,6 @@ impl GenerationRuntime {
             parent: None,
             max_ts: 0,
             last_access: AtomicU64::new(now_nanos()),
-            pool_capacity,
         })
     }
 
@@ -987,11 +890,6 @@ impl IndexRuntime {
             barrier_wait: Mutex::new(()),
             barrier_cv: Condvar::new(),
         }
-    }
-
-    pub(crate) fn load<K: IndexKeyGenerator>(manifest: &IndexManifest) -> StorageResult<Self> {
-        const DEFAULT_POOL_CAPACITY: u64 = 128 * 1024 * 1024;
-        Self::load_with_pool_capacity::<K>(manifest, DEFAULT_POOL_CAPACITY)
     }
 
     pub(crate) fn load_with_pool_capacity<K: IndexKeyGenerator>(
@@ -1157,25 +1055,6 @@ impl IndexRuntime {
         Ok(())
     }
 
-}
-
-pub(crate) fn generation_from_maps(
-    manifest: &IndexManifest,
-    maps: HashMap<u32, IndexMaps>,
-    parent: Option<&Arc<GenerationRuntime>>,
-    max_ts: Timestamp,
-    forward_prefix: Vec<u8>,
-    reverse_prefix: Vec<u8>,
-) -> GenerationRuntime {
-    generation_from_maps_with_pool_capacity(
-        manifest,
-        maps,
-        parent,
-        max_ts,
-        forward_prefix,
-        reverse_prefix,
-        128 * 1024 * 1024,
-    )
 }
 
 pub(crate) fn generation_from_maps_with_pool_capacity(

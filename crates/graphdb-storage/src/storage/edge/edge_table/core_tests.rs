@@ -30,7 +30,7 @@ fn create_test_schema() -> EdgeSchema {
 #[test]
 fn test_insert_and_get() {
     let schema = create_test_schema();
-    let mut table = EdgeTable::new(schema).unwrap();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
 
     table
         .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
@@ -47,7 +47,7 @@ fn test_insert_and_get() {
 #[test]
 fn test_rank_distinguishes_parallel_edges() {
     let schema = create_test_schema();
-    let mut table = EdgeTable::new(schema).unwrap();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
 
     table
         .insert_edge(0, 1, 10, &[("weight".to_string(), Value::Double(1.0))], 100)
@@ -67,7 +67,7 @@ fn test_rank_distinguishes_parallel_edges() {
 #[test]
 fn test_delete() {
     let schema = create_test_schema();
-    let mut table = EdgeTable::new(schema).unwrap();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
 
     table
         .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
@@ -80,7 +80,7 @@ fn test_delete() {
 #[test]
 fn test_out_in_edges() {
     let schema = create_test_schema();
-    let mut table = EdgeTable::new(schema).unwrap();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
 
     table.insert_edge(0, 1, 0, &[], 100).unwrap();
     table.insert_edge(0, 2, 0, &[], 100).unwrap();
@@ -95,7 +95,7 @@ fn test_out_in_edges() {
 #[test]
 fn test_update_edge_property() {
     let schema = create_test_schema();
-    let mut table = EdgeTable::new(schema).unwrap();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
 
     table
         .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
@@ -113,7 +113,7 @@ fn test_update_edge_property() {
 #[test]
 fn test_self_loop_edge() {
     let schema = create_test_schema();
-    let mut table = EdgeTable::new(schema).unwrap();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
 
     table
         .insert_edge(0, 0, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
@@ -135,7 +135,7 @@ fn test_self_loop_edge() {
 #[test]
 fn test_multiple_parallel_edges() {
     let schema = create_test_schema();
-    let mut table = EdgeTable::new(schema).unwrap();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
 
     let src = 1u32;
     let dst = 2u32;
@@ -166,7 +166,7 @@ fn test_multiple_parallel_edges() {
 #[test]
 fn test_edge_deletion_with_timestamps() {
     let schema = create_test_schema();
-    let mut table = EdgeTable::new(schema).unwrap();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
 
     table
         .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.5))], 100)
@@ -184,7 +184,7 @@ fn test_edge_deletion_with_timestamps() {
 #[test]
 fn test_property_updates_multiple_edges() {
     let schema = create_test_schema();
-    let mut table = EdgeTable::new(schema).unwrap();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
 
     for i in 0..3 {
         table
@@ -223,7 +223,7 @@ fn test_property_updates_multiple_edges() {
 #[test]
 fn test_reverse_index_consistency_insert() {
     let schema = create_test_schema();
-    let mut table = EdgeTable::new(schema).unwrap();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
 
     let src = 0u32;
     let dst = 1u32;
@@ -256,7 +256,7 @@ fn test_reverse_index_consistency_insert() {
 #[test]
 fn test_reverse_index_consistency_delete() {
     let schema = create_test_schema();
-    let mut table = EdgeTable::new(schema).unwrap();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
 
     let src = 0u32;
     let dst = 1u32;
@@ -291,7 +291,7 @@ fn test_reverse_index_consistency_delete() {
 #[test]
 fn test_reverse_index_consistency_parallel_edges() {
     let schema = create_test_schema();
-    let mut table = EdgeTable::new(schema).unwrap();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
 
     let src = 0u32;
     let dst = 1u32;
@@ -329,7 +329,7 @@ fn test_reverse_index_consistency_parallel_edges() {
 #[test]
 fn test_p0_segment_reverse_index_sync_on_delete() {
     let schema = create_test_schema();
-    let mut table = EdgeTable::new(schema).unwrap();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
 
     let src = 5u32;
     let dst = 10u32;
@@ -376,7 +376,7 @@ fn test_p0_segment_reverse_index_sync_on_delete() {
 #[test]
 fn test_p0_multi_edge_segment_delete_consistency() {
     let schema = create_test_schema();
-    let mut table = EdgeTable::new(schema).unwrap();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
 
     let src = 0u32;
     let dst = 1u32;
@@ -510,7 +510,7 @@ fn test_write_backpressure_disabled() {
 #[test]
 fn test_mutable_csr_memory_size() {
     let schema = create_test_schema();
-    let mut table = EdgeTable::new(schema).unwrap();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
 
     let initial_size = table.mutable_csr_memory_size();
 
@@ -537,7 +537,7 @@ fn test_mutable_csr_memory_size() {
 #[test]
 fn test_add_property_increments_version() {
     let schema = create_test_schema();
-    let mut table = EdgeTable::new(schema).unwrap();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
 
     let v1 = table.schema().schema_version;
     assert_eq!(v1, 1, "Initial version should be 1");
@@ -553,7 +553,7 @@ fn test_add_property_increments_version() {
 #[test]
 fn test_remove_property_increments_version() {
     let schema = create_test_schema();
-    let mut table = EdgeTable::new(schema).unwrap();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
 
     let v1 = table.schema().schema_version;
 
@@ -568,7 +568,7 @@ fn test_remove_property_increments_version() {
 #[test]
 fn test_rename_property_increments_version() {
     let schema = create_test_schema();
-    let mut table = EdgeTable::new(schema).unwrap();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
 
     let v1 = table.schema().schema_version;
 
@@ -583,7 +583,7 @@ fn test_rename_property_increments_version() {
 #[test]
 fn test_sequential_property_modifications() {
     let schema = create_test_schema();
-    let mut table = EdgeTable::new(schema).unwrap();
+    let mut table = EdgeTable::with_config(schema, EdgeTableConfig::default()).unwrap();
 
     // Initial version should be 1
     assert_eq!(table.schema().schema_version, 1);

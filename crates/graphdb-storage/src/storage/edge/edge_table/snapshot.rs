@@ -191,7 +191,7 @@ mod tests {
     use super::super::super::*;
     use crate::core::types::Timestamp;
     use crate::core::Value;
-    use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
+    use crate::storage::edge::edge_table::core::{EdgeTableConfig, TimeTravelEdgeStore};
 
     fn create_edge_table_with_props() -> TimeTravelEdgeStore {
         let schema = EdgeSchema {
@@ -207,7 +207,7 @@ mod tests {
             ie_strategy: EdgeStrategy::Multiple,
             schema_version: 1,
         };
-        TimeTravelEdgeStore::new(schema).unwrap()
+        TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap()
     }
 
     #[test]

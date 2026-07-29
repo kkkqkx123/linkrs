@@ -20,7 +20,6 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone)]
 pub struct EdgeTableConfig {
-    pub mode: super::EdgeStoreMode,
     pub initial_vertex_capacity: usize,
     pub initial_edge_capacity: usize,
     /// Fixed number of edges allocated per high-degree overflow chunk.
@@ -45,7 +44,6 @@ pub struct EdgeTableConfig {
 impl Default for EdgeTableConfig {
     fn default() -> Self {
         Self {
-            mode: super::EdgeStoreMode::default(),
             initial_vertex_capacity: 4096,
             initial_edge_capacity: 4096,
             overflow_chunk_edges: 4096,
@@ -71,9 +69,6 @@ pub struct UpdateEdgePropertyByOffsetParams {
 }
 
 /// TimeTravel edge store: multi-segment CSR with freeze/merge/MVCC (full history).
-///
-/// This is the original EdgeTableCore, renamed to distinguish it from the upcoming
-/// SimpleEdgeStore (no history). The `EdgeTable` type alias preserves backward compat.
 pub struct TimeTravelEdgeStore {
     pub label: LabelId,
     pub label_name: String,
@@ -122,10 +117,6 @@ pub struct TimeTravelEdgeStore {
 }
 
 impl TimeTravelEdgeStore {
-    pub fn new(schema: EdgeSchema) -> StorageResult<Self> {
-        Self::with_config(schema, EdgeTableConfig::default())
-    }
-
     pub fn with_config(schema: EdgeSchema, config: EdgeTableConfig) -> StorageResult<Self> {
         schema.validate()?;
 

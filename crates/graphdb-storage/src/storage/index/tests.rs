@@ -684,7 +684,7 @@ fn wal_recovers_data_after_checkpoint() {
     std::fs::create_dir_all(&checkpoint_file).unwrap();
 
     // Create a shard and insert data
-    let shard = ShardRuntime::empty(checkpoint_file.clone());
+    let shard = ShardRuntime::empty_with_capacity(checkpoint_file.clone(), 64 * 1024 * 1024);
     let mut forward = BTreeMap::new();
     let mut reverse = BTreeMap::new();
 
@@ -710,12 +710,12 @@ fn wal_recovers_data_after_checkpoint() {
     assert!(wal_path.exists(), "WAL file should exist after flush_wal");
 
     // Load a new shard from the same checkpoint - should replay WAL
-    let loaded_shard = ShardRuntime::load::<VertexIndexKeyGen>(checkpoint_file.clone()).unwrap();
+    let loaded_shard = ShardRuntime::load_with_pool_capacity::<VertexIndexKeyGen>(checkpoint_file.clone(), 128 * 1024 * 1024).unwrap();
 
     let fwd = loaded_shard.read_forward();
     let rev = loaded_shard.read_reverse();
-    assert_eq!(fwd.entry_count(), 1, "Should have 1 forward entry after WAL replay");
-    assert_eq!(rev.entry_count(), 1, "Should have 1 reverse entry after WAL replay");
+    assert_eq!(fwd.snapshot().len(), 1, "Should have 1 forward entry after WAL replay");
+    assert_eq!(rev.snapshot().len(), 1, "Should have 1 reverse entry after WAL replay");
 
     // Cleanup
     let _ = std::fs::remove_dir_all(&temp_dir);
@@ -733,7 +733,7 @@ fn checkpoint_clears_wal() {
     let checkpoint_file = temp_dir.join("checkpoint");
     std::fs::create_dir_all(&checkpoint_file).unwrap();
 
-    let shard = ShardRuntime::empty(checkpoint_file.clone());
+    let shard = ShardRuntime::empty_with_capacity(checkpoint_file.clone(), 64 * 1024 * 1024);
     let mut forward = BTreeMap::new();
     forward.insert(vec![1, 2, 3], IndexRecord::new(100));
     shard.replace(forward, BTreeMap::new());

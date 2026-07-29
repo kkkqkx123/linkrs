@@ -7,7 +7,7 @@ use crate::core::vertex_edge_path::Tag;
 use crate::core::{Edge, StorageError, StorageResult, Value, Vertex};
 use crate::storage::cursor::{EdgeCursor, ScanOptions, VertexCursor};
 use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
-use crate::storage::edge::{EdgeStore, Nbr};
+use crate::storage::edge::Nbr;
 use crate::storage::engine::data_store::EdgeTableKey;
 
 use super::context::GraphStorageContext;
@@ -363,15 +363,7 @@ impl EdgeCursor for GraphEdgeCursor {
                     }
                 };
                 let guard = arc.read();
-                #[allow(unreachable_patterns)]
-                let store = match &*guard {
-                    EdgeStore::TimeTravel(s) => s,
-                    _ => {
-                        *table_idx += 1;
-                        *table_state = TableScanState::new();
-                        continue;
-                    }
-                };
+                let store = &guard.0;
 
                 match table_state.phase {
                     TablePhase::Mutable => {

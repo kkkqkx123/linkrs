@@ -25,14 +25,6 @@ pub(crate) struct ChunkedIndex {
 }
 
 impl ChunkedIndex {
-    pub(crate) fn new(prefix: Vec<u8>) -> Self {
-        Self {
-            prefix,
-            chunks: Vec::new(),
-            pool: Arc::new(BufferPool::new(u64::MAX)),
-        }
-    }
-
     pub(crate) fn from_btree(
         prefix: Vec<u8>,
         map: &BTreeMap<SecondaryIndexKey, IndexRecord>,
@@ -175,17 +167,6 @@ impl ChunkedIndex {
         map
     }
 
-    /// Number of entries across all chunks (inexact, includes tombstones).
-    pub(crate) fn entry_count(&self) -> usize {
-        let mut count = 0;
-        for (chunk_id, _, _) in &self.chunks {
-            if let Some(cached) = self.pool.get_or_load(*chunk_id) {
-                count += cached.item.len();
-            }
-        }
-        count
-    }
-
     pub(crate) fn chunk_count(&self) -> usize {
         self.chunks.len()
     }
@@ -212,10 +193,6 @@ impl ChunkedIndex {
         &self.chunks
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.chunks.is_empty()
-    }
-
     /// Memory used by the index (prefix + chunk descriptors + pool).
     pub(crate) fn memory_usage(&self) -> u64 {
         let desc_size: usize = self
@@ -226,28 +203,6 @@ impl ChunkedIndex {
             })
             .sum();
         self.prefix.capacity() as u64 + desc_size as u64 + self.pool.current_usage()
-    }
-}
-
-/// Builder for constructing ChunkedIndex from a BTreeMap.
-pub(crate) struct ChunkedIndexBuilder {
-    prefix: Vec<u8>,
-    pool_capacity: u64,
-}
-
-impl ChunkedIndexBuilder {
-    pub(crate) fn new(prefix: Vec<u8>, pool_capacity: u64) -> Self {
-        Self {
-            prefix,
-            pool_capacity,
-        }
-    }
-
-    pub(crate) fn build(
-        self,
-        map: &BTreeMap<SecondaryIndexKey, IndexRecord>,
-    ) -> ChunkedIndex {
-        ChunkedIndex::from_btree(self.prefix, map, self.pool_capacity)
     }
 }
 
@@ -273,16 +228,16 @@ mod tests {
 
     #[test]
     fn empty_index_returns_empty_range() {
-        let idx = ChunkedIndex::new(vec![]);
+        let idx = ChunkedIndex::empty(vec![], u64::MAX);
         assert!(idx.range(&[0], &[255]).is_empty());
-        assert!(idx.is_empty());
+        assert_eq!(idx.chunk_count(), 0);
     }
 
     #[test]
     fn from_btree_preserves_all_entries() {
         let map = make_map(vec![(1, 10), (2, 20), (3, 30)]);
         let idx = ChunkedIndex::from_btree(vec![], &map, u64::MAX);
-        assert_eq!(idx.entry_count(), 3);
+        assert_eq!(idx.snapshot().len(), 3);
         assert_eq!(idx.chunk_count(), 1);
     }
 
@@ -324,7 +279,7 @@ mod tests {
 
     #[test]
     fn prefix_is_stored() {
-        let idx = ChunkedIndex::new(vec![0xAB, 0xCD]);
+        let idx = ChunkedIndex::empty(vec![0xAB, 0xCD], u64::MAX);
         assert_eq!(idx.prefix(), &[0xAB, 0xCD]);
     }
 
@@ -336,7 +291,7 @@ mod tests {
         }
         let idx = ChunkedIndex::from_btree(vec![], &map, u64::MAX);
         assert!(idx.chunk_count() >= 2, "expected multiple chunks, got {}", idx.chunk_count());
-        assert_eq!(idx.entry_count(), 200);
+        assert_eq!(idx.snapshot().len(), 200);
     }
 
     #[test]
@@ -364,10 +319,9 @@ mod tests {
     }
 
     #[test]
-    fn builder_creates_valid_index() {
+    fn from_btree_directly_creates_valid_index() {
         let map = make_map(vec![(5, 50), (3, 30), (1, 10)]);
-        let builder = ChunkedIndexBuilder::new(vec![], u64::MAX);
-        let idx = builder.build(&map);
-        assert_eq!(idx.entry_count(), 3);
+        let idx = ChunkedIndex::from_btree(vec![], &map, u64::MAX);
+        assert_eq!(idx.snapshot().len(), 3);
     }
 }
