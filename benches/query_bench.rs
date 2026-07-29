@@ -273,10 +273,27 @@ fn bench_large_edge_density(c: &mut Criterion) {
     for &(label, edges_per_vertex) in &[("sparse_1k_x3", 3usize), ("dense_1k_x50", 50)] {
         let space_name = format!("large_q{}e{}", 1_000u64, edges_per_vertex);
         let storage = setup_large_graph(1_000, edges_per_vertex);
+        let expected_total_edges = 1_000 * edges_per_vertex;
+        group.throughput(Throughput::Elements(expected_total_edges as u64));
         group.bench_function(format!("scan_edges_{}", label), |b| {
             b.iter(|| {
                 let edges = storage.scan_edges_by_type(&space_name, "Link").expect("scan");
                 black_box(edges.len());
+            });
+        });
+        group.bench_function(format!("cursor_scan_edges_{}", label), |b| {
+            b.iter(|| {
+                let options = ScanOptions::new()
+                    .with_edge_type("Link".to_string());
+                let mut cursor = storage
+                    .create_edge_cursor(&space_name, &options)
+                    .expect("edge cursor");
+                let mut count = 0usize;
+                while let Ok(batch) = cursor.next_batch(256) {
+                    if batch.is_empty() { break; }
+                    count += batch.len();
+                }
+                black_box(count);
             });
         });
         group.bench_function(format!("get_node_edges_{}", label), |b| {

@@ -115,6 +115,19 @@ fn bench_expression_eval(c: &mut Criterion) {
                 )
             },
         );
+
+        group.bench_function(
+            BenchmarkId::new("project_multi_expressions", chunk_size),
+            |b| {
+                b.iter_batched(
+                    || create_chunk(*chunk_size),
+                    |mut chunk| {
+                        let _ = chunk.evaluate_expressions(&project_multi, None);
+                    },
+                    BatchSize::SmallInput,
+                )
+            },
+        );
     }
 
     group.finish();

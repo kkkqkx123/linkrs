@@ -484,6 +484,21 @@ pub(crate) fn batch_insert_vertices(
 
     validate_vertex_batch(ctx, space, &vertices)?;
 
+    // Pre-count vertices per tag and reserve capacity to avoid rehashing during inserts.
+    {
+        let mut tag_counts: HashMap<LabelId, usize> = HashMap::new();
+        for vertex in &vertices {
+            for tag in &vertex.tags {
+                if let Ok(Some(label_id)) = tag_label_id(ctx, space, &tag.name) {
+                    *tag_counts.entry(label_id).or_insert(0) += 1;
+                }
+            }
+        }
+        for (label_id, count) in &tag_counts {
+            ctx.reserve_vertex_capacity(*label_id, *count);
+        }
+    }
+
     let ts = ctx.get_write_timestamp()?;
     let mut ids = Vec::with_capacity(vertices.len());
     let mut rollback = Vec::new();

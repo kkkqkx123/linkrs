@@ -178,18 +178,14 @@ impl UnaryOperator {
                 output_col_names: _,
                 state,
             } => loop {
-                if let Some(chunk) = input.advance()? {
+                if let Some(mut chunk) = input.advance()? {
                     let params = state.parameters.as_ref();
-                    let mut columns = Vec::with_capacity(output_expressions.len());
-                    for expr in output_expressions.iter() {
-                        let col = chunk.evaluate_expression(expr, params).map_err(|e| {
-                            QueryError::execution(format!(
-                                "Project expression evaluation failed: {}",
-                                e
-                            ))
-                        })?;
-                        columns.push(col);
-                    }
+                    let columns = chunk.evaluate_expressions(output_expressions, params).map_err(|e| {
+                        QueryError::execution(format!(
+                            "Project expression evaluation failed: {}",
+                            e
+                        ))
+                    })?;
                     if !columns.is_empty() && !columns[0].is_empty() {
                         return Ok(Some(DataChunk::from_columns(
                             columns,

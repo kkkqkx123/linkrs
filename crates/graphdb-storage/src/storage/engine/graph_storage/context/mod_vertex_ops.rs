@@ -65,6 +65,20 @@ impl GraphStorageContext {
         Ok(internal_id)
     }
 
+    /// Pre-allocate capacity for `additional` more vertices in the given label's table.
+    /// Call before batch inserts to avoid repeated hash rehashing.
+    pub fn reserve_vertex_capacity(&self, label: LabelId, additional: usize) {
+        let _ = self
+            .persistent
+            .data_store
+            .with_vertex_tables_mut(|vertex_tables| {
+                if let Some(table) = vertex_tables.get_mut(&label) {
+                    table.reserve_id_capacity(additional);
+                }
+                Ok(())
+            });
+    }
+
     pub fn get_vertex(
         &self,
         label: LabelId,

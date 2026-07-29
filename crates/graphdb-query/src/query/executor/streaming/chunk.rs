@@ -598,6 +598,53 @@ impl DataChunk {
 
     // ── Batch expression evaluation ──
 
+    /// Evaluate multiple expressions in a single pass, returning one column per expression.
+    ///
+    /// When all expressions are simple (Variable, Literal), this avoids redundant
+    /// column materialization. Falls back to per-expression evaluation for complex cases.
+    pub fn evaluate_expressions(
+        &mut self,
+        expressions: &[Expression],
+        params: Option<&Arc<HashMap<String, Value>>>,
+    ) -> Result<Vec<Vec<Value>>, ExpressionError> {
+        if self.rows.is_empty() {
+            return Ok(vec![Vec::new(); expressions.len()]);
+        }
+        // Fast path: all expressions are Variables — extract columns directly.
+        // get_column() transposes from rows on demand, no full materialization needed.
+        if expressions.iter().all(|e| matches!(e, Expression::Variable(_))) {
+            let mut columns = Vec::with_capacity(expressions.len());
+            for expr in expressions {
+                if let Expression::Variable(name) = expr {
+                    let slot = self.layout.slot_id(name).ok_or_else(|| {
+                        ExpressionError::undefined_variable(name)
+                    })?;
+                    let col = self.get_column(slot).ok_or_else(|| {
+                        ExpressionError::undefined_variable(name)
+                    })?;
+                    columns.push(col);
+                }
+            }
+            return Ok(columns);
+        }
+        // Fast path: all are Literal expressions
+        if expressions.iter().all(|e| matches!(e, Expression::Literal(_))) {
+            let mut columns = Vec::with_capacity(expressions.len());
+            for expr in expressions {
+                if let Expression::Literal(v) = expr {
+                    columns.push(vec![v.clone(); self.rows.len()]);
+                }
+            }
+            return Ok(columns);
+        }
+        // Fall back to individual columnar evaluation
+        let mut results = Vec::with_capacity(expressions.len());
+        for expr in expressions {
+            results.push(self.evaluate_expression(expr, params)?);
+        }
+        Ok(results)
+    }
+
     /// Evaluate an expression against every row in this chunk, returning one result per row.
     ///
     /// Uses a columnar batch path for simple expressions (Literal, Variable, Unary,
@@ -627,10 +674,70 @@ impl DataChunk {
         expression: &Expression,
         params: Option<&Arc<HashMap<String, Value>>>,
     ) -> Result<Vec<Value>, ExpressionError> {
+        // Build a column cache to avoid redundant get_column calls
+        // when the same variable appears in multiple sub-expressions.
+        let mut col_cache: HashMap<String, Vec<Value>> = HashMap::new();
+        self.collect_variables(expression, &mut col_cache, params);
+        self.eval_with_cache(expression, &col_cache, params)
+    }
+
+    /// Collect all Variable references from an expression tree into col_cache.
+    fn collect_variables(
+        &self,
+        expr: &Expression,
+        col_cache: &mut HashMap<String, Vec<Value>>,
+        params: Option<&Arc<HashMap<String, Value>>>,
+    ) {
+        match expr {
+            Expression::Variable(name) => {
+                if !col_cache.contains_key(name) {
+                    if let Some(slot) = self.layout.slot_id(name) {
+                        if let Some(col) = self.get_column(slot) {
+                            col_cache.insert(name.clone(), col);
+                        }
+                    }
+                }
+            }
+            Expression::Binary { left, right, .. } => {
+                self.collect_variables(left, col_cache, params);
+                self.collect_variables(right, col_cache, params);
+            }
+            Expression::Unary { operand, .. } => {
+                self.collect_variables(operand, col_cache, params);
+            }
+            Expression::TypeCast { expression, .. } => {
+                self.collect_variables(expression, col_cache, params);
+            }
+            Expression::Property { object, .. } => {
+                if let Expression::Variable(var_name) = object.as_ref() {
+                    if !col_cache.contains_key(var_name) {
+                        if let Some(slot) = self.layout.slot_id(var_name.as_str()) {
+                            if let Some(col) = self.get_column(slot) {
+                                col_cache.insert(var_name.clone(), col);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Evaluate expression using a pre-populated column cache.
+    fn eval_with_cache(
+        &self,
+        expression: &Expression,
+        col_cache: &HashMap<String, Vec<Value>>,
+        params: Option<&Arc<HashMap<String, Value>>>,
+    ) -> Result<Vec<Value>, ExpressionError> {
         match expression {
             Expression::Literal(v) => Ok(vec![v.clone(); self.rows.len()]),
 
             Expression::Variable(name) => {
+                // Use column cache if available, otherwise fall back to get_column
+                if let Some(col) = col_cache.get(name) {
+                    return Ok(col.clone());
+                }
                 let slot = self.layout.slot_id(name).ok_or_else(|| {
                     ExpressionError::undefined_variable(name)
                 })?;
@@ -647,7 +754,7 @@ impl DataChunk {
             }
 
             Expression::Unary { op, operand } => {
-                let values = self.try_evaluate_columnar(operand, params)?;
+                let values = self.eval_with_cache(operand, col_cache, params)?;
                 values
                     .into_iter()
                     .map(|v| UnaryOperationEvaluator::evaluate(op, &v))
@@ -655,8 +762,8 @@ impl DataChunk {
             }
 
             Expression::Binary { left, op, right } => {
-                let left_values = self.try_evaluate_columnar(left, params)?;
-                let right_values = self.try_evaluate_columnar(right, params)?;
+                let left_values = self.eval_with_cache(left, col_cache, params)?;
+                let right_values = self.eval_with_cache(right, col_cache, params)?;
                 left_values
                     .into_iter()
                     .zip(right_values)
@@ -668,7 +775,7 @@ impl DataChunk {
                 expression,
                 target_type,
             } => {
-                let values = self.try_evaluate_columnar(expression, params)?;
+                let values = self.eval_with_cache(expression, col_cache, params)?;
                 values
                     .into_iter()
                     .map(|v| ExpressionEvaluator::eval_type_cast(&v, target_type))

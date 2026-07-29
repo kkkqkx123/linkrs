@@ -457,6 +457,11 @@ impl VertexTable {
         self.id_indexer.len()
     }
 
+    /// Pre-allocate ID indexer capacity for `additional` more vertices.
+    pub fn reserve_id_capacity(&self, additional: usize) {
+        self.id_indexer.reserve(additional);
+    }
+
     pub fn scan(&self, ts: Timestamp) -> VertexIterator<'_> {
         VertexIterator::new(self, ts)
     }

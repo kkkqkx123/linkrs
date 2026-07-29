@@ -104,7 +104,9 @@ pub(crate) fn scan_vertices(ctx: &GraphStorageContext, space: &str) -> StorageRe
     let tags = ctx.schema_manager().list_tags(space)?;
     let ts = ctx.get_read_timestamp();
 
-    // Group records by vertex ID to merge multi-tag vertices
+    // Read per-tag in batches directly from vertex tables, merging by vertex ID.
+    // This avoids the intermediate Vec<VertexRecord> allocation per tag that
+    // ctx.scan_vertices() produces via table.scan(ts).collect().
     struct MergedVertex {
         vid: VertexId,
         internal_id: u32,
@@ -114,24 +116,40 @@ pub(crate) fn scan_vertices(ctx: &GraphStorageContext, space: &str) -> StorageRe
 
     let mut merged: HashMap<VertexId, MergedVertex> = HashMap::new();
 
+    const BATCH_SIZE: usize = 256;
+
     for tag in &tags {
-        if let Some(iterator) = ctx.scan_vertices(tag.tag_id, ts) {
-            for record in iterator {
-                record_vertex_read(ctx, record.vid);
-                let entry = merged.entry(record.vid).or_insert(MergedVertex {
-                    vid: record.vid,
-                    internal_id: record.internal_id,
-                    tags: Vec::new(),
-                    properties: HashMap::new(),
-                });
-                entry.internal_id = record.internal_id;
-                let props: HashMap<String, Value> = record.properties.iter().cloned().collect();
-                entry
-                    .tags
-                    .push(Tag::new(tag.tag_name.clone(), props.clone()));
-                entry.properties.extend(props);
+        let tag_id = tag.tag_id;
+        let tag_name = &tag.tag_name;
+        ctx.data_store().with_vertex_tables(|tables| {
+            if let Some(table) = tables.get(&tag_id) {
+                let mut iter = table.scan(ts);
+                loop {
+                    let batch: Vec<_> = iter.by_ref().take(BATCH_SIZE).collect();
+                    if batch.is_empty() {
+                        break;
+                    }
+                    for record in &batch {
+                        record_vertex_read(ctx, record.vid.clone());
+                        let entry = merged.entry(record.vid.clone()).or_insert_with(|| {
+                            MergedVertex {
+                                vid: record.vid.clone(),
+                                internal_id: record.internal_id,
+                                tags: Vec::new(),
+                                properties: HashMap::new(),
+                            }
+                        });
+                        entry.internal_id = record.internal_id;
+                        let props: HashMap<String, Value> =
+                            record.properties.iter().cloned().collect();
+                        entry
+                            .tags
+                            .push(Tag::new(tag_name.clone(), props.clone()));
+                        entry.properties.extend(props);
+                    }
+                }
             }
-        }
+        });
     }
 
     Ok(merged
@@ -426,94 +444,122 @@ pub(crate) fn scan_edges_by_type(
         None => return Ok(edges),
     };
 
+    const BATCH_SIZE: usize = 256;
+
     // For unconstrained edge types (both tags empty), edges may be spread across
-    // multiple edge tables (per-label tables from recent inserts + the original
-    // (0, 0, edge_label) table from legacy inserts). We iterate every edge table
-    // for this edge type and resolve internal IDs using each table's known
-    // src_label/dst_label. The (0, 0, edge_label) table mixes vertices from
-    // different tables whose internal IDs may collide, so we fall back to
-    // get_external_id_any for those (best-effort).
+    // multiple edge tables. Use iter() directly instead of scan() to avoid
+    // intermediate Vec<EdgeRecord> allocation per table.
     if src_label_id == 0 && dst_label_id == 0 {
-        let table_records = ctx.data_store().with_edge_tables(|edge_tables| {
-            edge_tables
+        ctx.data_store().with_edge_tables(|edge_tables| {
+            let matching: Vec<_> = edge_tables
                 .values()
-                .map(|arc| arc.read())
-                .filter(|table| table.label() == edge_label_id)
-                .map(|table| (table.src_label(), table.dst_label(), table.scan(ts)))
-                .collect::<Vec<_>>()
-        });
-        for (tbl_src, tbl_dst, records) in table_records {
-            for record in records {
-                let src_internal = record.src_vid.as_int64().unwrap_or(0) as u32;
-                let dst_internal = record.dst_vid.as_int64().unwrap_or(0) as u32;
+                .filter(|arc| arc.read().0.label() == edge_label_id)
+                .cloned()
+                .collect();
+            for arc in matching {
+                let guard = arc.read();
+                let mut iter = guard.0.iter(ts);
+                loop {
+                    let batch: Vec<_> = iter.by_ref().take(BATCH_SIZE).collect();
+                    if batch.is_empty() {
+                        break;
+                    }
+                    for record in batch {
+                        let src_internal = record.src_vid.as_int64().unwrap_or(0) as u32;
+                        let dst_internal = record.dst_vid.as_int64().unwrap_or(0) as u32;
 
-                let src_external = if tbl_src != 0 {
-                    ctx.get_external_id(tbl_src, src_internal, ts)
-                        .or_else(|| {
-                            ctx.get_external_id_by_internal_id(tbl_src, src_internal)
-                                .map(|v| vid_to_string(&v))
-                        })
-                        .unwrap_or_else(|| format!("{}", record.src_vid))
-                } else {
-                    ctx.get_external_id_any(src_internal, ts)
-                        .unwrap_or_else(|| format!("{}", record.src_vid))
-                };
+                        let tbl_src = guard.0.src_label();
+                        let tbl_dst = guard.0.dst_label();
 
-                let dst_external = if tbl_dst != 0 {
-                    ctx.get_external_id(tbl_dst, dst_internal, ts)
-                        .or_else(|| {
-                            ctx.get_external_id_by_internal_id(tbl_dst, dst_internal)
-                                .map(|v| vid_to_string(&v))
-                        })
-                        .unwrap_or_else(|| format!("{}", record.dst_vid))
-                } else {
-                    ctx.get_external_id_any(dst_internal, ts)
-                        .unwrap_or_else(|| format!("{}", record.dst_vid))
-                };
+                        let src_external = if tbl_src != 0 {
+                            ctx.get_external_id(tbl_src, src_internal, ts)
+                                .or_else(|| {
+                                    ctx.get_external_id_by_internal_id(tbl_src, src_internal)
+                                        .map(|v| vid_to_string(&v))
+                                })
+                                .unwrap_or_else(|| format!("{}", record.src_vid))
+                        } else {
+                            ctx.get_external_id_any(src_internal, ts)
+                                .unwrap_or_else(|| format!("{}", record.src_vid))
+                        };
 
-                let edge = edge_record_to_edge(&record, edge_type, &src_external, &dst_external);
-                edges.push(edge);
+                        let dst_external = if tbl_dst != 0 {
+                            ctx.get_external_id(tbl_dst, dst_internal, ts)
+                                .or_else(|| {
+                                    ctx.get_external_id_by_internal_id(tbl_dst, dst_internal)
+                                        .map(|v| vid_to_string(&v))
+                                })
+                                .unwrap_or_else(|| format!("{}", record.dst_vid))
+                        } else {
+                            ctx.get_external_id_any(dst_internal, ts)
+                                .unwrap_or_else(|| format!("{}", record.dst_vid))
+                        };
+
+                        let edge = edge_record_to_edge(
+                            &record,
+                            edge_type,
+                            &src_external,
+                            &dst_external,
+                        );
+                        edges.push(edge);
+                    }
+                }
             }
-        }
+        });
         return Ok(edges);
     }
 
-    let records = ctx.scan_edges(src_label_id, dst_label_id, edge_label_id, ts);
+    // Constrained path: access the specific edge table directly using iter()
+    // instead of ctx.scan_edges() which collects into Vec.
+    ctx.data_store().with_edge_tables(|edge_tables| {
+        use crate::storage::engine::data_store::EdgeTableKey;
+        let key = EdgeTableKey::new(src_label_id, dst_label_id, edge_label_id);
+        if let Some(arc) = edge_tables.get(&key) {
+            let guard = arc.read();
+            let mut iter = guard.0.iter(ts);
+            loop {
+                let batch: Vec<_> = iter.by_ref().take(BATCH_SIZE).collect();
+                if batch.is_empty() {
+                    break;
+                }
+                for record in batch {
+                    record_edge_read(
+                        ctx,
+                        crate::core::types::EdgeIdentifier::new(
+                            src_label_id,
+                            record.src_vid,
+                            dst_label_id,
+                            record.dst_vid,
+                            edge_label_id,
+                            record.rank,
+                        ),
+                    );
+                    let src_internal = record.src_vid.as_int64().unwrap_or(0) as u32;
+                    let dst_internal = record.dst_vid.as_int64().unwrap_or(0) as u32;
 
-    for record in records {
-        record_edge_read(
-            ctx,
-            crate::core::types::EdgeIdentifier::new(
-                src_label_id,
-                record.src_vid,
-                dst_label_id,
-                record.dst_vid,
-                edge_label_id,
-                record.rank,
-            ),
-        );
-        let src_internal = record.src_vid.as_int64().unwrap_or(0) as u32;
-        let dst_internal = record.dst_vid.as_int64().unwrap_or(0) as u32;
+                    let src_external = ctx
+                        .get_external_id(src_label_id, src_internal, ts)
+                        .or_else(|| {
+                            ctx.get_external_id_by_internal_id(src_label_id, src_internal)
+                                .map(|v| vid_to_string(&v))
+                        })
+                        .unwrap_or_else(|| format!("{}", record.src_vid));
 
-        let src_external = ctx
-            .get_external_id(src_label_id, src_internal, ts)
-            .or_else(|| {
-                ctx.get_external_id_by_internal_id(src_label_id, src_internal)
-                    .map(|v| vid_to_string(&v))
-            })
-            .unwrap_or_else(|| format!("{}", record.src_vid));
+                    let dst_external = ctx
+                        .get_external_id(dst_label_id, dst_internal, ts)
+                        .or_else(|| {
+                            ctx.get_external_id_by_internal_id(dst_label_id, dst_internal)
+                                .map(|v| vid_to_string(&v))
+                        })
+                        .unwrap_or_else(|| format!("{}", record.dst_vid));
 
-        let dst_external = ctx
-            .get_external_id(dst_label_id, dst_internal, ts)
-            .or_else(|| {
-                ctx.get_external_id_by_internal_id(dst_label_id, dst_internal)
-                    .map(|v| vid_to_string(&v))
-            })
-            .unwrap_or_else(|| format!("{}", record.dst_vid));
-
-        let edge = edge_record_to_edge(&record, edge_type, &src_external, &dst_external);
-        edges.push(edge);
-    }
+                    let edge =
+                        edge_record_to_edge(&record, edge_type, &src_external, &dst_external);
+                    edges.push(edge);
+                }
+            }
+        }
+    });
 
     Ok(edges)
 }

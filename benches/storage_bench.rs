@@ -146,9 +146,7 @@ fn bench_bulk_vertex_insert(c: &mut Criterion) {
                     (storage, vertices)
                 },
                 |(mut storage, vertices)| {
-                    for v in vertices {
-                        storage.insert_vertex("bench", v).unwrap();
-                    }
+                    storage.batch_insert_vertices("bench", vertices).unwrap();
                 },
                 criterion::BatchSize::NumIterations(1),
             )

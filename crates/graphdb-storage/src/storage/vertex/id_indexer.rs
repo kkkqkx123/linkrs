@@ -151,6 +151,20 @@ impl IdManager {
         }
     }
 
+    /// Pre-allocate capacity for `additional` more entries in both the Vec and HashMap.
+    /// This avoids repeated rehashing during batch inserts.
+    pub fn reserve(&mut self, additional: usize) {
+        let target = self.keys.len().saturating_add(additional);
+        if target > self.keys.capacity() {
+            let new_cap = target.min(self.config.max_capacity);
+            let grow = new_cap.saturating_sub(self.keys.capacity());
+            if grow > 0 {
+                self.keys.reserve(grow);
+            }
+        }
+        self.key_to_id.reserve(additional);
+    }
+
     pub fn insert(&mut self, key: IdKey) -> StorageResult<u32> {
         if self.key_to_id.contains_key(&key) {
             return Err(StorageError::vertex_already_exists(format!("{:?}", key)));
@@ -337,6 +351,13 @@ impl IdIndexer {
     pub fn insert(&self, key: IdKey) -> StorageResult<u32> {
         let mut manager = self.manager.lock();
         manager.insert(key)
+    }
+
+    /// Pre-allocate capacity for `additional` more entries.
+    /// Call before batch inserts to avoid repeated rehashing.
+    pub fn reserve(&self, additional: usize) {
+        let mut manager = self.manager.lock();
+        manager.reserve(additional);
     }
 
     pub fn get_index(&self, key: &IdKey) -> Option<u32> {
