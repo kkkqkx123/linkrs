@@ -465,14 +465,12 @@ mod tests {
         fn undo_update_edge_property(
             &self,
             edge_id: EdgeIdentifier,
-            oe_offset: i32,
-            ie_offset: i32,
             col_id: ColumnId,
             value: PropertyValue,
             ts: Timestamp,
         ) -> UndoLogResult<()> {
             self.record(format!(
-                "undo_update_edge_property:{edge_id:?}:{oe_offset}:{ie_offset}:{col_id:?}:{value:?}:{ts}"
+                "undo_update_edge_property:{edge_id:?}:{col_id:?}:{value:?}:{ts}"
             ))
         }
 

@@ -360,8 +360,6 @@ impl TransactionOps {
     pub fn update_edge_property_undo(
         edge_tables: &mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>,
         params: UpdateEdgePropertyUndoParams,
-        _oe_offset: i32,
-        _ie_offset: i32,
         prop_id: u16,
         old_value: PropertyValue,
         ts: Timestamp,
@@ -382,6 +380,51 @@ impl TransactionOps {
                 value,
                 ts,
             })
+            .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Single-table version of `update_edge_property_undo`.
+    /// Operates on a single `EdgeStore` instead of the full catalog HashMap.
+    pub fn update_edge_property_undo_single(
+        table: &mut EdgeStore,
+        params: UpdateEdgePropertyUndoParams,
+        prop_id: u16,
+        old_value: PropertyValue,
+        ts: Timestamp,
+    ) -> UndoLogResult<()> {
+        let value = property_value_to_value(old_value);
+        table
+            .update_edge_property_by_offset(UpdateEdgePropertyByOffsetParams {
+                src: params.src_vid,
+                dst: params.dst_vid,
+                rank: params.rank,
+                prop_id,
+                value,
+                ts,
+            })
+            .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Single-table version of `revert_delete_edge`.
+    /// Operates on a single `EdgeStore` instead of the full catalog HashMap.
+    pub fn revert_delete_edge_single(
+        table: &mut EdgeStore,
+        params: RevertDeleteEdgeParams,
+        oe_offset: i32,
+        ie_offset: i32,
+        ts: Timestamp,
+    ) -> UndoLogResult<()> {
+        table
+            .revert_delete_edge_by_offset(
+                params.src_vid,
+                params.dst_vid,
+                params.rank,
+                oe_offset,
+                ie_offset,
+                ts,
+            )
             .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
         Ok(())
     }

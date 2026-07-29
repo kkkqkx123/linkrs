@@ -2,6 +2,7 @@ use crate::core::types::{
     ColumnId, EdgeDeletionContext, EdgeIdentifier, EdgeKey, LabelId, PropertyValue, Timestamp,
     UndoLogError, UndoLogResult, UndoTarget, VertexIdentifier,
 };
+use crate::storage::engine::data_store::EdgeTableKey;
 use crate::storage::engine::graph_storage::GraphStorageContext;
 use crate::storage::engine::transaction::{
     EdgeTypeLabelParams, RevertDeleteEdgeParams, TransactionOps, UpdateEdgePropertyUndoParams,
@@ -117,8 +118,6 @@ impl UndoTarget for GraphStorageContext {
     fn undo_update_edge_property(
         &self,
         edge_id: EdgeIdentifier,
-        oe_offset: i32,
-        ie_offset: i32,
         col_id: ColumnId,
         value: PropertyValue,
         ts: Timestamp,
@@ -131,18 +130,23 @@ impl UndoTarget for GraphStorageContext {
             edge_label: edge_id.edge_label,
             rank: edge_id.rank,
         };
+        let key = EdgeTableKey::new(
+            edge_id.src_label,
+            edge_id.dst_label,
+            edge_id.edge_label,
+        );
         self.data_store()
-            .with_edge_tables_mut_result(|edge_tables| {
-                TransactionOps::update_edge_property_undo(
-                    edge_tables,
+            .with_single_edge_table_mut(&key, |table| {
+                TransactionOps::update_edge_property_undo_single(
+                    table,
                     params,
-                    oe_offset,
-                    ie_offset,
                     col_id.0 as u16,
                     value,
                     ts,
                 )
-            })?;
+                .map_err(|e| crate::core::StorageError::db_error(e.to_string()))
+            })
+            .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
         self.mark_edge_modified(edge_id.edge_label);
         Ok(())
     }
@@ -165,16 +169,23 @@ impl UndoTarget for GraphStorageContext {
             dst_vid: checked_internal_vertex_id(&edge_ctx.edge_id.dst_vid)?,
             rank: edge_ctx.edge_id.rank,
         };
+        let key = EdgeTableKey::new(
+            edge_ctx.edge_id.src_label,
+            edge_ctx.edge_id.dst_label,
+            edge_ctx.edge_id.edge_label,
+        );
         self.data_store()
-            .with_edge_tables_mut_result(|edge_tables| {
-                TransactionOps::revert_delete_edge(
-                    edge_tables,
+            .with_single_edge_table_mut(&key, |table| {
+                TransactionOps::revert_delete_edge_single(
+                    table,
                     params,
                     edge_ctx.oe_offset,
                     edge_ctx.ie_offset,
                     edge_ctx.timestamp,
                 )
-            })?;
+                .map_err(|e| crate::core::StorageError::db_error(e.to_string()))
+            })
+            .map_err(|e| UndoLogError::UndoFailed(e.to_string()))?;
         self.mark_edge_modified(edge_ctx.edge_id.edge_label);
         Ok(())
     }

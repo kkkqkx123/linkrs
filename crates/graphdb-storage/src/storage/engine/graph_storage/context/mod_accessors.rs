@@ -96,11 +96,8 @@ impl GraphStorageContext {
 
         self.persistent
             .data_store
-            .with_edge_tables_mut(|edge_tables| {
-                for arc in edge_tables.values_mut() {
-                    let mut edge_store = arc.write();
-                    edge_store.register_snapshot(timestamp);
-                }
+            .for_all_edge_partitions_mut(|_key, table| {
+                table.register_snapshot(timestamp);
                 Ok(())
             })?;
         context.mvcc_edge_snapshot_registered = true;
@@ -173,11 +170,8 @@ impl GraphStorageContext {
         if operation.mvcc_edge_snapshot_registered {
             self.persistent
                 .data_store
-                .with_edge_tables_mut(|edge_tables| {
-                    for arc in edge_tables.values_mut() {
-                        let mut edge_store = arc.write();
-                        edge_store.unregister_snapshot(timestamp);
-                    }
+                .for_all_edge_partitions_mut(|_key, table| {
+                    table.unregister_snapshot(timestamp);
                     Ok(())
                 })?;
         }

@@ -169,7 +169,7 @@ fn execute_id(args: &[Value]) -> Result<Value, ExpressionError> {
         ));
     }
     match &args[0] {
-        Value::Vertex(v) => Ok(Value::BigInt(v.vid.as_int64().unwrap_or(0))),
+        Value::Vertex(v) => Ok(Value::from(v.vid)),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
             "The id function requires a vertex type",
@@ -247,7 +247,7 @@ fn execute_src(args: &[Value]) -> Result<Value, ExpressionError> {
         ));
     }
     match &args[0] {
-        Value::Edge(e) => Ok(Value::BigInt(e.src.as_int64().unwrap_or(0))),
+        Value::Edge(e) => Ok(Value::from(e.src)),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
             "The src function requires the edge type",
@@ -262,7 +262,7 @@ fn execute_dst(args: &[Value]) -> Result<Value, ExpressionError> {
         ));
     }
     match &args[0] {
-        Value::Edge(e) => Ok(Value::BigInt(e.dst.as_int64().unwrap_or(0))),
+        Value::Edge(e) => Ok(Value::from(e.dst)),
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
             "The dst function requires an edge type",
@@ -343,8 +343,7 @@ fn execute_neighbors(args: &[Value]) -> Result<Value, ExpressionError> {
     }
     match &args[0] {
         Value::Vertex(v) => {
-            let vid = v.vid.as_int64().unwrap_or(0);
-            Ok(Value::BigInt(vid))
+            Ok(Value::from(v.vid))
         }
         Value::Null(_) => Ok(Value::Null(NullType::Null)),
         _ => Err(ExpressionError::type_error(
@@ -481,7 +480,7 @@ fn execute_neighbors_with_storage(
         .map_err(ExpressionError::function_error)?;
     let neighbor_ids: Vec<Value> = neighbors
         .into_iter()
-        .map(|(nid, _)| Value::BigInt(nid.as_int64().unwrap_or(0)))
+        .map(|(nid, _)| Value::from(nid))
         .collect();
     Ok(Value::list(List {
         values: neighbor_ids,
@@ -626,7 +625,7 @@ fn execute_bfs_with_storage(
 
     visited.insert(start_vid);
     queue.push_back((start_vid, 0));
-    result.push(Value::BigInt(start_vid.as_int64().unwrap_or(0)));
+    result.push(Value::from(start_vid));
 
     while let Some((current, depth)) = queue.pop_front() {
         if depth >= max_depth {
@@ -640,7 +639,7 @@ fn execute_bfs_with_storage(
         for (neighbor_id, _) in neighbors {
             if visited.insert(neighbor_id) {
                 queue.push_back((neighbor_id, depth + 1));
-                result.push(Value::BigInt(neighbor_id.as_int64().unwrap_or(0)));
+                result.push(Value::from(neighbor_id));
             }
         }
     }
@@ -680,7 +679,7 @@ fn execute_connected_components_with_storage(
         let mut queue: VecDeque<VertexId> = VecDeque::new();
         visited.insert(*start_vid);
         queue.push_back(*start_vid);
-        component.push(Value::BigInt(start_vid.as_int64().unwrap_or(0)));
+        component.push(Value::from(*start_vid));
 
         while let Some(current) = queue.pop_front() {
             let neighbors = match storage.get_neighbors(&current) {
@@ -690,7 +689,7 @@ fn execute_connected_components_with_storage(
             for (neighbor_id, _) in neighbors {
                 if visited.insert(neighbor_id) {
                     queue.push_back(neighbor_id);
-                    component.push(Value::BigInt(neighbor_id.as_int64().unwrap_or(0)));
+                    component.push(Value::from(neighbor_id));
                 }
             }
         }
@@ -778,7 +777,7 @@ fn execute_variable_length_path_with_storage(
     if start_vid == end_vid && min_depth <= 0 {
         return Ok(Value::list(List {
             values: vec![Value::list(List {
-                values: vec![Value::BigInt(start_vid.as_int64().unwrap_or(0))],
+                values: vec![Value::from(start_vid)],
             })],
         }));
     }
@@ -793,7 +792,7 @@ fn execute_variable_length_path_with_storage(
 
     queue.push_back((
         start_vid,
-        vec![Value::BigInt(start_vid.as_int64().unwrap_or(0))],
+        vec![Value::from(start_vid)],
         0,
     ));
 
@@ -809,7 +808,7 @@ fn execute_variable_length_path_with_storage(
 
         for (neighbor_id, _) in neighbors {
             // Avoid cycles - skip if neighbor already in path
-            let neighbor_val = Value::BigInt(neighbor_id.as_int64().unwrap_or(0));
+            let neighbor_val = Value::from(neighbor_id);
             if path.contains(&neighbor_val) {
                 continue;
             }
@@ -939,7 +938,7 @@ fn execute_pagerank_with_storage(
 
     let mut result: HashMap<String, Value> = HashMap::new();
     for (i, vid) in vertex_ids.iter().enumerate() {
-        let vid_str = vid.as_int64().map(|v| v.to_string()).unwrap_or_default();
+        let vid_str = vid.to_string();
         result.insert(vid_str, Value::Double(scores[i]));
     }
 

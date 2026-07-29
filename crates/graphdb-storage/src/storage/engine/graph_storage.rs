@@ -1511,14 +1511,12 @@ impl crate::transaction::UndoTarget for GraphStorage {
     fn undo_update_edge_property(
         &self,
         edge_id: crate::core::types::EdgeIdentifier,
-        oe_offset: i32,
-        ie_offset: i32,
         col_id: crate::core::types::ColumnId,
         value: crate::transaction::undo_log::PropertyValue,
         ts: crate::transaction::wal::Timestamp,
     ) -> crate::transaction::undo_log::UndoLogResult<()> {
         crate::core::types::UndoTarget::undo_update_edge_property(
-            &*self.ctx, edge_id, oe_offset, ie_offset, col_id, value, ts,
+            &*self.ctx, edge_id, col_id, value, ts,
         )
     }
 

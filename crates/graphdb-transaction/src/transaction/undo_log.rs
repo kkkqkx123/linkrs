@@ -186,8 +186,6 @@ pub struct UpdateEdgePropUndo {
     pub dst_vid: VertexId,
     pub edge_label: LabelId,
     pub rank: i64,
-    pub oe_offset: i32,
-    pub ie_offset: i32,
     pub col_id: ColumnId,
     pub old_value: PropertyValue,
 }
@@ -203,8 +201,6 @@ impl UpdateEdgePropUndo {
                 self.edge_label,
                 self.rank,
             ),
-            self.oe_offset,
-            self.ie_offset,
             self.col_id,
             self.old_value.clone(),
             ts,
@@ -696,8 +692,6 @@ pub struct AddUpdateEdgePropParams {
     pub dst_vid: VertexId,
     pub edge_label: LabelId,
     pub rank: i64,
-    pub oe_offset: i32,
-    pub ie_offset: i32,
     pub col_id: ColumnId,
     pub old_value: PropertyValue,
 }
@@ -762,8 +756,6 @@ impl UndoLogManager {
             dst_vid: params.dst_vid,
             edge_label: params.edge_label,
             rank: params.rank,
-            oe_offset: params.oe_offset,
-            ie_offset: params.ie_offset,
             col_id: params.col_id,
             old_value: params.old_value,
         }))
@@ -1068,8 +1060,6 @@ mod tests {
             dst_vid: VertexId::from_int64(200),
             edge_label: 3,
             rank: 0,
-            oe_offset: 0,
-            ie_offset: 0,
             col_id: ColumnId(0),
             old_value: PropertyValue::String("test".to_string()),
         };

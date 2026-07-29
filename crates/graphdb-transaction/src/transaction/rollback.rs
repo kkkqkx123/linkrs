@@ -146,8 +146,6 @@ pub struct CreateUpdateEdgePropUndoParams {
     pub dst_vid: u64,
     pub edge_label: LabelId,
     pub rank: i64,
-    pub oe_offset: i32,
-    pub ie_offset: i32,
     pub col_id: ColumnId,
     pub old_value: PropertyValue,
 }
@@ -202,8 +200,6 @@ impl RollbackHelper {
             dst_vid: VertexId::from_u64(params.dst_vid),
             edge_label: params.edge_label,
             rank: params.rank,
-            oe_offset: params.oe_offset,
-            ie_offset: params.ie_offset,
             col_id: params.col_id,
             old_value: params.old_value,
         })

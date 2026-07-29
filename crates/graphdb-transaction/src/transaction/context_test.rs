@@ -42,8 +42,6 @@ impl UndoTarget for MockUndoTarget {
     fn undo_update_edge_property(
         &self,
         _edge_id: EdgeIdentifier,
-        _oe_offset: i32,
-        _ie_offset: i32,
         _col_id: ColumnId,
         _value: PropertyValue,
         _ts: Timestamp,

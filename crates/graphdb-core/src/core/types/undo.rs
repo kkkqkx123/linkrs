@@ -64,8 +64,6 @@ pub trait UndoTarget: Send + Sync {
     fn undo_update_edge_property(
         &self,
         edge_id: EdgeIdentifier,
-        oe_offset: i32,
-        ie_offset: i32,
         col_id: ColumnId,
         value: PropertyValue,
         ts: Timestamp,

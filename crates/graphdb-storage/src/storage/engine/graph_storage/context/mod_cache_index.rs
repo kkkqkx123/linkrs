@@ -2,7 +2,6 @@ use crate::core::metadata::IndexMetadataManager;
 use crate::core::types::{LabelId, Timestamp};
 use crate::core::{StorageResult, Value};
 use crate::storage::edge::ExportedEdgeSnapshot;
-use crate::storage::engine::data_store::EdgeTableKey;
 use crate::storage::index::traits::IndexGcOps;
 use crate::storage::index::types::{EdgeIdentity, GcStats};
 
@@ -112,34 +111,21 @@ impl GraphStorageContext {
     pub fn export_snapshot(&self, ts: Timestamp) -> StorageResult<Vec<ExportedEdgeSnapshotRecord>> {
         self.persistent
             .data_store
-            .with_edge_tables_mut(|edge_tables| {
-                let mut results = Vec::with_capacity(edge_tables.len());
-                for (
-                    EdgeTableKey {
-                        src_label,
-                        dst_label,
-                        edge_label,
-                    },
-                    arc,
-                ) in edge_tables.iter_mut()
-                {
-                    let table = arc.write();
-                    let snapshot = table.export_snapshot(ts)?;
-                    log::debug!(
-                        "Exporting snapshot at ts={} for edge table {}/{}/{}",
-                        ts,
-                        src_label,
-                        dst_label,
-                        edge_label
-                    );
-                    results.push(ExportedEdgeSnapshotRecord {
-                        src_label: *src_label,
-                        dst_label: *dst_label,
-                        edge_label: *edge_label,
-                        snapshot,
-                    });
-                }
-                Ok(results)
+            .for_all_edge_partitions_mut(|key, table| {
+                let snapshot = table.export_snapshot(ts)?;
+                log::debug!(
+                    "Exporting snapshot at ts={} for edge table {}/{}/{}",
+                    ts,
+                    key.src_label,
+                    key.dst_label,
+                    key.edge_label
+                );
+                Ok(ExportedEdgeSnapshotRecord {
+                    src_label: key.src_label,
+                    dst_label: key.dst_label,
+                    edge_label: key.edge_label,
+                    snapshot,
+                })
             })
     }
 }

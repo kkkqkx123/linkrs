@@ -337,8 +337,6 @@ impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::Undo
     fn undo_update_edge_property(
         &self,
         edge_id: crate::core::types::EdgeIdentifier,
-        oe_offset: i32,
-        ie_offset: i32,
         col_id: crate::core::types::ColumnId,
         value: crate::transaction::undo_log::PropertyValue,
         ts: crate::transaction::wal::Timestamp,
@@ -346,8 +344,6 @@ impl<S: crate::transaction::UndoTarget + StorageClient> crate::transaction::Undo
         crate::transaction::UndoTarget::undo_update_edge_property(
             &self.inner,
             edge_id,
-            oe_offset,
-            ie_offset,
             col_id,
             value,
             ts,

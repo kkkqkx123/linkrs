@@ -64,38 +64,34 @@ impl GraphStorageContext {
             total_vertices_removed
         );
 
-        let mut total_edges_removed = 0usize;
-        let edge_keys = self
+        let edge_keys_and_removed: Vec<(EdgeTableKey, usize)> = self
             .persistent
             .data_store
-            .with_edge_tables_mut(|edge_tables| {
-                let keys: Vec<EdgeTableKey> = edge_tables.keys().copied().collect();
-                if config.enable_structure_compaction {
-                    for &key in &keys {
-                        let arc = edge_tables.get_mut(&key).expect("edge key must exist");
-                        let mut table = arc.write();
-                        let removed = table.compact_and_freeze(
-                            ts,
-                            config,
-                            crate::storage::edge::CompactionMode::Standard,
-                        );
-                        total_edges_removed += removed;
-                    }
-
-                    log::info!(
-                        "Compacted CSR structures: {} edges removed",
-                        total_edges_removed
-                    );
+            .for_all_edge_partitions_mut(|key, table| {
+                let removed = if config.enable_structure_compaction {
+                    table.compact_and_freeze(
+                        ts,
+                        config,
+                        crate::storage::edge::CompactionMode::Standard,
+                    )
                 } else {
-                    for &key in &keys {
-                        let arc = edge_tables.get_mut(&key).expect("edge key must exist");
-                        let mut table = arc.write();
-                        table.freeze_csr_only(ts);
-                        table.compact_properties(ts);
-                    }
-                }
-                Ok(keys)
+                    table.freeze_csr_only(ts);
+                    table.compact_properties(ts);
+                    0
+                };
+                Ok((key, removed))
             })?;
+
+        let total_edges_removed: usize = edge_keys_and_removed.iter().map(|(_, r)| r).sum();
+        let edge_keys: Vec<EdgeTableKey> =
+            edge_keys_and_removed.into_iter().map(|(k, _)| k).collect();
+
+        if config.enable_structure_compaction {
+            log::info!(
+                "Compacted CSR structures: {} edges removed",
+                total_edges_removed
+            );
+        }
 
         for &key in &edge_keys {
             self.mark_edge_modified(key.edge_label);
@@ -140,14 +136,15 @@ impl GraphStorageContext {
             }
         }
 
-        self.persistent.data_store.with_edge_tables_mut(|edge_tables| {
-            let mut adaptive_merged = 0usize;
-            let mut lsm_merged = 0usize;
+        let (adaptive_merged, lsm_merged) = self
+            .persistent
+            .data_store
+            .for_all_edge_partitions_mut(|_key, table| {
+                let mut adaptive_here = 0;
+                let mut lsm_here = 0;
 
-            for arc in edge_tables.values_mut() {
-                let mut table = arc.write();
                 if self.persistent.config.merge_config.enable_adaptive_merge {
-                    adaptive_merged += table.merge_segments_adaptive(
+                    adaptive_here += table.merge_segments_adaptive(
                         ts,
                         self.persistent.config.merge_config.max_segment_age,
                         self.persistent.config.merge_config.deletion_threshold,
@@ -155,7 +152,7 @@ impl GraphStorageContext {
                     );
                 }
                 if self.persistent.config.merge_config.enable_lsm_tiering {
-                    lsm_merged += table.merge_segments_lsm_tiered(ts);
+                    lsm_here += table.merge_segments_lsm_tiered(ts);
                 }
 
                 let stats = table.merge_stats();
@@ -193,22 +190,23 @@ impl GraphStorageContext {
                         );
                     }
                 }
-            }
+                Ok((adaptive_here, lsm_here))
+            })?
+            .into_iter()
+            .fold((0, 0), |acc, res| (acc.0 + res.0, acc.1 + res.1));
 
-            if adaptive_merged > 0 {
-                log::info!(
-                    "Adaptive merge during compaction: {} segments merged",
-                    adaptive_merged
-                );
-            }
-            if lsm_merged > 0 {
-                log::info!(
-                    "LSM tiered merge during compaction: {} segments merged",
-                    lsm_merged
-                );
-            }
-            Ok(())
-        })?;
+        if adaptive_merged > 0 {
+            log::info!(
+                "Adaptive merge during compaction: {} segments merged",
+                adaptive_merged
+            );
+        }
+        if lsm_merged > 0 {
+            log::info!(
+                "LSM tiered merge during compaction: {} segments merged",
+                lsm_merged
+            );
+        }
 
         // Log freeze configuration for monitoring
         if let Some(ref manager) = self.runtime.background_freeze_manager {

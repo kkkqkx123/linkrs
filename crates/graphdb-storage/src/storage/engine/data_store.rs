@@ -639,6 +639,35 @@ impl GraphDataStore {
             .collect()
     }
 
+    /// Iterate over all partitions of all edge labels, calling `operation` on each
+    /// with only the per-table write lock held (no catalog write lock).
+    ///
+    /// Uses scatter-gather: all EdgeTableKeys are collected from the edge_label_index
+    /// under a brief catalog read lock, then each table is locked individually so
+    /// partitions from different edge labels can be mutated concurrently.
+    pub(crate) fn for_all_edge_partitions_mut<R>(
+        &self,
+        operation: impl Fn(EdgeTableKey, &mut EdgeStore) -> StorageResult<R>,
+    ) -> StorageResult<Vec<R>> {
+        let keys: Vec<EdgeTableKey> = {
+            let index = self.read_edge_label_index();
+            index.values().flat_map(|v| v.iter()).copied().collect()
+        };
+        keys.into_iter()
+            .filter_map(|key| {
+                let arc = {
+                    let guard = self.edge_tables.read();
+                    guard.get(&key).cloned()
+                };
+                arc.map(|arc| (key, arc))
+            })
+            .map(|(key, arc)| {
+                let mut table = arc.write();
+                operation(key, &mut table)
+            })
+            .collect()
+    }
+
     pub(crate) fn with_edge_partitions_mut<R>(
         &self,
         edge_label: LabelId,
@@ -667,6 +696,16 @@ impl GraphDataStore {
         };
         let guard = arc.read();
         operation(&guard)
+    }
+
+    /// Try to get a mutable reference to a single edge table by key.
+    /// Returns `None` if the key does not exist (no catalog lock held during operation).
+    pub(crate) fn try_get_edge_table_mut(
+        &self,
+        key: &EdgeTableKey,
+    ) -> Option<std::sync::Arc<parking_lot::RwLock<EdgeStore>>> {
+        let guard = self.edge_tables.read();
+        guard.get(key).cloned()
     }
 
     /// Mutate a single edge table by key, holding only the table-level lock during the operation.
