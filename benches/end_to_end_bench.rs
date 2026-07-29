@@ -179,7 +179,7 @@ fn bench_write_transaction_workflow(c: &mut Criterion) {
                     VertexId::from_string(format!("u{}", i)),
                     vec![Tag::new(
                         "Node".to_string(),
-                        [("value".to_string(), Value::Int(i as i32))]
+                        [("value".to_string(), Value::Int(i))]
                             .into_iter()
                             .collect(),
                     )],

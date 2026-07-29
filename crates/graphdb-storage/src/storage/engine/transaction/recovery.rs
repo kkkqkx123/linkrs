@@ -537,7 +537,7 @@ impl RecoveryApplier for GraphStorageContext {
                         };
                         let arc = self
                             .data_store()
-                            .with_edge_tables(|tables| tables.get(&key).map(|a| a.clone()));
+                            .with_edge_tables(|tables| tables.get(&key).cloned());
                         if let Some(arc) = arc {
                             let mut table = arc.write();
                             let change_details =
@@ -911,7 +911,7 @@ impl GraphStorageContext {
 
         let arc = self
             .data_store()
-            .with_edge_tables(|tables| tables.get(&key).map(|a| a.clone()));
+            .with_edge_tables(|tables| tables.get(&key).cloned());
         if let Some(arc) = arc {
             let mut table = arc.write();
             let _ = table.delete_edge(src_internal, dst_internal, redo.rank, ts)?;

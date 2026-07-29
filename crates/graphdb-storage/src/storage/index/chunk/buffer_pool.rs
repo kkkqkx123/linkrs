@@ -1,10 +1,13 @@
-use crate::storage::index::chunk::chunk::ChunkId;
+use crate::storage::index::chunk::data::ChunkId;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+type LoaderFn<T> = Arc<dyn Fn(ChunkId) -> Option<(T, usize)> + Send + Sync>;
+type WriterFn<T> = Arc<dyn Fn(ChunkId, &T) -> Result<(), Box<dyn Error + Send + Sync>> + Send + Sync>;
 
 #[derive(Clone)]
 pub(crate) struct CachedItem<T: Clone + Send + Sync> {
@@ -65,8 +68,8 @@ struct BufferPoolInner<T: Clone + Send + Sync> {
     chunks: Mutex<HashMap<ChunkId, CachedItem<T>>>,
     clock_hand: Mutex<usize>,
     cached_ids: Mutex<Vec<ChunkId>>,
-    loader: Mutex<Option<Arc<dyn Fn(ChunkId) -> Option<(T, usize)> + Send + Sync>>>,
-    writer: Mutex<Option<Arc<dyn Fn(ChunkId, &T) -> Result<(), Box<dyn Error + Send + Sync>> + Send + Sync>>>,
+    loader: Mutex<Option<LoaderFn<T>>>,
+    writer: Mutex<Option<WriterFn<T>>>,
 }
 
 impl<T: Clone + Send + Sync> BufferPool<T> {
@@ -211,13 +214,13 @@ impl<T: Clone + Send + Sync> BufferPool<T> {
                 if ids.is_empty() {
                     break;
                 }
-                hand = hand % ids.len().max(1);
+                hand %= ids.len().max(1);
             } else {
                 ids.retain(|i| chunks.contains_key(i));
                 if ids.is_empty() {
                     break;
                 }
-                hand = hand % ids.len().max(1);
+                hand %= ids.len().max(1);
             }
             attempts += 1;
         }

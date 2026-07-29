@@ -59,7 +59,7 @@ impl EdgeIndexOps for IndexDataManagerImpl {
 
             let covering = index_definition
                 .as_ref()
-                .map_or(false, |idx| idx.covering);
+                .is_some_and(|idx| idx.covering);
             let new_values =
                 effective_index_values(index_definition.as_ref(), props, Vec::new());
 
@@ -75,7 +75,7 @@ impl EdgeIndexOps for IndexDataManagerImpl {
             } else {
                 let has_included = index_definition
                     .as_ref()
-                    .map_or(false, |idx| !idx.properties.is_empty());
+                    .is_some_and(|idx| !idx.properties.is_empty());
                 if !has_included {
                     return Ok(());
                 }

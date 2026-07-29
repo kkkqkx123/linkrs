@@ -46,18 +46,13 @@ use std::fmt;
 use std::time::Instant;
 
 /// Edge store variant selection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum EdgeStoreMode {
     /// Full MVCC + freeze/merge/segment (for persistent spaces).
+    #[default]
     TimeTravel,
     /// Single CSR, no history, lightweight (for in-memory spaces).
     Simple,
-}
-
-impl Default for EdgeStoreMode {
-    fn default() -> Self {
-        EdgeStoreMode::TimeTravel
-    }
 }
 
 /// Multi-segment CSR with freeze/merge/MVCC (full history),

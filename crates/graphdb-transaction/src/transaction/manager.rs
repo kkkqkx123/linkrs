@@ -228,15 +228,15 @@ pub struct TransactionManager {
     write_exclusion_owner: AtomicU64,
     /// Spatial index for O(1) vertex conflict lookup.
     /// Maps each vertex ID to committed write timestamps + transaction IDs.
-    committed_vertex_writes: Mutex<HashMap<VertexId, Vec<(Timestamp, TransactionId)>>>,
+    committed_vertex_writes: Mutex<ConflictMap<VertexId>>,
     /// Spatial index for O(1) edge conflict lookup.
     /// Key: (src_vid, dst_vid, edge_label).
     committed_edge_writes:
-        Mutex<HashMap<(VertexId, VertexId, LabelId), Vec<(Timestamp, TransactionId)>>>,
+        Mutex<ConflictMap<(VertexId, VertexId, LabelId)>>,
     /// Spatial index for O(1) schema resource conflict lookup.
-    committed_schema_writes: Mutex<HashMap<String, Vec<(Timestamp, TransactionId)>>>,
+    committed_schema_writes: Mutex<ConflictMap<String>>,
     /// Spatial index for O(1) index resource conflict lookup.
-    committed_index_writes: Mutex<HashMap<String, Vec<(Timestamp, TransactionId)>>>,
+    committed_index_writes: Mutex<ConflictMap<String>>,
     /// Transactions whose data is durable but whose post-commit finalization
     /// (e.g. commit_sink.finalize_commit, undo-log cleanup) failed. Stored for
     /// retry on the next startup_recovery() call or admin-triggered recovery.
@@ -246,6 +246,9 @@ pub struct TransactionManager {
 /// Number of certification lock shards. Must be a power of two for efficient
 /// modulo via bitmask (though the compiler optimizes `% 64` anyway).
 const CERT_SHARD_COUNT: usize = 64;
+
+/// Maps a resource reference to its committed write timestamps + transaction IDs.
+type ConflictMap<V> = HashMap<V, Vec<(Timestamp, TransactionId)>>;
 
 /// A transaction whose WAL data is durable but whose post-commit state is
 /// incomplete (finalize_commit or undo-log cleanup failed).
@@ -656,7 +659,7 @@ impl TransactionManager {
         let is_full_scan = serializable
             && ctx
                 .serializable_full_scan_threshold()
-                .map_or(false, |threshold| txn_read_set.size() > threshold);
+                .is_some_and(|threshold| txn_read_set.size() > threshold);
 
         for entry in self.active_transactions.iter() {
             let (other_id, other_ctx) = entry.pair();

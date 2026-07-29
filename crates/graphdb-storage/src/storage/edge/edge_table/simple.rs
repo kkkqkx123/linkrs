@@ -337,7 +337,7 @@ fn nbr_to_record(src: u32, nbr: &Nbr, properties: &SimplePropertyTable) -> EdgeR
     let prop_values = properties.get(nbr.prop_offset).unwrap_or_default();
     EdgeRecord {
         src_vid: crate::core::types::VertexId::from_int64(src as i64),
-        dst_vid: dst_vid,
+        dst_vid,
         rank,
         properties: prop_values,
     }

@@ -193,7 +193,7 @@ impl GraphStorageContext {
                 }
                 let remaining = excess - total_freed;
                 let table = arc.read();
-                match engine.evict_cold_segments(&*table, remaining as usize) {
+                match engine.evict_cold_segments(&table, remaining as usize) {
                     Ok(freed) => total_freed += freed as u64,
                     Err(e) => {
                         log::warn!("Segment eviction failed for table: {}", e);

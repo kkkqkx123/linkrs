@@ -1,6 +1,6 @@
 use crate::core::value::ordered_codec::OrderedCodec;
 use crate::core::{StorageError, StorageResult};
-use crate::storage::index::chunk::chunk::{Chunk, ChunkId};
+use crate::storage::index::chunk::data::{Chunk, ChunkId};
 use crate::storage::index::chunk::chunked_index::ChunkedIndex;
 use crate::storage::index::chunk::buffer_pool::BufferPool;
 use crate::storage::index::generic_index_manager::{write_entity_ref, EntityRefReader};

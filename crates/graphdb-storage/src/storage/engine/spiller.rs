@@ -97,7 +97,7 @@ impl Spiller {
                 }
                 let remaining = (requested_bytes - total_freed) as usize;
                 let table = arc.read();
-                match engine.evict_cold_segments(&*table, remaining) {
+                match engine.evict_cold_segments(&table, remaining) {
                     Ok(freed) => total_freed += freed as u64,
                     Err(e) => {
                         log::warn!("Segment eviction failed during spill: {}", e);

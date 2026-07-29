@@ -850,10 +850,10 @@ impl GenerationRuntime {
             sr.reverse_prefix = Arc::clone(&rev_prefix);
             sr.prefix_forward_len = prefix_f_len;
             sr.prefix_reverse_len = prefix_r_len;
-            for (k, _) in &stripped_fwd {
+            for k in stripped_fwd.keys() {
                 sr.forward_bloom.lock().insert(k);
             }
-            for (k, _) in &stripped_rev {
+            for k in stripped_rev.keys() {
                 sr.reverse_bloom.lock().insert(k);
             }
             sr.install_forward_from_btree(stripped_fwd);

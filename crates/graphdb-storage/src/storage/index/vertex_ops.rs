@@ -53,7 +53,7 @@ impl VertexIndexOps for IndexDataManagerImpl {
 
             let covering = index_definition
                 .as_ref()
-                .map_or(false, |idx| idx.covering);
+                .is_some_and(|idx| idx.covering);
             let new_values =
                 effective_index_values(index_definition.as_ref(), props, Vec::new());
 

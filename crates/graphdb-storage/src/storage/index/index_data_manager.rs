@@ -194,7 +194,7 @@ impl IndexDataManagerImpl {
             .map(|(id, rt)| (*id, rt.memory_usage_bytes()))
             .collect();
         drop(runtimes);
-        candidates.sort_by(|a, b| b.1.cmp(&a.1));
+        candidates.sort_by_key(|b| std::cmp::Reverse(b.1));
 
         for (identity, _mem) in candidates {
             if self.memory_usage_bytes() <= low {

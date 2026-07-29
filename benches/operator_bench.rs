@@ -53,7 +53,7 @@ fn bench_expression_eval(c: &mut Criterion) {
         };
 
         // Single column project: name
-        let project_single = vec![Expression::Variable("name".into())];
+        let project_single = [Expression::Variable("name".into())];
 
         // Multi column project: name, age, score
         let project_multi = vec![
