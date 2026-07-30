@@ -241,6 +241,8 @@ pub struct TransactionManager {
     /// (e.g. commit_sink.finalize_commit, undo-log cleanup) failed. Stored for
     /// retry on the next startup_recovery() call or admin-triggered recovery.
     pending_finalizations: Mutex<Vec<PendingFinalization>>,
+    /// SSI rw-dependency tracker for Serializable isolation.
+    ssi_tracker: SsiTracker,
 }
 
 /// Number of certification lock shards. Must be a power of two for efficient
@@ -256,6 +258,50 @@ struct PendingFinalization {
     txn_id: TransactionId,
     write_timestamp: Timestamp,
     commit_lsn: CommitLsn,
+}
+
+/// SSI (Serializable Snapshot Isolation) rw-dependency tracker.
+///
+/// Instead of scanning all committed write sets (O(N)), this tracker maintains
+/// per-resource read locks that enable O(1) dangerous-structure detection.
+struct SsiTracker {
+    /// Per-resource list of active readers: resource → Vec<(txn_id, start_ts)>
+    read_locks: parking_lot::RwLock<HashMap<ResourceId, Vec<(TransactionId, Timestamp)>>>,
+}
+
+impl SsiTracker {
+    fn new() -> Self {
+        Self {
+            read_locks: parking_lot::RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Register that `txn_id` read `resource` at `start_ts`.
+    fn register_read(&self, txn_id: TransactionId, resource: ResourceId, start_ts: Timestamp) {
+        self.read_locks
+            .write()
+            .entry(resource)
+            .or_default()
+            .push((txn_id, start_ts));
+    }
+
+    /// Remove all read locks held by `txn_id` (on commit or abort).
+    fn unregister_reads(&self, txn_id: TransactionId) {
+        let mut locks = self.read_locks.write();
+        locks.retain(|_, entries| {
+            entries.retain(|(id, _)| *id != txn_id);
+            !entries.is_empty()
+        });
+    }
+
+    /// Prune read locks older than `oldest_active_ts`.
+    fn prune(&self, oldest_active_ts: Timestamp) {
+        let mut locks = self.read_locks.write();
+        locks.retain(|_, entries| {
+            entries.retain(|(_, ts)| *ts > oldest_active_ts);
+            !entries.is_empty()
+        });
+    }
 }
 
 impl TransactionManager {
@@ -286,6 +332,7 @@ impl TransactionManager {
             committed_schema_writes: Mutex::new(HashMap::new()),
             committed_index_writes: Mutex::new(HashMap::new()),
             pending_finalizations: Mutex::new(Vec::new()),
+            ssi_tracker: SsiTracker::new(),
         };
         let commit_stats = Arc::clone(&manager.stats);
         manager.register_commit_callback(Arc::new(move |event| match event {
@@ -656,10 +703,29 @@ impl TransactionManager {
             return Ok(());
         }
 
-        let is_full_scan = serializable
-            && ctx
-                .serializable_full_scan_threshold()
-                .is_some_and(|threshold| txn_read_set.size() > threshold);
+        // SSI: register read locks for all entities in the read set.
+        // This enables O(1) dangerous-structure detection when other
+        // transactions write to these resources.
+        if serializable {
+            for vid in txn_read_set.vertices.iter() {
+                self.ssi_tracker
+                    .register_read(txn_id, ResourceId::Vertex(*vid), ctx.start_timestamp);
+            }
+            for edge in txn_read_set.edges.iter() {
+                self.ssi_tracker.register_read(
+                    txn_id,
+                    ResourceId::Edge(*edge),
+                    ctx.start_timestamp,
+                );
+            }
+            for resource in txn_read_set.schema_resources.iter() {
+                self.ssi_tracker.register_read(
+                    txn_id,
+                    ResourceId::Schema(resource.clone()),
+                    ctx.start_timestamp,
+                );
+            }
+        }
 
         for entry in self.active_transactions.iter() {
             let (other_id, other_ctx) = entry.pair();
@@ -798,29 +864,50 @@ impl TransactionManager {
                 }
             }
             drop(schema_idx);
+        }
 
-            // Read-range phantom and full-scan detection still require
-            // scanning committed write sets (predicate-based, not entity-indexed).
-            if !txn_read_set.read_ranges.is_empty() || is_full_scan {
-                for (commit_ts, write_set) in committed.iter() {
-                    if *commit_ts <= ctx.start_timestamp {
-                        continue;
-                    }
-                    if !txn_read_set.read_ranges.is_empty()
-                        && txn_read_set.has_read_range_conflict_with(write_set)
-                    {
-                        self.stats.record_txn_conflict();
-                        drop(committed);
-                        return Err(TransactionError::serialization_failed(
-                            "Serializable read-range conflict detected",
-                        ));
-                    }
-                    if is_full_scan && !write_set.is_empty() {
-                        self.stats.record_txn_conflict();
-                        drop(committed);
-                        return Err(TransactionError::serialization_failed(
-                            "Serializable full-scan transaction aborted due to concurrent write",
-                        ));
+        // SSI (Serializable Snapshot Isolation) dangerous-structure detection.
+        //
+        // Instead of scanning all committed write sets (O(N)), we check for
+        // dangerous structures: T_current writes R, T_other read R, AND
+        // T_current read something T_other writes. This is O(W × K) where
+        // W = write set size and K = max readers per resource.
+        //
+        // We also check against committed write sets via spatial indices (O(1))
+        // for the reverse direction (read set vs committed writes).
+        if serializable {
+            let write_resources = txn_write_set.ssi_resources();
+            let read_resources = ctx.get_ssi_read_resources();
+
+            for resource in &write_resources {
+                // Check if any active transaction has read this resource
+                // (rw-dependency: T_other →rw T_current)
+                let ssi_locks = self.ssi_tracker.read_locks.read();
+                if let Some(readers) = ssi_locks.get(resource) {
+                    for &(reader_id, reader_start_ts) in readers {
+                        if reader_id == txn_id {
+                            continue;
+                        }
+                        if reader_start_ts >= ctx.start_timestamp {
+                            continue;
+                        }
+                        // Check if T_current also reads something T_other writes
+                        // (rw-dependency: T_current →rw T_other → potential cycle)
+                        if let Some(reader_ctx) = self.active_transactions.get(&reader_id) {
+                            if !reader_ctx.read_only
+                                && reader_ctx.is_write_validated()
+                                && read_resources
+                                    .iter()
+                                    .any(|r| reader_ctx.get_write_set().ssi_resources().contains(r))
+                            {
+                                drop(ssi_locks);
+                                drop(committed);
+                                self.stats.record_txn_conflict();
+                                return Err(TransactionError::serialization_failed(
+                                    "SSI dangerous structure detected: read-write cycle",
+                                ));
+                            }
+                        }
                     }
                 }
             }
@@ -851,6 +938,9 @@ impl TransactionManager {
         schema_idx.retain(|_, entries| retain_fn(entries));
         let mut index_idx = self.committed_index_writes.lock();
         index_idx.retain(|_, entries| retain_fn(entries));
+
+        // SSI: prune stale read locks.
+        self.ssi_tracker.prune(oldest_active_ts);
     }
 
     /// Start a new transaction (legacy API for compatibility)
@@ -1201,6 +1291,9 @@ impl TransactionManager {
                             .or_default()
                             .push((descriptor.write_timestamp, context.id));
                     }
+
+                    // SSI: unregister read locks and register write locks.
+                    self.ssi_tracker.unregister_reads(context.id);
                 }
                 let safe_ts = self.version_manager.get_safe_gc_timestamp();
                 self.prune_committed_write_sets(safe_ts);
@@ -1533,6 +1626,8 @@ impl TransactionManager {
                 self.checkpoint_gate.release_write();
             }
         }
+        // SSI: unregister read locks on abort.
+        self.ssi_tracker.unregister_reads(context.id);
         self.active_transactions.remove(&context.id);
         if let Err(error) = context.clear_undo_logs() {
             log::warn!(

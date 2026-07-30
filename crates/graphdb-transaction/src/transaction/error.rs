@@ -45,7 +45,6 @@ pub enum TransactionErrorKind {
     CheckpointInProgress,
     CheckpointTimeout,
     TransactionBudgetExceeded,
-    DdlDmlBoundaryViolation,
     Internal,
 }
 
@@ -78,7 +77,6 @@ impl TransactionErrorKind {
             TransactionErrorKind::CheckpointInProgress => "checkpoint_in_progress",
             TransactionErrorKind::CheckpointTimeout => "checkpoint_timeout",
             TransactionErrorKind::TransactionBudgetExceeded => "transaction_budget_exceeded",
-            TransactionErrorKind::DdlDmlBoundaryViolation => "ddl_dml_boundary_violation",
             TransactionErrorKind::Internal => "internal",
         }
     }
@@ -288,10 +286,6 @@ impl TransactionError {
             TransactionErrorKind::TransactionBudgetExceeded,
             format!("Transaction budget exceeded: {resource} {current} > {limit}"),
         )
-    }
-
-    pub fn ddl_dml_boundary_violation(message: impl Into<String>) -> Self {
-        Self::new(TransactionErrorKind::DdlDmlBoundaryViolation, message)
     }
 
     pub fn is_timeout(&self) -> bool {

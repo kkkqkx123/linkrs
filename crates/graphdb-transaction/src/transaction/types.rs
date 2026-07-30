@@ -850,6 +850,24 @@ impl WriteSet {
         self.vertices.len() + self.edges.len()
     }
 
+    /// Convert write set entities into `ResourceId`s for SSI tracking.
+    pub fn ssi_resources(&self) -> Vec<ResourceId> {
+        let mut resources = Vec::new();
+        for vid in &self.vertices {
+            resources.push(ResourceId::Vertex(*vid));
+        }
+        for edge in &self.edges {
+            resources.push(ResourceId::Edge(*edge));
+        }
+        for res in &self.schema_resources {
+            resources.push(ResourceId::Schema(res.clone()));
+        }
+        for res in &self.index_resources {
+            resources.push(ResourceId::Index(res.clone()));
+        }
+        resources
+    }
+
     /// Check if two write sets have any conflicting entities.
     ///
     /// Conflict is defined as: same vertex modified OR same edge modified.
@@ -942,6 +960,56 @@ impl ReadRange {
             }
         }
         true
+    }
+}
+
+/// Unified resource identifier for SSI rw-dependency tracking.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ResourceId {
+    Vertex(VertexId),
+    Edge(crate::core::types::EdgeIdentifier),
+    Schema(String),
+    Index(String),
+}
+
+/// Per-transaction SSI (Serializable Snapshot Isolation) state.
+///
+/// Tracks which resources this transaction has read and written, enabling
+/// O(1) dangerous-structure detection instead of O(N) committed write-set scanning.
+#[derive(Debug, Clone, Default)]
+pub struct SsiState {
+    /// Resources read by this transaction (populated via `record_ssi_read`).
+    read_resources: HashSet<ResourceId>,
+    /// Resources written by this transaction (populated via `record_ssi_write`).
+    write_resources: HashSet<ResourceId>,
+}
+
+impl SsiState {
+    pub fn new() -> Self {
+        Self {
+            read_resources: HashSet::new(),
+            write_resources: HashSet::new(),
+        }
+    }
+
+    pub fn record_read(&mut self, resource: ResourceId) {
+        self.read_resources.insert(resource);
+    }
+
+    pub fn record_write(&mut self, resource: ResourceId) {
+        self.write_resources.insert(resource);
+    }
+
+    pub fn read_resources(&self) -> &HashSet<ResourceId> {
+        &self.read_resources
+    }
+
+    pub fn write_resources(&self) -> &HashSet<ResourceId> {
+        &self.write_resources
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.read_resources.is_empty() && self.write_resources.is_empty()
     }
 }
 

@@ -2,7 +2,7 @@
 //!
 //! Manages the state and resources of a single transaction.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -108,10 +108,8 @@ pub struct TransactionContext {
     schema_catalog_version: AtomicU64,
     /// Serializable full-scan read-set threshold for this transaction.
     serializable_full_scan_threshold: Option<usize>,
-    /// Whether this transaction has executed DDL (schema) operations.
-    has_ddl: AtomicCell<bool>,
-    /// Whether this transaction has executed DML (data) operations.
-    has_dml: AtomicCell<bool>,
+    /// SSI (Serializable Snapshot Isolation) state for rw-dependency tracking.
+    ssi_state: RwLock<super::types::SsiState>,
 }
 
 impl fmt::Debug for TransactionContext {
@@ -239,8 +237,7 @@ impl TransactionContext {
             concurrency_mode: config.concurrency_mode,
             schema_catalog_version: AtomicU64::new(0),
             serializable_full_scan_threshold: config.serializable_full_scan_threshold,
-            has_ddl: AtomicCell::new(false),
-            has_dml: AtomicCell::new(false),
+            ssi_state: RwLock::new(super::types::SsiState::new()),
         }
     }
 
@@ -294,8 +291,7 @@ impl TransactionContext {
             concurrency_mode: config.concurrency_mode,
             schema_catalog_version: AtomicU64::new(0),
             serializable_full_scan_threshold: config.serializable_full_scan_threshold,
-            has_ddl: AtomicCell::new(false),
-            has_dml: AtomicCell::new(false),
+            ssi_state: RwLock::new(super::types::SsiState::new()),
         }
     }
 
@@ -507,6 +503,32 @@ impl TransactionContext {
 
     pub fn serializable_full_scan_threshold(&self) -> Option<usize> {
         self.serializable_full_scan_threshold
+    }
+
+    /// Record a resource read for SSI rw-dependency tracking.
+    pub fn record_ssi_read(&self, resource: super::types::ResourceId) {
+        self.ssi_state.write().record_read(resource);
+    }
+
+    /// Record a resource write for SSI rw-dependency tracking.
+    pub fn record_ssi_write(&self, resource: super::types::ResourceId) {
+        self.ssi_state.write().record_write(resource);
+    }
+
+    /// Get the set of resources read by this transaction (for SSI).
+    pub fn get_ssi_read_resources(&self) -> HashSet<super::types::ResourceId> {
+        self.ssi_state.read().read_resources().clone()
+    }
+
+    /// Get the set of resources written by this transaction (for SSI).
+    pub fn get_ssi_write_resources(&self) -> HashSet<super::types::ResourceId> {
+        self.ssi_state.read().write_resources().clone()
+    }
+
+    /// Clear SSI read locks (called on commit/abort).
+    pub fn clear_ssi_state(&self) {
+        let mut state = self.ssi_state.write();
+        *state = super::types::SsiState::new();
     }
 
     /// Get remaining time
@@ -726,7 +748,6 @@ impl TransactionContext {
     }
 
     pub fn record_schema_write(&self, resource: &str) -> Result<(), TransactionError> {
-        self.has_ddl.store(true);
         self.write_set.lock().record_schema_resource(resource);
         Ok(())
     }
@@ -737,7 +758,6 @@ impl TransactionContext {
 
     /// Publish a complete mutation result in the canonical metadata order.
     pub fn record_mutation(&self, mutation: MutationResult) -> Result<(), TransactionError> {
-        self.has_dml.store(true);
         let new_count = self.mutation_count.fetch_add(1, Ordering::Relaxed) + 1;
         if self.max_mutation_count > 0 && new_count > self.max_mutation_count {
             return Err(TransactionError::transaction_budget_exceeded(
