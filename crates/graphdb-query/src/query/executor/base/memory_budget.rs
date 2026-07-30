@@ -7,17 +7,31 @@ use crate::core::error::QueryError;
 use crate::core::Value;
 use std::sync::Arc;
 
+static BUDGET_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// Memory budget for a single query execution.
 ///
 /// Each blocking operator should call `try_reserve` before
 /// buffering data. When the budget is exhausted the operator
 /// returns an error, preventing OOM.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MemoryBudget {
     /// Maximum bytes this query may use in blocking operators.
     pub max_bytes: usize,
     /// Number of bytes already accounted for.
     allocated: Arc<std::sync::atomic::AtomicUsize>,
+    /// Unique ID for debugging budget leaks.
+    pub(crate) id: usize,
+}
+
+impl std::fmt::Debug for MemoryBudget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemoryBudget")
+            .field("max_bytes", &self.max_bytes)
+            .field("allocated", &self.allocated.load(std::sync::atomic::Ordering::Relaxed))
+            .field("id", &self.id)
+            .finish()
+    }
 }
 
 impl MemoryBudget {
@@ -29,6 +43,7 @@ impl MemoryBudget {
         Self {
             max_bytes,
             allocated: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            id: BUDGET_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
     }
 

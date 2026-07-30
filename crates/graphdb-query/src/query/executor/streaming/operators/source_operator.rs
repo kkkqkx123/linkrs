@@ -684,6 +684,17 @@ impl SourceOperator {
                 // Fast path: single-ID lookup without batch/position machinery.
                 if let Some(ids) = vertex_ids.as_ref() {
                     if ids.len() == 1 {
+                        // Check if already returned (state position >= ids.len()).
+                        {
+                            let mut arena = base.state_arena();
+                            if let Some(GlobalState::Source(SourceState::GetVertices { position })) =
+                                arena.global.get_mut(&base.state_key())
+                            {
+                                if *position >= ids.len() {
+                                    return Ok(None);
+                                }
+                            }
+                        }
                         let storage_ref = storage.as_ref().ok_or_else(|| {
                             QueryError::execution("GetVertices requires storage".to_string())
                         })?;
@@ -701,6 +712,15 @@ impl SourceOperator {
                                 storage_error("GetVertices", "get vertex", space_name, error)
                             })?
                         };
+                        // Mark position as done so subsequent calls return None.
+                        let mark_done = |base: &mut OperatorBase| {
+                            let mut arena = base.state_arena();
+                            if let Some(GlobalState::Source(SourceState::GetVertices { position })) =
+                                arena.global.get_mut(&base.state_key())
+                            {
+                                *position = ids.len();
+                            }
+                        };
                         if let Some(vertex) = vertex_opt {
                             let rows = vec![make_vertex_row(vertex)];
                             let reservation = reserve_memory(base, &rows)?;
@@ -709,10 +729,10 @@ impl SourceOperator {
                             if let Some(r) = reservation {
                                 chunk = chunk.with_memory_reservation(r);
                             }
-                            base.state_arena().global.remove(&base.state_key());
+                            mark_done(base);
                             return Ok(Some(chunk));
                         }
-                        base.state_arena().global.remove(&base.state_key());
+                        mark_done(base);
                         return Ok(None);
                     }
                 }
@@ -1385,5 +1405,43 @@ mod tests {
             .expect_err("source without storage must fail");
         assert!(error.to_string().contains("requires storage"));
         assert!(source.close(&mut base).is_ok());
+    }
+
+    #[test]
+    fn get_vertices_single_id_returns_none_on_second_call() {
+        let mock = crate::storage::MockStorage::new()
+            .expect("MockStorage should be created");
+        let storage = Arc::new(RwLock::new(mock));
+        let mut source = SourceOperator::GetVertices {
+            storage: Some(storage),
+            space_name: "test".to_string(),
+            vertex_ids: Some(vec![Value::string("1".to_string())]),
+            cached_ids: Vec::new(),
+            projected_properties: Vec::new(),
+        };
+        let runtime = Arc::new(
+            crate::query::executor::streaming::runtime::ExecutionRuntime::new(
+                crate::query::executor::streaming::runtime::QueryIdentity::default(),
+                MemoryBudget::new(1024 * 1024),
+                None,
+                #[cfg(feature = "fulltext-search")]
+                None,
+                #[cfg(feature = "qdrant")]
+                None,
+            ),
+        );
+        let mut base = OperatorBase::new(0).with_runtime(Some(runtime));
+
+        source.open(&mut base).expect("open should succeed");
+
+        let result1 = source
+            .next(&mut base)
+            .expect("first next should succeed");
+        assert!(result1.is_none(), "no vertex in mock, first call returns None");
+
+        let result2 = source
+            .next(&mut base)
+            .expect("second next should succeed");
+        assert!(result2.is_none(), "second call must also return None (regression: do not re-emit)");
     }
 }

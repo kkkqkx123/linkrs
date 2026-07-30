@@ -648,9 +648,7 @@ impl TransactionManager {
             if prev != 0 {
                 self.checkpoint_gate.release_write();
                 self.active_transactions.remove(&txn_id);
-                return Err(TransactionError::internal(
-                    "SingleWriter lock is held by another transaction".to_string(),
-                ));
+                return Err(TransactionError::write_transaction_conflict());
             }
             context.set_pessimistic_lock();
         }

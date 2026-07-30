@@ -8,7 +8,9 @@
 //! - Transaction context cleanup on query failure
 //! - StorageInner lock ordering consistency
 
-use graphdb::transaction::{TransactionManager, TransactionManagerConfig, TransactionOptions};
+use graphdb::transaction::{
+    ConcurrencyMode, TransactionManager, TransactionManagerConfig, TransactionOptions,
+};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::{sleep, timeout};
@@ -31,7 +33,12 @@ fn test_write_lock_acquired_successfully() {
 /// when another write transaction is active (not blocking indefinitely)
 #[test]
 fn test_write_conflict_does_not_block_indefinitely() {
-    let manager = TransactionManager::new(TransactionManagerConfig::default());
+    let config = TransactionManagerConfig {
+        txn_config: graphdb::transaction::TransactionConfig::default()
+            .with_concurrency_mode(ConcurrencyMode::SingleWriter),
+        ..Default::default()
+    };
+    let manager = TransactionManager::new(config);
 
     let txn1 = manager
         .begin_transaction(TransactionOptions::default())
@@ -217,7 +224,12 @@ async fn test_concurrent_read_only_transactions() {
 /// Test that write transactions fail quickly when another write is active
 #[test]
 fn test_write_rejected_quickly_when_active() {
-    let manager = TransactionManager::new(TransactionManagerConfig::default());
+    let config = TransactionManagerConfig {
+        txn_config: graphdb::transaction::TransactionConfig::default()
+            .with_concurrency_mode(ConcurrencyMode::SingleWriter),
+        ..Default::default()
+    };
+    let manager = TransactionManager::new(config);
 
     let _txn1 = manager
         .begin_transaction(TransactionOptions::default())

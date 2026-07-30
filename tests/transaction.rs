@@ -22,6 +22,8 @@
 //! - Rollback operations - operation log rollback for vertices and edges
 //! - Error scenarios - various error conditions and edge cases
 //! - Config options - transaction and manager configuration
+//! - Recovery - timeout cleanup, shutdown, MVCC frontier advance
+//! - Crash recovery - WAL recovery after simulated crash
 //! - Storage integration - transaction integration with storage layer
 //! - Edge advanced - advanced edge operations and patterns
 
@@ -53,6 +55,8 @@ mod http_api;
 mod lifecycle;
 #[path = "transaction/recovery.rs"]
 mod recovery;
+#[path = "transaction/crash_recovery.rs"]
+mod crash_recovery;
 #[path = "transaction/rollback_operations.rs"]
 mod rollback_operations;
 #[path = "transaction/semantics.rs"]

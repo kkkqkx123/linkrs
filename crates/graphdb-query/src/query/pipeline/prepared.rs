@@ -159,46 +159,45 @@ impl<S: QueryStorage + 'static> QueryPipelineManager<S> {
         rctx: Arc<QueryRequestContext>,
         space_info: Option<SpaceInfo>,
     ) -> DBResult<PreparedRequest> {
-        let query_context = self.query_context_for_request(rctx, space_info.as_ref());
         let parser_result = self.parse_into_context(query_text)?;
+        let needs_write = requires_write_storage(parser_result.ast.stmt());
+        let auto_commit_needs_binding =
+            needs_write && rctx.operation_storage.is_none() && rctx.auto_commit;
+
+        let (operation_storage, rctx) = if auto_commit_needs_binding {
+            let storage = self.bind_auto_commit_storage()?;
+            let mut updated = (*rctx).clone();
+            let op_ctx = storage.read().operation_context();
+            updated.transaction_id = op_ctx.as_ref().and_then(|c| c.transaction_id);
+            updated.operation_context = op_ctx.as_deref().cloned();
+            updated.operation_storage = Some(storage.clone());
+            (Some(storage), Arc::new(updated))
+        } else {
+            (rctx.operation_storage.clone(), rctx)
+        };
+
+        let query_context = self.query_context_for_request(rctx, space_info.as_ref());
         let ast = parser_result.ast.clone();
         let bound = self.bind_parsed_statement(parser_result.ast, query_context.clone())?;
-        Self::finalize_prepare(query_text, query_context, ast, None, bound)
+        Self::finalize_prepare(query_text, query_context, ast, operation_storage, bound)
     }
 
     /// Parse and bind, with auto-commit storage for DML.
+    ///
+    /// Delegates to [`prepare_request`] which now handles auto-commit storage
+    /// binding internally when `rctx.auto_commit` is true and the statement
+    /// requires write storage.
     pub(crate) fn prepare_request_with_auto_commit(
         &mut self,
         query_text: &str,
         space_info: Option<SpaceInfo>,
     ) -> DBResult<PreparedRequest> {
-        let parser_result = self.parse_into_context(query_text)?;
-        let needs_write = requires_write_storage(parser_result.ast.stmt());
-        let operation_storage = if needs_write {
-            Some(self.bind_auto_commit_storage()?)
-        } else {
-            None
-        };
-
         let mut rctx = QueryRequestContext::new(query_text.to_string());
-        let space_name = space_info.as_ref().map(|s| s.space_name.clone());
-        if let Some(ref name) = space_name {
+        if let Some(ref name) = space_info.as_ref().map(|s| s.space_name.clone()) {
             rctx.space_name = Some(name.clone());
         }
-        if let Some(ref storage) = operation_storage {
-            rctx.transaction_id = storage
-                .read()
-                .operation_context()
-                .and_then(|context| context.transaction_id);
-            rctx.operation_context = storage.read().operation_context().as_deref().cloned();
-            rctx.operation_storage = Some(storage.clone());
-        }
-
-        let rctx = Arc::new(rctx);
-        let query_context = self.query_context_for_request(rctx, space_info.as_ref());
-        let ast = parser_result.ast.clone();
-        let bound = self.bind_parsed_statement(parser_result.ast, query_context.clone())?;
-        Self::finalize_prepare(query_text, query_context, ast, operation_storage, bound)
+        // QueryRequestContext::new() already sets auto_commit: true
+        self.prepare_request(query_text, Arc::new(rctx), space_info)
     }
 
     fn finalize_prepare(

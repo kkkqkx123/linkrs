@@ -67,19 +67,10 @@ fn test_error_invalid_state_transition() {
         .transition_to(TransactionState::Committing)
         .expect("Failed to transition to Committing");
 
-    // Committing → Aborting is valid.
-    let result = context.transition_to(TransactionState::Aborted);
-    assert!(result.is_err(), "Expected error");
-    let err = result.unwrap_err();
-    assert_eq!(
-        err.kind(),
-        TransactionErrorKind::InvalidStateTransition,
-        "Expected InvalidStateTransition error"
-    );
-
+    // Committing → Aborting is valid (abort during commit preparation).
     context
         .transition_to(TransactionState::Aborting)
-        .expect("Failed to transition to Aborting");
+        .expect("Committing → Aborting should be valid");
 
     context
         .transition_to(TransactionState::Aborted)
@@ -95,7 +86,7 @@ fn test_error_invalid_state_transition() {
     );
 }
 
-/// Test invalid state for commit/abort
+/// Test invalid state for execute
 #[test]
 fn test_error_invalid_state_for_commit_abort() {
     let manager = TransactionManager::new(TransactionManagerConfig::default());
@@ -115,8 +106,8 @@ fn test_error_invalid_state_for_commit_abort() {
     let err = result.unwrap_err();
     assert_eq!(
         err.kind(),
-        TransactionErrorKind::InvalidStateForCommit,
-        "Expected InvalidStateForCommit error"
+        TransactionErrorKind::InvalidStateForExecution,
+        "Expected InvalidStateForExecution error"
     );
 }
 

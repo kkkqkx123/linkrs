@@ -11,7 +11,8 @@
 use graphdb::test_utils::test_scenario::TestScenario;
 use graphdb::core::Value;
 use graphdb::transaction::{
-    TransactionErrorKind, TransactionManager, TransactionManagerConfig, TransactionOptions,
+    ConcurrencyMode, TransactionErrorKind, TransactionManager, TransactionManagerConfig,
+    TransactionOptions,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -88,7 +89,12 @@ async fn test_concurrent_readonly_transactions() {
 /// Test write transaction exclusivity using TransactionManager
 #[test]
 fn test_write_transaction_exclusivity() {
-    let manager = TransactionManager::new(TransactionManagerConfig::default());
+    let config = TransactionManagerConfig {
+        txn_config: graphdb::transaction::TransactionConfig::default()
+            .with_concurrency_mode(ConcurrencyMode::SingleWriter),
+        ..Default::default()
+    };
+    let manager = TransactionManager::new(config);
 
     let txn1 = manager
         .begin_transaction(TransactionOptions::default())
