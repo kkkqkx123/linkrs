@@ -12,7 +12,7 @@ A **lightweight single-node graph database** implemented in Rust, focusing on lo
 
 - **Graph Data Model** — Spaces, vertex tags, edge types with typed properties
 - **Cypher-compatible Query Language** — MATCH, RETURN, CREATE, streaming execution
-- **CSR Storage Engine** — Compressed Sparse Row adjacency storage with 6 variants, MVCC, compaction
+- **CSR Storage Engine** — Compressed Sparse Row adjacency storage with 5 variants + immutable Csr, MVCC, compaction
 - **Full-text Search** — BM25 via tantivy with jieba Chinese tokenization support
 - **Vector Search** — HNSW indexing via Qdrant external service (cosine, euclidean, dot)
 - **Multiple API Surfaces**:

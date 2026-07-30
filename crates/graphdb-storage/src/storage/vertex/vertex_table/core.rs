@@ -6,8 +6,8 @@
 //! # Concurrency Note
 //!
 //! `VertexTable` is NOT thread-safe. Multiple threads must not call mutable methods (`insert`, `delete`,
-//! `update_property`, etc.) concurrently. Although `IdIndexer` uses DashMap for concurrent-safe lookups,
-//! the overall table state (columns, timestamps, schema) requires external synchronization.
+//! `update_property`, etc.) concurrently. `IdIndexer` provides concurrent-safe lookups via `parking_lot::Mutex`,
+//! but the overall table state (columns, timestamps, schema) requires external synchronization.
 //!
 //! **Pattern for multi-threaded access:**
 //! ```ignore

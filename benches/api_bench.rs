@@ -118,8 +118,7 @@ fn bench_database_operations(c: &mut Criterion) {
     use graphdb_api::api::embedded::database::GraphDatabase;
 
     let db = GraphDatabase::open_in_memory().expect("open in memory");
-    let session = db.session();
-    let mut session = session.write();
+    let mut session = db.session().expect("create session");
 
     session
         .execute("CREATE SPACE bench (vid_type=INT64)")
@@ -157,8 +156,7 @@ fn bench_transaction_api(c: &mut Criterion) {
     use graphdb_api::api::embedded::database::GraphDatabase;
 
     let db = GraphDatabase::open_in_memory().expect("open in memory");
-    let session = db.session();
-    let mut session = session.write();
+    let mut session = db.session().expect("create session");
 
     session
         .execute("CREATE SPACE bench_txn (vid_type=INT64)")
@@ -174,10 +172,9 @@ fn bench_transaction_api(c: &mut Criterion) {
     group.bench_function("begin_commit", |b| {
         b.iter(|| {
             let txn = session.begin_transaction().expect("begin");
-            session
-                .execute("INSERT VERTEX T(name) VALUES (99)(\"txn_test\")")
+            txn.execute("INSERT VERTEX T(name) VALUES (99)(\"txn_test\")")
                 .expect("insert");
-            session.commit_transaction(txn).expect("commit");
+            txn.commit().expect("commit");
             black_box(())
         });
     });

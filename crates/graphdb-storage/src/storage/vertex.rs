@@ -20,7 +20,7 @@ use crate::storage::types::StoragePropertyDef;
 pub use column_store::ColumnStore;
 pub use gc_manager::VertexGcConfig;
 pub use id_indexer::{IdIndexer, IdKey};
-pub use vertex_table::VertexTable;
+pub use vertex_table::{ShardedVertexTable, VertexTable};
 pub use vertex_timestamp::VertexTimestamp;
 
 use crate::core::vertex_edge_path::Tag;

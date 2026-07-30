@@ -6,6 +6,7 @@
 //! - Cache: Record caching
 //! - Engine: Storage engine core
 
+pub(crate) mod buffer;
 pub(crate) mod cache;
 pub(crate) mod client;
 pub(crate) mod column_stats;

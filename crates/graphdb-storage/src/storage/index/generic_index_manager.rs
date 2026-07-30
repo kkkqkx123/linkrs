@@ -7,6 +7,7 @@ use crate::core::types::storage_ids::VertexId;
 use crate::core::value::ordered_codec::OrderedCodec;
 use crate::core::wal::EntityRef;
 use crate::core::{StorageError, StorageResult};
+use crate::storage::index::art::ArtTree;
 use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
 use crate::storage::index::key_codec::IndexKeyGenerator;
 use crate::storage::index::types::IndexRecord;
@@ -28,12 +29,12 @@ type LoadedIndexData = (
 /// Generic index manager
 ///
 /// Provides common functionality for index management including:
-/// - In-memory storage with BTreeMap
-/// - Persistence (flush/load)
+/// - In-memory storage with ART tree (replacing BTreeMap for better memory efficiency)
+/// - Persistence (flush/load via BTreeMap serialization)
 /// - GC for tombstones
 pub struct GenericIndexManager<K: IndexKeyGenerator> {
-    forward_index: Arc<RwLock<BTreeMap<SecondaryIndexKey, IndexRecord>>>,
-    reverse_index: Arc<RwLock<BTreeMap<SecondaryIndexKey, IndexRecord>>>,
+    forward_index: Arc<RwLock<ArtTree<IndexRecord>>>,
+    reverse_index: Arc<RwLock<ArtTree<IndexRecord>>>,
     _marker: PhantomData<K>,
 }
 
@@ -50,8 +51,8 @@ impl<K: IndexKeyGenerator> Clone for GenericIndexManager<K> {
 impl<K: IndexKeyGenerator> GenericIndexManager<K> {
     pub fn new() -> Self {
         Self {
-            forward_index: Arc::new(RwLock::new(BTreeMap::new())),
-            reverse_index: Arc::new(RwLock::new(BTreeMap::new())),
+            forward_index: Arc::new(RwLock::new(ArtTree::new())),
+            reverse_index: Arc::new(RwLock::new(ArtTree::new())),
             _marker: PhantomData,
         }
     }
@@ -62,6 +63,18 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
             self.forward_index.read().len(),
             self.reverse_index.read().len(),
         )
+    }
+
+    /// Access the underlying ART tree (read-only).
+    #[cfg(test)]
+    pub(crate) fn read_forward(&self) -> parking_lot::RwLockReadGuard<'_, ArtTree<IndexRecord>> {
+        self.forward_index.read()
+    }
+
+    /// Access the underlying ART tree (read-only).
+    #[cfg(test)]
+    pub(crate) fn read_reverse(&self) -> parking_lot::RwLockReadGuard<'_, ArtTree<IndexRecord>> {
+        self.reverse_index.read()
     }
 
     pub(crate) fn flush_data<P: AsRef<Path>>(
