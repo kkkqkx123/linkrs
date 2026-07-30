@@ -26,6 +26,7 @@ fn generation_rebuild_restarts_after_publish_io_failure() {
         .join("1")
         .join("generation-2")
         .join("forward_index.bin");
+    let _ = std::fs::remove_dir_all(&blocked_output);
     std::fs::create_dir_all(&blocked_output).expect("failure fixture should be created");
 
     let result = storage.rebuild_tag_index("test_space", "person_name_idx");

@@ -412,8 +412,8 @@ impl ToPublicError for DBError {
 /// Harmonized result types
 pub type DBResult<T> = Result<T, DBError>;
 
-/// Type aliases for backward compatibility
-pub type GraphDBResult<T> = DBResult<T>;
+// GraphDBResult was previously aliased here for backward compatibility.
+// Use DBResult directly for new code.
 
 // ==================== Tests ====================
 

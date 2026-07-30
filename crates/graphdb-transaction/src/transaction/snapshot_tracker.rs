@@ -29,17 +29,19 @@ use crate::core::types::Timestamp;
 ///
 /// ## Example
 ///
-/// ```ignore
+/// ```rust
+/// use graphdb_transaction::transaction::snapshot_tracker::SnapshotTracker;
+///
 /// let tracker = SnapshotTracker::new();
 ///
 /// // Create a snapshot
-/// tracker.add_snapshot(100)?;
+/// tracker.add_snapshot(100).unwrap();
 ///
 /// // Query minimum active snapshot
 /// let min = tracker.min_active_snapshot(); // O(1)
 ///
 /// // Release snapshot
-/// tracker.release_snapshot(100)?;
+/// tracker.release_snapshot(100).unwrap();
 /// ```
 pub struct SnapshotTracker {
     /// Timestamp → reference count mapping (for concurrent updates)

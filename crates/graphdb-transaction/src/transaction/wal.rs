@@ -10,39 +10,25 @@
 //!
 //! ## Usage
 //!
-//! ```rust,ignore
-//! use graphdb::transaction::wal::{LocalWalWriter, WalWriter, WalOpType};
+//! ```rust
+//! use graphdb_transaction::transaction::wal::{LocalWalWriter, WalWriter, WalOpType};
 //!
-//! // Create a WAL writer
-//! let mut writer = LocalWalWriter::new("/path/to/wal", 0);
-//! writer.open()?;
+//! let dir = tempfile::tempdir().unwrap();
+//! let path = dir.path().to_string_lossy().to_string();
 //!
-//! // Append an entry
-//! writer.append_entry(WalOpType::InsertVertex, 1, b"payload")?;
-//!
-//! // Sync and close
-//! writer.sync()?;
+//! let mut writer = LocalWalWriter::new(&path, 0);
+//! writer.open().unwrap();
+//! writer
+//!     .append_entry(WalOpType::InsertVertex, 1, b"payload")
+//!     .unwrap();
+//! writer.sync().unwrap();
 //! writer.close();
 //! ```
 //!
 //! ## Recovery
 //!
-//! ```rust,ignore
-//! use graphdb::transaction::wal::{LocalWalParser, WalParser};
-//!
-//! let mut parser = LocalWalParser::new();
-//! parser.open("/path/to/wal")?;
-//!
-//! // Get insert WAL entries
-//! if let Some(content) = parser.get_insert_wal(1) {
-//!     // Process the entry
-//! }
-//!
-//! // Get update WAL entries
-//! for update in parser.get_update_wals() {
-//!     // Process update entries
-//! }
-//! ```
+//! See the [`LocalWalParser`](parser/struct.LocalWalParser.html) docs for
+//! recovery examples.
 
 pub mod checkpoint;
 pub mod commit;

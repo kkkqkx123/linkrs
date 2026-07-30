@@ -519,7 +519,13 @@ impl TransactionConfig {
 /// Transaction Manager Configuration
 #[derive(Debug, Clone)]
 pub struct TransactionManagerConfig {
-    /// Default transaction timeout duration
+    /// Default transaction timeout duration.
+    ///
+    /// This value is referenced by the conflict-rate sliding window
+    /// (`CONFLICT_WINDOW_BUCKETS` = 60 s) — the window is sized at 2× this
+    /// timeout to capture at least two complete timeout cycles. If this
+    /// timeout is customised, consider adjusting the window size accordingly
+    /// so that `CONFLICT_WINDOW_BUCKETS ≥ default_timeout.as_secs()`.
     pub default_timeout: Duration,
     /// Maximum concurrent transactions (reads + writes)
     pub max_concurrent_transactions: usize,
@@ -548,6 +554,17 @@ impl Default for TransactionManagerConfig {
 }
 
 /// Number of 1-second buckets for the conflict rate sliding window.
+///
+/// The window duration (60 s) is 2× the default transaction timeout (30 s,
+/// see `TransactionManagerConfig::default_timeout`). This ensures:
+///   - At least 2 complete timeout cycles are captured,
+///     providing a stable conflict-rate signal even under moderate load.
+///   - Stale conflict counts from bursts older than 60 s are automatically
+///     evicted, keeping the metric responsive to current conditions.
+///
+/// If the transaction timeout is customised, users should ensure the window
+/// remains ≥ the timeout to avoid discarding conflict data before the
+/// conflicting transaction has a chance to commit or time out.
 const CONFLICT_WINDOW_BUCKETS: usize = 60;
 
 /// Transaction Statistics

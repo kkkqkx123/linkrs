@@ -103,23 +103,4 @@ pub trait UndoTarget: Send + Sync {
         current_names: &[String],
         original_names: &[String],
     ) -> UndoLogResult<()>;
-    fn revert_sequence_increment(
-        &self,
-        _sequence_name: &str,
-        _previous_value: i64,
-    ) -> UndoLogResult<()> {
-        Err(UndoLogError::UndoFailed(
-            "Sequence increment undo is not supported by this undo target".to_string(),
-        ))
-    }
-    fn revert_sequence_create(&self, _sequence_name: &str) -> UndoLogResult<()> {
-        Err(UndoLogError::UndoFailed(
-            "Sequence create undo is not supported by this undo target".to_string(),
-        ))
-    }
-    fn revert_sequence_drop(&self, _sequence_name: &str) -> UndoLogResult<()> {
-        Err(UndoLogError::UndoFailed(
-            "Sequence drop undo is not supported by this undo target".to_string(),
-        ))
-    }
 }

@@ -1,9 +1,6 @@
-// benches/api_bench.rs
-//! API layer performance benchmarks
-//! Tests: HTTP API and gRPC API performance
+use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use std::time::Duration;
 
 fn create_benchmark_group<'a>(
     c: &'a mut Criterion,
@@ -16,173 +13,191 @@ fn create_benchmark_group<'a>(
     group
 }
 
-fn bench_http_request_parsing(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "http_parsing");
+#[cfg(feature = "embedded")]
+fn bench_json_serialization(c: &mut Criterion) {
+    use graphdb_storage::core::types::VertexId;
+    use graphdb_storage::core::vertex_edge_path::Tag;
+    use graphdb_storage::core::{Value, Vertex};
 
-    group.bench_function("parse_simple_query_request", |b| {
+    let mut group = create_benchmark_group(c, "json_serialization");
+
+    let vertex = Vertex::new(
+        VertexId::from_int64(42),
+        vec![Tag::new(
+            "Node".to_string(),
+            vec![
+                ("name".to_string(), Value::string("test_node")),
+                ("value".to_string(), Value::BigInt(100)),
+            ]
+            .into_iter()
+            .collect(),
+        )],
+    );
+
+    group.bench_function("serialize_vertex", |b| {
         b.iter(|| {
-            let json = r#"{"query": "MATCH (n:Node) RETURN n"}"#;
-            black_box(json.to_string())
+            let json = serde_json::to_string(&vertex).unwrap();
+            black_box(json)
         });
     });
 
-    group.bench_function("parse_insert_vertex_request", |b| {
+    group.bench_function("serialize_100_vertices", |b| {
+        let vertices: Vec<Vertex> = (0..100)
+            .map(|i| {
+                Vertex::new(
+                    VertexId::from_int64(i),
+                    vec![Tag::new(
+                        "Node".to_string(),
+                        vec![
+                            ("name".to_string(), Value::string(format!("node_{}", i))),
+                            ("value".to_string(), Value::BigInt(i)),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    )],
+                )
+            })
+            .collect();
         b.iter(|| {
-            let json = r#"{"space": "bench_space", "vertex": {"id": "v1", "labels": ["Node"], "properties": {"name": "test", "value": 1.0}}}"#;
-            black_box(json.to_string())
-        });
-    });
-
-    group.finish();
-}
-
-fn bench_http_response_serialization(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "http_serialization");
-
-    group.bench_function("serialize_query_result_small", |b| {
-        b.iter(|| {
-            let response =
-                r#"{"status": "success", "data": [{"id": "v1", "properties": {"name": "test"}}]}"#;
-            black_box(response.to_string())
-        });
-    });
-
-    group.bench_function("serialize_query_result_large", |b| {
-        b.iter(|| {
-            let mut response = String::from(r#"{"status": "success", "data": ["#);
-            for i in 0..100 {
-                if i > 0 {
-                    response.push(',');
-                }
-                response.push_str(&format!(
-                    r#"{{"id": "v{}", "properties": {{"value": {}}}}}"#,
-                    i, i as f64
-                ));
-            }
-            response.push_str("]}");
-            black_box(response)
-        });
-    });
-
-    group.finish();
-}
-
-fn bench_grpc_request_encoding(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "grpc_encoding");
-
-    group.bench_function("encode_query_request", |b| {
-        b.iter(|| {
-            // Simulate protobuf encoding
-            let query = "MATCH (n:Node) RETURN n";
-            let bytes = query.len() as u32;
-            black_box(bytes)
-        });
-    });
-
-    group.bench_function("encode_vertex_response", |b| {
-        b.iter(|| {
-            // Simulate protobuf encoding of vertex response
-            let vertices = 10;
-            let properties = 5;
-            let encoded_size = vertices * (properties * 8);
-            black_box(encoded_size)
+            let json = serde_json::to_string(&vertices).unwrap();
+            black_box(json)
         });
     });
 
     group.finish();
 }
 
-fn bench_concurrent_request_handling(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "concurrent_requests");
-
-    for concurrent_count in &[1, 10, 100] {
-        group.bench_function(format!("concurrent_{}reqs", concurrent_count), |b| {
-            b.iter(|| {
-                // Simulate handling concurrent requests
-                let total_latency: u32 = (0..*concurrent_count)
-                    .map(|i| (i as u32 * 100) % 1000)
-                    .sum();
-                black_box(total_latency)
-            });
-        });
-    }
-
+#[cfg(not(feature = "embedded"))]
+fn bench_json_serialization(c: &mut Criterion) {
+    let mut group = create_benchmark_group(c, "json_serialization");
+    group.bench_function("placeholder", |b| b.iter(|| black_box("{}")));
     group.finish();
 }
 
-fn bench_request_routing(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "request_routing");
+#[cfg(feature = "embedded")]
+fn bench_json_deserialization(c: &mut Criterion) {
+    use graphdb_storage::core::types::VertexId;
+    use graphdb_storage::core::vertex_edge_path::Tag;
+    use graphdb_storage::core::{Value, Vertex};
 
-    let endpoints = vec![
-        "/graph/vertex",
-        "/graph/edge",
-        "/graph/query",
-        "/search/fulltext",
-        "/search/vector",
-    ];
+    let mut group = create_benchmark_group(c, "json_deserialization");
 
-    for endpoint in endpoints {
-        group.bench_function(format!("route_{}", endpoint.replace("/", "_")), |b| {
-            b.iter(|| {
-                // Simulate route matching
-                black_box(endpoint.contains("graph") as i32)
-            });
-        });
-    }
+    let vertex = Vertex::new(
+        VertexId::from_int64(42),
+        vec![Tag::new(
+            "Node".to_string(),
+            vec![
+                ("name".to_string(), Value::string("test_node")),
+                ("value".to_string(), Value::BigInt(100)),
+            ]
+            .into_iter()
+            .collect(),
+        )],
+    );
+    let json = serde_json::to_string(&vertex).unwrap();
 
-    group.finish();
-}
-
-fn bench_authentication_overhead(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "auth_overhead");
-
-    group.bench_function("verify_auth_token", |b| {
+    group.bench_function("deserialize_vertex", |b| {
         b.iter(|| {
-            // Simulate token verification
-            let token = "bearer_token_1234567890";
-            black_box(token.len())
-        });
-    });
-
-    group.bench_function("check_permissions", |b| {
-        b.iter(|| {
-            // Simulate permission checking
-            let permissions = ["read", "write", "delete"];
-            black_box(permissions.len())
+            let v: Vertex = serde_json::from_str(&json).unwrap();
+            black_box(v)
         });
     });
 
     group.finish();
 }
 
-fn bench_request_validation(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "request_validation");
+#[cfg(not(feature = "embedded"))]
+fn bench_json_deserialization(c: &mut Criterion) {
+    let mut group = create_benchmark_group(c, "json_deserialization");
+    group.bench_function("placeholder", |b| b.iter(|| black_box(0)));
+    group.finish();
+}
 
-    group.bench_function("validate_query_syntax", |b| {
+#[cfg(feature = "embedded")]
+fn bench_database_operations(c: &mut Criterion) {
+    use graphdb_api::api::embedded::database::GraphDatabase;
+
+    let db = GraphDatabase::open_in_memory().expect("open in memory");
+    let session = db.session();
+    let mut session = session.write();
+
+    session
+        .execute("CREATE SPACE bench (vid_type=INT64)")
+        .expect("create space");
+    session.use_space("bench").expect("use space");
+    session
+        .execute("CREATE TAG Node(name STRING, value INT64)")
+        .expect("create tag");
+
+    let mut group = create_benchmark_group(c, "database_ops");
+    group.sample_size(50);
+
+    group.bench_function("insert_vertex", |b| {
         b.iter(|| {
-            let query = "MATCH (n:Node) RETURN n";
-            black_box(query.contains("MATCH"))
+            let result = session
+                .execute("INSERT VERTEX Node(name, value) VALUES (1)(\"node_1\", 100)")
+                .expect("insert");
+            black_box(result.len());
         });
     });
 
-    group.bench_function("validate_vertex_schema", |b| {
+    group.finish();
+}
+
+#[cfg(not(feature = "embedded"))]
+fn bench_database_operations(c: &mut Criterion) {
+    let mut group = create_benchmark_group(c, "database_ops");
+    group.sample_size(50);
+    group.bench_function("placeholder", |b| b.iter(|| black_box(0)));
+    group.finish();
+}
+
+#[cfg(feature = "embedded")]
+fn bench_transaction_api(c: &mut Criterion) {
+    use graphdb_api::api::embedded::database::GraphDatabase;
+
+    let db = GraphDatabase::open_in_memory().expect("open in memory");
+    let session = db.session();
+    let mut session = session.write();
+
+    session
+        .execute("CREATE SPACE bench_txn (vid_type=INT64)")
+        .expect("create space");
+    session.use_space("bench_txn").expect("use space");
+    session
+        .execute("CREATE TAG T(name STRING)")
+        .expect("create tag");
+
+    let mut group = create_benchmark_group(c, "transaction_api");
+    group.sample_size(50);
+
+    group.bench_function("begin_commit", |b| {
         b.iter(|| {
-            let json = r#"{"properties": {"name": "test", "age": 30}}"#;
-            black_box(json.len() > 10)
+            let txn = session.begin_transaction().expect("begin");
+            session
+                .execute("INSERT VERTEX T(name) VALUES (99)(\"txn_test\")")
+                .expect("insert");
+            session.commit_transaction(txn).expect("commit");
+            black_box(())
         });
     });
 
+    group.finish();
+}
+
+#[cfg(not(feature = "embedded"))]
+fn bench_transaction_api(c: &mut Criterion) {
+    let mut group = create_benchmark_group(c, "transaction_api");
+    group.sample_size(50);
+    group.bench_function("placeholder", |b| b.iter(|| black_box(0)));
     group.finish();
 }
 
 criterion_group!(
     benches,
-    bench_http_request_parsing,
-    bench_http_response_serialization,
-    bench_grpc_request_encoding,
-    bench_concurrent_request_handling,
-    bench_request_routing,
-    bench_authentication_overhead,
-    bench_request_validation
+    bench_json_serialization,
+    bench_json_deserialization,
+    bench_database_operations,
+    bench_transaction_api,
 );
 criterion_main!(benches);

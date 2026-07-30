@@ -9,19 +9,17 @@
 //!
 //! ## Usage Example
 //!
-//! ```rust,ignore
-//! use graphdb::transaction::{TransactionManager, TransactionOptions};
+//! ```rust
+//! use graphdb_transaction::transaction::{
+//!     TransactionManager, TransactionManagerConfig, TransactionOptions,
+//! };
 //!
-//! // Create transaction manager
-//! let manager = TransactionManager::new(Default::default());
-//!
-//! // Start read transaction
-//! let txn_id = manager.begin_read_transaction(TransactionOptions::default())?;
-//!
-//! // Execute operations...
-//!
-//! // Commit transaction
-//! manager.commit_transaction(txn_id)?;
+//! let manager = TransactionManager::new(TransactionManagerConfig::default());
+//! let txn_id = manager
+//!     .begin_read_transaction(TransactionOptions::default())
+//!     .unwrap();
+//! // execute operations...
+//! manager.commit_transaction(txn_id).unwrap();
 //! ```
 
 pub mod cleaner;
@@ -71,7 +69,7 @@ pub use types::*;
 pub use undo_log::{
     CreateEdgeTypeUndo, CreateVertexTypeUndo, FileBackedUndoLog, InsertEdgeUndo, InsertVertexUndo,
     PropertyValue, RelatedEdgeInfo, RemoveEdgeUndo, RemoveVertexUndo, RestoreEdgeUndo,
-    SequenceCreateUndo, SequenceDropUndo, SequenceIncrementUndo, UndoLogConfig, UndoLogEntry,
+    UndoLogConfig, UndoLogEntry,
     UndoLogError, UndoLogManager, UndoLogResult, UndoTarget, UpdateEdgePropUndo,
     UpdateVertexPropUndo,
 };

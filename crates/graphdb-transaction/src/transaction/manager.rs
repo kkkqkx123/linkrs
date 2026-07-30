@@ -754,34 +754,74 @@ impl TransactionManager {
         }
         drop(index_idx);
 
-        // Write-write conflict O(N) scan is no longer needed — all resource
-        // types are covered by O(1) indices above.
         // The O(N) committed_write_sets scan below only handles Serializable
-        // read-set conflicts (read-write conflicts), which by nature require
-        // scanning all committed write sets since a read could touch any entity.
+        // read-range phantom and full-scan detection. Exact read-set entity
+        // conflicts are resolved via O(1) spatial indices below.
         if serializable {
-            for (commit_ts, write_set) in committed.iter() {
-                if *commit_ts <= ctx.start_timestamp {
-                    continue;
+            // O(1) read-set conflict lookup via committed write indices.
+            let vertex_idx = self.committed_vertex_writes.lock();
+            for vid in txn_read_set.vertices.iter() {
+                if let Some(entries) = vertex_idx.get(vid) {
+                    if entries.iter().any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp) {
+                        drop(vertex_idx);
+                        drop(committed);
+                        self.stats.record_txn_conflict();
+                        return Err(TransactionError::write_transaction_conflict());
+                    }
                 }
-                if txn_read_set.has_conflict_with(write_set) {
-                    self.stats.record_txn_conflict();
-                    drop(committed);
-                    return Err(TransactionError::write_transaction_conflict());
+            }
+            drop(vertex_idx);
+
+            let edge_idx = self.committed_edge_writes.lock();
+            for edge in txn_read_set.edges.iter() {
+                let key = (edge.src_vid, edge.dst_vid, edge.edge_label);
+                if let Some(entries) = edge_idx.get(&key) {
+                    if entries.iter().any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp) {
+                        drop(edge_idx);
+                        drop(committed);
+                        self.stats.record_txn_conflict();
+                        return Err(TransactionError::write_transaction_conflict());
+                    }
                 }
-                if txn_read_set.has_read_range_conflict_with(write_set) {
-                    self.stats.record_txn_conflict();
-                    drop(committed);
-                    return Err(TransactionError::serialization_failed(
-                        "Serializable read-range conflict detected",
-                    ));
+            }
+            drop(edge_idx);
+
+            let schema_idx = self.committed_schema_writes.lock();
+            for resource in txn_read_set.schema_resources.iter() {
+                if let Some(entries) = schema_idx.get(resource) {
+                    if entries.iter().any(|(commit_ts, _)| *commit_ts > ctx.start_timestamp) {
+                        drop(schema_idx);
+                        drop(committed);
+                        self.stats.record_txn_conflict();
+                        return Err(TransactionError::write_transaction_conflict());
+                    }
                 }
-                if is_full_scan && !write_set.is_empty() {
-                    self.stats.record_txn_conflict();
-                    drop(committed);
-                    return Err(TransactionError::serialization_failed(
-                        "Serializable full-scan transaction aborted due to concurrent write",
-                    ));
+            }
+            drop(schema_idx);
+
+            // Read-range phantom and full-scan detection still require
+            // scanning committed write sets (predicate-based, not entity-indexed).
+            if !txn_read_set.read_ranges.is_empty() || is_full_scan {
+                for (commit_ts, write_set) in committed.iter() {
+                    if *commit_ts <= ctx.start_timestamp {
+                        continue;
+                    }
+                    if !txn_read_set.read_ranges.is_empty()
+                        && txn_read_set.has_read_range_conflict_with(write_set)
+                    {
+                        self.stats.record_txn_conflict();
+                        drop(committed);
+                        return Err(TransactionError::serialization_failed(
+                            "Serializable read-range conflict detected",
+                        ));
+                    }
+                    if is_full_scan && !write_set.is_empty() {
+                        self.stats.record_txn_conflict();
+                        drop(committed);
+                        return Err(TransactionError::serialization_failed(
+                            "Serializable full-scan transaction aborted due to concurrent write",
+                        ));
+                    }
                 }
             }
         }
@@ -2244,21 +2284,6 @@ mod tests {
                 Ok(())
             }
 
-            fn revert_sequence_increment(
-                &self,
-                _sequence_name: &str,
-                _previous_value: i64,
-            ) -> UndoLogResult<()> {
-                Ok(())
-            }
-
-            fn revert_sequence_create(&self, _sequence_name: &str) -> UndoLogResult<()> {
-                Ok(())
-            }
-
-            fn revert_sequence_drop(&self, _sequence_name: &str) -> UndoLogResult<()> {
-                Ok(())
-            }
         }
 
         let sync_manager = Arc::new(SyncManager::new_without_fulltext());

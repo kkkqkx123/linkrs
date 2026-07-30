@@ -108,6 +108,10 @@ pub struct TransactionContext {
     schema_catalog_version: AtomicU64,
     /// Serializable full-scan read-set threshold for this transaction.
     serializable_full_scan_threshold: Option<usize>,
+    /// Whether this transaction has executed DDL (schema) operations.
+    has_ddl: AtomicCell<bool>,
+    /// Whether this transaction has executed DML (data) operations.
+    has_dml: AtomicCell<bool>,
 }
 
 impl fmt::Debug for TransactionContext {
@@ -235,6 +239,8 @@ impl TransactionContext {
             concurrency_mode: config.concurrency_mode,
             schema_catalog_version: AtomicU64::new(0),
             serializable_full_scan_threshold: config.serializable_full_scan_threshold,
+            has_ddl: AtomicCell::new(false),
+            has_dml: AtomicCell::new(false),
         }
     }
 
@@ -288,6 +294,8 @@ impl TransactionContext {
             concurrency_mode: config.concurrency_mode,
             schema_catalog_version: AtomicU64::new(0),
             serializable_full_scan_threshold: config.serializable_full_scan_threshold,
+            has_ddl: AtomicCell::new(false),
+            has_dml: AtomicCell::new(false),
         }
     }
 
@@ -717,8 +725,10 @@ impl TransactionContext {
         self.write_set.lock().record_edge(edge);
     }
 
-    pub fn record_schema_write(&self, resource: &str) {
+    pub fn record_schema_write(&self, resource: &str) -> Result<(), TransactionError> {
+        self.has_ddl.store(true);
         self.write_set.lock().record_schema_resource(resource);
+        Ok(())
     }
 
     pub fn record_index_write(&self, resource: &str) {
@@ -727,6 +737,7 @@ impl TransactionContext {
 
     /// Publish a complete mutation result in the canonical metadata order.
     pub fn record_mutation(&self, mutation: MutationResult) -> Result<(), TransactionError> {
+        self.has_dml.store(true);
         let new_count = self.mutation_count.fetch_add(1, Ordering::Relaxed) + 1;
         if self.max_mutation_count > 0 && new_count > self.max_mutation_count {
             return Err(TransactionError::transaction_budget_exceeded(
@@ -1052,8 +1063,8 @@ impl TransactionMutationRecorder for TransactionContext {
         self.record_table_modification(table_name);
     }
 
-    fn record_schema_write(&self, resource: &str) {
-        self.record_schema_write(resource);
+    fn record_schema_write(&self, resource: &str) -> Result<(), TransactionError> {
+        self.record_schema_write(resource)
     }
 
     fn record_index_write(&self, resource: &str) {
@@ -1072,13 +1083,6 @@ impl TransactionMutationRecorder for TransactionContext {
         self.record_schema_read(resource);
     }
 
-    fn record_sequence_change(&self, sequence_name: &str, previous_value: i64) {
-        let entry = UndoLogEntry::SequenceIncrement(super::undo_log::SequenceIncrementUndo {
-            sequence_name: sequence_name.to_string(),
-            previous_value,
-        });
-        let _ = self.add_undo_log(entry);
-    }
 }
 
 #[cfg(test)]

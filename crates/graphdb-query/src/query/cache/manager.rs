@@ -316,11 +316,7 @@ impl From<GlobalCacheStatsSnapshot> for CacheStatsSummary {
     }
 }
 
-/// Legacy type alias for backward compatibility
-pub type GlobalCacheManager = CacheManager;
 
-/// Legacy type alias for backward compatibility
-pub type GlobalCacheStats = GlobalCacheStatsSnapshot;
 
 #[cfg(test)]
 mod tests {

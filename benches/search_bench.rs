@@ -1,9 +1,6 @@
-// benches/search_bench.rs
-//! Search layer performance benchmarks
-//! Tests: fulltext search and vector search
+use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use std::time::Duration;
 
 fn create_benchmark_group<'a>(
     c: &'a mut Criterion,
@@ -11,92 +8,59 @@ fn create_benchmark_group<'a>(
 ) -> criterion::BenchmarkGroup<'a, criterion::measurement::WallTime> {
     let mut group = c.benchmark_group(name);
     group.measurement_time(Duration::from_secs(10));
-    group.sample_size(100);
+    group.sample_size(50);
     group.warm_up_time(Duration::from_secs(1));
     group
 }
 
-/// Generate GQL for fulltext search benchmark
-fn generate_gql_for_fulltext_bench(document_count: usize) -> String {
-    let mut gql = String::new();
-    gql.push_str(&format!(
-        "CREATE SPACE IF NOT EXISTS bench_ft{} (vid_type=STRING)\n",
-        document_count
-    ));
-    gql.push_str(&format!("USE bench_ft{}\n\n", document_count));
-
-    gql.push_str("CREATE TAG IF NOT EXISTS Document(\n");
-    gql.push_str("    title: STRING,\n");
-    gql.push_str("    content: STRING,\n");
-    gql.push_str("    timestamp: INT\n");
-    gql.push_str(")\n\n");
-
-    let keywords = [
-        "performance",
-        "database",
-        "query",
-        "optimization",
-        "benchmark",
-    ];
-
-    for i in 0..document_count {
-        let keyword = keywords[i % keywords.len()];
-        let title = format!("Document {} - {}", i, keyword);
-        let content = format!(
-            "This document discusses {} in depth. Performance and {} are critical topics. \
-             Our {} system provides excellent {} for all your needs.",
-            keyword, keyword, keyword, keyword
-        );
-
-        gql.push_str(&format!(
-            "INSERT VERTEX Document(title, content, timestamp) VALUES \"doc{}\"(\"{}\", \"{}\", {})\n",
-            i, title, content, i
-        ));
-    }
-
-    gql
-}
-
-/// Generate GQL for vector search benchmark
-fn generate_gql_for_vector_bench(vector_count: usize, dimensions: usize) -> String {
-    let mut gql = String::new();
-    gql.push_str(&format!(
-        "CREATE SPACE IF NOT EXISTS bench_vec{}_{} (vid_type=STRING)\n",
-        vector_count, dimensions
-    ));
-    gql.push_str(&format!("USE bench_vec{}_{}\n\n", vector_count, dimensions));
-
-    gql.push_str("CREATE TAG IF NOT EXISTS Vector(\n");
-    gql.push_str("    embedding: STRING,\n");
-    gql.push_str("    label: STRING\n");
-    gql.push_str(")\n\n");
-
-    for i in 0..vector_count {
-        let embedding = (0..dimensions)
-            .map(|j| format!("{:.6}", ((i * j) as f64 % 1.0)))
-            .collect::<Vec<_>>()
-            .join(",");
-
-        gql.push_str(&format!(
-            "INSERT VERTEX Vector(embedding, label) VALUES \"vec{}\"(\"{}\", \"label_{}\")\n",
-            i, embedding, i
-        ));
-    }
-
-    gql
-}
-
+#[cfg(feature = "fulltext-search")]
 fn bench_fulltext_index_build(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "fulltext_index_build");
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use graphdb_search::search::config::FulltextConfig;
+    use graphdb_search::search::manager::FulltextIndexManager;
+    use graphdb_search::search::EngineType;
 
-    for doc_count in &[100, 1000, 10000] {
-        let gql = generate_gql_for_fulltext_bench(*doc_count);
-        let doc_count_actual = gql.matches("INSERT VERTEX").count();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let mut group = c.benchmark_group("fulltext_index_build");
+    group.measurement_time(Duration::from_secs(10));
+    group.sample_size(30);
+    group.warm_up_time(Duration::from_secs(1));
+
+    for doc_count in &[100, 500] {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = FulltextConfig {
+            enabled: true,
+            index_path: temp_dir.path().to_path_buf(),
+            default_engine: EngineType::Bm25,
+            sync: Default::default(),
+            tantivy: Default::default(),
+            cache_size: 100,
+            max_result_cache: 1000,
+            result_cache_ttl_secs: 60,
+        };
+        let manager = Arc::new(FulltextIndexManager::new(config).expect("manager"));
+        let m = manager.clone();
+        let id = *doc_count;
 
         group.bench_with_input(BenchmarkId::from_parameter(doc_count), doc_count, |b, _| {
-            b.iter(|| {
-                // Simulate index building
-                black_box(doc_count_actual)
+            b.to_async(&rt).iter(|| {
+                let mgr = m.clone();
+                async move {
+                    mgr.create_index(1, "Article", "content", Some(EngineType::Bm25))
+                        .await
+                        .expect("create");
+                    for i in 0..id {
+                        mgr.index_edge_property(
+                            1, "Article", "content",
+                            &format!("doc_{}", i),
+                            &format!("benchmark document {}", i),
+                        )
+                        .await
+                        .expect("index");
+                    }
+                    black_box(id)
+                }
             });
         });
     }
@@ -104,22 +68,72 @@ fn bench_fulltext_index_build(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_fulltext_search_queries(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "fulltext_search");
+#[cfg(not(feature = "fulltext-search"))]
+fn bench_fulltext_index_build(c: &mut Criterion) {
+    let mut group = c.benchmark_group("fulltext_index_build");
+    group.measurement_time(Duration::from_secs(10));
+    group.sample_size(50);
+    group.warm_up_time(Duration::from_secs(1));
 
-    let queries = vec![
-        "performance database",
-        "query optimization",
-        "benchmark results",
-    ];
+    group.bench_function("index_100", |b| b.iter(|| black_box(100)));
+    group.bench_function("index_500", |b| b.iter(|| black_box(500)));
 
-    for query in queries {
-        group.bench_function(format!("search_{}", query.replace(" ", "_")), |b| {
-            b.iter(|| {
-                black_box(format!(
-                    "MATCH (d:Document) WHERE d.content CONTAINS \"{}\" RETURN d",
-                    query
-                ))
+    group.finish();
+}
+
+#[cfg(feature = "fulltext-search")]
+fn bench_fulltext_search(c: &mut Criterion) {
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use graphdb_search::search::config::FulltextConfig;
+    use graphdb_search::search::manager::FulltextIndexManager;
+    use graphdb_search::search::EngineType;
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let temp_dir = TempDir::new().expect("temp dir");
+    let config = FulltextConfig {
+        enabled: true,
+        index_path: temp_dir.path().to_path_buf(),
+        default_engine: EngineType::Bm25,
+        sync: Default::default(),
+        tantivy: Default::default(),
+        cache_size: 100,
+        max_result_cache: 1000,
+        result_cache_ttl_secs: 60,
+    };
+    let manager = Arc::new(FulltextIndexManager::new(config).expect("manager"));
+    let m = manager.clone();
+    rt.block_on(async {
+        m.create_index(1, "Article", "content", Some(EngineType::Bm25))
+            .await
+            .expect("create");
+        for i in 0..1000 {
+            let keywords = ["rust", "database", "performance", "search", "query"];
+            let kw = keywords[i % keywords.len()];
+            m.index_edge_property(1, "Article", "content", &format!("doc_{}", i), kw)
+                .await
+                .expect("index");
+        }
+    });
+
+    let mut group = c.benchmark_group("fulltext_search");
+    group.measurement_time(Duration::from_secs(10));
+    group.sample_size(50);
+    group.warm_up_time(Duration::from_secs(1));
+
+    for query in &["rust", "database performance", "search query"] {
+        let m = manager.clone();
+        group.bench_function(format!("search_{}", query.replace(' ', "_")), |b| {
+            b.to_async(&rt).iter(|| {
+                let mgr = m.clone();
+                let q = query.to_string();
+                async move {
+                    let results = mgr
+                        .search(1, "Article", "content", &q, 10)
+                        .await
+                        .expect("search");
+                    black_box(results.len())
+                }
             });
         });
     }
@@ -127,58 +141,26 @@ fn bench_fulltext_search_queries(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_fulltext_search_scaling(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "fulltext_scaling");
+#[cfg(not(feature = "fulltext-search"))]
+fn bench_fulltext_search(c: &mut Criterion) {
+    let mut group = c.benchmark_group("fulltext_search");
+    group.measurement_time(Duration::from_secs(10));
+    group.sample_size(50);
+    group.warm_up_time(Duration::from_secs(1));
 
-    for doc_count in &[1000, 10000, 100000] {
-        group.bench_with_input(BenchmarkId::from_parameter(doc_count), doc_count, |b, _| {
-            b.iter(|| {
-                // Simulate searching across larger dataset
-                black_box(doc_count / 10)
-            });
-        });
-    }
-
+    group.bench_function("search_rust", |b| b.iter(|| black_box(10usize)));
     group.finish();
 }
 
-fn bench_vector_index_build(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "vector_index_build");
-
-    for (vec_count, dim) in &[(100, 128), (1000, 256), (10000, 512)] {
-        let gql = generate_gql_for_vector_bench(*vec_count, *dim);
-        let vector_count_actual = gql.matches("INSERT VERTEX").count();
-
-        group.bench_with_input(
-            BenchmarkId::from_parameter(format!("{}d_{}v", dim, vec_count)),
-            &(*vec_count, *dim),
-            |b, _| {
-                b.iter(|| {
-                    // Simulate vector index building
-                    black_box(vector_count_actual * dim / 128)
-                });
-            },
-        );
-    }
-
-    group.finish();
-}
-
-fn bench_vector_search_distance_calculation(c: &mut Criterion) {
+fn bench_vector_distance(c: &mut Criterion) {
     let mut group = create_benchmark_group(c, "vector_distance");
 
-    let dimensions = vec![128, 256, 512, 768];
-
-    for dim in dimensions {
-        group.bench_with_input(BenchmarkId::from_parameter(dim), &dim, |b, d| {
-            // Simulate distance calculation
+    for dim in &[128, 256, 512] {
+        group.bench_with_input(BenchmarkId::from_parameter(dim), dim, |b, &d| {
+            let a: Vec<f32> = (0..d).map(|i| i as f32 * 0.1).collect();
+            let bv: Vec<f32> = (0..d).map(|i| (i + 1) as f32 * 0.1).collect();
             b.iter(|| {
-                let mut sum = 0.0;
-                for i in 0..*d {
-                    let a = (i as f64) * 0.1;
-                    let b = ((i + 1) as f64) * 0.1;
-                    sum += (a - b).abs();
-                }
+                let sum: f32 = a.iter().zip(bv.iter()).map(|(x, y)| (x - y).abs()).sum();
                 black_box(sum)
             });
         });
@@ -187,30 +169,10 @@ fn bench_vector_search_distance_calculation(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_vector_search_topk(c: &mut Criterion) {
-    let mut group = create_benchmark_group(c, "vector_topk_search");
-
-    for (vec_count, k) in &[(1000, 10), (10000, 100), (100000, 1000)] {
-        group.bench_with_input(
-            BenchmarkId::from_parameter(format!("{}v_top{}", vec_count, k)),
-            &(*vec_count, *k),
-            |b, _| {
-                // Simulate top-k search
-                b.iter(|| black_box(vec_count / 10));
-            },
-        );
-    }
-
-    group.finish();
-}
-
 criterion_group!(
     benches,
     bench_fulltext_index_build,
-    bench_fulltext_search_queries,
-    bench_fulltext_search_scaling,
-    bench_vector_index_build,
-    bench_vector_search_distance_calculation,
-    bench_vector_search_topk
+    bench_fulltext_search,
+    bench_vector_distance,
 );
 criterion_main!(benches);

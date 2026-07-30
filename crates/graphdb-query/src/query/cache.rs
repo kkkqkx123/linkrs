@@ -60,7 +60,7 @@ pub use plan_cache::{
 pub use cte_cache::{CteCacheDecision, CteCacheDecisionMaker, CteCacheEntry, CteCacheManager};
 
 // Re-export the manager types
-pub use manager::{CacheManager, CacheStatsSummary, GlobalCacheManager, GlobalCacheStats};
+pub use manager::{CacheManager, CacheStatsSummary};
 
 // Re-export the warmup module types
 pub use warmup::{
