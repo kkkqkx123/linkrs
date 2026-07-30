@@ -48,6 +48,201 @@ pub use super::property_schema::{
     PropertySchema,
 };
 
+/// Property value index for fast edge lookup by property value.
+///
+/// Maps (property_name → canonical_value_bytes → set of property offsets).
+/// Enables O(1) lookups of edges by property value without scanning the
+/// entire property table. Maintained incrementally during insert/update/delete.
+#[derive(Debug, Clone, Default)]
+pub struct PropertyValueIndex {
+    index: HashMap<String, HashMap<Vec<u8>, HashSet<u32>>>,
+}
+
+impl PropertyValueIndex {
+    pub fn new() -> Self {
+        Self {
+            index: HashMap::new(),
+        }
+    }
+
+    /// Insert a property value for a given offset.
+    pub fn insert(&mut self, name: &str, value: Option<&Value>, offset: u32) {
+        let entry = self.index.entry(name.to_string()).or_default();
+        let key = encode_value_for_index(value);
+        entry.entry(key).or_default().insert(offset);
+    }
+
+    /// Index all property values for a record at the given offset.
+    pub fn index_record(&mut self, props: &[(String, Option<Value>)], offset: u32) {
+        for (name, val) in props {
+            self.insert(name, val.as_ref(), offset);
+        }
+    }
+
+    /// Remove a property value for a given offset.
+    pub fn remove(&mut self, name: &str, value: Option<&Value>, offset: u32) {
+        if let Some(entry) = self.index.get_mut(name) {
+            let key = encode_value_for_index(value);
+            if let Some(offsets) = entry.get_mut(&key) {
+                offsets.remove(&offset);
+                if offsets.is_empty() {
+                    entry.remove(&key);
+                }
+            }
+            if entry.is_empty() {
+                self.index.remove(name);
+            }
+        }
+    }
+
+    /// Remove all indexed values for a given offset.
+    pub fn remove_record(&mut self, props: &[(String, Option<Value>)], offset: u32) {
+        for (name, val) in props {
+            self.remove(name, val.as_ref(), offset);
+        }
+    }
+
+    /// Find all property offsets that have the given property value.
+    pub fn lookup(&self, name: &str, value: Option<&Value>) -> Vec<u32> {
+        let key = encode_value_for_index(value);
+        self.index
+            .get(name)
+            .and_then(|entry| entry.get(&key))
+            .map(|offsets| offsets.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// Clear all index entries.
+    pub fn clear(&mut self) {
+        self.index.clear();
+    }
+
+    /// Number of distinct (property_name, value) pairs indexed.
+    pub fn entry_count(&self) -> usize {
+        self.index.values().map(|m| m.len()).sum()
+    }
+
+    /// Rebuild index from a list of records.
+    pub fn rebuild(&mut self, schema: &[PropertySchema], records: &[Option<PropertyRecord>]) {
+        self.clear();
+        for (row_idx, record_opt) in records.iter().enumerate() {
+            let Some(record) = record_opt else { continue };
+            if record.delete_ts.is_some() {
+                continue;
+            }
+            let offset = prop_index_to_offset(row_idx);
+            let props = deserialize_row_raw(schema, &record.data);
+            for (name, val) in props {
+                self.insert(&name, val.as_ref(), offset);
+            }
+        }
+    }
+}
+
+/// Encode a Value into a canonical byte key for index lookups.
+fn encode_value_for_index(value: Option<&Value>) -> Vec<u8> {
+    match value {
+        None => vec![0],
+        Some(v) => {
+            let mut buf = vec![1];
+            match v {
+                Value::Bool(b) => {
+                    buf.push(if *b { 1 } else { 0 });
+                }
+                Value::SmallInt(i) => buf.extend_from_slice(&i.to_le_bytes()),
+                Value::Int(i) => buf.extend_from_slice(&i.to_le_bytes()),
+                Value::BigInt(i) => buf.extend_from_slice(&i.to_le_bytes()),
+                Value::Float(f) => buf.extend_from_slice(&f.to_le_bytes()),
+                Value::Double(d) => buf.extend_from_slice(&d.to_le_bytes()),
+                Value::String(s) => {
+                    let bytes = s.as_bytes();
+                    encode_varint(bytes.len() as u32, &mut buf);
+                    buf.extend_from_slice(bytes);
+                }
+                Value::Date(d) => {
+                    buf.extend_from_slice(&d.year.to_le_bytes());
+                    buf.extend_from_slice(&d.month.to_le_bytes());
+                    buf.extend_from_slice(&d.day.to_le_bytes());
+                }
+                _ => {}
+            }
+            buf
+        }
+    }
+}
+
+/// Deserialize a row from raw bytes, used for index rebuilding.
+fn deserialize_row_raw(schema: &[PropertySchema], data: &[u8]) -> Vec<(String, Option<Value>)> {
+    let mut cursor = Cursor::new(data);
+    let mut result = Vec::new();
+    for schema_entry in schema {
+        let mut null_marker = [0u8; 1];
+        if cursor.read_exact(&mut null_marker).is_err() {
+            result.push((schema_entry.name.clone(), None));
+            continue;
+        }
+        if null_marker[0] == 0 {
+            result.push((schema_entry.name.clone(), None));
+        } else {
+            let value = deserialize_value_from_cursor(&mut cursor, &schema_entry.data_type);
+            result.push((schema_entry.name.clone(), value));
+        }
+    }
+    result
+}
+
+fn deserialize_value_from_cursor(cursor: &mut Cursor<&[u8]>, data_type: &DataType) -> Option<Value> {
+    match data_type {
+        DataType::Bool => {
+            let mut b = [0u8; 1];
+            cursor.read_exact(&mut b).ok()?;
+            Some(Value::Bool(b[0] != 0))
+        }
+        DataType::SmallInt => {
+            let mut buf = [0u8; 2];
+            cursor.read_exact(&mut buf).ok()?;
+            Some(Value::SmallInt(i16::from_le_bytes(buf)))
+        }
+        DataType::Int => {
+            let mut buf = [0u8; 4];
+            cursor.read_exact(&mut buf).ok()?;
+            Some(Value::Int(i32::from_le_bytes(buf)))
+        }
+        DataType::BigInt => {
+            let mut buf = [0u8; 8];
+            cursor.read_exact(&mut buf).ok()?;
+            Some(Value::BigInt(i64::from_le_bytes(buf)))
+        }
+        DataType::Float => {
+            let mut buf = [0u8; 4];
+            cursor.read_exact(&mut buf).ok()?;
+            Some(Value::Float(f32::from_le_bytes(buf)))
+        }
+        DataType::Double => {
+            let mut buf = [0u8; 8];
+            cursor.read_exact(&mut buf).ok()?;
+            Some(Value::Double(f64::from_le_bytes(buf)))
+        }
+        DataType::String => {
+            let len = decode_varint(cursor).unwrap_or(0) as usize;
+            let mut str_buf = vec![0u8; len];
+            cursor.read_exact(&mut str_buf).ok()?;
+            Some(Value::string(String::from_utf8_lossy(&str_buf)))
+        }
+        DataType::Date => {
+            let mut buf = [0u8; 10];
+            cursor.read_exact(&mut buf[..4]).ok()?;
+            let year = i32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+            cursor.read_exact(&mut buf[..4]).ok()?;
+            let month = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+            cursor.read_exact(&mut buf[..4]).ok()?;
+            let day = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+            Some(Value::Date(DateValue { year, month, day }))
+        }
+        _ => None,
+    }
+}
+
 // Varint encoding for compact string lengths
 fn encode_varint(mut value: u32, buffer: &mut Vec<u8>) {
     while value >= 128 {
@@ -89,6 +284,10 @@ pub struct PropertyTable {
     /// Only meaningful for fixed-size schemas. Used for direct byte manipulation
     /// in set_property to avoid full deserialize-merge-serialize cycle.
     column_byte_offsets: Vec<usize>,
+
+    /// Property value index for fast edge lookup by property value.
+    /// Maps (property_name → encoded_value → set of offsets).
+    value_index: PropertyValueIndex,
 }
 
 impl PropertyTable {
@@ -101,6 +300,7 @@ impl PropertyTable {
             free_list: Vec::new(),
             tombstones_manager: TieredTombstoneManager::new(10_000),
             column_byte_offsets: Vec::new(),
+            value_index: PropertyValueIndex::new(),
         }
     }
 
@@ -113,6 +313,7 @@ impl PropertyTable {
             free_list: Vec::with_capacity(capacity / 10),
             tombstones_manager: TieredTombstoneManager::new(10_000),
             column_byte_offsets: Vec::new(),
+            value_index: PropertyValueIndex::new(),
         }
     }
 
@@ -121,14 +322,14 @@ impl PropertyTable {
         name: String,
         data_type: DataType,
         nullable: bool,
-    ) -> PropertyId {
+    ) -> StorageResult<PropertyId> {
         let prop_id = PropertyId::new(self.schema.len() as u16);
         let schema = PropertySchema::new(name.clone(), prop_id.as_usize() as i32, data_type)
             .nullable(nullable);
-        self.name_indexer.register(name.clone());
+        self.name_indexer.register(name.clone())?;
         self.schema.push(schema);
         self.recompute_column_byte_offsets();
-        prop_id
+        Ok(prop_id)
     }
 
     pub fn remove_property(&mut self, name: &str) -> StorageResult<()> {
@@ -142,7 +343,7 @@ impl PropertyTable {
         self.name_indexer.clear();
         for (idx, schema) in self.schema.iter_mut().enumerate() {
             schema.prop_id = idx as i32;
-            self.name_indexer.register(schema.name.clone());
+            self.name_indexer.register(schema.name.clone())?;
         }
         self.recompute_column_byte_offsets();
 
@@ -165,7 +366,7 @@ impl PropertyTable {
         self.name_indexer.clear();
         for (idx, schema) in self.schema.iter_mut().enumerate() {
             schema.prop_id = idx as i32;
-            self.name_indexer.register(schema.name.clone());
+            self.name_indexer.register(schema.name.clone())?;
         }
         self.recompute_column_byte_offsets();
 
@@ -368,6 +569,13 @@ impl PropertyTable {
             row_offset
         };
 
+        // Index property values for fast lookup
+        let indexed: Vec<(String, Option<Value>)> = values
+            .iter()
+            .map(|(k, v)| (k.clone(), Some(v.clone())))
+            .collect();
+        self.value_index.index_record(&indexed, offset);
+
         Ok(offset)
     }
 
@@ -377,6 +585,11 @@ impl PropertyTable {
         values: &[(String, Value)],
         ts: Timestamp,
     ) -> StorageResult<u32> {
+        // Remove old values from index
+        if let Some(old_props) = self.get(offset, None) {
+            self.value_index.remove_record(&old_props, offset);
+        }
+
         // Get current record data BEFORE marking as deleted
         let merged_values = self.get_for_update(offset, values)?;
 
@@ -543,6 +756,9 @@ impl PropertyTable {
             return Err(StorageError::column_not_found(name.to_string()));
         }
 
+        // Get old property value for index maintenance
+        let old_props = self.get(offset, None);
+
         // Fast path: for fixed-size schemas, do direct byte manipulation
         let col_idx = self
             .schema
@@ -551,12 +767,21 @@ impl PropertyTable {
             .ok_or_else(|| StorageError::column_not_found(name.to_string()))?;
 
         if self.is_schema_fixed_size() && col_idx < self.column_byte_offsets.len() {
-            return self.set_property_fixed_size(row_idx, offset, col_idx, value, ts);
+            // Remove old value from index before updating
+            if let Some(ref props) = old_props {
+                self.value_index.remove_record(props, offset);
+            }
+            let result = self.set_property_fixed_size(row_idx, offset, col_idx, value, ts);
+            // Re-index with new value
+            if let Some(new_props) = self.get(offset, None) {
+                self.value_index.index_record(&new_props, offset);
+            }
+            return result;
         }
 
         // Slow path: full deserialize → merge → serialize cycle
         let mut merged_values: Vec<(String, Option<Value>)> = Vec::new();
-        if let Some(props) = self.get(offset, None) {
+        if let Some(props) = old_props {
             for (n, v) in props {
                 if n == name {
                     merged_values.push((n, value.clone()));
@@ -578,6 +803,9 @@ impl PropertyTable {
 
         let new_record_obj = PropertyRecord::new(new_record, ts);
         self.records[row_idx] = Some(new_record_obj);
+
+        // Re-index with new values
+        self.value_index.index_record(&merged_values, offset);
 
         Ok(())
     }
@@ -655,16 +883,26 @@ impl PropertyTable {
             return Ok(()); // Already deleted or doesn't exist
         }
 
-        if let Some(record) = &mut self.records[row_idx] {
-            if record.delete_ts.is_none() {
+        // Check deletion state and get old props BEFORE mutable borrow
+        let can_delete = self.records[row_idx]
+            .as_ref()
+            .is_some_and(|r| r.delete_ts.is_none());
+
+        if can_delete {
+            // Remove from index before marking as deleted
+            if let Some(props) = self.get(offset, None) {
+                self.value_index.remove_record(&props, offset);
+            }
+
+            if let Some(record) = &mut self.records[row_idx] {
                 record.delete_ts = Some(delete_ts);
                 self.tombstones_manager.add_tombstone(offset, delete_ts);
-                Ok(())
-            } else {
-                Err(StorageError::invalid_operation(
-                    "record already marked deleted",
-                ))
             }
+            Ok(())
+        } else if self.records[row_idx].is_some() {
+            Err(StorageError::invalid_operation(
+                "record already marked deleted",
+            ))
         } else {
             Ok(()) // Idempotent: already deleted
         }
@@ -703,6 +941,14 @@ impl PropertyTable {
             }
         }
 
+        for (idx, offset) in &indices_to_clear {
+            // Remove from index if still indexed
+            if let Some(ref record) = self.records[*idx] {
+                let props = deserialize_row_raw(&self.schema, &record.data);
+                self.value_index.remove_record(&props, *offset);
+            }
+        }
+
         for (idx, offset) in indices_to_clear {
             self.records[idx] = None;
             self.free_list.push(offset);
@@ -719,6 +965,11 @@ impl PropertyTable {
         };
         if row_idx >= self.records.len() {
             return false;
+        }
+
+        // Remove from index before deleting
+        if let Some(props) = self.get(offset, None) {
+            self.value_index.remove_record(&props, offset);
         }
 
         self.records[row_idx] = None;
@@ -930,7 +1181,7 @@ impl PropertyTable {
             let prop_schema = PropertySchema::new(name.clone(), prop_id, data_type)
                 .nullable(nullable)
                 .with_encoding(encoding_type);
-            self.name_indexer.register(name.clone());
+            self.name_indexer.register(name.clone())?;
             self.schema.push(prop_schema);
         }
 
@@ -1010,7 +1261,26 @@ impl PropertyTable {
             self.free_list.push(off);
         }
 
+        // Rebuild property value index from loaded records
+        self.value_index.rebuild(&self.schema, &self.records);
+
         Ok(())
+    }
+
+    /// Find property offsets by exact property value match.
+    ///
+    /// Returns all property offsets (row handles) whose record has the given
+    /// property set to the given value. This enables fast edge property-based
+    /// lookups without scanning the entire property table.
+    ///
+    /// Uses the in-memory `PropertyValueIndex` for O(1) lookup.
+    pub fn find_by_property(&self, name: &str, value: &Value) -> Vec<u32> {
+        self.value_index.lookup(name, Some(value))
+    }
+
+    /// Find property offsets where the given property is null.
+    pub fn find_by_property_null(&self, name: &str) -> Vec<u32> {
+        self.value_index.lookup(name, None)
     }
 
     pub fn compact(&mut self, valid_offsets: &HashSet<u32>) {
@@ -1043,6 +1313,9 @@ impl PropertyTable {
                 }
             }
         }
+
+        // Rebuild property value index
+        self.value_index.rebuild(&self.schema, &self.records);
     }
 
     pub fn used_memory_size(&self) -> usize {
@@ -1052,6 +1325,8 @@ impl PropertyTable {
         }
         total += self.records.len() * std::mem::size_of::<Option<PropertyRecord>>();
         total += std::mem::size_of::<Self>();
+        total += self.value_index.entry_count()
+            * (std::mem::size_of::<Vec<u8>>() + std::mem::size_of::<HashSet<u32>>());
         total
     }
 
@@ -1138,6 +1413,9 @@ impl PropertyTable {
                 }
             }
         }
+
+        // Rebuild property value index with new offsets
+        self.value_index.rebuild(&self.schema, &self.records);
 
         offset_mapping
     }

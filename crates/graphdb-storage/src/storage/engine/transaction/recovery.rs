@@ -58,20 +58,16 @@ impl RecoveryApplier for GraphStorageContext {
     fn replay_insert_edge(&self, redo: &InsertEdgeRedo, ts: Timestamp) -> StorageResult<()> {
         // Check if endpoints exist
         let endpoints_exist = self.data_store().with_vertex_tables(|vertex_tables| {
-            let src_exists = vertex_tables.contains_key(&redo.src_label)
-                && TransactionOps::resolve_vertex_id(
-                    vertex_tables.get(&redo.src_label).expect("label checked"),
-                    redo.src_vid,
-                    ts,
-                )
+            let src_exists = vertex_tables
+                .get(&redo.src_label)
+                .map(|t| t.as_ref())
+                .and_then(|table| TransactionOps::resolve_vertex_id(table, redo.src_vid, ts))
                 .is_some();
 
-            let dst_exists = vertex_tables.contains_key(&redo.dst_label)
-                && TransactionOps::resolve_vertex_id(
-                    vertex_tables.get(&redo.dst_label).expect("label checked"),
-                    redo.dst_vid,
-                    ts,
-                )
+            let dst_exists = vertex_tables
+                .get(&redo.dst_label)
+                .map(|t| t.as_ref())
+                .and_then(|table| TransactionOps::resolve_vertex_id(table, redo.dst_vid, ts))
                 .is_some();
             src_exists && dst_exists
         });
@@ -473,7 +469,7 @@ impl RecoveryApplier for GraphStorageContext {
                     if e.to_string().contains("already exists") {
                         // Column exists - need to record schema change for recovery
                         self.data_store().with_vertex_tables_mut(|vertex_tables| {
-                            if let Some(table) = vertex_tables.get_mut(&redo.label) {
+                            if let Some(table) = vertex_tables.get(&redo.label) {
                                 let change_details =
                                     crate::storage::schema::ChangeDetails::PropertyAdded {
                                         name: prop.name.clone(),
@@ -780,7 +776,7 @@ impl RecoveryApplier for GraphStorageContext {
 
 /// Resolve an external VertexId to its internal u32 ID.
 fn resolve_external_vid(
-    vertex_tables: &std::collections::HashMap<LabelId, crate::storage::vertex::VertexTable>,
+    vertex_tables: &std::collections::HashMap<LabelId, std::sync::Arc<crate::storage::vertex::ShardedVertexTable>>,
     label: LabelId,
     vid: VertexId,
     ts: Timestamp,

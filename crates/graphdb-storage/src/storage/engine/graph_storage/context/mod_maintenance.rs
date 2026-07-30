@@ -35,7 +35,8 @@ impl GraphStorageContext {
             .with_vertex_tables_mut(|vertex_tables| {
                 let labels: Vec<LabelId> = vertex_tables.keys().copied().collect();
                 for &label_id in &labels {
-                    let table = vertex_tables.get_mut(&label_id).expect("label must exist");
+                    let table = vertex_tables.get(&label_id)
+                        .ok_or_else(|| StorageError::label_not_found(format!("label {label_id} not found during compaction")))?;
                     match table.compact_with_ts_collect(ts) {
                         Ok(removed) => {
                             if !removed.is_empty() {

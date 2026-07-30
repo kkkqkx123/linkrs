@@ -1,10 +1,12 @@
-use crate::core::types::{LabelId, Timestamp, VertexId};
-use crate::storage::vertex::VertexTable;
 use std::collections::HashMap;
+use std::sync::Arc;
+
+use crate::core::types::{LabelId, Timestamp, VertexId};
+use crate::storage::vertex::ShardedVertexTable;
 
 pub fn resolve_internal_id(
     _ctx: &super::GraphStorageContext,
-    vertex_tables: &HashMap<LabelId, VertexTable>,
+    vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
     label: LabelId,
     id: VertexId,
     ts: Timestamp,
@@ -19,7 +21,7 @@ pub fn resolve_internal_id(
 }
 
 pub fn resolve_internal_id_any(
-    vertex_tables: &HashMap<LabelId, VertexTable>,
+    vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
     label: LabelId,
     id: VertexId,
 ) -> Option<u32> {
@@ -47,7 +49,7 @@ pub fn resolve_internal_id_any(
 }
 
 fn resolve_internal_id_from_i64(
-    vertex_tables: &HashMap<LabelId, VertexTable>,
+    vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
     label: LabelId,
     id: i64,
     ts: Timestamp,
@@ -62,7 +64,7 @@ fn resolve_internal_id_from_i64(
 }
 
 fn resolve_internal_id_from_str(
-    vertex_tables: &HashMap<LabelId, VertexTable>,
+    vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
     label: LabelId,
     id: &str,
     ts: Timestamp,
@@ -77,7 +79,7 @@ fn resolve_internal_id_from_str(
 }
 
 pub fn resolve_internal_id_label(
-    vertex_tables: &HashMap<LabelId, VertexTable>,
+    vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
     id: &VertexId,
     ts: Timestamp,
 ) -> Option<LabelId> {

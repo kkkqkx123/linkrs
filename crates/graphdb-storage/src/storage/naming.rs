@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 
+use crate::core::{StorageError, StorageResult};
 use crate::storage::types::PropertyId;
 
 /// Maps string names to PropertyId.
@@ -37,16 +38,20 @@ impl NameIndexer {
 
     /// Register a new name and return its PropertyId.
     /// Returns the existing PropertyId if the name is already registered.
-    pub fn register(&mut self, name: String) -> PropertyId {
+    pub fn register(&mut self, name: String) -> StorageResult<PropertyId> {
         if let Some(&id) = self.name_to_id.get(&name) {
-            return id;
+            return Ok(id);
         }
 
+        let next = self
+            .next_id
+            .checked_add(1)
+            .ok_or_else(StorageError::capacity_exceeded)?;
         let id = PropertyId::new(self.next_id);
-        self.next_id = self.next_id.checked_add(1).expect("property id overflow");
+        self.next_id = next;
         self.name_to_id.insert(name, id);
 
-        id
+        Ok(id)
     }
 
     /// Look up the PropertyId for a given name.

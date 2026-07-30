@@ -4,9 +4,9 @@ mod tests {
 
     use crate::storage::edge::{EdgeSchema, EdgeStore, EdgeStrategy};
     use crate::storage::engine::data_store::{EdgeTableKey, GraphDataStore};
-    use crate::storage::vertex::{VertexSchema, VertexTable};
+    use crate::storage::vertex::{ShardedVertexTable, VertexSchema};
 
-    fn vertex_table(label: u32, name: &str) -> VertexTable {
+    fn vertex_table(label: u32, name: &str) -> ShardedVertexTable {
         let schema = VertexSchema {
             label_id: label,
             label_name: name.to_string(),
@@ -14,7 +14,7 @@ mod tests {
             primary_key_index: 0,
             schema_version: 1,
         };
-        VertexTable::new(label, name.to_string(), schema)
+        ShardedVertexTable::new(label, name.to_string(), schema)
     }
 
     fn edge_table(label: u32, src_label: u32, dst_label: u32, name: &str) -> EdgeStore {

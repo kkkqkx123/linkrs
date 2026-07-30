@@ -16,7 +16,7 @@ use crate::transaction::undo_log::{PropertyValue, UndoLogError, UndoLogResult};
 
 use crate::storage::edge::EdgeStore;
 use crate::storage::engine::data_store::EdgeTableKey;
-use crate::storage::vertex::VertexTable;
+use crate::storage::vertex::ShardedVertexTable;
 
 /// Parameters for add_edge operation
 pub struct AddEdgeParams {
@@ -72,7 +72,7 @@ pub struct TransactionOps;
 
 impl TransactionOps {
     /// Resolve an external VertexId to an internal row ID.
-    pub fn resolve_vertex_id(table: &VertexTable, vid: VertexId, ts: Timestamp) -> Option<u32> {
+    pub fn resolve_vertex_id(table: &ShardedVertexTable, vid: VertexId, ts: Timestamp) -> Option<u32> {
         if let Some(int_id) = vid.as_int64() {
             table.get_internal_id_by_i64(int_id, ts)
         } else if let Some(str_id) = vid.as_str() {
@@ -82,14 +82,14 @@ impl TransactionOps {
         }
     }
     pub fn add_vertex(
-        vertex_tables: &mut HashMap<LabelId, VertexTable>,
+        vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
         label: LabelId,
         vid: VertexId,
         properties: &[(String, Value)],
         ts: Timestamp,
     ) -> UndoLogResult<VertexId> {
         let table = vertex_tables
-            .get_mut(&label)
+            .get(&label)
             .ok_or(UndoLogError::LabelNotFound(label))?;
 
         let internal_id = if let Some(int_id) = vid.as_int64() {
@@ -111,7 +111,7 @@ impl TransactionOps {
 
     pub fn add_edge(
         edge_tables: &mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>,
-        vertex_tables: &HashMap<LabelId, VertexTable>,
+        vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
         params: AddEdgeParams,
         properties: &[(String, Value)],
         ts: Timestamp,
@@ -150,13 +150,13 @@ impl TransactionOps {
     }
 
     pub fn delete_vertex(
-        vertex_tables: &mut HashMap<LabelId, VertexTable>,
+        vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
         label: LabelId,
         vid: VertexId,
         ts: Timestamp,
     ) -> UndoLogResult<()> {
         let table = vertex_tables
-            .get_mut(&label)
+            .get(&label)
             .ok_or(UndoLogError::LabelNotFound(label))?;
 
         let internal_id =
@@ -170,13 +170,13 @@ impl TransactionOps {
     }
 
     pub fn delete_vertex_by_external_vid(
-        vertex_tables: &mut HashMap<LabelId, VertexTable>,
+        vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
         label: LabelId,
         vid: VertexId,
         ts: Timestamp,
     ) -> UndoLogResult<()> {
         let table = vertex_tables
-            .get_mut(&label)
+            .get(&label)
             .ok_or(UndoLogError::LabelNotFound(label))?;
 
         let internal_id =
@@ -189,13 +189,13 @@ impl TransactionOps {
     }
 
     pub fn revert_delete_vertex(
-        vertex_tables: &mut HashMap<LabelId, VertexTable>,
+        vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
         label: LabelId,
         vid: VertexId,
         ts: Timestamp,
     ) -> UndoLogResult<()> {
         let table = vertex_tables
-            .get_mut(&label)
+            .get(&label)
             .ok_or(UndoLogError::LabelNotFound(label))?;
 
         let internal_id = if let Some(int_id) = vid.as_int64() {
@@ -240,7 +240,7 @@ impl TransactionOps {
     }
 
     pub fn update_vertex_property_by_vid(
-        vertex_tables: &mut HashMap<LabelId, VertexTable>,
+        vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
         label: LabelId,
         vid: VertexId,
         prop_name: &str,
@@ -248,7 +248,7 @@ impl TransactionOps {
         ts: Timestamp,
     ) -> UndoLogResult<()> {
         let table = vertex_tables
-            .get_mut(&label)
+            .get(&label)
             .ok_or(UndoLogError::LabelNotFound(label))?;
 
         let internal_id = if let Some(int_id) = vid.as_int64() {
@@ -267,7 +267,7 @@ impl TransactionOps {
     }
 
     pub fn update_vertex_property_undo(
-        vertex_tables: &mut HashMap<LabelId, VertexTable>,
+        vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
         label: LabelId,
         vid: VertexId,
         col_id: ColumnId,
@@ -275,7 +275,7 @@ impl TransactionOps {
         ts: Timestamp,
     ) -> UndoLogResult<()> {
         let table = vertex_tables
-            .get_mut(&label)
+            .get(&label)
             .ok_or(UndoLogError::LabelNotFound(label))?;
 
         let internal_id =
@@ -290,7 +290,7 @@ impl TransactionOps {
 
     pub fn update_edge_property(
         edge_tables: &mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>,
-        vertex_tables: &HashMap<LabelId, VertexTable>,
+        vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
         params: crate::storage::engine::params::EdgeOperationParams,
         prop_name: &str,
         value: &Value,
@@ -373,8 +373,8 @@ impl TransactionOps {
     }
 
     pub fn revert_rename_vertex_properties(
-        vertex_tables: &mut HashMap<LabelId, VertexTable>,
-        vertex_label_names: &mut HashMap<String, LabelId>,
+        vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
+        vertex_label_names: &HashMap<String, LabelId>,
         label: &str,
         current_names: &[String],
         original_names: &[String],
@@ -384,18 +384,14 @@ impl TransactionOps {
             .copied()
             .ok_or(UndoLogError::LabelNotFound(0))?;
 
-        if let Some(table) = vertex_tables.get_mut(&label_id) {
-            let _new_schema = table.schema().clone();
+        if let Some(table) = vertex_tables.get(&label_id) {
+            let mut schema = table.schema();
             for (current, original) in current_names.iter().zip(original_names.iter()) {
-                if let Some(prop) = table
-                    .schema_mut()
-                    .properties
-                    .iter_mut()
-                    .find(|p| p.name == *current)
-                {
+                if let Some(prop) = schema.properties.iter_mut().find(|p| p.name == *current) {
                     prop.name = original.clone();
                 }
             }
+            table.apply_schema(schema);
         }
 
         Ok(())
@@ -404,7 +400,7 @@ impl TransactionOps {
     pub fn revert_rename_edge_properties(
         edge_tables: &mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>,
         edge_label_names: &mut HashMap<String, LabelId>,
-        vertex_tables: &HashMap<LabelId, VertexTable>,
+        vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
         edge_labels: &EdgeTypeLabelParams,
         current_names: &[String],
         original_names: &[String],
@@ -443,8 +439,8 @@ impl TransactionOps {
     }
 
     pub fn revert_delete_vertex_properties(
-        vertex_tables: &mut HashMap<LabelId, VertexTable>,
-        vertex_label_names: &mut HashMap<String, LabelId>,
+        vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
+        vertex_label_names: &HashMap<String, LabelId>,
         label_name: &str,
         prop_names: &[String],
     ) -> UndoLogResult<()> {
@@ -454,15 +450,14 @@ impl TransactionOps {
             .ok_or(UndoLogError::LabelNotFound(0))?;
 
         let table = vertex_tables
-            .get_mut(&label_id)
+            .get(&label_id)
             .ok_or(UndoLogError::LabelNotFound(0))?;
 
+        let mut schema = table.schema();
         for prop_name in prop_names {
-            table
-                .schema_mut()
-                .properties
-                .retain(|p| p.name != *prop_name);
+            schema.properties.retain(|p| p.name != *prop_name);
         }
+        table.apply_schema(schema);
 
         Ok(())
     }
@@ -470,7 +465,7 @@ impl TransactionOps {
     pub fn revert_delete_edge_properties(
         edge_tables: &mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>,
         edge_label_names: &mut HashMap<String, LabelId>,
-        vertex_tables: &HashMap<LabelId, VertexTable>,
+        vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
         prop_names: &[String],
         edge_labels: &EdgeTypeLabelParams,
     ) -> UndoLogResult<()> {
@@ -507,7 +502,7 @@ impl TransactionOps {
 }
 #[cfg(test)]
 pub fn delete_vertex_type(
-    vertex_tables: &mut HashMap<LabelId, VertexTable>,
+    vertex_tables: &mut HashMap<LabelId, Arc<ShardedVertexTable>>,
     edge_tables: &mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>,
     vertex_label_names: &mut HashMap<String, LabelId>,
     edge_label_names: &mut HashMap<String, LabelId>,
@@ -549,7 +544,7 @@ pub fn delete_edge_type(
 
 #[cfg(test)]
 pub fn create_vertex_type_undo(
-    vertex_tables: &mut HashMap<LabelId, VertexTable>,
+    vertex_tables: &mut HashMap<LabelId, Arc<ShardedVertexTable>>,
     vertex_label_names: &mut HashMap<String, LabelId>,
     vertex_label_counter: &mut LabelId,
     name: &str,
@@ -564,7 +559,7 @@ pub fn create_vertex_type_undo(
         primary_key_index: 0,
         schema_version: 1,
     };
-    vertex_tables.insert(label, VertexTable::new(label, name.to_string(), schema));
+    vertex_tables.insert(label, Arc::new(ShardedVertexTable::new(label, name.to_string(), schema)));
     Ok(())
 }
 
@@ -573,7 +568,7 @@ pub fn create_edge_type_undo(
     edge_tables: &mut HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>,
     edge_label_names: &mut HashMap<String, LabelId>,
     edge_label_counter: &mut LabelId,
-    vertex_tables: &HashMap<LabelId, VertexTable>,
+    vertex_tables: &HashMap<LabelId, Arc<ShardedVertexTable>>,
     name: &str,
     src_label_name: &str,
     dst_label_name: &str,
@@ -581,12 +576,12 @@ pub fn create_edge_type_undo(
     let src_label = vertex_tables
         .values()
         .find(|table| table.label_name() == src_label_name)
-        .map(VertexTable::label)
+        .map(|t| t.label())
         .ok_or(UndoLogError::LabelNotFound(0))?;
     let dst_label = vertex_tables
         .values()
         .find(|table| table.label_name() == dst_label_name)
-        .map(VertexTable::label)
+        .map(|t| t.label())
         .ok_or(UndoLogError::LabelNotFound(0))?;
     let label = *edge_label_counter;
     *edge_label_counter = (*edge_label_counter).max(label.saturating_add(1));

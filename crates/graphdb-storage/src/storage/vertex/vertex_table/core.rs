@@ -9,11 +9,8 @@
 //! `update_property`, etc.) concurrently. `IdIndexer` provides concurrent-safe lookups via `parking_lot::Mutex`,
 //! but the overall table state (columns, timestamps, schema) requires external synchronization.
 //!
-//! **Pattern for multi-threaded access:**
-//! ```ignore
-//! let vertex_table = Arc::new(Mutex::new(VertexTable::new(...)));
-//! // Use vertex_table.lock().unwrap().insert(...) for mutable operations
-//! ```
+//! For multi-threaded access, use `ShardedVertexTable` which wraps `VertexTable` with per-shard
+//! `parking_lot::Mutex` provides shard-level concurrency.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -534,6 +531,50 @@ impl VertexTable {
         total += self.property_index_cache.len() * (24 + std::mem::size_of::<usize>()); // String overhead + usize
 
         total
+    }
+
+    /// Apply column encoding to in-memory data without flushing to disk.
+    ///
+    /// Encodes each column using `EncodingSelector` and applies the chosen
+    /// encoding in-place to reduce memory usage. This can be called before
+    /// the first flush (when data is still in raw format) or triggered by
+    /// `MemoryAccounting` under memory pressure.
+    ///
+    /// Columns with `EncodingType::None` (short columns, booleans, unknown types)
+    /// are skipped. Already-encoded columns are skipped. Call is idempotent.
+    pub fn compress_columns(&mut self) -> StorageResult<()> {
+        use crate::storage::encoding::EncodingType;
+
+        let selections = self
+            .columns
+            .columns()
+            .iter()
+            .map(|col| {
+                if col.encoding_type() != EncodingType::None {
+                    return (col.name.clone(), EncodingType::None);
+                }
+                let values = (0..col.len())
+                    .map(|row_idx| col.get(row_idx))
+                    .collect::<Vec<_>>();
+                (
+                    col.name.clone(),
+                    self.encoding_selector
+                        .select_for_column(&col.data_type, &values),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        for (name, encoding_type) in &selections {
+            if *encoding_type != EncodingType::None {
+                self.columns.apply_encoding_to_column(
+                    name,
+                    *encoding_type,
+                    self.encoding_selector.thresholds().fsst_max_symbols,
+                )?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Verify internal consistency after compaction.

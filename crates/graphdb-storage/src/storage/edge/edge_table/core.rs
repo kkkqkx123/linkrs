@@ -141,7 +141,7 @@ impl TimeTravelEdgeStore {
 
         let mut properties = PropertyTable::with_capacity(config.initial_edge_capacity);
         for prop in &schema.properties {
-            properties.add_property(prop.name.clone(), prop.data_type.clone(), prop.nullable);
+            properties.add_property(prop.name.clone(), prop.data_type.clone(), prop.nullable)?;
         }
 
         let label_id = schema.label_id;
@@ -839,7 +839,7 @@ impl TimeTravelEdgeStore {
         }
 
         self.properties
-            .add_property(name.clone(), data_type.clone(), nullable);
+            .add_property(name.clone(), data_type.clone(), nullable)?;
 
         let prop_def = StoragePropertyDef::new(name.clone(), data_type.clone());
         let new_idx = self.schema.properties.len();
@@ -1348,7 +1348,7 @@ impl<'a> EdgeTableScanIterator<'a> {
             }
         }
 
-        if max_records.is_none() || records.len() < max_records.unwrap() {
+        if records.len() < max_records.unwrap_or(usize::MAX) {
             for segment in table.out_segments.iter().rev() {
                 if segment.create_ts_min > ts {
                     continue;

@@ -10,7 +10,7 @@ mod tests {
     use crate::storage::edge::{EdgeSchema, EdgeStore, EdgeStrategy};
     use crate::storage::engine::data_store::EdgeTableKey;
     use crate::storage::types::StoragePropertyDef;
-    use crate::storage::vertex::{VertexSchema, VertexTable};
+    use crate::storage::vertex::{ShardedVertexTable, VertexSchema};
 
     use crate::storage::engine::transaction::ops::{
         create_edge_type_undo, create_vertex_type_undo, delete_edge_type, delete_vertex_type,
@@ -18,7 +18,7 @@ mod tests {
         TransactionOps,
     };
 
-    fn create_vertex_table(label: LabelId, name: &str) -> VertexTable {
+    fn create_vertex_table(label: LabelId, name: &str) -> Arc<ShardedVertexTable> {
         let schema = VertexSchema {
             label_id: label,
             label_name: name.to_string(),
@@ -29,7 +29,7 @@ mod tests {
             primary_key_index: 0,
             schema_version: 1,
         };
-        VertexTable::new(label, name.to_string(), schema)
+        Arc::new(ShardedVertexTable::new(label, name.to_string(), schema))
     }
 
     fn create_edge_table(
@@ -57,7 +57,7 @@ mod tests {
     #[test]
     #[allow(clippy::useless_vec)]
     fn test_add_vertex_int_id() {
-        let mut vertex_tables: HashMap<LabelId, VertexTable> = HashMap::new();
+        let mut vertex_tables: HashMap<LabelId, Arc<ShardedVertexTable>> = HashMap::new();
         vertex_tables.insert(0, create_vertex_table(0, "Person"));
 
         let vid = VertexId::from_int64(100);
@@ -66,7 +66,7 @@ mod tests {
             ("age".to_string(), Value::BigInt(30)),
         ];
 
-        let result = TransactionOps::add_vertex(&mut vertex_tables, 0, vid, &properties, 1);
+        let result = TransactionOps::add_vertex(&vertex_tables, 0, vid, &properties, 1);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), VertexId::from_int64(0));
 
@@ -78,7 +78,7 @@ mod tests {
     #[test]
     #[allow(clippy::useless_vec)]
     fn test_add_vertex_string_id() {
-        let mut vertex_tables: HashMap<LabelId, VertexTable> = HashMap::new();
+        let mut vertex_tables: HashMap<LabelId, Arc<ShardedVertexTable>> = HashMap::new();
         vertex_tables.insert(0, create_vertex_table(0, "Person"));
 
         // Use a string ID that is NOT 8 bytes (avoids as_int64() collision)
@@ -88,7 +88,7 @@ mod tests {
             ("age".to_string(), Value::BigInt(30)),
         ];
 
-        let result = TransactionOps::add_vertex(&mut vertex_tables, 0, vid, &properties, 1);
+        let result = TransactionOps::add_vertex(&vertex_tables, 0, vid, &properties, 1);
         assert!(result.is_ok());
 
         let table = vertex_tables.get(&0).unwrap();
@@ -98,16 +98,16 @@ mod tests {
 
     #[test]
     fn test_add_vertex_label_not_found() {
-        let mut vertex_tables: HashMap<LabelId, VertexTable> = HashMap::new();
+        let mut vertex_tables: HashMap<LabelId, Arc<ShardedVertexTable>> = HashMap::new();
 
         let vid = VertexId::from_int64(1);
-        let result = TransactionOps::add_vertex(&mut vertex_tables, 99, vid, &[], 1);
+        let result = TransactionOps::add_vertex(&vertex_tables, 99, vid, &[], 1);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_add_edge() {
-        let mut vertex_tables: HashMap<LabelId, VertexTable> = HashMap::new();
+        let mut vertex_tables: HashMap<LabelId, Arc<ShardedVertexTable>> = HashMap::new();
         vertex_tables.insert(0, create_vertex_table(0, "Person"));
         vertex_tables.insert(1, create_vertex_table(1, "Person"));
 
@@ -120,8 +120,8 @@ mod tests {
         let vid1 = VertexId::from_int64(100);
         let vid2 = VertexId::from_int64(101);
 
-        TransactionOps::add_vertex(&mut vertex_tables, 0, vid1, &[], 1).unwrap();
-        TransactionOps::add_vertex(&mut vertex_tables, 1, vid2, &[], 1).unwrap();
+        TransactionOps::add_vertex(&vertex_tables, 0, vid1, &[], 1).unwrap();
+        TransactionOps::add_vertex(&vertex_tables, 1, vid2, &[], 1).unwrap();
 
         let src_internal = vertex_tables
             .get(&0)
@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn test_add_edge_missing_src_label() {
-        let mut vertex_tables: HashMap<LabelId, VertexTable> = HashMap::new();
+        let mut vertex_tables: HashMap<LabelId, Arc<ShardedVertexTable>> = HashMap::new();
         vertex_tables.insert(0, create_vertex_table(0, "Person"));
 
         let mut edge_tables: HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>> = HashMap::new();
@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn test_resolve_vertex_id() {
-        let mut table = create_vertex_table(0, "Person");
+        let table = create_vertex_table(0, "Person");
         table
             .insert_by_i64(
                 100,
@@ -202,13 +202,13 @@ mod tests {
 
     #[test]
     fn test_delete_vertex() {
-        let mut vertex_tables: HashMap<LabelId, VertexTable> = HashMap::new();
+        let mut vertex_tables: HashMap<LabelId, Arc<ShardedVertexTable>> = HashMap::new();
         vertex_tables.insert(0, create_vertex_table(0, "Person"));
 
-        TransactionOps::add_vertex(&mut vertex_tables, 0, VertexId::from_int64(1), &[], 1).unwrap();
+        TransactionOps::add_vertex(&vertex_tables, 0, VertexId::from_int64(1), &[], 1).unwrap();
 
         let result =
-            TransactionOps::delete_vertex(&mut vertex_tables, 0, VertexId::from_int64(1), 2);
+            TransactionOps::delete_vertex(&vertex_tables, 0, VertexId::from_int64(1), 2);
         assert!(result.is_ok());
 
         // After deletion, the vertex should not be visible at timestamp 2
@@ -219,13 +219,13 @@ mod tests {
 
     #[test]
     fn test_update_vertex_property_by_vid() {
-        let mut vertex_tables: HashMap<LabelId, VertexTable> = HashMap::new();
+        let mut vertex_tables: HashMap<LabelId, Arc<ShardedVertexTable>> = HashMap::new();
         vertex_tables.insert(0, create_vertex_table(0, "Person"));
 
         // Insert with external ID = 1 (int64 vid), gets internal ID 0
         let vid = VertexId::from_int64(1);
         TransactionOps::add_vertex(
-            &mut vertex_tables,
+            &vertex_tables,
             0,
             vid,
             &[("name".to_string(), Value::string("Alice"))],
@@ -235,7 +235,7 @@ mod tests {
 
         // update_vertex_property_by_vid looks up external ID in the table
         let result = TransactionOps::update_vertex_property_by_vid(
-            &mut vertex_tables,
+            &vertex_tables,
             0,
             VertexId::from_int64(1),
             "name",
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn test_delete_vertex_type_cascades_to_edge_types() {
-        let mut vertex_tables: HashMap<LabelId, VertexTable> = HashMap::new();
+        let mut vertex_tables: HashMap<LabelId, Arc<ShardedVertexTable>> = HashMap::new();
         vertex_tables.insert(0, create_vertex_table(0, "Person"));
         vertex_tables.insert(1, create_vertex_table(1, "Employee"));
 
@@ -297,7 +297,7 @@ mod tests {
 
     #[test]
     fn test_delete_edge_type() {
-        let mut vertex_tables: HashMap<LabelId, VertexTable> = HashMap::new();
+        let mut vertex_tables: HashMap<LabelId, Arc<ShardedVertexTable>> = HashMap::new();
         vertex_tables.insert(0, create_vertex_table(0, "Person"));
         vertex_tables.insert(1, create_vertex_table(1, "Person"));
 
@@ -324,11 +324,11 @@ mod tests {
 
     #[test]
     fn test_revert_delete_vertex() {
-        let mut vertex_tables: HashMap<LabelId, VertexTable> = HashMap::new();
+        let mut vertex_tables: HashMap<LabelId, Arc<ShardedVertexTable>> = HashMap::new();
         vertex_tables.insert(0, create_vertex_table(0, "Person"));
 
         TransactionOps::add_vertex(
-            &mut vertex_tables,
+            &vertex_tables,
             0,
             VertexId::from_int64(1),
             &[("name".to_string(), Value::string("Alice"))],
@@ -336,11 +336,11 @@ mod tests {
         )
         .unwrap();
 
-        TransactionOps::delete_vertex(&mut vertex_tables, 0, VertexId::from_int64(1), 2).unwrap();
+        TransactionOps::delete_vertex(&vertex_tables, 0, VertexId::from_int64(1), 2).unwrap();
 
         // Revert at the same timestamp as deletion (or earlier)
         let result =
-            TransactionOps::revert_delete_vertex(&mut vertex_tables, 0, VertexId::from_int64(1), 2);
+            TransactionOps::revert_delete_vertex(&vertex_tables, 0, VertexId::from_int64(1), 2);
         assert!(result.is_ok(), "revert_delete_vertex failed: {:?}", result);
 
         let table = vertex_tables.get(&0).unwrap();
@@ -350,7 +350,7 @@ mod tests {
 
     #[test]
     fn test_revert_delete_edge() {
-        let mut vertex_tables: HashMap<LabelId, VertexTable> = HashMap::new();
+        let mut vertex_tables: HashMap<LabelId, Arc<ShardedVertexTable>> = HashMap::new();
         vertex_tables.insert(0, create_vertex_table(0, "Person"));
 
         let mut edge_tables: HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>> = HashMap::new();
@@ -359,8 +359,8 @@ mod tests {
             Arc::new(RwLock::new(create_edge_table(0, 0, 0, "KNOWS"))),
         );
 
-        TransactionOps::add_vertex(&mut vertex_tables, 0, VertexId::from_int64(1), &[], 1).unwrap();
-        TransactionOps::add_vertex(&mut vertex_tables, 0, VertexId::from_int64(2), &[], 1).unwrap();
+        TransactionOps::add_vertex(&vertex_tables, 0, VertexId::from_int64(1), &[], 1).unwrap();
+        TransactionOps::add_vertex(&vertex_tables, 0, VertexId::from_int64(2), &[], 1).unwrap();
 
         let add_params = AddEdgeParams {
             src_label: 0,
@@ -401,7 +401,7 @@ mod tests {
 
     #[test]
     fn test_create_vertex_type_undo() {
-        let mut vertex_tables: HashMap<LabelId, VertexTable> = HashMap::new();
+        let mut vertex_tables: HashMap<LabelId, Arc<ShardedVertexTable>> = HashMap::new();
         let mut vertex_label_names: HashMap<String, LabelId> = HashMap::new();
         let mut vertex_label_counter: LabelId = 0;
 
@@ -432,7 +432,7 @@ mod tests {
 
     #[test]
     fn test_create_edge_type_undo() {
-        let mut vertex_tables: HashMap<LabelId, VertexTable> = HashMap::new();
+        let mut vertex_tables: HashMap<LabelId, Arc<ShardedVertexTable>> = HashMap::new();
         let mut vertex_label_names: HashMap<String, LabelId> = HashMap::new();
         let mut vertex_label_counter: LabelId = 0;
 
@@ -466,7 +466,7 @@ mod tests {
 
     #[test]
     fn test_create_edge_type_undo_missing_vertex_label() {
-        let vertex_tables: HashMap<LabelId, VertexTable> = HashMap::new();
+        let vertex_tables: HashMap<LabelId, Arc<ShardedVertexTable>> = HashMap::new();
         let mut edge_tables: HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>> = HashMap::new();
         let mut edge_label_names: HashMap<String, LabelId> = HashMap::new();
         let mut edge_label_counter: LabelId = 0;
@@ -485,7 +485,7 @@ mod tests {
 
     #[test]
     fn test_revert_rename_vertex_properties() {
-        let mut vertex_tables: HashMap<LabelId, VertexTable> = HashMap::new();
+        let mut vertex_tables: HashMap<LabelId, Arc<ShardedVertexTable>> = HashMap::new();
         let mut vertex_label_names: HashMap<String, LabelId> = HashMap::new();
         let mut vertex_label_counter: LabelId = 0;
 
@@ -516,8 +516,8 @@ mod tests {
         }
 
         let result = TransactionOps::revert_rename_vertex_properties(
-            &mut vertex_tables,
-            &mut vertex_label_names,
+            &vertex_tables,
+            &vertex_label_names,
             "Person",
             &["full_name".to_string()],
             &["name".to_string()],
@@ -531,7 +531,7 @@ mod tests {
 
     #[test]
     fn test_undo_maintains_vertex_schema_version() {
-        let mut vertex_tables: HashMap<LabelId, VertexTable> = HashMap::new();
+        let mut vertex_tables: HashMap<LabelId, Arc<ShardedVertexTable>> = HashMap::new();
         let mut vertex_label_names: HashMap<String, LabelId> = HashMap::new();
         let mut vertex_label_counter: LabelId = 0;
 
@@ -574,8 +574,8 @@ mod tests {
         // Undo rename - version should remain the same (not revert to 2)
         // because the undo operation doesn't decrement version
         let result = TransactionOps::revert_rename_vertex_properties(
-            &mut vertex_tables,
-            &mut vertex_label_names,
+            &vertex_tables,
+            &vertex_label_names,
             "Person",
             &["email_address".to_string()],
             &["email".to_string()],

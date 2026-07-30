@@ -346,12 +346,6 @@ impl GraphStorage {
     }
 }
 
-impl Default for GraphStorage {
-    fn default() -> Self {
-        Self::new().expect("Failed to create GraphStorage")
-    }
-}
-
 impl StorageReader for GraphStorage {
     fn get_vertex(&self, space: &str, id: &VertexId) -> Result<Option<Vertex>, StorageError> {
         reader::get_vertex(&self.ctx, space, id)

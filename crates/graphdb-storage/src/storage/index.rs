@@ -21,7 +21,6 @@
 //! - `key_codec`: Index key encoding/decoding and compression utilities
 //! - `index_gc_manager`: Background GC for tombstone cleanup
 
-pub(crate) mod art;
 pub(crate) mod chunk;
 pub(crate) mod cursor;
 pub(crate) mod edge_index_manager;

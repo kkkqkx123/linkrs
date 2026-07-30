@@ -5,7 +5,7 @@ use crate::core::{StorageError, StorageResult};
 use crate::storage::edge::{EdgeSchema, EdgeStore, EdgeStrategy};
 use crate::storage::engine::params::CreateEdgeTypeParams;
 use crate::storage::types::StoragePropertyDef;
-use crate::storage::vertex::{VertexSchema, VertexTable};
+use crate::storage::vertex::{ShardedVertexTable, VertexSchema};
 
 use super::context::GraphStorageContext;
 
@@ -36,7 +36,7 @@ pub fn create_vertex_type(
             schema
                 .validate_on_creation()
                 .map_err(StorageError::invalid_operation)?;
-            Ok(VertexTable::new(label_id, name.to_string(), schema))
+            Ok(ShardedVertexTable::new(label_id, name.to_string(), schema))
         })
         .and_then(|label| {
             ctx.data_store().verify_invariants()?;
@@ -73,7 +73,7 @@ pub fn create_vertex_type_with_id(
             schema
                 .validate_on_creation()
                 .map_err(StorageError::invalid_operation)?;
-            Ok(VertexTable::new(label_id, user_name.to_string(), schema))
+            Ok(ShardedVertexTable::new(label_id, user_name.to_string(), schema))
         })
         .and_then(|label| {
             ctx.data_store().verify_invariants()?;

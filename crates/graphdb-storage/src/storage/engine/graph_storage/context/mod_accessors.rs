@@ -84,7 +84,7 @@ impl GraphStorageContext {
         self.persistent
             .data_store
             .with_vertex_tables_mut(|vertex_tables| {
-                for (label_id, vertex_table) in vertex_tables.iter_mut() {
+                for (label_id, vertex_table) in vertex_tables.iter() {
                     if let Ok(handle) = vertex_table.register_snapshot(timestamp) {
                         context
                             .mvcc_vertex_snapshot_handles
@@ -158,7 +158,7 @@ impl GraphStorageContext {
                 .data_store
                 .with_vertex_tables_mut(|vertex_tables| {
                     for (label_id, handle) in &vertex_snapshot_handles {
-                        if let Some(vertex_table) = vertex_tables.get_mut(label_id) {
+                        if let Some(vertex_table) = vertex_tables.get(label_id) {
                             let _ = vertex_table.unregister_snapshot(*handle);
                         }
                     }

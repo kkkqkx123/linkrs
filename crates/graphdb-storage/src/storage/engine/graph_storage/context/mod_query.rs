@@ -18,7 +18,7 @@ impl GraphStorageContext {
         self.persistent
             .data_store
             .catalog_read_snapshot()
-            .with_vertex_tables(|tables| tables.get(&label).map(|table| table.scan(ts).collect()))
+            .with_vertex_tables(|tables| tables.get(&label).map(|table| table.scan(ts)))
     }
 
     pub fn scan_edges(

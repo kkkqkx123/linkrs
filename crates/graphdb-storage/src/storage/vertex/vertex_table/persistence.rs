@@ -115,6 +115,21 @@ impl VertexTable {
         }
         self.flush_columns(&columns_path, &columns)?;
 
+        // Apply encoding to in-memory columns so data stays compressed after flush.
+        // This moves compression from "flush-time only" to "post-flush in-memory",
+        // reducing memory footprint for the lifetime of the column store.
+        for (name, encoding_type) in &selections {
+            if *encoding_type != EncodingType::None {
+                if let Err(e) = self.columns.apply_encoding_to_column(
+                    name,
+                    *encoding_type,
+                    self.encoding_selector.thresholds().fsst_max_symbols,
+                ) {
+                    log::warn!("failed to apply encoding to in-memory column {}: {}", name, e);
+                }
+            }
+        }
+
         let timestamps_path = path.join("timestamps.bin");
         self.flush_timestamps(&timestamps_path)?;
 

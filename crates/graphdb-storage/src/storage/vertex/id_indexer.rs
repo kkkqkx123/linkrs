@@ -323,11 +323,8 @@ impl Default for IdManager {
 /// ID indexer wrapper for simple, single-threaded ID management.
 ///
 /// Although this struct is cloneable (contains Arc), actual concurrent access
-/// is prevented by the external RwLock in GraphDataStore. All operations
-/// are effectively single-threaded.
-///
-/// This design removes unnecessary DashMap overhead while keeping the interface
-/// unchanged for compatibility.
+/// is serialized through the internal `parking_lot::Mutex`. All operations
+/// are effectively single-threaded at the method level.
 #[derive(Debug, Clone)]
 pub struct IdIndexer {
     manager: Arc<Mutex<IdManager>>,

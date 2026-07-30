@@ -1,5 +1,5 @@
 use crate::core::types::Timestamp;
-use crate::storage::index::chunk::buffer_pool::BufferPool;
+use crate::storage::cache::BufferPool;
 use crate::storage::index::chunk::data::{build_chunks, Chunk, ChunkId, CHUNK_TARGET_SIZE};
 use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
 use crate::storage::index::types::IndexRecord;

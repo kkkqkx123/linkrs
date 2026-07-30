@@ -97,7 +97,7 @@ impl VertexGcManager {
 
         let mut total_removed = 0usize;
         if let Err(e) = self.data_store.with_vertex_tables_mut(|tables| {
-            for table in tables.values_mut() {
+            for table in tables.values() {
                 let active = table.active_snapshot_count();
                 match table.gc(safe_ts) {
                     Ok(count) => {

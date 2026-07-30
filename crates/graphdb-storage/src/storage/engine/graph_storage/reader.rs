@@ -123,13 +123,9 @@ pub(crate) fn scan_vertices(ctx: &GraphStorageContext, space: &str) -> StorageRe
         let tag_name = &tag.tag_name;
         ctx.data_store().with_vertex_tables(|tables| {
             if let Some(table) = tables.get(&tag_id) {
-                let mut iter = table.scan(ts);
-                loop {
-                    let batch: Vec<_> = iter.by_ref().take(BATCH_SIZE).collect();
-                    if batch.is_empty() {
-                        break;
-                    }
-                    for record in &batch {
+                let records = table.scan(ts);
+                for chunk in records.chunks(BATCH_SIZE) {
+                    for record in chunk {
                         record_vertex_read(ctx, record.vid.clone());
                         let entry = merged.entry(record.vid.clone()).or_insert_with(|| {
                             MergedVertex {

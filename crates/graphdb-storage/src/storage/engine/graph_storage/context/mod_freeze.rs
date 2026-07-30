@@ -2,6 +2,8 @@ use crate::core::types::{CompactConfig, Timestamp};
 use crate::core::StorageResult;
 use crate::storage::edge::edge_table::segment_eviction::SegmentEvictionEngine;
 use crate::storage::engine::background_freeze::{FreezeGuard, FreezeStats};
+use parking_lot::Mutex;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::GraphStorageContext;
@@ -53,7 +55,7 @@ impl GraphStorageContext {
             .as_ref()
             .map(|m| FreezeGuard::new(m.clone()));
 
-        let totals = Arc::new(std::sync::Mutex::new((
+        let totals = Arc::new(Mutex::new((
             0u64,
             false,
             std::collections::HashSet::new(),
@@ -80,7 +82,7 @@ impl GraphStorageContext {
 
                     if manager.should_freeze_with_stats(&input) {
                         let decision = manager.get_freeze_decision_with_stats(&input);
-                        let mut t = totals.lock().unwrap();
+                        let mut t = totals.lock();
                         t.2.insert(decision.freeze_reason);
                         log::debug!(
                             "Freeze triggered ({} strategy): {}",
@@ -111,14 +113,14 @@ impl GraphStorageContext {
                         any_here = true;
                     }
                 }
-                let mut t = totals.lock().unwrap();
+                let mut t = totals.lock();
                 t.0 += frozen_here;
                 t.1 |= any_here;
                 Ok(())
             })?;
 
         let (total_frozen, any_frozen, freeze_reasons) = {
-            let t = totals.lock().unwrap();
+            let t = totals.lock();
             (t.0, t.1, t.2.clone())
         };
 

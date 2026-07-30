@@ -20,7 +20,7 @@ impl GraphStorageContext {
             .persistent
             .data_store
             .with_vertex_tables_mut(|vertex_tables| {
-                let table = vertex_tables.get_mut(&label).ok_or_else(|| {
+                let table = vertex_tables.get(&label).ok_or_else(|| {
                     StorageError::label_not_found(format!("vertex label {}", label))
                 })?;
                 table.insert(external_id, properties, ts)
@@ -48,7 +48,7 @@ impl GraphStorageContext {
             .persistent
             .data_store
             .with_vertex_tables_mut(|vertex_tables| {
-                let table = vertex_tables.get_mut(&label).ok_or_else(|| {
+                let table = vertex_tables.get(&label).ok_or_else(|| {
                     StorageError::label_not_found(format!("vertex label {}", label))
                 })?;
                 table.insert_by_i64(external_id, properties, ts)
@@ -72,7 +72,7 @@ impl GraphStorageContext {
             .persistent
             .data_store
             .with_vertex_tables_mut(|vertex_tables| {
-                if let Some(table) = vertex_tables.get_mut(&label) {
+                if let Some(table) = vertex_tables.get(&label) {
                     table.reserve_id_capacity(additional);
                 }
                 Ok(())
@@ -330,7 +330,7 @@ impl GraphStorageContext {
             .persistent
             .data_store
             .with_vertex_tables_mut(|vertex_tables| {
-                let table = vertex_tables.get_mut(&label).ok_or_else(|| {
+                let table = vertex_tables.get(&label).ok_or_else(|| {
                     StorageError::label_not_found(format!("vertex label {}", label))
                 })?;
                 let internal_id = table.get_internal_id(external_id, ts);
@@ -366,7 +366,7 @@ impl GraphStorageContext {
             .persistent
             .data_store
             .with_vertex_tables_mut(|vertex_tables| {
-                let table = vertex_tables.get_mut(&label).ok_or_else(|| {
+                let table = vertex_tables.get(&label).ok_or_else(|| {
                     StorageError::label_not_found(format!("vertex label {}", label))
                 })?;
                 let internal_id = table.get_internal_id_by_i64(external_id, ts);
@@ -401,7 +401,7 @@ impl GraphStorageContext {
             .persistent
             .data_store
             .with_vertex_tables_mut(|vertex_tables| {
-                let table = vertex_tables.get_mut(&label).ok_or_else(|| {
+                let table = vertex_tables.get(&label).ok_or_else(|| {
                     StorageError::label_not_found(format!("vertex label {}", label))
                 })?;
                 table.batch_delete(external_ids, ts)
@@ -431,7 +431,7 @@ impl GraphStorageContext {
             .persistent
             .data_store
             .with_vertex_tables_mut(|vertex_tables| {
-                let table = vertex_tables.get_mut(&label).ok_or_else(|| {
+                let table = vertex_tables.get(&label).ok_or_else(|| {
                     StorageError::label_not_found(format!("vertex label {}", label))
                 })?;
                 table.batch_delete_i64(external_ids, ts)
@@ -463,7 +463,7 @@ impl GraphStorageContext {
             .persistent
             .data_store
             .with_vertex_tables_mut(|vertex_tables| {
-                let table = vertex_tables.get_mut(&label).ok_or_else(|| {
+                let table = vertex_tables.get(&label).ok_or_else(|| {
                     StorageError::label_not_found(format!("vertex label {}", label))
                 })?;
                 let internal_id = table
@@ -497,7 +497,7 @@ impl GraphStorageContext {
             .persistent
             .data_store
             .with_vertex_tables_mut(|vertex_tables| {
-                let table = vertex_tables.get_mut(&label).ok_or_else(|| {
+                let table = vertex_tables.get(&label).ok_or_else(|| {
                     StorageError::label_not_found(format!("vertex label {}", label))
                 })?;
                 let internal_id = table

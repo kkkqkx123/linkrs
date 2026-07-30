@@ -230,10 +230,9 @@ impl MutableCsr {
                 .total_edge_capacity
                 .saturating_add(self.overflow_chunk_edges);
         }
-        self.overflow_chunks[src_idx]
-            .last_mut()
-            .expect("overflow chunk was just allocated")
-            .push(nbr);
+        if let Some(overflow) = self.overflow_chunks[src_idx].last_mut() {
+            overflow.push(nbr);
+        }
     }
 
     /// Insert an edge with automatic capacity expansion

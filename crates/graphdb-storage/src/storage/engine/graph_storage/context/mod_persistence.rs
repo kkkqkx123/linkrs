@@ -57,7 +57,7 @@ impl GraphStorageContext {
             self.persistent
                 .data_store
                 .with_vertex_tables_mut(|vertex_tables| {
-                    for (label_id, table) in vertex_tables.iter_mut() {
+                    for (label_id, table) in vertex_tables.iter() {
                         let table_dir = vertex_dir.join(format!("label_{}", label_id));
                         table.flush(&table_dir, compression)?;
                     }
@@ -118,7 +118,7 @@ impl GraphStorageContext {
                                 if let Some(name_str) = dir_name.to_str() {
                                     if let Some(label_str) = name_str.strip_prefix("label_") {
                                         if let Ok(label_id) = label_str.parse::<LabelId>() {
-                                            if let Some(table) = vertex_tables.get_mut(&label_id) {
+                                            if let Some(table) = vertex_tables.get(&label_id) {
                                                 table.load(&path)?;
                                             }
                                         }

@@ -7,16 +7,13 @@ use crate::core::types::storage_ids::VertexId;
 use crate::core::value::ordered_codec::OrderedCodec;
 use crate::core::wal::EntityRef;
 use crate::core::{StorageError, StorageResult};
-use crate::storage::index::art::ArtTree;
 use crate::storage::index::key_codec::key_types::SecondaryIndexKey;
 use crate::storage::index::key_codec::IndexKeyGenerator;
 use crate::storage::index::types::IndexRecord;
-use parking_lot::RwLock;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::marker::PhantomData;
 use std::path::Path;
-use std::sync::Arc;
 
 const MAGIC_FORWARD: [u8; 4] = *b"INDF";
 const MAGIC_REVERSE: [u8; 4] = *b"INDR";
@@ -29,54 +26,14 @@ type LoadedIndexData = (
 /// Generic index manager
 ///
 /// Provides common functionality for index management including:
-/// - In-memory storage with ART tree (replacing BTreeMap for better memory efficiency)
 /// - Persistence (flush/load via BTreeMap serialization)
 /// - GC for tombstones
+#[deprecated(since = "0.1.0", note = "use ChunkedIndex checkpoint instead")]
 pub struct GenericIndexManager<K: IndexKeyGenerator> {
-    forward_index: Arc<RwLock<ArtTree<IndexRecord>>>,
-    reverse_index: Arc<RwLock<ArtTree<IndexRecord>>>,
     _marker: PhantomData<K>,
 }
 
-impl<K: IndexKeyGenerator> Clone for GenericIndexManager<K> {
-    fn clone(&self) -> Self {
-        Self {
-            forward_index: Arc::clone(&self.forward_index),
-            reverse_index: Arc::clone(&self.reverse_index),
-            _marker: PhantomData,
-        }
-    }
-}
-
 impl<K: IndexKeyGenerator> GenericIndexManager<K> {
-    pub fn new() -> Self {
-        Self {
-            forward_index: Arc::new(RwLock::new(ArtTree::new())),
-            reverse_index: Arc::new(RwLock::new(ArtTree::new())),
-            _marker: PhantomData,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn entry_count(&self) -> (usize, usize) {
-        (
-            self.forward_index.read().len(),
-            self.reverse_index.read().len(),
-        )
-    }
-
-    /// Access the underlying ART tree (read-only).
-    #[cfg(test)]
-    pub(crate) fn read_forward(&self) -> parking_lot::RwLockReadGuard<'_, ArtTree<IndexRecord>> {
-        self.forward_index.read()
-    }
-
-    /// Access the underlying ART tree (read-only).
-    #[cfg(test)]
-    pub(crate) fn read_reverse(&self) -> parking_lot::RwLockReadGuard<'_, ArtTree<IndexRecord>> {
-        self.reverse_index.read()
-    }
-
     pub(crate) fn flush_data<P: AsRef<Path>>(
         path: P,
         forward: &BTreeMap<SecondaryIndexKey, IndexRecord>,
@@ -192,14 +149,12 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
 
     pub(crate) fn load_data<P: AsRef<Path>>(path: P) -> StorageResult<LoadedIndexData> {
         let path = path.as_ref();
-        let loader = Self::new();
-        let forward_index = loader.load_index_file(&path.join("forward_index.bin"))?;
-        let reverse_index = loader.load_index_file(&path.join("reverse_index.bin"))?;
+        let forward_index = Self::load_index_file(&path.join("forward_index.bin"))?;
+        let reverse_index = Self::load_index_file(&path.join("reverse_index.bin"))?;
         Ok((forward_index, reverse_index))
     }
 
     fn load_index_file(
-        &self,
         path: &Path,
     ) -> StorageResult<BTreeMap<SecondaryIndexKey, IndexRecord>> {
         use std::fs::File;
@@ -357,17 +312,11 @@ impl<K: IndexKeyGenerator> GenericIndexManager<K> {
     }
 }
 
-impl<K: IndexKeyGenerator> Default for GenericIndexManager<K> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 // ── EntityRef binary serialization helpers ──
 
 pub(crate) fn encode_entity_ref(entity_ref: &Option<EntityRef>) -> Vec<u8> {
     let mut buf = Vec::new();
-    write_entity_ref(&mut buf, entity_ref).expect("Vec::write is infallible");
+    let _ = write_entity_ref(&mut buf, entity_ref);
     buf
 }
 

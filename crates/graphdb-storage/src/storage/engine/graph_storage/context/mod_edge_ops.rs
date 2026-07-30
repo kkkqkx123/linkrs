@@ -1,16 +1,19 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+
 use crate::core::types::{LabelId, Timestamp, VertexId};
 use crate::core::{StorageError, StorageResult};
 use crate::storage::edge::EdgeRecord;
 use crate::storage::engine::data_store::EdgeTableKey;
 use crate::storage::engine::{EdgeOperationParams, InsertEdgeParams};
-use std::collections::HashMap;
-use std::sync::atomic::Ordering;
+use crate::storage::vertex::ShardedVertexTable;
 
 use super::helpers;
 use super::GraphStorageContext;
 
 struct EdgeLabelLookupCtx<'a> {
-    vertex_tables: &'a HashMap<LabelId, crate::storage::vertex::VertexTable>,
+    vertex_tables: &'a HashMap<LabelId, Arc<ShardedVertexTable>>,
     src_id: &'a VertexId,
     src_label: LabelId,
     dst_id: &'a VertexId,

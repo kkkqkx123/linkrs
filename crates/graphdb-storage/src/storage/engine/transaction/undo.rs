@@ -245,7 +245,7 @@ impl UndoTarget for GraphStorageContext {
                     primary_key_index: 0,
                     schema_version: 1,
                 };
-                Ok(crate::storage::vertex::VertexTable::new(
+                Ok(crate::storage::vertex::ShardedVertexTable::new(
                     label,
                     label_name.to_string(),
                     schema,

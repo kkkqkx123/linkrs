@@ -9,7 +9,7 @@ use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use crate::core::types::LabelId;
 use crate::core::{StorageError, StorageResult};
 use crate::storage::edge::EdgeStore;
-use crate::storage::vertex::VertexTable;
+use crate::storage::vertex::ShardedVertexTable;
 
 #[derive(Hash, Eq, PartialEq, Clone, Copy, Debug)]
 pub struct EdgeTableKey {
@@ -39,7 +39,7 @@ impl From<(LabelId, LabelId, LabelId)> for EdgeTableKey {
 }
 
 pub struct GraphDataStore {
-    vertex_tables: RwLock<HashMap<LabelId, VertexTable>>,
+    vertex_tables: RwLock<HashMap<LabelId, Arc<ShardedVertexTable>>>,
     edge_tables: RwLock<HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>>,
     vertex_label_names: RwLock<HashMap<String, LabelId>>,
     edge_label_names: RwLock<HashMap<String, LabelId>>,
@@ -62,7 +62,7 @@ pub(crate) struct CatalogReadSnapshot<'a> {
 impl CatalogReadSnapshot<'_> {
     pub(crate) fn with_vertex_tables<R>(
         &self,
-        operation: impl FnOnce(&HashMap<LabelId, VertexTable>) -> R,
+        operation: impl FnOnce(&HashMap<LabelId, Arc<ShardedVertexTable>>) -> R,
     ) -> R {
         self.store.with_vertex_tables(operation)
     }
@@ -211,7 +211,7 @@ pub(crate) struct CatalogWriteSet<'a> {
     pub edge_label_names: CatalogWriteGuard<'a, HashMap<String, LabelId>>,
     _vertex_label_counter: CatalogWriteGuard<'a, LabelId>,
     _edge_label_counter: CatalogWriteGuard<'a, LabelId>,
-    pub vertex_tables: CatalogWriteGuard<'a, HashMap<LabelId, VertexTable>>,
+    pub vertex_tables: CatalogWriteGuard<'a, HashMap<LabelId, Arc<ShardedVertexTable>>>,
     pub edge_tables: CatalogWriteGuard<'a, HashMap<EdgeTableKey, Arc<RwLock<EdgeStore>>>>,
     _edge_label_index: CatalogWriteGuard<'a, HashMap<LabelId, Vec<EdgeTableKey>>>,
 }
@@ -299,7 +299,7 @@ impl GraphDataStore {
     // Catalog lock order for operations that touch multiple registries:
     // label names -> label counters -> vertex tables -> edge tables -> edge label index.
     // A caller must never retain one of these guards while requesting an earlier guard.
-    fn read_vertex_tables(&self) -> CatalogReadGuard<'_, HashMap<LabelId, VertexTable>> {
+    fn read_vertex_tables(&self) -> CatalogReadGuard<'_, HashMap<LabelId, Arc<ShardedVertexTable>>> {
         let started = Instant::now();
         let guard = self.vertex_tables.read();
         self.lock_metrics
@@ -315,7 +315,7 @@ impl GraphDataStore {
     #[cfg(test)]
     pub(crate) fn test_read_vertex_tables(
         &self,
-    ) -> CatalogReadGuard<'_, HashMap<LabelId, VertexTable>> {
+    ) -> CatalogReadGuard<'_, HashMap<LabelId, Arc<ShardedVertexTable>>> {
         self.read_vertex_tables()
     }
 
@@ -410,7 +410,7 @@ impl GraphDataStore {
         }
     }
 
-    fn write_vertex_tables(&self) -> CatalogWriteGuard<'_, HashMap<LabelId, VertexTable>> {
+    fn write_vertex_tables(&self) -> CatalogWriteGuard<'_, HashMap<LabelId, Arc<ShardedVertexTable>>> {
         let started = Instant::now();
         let guard = self.vertex_tables.write();
         self.lock_metrics
@@ -522,7 +522,7 @@ impl GraphDataStore {
     /// the catalog. Callers cannot retain a raw table guard across domains.
     pub(crate) fn with_vertex_tables<R>(
         &self,
-        operation: impl FnOnce(&HashMap<LabelId, VertexTable>) -> R,
+        operation: impl FnOnce(&HashMap<LabelId, Arc<ShardedVertexTable>>) -> R,
     ) -> R {
         let tables = self.read_vertex_tables();
         operation(&tables)
@@ -538,7 +538,7 @@ impl GraphDataStore {
 
     pub(crate) fn with_vertex_tables_mut<R>(
         &self,
-        operation: impl FnOnce(&mut HashMap<LabelId, VertexTable>) -> StorageResult<R>,
+        operation: impl FnOnce(&mut HashMap<LabelId, Arc<ShardedVertexTable>>) -> StorageResult<R>,
     ) -> StorageResult<R> {
         let mut tables = self.write_vertex_tables();
         operation(&mut tables)
@@ -546,7 +546,7 @@ impl GraphDataStore {
 
     pub(crate) fn with_vertex_tables_mut_result<R, E>(
         &self,
-        operation: impl FnOnce(&mut HashMap<LabelId, VertexTable>) -> Result<R, E>,
+        operation: impl FnOnce(&mut HashMap<LabelId, Arc<ShardedVertexTable>>) -> Result<R, E>,
     ) -> Result<R, E> {
         let mut tables = self.write_vertex_tables();
         operation(&mut tables)
@@ -578,13 +578,40 @@ impl GraphDataStore {
     pub(crate) fn with_vertex_table_mut<R>(
         &self,
         label: LabelId,
-        operation: impl FnOnce(&mut VertexTable) -> StorageResult<R>,
+        operation: impl FnOnce(&Arc<ShardedVertexTable>) -> StorageResult<R>,
     ) -> StorageResult<R> {
-        let mut tables = self.write_vertex_tables();
+        let tables = self.write_vertex_tables();
         let table = tables
-            .get_mut(&label)
+            .get(&label)
             .ok_or_else(|| StorageError::label_not_found(format!("vertex label {}", label)))?;
         operation(table)
+    }
+
+    /// Scatter-gather: acquire catalog lock briefly to clone the Arc,
+    /// then operate on the ShardedVertexTable without holding the catalog lock.
+    pub(crate) fn with_vertex_table<R>(
+        &self,
+        label: LabelId,
+        operation: impl FnOnce(&ShardedVertexTable) -> StorageResult<R>,
+    ) -> StorageResult<R> {
+        let arc = {
+            let guard = self.vertex_tables.read();
+            guard.get(&label).ok_or_else(|| {
+                StorageError::label_not_found(format!("vertex label {}", label))
+            })?.clone()
+        };
+        operation(&arc)
+    }
+
+    pub(crate) fn with_all_vertex_tables<R>(
+        &self,
+        operation: impl Fn(&ShardedVertexTable) -> StorageResult<R>,
+    ) -> StorageResult<Vec<R>> {
+        let arcs: Vec<Arc<ShardedVertexTable>> = {
+            let guard = self.vertex_tables.read();
+            guard.values().cloned().collect()
+        };
+        arcs.iter().map(|arc| operation(&**arc)).collect()
     }
 
     pub(crate) fn edge_partition_keys(
@@ -707,7 +734,7 @@ impl GraphDataStore {
         &self,
         storage_name: String,
         requested_label: Option<LabelId>,
-        table: impl FnOnce(LabelId) -> StorageResult<VertexTable>,
+        table: impl FnOnce(LabelId) -> StorageResult<ShardedVertexTable>,
     ) -> StorageResult<LabelId> {
         let mut names = self.write_vertex_label_names();
         if names.contains_key(&storage_name) {
@@ -723,7 +750,7 @@ impl GraphDataStore {
             )));
         }
         *counter = (*counter).max(label.saturating_add(1));
-        tables.insert(label, table(label)?);
+        tables.insert(label, Arc::new(table(label)?));
         names.insert(storage_name, label);
         Ok(label)
     }

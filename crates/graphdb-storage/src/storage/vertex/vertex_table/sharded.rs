@@ -1,10 +1,15 @@
+use std::path::Path;
+
 use parking_lot::{Mutex, RwLock};
 
 use super::core::{VertexTable, VertexTableConfig};
 use crate::core::types::Timestamp;
 use crate::core::{StorageResult, Value};
+use crate::storage::compression::CompressionType;
 use crate::storage::mvcc::SnapshotHandle;
-use crate::storage::vertex::VertexRecord;
+use crate::storage::schema::ChangeDetails;
+use crate::storage::types::StoragePropertyDef;
+use crate::storage::vertex::{IdKey, VertexRecord};
 
 const DEFAULT_NUM_SHARDS: usize = 8;
 const SHARD_BITS: u32 = 4;
@@ -176,13 +181,18 @@ impl ShardedVertexTable {
     // ==================== MVCC ====================
 
     pub fn register_snapshot(&self, ts: Timestamp) -> StorageResult<SnapshotHandle> {
-        let mut table = self.shards[0].table.lock();
-        table.register_snapshot(ts)
+        let handle = self.shards[0].table.lock().register_snapshot(ts)?;
+        for shard in &self.shards[1..] {
+            shard.table.lock().register_snapshot(ts)?;
+        }
+        Ok(handle)
     }
 
     pub fn unregister_snapshot(&self, handle: SnapshotHandle) -> StorageResult<()> {
-        let mut table = self.shards[0].table.lock();
-        table.unregister_snapshot(handle)
+        for shard in &self.shards {
+            shard.table.lock().unregister_snapshot(handle)?;
+        }
+        Ok(())
     }
 
     pub fn gc(&self, min_ts: Timestamp) -> StorageResult<usize> {
@@ -200,6 +210,20 @@ impl ShardedVertexTable {
     }
 
     pub fn set_schema(&self, schema: crate::storage::vertex::VertexSchema) {
+        for shard in &self.shards {
+            shard.table.lock().set_schema(schema.clone());
+        }
+        *self.schema.write() = schema;
+    }
+
+    pub fn schema_mut(&self) -> crate::storage::vertex::VertexSchema {
+        self.schema.read().clone()
+    }
+
+    pub fn apply_schema(&self, schema: crate::storage::vertex::VertexSchema) {
+        for shard in &self.shards {
+            shard.table.lock().set_schema(schema.clone());
+        }
         *self.schema.write() = schema;
     }
 
@@ -221,6 +245,224 @@ impl ShardedVertexTable {
 
     pub fn num_shards(&self) -> usize {
         self.num_shards
+    }
+
+    // ==================== Additional Read Operations ====================
+
+    pub fn get_projected_by_internal_id(
+        &self,
+        global_id: u32,
+        ts: Timestamp,
+        projection: Option<&[String]>,
+    ) -> Option<VertexRecord> {
+        let (idx, local_id) = decode_id(global_id);
+        let table = self.shards[idx].table.lock();
+        table.get_projected_by_internal_id(local_id, ts, projection)
+    }
+
+    pub fn get_internal_id_raw(&self, external_id: &str) -> Option<u32> {
+        let idx = self.shard_index_by_str(external_id);
+        let table = self.shards[idx].table.lock();
+        let local_id = table.get_internal_id_raw(external_id)?;
+        Some(encode_id(idx, local_id))
+    }
+
+    pub fn get_internal_id_by_i64_raw(&self, external_id: i64) -> Option<u32> {
+        let idx = self.shard_index_by_i64(external_id);
+        let table = self.shards[idx].table.lock();
+        let local_id = table.get_internal_id_by_i64_raw(external_id)?;
+        Some(encode_id(idx, local_id))
+    }
+
+    pub fn get_external_id(&self, global_id: u32, ts: Timestamp) -> Option<IdKey> {
+        let (idx, local_id) = decode_id(global_id);
+        let table = self.shards[idx].table.lock();
+        table.get_external_id(local_id, ts)
+    }
+
+    pub fn get_external_id_raw(&self, global_id: u32) -> Option<IdKey> {
+        let (idx, local_id) = decode_id(global_id);
+        let table = self.shards[idx].table.lock();
+        table.get_external_id_raw(local_id)
+    }
+
+    // ==================== Additional Write Operations ====================
+
+    pub fn delete_by_internal_id(&self, global_id: u32, ts: Timestamp) -> StorageResult<()> {
+        let (idx, local_id) = decode_id(global_id);
+        let mut table = self.shards[idx].table.lock();
+        table.delete_by_internal_id(local_id, ts)
+    }
+
+    pub fn revert_delete(&self, global_id: u32, ts: Timestamp) -> StorageResult<()> {
+        let (idx, local_id) = decode_id(global_id);
+        let mut table = self.shards[idx].table.lock();
+        table.revert_delete(local_id, ts)
+    }
+
+    pub fn update_property_by_id(
+        &self,
+        global_id: u32,
+        col_id: i32,
+        value: &Value,
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        let (idx, local_id) = decode_id(global_id);
+        let mut table = self.shards[idx].table.lock();
+        table.update_property_by_id(local_id, col_id, value, ts)
+    }
+
+    pub fn batch_delete(&self, external_ids: &[&str], ts: Timestamp) -> StorageResult<usize> {
+        let mut total = 0;
+        for id in external_ids {
+            if self.delete(id, ts).is_ok() {
+                total += 1;
+            }
+        }
+        Ok(total)
+    }
+
+    pub fn batch_delete_i64(&self, external_ids: &[i64], ts: Timestamp) -> StorageResult<usize> {
+        let mut total = 0;
+        for id in external_ids {
+            if self.delete_by_i64(*id, ts).is_ok() {
+                total += 1;
+            }
+        }
+        Ok(total)
+    }
+
+    pub fn reserve_id_capacity(&self, additional: usize) {
+        for shard in &self.shards {
+            shard.table.lock().reserve_id_capacity(additional);
+        }
+    }
+
+    pub fn active_snapshot_count(&self) -> usize {
+        let mut total = 0;
+        for shard in &self.shards {
+            total += shard.table.lock().active_snapshot_count();
+        }
+        total
+    }
+
+    pub fn used_memory_size(&self) -> usize {
+        let mut total = std::mem::size_of::<Self>();
+        for shard in &self.shards {
+            total += shard.table.lock().used_memory_size();
+        }
+        total
+    }
+
+    // ==================== Schema Operations ====================
+
+    pub fn add_property(&self, prop: StoragePropertyDef) -> StorageResult<()> {
+        for shard in &self.shards {
+            shard.table.lock().add_property(prop.clone())?;
+        }
+        {
+            let mut schema = self.schema.write();
+            if !schema.properties.iter().any(|p| p.name == prop.name) {
+                schema.properties.push(prop);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn remove_property(&self, prop_name: &str) -> StorageResult<()> {
+        for shard in &self.shards {
+            shard.table.lock().remove_property(prop_name)?;
+        }
+        {
+            let mut schema = self.schema.write();
+            schema.properties.retain(|p| p.name != prop_name);
+        }
+        Ok(())
+    }
+
+    pub fn rename_property(&self, old_name: &str, new_name: &str) -> StorageResult<()> {
+        for shard in &self.shards {
+            shard.table.lock().rename_property(old_name, new_name)?;
+        }
+        {
+            let mut schema = self.schema.write();
+            if let Some(prop) = schema.properties.iter_mut().find(|p| p.name == old_name) {
+                prop.name = new_name.to_string();
+            }
+        }
+        Ok(())
+    }
+
+    pub fn rebuild_schema_change_from_redo(&self, details: ChangeDetails) -> StorageResult<()> {
+        for shard in &self.shards {
+            shard.table.lock().rebuild_schema_change_from_redo(details.clone())?;
+        }
+        Ok(())
+    }
+
+    // ==================== Compaction ====================
+
+    pub fn compact_coordinated(&self) -> StorageResult<()> {
+        for shard in &self.shards {
+            shard.table.lock().compact_coordinated()?;
+        }
+        Ok(())
+    }
+
+    pub fn compact_timestamps(&self) -> std::collections::HashMap<u32, u32> {
+        let mut combined = std::collections::HashMap::new();
+        for shard in &self.shards {
+            let map = shard.table.lock().compact_timestamps();
+            combined.extend(map);
+        }
+        combined
+    }
+
+    pub fn compact_with_ts_collect(&self, ts: Timestamp) -> StorageResult<Vec<IdKey>> {
+        let mut all = Vec::new();
+        for shard in &self.shards {
+            all.extend(shard.table.lock().compact_with_ts_collect(ts)?);
+        }
+        Ok(all)
+    }
+
+    // ==================== Version History ====================
+
+    pub fn version_history_ref(&self) -> std::sync::Arc<std::sync::Mutex<crate::storage::schema::LabelVersionHistory>> {
+        self.shards[0].table.lock().version_history_ref()
+    }
+
+    // ==================== Persistence ====================
+
+    pub fn flush<P: AsRef<Path>>(&self, path: P, compression: CompressionType) -> StorageResult<()> {
+        use std::fs;
+        let path = path.as_ref();
+        fs::create_dir_all(path)?;
+        for (i, shard) in self.shards.iter().enumerate() {
+            let shard_dir = path.join(format!("shard_{}", i));
+            shard.table.lock().flush(&shard_dir, compression)?;
+        }
+        Ok(())
+    }
+
+    pub fn load<P: AsRef<Path>>(&self, path: P) -> StorageResult<()> {
+        let path = path.as_ref();
+        for (i, shard) in self.shards.iter().enumerate() {
+            let shard_dir = path.join(format!("shard_{}", i));
+            if shard_dir.exists() {
+                shard.table.lock().load(&shard_dir)?;
+            }
+        }
+        Ok(())
+    }
+
+    // ==================== Verification ====================
+
+    pub fn verify_invariants(&self) -> StorageResult<()> {
+        for shard in &self.shards {
+            shard.table.lock().verify_invariants()?;
+        }
+        Ok(())
     }
 }
 
