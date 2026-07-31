@@ -1643,6 +1643,26 @@ impl PropertyTable {
     }
 }
 
+impl PropertyTable {
+    pub fn read_properties(&self, offset: u32) -> Option<Vec<(String, Value)>> {
+        let row_idx = prop_offset_to_index(offset)?;
+        if row_idx >= self.records.len() {
+            return None;
+        }
+        let record = self.records[row_idx].as_ref()?;
+        let props = self.deserialize_row(&record.data).ok()?;
+        let result: Vec<(String, Value)> = props
+            .into_iter()
+            .filter_map(|(name, opt_val)| opt_val.map(|v| (name, v)))
+            .collect();
+        if result.is_empty() {
+            None
+        } else {
+            Some(result)
+        }
+    }
+}
+
 impl Default for PropertyTable {
     fn default() -> Self {
         Self::new()

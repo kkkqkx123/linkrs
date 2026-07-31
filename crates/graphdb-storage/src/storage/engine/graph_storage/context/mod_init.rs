@@ -1,5 +1,8 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+use parking_lot::RwLock;
 
 use crate::core::stats::StatsManager;
 use crate::core::StorageResult;
@@ -17,6 +20,7 @@ impl GraphStorageContext {
             runtime: GraphStorageRuntime::new(),
             operation_context: None,
             write_timestamp_lease: None,
+            cold_snapshots: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -35,6 +39,7 @@ impl GraphStorageContext {
                 runtime: GraphStorageRuntime::new(),
                 operation_context: None,
                 write_timestamp_lease: None,
+                cold_snapshots: Arc::new(RwLock::new(HashMap::new())),
             }
         })
     }
@@ -66,6 +71,7 @@ impl GraphStorageContext {
             runtime,
             operation_context: self.operation_context.clone(),
             write_timestamp_lease: self.write_timestamp_lease.clone(),
+            cold_snapshots: self.cold_snapshots.clone(),
         }
     }
 

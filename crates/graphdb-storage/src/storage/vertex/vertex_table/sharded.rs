@@ -14,17 +14,23 @@ use crate::storage::vertex::{IdKey, VertexRecord};
 const DEFAULT_NUM_SHARDS: usize = 8;
 const SHARD_BITS: u32 = 4;
 const SHARD_MASK: u32 = (1 << SHARD_BITS) - 1;
-const LOCAL_ID_MASK: u32 = !(SHARD_MASK << (32 - SHARD_BITS));
+const LOCAL_ID_MASK: u32 = !SHARD_MASK;
 const MAX_SHARDS: usize = 1 << SHARD_BITS;
 
+// Internal IDs must stay proportional to the vertex count: they are used
+// directly as CSR array indices (e.g. edge table rows), so encoding the
+// shard in the high bits would force multi-gigabyte CSR allocations even
+// for a handful of vertices. Keeping the shard in the low bits bounds the
+// ID space by 16x the number of vertices per shard.
 fn encode_id(shard: usize, local_id: u32) -> u32 {
     debug_assert!(shard < MAX_SHARDS);
-    (shard as u32) << (32 - SHARD_BITS) | (local_id & LOCAL_ID_MASK)
+    debug_assert!(local_id <= (u32::MAX >> SHARD_BITS));
+    ((local_id << SHARD_BITS) & LOCAL_ID_MASK) | (shard as u32)
 }
 
 fn decode_id(global_id: u32) -> (usize, u32) {
-    let shard = (global_id >> (32 - SHARD_BITS)) as usize;
-    let local_id = global_id & LOCAL_ID_MASK;
+    let shard = (global_id & SHARD_MASK) as usize;
+    let local_id = global_id >> SHARD_BITS;
     (shard, local_id)
 }
 

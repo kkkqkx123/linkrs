@@ -4,6 +4,7 @@ use std::sync::atomic::Ordering;
 
 use crate::core::types::{LabelId, Timestamp, VertexId};
 use crate::core::{StorageError, StorageResult};
+use crate::storage::cold::ColdSnapshot;
 use crate::storage::edge::EdgeRecord;
 use crate::storage::engine::data_store::EdgeTableKey;
 use crate::storage::engine::{EdgeOperationParams, InsertEdgeParams};
@@ -11,6 +12,7 @@ use crate::storage::vertex::ShardedVertexTable;
 
 use super::helpers;
 use super::GraphStorageContext;
+use super::super::ops::endpoint_label_id;
 
 struct EdgeLabelLookupCtx<'a> {
     vertex_tables: &'a HashMap<LabelId, Arc<ShardedVertexTable>>,
@@ -128,6 +130,36 @@ impl GraphStorageContext {
             ctx.dst_label
         };
         EdgeTableKey::new(actual_src_label, actual_dst_label, ctx.edge_label)
+    }
+
+    /// Export a cold snapshot (`.lkcs` file) for one edge type at timestamp `ts`.
+    ///
+    /// The snapshot is written to `path` and also returned in memory so it can
+    /// be registered immediately via [`Self::load_cold_snapshot`].
+    pub fn export_cold_snapshot<P: AsRef<std::path::Path>>(
+        &self,
+        space: &str,
+        edge_type: &str,
+        ts: Timestamp,
+        path: P,
+    ) -> StorageResult<ColdSnapshot> {
+        let edge_info = self
+            .schema_manager()
+            .get_edge_type(space, edge_type)?
+            .ok_or_else(|| {
+                StorageError::not_found(format!(
+                    "Edge type {} not found in space {}",
+                    edge_type, space
+                ))
+            })?;
+        let src_label = endpoint_label_id(self, space, &edge_info.src_tag_name)?
+            .ok_or_else(|| StorageError::not_found(format!("No source tag for edge {}", edge_type)))?;
+        let dst_label = endpoint_label_id(self, space, &edge_info.dst_tag_name)?
+            .ok_or_else(|| StorageError::not_found(format!("No destination tag for edge {}", edge_type)))?;
+        let key = EdgeTableKey::new(src_label, dst_label, edge_info.edge_type_id);
+        self.persistent
+            .data_store
+            .with_single_edge_table(&key, |table| table.export_snapshot_file(ts, path))
     }
 
     pub fn get_edge(&self, params: &EdgeOperationParams, ts: Timestamp) -> Option<EdgeRecord> {

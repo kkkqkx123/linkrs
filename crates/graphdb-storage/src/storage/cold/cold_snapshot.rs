@@ -3,14 +3,26 @@ use std::path::Path;
 use memmap2::Mmap;
 
 use crate::core::types::{LabelId, Timestamp, VertexId};
-use crate::core::{StorageError, StorageResult};
-use crate::storage::edge::{Csr, CsrBase, EdgeSchema, Nbr, PropertyTable};
+use crate::core::{StorageError, StorageResult, Value};
+use crate::storage::edge::edge_table::core::TimeTravelEdgeStore;
+use crate::storage::edge::{Csr, CsrBase, EdgeRecord, EdgeSchema, Nbr, PropertyTable};
 
 use super::super::edge::edge_table::snapshot::ExportedEdgeSnapshot;
 
 pub const COLD_SNAPSHOT_MAGIC: [u8; 4] = *b"LKCS";
 pub const COLD_SNAPSHOT_VERSION: u32 = 1;
 const HEADER_SIZE: usize = 36;
+
+/// A scanned edge record from a ColdSnapshot.
+/// Contains enough information to construct a full Edge.
+#[derive(Debug, Clone)]
+pub struct ColdEdgeRecord {
+    pub src_internal: u32,
+    pub dst_vid: VertexId,
+    pub nbr: Nbr,
+    pub rank: i64,
+    pub properties: Option<Vec<(String, Value)>>,
+}
 
 /// Read-only single-file columnar snapshot for cold analytics queries.
 ///
@@ -32,6 +44,7 @@ const HEADER_SIZE: usize = 36;
 /// [8]  Schema length (u64 LE) + [N] Schema data (JSON)
 /// [4]  CRC32 of all preceding bytes
 /// ```
+#[derive(Clone)]
 pub struct ColdSnapshot {
     snapshot_ts: Timestamp,
     label: LabelId,
@@ -216,8 +229,58 @@ impl ColdSnapshot {
         })
     }
 
+    /// Find an edge from `src` (internal CSR index) to `dst` (internal vertex id).
+    ///
+    /// The CSR stores neighbors as encoded `(dst_internal, rank)` keys, so the
+    /// lookup decodes each neighbor before comparing with `dst`.
+    pub fn get_edge_to_dst(&self, src: u32, dst: u32) -> Option<Nbr> {
+        self.out_csr.edges_of(src).iter().find_map(|e| {
+            let (decoded, _) = TimeTravelEdgeStore::decode_edge_endpoint(e.neighbor);
+            if decoded.as_int64() == Some(dst as i64) {
+                Some(Nbr::new(e.neighbor, e.edge_id, e.prop_offset, e.timestamp))
+            } else {
+                None
+            }
+        })
+    }
+
     pub fn degree(&self, src: u32) -> usize {
         self.out_csr.edges_of(src).len()
+    }
+
+    pub fn scan_edges(&self) -> Vec<ColdEdgeRecord> {
+        let cap = self.vertex_capacity;
+        let mut results = Vec::with_capacity(self.edge_count as usize);
+        for src in 0..cap {
+            let src_u32 = src as u32;
+            for nbr in self.out_csr.edges_of(src_u32) {
+                let (dst_vid, rank) =
+                    TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+                results.push(ColdEdgeRecord {
+                    src_internal: src as u32,
+                    dst_vid,
+                    nbr: Nbr::new(nbr.neighbor, nbr.edge_id, nbr.prop_offset, nbr.timestamp),
+                    rank,
+                    properties: None,
+                });
+            }
+        }
+        results
+    }
+
+    pub fn nbr_to_edge_record(&self, nbr: &Nbr, src_vid: VertexId, dst_vid: VertexId) -> EdgeRecord {
+        let (_, rank) =
+            TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+        let properties = self
+            .properties
+            .read_properties(nbr.prop_offset)
+            .unwrap_or_default();
+        EdgeRecord {
+            src_vid,
+            dst_vid,
+            rank,
+            properties,
+        }
     }
 }
 
@@ -368,5 +431,141 @@ mod tests {
         let exported = table.export_snapshot(100).unwrap();
         let snapshot = ColdSnapshot::create(&exported, &path).unwrap();
         assert!(snapshot.vertex_capacity() >= 10);
+    }
+
+    #[test]
+    fn test_cold_snapshot_scan_edges() {
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        table
+            .insert_edge(0, 2, 0, &[("weight".to_string(), Value::Double(2.0))], 100)
+            .unwrap();
+        table
+            .insert_edge(3, 4, 0, &[("weight".to_string(), Value::Double(3.0))], 100)
+            .unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.lkcs");
+        let exported = table.export_snapshot(100).unwrap();
+        let snapshot = ColdSnapshot::create(&exported, &path).unwrap();
+
+        let scanned = snapshot.scan_edges();
+        assert_eq!(scanned.len(), 3);
+
+        let keys: Vec<(u32, VertexId)> = scanned.iter().map(|r| (r.src_internal, r.dst_vid)).collect();
+        assert!(keys.contains(&(0, VertexId::from_int64(1))));
+        assert!(keys.contains(&(0, VertexId::from_int64(2))));
+        assert!(keys.contains(&(3, VertexId::from_int64(4))));
+    }
+
+    #[test]
+    fn test_cold_snapshot_get_edge_to_dst() {
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 7, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+        table
+            .insert_edge(0, 2, 3, &[("weight".to_string(), Value::Double(2.0))], 100)
+            .unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.lkcs");
+        let exported = table.export_snapshot(100).unwrap();
+        let snapshot = ColdSnapshot::create(&exported, &path).unwrap();
+
+        let nbr = snapshot.get_edge_to_dst(0, 1).expect("edge 0->1 exists");
+        let (decoded_dst, decoded_rank) = TimeTravelEdgeStore::decode_edge_endpoint(nbr.neighbor);
+        assert_eq!(decoded_dst, VertexId::from_int64(1));
+        assert_eq!(decoded_rank, 7);
+        assert!(snapshot.get_edge_to_dst(0, 99).is_none());
+        assert!(snapshot.get_edge_to_dst(1, 1).is_none());
+    }
+
+    #[test]
+    fn test_cold_snapshot_nbr_to_edge_record_rank() {
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 42, &[("weight".to_string(), Value::Double(1.0))], 100)
+            .unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.lkcs");
+        let exported = table.export_snapshot(100).unwrap();
+        let snapshot = ColdSnapshot::create(&exported, &path).unwrap();
+
+        let nbr = snapshot.get_edge_to_dst(0, 1).expect("edge exists");
+        let record = snapshot.nbr_to_edge_record(
+            &nbr,
+            VertexId::from_int64(0),
+            VertexId::from_int64(1),
+        );
+        assert_eq!(record.rank, 42);
+    }
+
+    #[test]
+    fn test_cold_snapshot_nbr_to_edge_record() {
+        let mut table = make_table();
+        table
+            .insert_edge(0, 1, 0, &[("weight".to_string(), Value::Double(42.0))], 100)
+            .unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.lkcs");
+        let exported = table.export_snapshot(100).unwrap();
+        let snapshot = ColdSnapshot::create(&exported, &path).unwrap();
+
+        // Query edge and convert to record
+        if let Some(nbr) = snapshot.get_edge(0, make_edge_key(1, 0)) {
+            let src_vid = VertexId::from_int64(0);
+            let dst_vid = make_edge_key(1, 0);
+            let record = snapshot.nbr_to_edge_record(&nbr, src_vid, dst_vid);
+
+            assert_eq!(record.src_vid, src_vid);
+            assert_eq!(record.dst_vid, dst_vid);
+            assert!(!record.properties.is_empty());
+            assert_eq!(record.properties[0].0, "weight");
+            assert_eq!(record.properties[0].1, Value::Double(42.0));
+        } else {
+            panic!("expected edge to exist");
+        }
+    }
+
+    #[test]
+    fn test_cold_snapshot_scan_edges_empty() {
+        let table = make_table();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.lkcs");
+        let exported = table.export_snapshot(100).unwrap();
+        let snapshot = ColdSnapshot::create(&exported, &path).unwrap();
+
+        let scanned = snapshot.scan_edges();
+        assert!(scanned.is_empty());
+    }
+
+    #[test]
+    fn test_property_table_read_properties() {
+        use crate::storage::edge::PropertyTable;
+
+        let mut pt = PropertyTable::new();
+        pt.add_property("name".to_string(), crate::core::DataType::String, false).unwrap();
+        pt.add_property("age".to_string(), crate::core::DataType::Int, false).unwrap();
+
+        let offset = pt.insert(
+            &[("name".to_string(), Value::String("Alice".into())),
+              ("age".to_string(), Value::Int(30))],
+            100,
+        ).unwrap();
+
+        let props = pt.read_properties(offset).unwrap();
+        assert_eq!(props.len(), 2);
+        assert_eq!(props[0].0, "name");
+        assert_eq!(props[0].1, Value::String("Alice".into()));
+        assert_eq!(props[1].0, "age");
+        assert_eq!(props[1].1, Value::Int(30));
+
+        // Missing offset returns None
+        assert!(pt.read_properties(u32::MAX).is_none());
     }
 }

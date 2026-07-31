@@ -1,7 +1,7 @@
-#[cfg(test)]
-#[allow(clippy::module_inception)]
-mod tests {
-    use crate::core::types::{
+    #[cfg(test)]
+    #[allow(clippy::module_inception)]
+    mod tests {
+        use crate::core::types::{
         EdgeTypeInfo, Index, IndexConfig, IndexField, IndexType, PropertyDef, SpaceInfo, Timestamp,
         UserInfo, VertexId,
     };
@@ -1801,4 +1801,5 @@ mod tests {
         assert_eq!(snapshot_tracker.active_count(), 0);
         assert_eq!(snapshot_tracker.cleanup_threshold(), Timestamp::MAX);
     }
+
 }

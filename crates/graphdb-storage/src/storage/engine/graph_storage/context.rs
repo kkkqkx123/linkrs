@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -18,6 +19,7 @@ use crate::storage::engine::resource_budget::{MemoryAccounting, MemoryBudget};
 use crate::storage::engine::spiller::Spiller;
 use crate::storage::index::{IndexDataManagerImpl, IndexGcConfig, IndexGcManager};
 use crate::storage::vertex::{gc_manager::VertexGcManager, IdKey};
+use crate::storage::cold::ColdSnapshot;
 use crate::storage::StorageOperationContext;
 use crate::transaction::VersionManager;
 
@@ -470,6 +472,9 @@ pub struct GraphStorageContext {
     runtime: GraphStorageRuntime,
     operation_context: Option<Arc<StorageOperationContext>>,
     write_timestamp_lease: Option<Arc<WriteTimestampLease>>,
+    /// Read-only cold snapshots indexed by edge label ID.
+    /// Loaded at startup from `.lkcs` files; hot-loaded at runtime via API.
+    cold_snapshots: Arc<RwLock<HashMap<LabelId, ColdSnapshot>>>,
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -508,6 +513,7 @@ impl GraphStorageContext {
             runtime: GraphStorageRuntime::new(),
             operation_context: None,
             write_timestamp_lease: None,
+            cold_snapshots: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 }

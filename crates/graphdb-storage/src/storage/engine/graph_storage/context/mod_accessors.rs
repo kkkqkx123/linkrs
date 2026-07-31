@@ -1,12 +1,17 @@
+use std::collections::HashMap;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+
+use parking_lot::RwLock;
+
 use crate::core::stats::StatsManager;
 use crate::core::types::{LabelId, TableId, Timestamp};
 use crate::core::{StorageError, StorageResult};
+use crate::storage::cold::ColdSnapshot;
 use crate::storage::engine::resource_budget::{MemoryCategory, ResourceSnapshot};
 use crate::storage::index::IndexGcOps;
 use crate::storage::mvcc::SnapshotHandle;
 use crate::storage::StorageOperationContext;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
 
 use super::{GraphStorageContext, WriteTimestampLease};
 
@@ -571,4 +576,20 @@ impl GraphStorageContext {
         self.runtime.deferred_wal_ops.drain_deletes()
     }
 
+    pub fn cold_snapshots(&self) -> &Arc<RwLock<HashMap<LabelId, ColdSnapshot>>> {
+        &self.cold_snapshots
+    }
+
+    pub fn load_cold_snapshot(&self, snapshot: ColdSnapshot) {
+        let label = snapshot.label();
+        self.cold_snapshots.write().insert(label, snapshot);
+    }
+
+    pub fn remove_cold_snapshot(&self, label: LabelId) -> Option<ColdSnapshot> {
+        self.cold_snapshots.write().remove(&label)
+    }
+
+    pub fn list_cold_snapshots(&self) -> Vec<LabelId> {
+        self.cold_snapshots.read().keys().copied().collect()
+    }
 }

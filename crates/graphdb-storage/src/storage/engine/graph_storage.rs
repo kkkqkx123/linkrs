@@ -230,6 +230,59 @@ impl GraphStorage {
         self.ctx.trigger_background_freeze()
     }
 
+    // ── Cold Snapshot API ──
+
+    /// Export a cold snapshot file for one edge type at timestamp `ts`.
+    ///
+    /// Writes a `.lkcs` file to `path` containing the edge table state at `ts`
+    /// and returns the in-memory snapshot. Use [`Self::load_cold_snapshot`] to
+    /// register the file for cold query fallback.
+    pub fn export_cold_snapshot<P: AsRef<std::path::Path>>(
+        &self,
+        space: &str,
+        edge_type: &str,
+        ts: Timestamp,
+        path: P,
+    ) -> StorageResult<crate::storage::cold::ColdSnapshot> {
+        self.ctx.export_cold_snapshot(space, edge_type, ts, path)
+    }
+
+    /// Load a cold snapshot from a `.lkcs` file and register it by label.
+    pub fn load_cold_snapshot<P: AsRef<std::path::Path>>(&self, path: P) -> StorageResult<()> {
+        let snapshot = crate::storage::cold::ColdSnapshot::open(path)?;
+        self.ctx.load_cold_snapshot(snapshot);
+        Ok(())
+    }
+
+    /// Remove a cold snapshot by edge label ID, returning the removed snapshot.
+    pub fn remove_cold_snapshot(&self, label: LabelId) -> Option<crate::storage::cold::ColdSnapshot> {
+        self.ctx.remove_cold_snapshot(label)
+    }
+
+    /// List all edge label IDs that have a loaded cold snapshot.
+    pub fn list_cold_snapshots(&self) -> Vec<LabelId> {
+        self.ctx.list_cold_snapshots()
+    }
+
+    /// Scan the cold snapshot directory and load all `.lkcs` files.
+    pub fn load_cold_snapshots_from_dir<P: AsRef<std::path::Path>>(
+        &self,
+        dir: P,
+    ) -> StorageResult<usize> {
+        use std::fs;
+        let mut count = 0usize;
+        if let Ok(entries) = fs::read_dir(dir.as_ref()) {
+            for entry in entries {
+                let path = entry?.path();
+                if path.extension().map_or(false, |e| e == "lkcs") {
+                    self.load_cold_snapshot(&path)?;
+                    count += 1;
+                }
+            }
+        }
+        Ok(count)
+    }
+
     /// Remove old published checkpoints while retaining the newest recovery points.
     pub fn cleanup_old_checkpoints(&self, max_checkpoints: usize) -> StorageResult<usize> {
         let persistence = self

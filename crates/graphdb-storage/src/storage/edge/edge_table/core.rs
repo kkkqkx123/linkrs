@@ -201,7 +201,7 @@ impl TimeTravelEdgeStore {
         VertexId::from_bytes(data)
     }
 
-    fn decode_edge_endpoint(key: VertexId) -> (VertexId, i64) {
+    pub(crate) fn decode_edge_endpoint(key: VertexId) -> (VertexId, i64) {
         let bytes = key.as_bytes();
         if bytes.len() != 16 {
             log::warn!(
