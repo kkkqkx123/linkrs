@@ -3,9 +3,14 @@
 use std::time::Duration;
 
 use crate::core::error::storage::StorageErrorKind;
-use crate::core::types::Timestamp;
+use crate::core::types::{AutoCompactConfig, Timestamp};
 use crate::core::StorageError;
 use crate::storage::compression::CompressionType;
+
+/// Default number of vertex table shards (hash partitions). Higher shard
+/// counts increase write concurrency but widen the internal ID space under
+/// imbalanced hash distribution (max ID <= num_shards * live_vertices).
+pub const DEFAULT_VERTEX_TABLE_SHARDS: usize = 8;
 
 /// Configuration for flush operations
 #[derive(Debug, Clone)]
@@ -451,6 +456,10 @@ pub struct PropertyGraphConfig {
     pub resources: ResourceConfig,
     pub freeze: FreezeConfig,
     pub merge_config: MergeConfig,
+    /// Automatic background vertex compaction (ID hole reclamation)
+    pub auto_compact: AutoCompactConfig,
+    /// Hash partitions per vertex label table
+    pub vertex_table_shards: usize,
 }
 
 impl Default for PropertyGraphConfig {
@@ -462,6 +471,8 @@ impl Default for PropertyGraphConfig {
             resources: ResourceConfig::default(),
             freeze: FreezeConfig::default(),
             merge_config: MergeConfig::default(),
+            auto_compact: AutoCompactConfig::default(),
+            vertex_table_shards: DEFAULT_VERTEX_TABLE_SHARDS,
         }
     }
 }
@@ -487,6 +498,8 @@ impl PropertyGraphConfig {
                 enable_lsm_tiering: false,
                 ..Default::default()
             },
+            auto_compact: AutoCompactConfig::default(),
+            vertex_table_shards: DEFAULT_VERTEX_TABLE_SHARDS,
         }
     }
 
@@ -508,6 +521,8 @@ impl PropertyGraphConfig {
                 deletion_threshold: freeze.deletion_threshold,
                 ..Default::default()
             },
+            auto_compact: AutoCompactConfig::default(),
+            vertex_table_shards: DEFAULT_VERTEX_TABLE_SHARDS,
         }
     }
 
@@ -533,6 +548,8 @@ impl PropertyGraphConfig {
                 deletion_threshold: freeze.deletion_threshold,
                 ..Default::default()
             },
+            auto_compact: AutoCompactConfig::default(),
+            vertex_table_shards: DEFAULT_VERTEX_TABLE_SHARDS,
         }
     }
 
@@ -570,6 +587,8 @@ impl PropertyGraphConfig {
                 max_segment_age: Timestamp::MAX,
                 ..Default::default()
             },
+            auto_compact: AutoCompactConfig::default(),
+            vertex_table_shards: DEFAULT_VERTEX_TABLE_SHARDS,
         }
     }
 
@@ -613,6 +632,20 @@ impl PropertyGraphConfig {
             ));
         }
         self.freeze.validate()?;
+        if !(0.0..=1.0).contains(&self.auto_compact.min_hole_ratio) {
+            return Err(StorageError::new(
+                StorageErrorKind::InvalidInput,
+                "auto_compact min_hole_ratio must be in [0.0, 1.0]",
+            ));
+        }
+        if !(1..=16).contains(&self.vertex_table_shards)
+            || !self.vertex_table_shards.is_power_of_two()
+        {
+            return Err(StorageError::new(
+                StorageErrorKind::InvalidInput,
+                "vertex_table_shards must be a power of two in [1, 16]",
+            ));
+        }
         Ok(())
     }
 }

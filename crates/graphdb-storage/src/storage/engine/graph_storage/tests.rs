@@ -3,8 +3,8 @@
 #[allow(clippy::module_inception)]
 mod tests {
     use crate::core::types::{
-        EdgeTypeInfo, Index, IndexConfig, IndexField, IndexType, PropertyDef, SpaceInfo, Timestamp,
-        UserInfo, VertexId,
+        AutoCompactConfig, EdgeTypeInfo, Index, IndexConfig, IndexField, IndexType, PropertyDef,
+        SpaceInfo, Timestamp, UserInfo, VertexId,
     };
     use crate::core::vertex_edge_path::Tag;
     use crate::core::DataType;
@@ -1975,6 +1975,105 @@ mod tests {
             .unwrap();
         assert_eq!(in_edges.len(), 1);
         assert_eq!(in_edges[0].src, VertexId::from_int64(77));
+    }
+
+    #[test]
+    fn test_auto_vertex_compaction_reclaims_id_holes() {
+        // Background maintenance must reclaim deleted-vertex ID holes without
+        // an explicit compact transaction when thresholds are exceeded.
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let mut property_config = PropertyGraphConfig::test();
+        property_config.auto_compact = AutoCompactConfig {
+            enable_vertex_compaction: true,
+            min_holes: 20,
+            min_hole_ratio: 0.1,
+            min_interval_secs: 0,
+        };
+        let persistence_config = PersistenceConfig::for_work_dir(temp_dir.path())
+            .with_property_graph_config(property_config);
+        let mut storage =
+            GraphStorage::new_with_persistence(temp_dir.path().to_path_buf(), persistence_config)
+                .expect("Failed to create persistent storage");
+        setup_space(&mut storage);
+        setup_person_tag(&mut storage);
+        setup_knows_edge(&mut storage);
+
+        for i in 1..=100i64 {
+            insert_test_vertex(&mut storage, i, &format!("v{i}"));
+        }
+        let expected_edges: Vec<(i64, i64)> =
+            (1..=97).step_by(2).map(|src| (src, src + 2)).collect();
+        for (src, dst) in &expected_edges {
+            let edge = Edge::new(
+                VertexId::from_int64(*src),
+                VertexId::from_int64(*dst),
+                "KNOWS".to_string(),
+                0,
+                std::collections::HashMap::new(),
+            );
+            storage.insert_edge("test_space", edge).unwrap();
+        }
+        // Delete 40 vertices; holes appear but nothing is reclaimed yet.
+        for i in (2..=80).step_by(2) {
+            storage
+                .delete_vertex("test_space", &VertexId::from_int64(i))
+                .unwrap();
+        }
+
+        let (live, allocated) = storage
+            .ctx
+            .data_store()
+            .with_vertex_tables(|tables| {
+                Ok::<(usize, usize), crate::core::StorageError>(
+                    tables
+                        .values()
+                        .map(|t| t.id_hole_stats(u64::MAX))
+                        .fold((0, 0), |(l, a), (x, y)| (l + x, a + y)),
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            (live, allocated),
+            (60, 100),
+            "holes must not be reclaimed yet"
+        );
+
+        storage.trigger_background_maintenance().unwrap();
+
+        let (live, allocated) = storage
+            .ctx
+            .data_store()
+            .with_vertex_tables(|tables| {
+                Ok::<(usize, usize), crate::core::StorageError>(
+                    tables
+                        .values()
+                        .map(|t| t.id_hole_stats(u64::MAX))
+                        .fold((0, 0), |(l, a), (x, y)| (l + x, a + y)),
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            (live, allocated),
+            (60, 60),
+            "auto compaction should re-densify ID space"
+        );
+
+        // Surviving edges still resolve through the remapped edge CSR.
+        for (src, dst) in &expected_edges {
+            let retrieved = storage
+                .get_edge(
+                    "test_space",
+                    &VertexId::from_int64(*src),
+                    &VertexId::from_int64(*dst),
+                    "KNOWS",
+                    0,
+                )
+                .unwrap();
+            assert!(
+                retrieved.is_some(),
+                "edge {src}->{dst} lost after auto vertex compaction remap"
+            );
+        }
     }
 
     #[test]

@@ -36,7 +36,12 @@ pub fn create_vertex_type(
             schema
                 .validate_on_creation()
                 .map_err(StorageError::invalid_operation)?;
-            Ok(ShardedVertexTable::new(label_id, name.to_string(), schema))
+            Ok(ShardedVertexTable::with_config(
+                label_id,
+                name.to_string(),
+                schema,
+                ctx.vertex_table_shards(),
+            ))
         })
         .and_then(|label| {
             ctx.data_store().verify_invariants()?;
@@ -73,10 +78,11 @@ pub fn create_vertex_type_with_id(
             schema
                 .validate_on_creation()
                 .map_err(StorageError::invalid_operation)?;
-            Ok(ShardedVertexTable::new(
+            Ok(ShardedVertexTable::with_config(
                 label_id,
                 user_name.to_string(),
                 schema,
+                ctx.vertex_table_shards(),
             ))
         })
         .and_then(|label| {

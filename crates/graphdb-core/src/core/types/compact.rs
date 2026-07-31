@@ -82,6 +82,35 @@ impl Default for AdaptiveCompactionConfig {
     }
 }
 
+/// Configuration for automatic background vertex compaction.
+///
+/// Deleted vertices leave holes in the shard-local ID space; the edge CSR
+/// row space is tied to the highest allocated ID, so unreclaimed holes grow
+/// memory monotonically. The background maintenance thread compacts vertex
+/// tables when both hole thresholds are exceeded and the cooldown elapsed.
+#[derive(Debug, Clone)]
+pub struct AutoCompactConfig {
+    /// Enable automatic vertex compaction in the background maintenance thread
+    pub enable_vertex_compaction: bool,
+    /// Minimum absolute number of holes (allocated minus live IDs) to trigger
+    pub min_holes: u32,
+    /// Minimum hole ratio (holes / allocated IDs) to trigger
+    pub min_hole_ratio: f32,
+    /// Cooldown between automatic compactions, in seconds
+    pub min_interval_secs: u64,
+}
+
+impl Default for AutoCompactConfig {
+    fn default() -> Self {
+        Self {
+            enable_vertex_compaction: true,
+            min_holes: 65_536,
+            min_hole_ratio: 0.25,
+            min_interval_secs: 3600,
+        }
+    }
+}
+
 /// Configuration for compact operations
 #[derive(Debug, Clone)]
 pub struct CompactConfig {

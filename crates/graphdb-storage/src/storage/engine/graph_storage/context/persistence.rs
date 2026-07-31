@@ -32,7 +32,7 @@ impl GraphStorageContext {
     pub(crate) fn flush_tables_to_dir(&self, data_dir: &Path) -> StorageResult<()> {
         use std::fs;
 
-        match self.trigger_background_freeze() {
+        match self.trigger_background_maintenance() {
             Ok(()) => {
                 if let Some(stats) = self.get_freeze_stats() {
                     if stats.freeze_count > 0 {

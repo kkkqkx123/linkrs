@@ -340,6 +340,8 @@ struct GraphStorageRuntime {
     background_freeze_manager: Option<Arc<BackgroundFreezeManager>>,
     deferred_wal_ops: DeferredWalOps,
     background_freeze_running: Arc<AtomicBool>,
+    /// Last automatic vertex compaction time, for cooldown checks
+    last_auto_compact: Arc<Mutex<Option<std::time::Instant>>>,
 }
 
 struct WriteTimestampLease {
@@ -378,6 +380,7 @@ impl GraphStorageRuntime {
             background_freeze_manager: None,
             deferred_wal_ops: DeferredWalOps::new(),
             background_freeze_running: Arc::new(AtomicBool::new(false)),
+            last_auto_compact: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -396,6 +399,7 @@ impl GraphStorageRuntime {
             background_freeze_manager: self.background_freeze_manager.clone(),
             deferred_wal_ops: self.deferred_wal_ops.clone(),
             background_freeze_running: self.background_freeze_running.clone(),
+            last_auto_compact: self.last_auto_compact.clone(),
         }
     }
 
@@ -413,6 +417,7 @@ impl GraphStorageRuntime {
             background_freeze_manager: self.background_freeze_manager.clone(),
             deferred_wal_ops: self.deferred_wal_ops.clone(),
             background_freeze_running: self.background_freeze_running.clone(),
+            last_auto_compact: self.last_auto_compact.clone(),
         }
     }
 
@@ -423,6 +428,7 @@ impl GraphStorageRuntime {
             background_freeze_manager: Some(manager),
             deferred_wal_ops: self.deferred_wal_ops.clone(),
             background_freeze_running: self.background_freeze_running.clone(),
+            last_auto_compact: self.last_auto_compact.clone(),
         }
     }
 
@@ -481,19 +487,18 @@ pub struct GraphStorageContext {
 // ──────────────────────────────────────────────────────────────────────────────
 
 pub(crate) mod helpers;
-mod mod_accessors;
-mod mod_cache_index;
-mod mod_edge_ops;
-mod mod_freeze;
-mod mod_init;
-mod mod_maintenance;
-mod mod_persistence;
-mod mod_query;
-mod mod_schema;
-mod mod_vertex_ops;
+mod accessors;
+mod cache_index;
+mod edge_ops;
+mod freeze;
+mod init;
+mod maintenance;
+mod persistence;
+mod query;
+mod schema;
+mod vertex_ops;
 
-// Re-export for backward compatibility and internal use
-pub use mod_cache_index::ExportedEdgeSnapshotRecord;
+pub use cache_index::ExportedEdgeSnapshotRecord;
 
 impl std::fmt::Debug for GraphStorageContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

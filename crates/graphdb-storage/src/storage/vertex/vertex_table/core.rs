@@ -456,6 +456,16 @@ impl VertexTable {
         self.id_indexer.next_index()
     }
 
+    /// Live vertex count at `ts` (excludes vertices deleted at or before
+    /// `ts`) and total allocated local IDs (the high-water mark, never
+    /// reused until compaction). The gap `allocated - live` is the number of
+    /// slots reclaimable by a compaction at `ts`.
+    pub fn id_hole_stats(&self, ts: Timestamp) -> (usize, usize) {
+        let allocated = self.next_local_id() as usize;
+        let deleted = self.timestamps.iter_deleted(ts).count();
+        (allocated.saturating_sub(deleted), allocated)
+    }
+
     /// Pre-allocate ID indexer capacity for `additional` more vertices.
     pub fn reserve_id_capacity(&self, additional: usize) {
         self.id_indexer.reserve(additional);

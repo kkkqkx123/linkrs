@@ -235,6 +235,24 @@ impl ShardedVertexTable {
         total
     }
 
+    /// Live vertex count at `ts` and total allocated local IDs across all
+    /// shards.
+    ///
+    /// The difference (`allocated - live`) is the number of deleted-but-
+    /// unreclaimed vertex slots. Edge CSR row space stays at the allocated
+    /// high-water mark until compaction reclaims it, so a large gap is the
+    /// trigger signal for automatic background compaction.
+    pub fn id_hole_stats(&self, ts: Timestamp) -> (usize, usize) {
+        let mut live = 0;
+        let mut allocated = 0;
+        for shard in &self.shards {
+            let (l, a) = shard.table.lock().id_hole_stats(ts);
+            live += l;
+            allocated += a;
+        }
+        (live, allocated)
+    }
+
     pub fn scan(&self, ts: Timestamp) -> Vec<VertexRecord> {
         let mut all = Vec::new();
         for (shard_idx, shard) in self.shards.iter().enumerate() {
@@ -800,5 +818,60 @@ mod tests {
             assert!(ids.insert(id), "duplicate internal_id: {}", id);
         }
         assert_eq!(ids.len(), 200);
+    }
+
+    #[test]
+    fn test_id_hole_stats_tracks_allocated_and_live() {
+        let table = ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), 8);
+        let ts_insert = 200;
+        let ts_delete = 100;
+        for i in 0..100 {
+            insert_with_name(&table, &format!("v_{}", i), ts_insert);
+        }
+        let (live, allocated) = table.id_hole_stats(150);
+        assert_eq!((live, allocated), (100, 100));
+
+        for i in 0..30 {
+            table.delete(&format!("v_{}", i), ts_delete).unwrap();
+        }
+        // Deleted vertices leave holes: allocated stays at the high-water
+        // mark, live only counts vertices not deleted at the cutoff.
+        let (live, allocated) = table.id_hole_stats(150);
+        assert_eq!((live, allocated), (70, 100));
+        // A cutoff before the deletes sees no holes.
+        let (live, allocated) = table.id_hole_stats(50);
+        assert_eq!((live, allocated), (100, 100));
+
+        // Physical removal + compaction re-densifies local IDs and resets
+        // the allocation counters (same path as compact_vertex_remap).
+        let (removed, mapping) = table.compact_with_ts_collect_mapping(ts_insert).unwrap();
+        assert_eq!(removed.len(), 30);
+        assert!(!mapping.is_empty());
+
+        let (live, allocated) = table.id_hole_stats(150);
+        assert_eq!((live, allocated), (70, 70));
+    }
+
+    #[test]
+    fn test_internal_id_upper_bound_across_shard_counts() {
+        for num_shards in [1usize, 2, 4, 8] {
+            let table =
+                ShardedVertexTable::with_config(1, "t".to_string(), test_schema(), num_shards);
+            let ts = TEST_TS;
+            let n = 20_000;
+            for i in 0..n {
+                insert_with_name(&table, &format!("v_{}_{}", num_shards, i), ts);
+            }
+            let max_id = (0..n)
+                .filter_map(|i| table.get_internal_id(&format!("v_{}_{}", num_shards, i), ts))
+                .max()
+                .unwrap();
+            assert!(
+                (max_id as usize) <= num_shards * n,
+                "num_shards={}: max_id {max_id} exceeds upper bound {}",
+                num_shards,
+                num_shards * n
+            );
+        }
     }
 }

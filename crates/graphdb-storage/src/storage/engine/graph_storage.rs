@@ -230,6 +230,14 @@ impl GraphStorage {
         self.ctx.trigger_background_freeze()
     }
 
+    /// Run the background maintenance pass synchronously: automatic vertex
+    /// compaction (ID hole reclamation, governed by
+    /// `PropertyGraphConfig::auto_compact`) followed by delta freeze.
+    /// Mainly for tests and explicit operator invocation.
+    pub fn trigger_background_maintenance(&self) -> StorageResult<()> {
+        self.ctx.trigger_background_maintenance()
+    }
+
     // ── Cold Snapshot API ──
 
     /// Export a cold snapshot file for one edge type at timestamp `ts`.

@@ -1,4 +1,4 @@
-use crate::core::types::{CompactConfig, Timestamp};
+use crate::core::types::{AutoCompactConfig, CompactConfig, Timestamp};
 use crate::core::StorageResult;
 use crate::storage::edge::edge_table::segment_eviction::SegmentEvictionEngine;
 use crate::storage::engine::background_freeze::{FreezeGuard, FreezeStats};
@@ -8,7 +8,31 @@ use std::sync::Arc;
 use super::GraphStorageContext;
 
 impl GraphStorageContext {
-    pub(crate) fn schedule_background_freeze(&self) {
+    /// Pure decision predicate for automatic vertex compaction: enabled,
+    /// absolute hole count above `min_holes`, and hole ratio at or above
+    /// `min_hole_ratio` (holes / allocated IDs).
+    pub(crate) fn should_auto_compact(
+        live: usize,
+        allocated: usize,
+        cfg: &AutoCompactConfig,
+    ) -> bool {
+        if !cfg.enable_vertex_compaction {
+            return false;
+        }
+        let holes = allocated.saturating_sub(live);
+        if holes < cfg.min_holes as usize {
+            return false;
+        }
+        if allocated > 0 && (holes as f32) / (allocated as f32) < cfg.min_hole_ratio {
+            return false;
+        }
+        true
+    }
+
+    /// Schedule the background maintenance thread: automatic vertex
+    /// compaction (if ID holes exceed thresholds) followed by delta freeze.
+    /// No-op while a previous maintenance run is still in flight.
+    pub(crate) fn schedule_background_maintenance(&self) {
         if self
             .runtime
             .background_freeze_running
@@ -22,12 +46,12 @@ impl GraphStorageContext {
         let timeout = self.persistent.config.resources.operation_timeout;
         std::thread::spawn(move || {
             let started = std::time::Instant::now();
-            if let Err(error) = context.trigger_background_freeze() {
-                log::warn!("Background freeze failed: {}", error);
+            if let Err(error) = context.trigger_background_maintenance() {
+                log::warn!("Background maintenance failed: {}", error);
             }
             if started.elapsed() > timeout {
                 log::warn!(
-                    "Background freeze exceeded operation timeout: {:?} > {:?}",
+                    "Background maintenance exceeded operation timeout: {:?} > {:?}",
                     started.elapsed(),
                     timeout
                 );
@@ -36,7 +60,74 @@ impl GraphStorageContext {
         });
     }
 
-    pub fn get_freeze_stats(&self) -> Option<FreezeStats> {
+    /// Run background maintenance synchronously: automatic vertex compaction
+    /// followed by the existing delta freeze pass.
+    pub(crate) fn trigger_background_maintenance(&self) -> StorageResult<()> {
+        if let Err(e) = self.maybe_auto_compact_vertices() {
+            log::warn!("Automatic vertex compaction failed: {}", e);
+        }
+        self.trigger_background_freeze()
+    }
+
+    /// Compact vertex tables whose deleted-vertex ID holes exceed the
+    /// configured thresholds (absolute count and ratio), with a cooldown
+    /// between runs. Deletions at or before the snapshot cleanup threshold
+    /// are reclaimed so active snapshot time-travel stays intact.
+    fn maybe_auto_compact_vertices(&self) -> StorageResult<()> {
+        let cfg = &self.persistent.config.auto_compact;
+        if !cfg.enable_vertex_compaction {
+            return Ok(());
+        }
+
+        let now = std::time::Instant::now();
+        {
+            let last = self.runtime.last_auto_compact.lock();
+            if let Some(prev) = *last {
+                if now.duration_since(prev).as_secs() < cfg.min_interval_secs {
+                    return Ok(());
+                }
+            }
+        }
+
+        let (live, allocated) = {
+            let cleanup_ts = self
+                .persistent
+                .version_manager
+                .snapshot_tracker()
+                .cleanup_threshold();
+            self.persistent.data_store.with_vertex_tables(|tables| {
+                let mut live = 0;
+                let mut allocated = 0;
+                for table in tables.values() {
+                    let (l, a) = table.id_hole_stats(cleanup_ts);
+                    live += l;
+                    allocated += a;
+                }
+                (live, allocated)
+            })
+        };
+
+        if !Self::should_auto_compact(live, allocated, cfg) {
+            return Ok(());
+        }
+
+        let cleanup_ts = self
+            .persistent
+            .version_manager
+            .snapshot_tracker()
+            .cleanup_threshold();
+        let removed = self.compact_vertex_remap(cleanup_ts)?;
+        *self.runtime.last_auto_compact.lock() = Some(std::time::Instant::now());
+        log::info!(
+            "Automatic vertex compaction removed {} vertices (holes={}, live={})",
+            removed,
+            allocated.saturating_sub(live),
+            live
+        );
+        Ok(())
+    }
+
+    pub(crate) fn get_freeze_stats(&self) -> Option<FreezeStats> {
         self.runtime
             .background_freeze_manager
             .as_ref()
@@ -212,5 +303,58 @@ impl GraphStorageContext {
         }
 
         Ok(total_freed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg() -> AutoCompactConfig {
+        AutoCompactConfig {
+            enable_vertex_compaction: true,
+            min_holes: 100,
+            min_hole_ratio: 0.25,
+            min_interval_secs: 3600,
+        }
+    }
+
+    #[test]
+    fn test_should_auto_compact_below_absolute_threshold() {
+        assert!(!GraphStorageContext::should_auto_compact(
+            1000,
+            1050,
+            &cfg()
+        ));
+    }
+
+    #[test]
+    fn test_should_auto_compact_below_ratio_threshold() {
+        assert!(!GraphStorageContext::should_auto_compact(
+            9000,
+            10_000,
+            &cfg()
+        ));
+    }
+
+    #[test]
+    fn test_should_auto_compact_above_both_thresholds() {
+        assert!(GraphStorageContext::should_auto_compact(
+            7000,
+            10_000,
+            &cfg()
+        ));
+    }
+
+    #[test]
+    fn test_should_auto_compact_disabled() {
+        let mut c = cfg();
+        c.enable_vertex_compaction = false;
+        assert!(!GraphStorageContext::should_auto_compact(0, 10_000, &c));
+    }
+
+    #[test]
+    fn test_should_auto_compact_empty_table() {
+        assert!(!GraphStorageContext::should_auto_compact(0, 0, &cfg()));
     }
 }

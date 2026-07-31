@@ -110,7 +110,7 @@ impl GraphStorageContext {
             },
         )?;
         if freeze_requested {
-            self.schedule_background_freeze();
+            self.schedule_background_maintenance();
         }
         self.mark_edge_modified(params.edge_label);
         Ok(())

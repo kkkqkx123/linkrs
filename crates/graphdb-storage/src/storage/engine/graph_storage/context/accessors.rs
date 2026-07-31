@@ -396,6 +396,12 @@ impl GraphStorageContext {
         &self.persistent.user_storage
     }
 
+    /// Hash partitions per vertex label table (auto-compaction / ID space
+    /// related config).
+    pub(crate) fn vertex_table_shards(&self) -> usize {
+        self.persistent.config.vertex_table_shards
+    }
+
     pub(crate) fn persistence(
         &self,
     ) -> &Option<

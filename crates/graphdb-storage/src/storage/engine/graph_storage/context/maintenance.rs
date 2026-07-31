@@ -7,25 +7,22 @@ use std::sync::atomic::Ordering;
 use super::GraphStorageContext;
 
 impl GraphStorageContext {
-    pub(crate) fn compact_maintenance(
-        &self,
-        config: &CompactConfig,
-        ts: Timestamp,
-    ) -> StorageResult<()> {
+    /// Compact deleted vertices and propagate old-to-new internal ID
+    /// mappings into edge tables and cold snapshots.
+    ///
+    /// Shared by manual compaction transactions and the background
+    /// maintenance thread (auto-compaction). Deletes at or before `ts` are
+    /// reclaimed; callers must pass a safe timestamp (e.g. the snapshot
+    /// tracker cleanup threshold) to preserve time-travel visibility.
+    ///
+    /// Returns the number of removed vertices. Compaction is an in-memory
+    /// re-layout: it writes no WAL entries, and crash recovery replays
+    /// external IDs from the WAL, so no persistence ordering constraint
+    /// applies here.
+    pub(crate) fn compact_vertex_remap(&self, ts: Timestamp) -> StorageResult<usize> {
         if !self.persistent.is_open.load(Ordering::Acquire) {
             return Err(StorageError::storage_not_open());
         }
-
-        let cleanup_ts = self
-            .persistent
-            .version_manager
-            .snapshot_tracker()
-            .cleanup_threshold();
-        log::info!(
-            "Compact maintenance started: compact_ts={}, cleanup_threshold={}",
-            ts,
-            cleanup_ts
-        );
 
         let mut last_compacted_vertices = self.persistent.last_compacted_vertices.lock();
         last_compacted_vertices.clear();
@@ -148,6 +145,31 @@ impl GraphStorageContext {
             "Compacted vertex tables: {} vertices removed",
             total_vertices_removed
         );
+
+        Ok(total_vertices_removed)
+    }
+
+    pub(crate) fn compact_maintenance(
+        &self,
+        config: &CompactConfig,
+        ts: Timestamp,
+    ) -> StorageResult<()> {
+        if !self.persistent.is_open.load(Ordering::Acquire) {
+            return Err(StorageError::storage_not_open());
+        }
+
+        let cleanup_ts = self
+            .persistent
+            .version_manager
+            .snapshot_tracker()
+            .cleanup_threshold();
+        log::info!(
+            "Compact maintenance started: compact_ts={}, cleanup_threshold={}",
+            ts,
+            cleanup_ts
+        );
+
+        let total_vertices_removed = self.compact_vertex_remap(ts)?;
 
         let edge_keys_and_removed: Vec<(EdgeTableKey, usize)> = self
             .persistent
