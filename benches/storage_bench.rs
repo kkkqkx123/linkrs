@@ -1,7 +1,3 @@
-// benches/storage_bench.rs
-//! Storage layer performance benchmarks
-//! Tests: vertex operations, edge operations, and persistence
-
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use graphdb_storage::core::types::{EdgeTypeInfo, PropertyDef, SpaceInfo, TagInfo, VertexId};
 use graphdb_storage::core::vertex_edge_path::Tag;
@@ -482,6 +478,101 @@ fn bench_scaled_graph_operations(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_sparse_id_insert_throughput(c: &mut Criterion) {
+    let mut group = create_benchmark_group(c, "csr_sparse_id_insert");
+    for &(label, high_ids) in &[
+        ("dense_100k", &[][..]),
+        ("sparse_1M", &[1_000_000i64][..]),
+        ("sparse_4M", &[1_000_000i64, 2_000_000, 4_000_000][..]),
+    ] {
+        let n = 100_000u64;
+        let total_edges = n + high_ids.len() as u64;
+        group.throughput(Throughput::Elements(total_edges));
+        group.bench_function(BenchmarkId::new("insert_edges", label), |b| {
+            b.iter_batched(
+                || {
+                    let mut storage = benchmark_storage_with_schema();
+                    storage
+                        .create_edge_type(
+                            "bench",
+                            &EdgeTypeInfo::new("Link".to_string())
+                                .with_src_tag("Node".to_string())
+                                .with_dst_tag("Node".to_string()),
+                        )
+                        .expect("edge type should be created");
+                    for id in 0..n as i64 {
+                        storage
+                            .insert_vertex(
+                                "bench",
+                                Vertex::new(
+                                    VertexId::from_int64(id),
+                                    vec![Tag::new(
+                                        "Node".to_string(),
+                                        [("value".to_string(), Value::BigInt(id))]
+                                            .into_iter()
+                                            .collect(),
+                                    )],
+                                ),
+                            )
+                            .expect("vertex insert");
+                    }
+                    for &high in high_ids {
+                        storage
+                            .insert_vertex(
+                                "bench",
+                                Vertex::new(
+                                    VertexId::from_int64(high),
+                                    vec![Tag::new(
+                                        "Node".to_string(),
+                                        [("value".to_string(), Value::BigInt(high))]
+                                            .into_iter()
+                                            .collect(),
+                                    )],
+                                ),
+                            )
+                            .expect("vertex insert");
+                    }
+                    storage
+                },
+                |mut storage| {
+                    for src in 0..n as i64 {
+                        let dst = (src + 1) % n as i64;
+                        storage
+                            .insert_edge(
+                                "bench",
+                                Edge {
+                                    src: VertexId::from_int64(src),
+                                    dst: VertexId::from_int64(dst),
+                                    edge_type: "Link".to_string(),
+                                    ranking: 0,
+                                    props: HashMap::new(),
+                                },
+                            )
+                            .expect("edge insert");
+                    }
+                    for &high in high_ids {
+                        storage
+                            .insert_edge(
+                                "bench",
+                                Edge {
+                                    src: VertexId::from_int64(high),
+                                    dst: VertexId::from_int64(0),
+                                    edge_type: "Link".to_string(),
+                                    ranking: 0,
+                                    props: HashMap::new(),
+                                },
+                            )
+                            .expect("edge insert");
+                    }
+                    black_box(());
+                },
+                criterion::BatchSize::NumIterations(1),
+            )
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_real_vertex_insert,
@@ -494,5 +585,6 @@ criterion_group!(
     bench_real_checkpoint,
     bench_scaled_checkpoint,
     bench_scaled_graph_operations,
+    bench_sparse_id_insert_throughput,
 );
 criterion_main!(benches);

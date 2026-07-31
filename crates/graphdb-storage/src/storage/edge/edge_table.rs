@@ -947,6 +947,96 @@ mod tests {
     }
 
     #[test]
+    fn test_row_capacity_assertion_on_compaction() {
+        let schema = create_test_schema();
+        let mut table =
+            TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+
+        // Create sparse IDs with deletions and reinserts
+        table.insert_edge(0, 500_000, 0, &[], 100).unwrap();
+        table.insert_edge(50_000, 100_001, 0, &[], 100).unwrap();
+        table.insert_edge(100_002, 0, 0, &[], 100).unwrap();
+
+        // Delete and reinsert
+        table.delete_edge(0, 50_000, 0, 150).unwrap();
+        table.insert_edge(0, 50_001, 1, &[], 160).unwrap();
+
+        // Compact mutable CSR (layer 1 deletion)
+        let removed = table.compact_csr_only(200, 0.25);
+        // The deleted edge may be in out_csr (deletion at timestamp 150)
+        // The compaction at timestamp 200 may or may not remove it depending on visibility
+        // Assert that row capacity is within bounds regardless of whether compaction removed edges
+
+        // Row capacity should respect 1.25x growth factor.
+        // out CSR tracks max src (100_002), in CSR tracks max dst (500_001 after reinsert).
+        let max_src = 100_002usize;
+        let max_dst = 500_001usize;
+        let out_rows = table.out_csr.vertex_capacity();
+        let in_rows = table.in_csr.vertex_capacity();
+        let tail = |rows: usize| ((rows as f64) * 1.25).ceil() as usize;
+        
+        assert!(
+            out_rows <= tail(max_src + 1),
+            "out rows {} exceeds 1.25x tail of {}", out_rows, max_src + 1
+        );
+        assert!(
+            in_rows <= tail(max_dst + 1),
+            "in rows {} exceeds 1.25x tail of {}", in_rows, max_dst + 1
+        );
+
+        // Lazy allocation: wasted memory should stay tiny
+        assert!(
+            table.out_csr.wasted_bytes_estimate() < 64 * 64,
+            "out CSR wasted memory {} exceeds lazy allocation tolerance",
+            table.out_csr.wasted_bytes_estimate()
+        );
+        assert!(
+            table.in_csr.wasted_bytes_estimate() < 64 * 64,
+            "in CSR wasted memory {} exceeds lazy allocation tolerance",
+            table.in_csr.wasted_bytes_estimate()
+        );
+    }
+
+    #[test]
+    fn test_row_capacity_assertion_on_freeze() {
+        let schema = create_test_schema();
+        let mut table =
+            TimeTravelEdgeStore::with_config(schema, EdgeTableConfig::default()).unwrap();
+
+        // Freeze should truncate segments strictly to edge-bearing rows + 1
+        table.insert_edge(0, 500_000, 0, &[], 100).unwrap();
+        table.insert_edge(50_000, 100_001, 0, &[], 100).unwrap();
+        table.insert_edge(100_002, 0, 0, &[], 100).unwrap();
+
+        let frozen = table.freeze_csr_only(150);
+        assert!(frozen > 0);
+
+        // Frozen segment rows track only their own direction's vertex space
+        let out_segment_capacity = table.out_segments[0].csr.read().vertex_capacity();
+        let in_segment_capacity = table.in_segments[0].csr.read().vertex_capacity();
+
+        // out segment: src IDs {0, 50_000, 100_002} -> max row 100_002 → capacity 100_003
+        // in segment: dst IDs {500_000, 100_001, 0} -> max row 500_000 → capacity 500_001
+        assert_eq!(out_segment_capacity, 100_003);
+        assert_eq!(in_segment_capacity, 500_001);
+
+        // After freeze, the mutable CSR is empty but retains its grown row capacity
+        // (the frozen segment is what enforces strict truncation)
+        let out_mutable_capacity = table.out_csr.vertex_capacity();
+        let in_mutable_capacity = table.in_csr.vertex_capacity();
+        let out_tail = ((100_003usize) as f64 * 1.25).ceil() as usize;
+        let in_tail = ((500_001usize) as f64 * 1.25).ceil() as usize;
+        assert!(
+            out_mutable_capacity <= out_tail,
+            "out mutable capacity {} exceeds 1.25x tail of 100_003", out_mutable_capacity
+        );
+        assert!(
+            in_mutable_capacity <= in_tail,
+            "in mutable capacity {} exceeds 1.25x tail of 500_001", in_mutable_capacity
+        );
+    }
+
+    #[test]
     fn test_freeze_and_remap_keep_rows_truncated() {
         let schema = create_test_schema();
         let mut table =
